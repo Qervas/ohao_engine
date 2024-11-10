@@ -1,13 +1,19 @@
 #pragma once
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+#include <cstdint>
+#include <optional>
 #include <vulkan/vulkan.hpp>
 #include <vector>
 #include <string>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
 class VulkanContext {
 public:
     VulkanContext();
+    VulkanContext(GLFWwindow* windowHandle);
     ~VulkanContext();
 
     bool initialize();
@@ -16,7 +22,7 @@ public:
 
 
 private:
-    VkInstance instance;
+    VkInstance instance{VK_NULL_HANDLE};
     void createInstance();
     bool checkValidationLayerSupport();
     std::vector<const char*> getRequiredExtensions();
@@ -33,7 +39,7 @@ private:
     const bool enableValidationLayers = true;
 #endif
 
-    VkDebugUtilsMessengerEXT debugMessenger;
+    VkDebugUtilsMessengerEXT debugMessenger{VK_NULL_HANDLE};
 
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
         VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -54,6 +60,35 @@ private:
 
     void populateDebugMessengerCreateInfo(
         VkDebugUtilsMessengerCreateInfoEXT& createInfo);
+
+    //Surface
+    VkSurfaceKHR surface{VK_NULL_HANDLE};
+
+    //Device
+    VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
+    VkDevice device{VK_NULL_HANDLE};
+
+    //Queue handles
+    VkQueue graphicsQueue{VK_NULL_HANDLE};
+    VkQueue presentQueue{VK_NULL_HANDLE};
+
+    struct QueueFamilyIndices{
+        std::optional<uint32_t> graphicsFamily;
+        std::optional<uint32_t> presentFamily;
+
+        bool isComplete(){
+            return graphicsFamily.has_value() && presentFamily.has_value();
+        }
+    };
+
+    void createSurface();
+    void pickPhysicalDevice();
+    void createLogicalDevice();
+
+    QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
+    bool isDeviceSuitable(VkPhysicalDevice device);
+
+    GLFWwindow* window;
 };
 
 } // namespace ohao

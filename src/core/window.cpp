@@ -21,6 +21,7 @@ Window::Window(int w, int h, const std::string& title) {
 Window::~Window() {
     if (window) {
         glfwDestroyWindow(window);
+        window = nullptr;
     }
     glfwTerminate();
 }

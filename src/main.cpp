@@ -6,7 +6,7 @@ int main() {
     try {
         ohao::Window window(800, 600, "OHAO Engine");
 
-        ohao::VulkanContext vulkan;
+        ohao::VulkanContext vulkan(window.getGLFWWindow());
         vulkan.initialize();
 
         while (!window.shouldClose()) {
