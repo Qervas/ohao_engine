@@ -1,6 +1,7 @@
 #include "core/window.hpp"
 #include "renderer/vulkan_context.hpp"
 #include <iostream>
+#include <vulkan/vulkan_core.h>
 
 int main() {
     try {
@@ -11,7 +12,9 @@ int main() {
 
         while (!window.shouldClose()) {
             window.pollEvents();
+            vulkan.drawFrame();
         }
+        vkDeviceWaitIdle(vulkan.getDevice());
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;

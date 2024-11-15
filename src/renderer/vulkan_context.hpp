@@ -28,6 +28,9 @@ public:
     void cleanup();
     void setupDebugMessenger();//validation layer
 
+    VkDevice getDevice()const{return device;}
+    void drawFrame();
+
 
 private:
     GLFWwindow* window;
@@ -122,6 +125,7 @@ private:
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
 
+    //shader
     enum class ShaderType{
         VERTEX,
         FRAGMENT,
@@ -144,6 +148,7 @@ private:
     ShaderModule* createShaderFromFile(const std::string& filename, ShaderType type);
     void destroyShaderModule(const std::string& name);
 
+    //pipeline
     VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
     VkRenderPass renderPass{VK_NULL_HANDLE};
     VkPipeline graphicsPipeline{VK_NULL_HANDLE};
@@ -151,6 +156,25 @@ private:
     void createRenderPass();
     void createGraphicsPipeline();
     void createPipelineLayout();
+
+    //framebuffers
+    std::vector<VkFramebuffer> swapChainFrameBuffers;
+
+    VkCommandPool commandPool{VK_NULL_HANDLE};
+    std::vector<VkCommandBuffer> commandBuffers;
+
+    std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
+    std::vector<VkFence> inFlightFences;
+    const int MAX_FRAMES_IN_FLIGHT = 2;
+    size_t currentFrame = 0;
+
+    void createFramebuffers();
+    void createCommandPool();
+    void createCommandBuffers();
+    void createSyncObjects();
+
+    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 
 };
 
