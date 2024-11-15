@@ -144,7 +144,13 @@ private:
     ShaderModule* createShaderFromFile(const std::string& filename, ShaderType type);
     void destroyShaderModule(const std::string& name);
 
+    VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
+    VkRenderPass renderPass{VK_NULL_HANDLE};
+    VkPipeline graphicsPipeline{VK_NULL_HANDLE};
 
+    void createRenderPass();
+    void createGraphicsPipeline();
+    void createPipelineLayout();
 
 };
 

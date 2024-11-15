@@ -11,3 +11,9 @@ target_link_libraries(ohao_engine PRIVATE
     ohao_renderer
     ohao_utils
 )
+
+add_dependencies(ohao_engine shaders)
+
+target_include_directories(ohao_engine PRIVATE
+    ${CMAKE_BINARY_DIR}
+)
