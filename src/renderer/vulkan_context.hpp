@@ -8,6 +8,13 @@
 #include <string>
 #include <vulkan/vulkan_core.h>
 
+#define GPU_VENDOR_NVIDIA 0
+#define GPU_VENDOR_AMD 1
+#define GPU_VENDOR_INTEL 2
+
+// Change this to select preferred GPU vendor
+#define PREFERRED_GPU_VENDOR GPU_VENDOR_NVIDIA
+
 namespace ohao {
 
 class VulkanContext {
@@ -22,6 +29,7 @@ public:
 
 
 private:
+    GLFWwindow* window;
     VkInstance instance{VK_NULL_HANDLE};
     void createInstance();
     bool checkValidationLayerSupport();
@@ -88,7 +96,32 @@ private:
     QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
     bool isDeviceSuitable(VkPhysicalDevice device);
 
-    GLFWwindow* window;
+    //Swap Chain
+    VkSwapchainKHR swapChain{VK_NULL_HANDLE};
+    std::vector<VkImage> swapChainImages;
+    VkFormat swapChainImageFormat;
+    VkExtent2D swapChainExtent;
+    std::vector<VkImageView> swapChainImageViews;
+
+    struct SwapChainSupportDetails{
+        VkSurfaceCapabilitiesKHR capabilities;
+        std::vector<VkSurfaceFormatKHR> formats;
+        std::vector<VkPresentModeKHR> presentModes;
+    };
+
+    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
+    VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
+    VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
+    VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
+    void createSwapChain();
+    void createImageViews();
+
+    bool checkDeviceExtensionSupport(VkPhysicalDevice);
+    const std::vector<const char*> deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    };
+
+
 };
 
 } // namespace ohao
