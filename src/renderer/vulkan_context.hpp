@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <vulkan/vulkan_core.h>
+#include <unordered_map>
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -120,6 +121,29 @@ private:
     const std::vector<const char*> deviceExtensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
+
+    enum class ShaderType{
+        VERTEX,
+        FRAGMENT,
+        COMPUTE,
+        GEOMETRY,
+        TESSELLATION_CONTROL,
+        TESSELLATION_EVALUATION
+    };
+
+    struct ShaderModule{
+        VkShaderModule modules{VK_NULL_HANDLE};
+        ShaderType type;
+        std::string entryPoint{"main"};
+    };
+
+    std::unordered_map<std::string, ShaderModule> shaderModules;
+
+    VkShaderModule createShaderModule(const std::vector<char>& code);
+    std::vector<char> readShaderFile(const std::string& filename);
+    ShaderModule* createShaderFromFile(const std::string& filename, ShaderType type);
+    void destroyShaderModule(const std::string& name);
+
 
 
 };

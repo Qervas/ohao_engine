@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -35,6 +36,11 @@ VulkanContext::initialize(){
 
 void
 VulkanContext::cleanup(){
+    for(const auto& [name, shader] : shaderModules){
+        vkDestroyShaderModule(device, shader.modules, nullptr);
+    }
+    shaderModules.clear();
+
     for(auto imageView : swapChainImageViews){
         vkDestroyImageView(device, imageView, nullptr);
     }
@@ -538,5 +544,59 @@ VulkanContext::createImageViews(){
         }
     }
 }
+
+VkShaderModule
+VulkanContext::createShaderModule(const std::vector<char>& code){
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = code.size();
+    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+    VkShaderModule shaderModule;
+    if(vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS){
+        throw std::runtime_error("failed to create shader module!");
+    }
+    return shaderModule;
+}
+
+std::vector<char>
+VulkanContext::readShaderFile(const std::string& filename){
+    std::ifstream file(filename, std::ios::ate | std::ios::binary);
+
+    if(!file.is_open()){
+        throw std::runtime_error("failed to open file: " + filename);
+    }
+
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<char> buffer(fileSize);
+
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+
+    return buffer;
+}
+
+VulkanContext::ShaderModule*
+VulkanContext::createShaderFromFile(const std::string& filename, ShaderType type){
+    auto code = readShaderFile(filename);
+
+    ShaderModule shader;
+    shader.modules = createShaderModule(code);
+    shader.type = type;
+
+    shaderModules[filename] = shader;
+    return &shaderModules[filename];
+}
+
+void
+VulkanContext::destroyShaderModule(const std::string& name){
+    auto it = shaderModules.find(name);
+    if ( it != shaderModules.end()){
+        vkDestroyShaderModule(device, it->second.modules, nullptr);
+        shaderModules.erase(it);
+    }
+}
+
 
 }//namespace ohao
