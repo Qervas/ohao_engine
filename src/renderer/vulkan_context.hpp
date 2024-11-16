@@ -1,4 +1,5 @@
 #pragma once
+#include <glm/ext/matrix_float4x4.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vulkan/vulkan_core.h>
 #include <unordered_map>
+#include "../core/camera.hpp"
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -31,6 +33,13 @@ public:
     VkDevice getDevice()const{return device;}
     void drawFrame();
 
+    struct UniformBufferObject{
+        glm::mat4 model;
+        glm::mat4 view;
+        glm::mat4 proj;
+    };
+
+    Camera& getCamera() {return camera;}
 
 private:
     GLFWwindow* window;
@@ -175,6 +184,24 @@ private:
     void createSyncObjects();
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+
+    std::vector<VkBuffer> uniformBuffers;
+    std::vector<VkDeviceMemory> uniformBuffersMemory;
+    std::vector<void*> uniformBuffersMapped;
+    VkDescriptorSetLayout descriptorSetLayout{VK_NULL_HANDLE};
+    VkDescriptorPool descriptorPool{VK_NULL_HANDLE};
+    std::vector<VkDescriptorSet> descriptorSets;
+    Camera camera;
+
+    void createDescriptorSetLayout();
+    void createUniformBuffers();
+    void createDescriptorPool();
+    void createDescriptorSets();
+    void updateUniformBuffer(uint32_t currentImage);
+    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
+
+
 
 };
 

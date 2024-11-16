@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find packages
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
+find_package(glm REQUIRED)
 
 add_subdirectory(shaders)
 add_subdirectory(src)
