@@ -15,7 +15,7 @@ namespace ohao{
 
 Camera::Camera(float fov, float aspect, float nearPlane, float farPlane)
     :fov(fov), aspectRatio(aspect), nearPlane(nearPlane), farPlane(farPlane){
-        position = glm::vec3(0.0f, 0.0f, 6.0f);
+        position = glm::vec3(0.0f, 0.0f, 2.5f);
         yaw = -90.0f;
         pitch = 0.0f;
         updateVectors();

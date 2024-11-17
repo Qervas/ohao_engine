@@ -2,6 +2,8 @@ add_library(ohao_core
     window.cpp
     camera.cpp
     camera_controller.cpp
+    model.cpp
+    scene.cpp
 )
 
 target_include_directories(ohao_core PUBLIC

@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/ext/matrix_float4x4.hpp>
+#include <memory>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -10,6 +11,9 @@
 #include <vulkan/vulkan_core.h>
 #include <unordered_map>
 #include "../core/camera.hpp"
+#include "../core/model.hpp"
+#include "../core/material.hpp"
+#include "../core/scene.hpp"
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -37,6 +41,20 @@ public:
         glm::mat4 model;
         glm::mat4 view;
         glm::mat4 proj;
+        glm::vec3 viewPos;
+        float padding1;
+
+        glm::vec3 lightPos;
+        float padding2;
+        glm::vec3 lightColor;
+        float lightIntensity;
+
+        glm::vec3 baseColor;
+        float metallic;
+        float roughness;
+        float ao;
+        float padding3;
+        float padding4;
     };
 
     Camera& getCamera() {return camera;}
@@ -200,8 +218,21 @@ private:
     void updateUniformBuffer(uint32_t currentImage);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
+    VkBuffer vertexBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory vertexBufferMemory{VK_NULL_HANDLE};
+    VkBuffer indexBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory indexBufferMemory{VK_NULL_HANDLE};
 
 
+    void createVertexBuffer(const std::vector<Vertex>& vertices);
+    void createIndexBuffer(const std::vector<uint32_t>& indices);
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags propertiesm, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
+
+    void updateMaterial(const Material& material);
+    void updateLight(const glm::vec3& position, const glm::vec3& color, float intensity);
+
+    std::unique_ptr<Scene> scene;
 
 };
 
