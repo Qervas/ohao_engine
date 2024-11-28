@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
+#include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_surface.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -67,27 +68,15 @@ private:
     std::unique_ptr<OhaoVkSurface> surface;
 
     //Device
-    VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
+    std::unique_ptr<OhaoVkPhysicalDevice> physicalDevice;
     VkDevice device{VK_NULL_HANDLE};
 
     //Queue handles
     VkQueue graphicsQueue{VK_NULL_HANDLE};
     VkQueue presentQueue{VK_NULL_HANDLE};
 
-    struct QueueFamilyIndices{
-        std::optional<uint32_t> graphicsFamily;
-        std::optional<uint32_t> presentFamily;
-
-        bool isComplete(){
-            return graphicsFamily.has_value() && presentFamily.has_value();
-        }
-    };
-
-    void pickPhysicalDevice();
     void createLogicalDevice();
 
-    QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
-    bool isDeviceSuitable(VkPhysicalDevice device);
 
     //Swap Chain
     VkSwapchainKHR swapChain{VK_NULL_HANDLE};
@@ -109,10 +98,7 @@ private:
     void createSwapChain();
     void createImageViews();
 
-    bool checkDeviceExtensionSupport(VkPhysicalDevice);
-    const std::vector<const char*> deviceExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
-    };
+
 
     //shader
     enum class ShaderType{
