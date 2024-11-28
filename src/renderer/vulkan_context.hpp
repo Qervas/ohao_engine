@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
+#include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_surface.hpp>
 #define GLFW_INCLUDE_VULKAN
@@ -37,7 +38,7 @@ public:
     bool initialize();
     void cleanup();
 
-    VkDevice getDevice()const{return device;}
+    VkDevice getDevice()const{return device->getDevice();}
     void drawFrame();
 
     struct UniformBufferObject{
@@ -66,10 +67,9 @@ private:
     GLFWwindow* window;
     std::unique_ptr<OhaoVkInstance> instance;
     std::unique_ptr<OhaoVkSurface> surface;
-
-    //Device
     std::unique_ptr<OhaoVkPhysicalDevice> physicalDevice;
-    VkDevice device{VK_NULL_HANDLE};
+    std::unique_ptr<OhaoVkDevice> device;
+
 
     //Queue handles
     VkQueue graphicsQueue{VK_NULL_HANDLE};
