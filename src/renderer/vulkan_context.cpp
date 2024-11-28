@@ -21,6 +21,9 @@
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
 #include <iostream>
+#include <vk/ohao_vk_instance.hpp>
+
+#define OHAO_ENABLE_VALIDATION_LAYER true
 
 namespace ohao{
 
@@ -35,8 +38,10 @@ VulkanContext::~VulkanContext(){
 bool
 VulkanContext::initialize(){
     //vulkan setup
-    createInstance();
-    setupDebugMessenger();
+    instance = std::make_unique<OhaoVkInstance>();
+    if (!instance->initialize("OHAO Engine", OHAO_ENABLE_VALIDATION_LAYER)) {
+        throw std::runtime_error("engine initialization failed!");
+    }
     createSurface();
     pickPhysicalDevice();
     createLogicalDevice();
@@ -142,60 +147,14 @@ VulkanContext::cleanup(){
     }
 
     if (surface) {
-        vkDestroySurfaceKHR(instance, surface, nullptr);
+        vkDestroySurfaceKHR(instance->getInstance(), surface, nullptr);
         surface = VK_NULL_HANDLE;
     }
 
-    if (enableValidationLayers && debugMessenger) {
-        DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
-        debugMessenger = VK_NULL_HANDLE;
-    }
-
-    if (instance) {
-        vkDestroyInstance(instance, nullptr);
-        instance = VK_NULL_HANDLE;
-    }
+    instance->cleanup();
 
 }
 
-void
-VulkanContext::createInstance(){
-    VkApplicationInfo appInfo = {};
-    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "OHAO Engine";
-    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "OHAO Engine";
-    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_3;
-
-    VkInstanceCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    createInfo.pApplicationInfo = &appInfo;
-
-    auto extensions = getRequiredExtensions();
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-    createInfo.ppEnabledExtensionNames = extensions.data();
-
-    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
-    if(enableValidationLayers == true){
-        if(!checkValidationLayerSupport()){
-            throw std::runtime_error("validation layers requested, but not available!");
-        }
-        createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-        createInfo.ppEnabledLayerNames = validationLayers.data();
-
-        populateDebugMessengerCreateInfo(debugCreateInfo);
-        createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*) &debugCreateInfo;
-
-    }else{
-        createInfo.enabledLayerCount = 0;
-        createInfo.pNext = nullptr;
-    }
-
-    if(vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS){
-        throw std::runtime_error("failed to create instance!");
-    }
-}//createInstance
 
 std::vector<const char*>
 VulkanContext::getRequiredExtensions(){
@@ -203,7 +162,7 @@ VulkanContext::getRequiredExtensions(){
     const char** glfwExtensions;
     glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-    if(enableValidationLayers){
+    if(OHAO_ENABLE_VALIDATION_LAYER){
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
     return extensions;
@@ -266,51 +225,10 @@ VulkanContext::CreateDebugUtilsMessengerEXT(
     }
 }
 
-void
-VulkanContext::DestroyDebugUtilsMessengerEXT(
-    VkInstance instance,
-    VkDebugUtilsMessengerEXT debugMessenger,
-    const VkAllocationCallbacks* pAllocator
-){
-    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(
-        instance,"vkDestroyDebugUtilsMessengerEXT"
-    );
-
-    if(func != nullptr){
-        func(instance, debugMessenger, pAllocator);
-    }
-
-}
-
-void
-VulkanContext::populateDebugMessengerCreateInfo(
-    VkDebugUtilsMessengerCreateInfoEXT& createInfo
-){
-    createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-        VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    createInfo.pfnUserCallback = debugCallback;
-    createInfo.pUserData = nullptr;
-}
-
-void
-VulkanContext::setupDebugMessenger(){
-    if(!enableValidationLayers) return;
-
-    VkDebugUtilsMessengerCreateInfoEXT createInfo;
-    populateDebugMessengerCreateInfo(createInfo);
-
-    if(CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS){
-        throw std::runtime_error("failed to set up debug messager!");
-    }
-}
 
 void
 VulkanContext::createSurface(){
-    if(glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS){
+    if(glfwCreateWindowSurface(instance->getInstance(), window, nullptr, &surface) != VK_SUCCESS){
         throw std::runtime_error("failed to create window surface");
     }
 }
@@ -318,13 +236,13 @@ VulkanContext::createSurface(){
 void
 VulkanContext::pickPhysicalDevice(){
     uint32_t deviceCount = 0;
-    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+    vkEnumeratePhysicalDevices(instance->getInstance(), &deviceCount, nullptr);
     if(deviceCount == 0){
         throw std::runtime_error("failed to find GPUs with Vulkan support!");
     }
 
     std::vector<VkPhysicalDevice> devices(deviceCount);
-    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+    vkEnumeratePhysicalDevices(instance->getInstance(), &deviceCount, devices.data());
 
     std::cout << "Found " << deviceCount << " physical devices." << std::endl;
     for (const auto& device : devices) {
@@ -456,7 +374,7 @@ VulkanContext::createLogicalDevice(){
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
-    if (enableValidationLayers) {
+    if (OHAO_ENABLE_VALIDATION_LAYER) {
         createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();
     } else {

@@ -38,6 +38,10 @@ CameraController::updatePosition(float deltaTime){
     if (window.isKeyPressed(GLFW_KEY_LEFT_CONTROL))
         movement -= camera.getUp();
 
+	// Acceleration
+	if (window.isKeyPressed(GLFW_KEY_LEFT_SHIFT))
+		velocity *= 4.0f;
+
     // Normalize and apply movement
     if (glm::length(movement) > 0.0f) {
         movement = glm::normalize(movement) * velocity;

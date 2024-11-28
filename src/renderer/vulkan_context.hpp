@@ -14,6 +14,7 @@
 #include "../core/model.hpp"
 #include "../core/material.hpp"
 #include "../core/scene.hpp"
+#include "vk/ohao_vk_instance.hpp"
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -32,7 +33,6 @@ public:
 
     bool initialize();
     void cleanup();
-    void setupDebugMessenger();//validation layer
 
     VkDevice getDevice()const{return device;}
     void drawFrame();
@@ -61,8 +61,7 @@ public:
 
 private:
     GLFWwindow* window;
-    VkInstance instance{VK_NULL_HANDLE};
-    void createInstance();
+    std::unique_ptr<OhaoVkInstance> instance;
     bool checkValidationLayerSupport();
     std::vector<const char*> getRequiredExtensions();
 
@@ -70,13 +69,6 @@ private:
         "VK_LAYER_KHRONOS_validation"
     };
 
-
-    //debug
-#ifdef NDEBUG
-    const bool enableValidationLayers = false;
-#else
-    const bool enableValidationLayers = true;
-#endif
 
     VkDebugUtilsMessengerEXT debugMessenger{VK_NULL_HANDLE};
 
@@ -92,13 +84,6 @@ private:
         const VkAllocationCallbacks* pAllocator,
         VkDebugUtilsMessengerEXT* pDebugMessenger);
 
-    void DestroyDebugUtilsMessengerEXT(
-        VkInstance instance,
-        VkDebugUtilsMessengerEXT debugMessenger,
-        const VkAllocationCallbacks* pAllocator);
-
-    void populateDebugMessengerCreateInfo(
-        VkDebugUtilsMessengerCreateInfoEXT& createInfo);
 
     //Surface
     VkSurfaceKHR surface{VK_NULL_HANDLE};
