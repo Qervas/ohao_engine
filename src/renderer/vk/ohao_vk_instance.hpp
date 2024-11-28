@@ -15,6 +15,7 @@ public:
 
     VkInstance getInstance() const { return instance; }
     bool isValidationEnabled() const { return validationEnabled; }
+    auto&& getValidationLayers() const {return validationLayers;}
 
 private:
     VkInstance instance{VK_NULL_HANDLE};

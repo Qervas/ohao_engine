@@ -1,6 +1,8 @@
 #pragma once
+#include <algorithm>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
+#include <vk/ohao_vk_surface.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -62,31 +64,7 @@ public:
 private:
     GLFWwindow* window;
     std::unique_ptr<OhaoVkInstance> instance;
-    bool checkValidationLayerSupport();
-    std::vector<const char*> getRequiredExtensions();
-
-    const std::vector<const char*> validationLayers = {
-        "VK_LAYER_KHRONOS_validation"
-    };
-
-
-    VkDebugUtilsMessengerEXT debugMessenger{VK_NULL_HANDLE};
-
-    static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-        VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-        VkDebugUtilsMessageTypeFlagsEXT messageType,
-        const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData);
-
-    VkResult CreateDebugUtilsMessengerEXT(
-        VkInstance instance,
-        const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
-        const VkAllocationCallbacks* pAllocator,
-        VkDebugUtilsMessengerEXT* pDebugMessenger);
-
-
-    //Surface
-    VkSurfaceKHR surface{VK_NULL_HANDLE};
+    std::unique_ptr<OhaoVkSurface> surface;
 
     //Device
     VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
@@ -105,7 +83,6 @@ private:
         }
     };
 
-    void createSurface();
     void pickPhysicalDevice();
     void createLogicalDevice();
 

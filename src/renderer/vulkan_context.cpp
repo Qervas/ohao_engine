@@ -13,11 +13,11 @@
 #include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
 #include <memory>
-#include <random>
 #include <set>
 #include <stdexcept>
 #include <sys/types.h>
 #include <vector>
+#include <vk/ohao_vk_surface.hpp>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
 #include <iostream>
@@ -40,9 +40,13 @@ VulkanContext::initialize(){
     //vulkan setup
     instance = std::make_unique<OhaoVkInstance>();
     if (!instance->initialize("OHAO Engine", OHAO_ENABLE_VALIDATION_LAYER)) {
-        throw std::runtime_error("engine initialization failed!");
+        throw std::runtime_error("engine instance initialization failed!");
     }
-    createSurface();
+    surface = std::make_unique<OhaoVkSurface>();
+    if (!surface->initialize(instance.get(), window)){
+        throw std::runtime_error("engine surface initialization failed!");
+    }
+
     pickPhysicalDevice();
     createLogicalDevice();
     createSwapChain();
@@ -146,92 +150,12 @@ VulkanContext::cleanup(){
         device = VK_NULL_HANDLE;
     }
 
-    if (surface) {
-        vkDestroySurfaceKHR(instance->getInstance(), surface, nullptr);
-        surface = VK_NULL_HANDLE;
-    }
-
-    instance->cleanup();
+    surface.reset();
+    instance.reset();
 
 }
 
 
-std::vector<const char*>
-VulkanContext::getRequiredExtensions(){
-    uint32_t glfwExtensionCount = 0;
-    const char** glfwExtensions;
-    glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-    std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-    if(OHAO_ENABLE_VALIDATION_LAYER){
-        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
-    return extensions;
-}//getRequiredExtensions
-
-bool
-VulkanContext::checkValidationLayerSupport(){
-    uint32_t layerCount;
-    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-
-    std::vector<VkLayerProperties> availableLayers(layerCount);
-    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
-    for(const char* layerName: validationLayers){
-        bool layerFound = false;
-
-        for(const auto& layerProperties: availableLayers){
-            if(strcmp(layerName, layerProperties.layerName) == 0){
-                layerFound = true;
-                break;
-            }
-        }
-
-        if(!layerFound){
-            return false;
-        }
-
-    }
-    return true;
-}
-
-
-//debug
-VKAPI_ATTR VkBool32 VKAPI_CALL
-VulkanContext::debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT * pCallbackData,
-    void* pUserData)
-{
-    std::cerr << "Validation Layer: " << pCallbackData->pMessage << std::endl;
-    return VK_FALSE;
-}
-
-VkResult
-VulkanContext::CreateDebugUtilsMessengerEXT(
-    VkInstance instance,
-    const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
-    const VkAllocationCallbacks* pAllocator,
-    VkDebugUtilsMessengerEXT* pDebugMessenger
-){
-    auto func = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(
-        instance, "vkCreateDebugUtilsMessengerEXT"
-    );
-
-    if(func != nullptr){
-        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
-    }else{
-        return VK_ERROR_EXTENSION_NOT_PRESENT;
-    }
-}
-
-
-void
-VulkanContext::createSurface(){
-    if(glfwCreateWindowSurface(instance->getInstance(), window, nullptr, &surface) != VK_SUCCESS){
-        throw std::runtime_error("failed to create window surface");
-    }
-}
 
 void
 VulkanContext::pickPhysicalDevice(){
@@ -330,7 +254,7 @@ VulkanContext::findQueueFamilies(VkPhysicalDevice device){
         }
 
         VkBool32 presentSupport = false;
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface->getSurface(), &presentSupport);
 
         if(presentSupport){
             indices.presentFamily = i;
@@ -375,8 +299,8 @@ VulkanContext::createLogicalDevice(){
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
     if (OHAO_ENABLE_VALIDATION_LAYER) {
-        createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-        createInfo.ppEnabledLayerNames = validationLayers.data();
+        createInfo.enabledLayerCount = static_cast<uint32_t>(instance->getValidationLayers().size());
+        createInfo.ppEnabledLayerNames = instance->getValidationLayers().data();
     } else {
         createInfo.enabledLayerCount = 0;
     }
@@ -392,22 +316,22 @@ VulkanContext::SwapChainSupportDetails
 VulkanContext::querySwapChainSupport(VkPhysicalDevice device){
     SwapChainSupportDetails details;
 
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface->getSurface(), &details.capabilities);
     std::cout << "Swap chain capabilities:" << std::endl;
     std::cout << "\tminImageCount: " << details.capabilities.minImageCount << std::endl;
     std::cout << "\tmaxImageCount: " << details.capabilities.maxImageCount << std::endl;
     uint32_t formatCount;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface->getSurface(), &formatCount, nullptr);
     if(formatCount != 0){
         details.formats.resize(formatCount);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface->getSurface(), &formatCount, details.formats.data());
     }
 
     uint32_t presentModeCount;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface->getSurface(), &presentModeCount, nullptr);
     if(presentModeCount != 0){
         details.presentModes.resize(presentModeCount);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface->getSurface(), &presentModeCount, details.presentModes.data());
     }
 
     return details;
@@ -483,7 +407,7 @@ VulkanContext::createSwapChain(){
 
     VkSwapchainCreateInfoKHR createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    createInfo.surface = surface;
+    createInfo.surface = surface->getSurface();
     createInfo.minImageCount = imageCount;
     createInfo.imageFormat = surfaceFormat.format;
     createInfo.imageColorSpace = surfaceFormat.colorSpace;
