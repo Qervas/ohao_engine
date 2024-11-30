@@ -4,6 +4,7 @@
 #include <memory>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
+#include <vk/ohao_vk_pipeline.hpp>
 #include <vk/ohao_vk_render_pass.hpp>
 #include <vk/ohao_vk_shader_module.hpp>
 #include <vk/ohao_vk_surface.hpp>
@@ -82,12 +83,8 @@ private:
     std::unique_ptr<OhaoVkShaderModule> shaderModules;
 
     //pipeline
-    VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
     std::unique_ptr<OhaoVkRenderPass> renderPass;
-    VkPipeline graphicsPipeline{VK_NULL_HANDLE};
-
-    void createGraphicsPipeline();
-    void createPipelineLayout();
+    std::unique_ptr<OhaoVkPipeline> pipeline;
 
     //framebuffers
     std::vector<VkFramebuffer> swapChainFrameBuffers;

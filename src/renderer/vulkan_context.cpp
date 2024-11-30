@@ -16,6 +16,7 @@
 #include <vector>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
+#include <vk/ohao_vk_pipeline.hpp>
 #include <vk/ohao_vk_render_pass.hpp>
 #include <vk/ohao_vk_surface.hpp>
 #include <vk/ohao_vk_swapchain.hpp>
@@ -62,6 +63,8 @@ VulkanContext::initialize(){
     graphicsQueue = device->getGraphicsQueue();
     presentQueue = device->getPresentQueue();
 
+    createDescriptorSetLayout();
+
     swapchain = std::make_unique<OhaoVkSwapChain>();
     if(!swapchain->initialize(device.get(), surface.get(), width, height)){
         throw std::runtime_error("engine swapchain initialization failed!");
@@ -77,10 +80,28 @@ VulkanContext::initialize(){
         throw std::runtime_error("engine render pass initialization failed!");
     }
 
-    createDescriptorSetLayout();
-    createPipelineLayout();
+    if (!shaderModules->createShaderModule(
+            "vert", "shaders/shader.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "frag", "shaders/shader.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT)) {
+        throw std::runtime_error("Failed to create shader modules!");
+    }
+
+    pipeline = std::make_unique<OhaoVkPipeline>();
+    if(!pipeline->initialize(device.get(), renderPass.get(), shaderModules.get(), swapchain->getExtent(), descriptorSetLayout)){
+        throw std::runtime_error("engine pipeline initialization failed!");
+    }
+
     createCommandPool();
     createDepthResources();
+    createFramebuffers();
+    createUniformBuffers();
+    createDescriptorPool();
+    createDescriptorSets();
+    createCommandBuffers();
+    createSyncObjects();
 
     //load model
     scene = std::make_unique<Scene>();
@@ -93,17 +114,6 @@ VulkanContext::initialize(){
 
     createVertexBuffer(mainObject->model->vertices);
     createIndexBuffer(mainObject->model->indices);
-
-    //pipeline
-    createGraphicsPipeline();
-
-    //resources
-    createFramebuffers();
-    createUniformBuffers();
-    createDescriptorPool();
-    createDescriptorSets();
-    createCommandBuffers();
-    createSyncObjects();
 
     // Look for light material and apply its properties
     for (const auto& [name, light] : scene->getLights()) {
@@ -145,142 +155,15 @@ VulkanContext::cleanup(){
         vkDestroyFramebuffer(device->getDevice(), framebuffer, nullptr);
     }
 
-    shaderModules.reset();
-
-    if(graphicsPipeline){
-        vkDestroyPipeline(device->getDevice(), graphicsPipeline, nullptr);
-    }
-
-    if(pipelineLayout){
-        vkDestroyPipelineLayout(device->getDevice(), pipelineLayout, nullptr);
-    }
-
+    pipeline.reset();
     renderPass.reset();
+    shaderModules.reset();
     swapchain.reset();
     device.reset();
     physicalDevice.reset();
     surface.reset();
     instance.reset();
 
-}
-
-void
-VulkanContext::createPipelineLayout(){
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-
-    if(vkCreatePipelineLayout(device->getDevice(),&pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS){
-        throw std::runtime_error("failed to create pipeline layout!");
-    }
-}
-
-void VulkanContext::createGraphicsPipeline(){
-    //load shaders
-    if (!shaderModules->createShaderModule("vert", "shaders/shader.vert.spv", OhaoVkShaderModule::ShaderType::VERTEX)
-        ||!shaderModules->createShaderModule("frag", "shaders/shader.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT)) {
-        throw std::runtime_error("graphics pipeline shader modules failed to create!");
-    }
-
-    VkPipelineShaderStageCreateInfo vertShaderStageInfo = shaderModules->getShaderStageInfo("vert");
-    VkPipelineShaderStageCreateInfo fragShaderStageInfo = shaderModules->getShaderStageInfo("frag");
-
-    VkPipelineShaderStageCreateInfo shaderStages[]{vertShaderStageInfo, fragShaderStageInfo};
-
-    //vertex input
-    auto bindingDescription = Vertex::getBindingDescriptions();
-    auto attributeDescription = Vertex::getAttributeDescriptions();
-
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescription.size());
-    vertexInputInfo.pVertexBindingDescriptions = bindingDescription.data();
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescription.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescription.data();
-
-    //Input assembly
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
-
-    //viewport
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(swapchain->getExtent().width);
-    viewport.height = static_cast<float>(swapchain->getExtent().height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = swapchain->getExtent();
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.pViewports = &viewport;
-    viewportState.scissorCount = 1;
-    viewportState.pScissors = &scissor;
-
-    //Rasterizer
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_FALSE;
-
-    //Multisampling
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    //color blending
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT; ;
-    colorBlendAttachment.blendEnable = VK_FALSE;
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
-    depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.stencilTestEnable = VK_FALSE;
-
-    //graphics pipeline
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = shaderStages;
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass->getRenderPass();
-    pipelineInfo.subpass = 0;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-
-    if(vkCreateGraphicsPipelines(device->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS){
-        throw std::runtime_error("failed to create graphics pipeline!");
-    }
 }
 
 void
@@ -429,7 +312,7 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
                     0);                          // clear stencil)
 
     // Bind pipeline and set viewport/scissor
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    pipeline->bind(commandBuffer);
 
     // Bind vertex and index buffers
     VkBuffer vertexBuffers[] = {vertexBuffer};
@@ -441,7 +324,7 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
     vkCmdBindDescriptorSets(
         commandBuffer,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
-        pipelineLayout,
+        pipeline->getPipelineLayout(),
         0, 1,
         &descriptorSets[currentFrame],
         0, nullptr
