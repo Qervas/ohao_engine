@@ -5,6 +5,7 @@
 #include <vk/ohao_vk_command_manager.hpp>
 #include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
+#include <vk/ohao_vk_framebuffer.hpp>
 #include <vk/ohao_vk_image.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_pipeline.hpp>
@@ -76,31 +77,19 @@ private:
     std::unique_ptr<OhaoVkSurface> surface;
     std::unique_ptr<OhaoVkPhysicalDevice> physicalDevice;
     std::unique_ptr<OhaoVkDevice> device;
-    //Queue handles
     VkQueue graphicsQueue{VK_NULL_HANDLE};
     VkQueue presentQueue{VK_NULL_HANDLE};
     std::unique_ptr<OhaoVkSwapChain> swapchain;
     uint32_t width{WIDTH}, height{HEIGHT};
     std::unique_ptr<OhaoVkShaderModule> shaderModules;
-
-    //pipeline
     std::unique_ptr<OhaoVkRenderPass> renderPass;
     std::unique_ptr<OhaoVkPipeline> pipeline;
-
     std::unique_ptr<OhaoVkDescriptor> descriptor;
-
-    //framebuffers
-    std::vector<VkFramebuffer> swapChainFrameBuffers;
+    std::unique_ptr<OhaoVkFramebuffer> framebufferManager;
     std::unique_ptr<OhaoVkCommandManager> commandManager;
-
     std::unique_ptr<OhaoVkSyncObjects> syncObjects;
     const int MAX_FRAMES_IN_FLIGHT = 2;
     size_t currentFrame = 0;
-
-    void createFramebuffers();
-
-    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
-
     std::unique_ptr<OhaoVkBuffer> vertexBuffer;
     std::unique_ptr<OhaoVkBuffer> indexBuffer;
     std::vector<std::unique_ptr<OhaoVkBuffer>> uniformBuffers;
@@ -108,6 +97,7 @@ private:
 
     Camera camera;
 
+    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
     void createUniformBuffers();
     void updateUniformBuffer(uint32_t currentImage);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);

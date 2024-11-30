@@ -17,6 +17,7 @@
 #include <vk/ohao_vk_command_manager.hpp>
 #include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
+#include <vk/ohao_vk_framebuffer.hpp>
 #include <vk/ohao_vk_image.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_pipeline.hpp>
@@ -99,7 +100,12 @@ VulkanContext::initialize(){
     }
 
     createDepthResources();
-    createFramebuffers();
+
+    framebufferManager = std::make_unique<OhaoVkFramebuffer>();
+    if(!framebufferManager->initialize(device.get(), swapchain.get(), renderPass.get(), depthImage.get())){
+        throw std::runtime_error("engine framebuffer manager initialization failed!");
+    }
+
     createUniformBuffers();
 
     descriptor = std::make_unique<OhaoVkDescriptor>();
@@ -149,16 +155,10 @@ VulkanContext::cleanup(){
     }
     indexBuffer.reset();
     vertexBuffer.reset();
-
     descriptor.reset();
-
     syncObjects.reset();
     commandManager.reset();
-
-    for(auto framebuffer : swapChainFrameBuffers){
-        vkDestroyFramebuffer(device->getDevice(), framebuffer, nullptr);
-    }
-
+    framebufferManager.reset();
     pipeline.reset();
     renderPass.reset();
     shaderModules.reset();
@@ -167,31 +167,6 @@ VulkanContext::cleanup(){
     physicalDevice.reset();
     surface.reset();
     instance.reset();
-
-}
-
-void
-VulkanContext::createFramebuffers(){
-    swapChainFrameBuffers.resize(swapchain->getImageViews().size());
-
-    for(size_t i = 0; i < swapchain->getImageViews().size(); ++i){
-        std::array<VkImageView, 2> attachments = {
-                    swapchain->getImageViews().at(i),
-                    depthImage->getImageView()
-                };
-        VkFramebufferCreateInfo framebufferInfo{};
-        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = renderPass->getRenderPass();
-        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-        framebufferInfo.pAttachments = attachments.data();
-        framebufferInfo.width = swapchain->getExtent().width;
-        framebufferInfo.height = swapchain->getExtent().height;
-        framebufferInfo.layers = 1;
-
-        if(vkCreateFramebuffer(device->getDevice(), &framebufferInfo, nullptr, &swapChainFrameBuffers[i]) != VK_SUCCESS){
-            throw std::runtime_error("failed to create framebuffer!");
-        }
-    }
 }
 
 void
@@ -258,7 +233,7 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
         throw std::runtime_error("failed to begin recording command buffer!");
     }
 
-    renderPass->begin(commandBuffer, swapChainFrameBuffers[imageIndex], swapchain->getExtent(),
+    renderPass->begin(commandBuffer, framebufferManager->getFramebuffer(imageIndex), swapchain->getExtent(),
                     {0.2f, 0.2f, 0.2f, 1.0f},  // clear color
                     1.0f,                       // clear depth
                     0);                          // clear stencil
