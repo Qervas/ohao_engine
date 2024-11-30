@@ -1,5 +1,6 @@
 #pragma once
 #include <GLFW/glfw3.h>
+#include <cstdint>
 #include <glm/ext/vector_float2.hpp>
 #include <string>
 #include <glm/glm.hpp>
@@ -8,7 +9,7 @@ namespace ohao {
 
 class Window {
 public:
-    Window(int w, int h, const std::string& title);
+    Window(uint32_t w, uint32_t h, const std::string& title);
     ~Window();
 
     bool shouldClose();
@@ -19,6 +20,8 @@ public:
     bool isKeyPressed(int key) const;
     glm::vec2 getMousePosition() const;
     glm::vec2 getMouseDelta();
+    uint32_t getWidth() const { return width; }
+    uint32_t getHeight() const { return height; }
     void enableCursor(bool enabled);
     void setMousePosition(const glm::vec2& pos);
 
@@ -26,6 +29,8 @@ private:
     GLFWwindow* window;
     glm::vec2 lastMousePos{0.0f};
     bool firstMouse{true};
+    uint32_t width{};
+    uint32_t height{};
 };
 
 } // namespace ohao

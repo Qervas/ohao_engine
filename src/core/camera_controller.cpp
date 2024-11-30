@@ -5,8 +5,8 @@
 
 namespace ohao {
 
-CameraController::CameraController(Camera& camera, Window& window)
-    : camera(camera), window(window) {
+CameraController::CameraController(Camera& camera, Window& window, OhaoVkUniformBuffer& uniformBuffer)
+    : camera(camera), window(window), uniformBuffer(uniformBuffer) {
 }
 
 void
@@ -46,7 +46,9 @@ CameraController::updatePosition(float deltaTime){
     if (glm::length(movement) > 0.0f) {
         movement = glm::normalize(movement) * velocity;
         camera.move( movement);
+        uniformBuffer.markForUpdate();
     }
+
 }
 
 void
@@ -57,6 +59,7 @@ CameraController::updateRotation(){
         float deltaPitch = mouseDelta.y * mouseSensitivity * (invertY ? 1.0f : -1.0f);
         float deltaYaw = mouseDelta.x * mouseSensitivity;
         camera.rotate(deltaPitch, deltaYaw);
+        uniformBuffer.markForUpdate();
     }
 }
 

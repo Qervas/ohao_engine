@@ -1,6 +1,5 @@
 #include "ohao_vk_swapchain.hpp"
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -22,6 +21,7 @@ bool OhaoVkSwapChain::initialize(OhaoVkDevice* device,
     try {
         createSwapChain(width, height);
         createImageViews();
+        setupPresentInfo();
     } catch (const std::exception& e) {
         std::cerr << "Failed to create swap chain: " << e.what() << std::endl;
         cleanup();
@@ -189,6 +189,18 @@ VkExtent2D OhaoVkSwapChain::chooseSwapExtent(
         capabilities.maxImageExtent.height);
 
     return actualExtent;
+}
+
+void OhaoVkSwapChain::setupPresentInfo() {
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &swapChain;
+}
+
+void OhaoVkSwapChain::updatePresentInfo(VkSemaphore waitSemaphore, uint32_t* pImageIndex) {
+    presentInfo.pWaitSemaphores = &waitSemaphore;
+    presentInfo.pImageIndices = pImageIndex;
 }
 
 } // namespace ohao

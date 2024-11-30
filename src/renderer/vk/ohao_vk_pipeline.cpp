@@ -4,7 +4,6 @@
 #include "ohao_vk_shader_module.hpp"
 #include "../../core/model.hpp"
 #include <iostream>
-#include <stdexcept>
 
 namespace ohao {
 

@@ -10,9 +10,10 @@ int main() {
     try {
         ohao::Window window(1440, 900, "OHAO Engine");
         ohao::VulkanContext vulkan(window.getGLFWWindow());
-        vulkan.initialize();
+        vulkan.initializeVulkan();
+        vulkan.initializeScene();
 
-        ohao::CameraController cameraController(vulkan.getCamera(), window);
+        ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
         auto lastTime = std::chrono::high_resolution_clock::now();
 

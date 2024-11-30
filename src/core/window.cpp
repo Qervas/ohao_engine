@@ -1,10 +1,12 @@
 #include "window.hpp"
 #include <GLFW/glfw3.h>
+#include <cstdint>
 #include <stdexcept>
 
 namespace ohao {
 
-Window::Window(int w, int h, const std::string& title) {
+Window::Window(uint32_t w, uint32_t h, const std::string& title)
+    : width(w), height(h){
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW");
     }
@@ -12,7 +14,7 @@ Window::Window(int w, int h, const std::string& title) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
-    window = glfwCreateWindow(w, h, title.c_str(), nullptr, nullptr);
+    window = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
     if (!window) {
         glfwTerminate();
         throw std::runtime_error("Failed to create window");

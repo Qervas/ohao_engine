@@ -33,21 +33,21 @@
 
 // Change this to select preferred GPU vendor
 #define PREFERRED_GPU_VENDOR GPU_VENDOR_NVIDIA
-#define WIDTH 1024
-#define HEIGHT 768
 
 namespace ohao {
 
 class VulkanContext {
 public:
-    VulkanContext();
+    VulkanContext() = delete;
     VulkanContext(GLFWwindow* windowHandle);
     ~VulkanContext();
 
-    void initialize();
+    void initializeVulkan();
+    void initializeScene();
     void cleanup();
 
     VkDevice getDevice()const{return device->getDevice();}
+    OhaoVkUniformBuffer* getUniformBuffer() const {return uniformBuffer.get();}
     void drawFrame();
 
     struct UniformBufferObject{
@@ -74,39 +74,37 @@ public:
 
 private:
     GLFWwindow* window;
+
+    //vulkan
+    const int MAX_FRAMES_IN_FLIGHT = 2;
+    size_t currentFrame = 0;
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+    uint32_t width{}, height{};
+    VkQueue graphicsQueue{VK_NULL_HANDLE};
+    VkQueue presentQueue{VK_NULL_HANDLE};
     std::unique_ptr<OhaoVkInstance> instance;
     std::unique_ptr<OhaoVkSurface> surface;
     std::unique_ptr<OhaoVkPhysicalDevice> physicalDevice;
     std::unique_ptr<OhaoVkDevice> device;
-    VkQueue graphicsQueue{VK_NULL_HANDLE};
-    VkQueue presentQueue{VK_NULL_HANDLE};
     std::unique_ptr<OhaoVkSwapChain> swapchain;
-    uint32_t width{WIDTH}, height{HEIGHT};
     std::unique_ptr<OhaoVkShaderModule> shaderModules;
     std::unique_ptr<OhaoVkRenderPass> renderPass;
     std::unique_ptr<OhaoVkPipeline> pipeline;
     std::unique_ptr<OhaoVkDescriptor> descriptor;
+    std::unique_ptr<OhaoVkImage> depthImage;
     std::unique_ptr<OhaoVkFramebuffer> framebufferManager;
     std::unique_ptr<OhaoVkCommandManager> commandManager;
     std::unique_ptr<OhaoVkSyncObjects> syncObjects;
-    const int MAX_FRAMES_IN_FLIGHT = 2;
-    size_t currentFrame = 0;
     std::unique_ptr<OhaoVkBuffer> vertexBuffer;
     std::unique_ptr<OhaoVkBuffer> indexBuffer;
     std::unique_ptr<OhaoVkUniformBuffer> uniformBuffer;
-
-    Camera camera;
-
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
     void createVertexBuffer(const std::vector<Vertex>& vertices);
     void createIndexBuffer(const std::vector<uint32_t>& indices);
 
+    Camera camera;
     std::unique_ptr<Scene> scene;
-    std::unique_ptr<OhaoVkImage> depthImage;
 
-    void createDepthResources();
-
-    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 };
 
 } // namespace ohao

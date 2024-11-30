@@ -1,7 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <vector>
-#include <array>
 
 namespace ohao {
 

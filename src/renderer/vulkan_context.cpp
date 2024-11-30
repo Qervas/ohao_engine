@@ -1,9 +1,7 @@
 #include "vulkan_context.hpp"
 #include <GLFW/glfw3.h>
 #include <alloca.h>
-#include <chrono>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -35,14 +33,17 @@
 
 namespace ohao{
 
-VulkanContext::VulkanContext(){}
-
-VulkanContext::VulkanContext(GLFWwindow* windowHandle): window(windowHandle){}
+VulkanContext::VulkanContext(GLFWwindow* windowHandle): window(windowHandle){
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+    width = static_cast<uint32_t>(w);
+    height = static_cast<uint32_t>(h);
+}
 
 VulkanContext::~VulkanContext(){cleanup();}
 
 void
-VulkanContext::initialize(){
+VulkanContext::initializeVulkan(){
     //vulkan setup
     instance = std::make_unique<OhaoVkInstance>();
     if (!instance->initialize("OHAO Engine", OHAO_ENABLE_VALIDATION_LAYER)) {
@@ -52,7 +53,6 @@ VulkanContext::initialize(){
     if (!surface->initialize(instance.get(), window)){
         throw std::runtime_error("engine surface initialization failed!");
     }
-
 
     physicalDevice = std::make_unique<OhaoVkPhysicalDevice>();
     if (!physicalDevice->initialize(instance.get(), surface.get(),
@@ -100,7 +100,13 @@ VulkanContext::initialize(){
         throw std::runtime_error("failed to allocate command buffers!");
     }
 
-    createDepthResources();
+    depthImage = std::make_unique<OhaoVkImage>();
+    if (!depthImage->initialize(device.get())) {
+        throw std::runtime_error("engine depth image initialization failed!");
+    }
+    if (!depthImage->createDepthResources(swapchain->getExtent(), msaaSamples)) {
+        throw std::runtime_error("Failed to create depth resources!");
+    }
 
     framebufferManager = std::make_unique<OhaoVkFramebuffer>();
     if(!framebufferManager->initialize(device.get(), swapchain.get(), renderPass.get(), depthImage.get())){
@@ -129,24 +135,10 @@ VulkanContext::initialize(){
     if(!syncObjects->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)){
         throw std::runtime_error("engine sync objects initialization failed!");
     }
-
-    //load model
-    scene = std::make_unique<Scene>();
-    scene->loadFromFile("assets/models/cornell_box.obj");
-    auto sceneObjects = scene->getObjects();
-    if (sceneObjects.empty()) {
-        throw std::runtime_error("No objects loaded in scene!");
-    }
-    auto mainObject = sceneObjects.begin()->second;
-
-    createVertexBuffer(mainObject->model->vertices);
-    createIndexBuffer(mainObject->model->indices);
 }
-
 void
 VulkanContext::cleanup(){
     depthImage.reset();
-
     uniformBuffer.reset();
     indexBuffer.reset();
     vertexBuffer.reset();
@@ -165,35 +157,65 @@ VulkanContext::cleanup(){
 }
 
 void
+VulkanContext::initializeScene() {
+    scene = std::make_unique<Scene>();
+    scene->loadFromFile("assets/models/cornell_box.obj");
+    auto sceneObjects = scene->getObjects();
+    if (sceneObjects.empty()) {
+        throw std::runtime_error("No objects loaded in scene!");
+    }
+    auto mainObject = sceneObjects.begin()->second;
+
+    createVertexBuffer(mainObject->model->vertices);
+    createIndexBuffer(mainObject->model->indices);
+
+    // Initialize uniform buffer with scene data
+    UniformBufferObject initialUBO{};
+    initialUBO.model = glm::mat4(1.0f);
+    initialUBO.view = camera.getViewMatrix();
+    initialUBO.proj = camera.getProjectionMatrix();
+    initialUBO.viewPos = camera.getPosition();
+    initialUBO.proj[1][1] *= -1;
+
+    // Set default values
+    initialUBO.baseColor = mainObject->material.baseColor;
+    initialUBO.metallic = mainObject->material.metallic;
+    initialUBO.roughness = mainObject->material.roughness;
+    initialUBO.ao = mainObject->material.ao;
+
+    // Get light data from scene
+    const auto& lights = scene->getLights();
+    if (!lights.empty()) {
+        const auto& light = lights.begin()->second;
+        initialUBO.lightPos = light.position;
+        initialUBO.lightColor = light.color;
+        initialUBO.lightIntensity = light.intensity;
+    }
+
+    // Write initial values to all uniform buffers
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        uniformBuffer->writeToBuffer(i, &initialUBO, sizeof(UniformBufferObject));
+    }
+}
+
+void
 VulkanContext::drawFrame(){
     syncObjects->waitForFence(currentFrame);
+    syncObjects->resetFence(currentFrame);
 
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(device->getDevice(), swapchain->getSwapChain(), UINT64_MAX,
                     syncObjects->getImageAvailableSemaphore(currentFrame), VK_NULL_HANDLE, &imageIndex);
 
-    if(result != VK_SUCCESS){
+    if(result == VK_ERROR_OUT_OF_DATE_KHR) return;
+
+    if(result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR){
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
-    UniformBufferObject ubo{};
-    ubo.model = glm::mat4(1.0f);
-    ubo.view = camera.getViewMatrix();
-    ubo.proj = camera.getProjectionMatrix();
-    ubo.viewPos = camera.getPosition();
-    ubo.proj[1][1] *= -1;
 
-    UniformBufferObject* currentUBO = static_cast<UniformBufferObject*>(uniformBuffer->getMappedMemory(currentFrame));
-    ubo.lightPos = currentUBO->lightPos;
-    ubo.lightColor = currentUBO->lightColor;
-    ubo.lightIntensity = currentUBO->lightIntensity;
-    ubo.baseColor = currentUBO->baseColor;
-    ubo.metallic = currentUBO->metallic;
-    ubo.roughness = currentUBO->roughness;
-    ubo.ao = currentUBO->ao;
 
-    uniformBuffer->writeToBuffer(currentFrame, &ubo, sizeof(ubo));
-    syncObjects->resetFence(currentFrame);
+    uniformBuffer->updateFromCamera(currentFrame, camera);
     commandManager->resetCommandBuffer(currentFrame);
     recordCommandBuffer(commandManager->getCommandBuffer(currentFrame), imageIndex);
 
@@ -281,9 +303,6 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
     );
 
     vkCmdEndRenderPass(commandBuffer);
-
-
-
     if(vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer!");
     }
@@ -324,24 +343,5 @@ VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices){
         throw std::runtime_error("Failed to create index buffer!");
     }
 }
-
-void
-VulkanContext::createDepthResources(){
-    VkFormat depthFormat = OhaoVkImage::findDepthFormat(device.get());
-    depthImage = std::make_unique<OhaoVkImage>();
-    depthImage->initialize(device.get());
-
-    if(!depthImage->createImage(swapchain->getExtent().width, swapchain->getExtent().height,
-        depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, msaaSamples)){
-
-        throw std::runtime_error("failed to create depth image!");
-    }
-
-    if(!depthImage->createImageView(depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT)){
-        throw std::runtime_error("failed to create depth image view!");
-    }
-}
-
 
 }//namespace ohao

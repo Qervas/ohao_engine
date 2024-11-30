@@ -76,4 +76,50 @@ OhaoVkBuffer* OhaoVkUniformBuffer::getBuffer(uint32_t frameIndex) const {
     return uniformBuffers[frameIndex].get();
 }
 
+void OhaoVkUniformBuffer::updateFromCamera(uint32_t frameIndex, const Camera& camera) {
+    // Always update camera-dependent properties
+    cachedUBO.model = glm::mat4(1.0f);
+    cachedUBO.view = camera.getViewMatrix();
+    cachedUBO.proj = camera.getProjectionMatrix();
+    cachedUBO.viewPos = camera.getPosition();
+    cachedUBO.proj[1][1] *= -1;
+
+    // Only copy other properties if this is the first update or they've changed
+    if (needsUpdate) {
+        UniformBufferObject* currentUBO = static_cast<UniformBufferObject*>(getMappedMemory(frameIndex));
+        cachedUBO.lightPos = currentUBO->lightPos;
+        cachedUBO.lightColor = currentUBO->lightColor;
+        cachedUBO.lightIntensity = currentUBO->lightIntensity;
+        cachedUBO.baseColor = currentUBO->baseColor;
+        cachedUBO.metallic = currentUBO->metallic;
+        cachedUBO.roughness = currentUBO->roughness;
+        cachedUBO.ao = currentUBO->ao;
+        needsUpdate = false;
+    }
+
+    writeToBuffer(frameIndex, &cachedUBO, sizeof(UniformBufferObject));
+}
+
+void OhaoVkUniformBuffer::setLightProperties(
+    const glm::vec3& pos,
+    const glm::vec3& color,
+    float intensity){
+    cachedUBO.lightPos = pos;
+    cachedUBO.lightColor = color;
+    cachedUBO.lightIntensity = intensity;
+    needsUpdate = true;
+}
+
+void OhaoVkUniformBuffer::setMaterialProperties(
+    const glm::vec3& color,
+    float metallic,
+    float roughness,
+    float ao){
+    cachedUBO.baseColor = color;
+    cachedUBO.metallic = metallic;
+    cachedUBO.roughness = roughness;
+    cachedUBO.ao = ao;
+    needsUpdate = true;
+}
+
 } // namespace ohao

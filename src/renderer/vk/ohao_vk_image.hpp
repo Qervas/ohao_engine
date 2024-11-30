@@ -1,6 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
-#include <vector>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
@@ -30,6 +30,8 @@ public:
         VkFormat format,
         VkImageAspectFlags aspectFlags
     );
+
+    bool createDepthResources(VkExtent2D extent, VkSampleCountFlagBits msaaSamples);
 
     // Depth buffer specific functions
     static VkFormat findDepthFormat(OhaoVkDevice* device);

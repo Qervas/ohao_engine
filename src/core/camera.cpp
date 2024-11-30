@@ -23,19 +23,26 @@ Camera::Camera(float fov, float aspect, float nearPlane, float farPlane)
 
 void
 Camera::updateVectors(){
-    front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-    front.y = sin(glm::radians(pitch));
-    front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-    front = glm::normalize(front);
+    // Calculate all vectors first
+    glm::vec3 newFront;
+    newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+    newFront.y = sin(glm::radians(pitch));
+    newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+    newFront = glm::normalize(newFront);
 
-    right = glm::normalize(glm::cross(front, worldUp));
-    up = glm::normalize(glm::cross(right, front));
+    glm::vec3 newRight = glm::normalize(glm::cross(newFront, worldUp));
+    glm::vec3 newUp = glm::normalize(glm::cross(newRight, newFront));
+
+    // Update all vectors and matrices atomically
+    front = newFront;
+    right = newRight;
+    up = newUp;
 
     viewMatrix = glm::lookAt(position, position + front, up);
 
-    if(projectionType == ProjectionType::Perspective){
+    if(projectionType == ProjectionType::Perspective) {
         projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
-    }else{
+    } else {
         projectionMatrix = glm::ortho(orthoLeft, orthoRight, orthoBottom, orthoTop, nearPlane, farPlane);
     }
 }

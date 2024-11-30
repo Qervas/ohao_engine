@@ -1,7 +1,8 @@
 #pragma once
+#include <cstdint>
 #include <vulkan/vulkan.h>
 #include <vector>
-#include <memory>
+#include <vulkan/vulkan_core.h>
 #include "ohao_vk_device.hpp"
 #include "ohao_vk_surface.hpp"
 
@@ -46,6 +47,9 @@ private:
         const VkSurfaceCapabilitiesKHR& capabilities,
         uint32_t width,
         uint32_t height);
+    void setupPresentInfo();
+    void updatePresentInfo(VkSemaphore waitSemaphore, uint32_t* pImageIndex);
+
 
     OhaoVkDevice* device{nullptr};
     OhaoVkSurface* surface{nullptr};
@@ -55,6 +59,9 @@ private:
     std::vector<VkImageView> imageViews;
     VkFormat imageFormat;
     VkExtent2D extent;
+
+    VkPresentInfoKHR presentInfo{};
+
 };
 
 } // namespace ohao

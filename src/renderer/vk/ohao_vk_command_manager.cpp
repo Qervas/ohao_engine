@@ -11,6 +11,7 @@ OhaoVkCommandManager::~OhaoVkCommandManager() {
 
 bool OhaoVkCommandManager::initialize(OhaoVkDevice* devicePtr, uint32_t queueFamilyIndex) {
     device = devicePtr;
+    setupSubmitInfo();
     return createCommandPool(queueFamilyIndex);
 }
 
@@ -119,6 +120,22 @@ void OhaoVkCommandManager::endSingleTime(VkCommandBuffer commandBuffer) {
     vkQueueWaitIdle(device->getGraphicsQueue());
 
     vkFreeCommandBuffers(device->getDevice(), commandPool, 1, &commandBuffer);
+}
+
+void OhaoVkCommandManager::setupSubmitInfo() {
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitDstStageMask = &waitStages;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.signalSemaphoreCount = 1;
+}
+
+void OhaoVkCommandManager::updateSubmitInfo(VkSemaphore waitSemaphore,
+                                          VkSemaphore signalSemaphore,
+                                          VkCommandBuffer commandBuffer) {
+    submitInfo.pWaitSemaphores = &waitSemaphore;
+    submitInfo.pCommandBuffers = &commandBuffer;
+    submitInfo.pSignalSemaphores = &signalSemaphore;
 }
 
 } // namespace ohao

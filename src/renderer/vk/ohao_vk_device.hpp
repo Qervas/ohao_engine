@@ -1,7 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <vector>
-#include <memory>
 #include "ohao_vk_physical_device.hpp"
 
 namespace ohao {

@@ -96,6 +96,28 @@ bool OhaoVkImage::createImageView(VkFormat format, VkImageAspectFlags aspectFlag
     return true;
 }
 
+bool OhaoVkImage::createDepthResources(VkExtent2D extent, VkSampleCountFlagBits msaaSamples) {
+    VkFormat depthFormat = findDepthFormat(device);
+
+    if (!createImage(
+        extent.width, extent.height,
+        depthFormat,
+        VK_IMAGE_TILING_OPTIMAL,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        msaaSamples)) {
+        std::cerr << "Failed to create depth image!" << std::endl;
+        return false;
+    }
+
+    if (!createImageView(depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        std::cerr << "Failed to create depth image view!" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
 VkFormat OhaoVkImage::findDepthFormat(OhaoVkDevice* device) {
     const std::vector<VkFormat> candidates = {
         VK_FORMAT_D32_SFLOAT,

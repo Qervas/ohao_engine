@@ -30,12 +30,22 @@ public:
     VkCommandBuffer beginSingleTime();
     void endSingleTime(VkCommandBuffer commandBuffer);
 
+    //submit info
+    const VkSubmitInfo* getSubmitInfo() const { return &submitInfo; }
+    void updateSubmitInfo(VkSemaphore waitSemaphore,
+                         VkSemaphore signalSemaphore,
+                         VkCommandBuffer commandBuffer);
+
 private:
     OhaoVkDevice* device{nullptr};
     VkCommandPool commandPool{VK_NULL_HANDLE};
     std::vector<VkCommandBuffer> commandBuffers;
 
+    VkSubmitInfo submitInfo{};
+    VkPipelineStageFlags waitStages{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+
     bool createCommandPool(uint32_t queueFamilyIndex);
+    void setupSubmitInfo();
 };
 
 } // namespace ohao
