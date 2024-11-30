@@ -1,6 +1,6 @@
 # OHAO Engine
 
-OHAO Engine is a modern, high-performance game engine developed for Linux platforms, focusing on advanced rendering techniques, procedural generation, and physics simulation.
+OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
 
 
 ## Building
@@ -27,8 +27,10 @@ make
 
 Currently in early development. Features being implemented:
 - [x] Basic window creation
-- [ ] Vulkan initialization
-
+- [x] Vulkan initialization, validation layer, pipeline, rasterization
+- [x] Load scene from obj file, including lighting and materials
+- [x] Friendly camera control
+- [ ] User interface
 
 ## Documentation
 
