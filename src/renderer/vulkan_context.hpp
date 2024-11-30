@@ -10,6 +10,7 @@
 #include <vk/ohao_vk_shader_module.hpp>
 #include <vk/ohao_vk_surface.hpp>
 #include <vk/ohao_vk_swapchain.hpp>
+#include <vk/ohao_vk_sync_objects.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -92,9 +93,8 @@ private:
     VkCommandPool commandPool{VK_NULL_HANDLE};
     std::vector<VkCommandBuffer> commandBuffers;
 
-    std::vector<VkSemaphore> imageAvailableSemaphores;
-    std::vector<VkSemaphore> renderFinishedSemaphores;
-    std::vector<VkFence> inFlightFences;
+    std::unique_ptr<OhaoVkSyncObjects> syncObjects;
+
     const int MAX_FRAMES_IN_FLIGHT = 2;
     size_t currentFrame = 0;
 
@@ -120,8 +120,6 @@ private:
 
     void createVertexBuffer(const std::vector<Vertex>& vertices);
     void createIndexBuffer(const std::vector<uint32_t>& indices);
-    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags propertiesm, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
-    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
 
     void updateMaterial(const Material& material);
     void updateLight(const glm::vec3& position, const glm::vec3& color, float intensity);

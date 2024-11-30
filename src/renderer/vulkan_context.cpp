@@ -23,6 +23,7 @@
 #include <vk/ohao_vk_swapchain.hpp>
 #include <vk/ohao_vk_instance.hpp>
 #include <vk/ohao_vk_shader_module.hpp>
+#include <vk/ohao_vk_sync_objects.hpp>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
 
@@ -108,7 +109,11 @@ VulkanContext::initialize(){
         throw std::runtime_error("engine pipeline initialization failed!");
     }
     createCommandBuffers();
-    createSyncObjects();
+
+    syncObjects = std::make_unique<OhaoVkSyncObjects>();
+    if(!syncObjects->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)){
+        throw std::runtime_error("engine sync objects initialization failed!");
+    }
 
     //load model
     scene = std::make_unique<Scene>();
@@ -144,12 +149,7 @@ VulkanContext::cleanup(){
 
     descriptor.reset();
 
-    for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++){
-        vkDestroySemaphore(device->getDevice(), renderFinishedSemaphores[i], nullptr);
-        vkDestroySemaphore(device->getDevice(), imageAvailableSemaphores[i], nullptr);
-        vkDestroyFence(device->getDevice(), inFlightFences[i], nullptr);
-    }
-
+    syncObjects.reset();
     vkDestroyCommandPool(device->getDevice(), commandPool, nullptr);
 
     for(auto framebuffer : swapChainFrameBuffers){
@@ -220,43 +220,20 @@ VulkanContext::createCommandBuffers(){
     }
 }
 
-
-void
-VulkanContext::createSyncObjects(){
-    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
-
-    VkSemaphoreCreateInfo semaphoreInfo{};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-    VkFenceCreateInfo fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-    for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++){
-        if(vkCreateSemaphore(device->getDevice(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS
-            || vkCreateSemaphore(device->getDevice(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS
-            || vkCreateFence(device->getDevice(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS
-        ){
-            throw std::runtime_error("failed to create synchronization objects!");
-        }
-    }
-}
-
 void
 VulkanContext::drawFrame(){
-    vkWaitForFences(device->getDevice(), 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    syncObjects->waitForFence(currentFrame);
 
     uint32_t imageIndex;
-    VkResult result = vkAcquireNextImageKHR(device->getDevice(), swapchain->getSwapChain(), UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+    VkResult result = vkAcquireNextImageKHR(device->getDevice(), swapchain->getSwapChain(), UINT64_MAX,
+                    syncObjects->getImageAvailableSemaphore(currentFrame), VK_NULL_HANDLE, &imageIndex);
 
     if(result != VK_SUCCESS){
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
     updateUniformBuffer(currentFrame);
-    vkResetFences(device->getDevice(), 1, &inFlightFences[currentFrame]);
+    syncObjects->resetFence(currentFrame);
     vkResetCommandBuffer(commandBuffers[currentFrame], 0);
     recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
@@ -264,7 +241,7 @@ VulkanContext::drawFrame(){
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    VkSemaphore waitSemaphores[]{imageAvailableSemaphores[currentFrame]};
+    VkSemaphore waitSemaphores[]{syncObjects->getImageAvailableSemaphore(currentFrame)};
     VkPipelineStageFlags waitStages[] {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = waitSemaphores;
@@ -272,11 +249,11 @@ VulkanContext::drawFrame(){
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
-    VkSemaphore signalSemaphores[]{renderFinishedSemaphores[currentFrame]};
+    VkSemaphore signalSemaphores[]{syncObjects->getRenderFinishedSemaphore(currentFrame)};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    if(vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS){
+    if(vkQueueSubmit(graphicsQueue, 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS){
         throw std::runtime_error("failed to submit draw command buffer");
     }
 
@@ -421,73 +398,6 @@ VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags propert
     throw std::runtime_error("failed to find suitable memory type!");
 }
 
-void
-VulkanContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-            VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory){
-
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if(vkCreateBuffer(device->getDevice(), &bufferInfo, nullptr, &buffer) != VK_SUCCESS){
-        throw std::runtime_error("failed to create buffer!");
-    }
-
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(device->getDevice(), buffer, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-    if(vkAllocateMemory(device->getDevice(), &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS){
-        throw std::runtime_error("failed to allocate buffer memory!");
-    }
-
-    vkBindBufferMemory(device->getDevice(), buffer, bufferMemory, 0);
-}
-
-void
-VulkanContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size){
-    if (commandPool == VK_NULL_HANDLE) {
-        throw std::runtime_error("Attempting to copy buffer before command pool creation!");
-    }
-
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool = commandPool;
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer commandBuffer;
-    if (vkAllocateCommandBuffers(device->getDevice(), &allocInfo, &commandBuffer) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate command buffer for copy operation!");
-    }
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-    VkBufferCopy copyRegion{};
-    copyRegion.size = size;
-    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-
-    vkEndCommandBuffer(commandBuffer);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
-
-    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(graphicsQueue);
-
-    vkFreeCommandBuffers(device->getDevice(), commandPool, 1, &commandBuffer);
-}
 
 void
 VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices){
