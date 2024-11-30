@@ -19,6 +19,8 @@ public:
     VkDevice getDevice() const { return device; }
     VkQueue getGraphicsQueue() const { return graphicsQueue; }
     VkQueue getPresentQueue() const { return presentQueue; }
+    const QueueFamilyIndices& getQueueFamilyIndices() const {return queueFamilyIndices;}
+    OhaoVkPhysicalDevice* getPhysicalDevice() const {return physicalDevice;}
 
     // Device operations
     void waitIdle() const;

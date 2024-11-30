@@ -27,10 +27,4 @@ private:
     OhaoVkInstance* vkInstance{nullptr}; // Non-owning pointer
 };
 
-struct SwapChainSupportDetails {
-    VkSurfaceCapabilitiesKHR capabilities;
-    std::vector<VkSurfaceFormatKHR> formats;
-    std::vector<VkPresentModeKHR> presentModes;
-};
-
 } // namespace ohao

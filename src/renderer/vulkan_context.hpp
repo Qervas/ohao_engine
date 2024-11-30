@@ -5,6 +5,7 @@
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_surface.hpp>
+#include <vk/ohao_vk_swapchain.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -26,6 +27,8 @@
 
 // Change this to select preferred GPU vendor
 #define PREFERRED_GPU_VENDOR GPU_VENDOR_NVIDIA
+#define WIDTH 1024
+#define HEIGHT 768
 
 namespace ohao {
 
@@ -69,36 +72,11 @@ private:
     std::unique_ptr<OhaoVkSurface> surface;
     std::unique_ptr<OhaoVkPhysicalDevice> physicalDevice;
     std::unique_ptr<OhaoVkDevice> device;
-
-
     //Queue handles
     VkQueue graphicsQueue{VK_NULL_HANDLE};
     VkQueue presentQueue{VK_NULL_HANDLE};
-
-    void createLogicalDevice();
-
-
-    //Swap Chain
-    VkSwapchainKHR swapChain{VK_NULL_HANDLE};
-    std::vector<VkImage> swapChainImages;
-    VkFormat swapChainImageFormat;
-    VkExtent2D swapChainExtent;
-    std::vector<VkImageView> swapChainImageViews;
-
-    struct SwapChainSupportDetails{
-        VkSurfaceCapabilitiesKHR capabilities;
-        std::vector<VkSurfaceFormatKHR> formats;
-        std::vector<VkPresentModeKHR> presentModes;
-    };
-
-    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
-    VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
-    VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes);
-    VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
-    void createSwapChain();
-    void createImageViews();
-
-
+    std::unique_ptr<OhaoVkSwapChain> swapchain;
+    uint32_t width{WIDTH}, height{HEIGHT};
 
     //shader
     enum class ShaderType{
