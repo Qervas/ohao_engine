@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
+#include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_pipeline.hpp>
@@ -86,6 +87,8 @@ private:
     std::unique_ptr<OhaoVkRenderPass> renderPass;
     std::unique_ptr<OhaoVkPipeline> pipeline;
 
+    std::unique_ptr<OhaoVkDescriptor> descriptor;
+
     //framebuffers
     std::vector<VkFramebuffer> swapChainFrameBuffers;
 
@@ -108,15 +111,9 @@ private:
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
-    VkDescriptorSetLayout descriptorSetLayout{VK_NULL_HANDLE};
-    VkDescriptorPool descriptorPool{VK_NULL_HANDLE};
-    std::vector<VkDescriptorSet> descriptorSets;
     Camera camera;
 
-    void createDescriptorSetLayout();
     void createUniformBuffers();
-    void createDescriptorPool();
-    void createDescriptorSets();
     void updateUniformBuffer(uint32_t currentImage);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
