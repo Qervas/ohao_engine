@@ -1,7 +1,7 @@
 #pragma once
-#include <algorithm>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
+#include <vk/ohao_vk_buffer.hpp>
 #include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
@@ -13,12 +13,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
-#include <optional>
 #include <vulkan/vulkan.hpp>
 #include <vector>
-#include <string>
 #include <vulkan/vulkan_core.h>
-#include <unordered_map>
 #include "../core/camera.hpp"
 #include "../core/model.hpp"
 #include "../core/material.hpp"
@@ -108,19 +105,17 @@ private:
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 
-    std::vector<VkBuffer> uniformBuffers;
-    std::vector<VkDeviceMemory> uniformBuffersMemory;
+    std::unique_ptr<OhaoVkBuffer> vertexBuffer;
+    std::unique_ptr<OhaoVkBuffer> indexBuffer;
+    std::vector<std::unique_ptr<OhaoVkBuffer>> uniformBuffers;
     std::vector<void*> uniformBuffersMapped;
+
     Camera camera;
 
     void createUniformBuffers();
     void updateUniformBuffer(uint32_t currentImage);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 
-    VkBuffer vertexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory vertexBufferMemory{VK_NULL_HANDLE};
-    VkBuffer indexBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory indexBufferMemory{VK_NULL_HANDLE};
 
 
     void createVertexBuffer(const std::vector<Vertex>& vertices);

@@ -1,6 +1,8 @@
 #include "ohao_vk_descriptor.hpp"
 #include "ohao_vk_device.hpp"
 #include <iostream>
+#include <memory>
+#include <ohao_vk_buffer.hpp>
 
 namespace ohao {
 
@@ -77,9 +79,8 @@ bool OhaoVkDescriptor::createPool() {
 }
 
 bool OhaoVkDescriptor::createDescriptorSets(
-    const std::vector<VkBuffer>& uniformBuffers,
-    VkDeviceSize bufferSize)
-{
+    const std::vector<std::unique_ptr<OhaoVkBuffer>>& uniformBuffers,
+    VkDeviceSize bufferSize){
     std::vector<VkDescriptorSetLayout> layouts(maxSets, layout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
@@ -96,7 +97,7 @@ bool OhaoVkDescriptor::createDescriptorSets(
 
     for (size_t i = 0; i < maxSets; i++) {
         VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = uniformBuffers[i];
+        bufferInfo.buffer = uniformBuffers[i]->getBuffer();
         bufferInfo.offset = 0;
         bufferInfo.range = bufferSize;
 
@@ -113,6 +114,29 @@ bool OhaoVkDescriptor::createDescriptorSets(
     }
 
     return true;
+}
+
+void OhaoVkDescriptor::updateDescriptorSet(
+    uint32_t index,
+    const OhaoVkBuffer& buffer,
+    VkDeviceSize size,
+    VkDeviceSize offset){
+
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = buffer.getBuffer();
+    bufferInfo.offset = offset;
+    bufferInfo.range = size;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSets[index];
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfo;
+
+    vkUpdateDescriptorSets(device->getDevice(), 1, &descriptorWrite, 0, nullptr);
 }
 
 } // namespace ohao

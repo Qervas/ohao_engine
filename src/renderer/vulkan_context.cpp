@@ -136,16 +136,11 @@ VulkanContext::cleanup(){
     vkDestroyImage(device->getDevice(), depthImage, nullptr);
     vkFreeMemory(device->getDevice(), depthImageMemory, nullptr);
 
-    vkDestroyBuffer(device->getDevice(), indexBuffer, nullptr);
-    vkFreeMemory(device->getDevice(), indexBufferMemory, nullptr);
-
-    vkDestroyBuffer(device->getDevice(), vertexBuffer, nullptr);
-    vkFreeMemory(device->getDevice(), vertexBufferMemory, nullptr);
-
-    for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++){
-        vkDestroyBuffer(device->getDevice(), uniformBuffers[i], nullptr);
-        vkFreeMemory(device->getDevice(), uniformBuffersMemory[i], nullptr);
+    for(auto& uniformBuffer: uniformBuffers){
+        uniformBuffer.reset();
     }
+    indexBuffer.reset();
+    vertexBuffer.reset();
 
     descriptor.reset();
 
@@ -260,11 +255,11 @@ VulkanContext::drawFrame(){
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
+    updateUniformBuffer(currentFrame);
     vkResetFences(device->getDevice(), 1, &inFlightFences[currentFrame]);
     vkResetCommandBuffer(commandBuffers[currentFrame], 0);
     recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
-    updateUniformBuffer(currentFrame);
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -315,16 +310,16 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
     renderPass->begin(commandBuffer, swapChainFrameBuffers[imageIndex], swapchain->getExtent(),
                     {0.2f, 0.2f, 0.2f, 1.0f},  // clear color
                     1.0f,                       // clear depth
-                    0);                          // clear stencil)
+                    0);                          // clear stencil
 
     // Bind pipeline and set viewport/scissor
     pipeline->bind(commandBuffer);
 
     // Bind vertex and index buffers
-    VkBuffer vertexBuffers[] = {vertexBuffer};
+    VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
 
     // Bind descriptor sets
     vkCmdBindDescriptorSets(
@@ -361,37 +356,25 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
 void
 VulkanContext::createUniformBuffers(){
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-
     uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
     uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
 
-    for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++){
-        VkBufferCreateInfo bufferInfo{};
-        bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = bufferSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        uniformBuffers[i] = std::make_unique<OhaoVkBuffer>();
+        uniformBuffers[i]->initialize(device.get());
 
-        if(vkCreateBuffer(device->getDevice(), &bufferInfo, nullptr, &uniformBuffers[i]) != VK_SUCCESS){
-            throw std::runtime_error("failed to create uniform buffer!");
+        if (!uniformBuffers[i]->create(
+            bufferSize,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+            throw std::runtime_error("Failed to create uniform buffer!");
         }
 
-        VkMemoryRequirements memRequirements;
-        vkGetBufferMemoryRequirements(device->getDevice(), uniformBuffers[i], &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-        if(vkAllocateMemory(device->getDevice(), &allocInfo, nullptr, &uniformBuffersMemory[i]) != VK_SUCCESS){
-            throw std::runtime_error("failed to allocate uniform buffer memory!");
+        // Map the memory for the entire lifetime
+        if (!uniformBuffers[i]->map()) {
+            throw std::runtime_error("Failed to map uniform buffer!");
         }
-
-        vkBindBufferMemory(device->getDevice(), uniformBuffers[i], uniformBuffersMemory[i], 0);
-        vkMapMemory(device->getDevice(), uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+        uniformBuffersMapped[i] = uniformBuffers[i]->getMappedMemory();
     }
 }
 
@@ -419,8 +402,9 @@ VulkanContext::updateUniformBuffer(uint32_t currentImage){
         ubo.roughness = 0.5f;
         ubo.ao = 1.0f;
     }
+    uniformBuffers[currentImage]->writeToBuffer(&ubo, sizeof(ubo));
 
-    memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+    descriptor->updateDescriptorSet(currentImage, *uniformBuffers[currentImage], sizeof(ubo));
 }
 
 uint32_t
@@ -507,52 +491,38 @@ VulkanContext::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize s
 
 void
 VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices){
-    VkDeviceSize bufferSize = sizeof(Vertex) * vertices.size();
+    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer, stagingBufferMemory);
+    vertexBuffer = std::make_unique<OhaoVkBuffer>();
+    vertexBuffer->initialize(device.get());
 
-    void* data;
-    vkMapMemory(device->getDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(device->getDevice(), stagingBufferMemory);
-
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
-
-    copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-
-    vkDestroyBuffer(device->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(device->getDevice(), stagingBufferMemory, nullptr);
+    if (!OhaoVkBuffer::createWithStaging(
+        device.get(),
+        commandPool,
+        vertices.data(),
+        bufferSize,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        *vertexBuffer)) {
+        throw std::runtime_error("Failed to create vertex buffer!");
+    }
 }
 
 void
 VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices){
-    VkDeviceSize bufferSize = sizeof(uint32_t) * indices.size();
+    VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                stagingBuffer, stagingBufferMemory);
+    indexBuffer = std::make_unique<OhaoVkBuffer>();
+    indexBuffer->initialize(device.get());
 
-    void* data;
-    vkMapMemory(device->getDevice(), stagingBufferMemory, 0, bufferSize, 0, &data);
-    memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    vkUnmapMemory(device->getDevice(), stagingBufferMemory);
-
-    createBuffer(bufferSize,
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                indexBuffer, indexBufferMemory);
-
-    copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-
-    vkDestroyBuffer(device->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(device->getDevice(), stagingBufferMemory, nullptr);
+    if (!OhaoVkBuffer::createWithStaging(
+        device.get(),
+        commandPool,
+        indices.data(),
+        bufferSize,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        *indexBuffer)) {
+        throw std::runtime_error("Failed to create index buffer!");
+    }
 }
 
 void

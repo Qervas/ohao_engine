@@ -1,7 +1,8 @@
 #pragma once
+#include <memory>
 #include <vulkan/vulkan.h>
 #include <vector>
-#include <memory>
+#include "ohao_vk_buffer.hpp"
 
 namespace ohao {
 
@@ -20,8 +21,13 @@ public:
 
     // Pool and set management
     bool createPool();
-    bool createDescriptorSets(const std::vector<VkBuffer>& uniformBuffers,
+    bool createDescriptorSets(const std::vector<std::unique_ptr<OhaoVkBuffer>>& uniformBuffers,
                              VkDeviceSize bufferSize);
+    void updateDescriptorSet(
+            uint32_t index,
+            const OhaoVkBuffer& buffer,
+            VkDeviceSize size,
+            VkDeviceSize offset = 0);
 
     // Getters
     VkDescriptorSetLayout getLayout() const { return layout; }
