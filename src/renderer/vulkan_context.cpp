@@ -1,6 +1,5 @@
 #include "vulkan_context.hpp"
 #include <GLFW/glfw3.h>
-#include <algorithm>
 #include <alloca.h>
 #include <chrono>
 #include <cmath>
@@ -8,7 +7,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
@@ -20,10 +18,10 @@
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_surface.hpp>
 #include <vk/ohao_vk_swapchain.hpp>
+#include <vk/ohao_vk_instance.hpp>
+#include <vk/ohao_vk_shader_module.hpp>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
-#include <iostream>
-#include <vk/ohao_vk_instance.hpp>
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
@@ -66,6 +64,11 @@ VulkanContext::initialize(){
     swapchain = std::make_unique<OhaoVkSwapChain>();
     if(!swapchain->initialize(device.get(), surface.get(), width, height)){
         throw std::runtime_error("engine swapchain initialization failed!");
+    }
+
+    shaderModules = std::make_unique<OhaoVkShaderModule>();
+    if (!shaderModules->initialize(device.get())) {
+        throw std::runtime_error("Failed to initialize shader modules!");
     }
 
     createRenderPass();
@@ -137,6 +140,8 @@ VulkanContext::cleanup(){
         vkDestroyFramebuffer(device->getDevice(), framebuffer, nullptr);
     }
 
+    shaderModules.reset();
+
     if(graphicsPipeline){
         vkDestroyPipeline(device->getDevice(), graphicsPipeline, nullptr);
     }
@@ -149,15 +154,6 @@ VulkanContext::cleanup(){
         vkDestroyRenderPass(device->getDevice(), renderPass, nullptr);
     }
 
-    for(const auto& [name, shader] : shaderModules){
-        vkDestroyShaderModule(device->getDevice(), shader.modules, nullptr);
-    }
-    shaderModules.clear();
-
-    for(auto imageView : swapchain->getImageViews()){
-        vkDestroyImageView(device->getDevice(), imageView, nullptr);
-    }
-
     swapchain.reset();
     device.reset();
     physicalDevice.reset();
@@ -167,62 +163,8 @@ VulkanContext::cleanup(){
 }
 
 
-VkShaderModule
-VulkanContext::createShaderModule(const std::vector<char>& code){
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = code.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
-    VkShaderModule shaderModule;
-    if(vkCreateShaderModule(device->getDevice(), &createInfo, nullptr, &shaderModule) != VK_SUCCESS){
-        throw std::runtime_error("failed to create shader module!");
-    }
-    return shaderModule;
-}
-
-std::vector<char>
-VulkanContext::readShaderFile(const std::string& filename){
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
-
-    if(!file.is_open()){
-        throw std::runtime_error("failed to open file: " + filename);
-    }
-
-    size_t fileSize = static_cast<size_t>(file.tellg());
-    std::vector<char> buffer(fileSize);
-
-    file.seekg(0);
-    file.read(buffer.data(), fileSize);
-    file.close();
-
-    return buffer;
-}
-
-VulkanContext::ShaderModule*
-VulkanContext::createShaderFromFile(const std::string& filename, ShaderType type){
-    auto code = readShaderFile(filename);
-
-    ShaderModule shader;
-    shader.modules = createShaderModule(code);
-    shader.type = type;
-
-    shaderModules[filename] = shader;
-    return &shaderModules[filename];
-}
-
-void
-VulkanContext::destroyShaderModule(const std::string& name){
-    auto it = shaderModules.find(name);
-    if ( it != shaderModules.end()){
-        vkDestroyShaderModule(device->getDevice(), it->second.modules, nullptr);
-        shaderModules.erase(it);
-    }
-}
-
 void
 VulkanContext::createRenderPass(){
-
 
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = swapchain->getImageFormat();
@@ -306,24 +248,13 @@ VulkanContext::createPipelineLayout(){
 
 void VulkanContext::createGraphicsPipeline(){
     //load shaders
-    auto vertShaderCode = readShaderFile("shaders/shader.vert.spv");
-    auto fragShaderCode = readShaderFile("shaders/shader.frag.spv");
+    if (!shaderModules->createShaderModule("vert", "shaders/shader.vert.spv", OhaoVkShaderModule::ShaderType::VERTEX)
+        ||!shaderModules->createShaderModule("frag", "shaders/shader.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT)) {
+        throw std::runtime_error("graphics pipeline shader modules failed to create!");
+    }
 
-    VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
-    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
-
-    VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
-    vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertShaderStageInfo.module = vertShaderModule;
-    vertShaderStageInfo.pName = "main";
-
-    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
-
-    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragShaderStageInfo.module = fragShaderModule;
-    fragShaderStageInfo.pName = "main";
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo = shaderModules->getShaderStageInfo("vert");
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo = shaderModules->getShaderStageInfo("frag");
 
     VkPipelineShaderStageCreateInfo shaderStages[]{vertShaderStageInfo, fragShaderStageInfo};
 
@@ -419,9 +350,6 @@ void VulkanContext::createGraphicsPipeline(){
     if(vkCreateGraphicsPipelines(device->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS){
         throw std::runtime_error("failed to create graphics pipeline!");
     }
-
-    vkDestroyShaderModule(device->getDevice(), fragShaderModule, nullptr);
-    vkDestroyShaderModule(device->getDevice(), vertShaderModule, nullptr);
 }
 
 void
@@ -472,10 +400,11 @@ VulkanContext::createCommandBuffers(){
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 
-    if(vkAllocateCommandBuffers(device->getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS){
+    if (vkAllocateCommandBuffers(device->getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
         throw std::runtime_error("failed to allocate command buffers!");
     }
 }
+
 
 void
 VulkanContext::createSyncObjects(){

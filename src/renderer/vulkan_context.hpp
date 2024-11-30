@@ -4,6 +4,7 @@
 #include <memory>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
+#include <vk/ohao_vk_shader_module.hpp>
 #include <vk/ohao_vk_surface.hpp>
 #include <vk/ohao_vk_swapchain.hpp>
 #define GLFW_INCLUDE_VULKAN
@@ -77,29 +78,7 @@ private:
     VkQueue presentQueue{VK_NULL_HANDLE};
     std::unique_ptr<OhaoVkSwapChain> swapchain;
     uint32_t width{WIDTH}, height{HEIGHT};
-
-    //shader
-    enum class ShaderType{
-        VERTEX,
-        FRAGMENT,
-        COMPUTE,
-        GEOMETRY,
-        TESSELLATION_CONTROL,
-        TESSELLATION_EVALUATION
-    };
-
-    struct ShaderModule{
-        VkShaderModule modules{VK_NULL_HANDLE};
-        ShaderType type;
-        std::string entryPoint{"main"};
-    };
-
-    std::unordered_map<std::string, ShaderModule> shaderModules;
-
-    VkShaderModule createShaderModule(const std::vector<char>& code);
-    std::vector<char> readShaderFile(const std::string& filename);
-    ShaderModule* createShaderFromFile(const std::string& filename, ShaderType type);
-    void destroyShaderModule(const std::string& name);
+    std::unique_ptr<OhaoVkShaderModule> shaderModules;
 
     //pipeline
     VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
