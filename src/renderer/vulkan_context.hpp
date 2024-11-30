@@ -5,6 +5,7 @@
 #include <vk/ohao_vk_command_manager.hpp>
 #include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
+#include <vk/ohao_vk_image.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
 #include <vk/ohao_vk_pipeline.hpp>
 #include <vk/ohao_vk_render_pass.hpp>
@@ -120,18 +121,9 @@ private:
     void updateLight(const glm::vec3& position, const glm::vec3& color, float intensity);
 
     std::unique_ptr<Scene> scene;
+    std::unique_ptr<OhaoVkImage> depthImage;
 
-    VkImage depthImage;
-    VkDeviceMemory depthImageMemory;
-    VkImageView depthImageView;
     void createDepthResources();
-    VkFormat findDepthFormat();
-
-    void createImage(uint32_t width, uint32_t height, VkFormat format,
-                        VkImageTiling tiling, VkImageUsageFlags usage,
-                        VkMemoryPropertyFlags properties, VkImage& image,
-                        VkDeviceMemory& imageMemory, VkSampleCountFlagBits mssaSamples);
-    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
 
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 };
