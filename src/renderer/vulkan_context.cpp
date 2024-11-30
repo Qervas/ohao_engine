@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <sys/types.h>
 #include <vector>
+#include <vk/ohao_vk_command_manager.hpp>
 #include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
@@ -35,9 +36,7 @@ VulkanContext::VulkanContext(){}
 
 VulkanContext::VulkanContext(GLFWwindow* windowHandle): window(windowHandle){}
 
-VulkanContext::~VulkanContext(){
-    cleanup();
-}
+VulkanContext::~VulkanContext(){cleanup();}
 
 bool
 VulkanContext::initialize(){
@@ -86,12 +85,18 @@ VulkanContext::initialize(){
         !shaderModules->createShaderModule(
             "frag", "shaders/shader.frag.spv",
             OhaoVkShaderModule::ShaderType::FRAGMENT)) {
-        throw std::runtime_error("Failed to create shader modules!");
+        throw std::runtime_error("failed to create shader modules!");
     }
 
+    commandManager = std::make_unique<OhaoVkCommandManager>();
+    if(!commandManager->initialize(device.get(), physicalDevice->getQueueFamilyIndices().graphicsFamily.value())){
+        throw std::runtime_error("engine command manager initialization failed!");
+    }
 
+    if(!commandManager->allocateCommandBuffers(MAX_FRAMES_IN_FLIGHT)){
+        throw std::runtime_error("failed to allocate command buffers!");
+    }
 
-    createCommandPool();
     createDepthResources();
     createFramebuffers();
     createUniformBuffers();
@@ -108,7 +113,6 @@ VulkanContext::initialize(){
     if(!pipeline->initialize(device.get(), renderPass.get(), shaderModules.get(), swapchain->getExtent(), descriptor->getLayout())){
         throw std::runtime_error("engine pipeline initialization failed!");
     }
-    createCommandBuffers();
 
     syncObjects = std::make_unique<OhaoVkSyncObjects>();
     if(!syncObjects->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)){
@@ -150,7 +154,7 @@ VulkanContext::cleanup(){
     descriptor.reset();
 
     syncObjects.reset();
-    vkDestroyCommandPool(device->getDevice(), commandPool, nullptr);
+    commandManager.reset();
 
     for(auto framebuffer : swapChainFrameBuffers){
         vkDestroyFramebuffer(device->getDevice(), framebuffer, nullptr);
@@ -192,35 +196,6 @@ VulkanContext::createFramebuffers(){
 }
 
 void
-VulkanContext::createCommandPool(){
-    QueueFamilyIndices queueFamilyIndices = physicalDevice->getQueueFamilyIndices();
-
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
-
-    if(vkCreateCommandPool(device->getDevice(), &poolInfo, nullptr, &commandPool) != VK_SUCCESS){
-        throw std::runtime_error("failed to create command pool!");
-    }
-}
-
-void
-VulkanContext::createCommandBuffers(){
-    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = commandPool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
-
-    if (vkAllocateCommandBuffers(device->getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate command buffers!");
-    }
-}
-
-void
 VulkanContext::drawFrame(){
     syncObjects->waitForFence(currentFrame);
 
@@ -234,8 +209,8 @@ VulkanContext::drawFrame(){
 
     updateUniformBuffer(currentFrame);
     syncObjects->resetFence(currentFrame);
-    vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-    recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+    commandManager->resetCommandBuffer(currentFrame);
+    recordCommandBuffer(commandManager->getCommandBuffer(currentFrame), imageIndex);
 
 
     VkSubmitInfo submitInfo{};
@@ -247,7 +222,7 @@ VulkanContext::drawFrame(){
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+    submitInfo.pCommandBuffers = commandManager->getCommandBufferPtr(currentFrame);
 
     VkSemaphore signalSemaphores[]{syncObjects->getRenderFinishedSemaphore(currentFrame)};
     submitInfo.signalSemaphoreCount = 1;
@@ -408,7 +383,7 @@ VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices){
 
     if (!OhaoVkBuffer::createWithStaging(
         device.get(),
-        commandPool,
+        commandManager->getCommandPool(),
         vertices.data(),
         bufferSize,
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -426,7 +401,7 @@ VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices){
 
     if (!OhaoVkBuffer::createWithStaging(
         device.get(),
-        commandPool,
+        commandManager->getCommandPool(),
         indices.data(),
         bufferSize,
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,

@@ -2,6 +2,7 @@
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
 #include <vk/ohao_vk_buffer.hpp>
+#include <vk/ohao_vk_command_manager.hpp>
 #include <vk/ohao_vk_descriptor.hpp>
 #include <vk/ohao_vk_device.hpp>
 #include <vk/ohao_vk_physical_device.hpp>
@@ -89,19 +90,13 @@ private:
 
     //framebuffers
     std::vector<VkFramebuffer> swapChainFrameBuffers;
-
-    VkCommandPool commandPool{VK_NULL_HANDLE};
-    std::vector<VkCommandBuffer> commandBuffers;
+    std::unique_ptr<OhaoVkCommandManager> commandManager;
 
     std::unique_ptr<OhaoVkSyncObjects> syncObjects;
-
     const int MAX_FRAMES_IN_FLIGHT = 2;
     size_t currentFrame = 0;
 
     void createFramebuffers();
-    void createCommandPool();
-    void createCommandBuffers();
-    void createSyncObjects();
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 
