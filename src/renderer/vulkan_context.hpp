@@ -14,6 +14,7 @@
 #include <vk/ohao_vk_surface.hpp>
 #include <vk/ohao_vk_swapchain.hpp>
 #include <vk/ohao_vk_sync_objects.hpp>
+#include <vk/ohao_vk_uniform_buffer.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -43,7 +44,7 @@ public:
     VulkanContext(GLFWwindow* windowHandle);
     ~VulkanContext();
 
-    bool initialize();
+    void initialize();
     void cleanup();
 
     VkDevice getDevice()const{return device->getDevice();}
@@ -92,23 +93,13 @@ private:
     size_t currentFrame = 0;
     std::unique_ptr<OhaoVkBuffer> vertexBuffer;
     std::unique_ptr<OhaoVkBuffer> indexBuffer;
-    std::vector<std::unique_ptr<OhaoVkBuffer>> uniformBuffers;
-    std::vector<void*> uniformBuffersMapped;
+    std::unique_ptr<OhaoVkUniformBuffer> uniformBuffer;
 
     Camera camera;
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
-    void createUniformBuffers();
-    void updateUniformBuffer(uint32_t currentImage);
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
-
-
     void createVertexBuffer(const std::vector<Vertex>& vertices);
     void createIndexBuffer(const std::vector<uint32_t>& indices);
-
-    void updateMaterial(const Material& material);
-    void updateLight(const glm::vec3& position, const glm::vec3& color, float intensity);
 
     std::unique_ptr<Scene> scene;
     std::unique_ptr<OhaoVkImage> depthImage;

@@ -27,6 +27,7 @@
 #include <vk/ohao_vk_instance.hpp>
 #include <vk/ohao_vk_shader_module.hpp>
 #include <vk/ohao_vk_sync_objects.hpp>
+#include <vk/ohao_vk_uniform_buffer.hpp>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
 
@@ -40,7 +41,7 @@ VulkanContext::VulkanContext(GLFWwindow* windowHandle): window(windowHandle){}
 
 VulkanContext::~VulkanContext(){cleanup();}
 
-bool
+void
 VulkanContext::initialize(){
     //vulkan setup
     instance = std::make_unique<OhaoVkInstance>();
@@ -106,13 +107,16 @@ VulkanContext::initialize(){
         throw std::runtime_error("engine framebuffer manager initialization failed!");
     }
 
-    createUniformBuffers();
+    uniformBuffer = std::make_unique<OhaoVkUniformBuffer>();
+    if(!uniformBuffer->initialize(device.get(), MAX_FRAMES_IN_FLIGHT, sizeof(UniformBufferObject))){
+        throw std::runtime_error("engine uniform buffer initialization failed!");
+    }
 
     descriptor = std::make_unique<OhaoVkDescriptor>();
     if(!descriptor->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)) {
         throw std::runtime_error("engine descriptor system initialization failed!");
     }
-    if(!descriptor->createDescriptorSets(uniformBuffers, sizeof(UniformBufferObject))){
+    if(!descriptor->createDescriptorSets(uniformBuffer->getBuffers(), sizeof(UniformBufferObject))){
         throw std::runtime_error("failed to create descriptor sets!");
     }
 
@@ -137,22 +141,13 @@ VulkanContext::initialize(){
 
     createVertexBuffer(mainObject->model->vertices);
     createIndexBuffer(mainObject->model->indices);
-
-    // Look for light material and apply its properties
-    for (const auto& [name, light] : scene->getLights()) {
-        updateLight(light.position, light.color, light.intensity);
-    }
-    updateMaterial(mainObject->material);
-    return true;
 }
 
 void
 VulkanContext::cleanup(){
     depthImage.reset();
 
-    for(auto& uniformBuffer: uniformBuffers){
-        uniformBuffer.reset();
-    }
+    uniformBuffer.reset();
     indexBuffer.reset();
     vertexBuffer.reset();
     descriptor.reset();
@@ -181,7 +176,23 @@ VulkanContext::drawFrame(){
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
-    updateUniformBuffer(currentFrame);
+    UniformBufferObject ubo{};
+    ubo.model = glm::mat4(1.0f);
+    ubo.view = camera.getViewMatrix();
+    ubo.proj = camera.getProjectionMatrix();
+    ubo.viewPos = camera.getPosition();
+    ubo.proj[1][1] *= -1;
+
+    UniformBufferObject* currentUBO = static_cast<UniformBufferObject*>(uniformBuffer->getMappedMemory(currentFrame));
+    ubo.lightPos = currentUBO->lightPos;
+    ubo.lightColor = currentUBO->lightColor;
+    ubo.lightIntensity = currentUBO->lightIntensity;
+    ubo.baseColor = currentUBO->baseColor;
+    ubo.metallic = currentUBO->metallic;
+    ubo.roughness = currentUBO->roughness;
+    ubo.ao = currentUBO->ao;
+
+    uniformBuffer->writeToBuffer(currentFrame, &ubo, sizeof(ubo));
     syncObjects->resetFence(currentFrame);
     commandManager->resetCommandBuffer(currentFrame);
     recordCommandBuffer(commandManager->getCommandBuffer(currentFrame), imageIndex);
@@ -278,76 +289,6 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
     }
 }
 
-
-void
-VulkanContext::createUniformBuffers(){
-    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-    uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        uniformBuffers[i] = std::make_unique<OhaoVkBuffer>();
-        uniformBuffers[i]->initialize(device.get());
-
-        if (!uniformBuffers[i]->create(
-            bufferSize,
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-            throw std::runtime_error("Failed to create uniform buffer!");
-        }
-
-        // Map the memory for the entire lifetime
-        if (!uniformBuffers[i]->map()) {
-            throw std::runtime_error("Failed to map uniform buffer!");
-        }
-        uniformBuffersMapped[i] = uniformBuffers[i]->getMappedMemory();
-    }
-}
-
-
-
-void
-VulkanContext::updateUniformBuffer(uint32_t currentImage){
-    static auto startTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-
-    UniformBufferObject ubo{};
-    ubo.model = glm::mat4(1.0f);
-    ubo.view = camera.getViewMatrix();
-    ubo.proj = camera.getProjectionMatrix();
-    ubo.viewPos = camera.getPosition();
-    ubo.proj[1][1] *= -1; //flip Y coordinate
-
-    if (glm::length(ubo.lightColor) == 0.0f) {
-        ubo.lightPos = glm::vec3(0.0f, 2.5f, 0.0f);
-        ubo.lightColor = glm::vec3(1.0f);
-        ubo.lightIntensity = 10.0f;
-        ubo.baseColor = glm::vec3(0.8f);
-        ubo.metallic = 0.0f;
-        ubo.roughness = 0.5f;
-        ubo.ao = 1.0f;
-    }
-    uniformBuffers[currentImage]->writeToBuffer(&ubo, sizeof(ubo));
-
-    descriptor->updateDescriptorSet(currentImage, *uniformBuffers[currentImage], sizeof(ubo));
-}
-
-uint32_t
-VulkanContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties){
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice->getDevice(), &memProperties);
-
-    for(uint32_t i = 0; i < memProperties.memoryTypeCount; i++){
-        if((typeFilter & ( 1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties){
-            return i;
-        }
-    }
-
-    throw std::runtime_error("failed to find suitable memory type!");
-}
-
-
 void
 VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices){
     VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -381,27 +322,6 @@ VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices){
         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
         *indexBuffer)) {
         throw std::runtime_error("Failed to create index buffer!");
-    }
-}
-
-void
-VulkanContext::updateMaterial(const Material& material){
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        UniformBufferObject* ubo = static_cast<UniformBufferObject*>(uniformBuffersMapped[i]);
-        ubo->baseColor = material.baseColor;
-        ubo->metallic = material.metallic;
-        ubo->roughness = material.roughness;
-        ubo->ao = material.ao;
-    }
-}
-
-void
-VulkanContext::updateLight(const glm::vec3& position, const glm::vec3& color, float intensity){
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        UniformBufferObject* ubo = static_cast<UniformBufferObject*>(uniformBuffersMapped[i]);
-        ubo->lightPos = position;
-        ubo->lightColor = color;
-        ubo->lightIntensity = intensity;
     }
 }
 
