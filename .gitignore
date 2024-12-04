@@ -2,3 +2,5 @@ build/
 .vscode/
 *.o
 *.so
+.cache
+.ropeproject

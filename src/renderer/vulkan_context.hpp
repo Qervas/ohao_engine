@@ -21,11 +21,11 @@
 #include <vulkan/vulkan.hpp>
 #include <vector>
 #include <vulkan/vulkan_core.h>
-#include "../core/camera.hpp"
-#include "../core/model.hpp"
-#include "../core/material.hpp"
-#include "../core/scene.hpp"
-#include "vk/ohao_vk_instance.hpp"
+#include "renderer/camera/camera.hpp"
+#include "core/asset/model.hpp"
+#include "core/material/material.hpp"
+#include "core/scene/scene.hpp"
+#include "renderer/vk/ohao_vk_instance.hpp"
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1

@@ -4,7 +4,7 @@
 #include <memory>
 #include "ohao_vk_buffer.hpp"
 #include <glm/glm.hpp>
-#include "../../core/camera.hpp"
+#include "renderer/camera/camera.hpp"
 
 namespace ohao {
 

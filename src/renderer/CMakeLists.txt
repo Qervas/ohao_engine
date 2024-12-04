@@ -1,5 +1,7 @@
 # Find all source files in vk directory
-file(GLOB VK_SOURCES
+file(GLOB_RECURSE RENDERER_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/camera/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/camera/*.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/vk/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/vk/*.hpp"
 )
@@ -7,11 +9,12 @@ file(GLOB VK_SOURCES
 # Create the renderer library with all sources
 add_library(ohao_renderer
     vulkan_context.cpp
-    ${VK_SOURCES}
+    ${RENDERER_SOURCES}
 )
 
 target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/camera
     ${CMAKE_CURRENT_SOURCE_DIR}/vk
     ${CMAKE_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
@@ -22,3 +25,5 @@ target_link_libraries(ohao_renderer PUBLIC
     glfw
     ohao_core
 )
+
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})

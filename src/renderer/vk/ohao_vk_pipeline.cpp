@@ -2,7 +2,7 @@
 #include "ohao_vk_device.hpp"
 #include "ohao_vk_render_pass.hpp"
 #include "ohao_vk_shader_module.hpp"
-#include "../../core/model.hpp"
+#include "core/asset/model.hpp"
 #include <iostream>
 
 namespace ohao {

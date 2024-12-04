@@ -1,8 +1,8 @@
-#include "core/window.hpp"
+#include "ui/window/window.hpp"
 #include "renderer/vulkan_context.hpp"
 #include <GLFW/glfw3.h>
 #include <chrono>
-#include <core/camera_controller.hpp>
+#include "renderer/camera/camera_controller.hpp"
 #include <iostream>
 #include <vulkan/vulkan_core.h>
 

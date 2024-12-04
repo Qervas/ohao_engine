@@ -1,8 +1,8 @@
 #pragma once
 #include "camera.hpp"
-#include "window.hpp"
+#include "ui/window/window.hpp"
 #include <glm/glm.hpp>
-#include "../renderer/vk/ohao_vk_uniform_buffer.hpp"
+#include "renderer/vk/ohao_vk_uniform_buffer.hpp"
 
 namespace ohao {
 
