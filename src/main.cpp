@@ -1,4 +1,5 @@
 #include "ui/window/window.hpp"
+#include "ui/components/file_dialog.hpp"
 #include "renderer/vulkan_context.hpp"
 #include <GLFW/glfw3.h>
 #include <chrono>
@@ -11,7 +12,7 @@ int main() {
         ohao::Window window(1440, 900, "OHAO Engine");
         ohao::VulkanContext vulkan(window.getGLFWWindow());
         vulkan.initializeVulkan();
-        vulkan.initializeScene();
+        // vulkan.initializeScene();
 
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
@@ -24,6 +25,23 @@ int main() {
 
             window.pollEvents();
             cameraController.update(deltaTime);
+
+            if (window.isKeyPressed(GLFW_KEY_F)) {
+                window.enableCursor(true); // Enable cursor for file dialog
+
+                std::string filename = ohao::FileDialog::openFile(
+                    "Select OBJ File",
+                    "",
+                    std::vector<const char*>{"*.obj"},
+                    "Object Files (*.obj)"
+                );
+
+                if (!filename.empty()) {
+                    vulkan.loadModel(filename);
+                }
+
+                window.enableCursor(false); // Disable cursor again for camera control
+            }
 
             vulkan.drawFrame();
             if(window.isKeyPressed(GLFW_KEY_ESCAPE)){

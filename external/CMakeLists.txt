@@ -1,5 +1,6 @@
 # external/CMakeLists.txt
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/imgui.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/tinyfiledialogs.cmake)
 
 # Set the path to the ImGui submodule
 set(IMGUI_PATH ${CMAKE_CURRENT_SOURCE_DIR}/imgui)

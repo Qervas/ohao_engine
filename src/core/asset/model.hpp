@@ -44,6 +44,7 @@ public:
     std::vector<std::string> materialAssignments;
 
     void loadFromOBJ(const std::string& filename);
+    void setupDefaultMaterial();
 
 private:
     void loadMTL(const std::string& filename);

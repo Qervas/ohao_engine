@@ -46,6 +46,7 @@ public:
     void initializeScene();
     void cleanup();
 
+    Camera& getCamera() {return camera;}
     VkDevice getDevice()const{return device->getDevice();}
     OhaoVkUniformBuffer* getUniformBuffer() const {return uniformBuffer.get();}
     void drawFrame();
@@ -70,7 +71,10 @@ public:
         float padding4;
     };
 
-    Camera& getCamera() {return camera;}
+    bool hasLoadScene();
+    bool loadModel(const std::string& filename);
+    void cleanupCurrentModel();
+
 
 private:
     GLFWwindow* window;

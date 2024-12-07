@@ -1,4 +1,5 @@
 #include "model.hpp"
+#include "material.hpp"
 #include <cstddef>
 #include <fstream>
 #include <sstream>
@@ -79,11 +80,20 @@ Model::loadFromOBJ(const std::string& filename) {
             std::string fullMtlPath = directory + mtlFilename;
 
             std::cout << "Loading material file: " << fullMtlPath << std::endl;
-            loadMTL(fullMtlPath);
+            try {
+                loadMTL(fullMtlPath);
+            } catch (const std::exception& e) {
+                std::cout << "Warning: Failed to load MTL file: " << e.what() << std::endl;
+                std::cout << "Using default materials instead." << std::endl;
+                setupDefaultMaterial();
+            }
         }
         else if (type == "usemtl") {
             iss >> currentMaterial;
-            std::cout << "Switching to material: " << currentMaterial << std::endl;
+            if (materials.find(currentMaterial) == materials.end()) {
+                std::cout << "Warning: Material '" << currentMaterial << "' not found, using default" << std::endl;
+                currentMaterial = "default";
+            }
         }
         else if (type == "v") {
             glm::vec3 pos;
@@ -145,6 +155,10 @@ Model::loadFromOBJ(const std::string& filename) {
             materialAssignments.push_back(currentMaterial);
             std::cout << "Added face with material: '" << currentMaterial << "'" << std::endl;
         }
+    }
+
+    if(materials.empty()){
+        setupDefaultMaterial();
     }
 
     std::cout << "Loaded " << vertices.size() << " vertices, "
@@ -267,16 +281,17 @@ Model::assignMaterialColors() {
 
         // Get the material name for this face
         const std::string& matName = materialAssignments[faceIndex];
-        if (matName.empty()) {
-            std::cout << "Face " << faceIndex << " has empty material name, using default color" << std::endl;
-            for (size_t j = 0; j < 3; ++j) {
-                vertices[i + j].color = defaultColor;
-            }
-            continue;
-        }
+        auto matIt = materials.find(matName.empty() ? "default" : matName);
+        // if (matName.empty()) {
+        //     std::cout << "Face " << faceIndex << " has empty material name, using default color" << std::endl;
+        //     for (size_t j = 0; j < 3; ++j) {
+        //         vertices[i + j].color = defaultColor;
+        //     }
+        //     continue;
+        // }
 
         // Find the material
-        auto matIt = materials.find(matName);
+        // auto matIt = materials.find(matName);
         if (matIt != materials.end()) {
             const auto& material = matIt->second;
             for (size_t j = 0; j < 3 && (i + j) < vertices.size(); ++j) {
@@ -289,13 +304,33 @@ Model::assignMaterialColors() {
         } else {
             std::cout << "Face " << faceIndex << ": Material '" << matName
                      << "' not found, using default color" << std::endl;
+            auto defaultMatIt = materials.find("default");
+            const glm::vec3& color = defaultMatIt != materials.end() ?
+                defaultMatIt->second.diffuse : defaultColor;
+
             for (size_t j = 0; j < 3 && (i + j) < vertices.size(); ++j) {
-                vertices[i + j].color = defaultColor;
+                vertices[i + j].color = color;
             }
         }
     }
 
     std::cout << "Finished assigning colors to all vertices" << std::endl;
+}
+
+void Model::setupDefaultMaterial() {
+    MaterialData defaultMaterial;
+    defaultMaterial.name = "default";
+    defaultMaterial.ambient = glm::vec3(0.2f);
+    defaultMaterial.diffuse = glm::vec3(0.8f);
+    defaultMaterial.specular = glm::vec3(0.5f);
+    defaultMaterial.shininess = 32.0f;
+    defaultMaterial.ior = 1.45f;
+    defaultMaterial.opacity = 1.0f;
+    defaultMaterial.illum = 2;
+    defaultMaterial.isLight = false;
+
+    materials["default"] = defaultMaterial;
+    std::cout << "Created default material" << std::endl;
 }
 
 }//namespace

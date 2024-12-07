@@ -20,6 +20,7 @@ target_include_directories(ohao_ui PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/external/imgui
     ${CMAKE_SOURCE_DIR}/external/imgui/backends
+    ${CMAKE_BUILD_DIR}/_deps/tinyfieldialogs-src
     ${Vulkan_INCLUDE_DIRS}
 )
 
@@ -27,6 +28,7 @@ target_include_directories(ohao_ui PUBLIC
 target_link_libraries(ohao_ui PUBLIC
     imgui
     imgui_stdlib
+    tinyfiledialogs
     ${Vulkan_LIBRARIES}
     glfw
     ohao_core

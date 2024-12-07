@@ -27,6 +27,7 @@
 #include <vk/ohao_vk_uniform_buffer.hpp>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
+#include <iostream>
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
@@ -199,6 +200,9 @@ VulkanContext::initializeScene() {
 
 void
 VulkanContext::drawFrame(){
+    if (!scene || !vertexBuffer || !indexBuffer) {
+        return;  // Nothing to render yet
+    }
     syncObjects->waitForFence(currentFrame);
     syncObjects->resetFence(currentFrame);
 
@@ -258,6 +262,25 @@ VulkanContext::drawFrame(){
 
 void
 VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+    if(!vertexBuffer || !indexBuffer || !scene){
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+        if(vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+            throw std::runtime_error("failed to begin recording command buffer!");
+        }
+
+        renderPass->begin(commandBuffer,
+                         framebufferManager->getFramebuffer(imageIndex),
+                         swapchain->getExtent(),
+                         {0.2f, 0.2f, 0.2f, 1.0f},
+                         1.0f,
+                         0);
+
+        vkCmdEndRenderPass(commandBuffer);
+        vkEndCommandBuffer(commandBuffer);
+        return;
+    }
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -341,6 +364,66 @@ VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices){
         *indexBuffer)) {
         throw std::runtime_error("Failed to create index buffer!");
     }
+}
+
+bool VulkanContext::loadModel(const std::string& filename) {
+    cleanupCurrentModel();
+
+    try {
+        scene = std::make_unique<Scene>();
+        scene->loadFromFile(filename);
+        auto sceneObjects = scene->getObjects();
+        if (sceneObjects.empty()) {
+            throw std::runtime_error("No objects loaded in scene!");
+        }
+        auto mainObject = sceneObjects.begin()->second;
+
+        createVertexBuffer(mainObject->model->vertices);
+        createIndexBuffer(mainObject->model->indices);
+
+        // Initialize uniform buffer with scene data
+        UniformBufferObject initialUBO{};
+        initialUBO.model = glm::mat4(1.0f);
+        initialUBO.view = camera.getViewMatrix();
+        initialUBO.proj = camera.getProjectionMatrix();
+        initialUBO.viewPos = camera.getPosition();
+        initialUBO.proj[1][1] *= -1;
+
+        // Set default values
+        initialUBO.baseColor = mainObject->material.baseColor;
+        initialUBO.metallic = mainObject->material.metallic;
+        initialUBO.roughness = mainObject->material.roughness;
+        initialUBO.ao = mainObject->material.ao;
+
+        // Get light data from scene
+        const auto& lights = scene->getLights();
+        if (!lights.empty()) {
+            const auto& light = lights.begin()->second;
+            initialUBO.lightPos = light.position;
+            initialUBO.lightColor = light.color;
+            initialUBO.lightIntensity = light.intensity;
+        }
+
+        // Write initial values to all uniform buffers
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            uniformBuffer->writeToBuffer(i, &initialUBO, sizeof(UniformBufferObject));
+        }
+
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to load model: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+void VulkanContext::cleanupCurrentModel() {
+    vertexBuffer.reset();
+    indexBuffer.reset();
+    scene.reset();
+}
+
+bool VulkanContext::hasLoadScene(){
+    return scene != nullptr && vertexBuffer != nullptr && indexBuffer != nullptr;
 }
 
 }//namespace ohao
