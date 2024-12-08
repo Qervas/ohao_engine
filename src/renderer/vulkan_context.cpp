@@ -266,8 +266,11 @@ void VulkanContext::drawFrame() {
 
     // First pass: Render scene to scene render target
     if (hasLoadScene()) {
+        if (!sceneRenderer->hasValidRenderTarget()) {
+            initializeSceneRenderer();
+        }
         sceneRenderer->beginFrame();
-        sceneRenderer->render();
+        sceneRenderer->render(uniformBuffer.get(), currentFrame);
         sceneRenderer->endFrame();
     }
 
