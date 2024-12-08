@@ -1,4 +1,4 @@
-# Cornell Box Materials 
+# Cornell Box Materials
 
 newmtl white_wall
 Ka 0.7 0.5 0.3  # Warm beige color
@@ -49,7 +49,7 @@ newmtl light
 Ka 1.0 1.0 1.0
 Kd 1.0 1.0 1.0
 Ks 0.0 0.0 0.0
-Ke 30.0 30.0 30.0
+Ke 3.0 3.0 3.0
 Ns 1.0
 d 1.0
 illum 7

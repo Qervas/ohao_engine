@@ -1,9 +1,12 @@
 #include "ohao_vk_swapchain.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <exception>
 #include <iostream>
 #include <limits>
+#include <ostream>
 #include <stdexcept>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
@@ -89,7 +92,7 @@ void OhaoVkSwapChain::createSwapChain(uint32_t width, uint32_t height) {
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
-    createInfo.oldSwapchain = VK_NULL_HANDLE;
+    createInfo.oldSwapchain = oldSwapChain;
 
     if (vkCreateSwapchainKHR(device->getDevice(), &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create swap chain!");
@@ -201,6 +204,30 @@ void OhaoVkSwapChain::setupPresentInfo() {
 void OhaoVkSwapChain::updatePresentInfo(VkSemaphore waitSemaphore, uint32_t* pImageIndex) {
     presentInfo.pWaitSemaphores = &waitSemaphore;
     presentInfo.pImageIndices = pImageIndex;
+}
+
+bool OhaoVkSwapChain::recreate(uint32_t width, uint32_t height){
+    oldSwapChain = swapChain;
+
+    for(auto imageView: imageViews){
+        vkDestroyImageView(device->getDevice(), imageView, nullptr);
+    }
+    imageViews.clear();
+    images.clear();
+
+    try{
+        createSwapChain(width, height);
+        createImageViews();
+        setupPresentInfo();
+    }catch(const std::exception& e){
+        std::cerr << "failed to recreate swapchain:" << e.what() << std::endl;
+        return false;
+    }
+    if (oldSwapChain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device->getDevice(), oldSwapChain, nullptr);
+        oldSwapChain = VK_NULL_HANDLE;
+    }
+    return true;
 }
 
 } // namespace ohao

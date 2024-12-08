@@ -24,6 +24,8 @@ public:
     uint32_t getHeight() const { return height; }
     void enableCursor(bool enabled);
     void setMousePosition(const glm::vec2& pos);
+    void toggleCursorMode();
+    bool isCursorEnabled() const {return cursorEnabled;}
 
 private:
     GLFWwindow* window;
@@ -31,6 +33,7 @@ private:
     bool firstMouse{true};
     uint32_t width{};
     uint32_t height{};
+    bool cursorEnabled{true};
 };
 
 } // namespace ohao

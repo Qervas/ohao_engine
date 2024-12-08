@@ -3,19 +3,24 @@
 OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
 
 
+![1733694043848](image/README/1733694043848.png)
+
 ## Building
 
 ### Required Dependencies
+
 - CMake 3.20+
 - Vulkan SDK
 - GLFW3
 
 ### Installation on Fedora Linux
+
 ```bash
 sudo dnf install cmake vulkan-devel glfw-devel git gcc-c++
 ```
 
 ### Clone the Repository
+
 ```bash
 # Clone the repository with submodules
 git clone --recursive https://github.com/Qervas/ohao-engine.git
@@ -27,6 +32,7 @@ git submodule update --init --recursive
 ```
 
 ### Build Steps
+
 ```bash
 mkdir build
 cd build
@@ -35,6 +41,7 @@ make -j$(nproc)  # Use multiple cores for faster building
 ```
 
 ### Running
+
 ```bash
 ./ohao_engine
 ```
@@ -50,10 +57,11 @@ make -j$(nproc)  # Use multiple cores for faster building
 ## Development Status
 
 Currently in early development. Features being implemented:
-- [x] Basic window creation
-- [x] Vulkan initialization, validation layer, pipeline, rasterization
-- [x] Load scene from obj file, including lighting and materials
-- [x] Friendly camera control
+
+- [X] Basic window creation
+- [X] Vulkan initialization, validation layer, pipeline, rasterization
+- [X] Load scene from obj file, including lighting and materials
+- [X] Friendly camera control
 - [ ] User interface
 
 ## Documentation
@@ -62,6 +70,7 @@ Currently in early development. Features being implemented:
 - More documentation will be added as the project develops
 
 ## Project Structure
+
 ```
 ohao-engine/
 ├── src/             # Source files

@@ -29,6 +29,10 @@ public:
             VkDeviceSize size,
             VkDeviceSize offset = 0);
 
+    bool createCombinedImageSamplerLayout();
+    bool createCombinedImageSamplerPool();
+    VkDescriptorSet allocateImageDescriptor(VkImageView imageView, VkSampler sampler);
+
     // Getters
     VkDescriptorSetLayout getLayout() const { return layout; }
     VkDescriptorPool getPool() const { return pool; }
@@ -42,6 +46,11 @@ private:
     VkDescriptorSetLayout layout{VK_NULL_HANDLE};
     VkDescriptorPool pool{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> descriptorSets;
+    std::vector<VkDescriptorSet> imageDescriptorSets;
+
+
+    VkDescriptorSetLayout imageSamplerLayout{VK_NULL_HANDLE};
+
 };
 
 } // namespace ohao

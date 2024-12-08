@@ -1,4 +1,5 @@
 #include "window.hpp"
+#include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <stdexcept>
@@ -19,7 +20,7 @@ Window::Window(uint32_t w, uint32_t h, const std::string& title)
         glfwTerminate();
         throw std::runtime_error("Failed to create window");
     }
-    enableCursor(false);
+    enableCursor(true);
 }
 
 Window::~Window() {
@@ -77,6 +78,11 @@ void
 Window::setMousePosition(const glm::vec2& pos){
     glfwSetCursorPos(window, pos.x, pos.y);
     lastMousePos = pos;
+}
+
+void Window::toggleCursorMode(){
+    cursorEnabled = ! cursorEnabled;
+    enableCursor(cursorEnabled);
 }
 
 } // namespace ohao
