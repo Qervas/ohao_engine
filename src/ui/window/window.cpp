@@ -1,4 +1,5 @@
 #include "window.hpp"
+#include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <stdexcept>
@@ -77,6 +78,11 @@ void
 Window::setMousePosition(const glm::vec2& pos){
     glfwSetCursorPos(window, pos.x, pos.y);
     lastMousePos = pos;
+}
+
+void Window::toggleCursorMode(){
+    cursorEnabled = ! cursorEnabled;
+    enableCursor(cursorEnabled);
 }
 
 } // namespace ohao

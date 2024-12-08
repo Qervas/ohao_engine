@@ -16,6 +16,8 @@ public:
     void initialize();
     void render();
     bool wantsInputCapture() const;
+    bool isSceneViewportHovered() const;
+    ImVec2 getSceneViewportSize() const;
 
 private:
     void setupImGuiStyle();
@@ -29,6 +31,8 @@ private:
     void renderHelpMenu();
     void enableCursor(bool enable);
     void handleModelImport();
+    void shutdownImGui();
+    void setupDefaultLayout();
 
     // Temporary state variables for menu items
     bool showStyleEditor = false;
@@ -43,6 +47,11 @@ private:
     ImGuiStyle* style;
 
     VkDescriptorPool imguiPool{VK_NULL_HANDLE};
+
+    ImVec2 sceneViewportSize{1280, 720};
+    bool isSceneWindowHovered{false};
+    bool layoutInitialized{false};
+
 
 };
 

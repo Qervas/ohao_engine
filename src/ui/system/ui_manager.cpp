@@ -1,4 +1,5 @@
 #include "ui/system/ui_manager.hpp"
+#include "console_widget.hpp"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
@@ -6,6 +7,7 @@
 #include "components/file_dialog.hpp"
 #include <GLFW/glfw3.h>
 #include <imgui_internal.h>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
@@ -14,16 +16,7 @@ UIManager::UIManager(Window* window, VulkanContext* context)
 }
 
 UIManager::~UIManager(){
-    if (imguiInitialized) {
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-    }
-
-    if (vulkanContext && imguiPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(vulkanContext->getVkDevice(), imguiPool, nullptr);
-        imguiPool = VK_NULL_HANDLE;
-    }
+    shutdownImGui();
 }
 
 void UIManager::initialize() {
@@ -172,6 +165,27 @@ void UIManager::initializeVulkanBackend(){
     imguiInitialized = true;
 }
 
+void UIManager::shutdownImGui(){
+    if (imguiInitialized) {
+        // Wait for device to be idle before cleanup
+        if (vulkanContext && vulkanContext->getLogicalDevice()) {
+            vulkanContext->getLogicalDevice()->waitIdle();
+        }
+
+        // Cleanup ImGui
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+
+        // Destroy descriptor pool after ImGui shutdown
+        if (imguiPool != VK_NULL_HANDLE && vulkanContext) {
+            vkDestroyDescriptorPool(vulkanContext->getVkDevice(), imguiPool, nullptr);
+            imguiPool = VK_NULL_HANDLE;
+        }
+
+        imguiInitialized = false;
+    }
+}
 
 void UIManager::render() {
     if (!imguiInitialized) return;
@@ -180,19 +194,81 @@ void UIManager::render() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    // Begin dockspace with menubar
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
+    window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+
+    ImGui::Begin("DockSpace Demo", nullptr, window_flags);
+    ImGui::PopStyleVar(3);
+
+    // Draw the main menu bar
     renderMainMenuBar();
 
-    // Test window to make sure UI is visible
-    ImGui::Begin("OHAO Engine");
-    ImGui::Text("Welcome to OHAO Engine!");
-    if (ImGui::Button("Load Model")) {
-        handleModelImport();
+    // DockSpace
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f));
+
+    // Setup default layout after first frame
+    if (!layoutInitialized) {
+        ImGui::DockBuilderRemoveNode(dockspace_id);
+        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
+
+        auto dock_id_main = dockspace_id;
+        auto dock_id_right = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Right, 0.2f, nullptr, &dock_id_main);
+        auto dock_id_bottom = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Down, 0.25f, nullptr, &dock_id_main);
+
+        ImGui::DockBuilderDockWindow("Scene Viewport", dock_id_main);
+        ImGui::DockBuilderDockWindow("Properties", dock_id_right);
+        ImGui::DockBuilderDockWindow("Console", dock_id_bottom);
+
+        ImGui::DockBuilderFinish(dockspace_id);
+        layoutInitialized = true;
+    }
+
+    // Scene Viewport
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("Scene Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        sceneViewportSize = ImGui::GetContentRegionAvail();
+        isSceneWindowHovered = ImGui::IsWindowHovered();
+
+        // Get the size of the viewport
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+
+        // Display viewport info
+        ImGui::SetCursorPos(ImVec2(10, 10));
+        ImGui::Text("Viewport: %dx%d", (int)sceneViewportSize.x, (int)sceneViewportSize.y);
+
+        ImGui::End();
+        ImGui::PopStyleVar();
+    }
+
+    // Properties Panel
+    ImGui::Begin("Properties");
+    if (ImGui::CollapsingHeader("Scene Info")) {
+        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+        ImGui::Text("Draw Calls: %d", 0);
+        ImGui::Text("Vertices: %d", 0);
     }
     ImGui::End();
 
-    renderMainMenuBar();
+    // Console
+    ConsoleWidget::get().render();
 
-    // Render debug windows if enabled
+    // Debug windows
     if (showStyleEditor) {
         ImGui::Begin("Style Editor", &showStyleEditor);
         ImGui::ShowStyleEditor();
@@ -211,6 +287,8 @@ void UIManager::render() {
         ImGui::Text("Created by [Your Name]");
         ImGui::End();
     }
+
+    ImGui::End(); // DockSpace
 
     ImGui::Render();
     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
@@ -322,7 +400,12 @@ void UIManager::handleModelImport() {
     );
 
     if (!filename.empty()) {
-        vulkanContext->loadModel(filename);
+        if (vulkanContext->loadModel(filename)) {
+            OHAO_LOG("Successfully loaded model: " + filename);
+            window->enableCursor(true);  // Keep cursor enabled after loading
+        } else {
+            OHAO_LOG_ERROR("Failed to load model: " + filename);
+        }
     }
 
     enableCursor(false);
@@ -335,6 +418,36 @@ bool UIManager::wantsInputCapture() const {
 
 void UIManager::enableCursor(bool enable) {
     window->enableCursor(enable);
+}
+
+bool UIManager::isSceneViewportHovered() const {
+    return isSceneWindowHovered;
+}
+
+ImVec2 UIManager::getSceneViewportSize() const {
+    return sceneViewportSize;
+}
+
+void UIManager::setupDefaultLayout(){
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+
+    // Setup default docking layout
+    ImGui::DockBuilderRemoveNode(dockspace_id); // Clear any previous layout
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->Size);
+
+    // Split the docking space into sections
+    auto dock_id_main = dockspace_id; // Main dock space ID
+    auto dock_id_right = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Right, 0.2f, nullptr, &dock_id_main);
+    auto dock_id_bottom = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Down, 0.25f, nullptr, &dock_id_main);
+
+    // Dock windows
+    ImGui::DockBuilderDockWindow("Scene Viewport", dock_id_main);
+    ImGui::DockBuilderDockWindow("Properties", dock_id_right);
+    ImGui::DockBuilderDockWindow("Console", dock_id_bottom);
+
+    ImGui::DockBuilderFinish(dockspace_id);
+
 }
 
 } // namespace ohao

@@ -6,6 +6,7 @@
 #include "renderer/camera/camera_controller.hpp"
 #include "ui_manager.hpp"
 #include <iostream>
+#include <memory>
 #include <vulkan/vulkan_core.h>
 
 int main() {
@@ -14,11 +15,13 @@ int main() {
         ohao::VulkanContext vulkan(window.getGLFWWindow());
         vulkan.initializeVulkan();
 
-        ohao::UIManager uiManager(&window, &vulkan);
-        uiManager.initialize();
+        auto uiManager = std::make_shared<ohao::UIManager>(&window, &vulkan);
+        vulkan.setUIManager(uiManager);
+        uiManager->initialize();
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
         auto lastTime = std::chrono::high_resolution_clock::now();
+        bool tabPressed = false;
 
         while (!window.shouldClose()) {
             auto currentTime = std::chrono::high_resolution_clock::now();
@@ -28,15 +31,20 @@ int main() {
             window.pollEvents();
             cameraController.update(deltaTime);
 
+            if(window.isKeyPressed(GLFW_KEY_TAB)){
+                if(!tabPressed){
+                    window.toggleCursorMode();
+                    tabPressed = true;
+                }
+            }else {
+                tabPressed = false;
+            }
 
-            // Only update camera if UI isn't capturing input
-            if (!uiManager.wantsInputCapture()) {
+            if (!uiManager->wantsInputCapture()) {
                 cameraController.update(deltaTime);
             }
 
-
-            uiManager.render();
-
+            uiManager->render();
             vulkan.drawFrame();
             if(window.isKeyPressed(GLFW_KEY_ESCAPE)){
                 break;

@@ -36,6 +36,7 @@
 
 namespace ohao {
 
+class UIManager;
 class VulkanContext {
 public:
     VulkanContext() = delete;
@@ -114,7 +115,12 @@ public:
     bool hasLoadScene();
     bool loadModel(const std::string& filename);
     void cleanupCurrentModel();
+    void updateViewport(uint32_t width, uint32_t height);
 
+    VkDescriptorSet getSceneTextureDescriptor() const { return sceneTextureDescriptor; }
+    void setViewportSize(uint32_t width, uint32_t height);
+    void setUIManager(std::shared_ptr<UIManager> manager) {uiManager = manager;}
+    std::shared_ptr<UIManager> getUIManager() const {return uiManager;}
 
 private:
     GLFWwindow* window;
@@ -146,9 +152,18 @@ private:
     void createVertexBuffer(const std::vector<Vertex>& vertices);
     void createIndexBuffer(const std::vector<uint32_t>& indices);
 
+    VkImage sceneColorImage{VK_NULL_HANDLE};
+    VkDeviceMemory sceneColorMemory{VK_NULL_HANDLE};
+    VkImageView sceneColorView{VK_NULL_HANDLE};
+    VkDescriptorSet sceneTextureDescriptor{VK_NULL_HANDLE};
+
     Camera camera;
     std::unique_ptr<Scene> scene;
 
+    uint32_t lastWidth{0};
+    uint32_t lastHeight{0};
+    bool needsResize{false};
+    std::shared_ptr<UIManager> uiManager;
 };
 
 } // namespace ohao

@@ -30,6 +30,7 @@
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
 #include <iostream>
+#include "ui/system/ui_manager.hpp"
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
@@ -140,10 +141,11 @@ VulkanContext::initializeVulkan(){
 }
 void
 VulkanContext::cleanup(){
+    if(device){device->waitIdle();}
+    if(uiManager){uiManager.reset();}
     depthImage.reset();
+    cleanupCurrentModel();
     uniformBuffer.reset();
-    indexBuffer.reset();
-    vertexBuffer.reset();
     descriptor.reset();
     syncObjects.reset();
     commandManager.reset();
@@ -202,8 +204,17 @@ VulkanContext::initializeScene() {
 
 void
 VulkanContext::drawFrame(){
-    if (!scene || !vertexBuffer || !indexBuffer) {
-        return;  // Nothing to render yet
+    // if (!scene || !vertexBuffer || !indexBuffer) {
+    //     return;  // Nothing to render yet
+    // }
+    if (!uiManager) {
+        throw std::runtime_error("UI Manager not set!");
+    }
+
+    ImVec2 viewportSize = uiManager->getSceneViewportSize();
+    if (viewportSize.x > 0 && viewportSize.y > 0) {
+        updateViewport(static_cast<uint32_t>(viewportSize.x),
+                      static_cast<uint32_t>(viewportSize.y));
     }
     syncObjects->waitForFence(currentFrame);
     syncObjects->resetFence(currentFrame);
@@ -327,9 +338,11 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
     }
 
     // Render ImGui
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+    if (ImGui::GetDrawData()) {
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+    }
 
-    vkCmdEndRenderPass(commandBuffer);
+    renderPass->end(commandBuffer);
     if(vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer!");
     }
@@ -429,6 +442,38 @@ void VulkanContext::cleanupCurrentModel() {
 
 bool VulkanContext::hasLoadScene(){
     return scene != nullptr && vertexBuffer != nullptr && indexBuffer != nullptr;
+}
+
+void VulkanContext::updateViewport(uint32_t width, uint32_t height){
+    if(width == 0 || height == 0)return ;
+
+    if (width != this->width || height != this->height) {
+        this->width = width;
+        this->height = height;
+
+        device->waitIdle();
+
+        if (framebufferManager) {
+            framebufferManager->cleanup();
+        }
+
+        if (!swapchain->recreate(width, height)) {
+            throw std::runtime_error("Failed to recreate swapchain!");
+        }
+
+        // Recreate dependent resources
+        if (!framebufferManager->initialize(device.get(), swapchain.get(), renderPass.get(), depthImage.get())) {
+            throw std::runtime_error("Failed to recreate framebuffers!");
+        }
+    }
+}
+
+void VulkanContext::setViewportSize(uint32_t width, uint32_t height){
+    if (width != lastWidth || height != lastHeight) {
+        lastWidth = width;
+        lastHeight = height;
+        needsResize = true;
+    }
 }
 
 }//namespace ohao

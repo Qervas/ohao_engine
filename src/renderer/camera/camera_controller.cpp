@@ -11,6 +11,7 @@ CameraController::CameraController(Camera& camera, Window& window, OhaoVkUniform
 
 void
 CameraController::update(float deltaTime) {
+    if(window.isCursorEnabled()){return;}
     updatePosition(deltaTime);
     updateRotation();
 }
