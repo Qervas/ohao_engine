@@ -2,7 +2,7 @@
 #include "camera.hpp"
 #include "ui/window/window.hpp"
 #include <glm/glm.hpp>
-#include "renderer/vk/ohao_vk_uniform_buffer.hpp"
+#include "rhi/vk/ohao_vk_uniform_buffer.hpp"
 
 namespace ohao {
 

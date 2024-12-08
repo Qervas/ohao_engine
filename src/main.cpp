@@ -1,10 +1,11 @@
 #include "ui/window/window.hpp"
-#include "ui/components/file_dialog.hpp"
 #include "renderer/vulkan_context.hpp"
 #include <GLFW/glfw3.h>
 #include <chrono>
 #include "renderer/camera/camera_controller.hpp"
+#include "ui_manager.hpp"
 #include <iostream>
+#include <memory>
 #include <vulkan/vulkan_core.h>
 
 int main() {
@@ -12,11 +13,15 @@ int main() {
         ohao::Window window(1440, 900, "OHAO Engine");
         ohao::VulkanContext vulkan(window.getGLFWWindow());
         vulkan.initializeVulkan();
-        // vulkan.initializeScene();
 
+        auto uiManager = std::make_shared<ohao::UIManager>(&window, &vulkan);
+        vulkan.setUIManager(uiManager);
+        uiManager->initialize();
+        vulkan.initializeSceneRenderer();
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
         auto lastTime = std::chrono::high_resolution_clock::now();
+        bool tabPressed = false;
 
         while (!window.shouldClose()) {
             auto currentTime = std::chrono::high_resolution_clock::now();
@@ -26,29 +31,26 @@ int main() {
             window.pollEvents();
             cameraController.update(deltaTime);
 
-            if (window.isKeyPressed(GLFW_KEY_F)) {
-                window.enableCursor(true); // Enable cursor for file dialog
-
-                std::string filename = ohao::FileDialog::openFile(
-                    "Select OBJ File",
-                    "",
-                    std::vector<const char*>{"*.obj"},
-                    "Object Files (*.obj)"
-                );
-
-                if (!filename.empty()) {
-                    vulkan.loadModel(filename);
+            if(window.isKeyPressed(GLFW_KEY_TAB)){
+                if(!tabPressed){
+                    window.toggleCursorMode();
+                    tabPressed = true;
                 }
-
-                window.enableCursor(false); // Disable cursor again for camera control
+            }else {
+                tabPressed = false;
             }
 
+            if (!uiManager->wantsInputCapture()) {
+                cameraController.update(deltaTime);
+            }
+
+            uiManager->render();
             vulkan.drawFrame();
             if(window.isKeyPressed(GLFW_KEY_ESCAPE)){
                 break;
             }
         }
-        vkDeviceWaitIdle(vulkan.getDevice());
+        vkDeviceWaitIdle(vulkan.getVkDevice());
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
