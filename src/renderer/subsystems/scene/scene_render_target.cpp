@@ -54,9 +54,8 @@ void SceneRenderTarget::cleanup() {
     auto device = context->getVkDevice();
     context->getLogicalDevice()->waitIdle();
 
-
     if (descriptorSet != VK_NULL_HANDLE) {
-        // Note: Descriptor sets are freed when their pool is destroyed
+        // Don't free the descriptor set here, let the descriptor pool handle it
         descriptorSet = VK_NULL_HANDLE;
     }
 
@@ -271,25 +270,104 @@ bool SceneRenderTarget::createDescriptor() {
         return false;
     }
 
-    descriptorSet = context->getDescriptor()->allocateImageDescriptor(
-        colorTarget->getImageView(),
-        sampler
-    );
+    for (int attempts = 0; attempts < 3; attempts++) {
+        descriptorSet = context->getDescriptor()->allocateImageDescriptor(
+            colorTarget->getImageView(),
+            sampler
+        );
 
-    if (descriptorSet == VK_NULL_HANDLE) {
-        std::cerr << "Failed to allocate image descriptor set" << std::endl;
-        return false;
+        if (descriptorSet != VK_NULL_HANDLE) {
+            return true;
+        }
+
+        std::cerr << "Attempt " << (attempts + 1) << " to allocate descriptor set failed" << std::endl;
     }
 
-    return true;
+    std::cerr << "Failed to allocate descriptor set after multiple attempts" << std::endl;
+    return false;
 }
 
 void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
-    if (context) {
-        context->getLogicalDevice()->waitIdle();
+    if (!context) {
+        std::cerr << "No valid context for resize operation" << std::endl;
+        return;
     }
-    cleanup();
-    initialize(context, width, height);
+
+    if (width == 0 || height == 0) {
+        std::cerr << "Invalid dimensions for resize: " << width << "x" << height << std::endl;
+        return;
+    }
+
+    // Wait for the device to be idle before cleanup
+    context->getLogicalDevice()->waitIdle();
+
+    // Store old resources in case we need to rollback
+    auto oldColorTarget = std::move(colorTarget);
+    auto oldDepthTarget = std::move(depthTarget);
+    auto oldSampler = sampler;
+    auto oldRenderPass = renderPass;
+    auto oldFramebuffer = framebuffer;
+    auto oldDescriptorSet = descriptorSet;
+
+    // Reset handles to prevent accidental use
+    sampler = VK_NULL_HANDLE;
+    renderPass = VK_NULL_HANDLE;
+    framebuffer = VK_NULL_HANDLE;
+    descriptorSet = VK_NULL_HANDLE;
+
+    bool success = true;
+
+    try {
+        if (!createRenderTargets(width, height)) {
+            throw std::runtime_error("Failed to create render targets");
+        }
+        if (!createSampler()) {
+            throw std::runtime_error("Failed to create sampler");
+        }
+        if (!createRenderPass()) {
+            throw std::runtime_error("Failed to create render pass");
+        }
+        if (!createFramebuffer()) {
+            throw std::runtime_error("Failed to create framebuffer");
+        }
+        if (!createDescriptor()) {
+            throw std::runtime_error("Failed to create descriptor");
+        }
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Error during resize: " << e.what() << std::endl;
+        success = false;
+    }
+
+    if (!success) {
+        // Rollback to old resources
+        cleanup();  // Clean up any partially created resources
+
+        colorTarget = std::move(oldColorTarget);
+        depthTarget = std::move(oldDepthTarget);
+        sampler = oldSampler;
+        renderPass = oldRenderPass;
+        framebuffer = oldFramebuffer;
+        descriptorSet = oldDescriptorSet;
+
+        std::cerr << "Rolled back to previous state after failed resize" << std::endl;
+    }
+    else {
+        // Clean up old resources
+        if (oldSampler != VK_NULL_HANDLE) {
+            vkDestroySampler(context->getVkDevice(), oldSampler, nullptr);
+        }
+        if (oldRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(context->getVkDevice(), oldRenderPass, nullptr);
+        }
+        if (oldFramebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(context->getVkDevice(), oldFramebuffer, nullptr);
+        }
+    }
+
 }
 
+bool SceneRenderTarget::hasValidRenderTarget() const {
+    return colorTarget && depthTarget && sampler && renderPass && framebuffer && descriptorSet;
+}
 } // namespace ohao
