@@ -16,6 +16,8 @@ target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/camera
     ${CMAKE_CURRENT_SOURCE_DIR}/vk
+    ${CMAKE_SOURCE_DIR}/external/imgui
+    ${CMAKE_SOURCE_DIR}/external/imgui/backends
     ${CMAKE_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
 )
@@ -24,6 +26,9 @@ target_link_libraries(ohao_renderer PUBLIC
     ${Vulkan_LIBRARIES}
     glfw
     ohao_core
+    imgui
+    imgui_stdlib
+
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})

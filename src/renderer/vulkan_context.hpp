@@ -46,9 +46,49 @@ public:
     void initializeScene();
     void cleanup();
 
+    //Getters
+    // === OhaoVk Object Getters ===
+    OhaoVkInstance* getInstance() const { return instance.get(); }
+    OhaoVkSurface* getSurface() const { return surface.get(); }
+    OhaoVkPhysicalDevice* getPhysicalDevice() const { return physicalDevice.get(); }
+    OhaoVkDevice* getLogicalDevice() const { return device.get(); }
+    OhaoVkSwapChain* getSwapChain() const { return swapchain.get(); }
+    OhaoVkShaderModule* getShaderModules() const { return shaderModules.get(); }
+    OhaoVkRenderPass* getRenderPass() const { return renderPass.get(); }
+    OhaoVkPipeline* getPipeline() const { return pipeline.get(); }
+    OhaoVkDescriptor* getDescriptor() const { return descriptor.get(); }
+    OhaoVkImage* getDepthImage() const { return depthImage.get(); }
+    OhaoVkFramebuffer* getFramebufferManager() const { return framebufferManager.get(); }
+    OhaoVkCommandManager* getCommandManager() const { return commandManager.get(); }
+    OhaoVkSyncObjects* getSyncObjects() const { return syncObjects.get(); }
+    OhaoVkBuffer* getVertexBuffer() const { return vertexBuffer.get(); }
+    OhaoVkBuffer* getIndexBuffer() const { return indexBuffer.get(); }
+    // === Raw Vulkan Handle Getters ===
+    VkInstance getVkInstance() const { return instance ? instance->getInstance() : VK_NULL_HANDLE; }
+    VkSurfaceKHR getVkSurface() const { return surface ? surface->getSurface() : VK_NULL_HANDLE; }
+    VkPhysicalDevice getVkPhysicalDevice() const { return physicalDevice ? physicalDevice->getDevice() : VK_NULL_HANDLE; }
+    VkDevice getVkDevice() const { return device ? device->getDevice() : VK_NULL_HANDLE; }
+    VkSwapchainKHR getVkSwapChain() const { return swapchain ? swapchain->getSwapChain() : VK_NULL_HANDLE; }
+    VkRenderPass getVkRenderPass() const { return renderPass ? renderPass->getRenderPass() : VK_NULL_HANDLE; }
+    VkPipeline getVkPipeline() const { return pipeline ? pipeline->getPipeline() : VK_NULL_HANDLE; }
+    VkPipelineLayout getVkPipelineLayout() const { return pipeline ? pipeline->getPipelineLayout() : VK_NULL_HANDLE; }
+    VkDescriptorPool getVkDescriptorPool() const { return descriptor ? descriptor->getPool() : VK_NULL_HANDLE; }
+    VkDescriptorSetLayout getVkDescriptorSetLayout() const { return descriptor ? descriptor->getLayout() : VK_NULL_HANDLE; }
+    VkImage getVkDepthImage() const { return depthImage ? depthImage->getImage() : VK_NULL_HANDLE; }
+    VkImageView getVkDepthImageView() const { return depthImage ? depthImage->getImageView() : VK_NULL_HANDLE; }
+    VkCommandPool getVkCommandPool() const { return commandManager ? commandManager->getCommandPool() : VK_NULL_HANDLE; }
+    VkBuffer getVkVertexBuffer() const { return vertexBuffer ? vertexBuffer->getBuffer() : VK_NULL_HANDLE; }
+    VkBuffer getVkIndexBuffer() const { return indexBuffer ? indexBuffer->getBuffer() : VK_NULL_HANDLE; }
+    // Sync objects getters
+    VkSemaphore getImageAvailableSemaphore(size_t frame) const {return syncObjects ? syncObjects->getImageAvailableSemaphore(frame) : VK_NULL_HANDLE;}
+    VkSemaphore getRenderFinishedSemaphore(size_t frame) const {return syncObjects ? syncObjects->getRenderFinishedSemaphore(frame) : VK_NULL_HANDLE;}
+    VkFence getInFlightFence(size_t frame) const {return syncObjects ? syncObjects->getInFlightFence(frame) : VK_NULL_HANDLE;}
+
     Camera& getCamera() {return camera;}
-    VkDevice getDevice()const{return device->getDevice();}
     OhaoVkUniformBuffer* getUniformBuffer() const {return uniformBuffer.get();}
+    size_t getCurrentFrame() const { return currentFrame; }
+
+
     void drawFrame();
 
     struct UniformBufferObject{

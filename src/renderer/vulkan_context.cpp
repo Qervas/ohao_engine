@@ -1,4 +1,6 @@
 #include "vulkan_context.hpp"
+#include "imgui.h"
+#include "imgui_impl_vulkan.h"
 #include <GLFW/glfw3.h>
 #include <alloca.h>
 #include <cmath>
@@ -260,27 +262,7 @@ VulkanContext::drawFrame(){
     currentFrame = (currentFrame + 1 ) % MAX_FRAMES_IN_FLIGHT;
 }
 
-void
-VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
-    if(!vertexBuffer || !indexBuffer || !scene){
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-        if(vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("failed to begin recording command buffer!");
-        }
-
-        renderPass->begin(commandBuffer,
-                         framebufferManager->getFramebuffer(imageIndex),
-                         swapchain->getExtent(),
-                         {0.2f, 0.2f, 0.2f, 1.0f},
-                         1.0f,
-                         0);
-
-        vkCmdEndRenderPass(commandBuffer);
-        vkEndCommandBuffer(commandBuffer);
-        return;
-    }
+void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -288,41 +270,64 @@ VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t image
         throw std::runtime_error("failed to begin recording command buffer!");
     }
 
-    renderPass->begin(commandBuffer, framebufferManager->getFramebuffer(imageIndex), swapchain->getExtent(),
-                    {0.2f, 0.2f, 0.2f, 1.0f},  // clear color
-                    1.0f,                       // clear depth
-                    0);                          // clear stencil
+    renderPass->begin(commandBuffer,
+                     framebufferManager->getFramebuffer(imageIndex),
+                     swapchain->getExtent(),
+                     {0.2f, 0.2f, 0.2f, 1.0f},
+                     1.0f,
+                     0);
 
-    // Bind pipeline and set viewport/scissor
-    pipeline->bind(commandBuffer);
+    // Set viewport and scissor for both scene and ImGui
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(swapchain->getExtent().width);
+    viewport.height = static_cast<float>(swapchain->getExtent().height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
-    // Bind vertex and index buffers
-    VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = swapchain->getExtent();
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    // Bind descriptor sets
-    vkCmdBindDescriptorSets(
-        commandBuffer,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        pipeline->getPipelineLayout(),
-        0, 1,
-        &descriptor->getSet(currentFrame),
-        0, nullptr
-    );
+    // Only render scene if we have one loaded
+    if (vertexBuffer && indexBuffer && scene) {
+        // Bind pipeline and set viewport/scissor
+        pipeline->bind(commandBuffer);
 
-    // Draw the scene
-    auto sceneObjects = scene->getObjects();
-    if(sceneObjects.empty()) {
-        throw std::runtime_error("Scene object is empty!");
+        // Bind vertex and index buffers
+        VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+
+        // Bind descriptor sets
+        vkCmdBindDescriptorSets(
+            commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipeline->getPipelineLayout(),
+            0, 1,
+            &descriptor->getSet(currentFrame),
+            0, nullptr
+        );
+
+        // Draw the scene
+        auto sceneObjects = scene->getObjects();
+        if(sceneObjects.empty()) {
+            throw std::runtime_error("Scene object is empty!");
+        }
+        auto mainObject = sceneObjects.begin()->second;
+        vkCmdDrawIndexed(
+            commandBuffer,
+            static_cast<uint32_t>(mainObject->model->indices.size()),
+            1, 0, 0, 0
+        );
     }
-    auto mainObject = sceneObjects.begin()->second;
-    vkCmdDrawIndexed(
-        commandBuffer,
-        static_cast<uint32_t>(mainObject->model->indices.size()),
-        1, 0, 0, 0
-    );
+
+    // Render ImGui
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 
     vkCmdEndRenderPass(commandBuffer);
     if(vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
