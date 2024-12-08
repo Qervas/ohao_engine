@@ -81,15 +81,10 @@ void SceneRenderer::beginFrame() {
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 }
 
-void SceneRenderer::render() {
+void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame) {
     if (!renderTarget || !context->hasLoadScene()) return;
 
     VkCommandBuffer cmd = context->getCommandManager()->getCommandBuffer(context->getCurrentFrame());
-    // Validate descriptor set before use
-    if (renderTarget->getDescriptorSet() == VK_NULL_HANDLE) {
-        std::cerr << "Invalid descriptor set for scene rendering" << std::endl;
-        return;
-    }
 
     // Bind the scene rendering pipeline
     context->getPipeline()->bind(cmd);
@@ -101,12 +96,13 @@ void SceneRenderer::render() {
     vkCmdBindIndexBuffer(cmd, context->getVkIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
 
     // Bind descriptor sets
+    auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
     vkCmdBindDescriptorSets(
         cmd,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
         context->getVkPipelineLayout(),
         0, 1,
-        &context->getDescriptor()->getSet(context->getCurrentFrame()),
+        &descriptorSet,
         0, nullptr
     );
 
@@ -138,8 +134,29 @@ OhaoVkTextureHandle SceneRenderer::getViewportTexture() const {
 }
 
 void SceneRenderer::resize(uint32_t width, uint32_t height) {
-    if (renderTarget) {
-        renderTarget->resize(width, height);
+    if (width == 0 || height == 0) return;
+
+    // Wait for device to be idle
+    if (context) {
+        context->getLogicalDevice()->waitIdle();
+    }
+
+    try {
+        if (renderTarget) {
+            renderTarget->resize(width, height);
+        } else {
+            renderTarget = std::make_unique<SceneRenderTarget>();
+            if (!renderTarget->initialize(context, width, height)) {
+                throw std::runtime_error("Failed to initialize render target");
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to resize scene renderer: " << e.what() << std::endl;
+        // If resize fails, try to restore a valid state
+        if (renderTarget) {
+            renderTarget->cleanup();
+            renderTarget = nullptr;
+        }
     }
 }
 
@@ -150,5 +167,7 @@ ViewportSize SceneRenderer::getViewportSize() const {
     return {0, 0};
 }
 
-
+bool SceneRenderer::hasValidRenderTarget() const{
+    return renderTarget->hasValidRenderTarget();
+}
 } // namespace ohao

@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <vulkan/vulkan.h>
+#include "ohao_vk_uniform_buffer.hpp"
 #include "rhi/vk/ohao_vk_texture_handle.hpp"
 
 namespace ohao {
@@ -23,12 +24,14 @@ public:
 
 
     void beginFrame();
-    void render();
+    void render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame);
     void endFrame();
 
     OhaoVkTextureHandle getViewportTexture() const;
     void resize(uint32_t width, uint32_t height);
     ViewportSize getViewportSize() const;
+    bool hasValidRenderTarget() const;
+
 
 private:
     VulkanContext* context{nullptr};

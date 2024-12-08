@@ -88,21 +88,16 @@ bool OhaoVkDescriptor::createPool() {
         vkDestroyDescriptorPool(device->getDevice(), pool, nullptr);
         pool = VK_NULL_HANDLE;
     }
-    std::vector<VkDescriptorPoolSize> poolSizes(2);
-
-    // For uniform buffers
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = maxSets;
-
-    // For combined image samplers
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = maxSets;  // Adjust count as needed
+    std::vector<VkDescriptorPoolSize> poolSizes = {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, maxSets * POOL_MULTIPLIER },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxSets * POOL_MULTIPLIER }
+    };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = maxSets * 2;  // Total number of sets we might allocate
+    poolInfo.maxSets = maxSets * POOL_MULTIPLIER * 2;  // Double the size to account for both types
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
     if (vkCreateDescriptorPool(device->getDevice(), &poolInfo, nullptr, &pool) != VK_SUCCESS) {
@@ -193,24 +188,9 @@ bool OhaoVkDescriptor::createCombinedImageSamplerLayout() {
     return true;
 }
 
-bool OhaoVkDescriptor::createCombinedImageSamplerPool() {
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 1;  // Adjust if needed
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 1;  // Adjust if needed
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-
-    return vkCreateDescriptorPool(device->getDevice(), &poolInfo, nullptr, &pool) == VK_SUCCESS;
-}
-
 VkDescriptorSet OhaoVkDescriptor::allocateImageDescriptor(VkImageView imageView, VkSampler sampler) {
-    if (imageSamplerLayout == VK_NULL_HANDLE) {
-        std::cerr << "Image sampler layout is null!" << std::endl;
+    if (!device || !imageView || !sampler || !imageSamplerLayout || !pool) {
+        std::cerr << "Invalid resources for image descriptor allocation" << std::endl;
         return VK_NULL_HANDLE;
     }
 
@@ -221,11 +201,22 @@ VkDescriptorSet OhaoVkDescriptor::allocateImageDescriptor(VkImageView imageView,
     allocInfo.descriptorSetCount = 1;
     allocInfo.pSetLayouts = &imageSamplerLayout;
 
-    if (vkAllocateDescriptorSets(device->getDevice(), &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        return VK_NULL_HANDLE;
-    }
+    VkResult result = vkAllocateDescriptorSets(device->getDevice(), &allocInfo, &descriptorSet);
 
-    imageDescriptorSets.push_back(descriptorSet);
+    if (result != VK_SUCCESS) {
+        // Try to recreate pool if allocation fails
+        if (!recreatePool()) {
+            std::cerr << "Failed to recreate descriptor pool" << std::endl;
+            return VK_NULL_HANDLE;
+        }
+
+        // Try allocation again
+        result = vkAllocateDescriptorSets(device->getDevice(), &allocInfo, &descriptorSet);
+        if (result != VK_SUCCESS) {
+            std::cerr << "Failed to allocate descriptor set after pool recreation" << std::endl;
+            return VK_NULL_HANDLE;
+        }
+    }
 
     VkDescriptorImageInfo imageInfo{};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -241,9 +232,37 @@ VkDescriptorSet OhaoVkDescriptor::allocateImageDescriptor(VkImageView imageView,
     descriptorWrite.descriptorCount = 1;
     descriptorWrite.pImageInfo = &imageInfo;
 
+    imageDescriptorSets.push_back(descriptorSet);
     vkUpdateDescriptorSets(device->getDevice(), 1, &descriptorWrite, 0, nullptr);
 
     return descriptorSet;
+}
+
+bool OhaoVkDescriptor::recreatePool() {
+    // Destroy old pool
+    if (pool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(device->getDevice(), pool, nullptr);
+        pool = VK_NULL_HANDLE;
+    }
+
+    std::vector<VkDescriptorPoolSize> poolSizes = {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, maxSets * POOL_MULTIPLIER },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxSets * POOL_MULTIPLIER }
+    };
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = maxSets * POOL_MULTIPLIER * 2;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+
+    if (vkCreateDescriptorPool(device->getDevice(), &poolInfo, nullptr, &pool) != VK_SUCCESS) {
+        std::cerr << "Failed to create descriptor pool!" << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace ohao

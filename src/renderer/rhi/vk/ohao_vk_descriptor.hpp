@@ -28,9 +28,10 @@ public:
             const OhaoVkBuffer& buffer,
             VkDeviceSize size,
             VkDeviceSize offset = 0);
+    bool recreatePool();
+
 
     bool createCombinedImageSamplerLayout();
-    bool createCombinedImageSamplerPool();
     VkDescriptorSet allocateImageDescriptor(VkImageView imageView, VkSampler sampler);
 
     // Getters
@@ -47,6 +48,7 @@ private:
     VkDescriptorPool pool{VK_NULL_HANDLE};
     std::vector<VkDescriptorSet> descriptorSets;
     std::vector<VkDescriptorSet> imageDescriptorSets;
+    const uint32_t POOL_MULTIPLIER = 100;
 
 
     VkDescriptorSetLayout imageSamplerLayout{VK_NULL_HANDLE};

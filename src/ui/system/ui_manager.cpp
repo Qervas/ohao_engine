@@ -458,7 +458,7 @@ void UIManager::setupDefaultLayout(){
     ImGui::DockBuilderFinish(dockspace_id);
 }
 
-void UIManager::renderSceneViewport(){
+void UIManager::renderSceneViewport() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::Begin("Scene Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
@@ -467,8 +467,8 @@ void UIManager::renderSceneViewport(){
 
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
-    OhaoVkTextureHandle sceneTexture = vulkanContext->getSceneRenderer()->getViewportTexture();
-    if (sceneTexture.getDescriptorSet() != VK_NULL_HANDLE) {
+    auto sceneTexture = vulkanContext->getSceneRenderer()->getViewportTexture();
+    if (sceneTexture) {  // Now we can use the bool operator
         ImTextureID imguiTexID = imgui::convertVulkanTextureToImGui(sceneTexture);
         ImGui::GetWindowDrawList()->AddImage(
             imguiTexID,
@@ -479,24 +479,7 @@ void UIManager::renderSceneViewport(){
         );
     }
 
-    // Update the scene renderer if the viewport size changes
-    if (vulkanContext->getSceneRenderer()) {
-        auto currentSize = vulkanContext->getSceneRenderer()->getViewportSize();
-        if (currentSize.width != static_cast<uint32_t>(sceneViewportSize.x) ||
-            currentSize.height != static_cast<uint32_t>(sceneViewportSize.y)) {
-            if (sceneViewportSize.x > 0 && sceneViewportSize.y > 0) {
-                try {
-                    vulkanContext->getSceneRenderer()->resize(
-                        static_cast<uint32_t>(sceneViewportSize.x),
-                        static_cast<uint32_t>(sceneViewportSize.y)
-                    );
-                } catch (const std::exception& e) {
-                    OHAO_LOG_ERROR(std::string("Failed to resize viewport: ") + e.what());
-                }
-            }
-        }
-    }
-
+    // Viewport resolution text at the bottom
     ImGui::SetCursorPos(ImVec2(10, sceneViewportSize.y - 30));
     ImGui::Text("Viewport: %dx%d", (int)sceneViewportSize.x, (int)sceneViewportSize.y);
 
