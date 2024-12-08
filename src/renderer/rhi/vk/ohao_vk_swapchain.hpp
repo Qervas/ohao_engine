@@ -35,6 +35,9 @@ public:
     // Support query
     SwapChainSupportDetails querySwapChainSupport() const;
 
+    bool recreate(uint32_t width, uint32_t height);
+    VkSwapchainKHR getOldSwapChain() const {return oldSwapChain;}
+
 private:
     void createSwapChain(uint32_t width, uint32_t height);
     void createImageViews();
@@ -55,6 +58,8 @@ private:
     OhaoVkSurface* surface{nullptr};
 
     VkSwapchainKHR swapChain{VK_NULL_HANDLE};
+    VkSwapchainKHR oldSwapChain{VK_NULL_HANDLE};
+
     std::vector<VkImage> images;
     std::vector<VkImageView> imageViews;
     VkFormat imageFormat;

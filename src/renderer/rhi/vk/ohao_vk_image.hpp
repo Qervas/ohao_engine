@@ -42,11 +42,16 @@ public:
     VkImageView getImageView() const { return imageView; }
     VkDeviceMemory getImageMemory() const { return imageMemory; }
 
+    uint32_t getWidth() const { return width; }
+    uint32_t getHeight() const { return height; }
+
 private:
     OhaoVkDevice* device{nullptr};
     VkImage image{VK_NULL_HANDLE};
     VkImageView imageView{VK_NULL_HANDLE};
     VkDeviceMemory imageMemory{VK_NULL_HANDLE};
+    uint32_t width{0};
+    uint32_t height{0};
 
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 };
