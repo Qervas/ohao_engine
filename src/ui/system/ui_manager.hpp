@@ -17,7 +17,7 @@ public:
     void render();
     bool wantsInputCapture() const;
     bool isSceneViewportHovered() const;
-    ImVec2 getSceneViewportSize() const;
+    ViewportSize getSceneViewportSize() const;
 
 private:
     void setupImGuiStyle();
@@ -29,6 +29,7 @@ private:
     void renderBuildMenu();
     void renderDebugMenu();
     void renderHelpMenu();
+    void renderSceneViewport();
     void enableCursor(bool enable);
     void handleModelImport();
     void shutdownImGui();

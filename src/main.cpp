@@ -1,5 +1,4 @@
 #include "ui/window/window.hpp"
-#include "ui/components/file_dialog.hpp"
 #include "renderer/vulkan_context.hpp"
 #include <GLFW/glfw3.h>
 #include <chrono>
@@ -18,6 +17,7 @@ int main() {
         auto uiManager = std::make_shared<ohao::UIManager>(&window, &vulkan);
         vulkan.setUIManager(uiManager);
         uiManager->initialize();
+        vulkan.initializeSceneRenderer();
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
         auto lastTime = std::chrono::high_resolution_clock::now();

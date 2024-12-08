@@ -1,20 +1,20 @@
 #pragma once
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
-#include <vk/ohao_vk_buffer.hpp>
-#include <vk/ohao_vk_command_manager.hpp>
-#include <vk/ohao_vk_descriptor.hpp>
-#include <vk/ohao_vk_device.hpp>
-#include <vk/ohao_vk_framebuffer.hpp>
-#include <vk/ohao_vk_image.hpp>
-#include <vk/ohao_vk_physical_device.hpp>
-#include <vk/ohao_vk_pipeline.hpp>
-#include <vk/ohao_vk_render_pass.hpp>
-#include <vk/ohao_vk_shader_module.hpp>
-#include <vk/ohao_vk_surface.hpp>
-#include <vk/ohao_vk_swapchain.hpp>
-#include <vk/ohao_vk_sync_objects.hpp>
-#include <vk/ohao_vk_uniform_buffer.hpp>
+#include <rhi/vk/ohao_vk_buffer.hpp>
+#include <rhi/vk/ohao_vk_command_manager.hpp>
+#include <rhi/vk/ohao_vk_descriptor.hpp>
+#include <rhi/vk/ohao_vk_device.hpp>
+#include <rhi/vk/ohao_vk_framebuffer.hpp>
+#include <rhi/vk/ohao_vk_image.hpp>
+#include <rhi/vk/ohao_vk_physical_device.hpp>
+#include <rhi/vk/ohao_vk_pipeline.hpp>
+#include <rhi/vk/ohao_vk_render_pass.hpp>
+#include <rhi/vk/ohao_vk_shader_module.hpp>
+#include <rhi/vk/ohao_vk_surface.hpp>
+#include <rhi/vk/ohao_vk_swapchain.hpp>
+#include <rhi/vk/ohao_vk_sync_objects.hpp>
+#include <rhi/vk/ohao_vk_uniform_buffer.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -25,7 +25,8 @@
 #include "core/asset/model.hpp"
 #include "core/material/material.hpp"
 #include "core/scene/scene.hpp"
-#include "renderer/vk/ohao_vk_instance.hpp"
+#include "renderer/rhi/vk/ohao_vk_instance.hpp"
+#include "subsystems/scene/scene_renderer.hpp"
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -36,6 +37,7 @@
 
 namespace ohao {
 
+class SceneRenderer;
 class UIManager;
 class VulkanContext {
 public:
@@ -45,6 +47,7 @@ public:
 
     void initializeVulkan();
     void initializeScene();
+    void initializeSceneRenderer();
     void cleanup();
 
     //Getters
@@ -121,7 +124,8 @@ public:
     void setViewportSize(uint32_t width, uint32_t height);
     void setUIManager(std::shared_ptr<UIManager> manager) {uiManager = manager;}
     std::shared_ptr<UIManager> getUIManager() const {return uiManager;}
-
+    SceneRenderer* getSceneRenderer() const {return sceneRenderer.get();}
+    Scene* getScene() const {return scene.get();}
 private:
     GLFWwindow* window;
 
@@ -164,6 +168,8 @@ private:
     uint32_t lastHeight{0};
     bool needsResize{false};
     std::shared_ptr<UIManager> uiManager;
+    std::unique_ptr<SceneRenderer> sceneRenderer;
+
 };
 
 } // namespace ohao

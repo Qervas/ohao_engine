@@ -1,4 +1,4 @@
-#include "camera_controller.hpp"
+#include "camera/camera_controller.hpp"
 #include <GLFW/glfw3.h>
 #include <camera.hpp>
 #include <glm/geometric.hpp>

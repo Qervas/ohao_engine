@@ -39,6 +39,8 @@ bool OhaoVkImage::createImage(
     VkMemoryPropertyFlags properties,
     VkSampleCountFlagBits numSamples)
 {
+    this->width = width;
+    this->height = height;
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -97,6 +99,8 @@ bool OhaoVkImage::createImageView(VkFormat format, VkImageAspectFlags aspectFlag
 }
 
 bool OhaoVkImage::createDepthResources(VkExtent2D extent, VkSampleCountFlagBits msaaSamples) {
+    width = extent.width;
+    height = extent.height;
     VkFormat depthFormat = findDepthFormat(device);
 
     if (!createImage(

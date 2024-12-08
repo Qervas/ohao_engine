@@ -20,7 +20,7 @@ Window::Window(uint32_t w, uint32_t h, const std::string& title)
         glfwTerminate();
         throw std::runtime_error("Failed to create window");
     }
-    enableCursor(false);
+    enableCursor(true);
 }
 
 Window::~Window() {

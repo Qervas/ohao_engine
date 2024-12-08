@@ -3,11 +3,14 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
+#include "ohao_vk_texture_handle.hpp"
 #include "window/window.hpp"
 #include "components/file_dialog.hpp"
 #include <GLFW/glfw3.h>
 #include <imgui_internal.h>
 #include <vulkan/vulkan_core.h>
+#include "imgui.h"
+#include "imgui_vulkan_utils.hpp"
 
 namespace ohao {
 
@@ -16,6 +19,9 @@ UIManager::UIManager(Window* window, VulkanContext* context)
 }
 
 UIManager::~UIManager(){
+    if (vulkanContext && vulkanContext->getLogicalDevice()) {
+        vulkanContext->getLogicalDevice()->waitIdle();
+    }
     shutdownImGui();
 }
 
@@ -28,8 +34,11 @@ void UIManager::initialize() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // Enable Docking
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;    // Enable Multi-Viewport
-    io.ConfigViewportsNoAutoMerge = true;
-    io.ConfigViewportsNoTaskBarIcon = true;
+
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        io.ConfigViewportsNoAutoMerge = true;
+        io.ConfigViewportsNoTaskBarIcon = true;
+    }
 
     setupImGuiStyle();
 
@@ -156,6 +165,7 @@ void UIManager::initializeVulkanBackend(){
         throw std::runtime_error("Failed to initialize ImGui Vulkan implementation!");
     }
 
+
     // Upload fonts
     VkCommandBuffer commandBuffer = vulkanContext->getCommandManager()->beginSingleTime();
     ImGui_ImplVulkan_CreateFontsTexture();
@@ -175,7 +185,6 @@ void UIManager::shutdownImGui(){
         // Cleanup ImGui
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
 
         // Destroy descriptor pool after ImGui shutdown
         if (imguiPool != VK_NULL_HANDLE && vulkanContext) {
@@ -183,6 +192,7 @@ void UIManager::shutdownImGui(){
             imguiPool = VK_NULL_HANDLE;
         }
 
+        ImGui::DestroyContext();
         imguiInitialized = false;
     }
 }
@@ -237,31 +247,22 @@ void UIManager::render() {
         layoutInitialized = true;
     }
 
-    // Scene Viewport
-    {
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::Begin("Scene Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-        sceneViewportSize = ImGui::GetContentRegionAvail();
-        isSceneWindowHovered = ImGui::IsWindowHovered();
-
-        // Get the size of the viewport
-        ImVec2 pos = ImGui::GetCursorScreenPos();
-
-        // Display viewport info
-        ImGui::SetCursorPos(ImVec2(10, 10));
-        ImGui::Text("Viewport: %dx%d", (int)sceneViewportSize.x, (int)sceneViewportSize.y);
-
-        ImGui::End();
-        ImGui::PopStyleVar();
-    }
+    renderSceneViewport();
 
     // Properties Panel
     ImGui::Begin("Properties");
     if (ImGui::CollapsingHeader("Scene Info")) {
         ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-        ImGui::Text("Draw Calls: %d", 0);
-        ImGui::Text("Vertices: %d", 0);
+
+        // Get actual vertex count from scene
+        size_t vertexCount = 0;
+        if (vulkanContext->hasLoadScene()) {
+            auto scene = vulkanContext->getScene();
+            auto mainObject = scene->getObjects().begin()->second;
+            vertexCount = mainObject->model->vertices.size();
+        }
+
+        ImGui::Text("Vertices: %zu", vertexCount);
     }
     ImGui::End();
 
@@ -290,10 +291,15 @@ void UIManager::render() {
 
     ImGui::End(); // DockSpace
 
+    // End the frame
+    ImGui::EndFrame();
+
     ImGui::Render();
     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        GLFWwindow* backup_current_context = glfwGetCurrentContext();
         ImGui::UpdatePlatformWindows();
         ImGui::RenderPlatformWindowsDefault();
+        glfwMakeContextCurrent(backup_current_context);
     }
 }
 
@@ -424,8 +430,11 @@ bool UIManager::isSceneViewportHovered() const {
     return isSceneWindowHovered;
 }
 
-ImVec2 UIManager::getSceneViewportSize() const {
-    return sceneViewportSize;
+ViewportSize UIManager::getSceneViewportSize() const {
+    return {
+        static_cast<uint32_t>(sceneViewportSize.x),
+        static_cast<uint32_t>(sceneViewportSize.y)
+    };
 }
 
 void UIManager::setupDefaultLayout(){
@@ -447,7 +456,52 @@ void UIManager::setupDefaultLayout(){
     ImGui::DockBuilderDockWindow("Console", dock_id_bottom);
 
     ImGui::DockBuilderFinish(dockspace_id);
+}
 
+void UIManager::renderSceneViewport(){
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("Scene Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    sceneViewportSize = ImGui::GetContentRegionAvail();
+    isSceneWindowHovered = ImGui::IsWindowHovered();
+
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+
+    OhaoVkTextureHandle sceneTexture = vulkanContext->getSceneRenderer()->getViewportTexture();
+    if (sceneTexture.getDescriptorSet() != VK_NULL_HANDLE) {
+        ImTextureID imguiTexID = imgui::convertVulkanTextureToImGui(sceneTexture);
+        ImGui::GetWindowDrawList()->AddImage(
+            imguiTexID,
+            pos,
+            ImVec2(pos.x + sceneViewportSize.x, pos.y + sceneViewportSize.y),
+            ImVec2(0, 0),
+            ImVec2(1, 1)
+        );
+    }
+
+    // Update the scene renderer if the viewport size changes
+    if (vulkanContext->getSceneRenderer()) {
+        auto currentSize = vulkanContext->getSceneRenderer()->getViewportSize();
+        if (currentSize.width != static_cast<uint32_t>(sceneViewportSize.x) ||
+            currentSize.height != static_cast<uint32_t>(sceneViewportSize.y)) {
+            if (sceneViewportSize.x > 0 && sceneViewportSize.y > 0) {
+                try {
+                    vulkanContext->getSceneRenderer()->resize(
+                        static_cast<uint32_t>(sceneViewportSize.x),
+                        static_cast<uint32_t>(sceneViewportSize.y)
+                    );
+                } catch (const std::exception& e) {
+                    OHAO_LOG_ERROR(std::string("Failed to resize viewport: ") + e.what());
+                }
+            }
+        }
+    }
+
+    ImGui::SetCursorPos(ImVec2(10, sceneViewportSize.y - 30));
+    ImGui::Text("Viewport: %dx%d", (int)sceneViewportSize.x, (int)sceneViewportSize.y);
+
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 } // namespace ohao

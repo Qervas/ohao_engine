@@ -10,26 +10,29 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/geometric.hpp>
 #include <glm/trigonometric.hpp>
+#include <memory>
 #include <stdexcept>
 #include <sys/types.h>
 #include <vector>
-#include <vk/ohao_vk_command_manager.hpp>
-#include <vk/ohao_vk_descriptor.hpp>
-#include <vk/ohao_vk_device.hpp>
-#include <vk/ohao_vk_framebuffer.hpp>
-#include <vk/ohao_vk_image.hpp>
-#include <vk/ohao_vk_physical_device.hpp>
-#include <vk/ohao_vk_pipeline.hpp>
-#include <vk/ohao_vk_render_pass.hpp>
-#include <vk/ohao_vk_surface.hpp>
-#include <vk/ohao_vk_swapchain.hpp>
-#include <vk/ohao_vk_instance.hpp>
-#include <vk/ohao_vk_shader_module.hpp>
-#include <vk/ohao_vk_sync_objects.hpp>
-#include <vk/ohao_vk_uniform_buffer.hpp>
+#include <rhi/vk/ohao_vk_command_manager.hpp>
+#include <rhi/vk/ohao_vk_descriptor.hpp>
+#include <rhi/vk/ohao_vk_device.hpp>
+#include <rhi/vk/ohao_vk_framebuffer.hpp>
+#include <rhi/vk/ohao_vk_image.hpp>
+#include <rhi/vk/ohao_vk_physical_device.hpp>
+#include <rhi/vk/ohao_vk_pipeline.hpp>
+#include <rhi/vk/ohao_vk_render_pass.hpp>
+#include <rhi/vk/ohao_vk_surface.hpp>
+#include <rhi/vk/ohao_vk_swapchain.hpp>
+#include <rhi/vk/ohao_vk_instance.hpp>
+#include <rhi/vk/ohao_vk_shader_module.hpp>
+#include <rhi/vk/ohao_vk_sync_objects.hpp>
+#include <rhi/vk/ohao_vk_uniform_buffer.hpp>
 #include <vulkan/vk_platform.h>
 #include <vulkan/vulkan_core.h>
 #include <iostream>
+#include "subsystems/scene/scene_renderer.hpp"
+#include "subsystems/scene/scene_render_target.hpp"
 #include "ui/system/ui_manager.hpp"
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
@@ -125,7 +128,9 @@ VulkanContext::initializeVulkan(){
     if(!descriptor->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)) {
         throw std::runtime_error("engine descriptor system initialization failed!");
     }
-    if(!descriptor->createDescriptorSets(uniformBuffer->getBuffers(), sizeof(UniformBufferObject))){
+
+    // Create descriptor sets for uniform buffers
+    if (!descriptor->createDescriptorSets(uniformBuffer->getBuffers(), sizeof(UniformBufferObject))) {
         throw std::runtime_error("failed to create descriptor sets!");
     }
 
@@ -138,15 +143,21 @@ VulkanContext::initializeVulkan(){
     if(!syncObjects->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)){
         throw std::runtime_error("engine sync objects initialization failed!");
     }
+
+    sceneRenderer = std::make_unique<SceneRenderer>();
+    if(!sceneRenderer->initialize(this)){
+        throw std::runtime_error("engine scene renderer initializatin failed");
+    }
 }
 void
 VulkanContext::cleanup(){
     if(device){device->waitIdle();}
     if(uiManager){uiManager.reset();}
+    sceneRenderer.reset();
+    descriptor.reset();
     depthImage.reset();
     cleanupCurrentModel();
     uniformBuffer.reset();
-    descriptor.reset();
     syncObjects.reset();
     commandManager.reset();
     framebufferManager.reset();
@@ -202,59 +213,105 @@ VulkanContext::initializeScene() {
     }
 }
 
-void
-VulkanContext::drawFrame(){
-    // if (!scene || !vertexBuffer || !indexBuffer) {
-    //     return;  // Nothing to render yet
-    // }
+void VulkanContext::initializeSceneRenderer() {
+    if (!uiManager) {
+        throw std::runtime_error("UIManager must be set before initializing scene renderer");
+    }
+
+    auto viewportSize = uiManager->getSceneViewportSize();
+    if (!sceneRenderer->initializeRenderTarget(
+            static_cast<uint32_t>(viewportSize.width),
+            static_cast<uint32_t>(viewportSize.height))) {
+        throw std::runtime_error("Failed to initialize scene render target");
+    }
+}
+
+void VulkanContext::drawFrame() {
     if (!uiManager) {
         throw std::runtime_error("UI Manager not set!");
     }
 
-    ImVec2 viewportSize = uiManager->getSceneViewportSize();
-    if (viewportSize.x > 0 && viewportSize.y > 0) {
-        updateViewport(static_cast<uint32_t>(viewportSize.x),
-                      static_cast<uint32_t>(viewportSize.y));
-    }
+    // Wait for previous frame
     syncObjects->waitForFence(currentFrame);
     syncObjects->resetFence(currentFrame);
 
+    // Get next image
     uint32_t imageIndex;
-    VkResult result = vkAcquireNextImageKHR(device->getDevice(), swapchain->getSwapChain(), UINT64_MAX,
-                    syncObjects->getImageAvailableSemaphore(currentFrame), VK_NULL_HANDLE, &imageIndex);
+    VkResult result = vkAcquireNextImageKHR(
+        device->getDevice(),
+        swapchain->getSwapChain(),
+        UINT64_MAX,
+        syncObjects->getImageAvailableSemaphore(currentFrame),
+        VK_NULL_HANDLE,
+        &imageIndex
+    );
 
-    if(result == VK_ERROR_OUT_OF_DATE_KHR) return;
-
-    if(result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR){
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
-
-
+    // Update uniform buffer with camera data
     uniformBuffer->updateFromCamera(currentFrame, camera);
+
+    // Reset and record command buffer
     commandManager->resetCommandBuffer(currentFrame);
-    recordCommandBuffer(commandManager->getCommandBuffer(currentFrame), imageIndex);
+    auto commandBuffer = commandManager->getCommandBuffer(currentFrame);
 
+    // Begin command buffer recording
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to begin recording command buffer!");
+    }
 
+    // First pass: Render scene to scene render target
+    if (hasLoadScene()) {
+        sceneRenderer->beginFrame();
+        sceneRenderer->render();
+        sceneRenderer->endFrame();
+    }
+
+    // Second pass: Main render pass with UI
+    renderPass->begin(
+        commandBuffer,
+        framebufferManager->getFramebuffer(imageIndex),
+        swapchain->getExtent(),
+        {0.2f, 0.2f, 0.2f, 1.0f},
+        1.0f,
+        0
+    );
+
+    // Render ImGui
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
+
+    renderPass->end(commandBuffer);
+
+    // End command buffer recording
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to record command buffer!");
+    }
+
+    // Submit command buffer
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    VkSemaphore waitSemaphores[]{syncObjects->getImageAvailableSemaphore(currentFrame)};
-    VkPipelineStageFlags waitStages[] {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    VkSemaphore waitSemaphores[] = {syncObjects->getImageAvailableSemaphore(currentFrame)};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = commandManager->getCommandBufferPtr(currentFrame);
 
-    VkSemaphore signalSemaphores[]{syncObjects->getRenderFinishedSemaphore(currentFrame)};
+    VkSemaphore signalSemaphores[] = {syncObjects->getRenderFinishedSemaphore(currentFrame)};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    if(vkQueueSubmit(graphicsQueue, 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS){
-        throw std::runtime_error("failed to submit draw command buffer");
+    if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to submit draw command buffer");
     }
 
+    // Present
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
@@ -266,11 +323,12 @@ VulkanContext::drawFrame(){
     presentInfo.pImageIndices = &imageIndex;
 
     result = vkQueuePresentKHR(presentQueue, &presentInfo);
-    if(result != VK_SUCCESS){
-        throw std::runtime_error("failed to present swap chain image!");
+    if (result != VK_SUCCESS) {
+        throw std::runtime_error("Failed to present swap chain image!");
     }
 
-    currentFrame = (currentFrame + 1 ) % MAX_FRAMES_IN_FLIGHT;
+    // Advance to next frame
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
