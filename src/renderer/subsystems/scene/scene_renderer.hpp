@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include "ohao_vk_uniform_buffer.hpp"
 #include "rhi/vk/ohao_vk_texture_handle.hpp"
+#include "rhi/vk/ohao_vk_pipeline.hpp"
 
 namespace ohao {
 
@@ -30,12 +31,15 @@ public:
     OhaoVkTextureHandle getViewportTexture() const;
     void resize(uint32_t width, uint32_t height);
     ViewportSize getViewportSize() const;
+    SceneRenderTarget* getRenderTarget() const { return renderTarget.get(); }
     bool hasValidRenderTarget() const;
+    void setPipeline(OhaoVkPipeline* p) { pipeline = p; }
 
 
 private:
     VulkanContext* context{nullptr};
     std::unique_ptr<SceneRenderTarget> renderTarget;
+    OhaoVkPipeline* pipeline{nullptr};
 
     bool createRenderResources(uint32_t width, uint32_t height);
 };

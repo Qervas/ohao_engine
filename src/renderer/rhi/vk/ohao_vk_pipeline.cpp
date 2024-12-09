@@ -167,7 +167,7 @@ bool OhaoVkPipeline::createPipeline() {
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass->getRenderPass();
+    pipelineInfo.renderPass = renderPass->getVkRenderPass();
     pipelineInfo.subpass = 0;
 
     if (vkCreateGraphicsPipelines(

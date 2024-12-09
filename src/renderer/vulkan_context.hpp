@@ -27,6 +27,7 @@
 #include "core/scene/scene.hpp"
 #include "renderer/rhi/vk/ohao_vk_instance.hpp"
 #include "subsystems/scene/scene_renderer.hpp"
+#include "renderer/shader/shader_uniforms.hpp"
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -41,12 +42,14 @@ class SceneRenderer;
 class UIManager;
 class VulkanContext {
 public:
+
+    using UniformBufferObject = GlobalUniformBuffer;
+
     VulkanContext() = delete;
     VulkanContext(GLFWwindow* windowHandle);
     ~VulkanContext();
 
     void initializeVulkan();
-    void initializeScene();
     void initializeSceneRenderer();
     void cleanup();
 
@@ -73,7 +76,7 @@ public:
     VkPhysicalDevice getVkPhysicalDevice() const { return physicalDevice ? physicalDevice->getDevice() : VK_NULL_HANDLE; }
     VkDevice getVkDevice() const { return device ? device->getDevice() : VK_NULL_HANDLE; }
     VkSwapchainKHR getVkSwapChain() const { return swapchain ? swapchain->getSwapChain() : VK_NULL_HANDLE; }
-    VkRenderPass getVkRenderPass() const { return renderPass ? renderPass->getRenderPass() : VK_NULL_HANDLE; }
+    VkRenderPass getVkRenderPass() const { return renderPass ? renderPass->getVkRenderPass() : VK_NULL_HANDLE; }
     VkPipeline getVkPipeline() const { return pipeline ? pipeline->getPipeline() : VK_NULL_HANDLE; }
     VkPipelineLayout getVkPipelineLayout() const { return pipeline ? pipeline->getPipelineLayout() : VK_NULL_HANDLE; }
     VkDescriptorPool getVkDescriptorPool() const { return descriptor ? descriptor->getPool() : VK_NULL_HANDLE; }
@@ -92,29 +95,7 @@ public:
     OhaoVkUniformBuffer* getUniformBuffer() const {return uniformBuffer.get();}
     size_t getCurrentFrame() const { return currentFrame; }
 
-
     void drawFrame();
-
-    struct UniformBufferObject{
-        glm::mat4 model;
-        glm::mat4 view;
-        glm::mat4 proj;
-        glm::vec3 viewPos;
-        float padding1;
-
-        glm::vec3 lightPos;
-        float padding2;
-        glm::vec3 lightColor;
-        float lightIntensity;
-
-        glm::vec3 baseColor;
-        float metallic;
-        float roughness;
-        float ao;
-        float padding3;
-        float padding4;
-    };
-
     bool hasLoadScene();
     bool loadModel(const std::string& filename);
     void cleanupCurrentModel();
@@ -144,6 +125,7 @@ private:
     std::unique_ptr<OhaoVkShaderModule> shaderModules;
     std::unique_ptr<OhaoVkRenderPass> renderPass;
     std::unique_ptr<OhaoVkPipeline> pipeline;
+    std::unique_ptr<OhaoVkPipeline> scenePipeline;
     std::unique_ptr<OhaoVkDescriptor> descriptor;
     std::unique_ptr<OhaoVkImage> depthImage;
     std::unique_ptr<OhaoVkFramebuffer> framebufferManager;

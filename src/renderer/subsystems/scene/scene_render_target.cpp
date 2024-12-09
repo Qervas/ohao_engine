@@ -64,10 +64,6 @@ void SceneRenderTarget::cleanup() {
         framebuffer = VK_NULL_HANDLE;
     }
 
-    if (renderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(device, renderPass, nullptr);
-        renderPass = VK_NULL_HANDLE;
-    }
 
     if (sampler != VK_NULL_HANDLE) {
         vkDestroySampler(device, sampler, nullptr);
@@ -76,6 +72,7 @@ void SceneRenderTarget::cleanup() {
 
     colorTarget.reset();
     depthTarget.reset();
+    renderPass.reset();
 }
 
 bool SceneRenderTarget::createRenderTargets(uint32_t width, uint32_t height) {
@@ -100,7 +97,7 @@ bool SceneRenderTarget::createRenderTargets(uint32_t width, uint32_t height) {
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = colorTarget->getImage();
@@ -110,12 +107,12 @@ bool SceneRenderTarget::createRenderTargets(uint32_t width, uint32_t height) {
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
     barrier.srcAccessMask = 0;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
     vkCmdPipelineBarrier(
         cmdBuffer,
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         0,
         0, nullptr,
         0, nullptr,
@@ -180,7 +177,7 @@ bool SceneRenderTarget::createRenderPass() {
     attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    attachments[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     // Depth attachment
     attachments[1].format = context->getDepthImage()->findDepthFormat(context->getLogicalDevice());
@@ -192,40 +189,44 @@ bool SceneRenderTarget::createRenderPass() {
     attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Attachment references
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkAttachmentReference depthRef{};
-    depthRef.attachment = 1;
-    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference depthAttachmentRef{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+    // Subpass
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-    subpass.pDepthStencilAttachment = &depthRef;
+    subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
+    // Dependencies
     std::array<VkSubpassDependency, 2> dependencies{};
 
-    // First dependency - External -> This pass
+    // Dependency 0: External -> Subpass
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].srcAccessMask = VK_ACCESS_NONE;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
-    // Second dependency - This pass -> External
+    // Dependency 1: Subpass -> External
     dependencies[1].srcSubpass = 0;
     dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstAccessMask = VK_ACCESS_NONE;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
+    // Create render pass
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
@@ -235,10 +236,16 @@ bool SceneRenderTarget::createRenderPass() {
     renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
     renderPassInfo.pDependencies = dependencies.data();
 
-    if (vkCreateRenderPass(context->getVkDevice(), &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
+    VkRenderPass renderPassHandle;
+    if (vkCreateRenderPass(context->getVkDevice(), &renderPassInfo, nullptr, &renderPassHandle) != VK_SUCCESS) {
         return false;
     }
 
+    renderPass = std::make_unique<OhaoVkRenderPass>();
+    if (!renderPass->initialize(context->getLogicalDevice(), context->getSwapChain())) {
+        return false;
+    }
+    renderPass->setRenderPass(renderPassHandle);
     return true;
 }
 
@@ -250,7 +257,7 @@ bool SceneRenderTarget::createFramebuffer() {
 
     VkFramebufferCreateInfo framebufferInfo{};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebufferInfo.renderPass = renderPass;
+    framebufferInfo.renderPass = renderPass->getVkRenderPass();
     framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
     framebufferInfo.pAttachments = attachments.data();
     framebufferInfo.width = colorTarget->getWidth();
@@ -271,6 +278,12 @@ bool SceneRenderTarget::createDescriptor() {
     }
 
     for (int attempts = 0; attempts < 3; attempts++) {
+        // Create descriptor with correct layout
+        VkDescriptorImageInfo imageInfo{};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = colorTarget->getImageView();
+        imageInfo.sampler = sampler;
+
         descriptorSet = context->getDescriptor()->allocateImageDescriptor(
             colorTarget->getImageView(),
             sampler
@@ -305,7 +318,7 @@ void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
     auto oldColorTarget = std::move(colorTarget);
     auto oldDepthTarget = std::move(depthTarget);
     auto oldSampler = sampler;
-    auto oldRenderPass = renderPass;
+    auto oldRenderPass = renderPass->getVkRenderPass();
     auto oldFramebuffer = framebuffer;
     auto oldDescriptorSet = descriptorSet;
 
@@ -346,7 +359,10 @@ void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
         colorTarget = std::move(oldColorTarget);
         depthTarget = std::move(oldDepthTarget);
         sampler = oldSampler;
-        renderPass = oldRenderPass;
+        if (!renderPass) {
+            renderPass = std::make_unique<OhaoVkRenderPass>();
+            renderPass->initialize(context->getLogicalDevice(), context->getSwapChain());
+        }
         framebuffer = oldFramebuffer;
         descriptorSet = oldDescriptorSet;
 
@@ -370,4 +386,5 @@ void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
 bool SceneRenderTarget::hasValidRenderTarget() const {
     return colorTarget && depthTarget && sampler && renderPass && framebuffer && descriptorSet;
 }
+
 } // namespace ohao
