@@ -233,7 +233,10 @@ Model::loadMTL(const std::string& filename) {
             }
             else if (token == "Ke"){
                 iss >> currentMaterial->emission.x >> currentMaterial->emission.y >> currentMaterial->emission.z;
-                currentMaterial->isLight = true;
+                currentMaterial->isLight = glm::length(currentMaterial->emission) > 0.0f;
+                std::cout << "  Emission: " << currentMaterial->emission.x << " "
+                          << currentMaterial->emission.y << " "
+                          << currentMaterial->emission.z << std::endl;
             }
             else if (token == "Light_Position") {
                 iss >> currentMaterial->lightPosition.x
