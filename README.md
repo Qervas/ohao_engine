@@ -3,7 +3,7 @@
 OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
 
 
-![1733694043848](image/README/1733694043848.png)
+![1733708535551](image/README/1733708535551.png)
 
 ## Building
 
@@ -62,7 +62,8 @@ Currently in early development. Features being implemented:
 - [X] Vulkan initialization, validation layer, pipeline, rasterization
 - [X] Load scene from obj file, including lighting and materials
 - [X] Friendly camera control
-- [ ] User interface
+- [X] User interface
+- [ ] BRDF and illumination model switch
 
 ## Documentation
 
