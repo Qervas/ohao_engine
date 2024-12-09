@@ -15,20 +15,27 @@ Scene::loadFromFile(const std::string& filename) {
     objects["cornell_box"] = sceneObject;
 }
 
-void
-Scene::parseModelMaterials(const Model& model) {
+void Scene::parseModelMaterials(const Model& model) {
     for (const auto& [name, mtlData] : model.materials) {
         if (mtlData.isLight) {
             Light light;
-            light.position = mtlData.lightPosition;
+            light.position = mtlData.lightPosition.length() > 0 ?
+                           mtlData.lightPosition :
+                           glm::vec3(0.0f, 0.9f, 0.0f); // Default position
             light.color = mtlData.emission;
-            light.intensity = mtlData.lightIntensity;
+            light.intensity = mtlData.lightIntensity > 0 ?
+                           mtlData.lightIntensity :
+                           glm::length(mtlData.emission); // Use emission magnitude as fallback
             addLight(name, light);
 
             std::cout << "Added light: " << name
-                      << " pos: " << light.position.x << ","
-                      << light.position.y << ","
-                      << light.position.z << std::endl;
+                     << " pos: " << light.position.x << ","
+                     << light.position.y << ","
+                     << light.position.z
+                     << " intensity: " << light.intensity
+                     << " emission: " << mtlData.emission.x << ","
+                     << mtlData.emission.y << ","
+                     << mtlData.emission.z << std::endl;
         }
 
         // Convert MTL material to our PBR material
@@ -43,7 +50,13 @@ Scene::convertMTLToMaterial(const MaterialData& mtlData) {
     Material material;
 
     // Convert traditional material properties to PBR parameters
-    material.baseColor = mtlData.diffuse;
+    if (mtlData.isLight) {
+        material.baseColor = mtlData.emission;
+        material.emissive = mtlData.emission;
+    } else {
+        material.baseColor = mtlData.diffuse;
+        material.emissive = glm::vec3(0.0f);
+    }
 
     // Calculate metallic value from specular intensity
     float specIntensity = (mtlData.specular.r + mtlData.specular.g + mtlData.specular.b) / 3.0f;
@@ -54,12 +67,6 @@ Scene::convertMTLToMaterial(const MaterialData& mtlData) {
 
     // Set ambient occlusion from ambient term
     material.ao = (mtlData.ambient.r + mtlData.ambient.g + mtlData.ambient.b) / 3.0f;
-
-    // Handle emissive materials
-    if (mtlData.isLight) {
-        material.emissive = mtlData.emission;
-    }
-
     material.ior = mtlData.ior;
 
     return material;

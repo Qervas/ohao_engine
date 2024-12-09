@@ -161,6 +161,7 @@ VulkanContext::cleanup(){
     syncObjects.reset();
     commandManager.reset();
     framebufferManager.reset();
+    scenePipeline.reset();
     pipeline.reset();
     renderPass.reset();
     shaderModules.reset();
@@ -169,48 +170,6 @@ VulkanContext::cleanup(){
     physicalDevice.reset();
     surface.reset();
     instance.reset();
-}
-
-void
-VulkanContext::initializeScene() {
-    scene = std::make_unique<Scene>();
-    scene->loadFromFile("assets/models/cornell_box.obj");
-    auto sceneObjects = scene->getObjects();
-    if (sceneObjects.empty()) {
-        throw std::runtime_error("No objects loaded in scene!");
-    }
-    auto mainObject = sceneObjects.begin()->second;
-
-    createVertexBuffer(mainObject->model->vertices);
-    createIndexBuffer(mainObject->model->indices);
-
-    // Initialize uniform buffer with scene data
-    UniformBufferObject initialUBO{};
-    initialUBO.model = glm::mat4(1.0f);
-    initialUBO.view = camera.getViewMatrix();
-    initialUBO.proj = camera.getProjectionMatrix();
-    initialUBO.viewPos = camera.getPosition();
-    initialUBO.proj[1][1] *= -1;
-
-    // Set default values
-    initialUBO.baseColor = mainObject->material.baseColor;
-    initialUBO.metallic = mainObject->material.metallic;
-    initialUBO.roughness = mainObject->material.roughness;
-    initialUBO.ao = mainObject->material.ao;
-
-    // Get light data from scene
-    const auto& lights = scene->getLights();
-    if (!lights.empty()) {
-        const auto& light = lights.begin()->second;
-        initialUBO.lightPos = light.position;
-        initialUBO.lightColor = light.color;
-        initialUBO.lightIntensity = light.intensity;
-    }
-
-    // Write initial values to all uniform buffers
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-        uniformBuffer->writeToBuffer(i, &initialUBO, sizeof(UniformBufferObject));
-    }
 }
 
 void VulkanContext::initializeSceneRenderer() {
@@ -224,6 +183,20 @@ void VulkanContext::initializeSceneRenderer() {
             static_cast<uint32_t>(viewportSize.height))) {
         throw std::runtime_error("Failed to initialize scene render target");
     }
+
+    // Create scene-specific pipeline
+    scenePipeline = std::make_unique<OhaoVkPipeline>();
+    if (!scenePipeline->initialize(
+            device.get(),
+            sceneRenderer->getRenderTarget()->getRenderPass(),
+            shaderModules.get(),
+            VkExtent2D{viewportSize.width, viewportSize.height},
+            descriptor->getLayout())) {
+        throw std::runtime_error("Failed to initialize scene pipeline!");
+    }
+
+    // Update the scene renderer to use the new pipeline
+    sceneRenderer->setPipeline(scenePipeline.get());
 }
 
 void VulkanContext::drawFrame() {
@@ -250,8 +223,6 @@ void VulkanContext::drawFrame() {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
-    // Update uniform buffer with camera data
-    uniformBuffer->updateFromCamera(currentFrame, camera);
 
     // Reset and record command buffer
     commandManager->resetCommandBuffer(currentFrame);
@@ -264,14 +235,23 @@ void VulkanContext::drawFrame() {
         throw std::runtime_error("Failed to begin recording command buffer!");
     }
 
+    uniformBuffer->updateFromCamera(currentFrame, camera);
     // First pass: Render scene to scene render target
     if (hasLoadScene()) {
+
+        auto scene = getScene();
+        if (scene && !scene->getLights().empty()) {
+            const auto& light = scene->getLights().begin()->second;
+            uniformBuffer->setLightProperties(
+                light.position,
+                light.color,
+                light.intensity
+            );
+        }
         if (!sceneRenderer->hasValidRenderTarget()) {
             initializeSceneRenderer();
         }
-        sceneRenderer->beginFrame();
         sceneRenderer->render(uniformBuffer.get(), currentFrame);
-        sceneRenderer->endFrame();
     }
 
     // Second pass: Main render pass with UI
@@ -456,7 +436,6 @@ bool VulkanContext::loadModel(const std::string& filename) {
             throw std::runtime_error("No objects loaded in scene!");
         }
         auto mainObject = sceneObjects.begin()->second;
-
         createVertexBuffer(mainObject->model->vertices);
         createIndexBuffer(mainObject->model->indices);
 
@@ -468,12 +447,6 @@ bool VulkanContext::loadModel(const std::string& filename) {
         initialUBO.viewPos = camera.getPosition();
         initialUBO.proj[1][1] *= -1;
 
-        // Set default values
-        initialUBO.baseColor = mainObject->material.baseColor;
-        initialUBO.metallic = mainObject->material.metallic;
-        initialUBO.roughness = mainObject->material.roughness;
-        initialUBO.ao = mainObject->material.ao;
-
         // Get light data from scene
         const auto& lights = scene->getLights();
         if (!lights.empty()) {
@@ -481,6 +454,10 @@ bool VulkanContext::loadModel(const std::string& filename) {
             initialUBO.lightPos = light.position;
             initialUBO.lightColor = light.color;
             initialUBO.lightIntensity = light.intensity;
+        }else{
+            initialUBO.lightPos = glm::vec3(0.0f, 0.9f, 0.0f);
+            initialUBO.lightColor = glm::vec3(1.0f);
+            initialUBO.lightIntensity = 1.0f;
         }
 
         // Write initial values to all uniform buffers

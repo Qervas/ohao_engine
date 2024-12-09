@@ -47,7 +47,7 @@ void SceneRenderer::beginFrame() {
     // Begin render pass for scene
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = renderTarget->getRenderPass();
+    renderPassInfo.renderPass = renderTarget->getVkRenderPass();
     renderPassInfo.framebuffer = renderTarget->getFramebuffer();
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = {
@@ -83,11 +83,23 @@ void SceneRenderer::beginFrame() {
 
 void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame) {
     if (!renderTarget || !context->hasLoadScene()) return;
-
     VkCommandBuffer cmd = context->getCommandManager()->getCommandBuffer(context->getCurrentFrame());
 
+
+    beginFrame();
+    // Update light properties before binding pipeline
+    auto scene = context->getScene();
+    if (scene && !scene->getLights().empty()) {
+        const auto& light = scene->getLights().begin()->second;
+        uniformBuffer->setLightProperties(
+            light.position,
+            light.color,
+            light.intensity
+        );
+    }
+
     // Bind the scene rendering pipeline
-    context->getPipeline()->bind(cmd);
+    pipeline->bind(cmd);
 
     // Bind vertex and index buffers
     VkBuffer vertexBuffers[] = {context->getVkVertexBuffer()};
@@ -100,14 +112,13 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
     vkCmdBindDescriptorSets(
         cmd,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
-        context->getVkPipelineLayout(),
+        pipeline->getPipelineLayout(),
         0, 1,
         &descriptorSet,
         0, nullptr
     );
 
     // Draw the scene
-    auto scene = context->getScene();
     if (scene) {
         auto sceneObjects = scene->getObjects();
         if (!sceneObjects.empty()) {
@@ -119,6 +130,8 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             );
         }
     }
+    endFrame();
+
 }
 
 void SceneRenderer::endFrame() {

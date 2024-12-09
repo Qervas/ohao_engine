@@ -5,33 +5,16 @@
 #include "ohao_vk_buffer.hpp"
 #include <glm/glm.hpp>
 #include "renderer/camera/camera.hpp"
+#include "renderer/shader/shader_uniforms.hpp"
 
 namespace ohao {
 
 class OhaoVkDevice;
 
-struct UniformBufferObject {
-    glm::mat4 model;
-    glm::mat4 view;
-    glm::mat4 proj;
-    glm::vec3 viewPos;
-    float padding1;
-
-    glm::vec3 lightPos;
-    float padding2;
-    glm::vec3 lightColor;
-    float lightIntensity;
-
-    glm::vec3 baseColor;
-    float metallic;
-    float roughness;
-    float ao;
-    float padding3;
-    float padding4;
-};
-
 class OhaoVkUniformBuffer {
 public:
+    using UniformBufferObject =  GlobalUniformBuffer;
+
     OhaoVkUniformBuffer() = default;
     ~OhaoVkUniformBuffer();
 

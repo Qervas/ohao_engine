@@ -56,7 +56,7 @@ bool OhaoVkFramebuffer::createFramebuffers() {
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = renderPass->getRenderPass();
+        framebufferInfo.renderPass = renderPass->getVkRenderPass();
         framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
         framebufferInfo.pAttachments = attachments.data();
         framebufferInfo.width = swapchain->getExtent().width;

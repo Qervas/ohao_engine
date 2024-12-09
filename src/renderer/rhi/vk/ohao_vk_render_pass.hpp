@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <array>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
@@ -15,9 +16,8 @@ public:
     bool initialize(OhaoVkDevice* device, OhaoVkSwapChain* swapchain);
     void cleanup();
 
-    VkRenderPass getRenderPass() const { return renderPass; }
-
-    void begin(VkCommandBuffer commandBuffer,
+    VkRenderPass getVkRenderPass() const { return renderPass; }
+    void setRenderPass(VkRenderPass newRenderPass) { if (renderPass != VK_NULL_HANDLE) {cleanup();} renderPass = newRenderPass; }    void begin(VkCommandBuffer commandBuffer,
               VkFramebuffer framebuffer,
               const VkExtent2D& extent,
               const std::array<float, 4>& clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
