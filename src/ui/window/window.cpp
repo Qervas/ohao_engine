@@ -13,7 +13,7 @@ Window::Window(uint32_t w, uint32_t h, const std::string& title)
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     window = glfwCreateWindow(width, height, title.c_str(), nullptr, nullptr);
     if (!window) {
@@ -21,6 +21,15 @@ Window::Window(uint32_t w, uint32_t h, const std::string& title)
         throw std::runtime_error("Failed to create window");
     }
     enableCursor(true);
+    glfwSetWindowUserPointer(window, this);
+    glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+}
+
+void Window::framebufferResizeCallback(GLFWwindow* window, int width, int height){
+    auto app = reinterpret_cast<Window*>(glfwGetWindowUserPointer(window));
+    app->width = width;
+    app->height = height;
+    app->framebufferResized = true;
 }
 
 Window::~Window() {
@@ -31,30 +40,25 @@ Window::~Window() {
     glfwTerminate();
 }
 
-bool
-Window::shouldClose() {
+bool Window::shouldClose() {
     return glfwWindowShouldClose(window);
 }
 
-void
-Window::pollEvents() {
+void Window::pollEvents() {
     glfwPollEvents();
 }
 
-bool
-Window::isKeyPressed(int key) const{
+bool Window::isKeyPressed(int key) const{
     return glfwGetKey(window, key) == GLFW_PRESS;
 }
 
-glm::vec2
-Window::getMousePosition() const{
+glm::vec2 Window::getMousePosition() const{
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
     return glm::vec2(xpos, ypos);
 }
 
-glm::vec2
-Window::getMouseDelta(){
+glm::vec2 Window::getMouseDelta(){
     glm::vec2 currentPos = getMousePosition();
     if(firstMouse){
         lastMousePos = currentPos;
@@ -74,8 +78,7 @@ Window::enableCursor(bool enabled){
     firstMouse = true;
 }
 
-void
-Window::setMousePosition(const glm::vec2& pos){
+void Window::setMousePosition(const glm::vec2& pos){
     glfwSetCursorPos(window, pos.x, pos.y);
     lastMousePos = pos;
 }
@@ -83,6 +86,12 @@ Window::setMousePosition(const glm::vec2& pos){
 void Window::toggleCursorMode(){
     cursorEnabled = ! cursorEnabled;
     enableCursor(cursorEnabled);
+}
+
+bool Window::wasResized(){
+    bool resized = framebufferResized;
+    framebufferResized = false;
+    return resized;
 }
 
 } // namespace ohao
