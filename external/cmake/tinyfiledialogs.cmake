@@ -6,6 +6,14 @@ FetchContent_Declare(
     GIT_TAG master
 )
 
+# Check if tinyfiledialogs has already been downloaded
+FetchContent_GetProperties(tinyfiledialogs)
+if(NOT tinyfiledialogs_POPULATED)
+    message(STATUS "Downloading tinyfiledialogs...")
+    FetchContent_MakeAvailable(tinyfiledialogs)
+    message(STATUS "Download completed: tinyfiledialogs")
+endif()
+
 FetchContent_MakeAvailable(tinyfiledialogs)
 
 # Create library target for tinyfiledialogs
