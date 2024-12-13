@@ -3,7 +3,6 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
-
 namespace ohao {
 
 OhaoVkShaderModule::~OhaoVkShaderModule() {

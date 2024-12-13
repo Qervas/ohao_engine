@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/window/window.hpp"
 #include <glm/ext/matrix_float4x4.hpp>
 #include <memory>
 #include <rhi/vk/ohao_vk_buffer.hpp>
@@ -46,12 +47,15 @@ public:
     using UniformBufferObject = GlobalUniformBuffer;
 
     VulkanContext() = delete;
-    VulkanContext(GLFWwindow* windowHandle);
+    VulkanContext(Window* windowHandle);
     ~VulkanContext();
 
     void initializeVulkan();
     void initializeSceneRenderer();
     void cleanup();
+    void recreateSwapChain();
+    void cleanupSwapChain();
+
 
     //Getters
     // === OhaoVk Object Getters ===
@@ -108,7 +112,7 @@ public:
     SceneRenderer* getSceneRenderer() const {return sceneRenderer.get();}
     Scene* getScene() const {return scene.get();}
 private:
-    GLFWwindow* window;
+    Window* window;
 
     //vulkan
     const int MAX_FRAMES_IN_FLIGHT = 2;

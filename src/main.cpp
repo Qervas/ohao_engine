@@ -11,7 +11,7 @@
 int main() {
     try {
         ohao::Window window(1440, 900, "OHAO Engine");
-        ohao::VulkanContext vulkan(window.getGLFWWindow());
+        ohao::VulkanContext vulkan(&window);
         vulkan.initializeVulkan();
 
         auto uiManager = std::make_shared<ohao::UIManager>(&window, &vulkan);

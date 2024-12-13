@@ -34,14 +34,15 @@
 #include "subsystems/scene/scene_renderer.hpp"
 #include "subsystems/scene/scene_render_target.hpp"
 #include "ui/system/ui_manager.hpp"
+#include "ui/window/window.hpp"
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
 namespace ohao{
 
-VulkanContext::VulkanContext(GLFWwindow* windowHandle): window(windowHandle){
+VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
     int w, h;
-    glfwGetFramebufferSize(window, &w, &h);
+    glfwGetFramebufferSize(window->getGLFWWindow(), &w, &h);
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
 }
@@ -56,7 +57,7 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("engine instance initialization failed!");
     }
     surface = std::make_unique<OhaoVkSurface>();
-    if (!surface->initialize(instance.get(), window)){
+    if (!surface->initialize(instance.get(), window->getGLFWWindow())){
         throw std::runtime_error("engine surface initialization failed!");
     }
 
@@ -203,25 +204,31 @@ void VulkanContext::drawFrame() {
     if (!uiManager) {
         throw std::runtime_error("UI Manager not set!");
     }
+    if(window->wasResized()){
+        recreateSwapChain();
+        return;
+    }
 
     // Wait for previous frame
     syncObjects->waitForFence(currentFrame);
-    syncObjects->resetFence(currentFrame);
-
     // Get next image
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(
         device->getDevice(),
         swapchain->getSwapChain(),
-        UINT64_MAX,
+        1000000000,
         syncObjects->getImageAvailableSemaphore(currentFrame),
         VK_NULL_HANDLE,
-        &imageIndex
-    );
+        &imageIndex);
 
-    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window->wasResized()) {
+        recreateSwapChain();
+        return;
+    } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
+
+    syncObjects->resetFence(currentFrame);
 
 
     // Reset and record command buffer
@@ -306,10 +313,12 @@ void VulkanContext::drawFrame() {
     presentInfo.pImageIndices = &imageIndex;
 
     result = vkQueuePresentKHR(presentQueue, &presentInfo);
-    if (result != VK_SUCCESS) {
-        throw std::runtime_error("Failed to present swap chain image!");
-    }
 
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window->wasResized()) {
+        recreateSwapChain();
+    } else if (result != VK_SUCCESS) {
+        throw std::runtime_error("failed to present swap chain image!");
+    }
     // Advance to next frame
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
@@ -512,6 +521,46 @@ void VulkanContext::setViewportSize(uint32_t width, uint32_t height){
         lastHeight = height;
         needsResize = true;
     }
+}
+
+void VulkanContext::recreateSwapChain(){
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window->getGLFWWindow(), &width, &height);
+    while (width == 0 || height == 0) {
+        glfwGetFramebufferSize(window->getGLFWWindow(), &width, &height);
+        glfwWaitEvents();
+    }
+    device->waitIdle();
+    cleanupSwapChain();
+
+    if (!swapchain->recreate(width, height)) {
+        throw std::runtime_error("Failed to recreate swap chain!");
+    }
+
+    if (!renderPass->initialize(device.get(), swapchain.get())) {
+        throw std::runtime_error("Failed to recreate render pass!");
+    }
+
+    if (!depthImage->createDepthResources(swapchain->getExtent(), msaaSamples)) {
+        throw std::runtime_error("Failed to recreate depth resources!");
+    }
+
+    if (!framebufferManager->initialize(device.get(), swapchain.get(), renderPass.get(), depthImage.get())) {
+        throw std::runtime_error("Failed to recreate framebuffers!");
+    }
+}
+
+void VulkanContext::cleanupSwapChain() {
+    device->waitIdle();
+
+    // Wait for all fences
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        syncObjects->waitForFence(i);
+    }
+    framebufferManager->cleanup();
+    depthImage->cleanup();
+    renderPass->cleanup();
+    swapchain->cleanup();
 }
 
 }//namespace ohao
