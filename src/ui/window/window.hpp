@@ -26,6 +26,8 @@ public:
     void setMousePosition(const glm::vec2& pos);
     void toggleCursorMode();
     bool isCursorEnabled() const {return cursorEnabled;}
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
+    bool wasResized();
 
 private:
     GLFWwindow* window;
@@ -34,6 +36,7 @@ private:
     uint32_t width{};
     uint32_t height{};
     bool cursorEnabled{true};
+    bool framebufferResized{false};
 };
 
 } // namespace ohao

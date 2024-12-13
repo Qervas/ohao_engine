@@ -56,7 +56,7 @@ void OhaoVkSwapChain::createSwapChain(uint32_t width, uint32_t height) {
     VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities, width, height);
 
     // Choose image count
-    uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
+    uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 2;
     if (swapChainSupport.capabilities.maxImageCount > 0) {
         imageCount = std::min(imageCount, swapChainSupport.capabilities.maxImageCount);
     }
@@ -167,9 +167,7 @@ VkSurfaceFormatKHR OhaoVkSwapChain::chooseSwapSurfaceFormat(
 VkPresentModeKHR OhaoVkSwapChain::chooseSwapPresentMode(
     const std::vector<VkPresentModeKHR>& availablePresentModes) {
     for (const auto& availablePresentMode : availablePresentModes) {
-        if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-            return availablePresentMode;
-        }
+        std::cout << "Available present mode: " << availablePresentMode << std::endl;
     }
     return VK_PRESENT_MODE_FIFO_KHR;
 }
