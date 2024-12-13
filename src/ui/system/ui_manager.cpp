@@ -3,7 +3,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
-#include "ohao_vk_texture_handle.hpp"
+#include <renderer/rhi/vk/ohao_vk_texture_handle.hpp>
 #include "window/window.hpp"
 #include "components/file_dialog.hpp"
 #include <GLFW/glfw3.h>
@@ -14,13 +14,23 @@
 
 namespace ohao {
 
+// initialize static instance pointer
+UIManager* UIManager::instance = nullptr;
+
+
 UIManager::UIManager(Window* window, VulkanContext* context)
     : window(window), vulkanContext(context) {
+
+    instance = this;
+    preferencesWindow = std::make_unique<PreferencesWindow>();
 }
 
 UIManager::~UIManager(){
     if (vulkanContext && vulkanContext->getLogicalDevice()) {
         vulkanContext->getLogicalDevice()->waitIdle();
+    }
+    if(instance == this){
+        instance = nullptr;
     }
     shutdownImGui();
 }
@@ -29,67 +39,73 @@ void UIManager::initialize() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
-    // Enable docking
+    // Load and apply preferences before setting up ImGui
+    auto& prefs = Preferences::get();
+    const auto& appearance = prefs.getAppearance();
+
+    // Configure ImGui with saved preferences
     ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;      // Enable Docking
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;    // Enable Multi-Viewport
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Apply docking and viewport settings from preferences
+    if (appearance.enableDocking) {
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    }
+    if (appearance.enableViewports) {
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    }
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         io.ConfigViewportsNoAutoMerge = true;
         io.ConfigViewportsNoTaskBarIcon = true;
     }
-
-    setupImGuiStyle();
-
     // Initialize ImGui implementation
     ImGui_ImplGlfw_InitForVulkan(window->getGLFWWindow(), true);
     initializeVulkanBackend();
+
+    applyTheme(appearance.theme);
+    io.FontGlobalScale = appearance.uiScale;
+
+    setupImGuiStyle();
+
+
+
+    OHAO_LOG_DEBUG("UI Manager initialized with preferences:");
+    OHAO_LOG_DEBUG("Theme: " + appearance.theme);
+    OHAO_LOG_DEBUG("UI Scale: " + std::to_string(appearance.uiScale));
+    OHAO_LOG_DEBUG("Docking: " + std::string(appearance.enableDocking ? "enabled" : "disabled"));
+    OHAO_LOG_DEBUG("Viewports: " + std::string(appearance.enableViewports ? "enabled" : "disabled"));
+}
+
+void UIManager::applyTheme(const std::string& theme) {
+    if (theme == "Dark") {
+        ImGui::StyleColorsDark();
+        OHAO_LOG_DEBUG("Applied Dark theme");
+    } else if (theme == "Light") {
+        ImGui::StyleColorsLight();
+        OHAO_LOG_DEBUG("Applied Light theme");
+    } else if (theme == "Classic") {
+        ImGui::StyleColorsClassic();
+        OHAO_LOG_DEBUG("Applied Classic theme");
+    }
+
+    // After applying the base theme, apply any custom style modifications
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    // Ensure colors are properly set based on the theme
+    ImVec4* colors = style.Colors;
+    if (theme == "Dark") {
+        colors[ImGuiCol_WindowBg] = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
+        colors[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
+        colors[ImGuiCol_Border] = ImVec4(0.43f, 0.43f, 0.50f, 0.50f);
+        colors[ImGuiCol_FrameBg] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
+        colors[ImGuiCol_TitleBg] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
+        colors[ImGuiCol_TitleBgActive] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
+    }
 }
 
 void UIManager::setupImGuiStyle() {
     ImGuiStyle& style = ImGui::GetStyle();
-
-    // Color scheme
-    ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text]                   = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
-    colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-    colors[ImGuiCol_WindowBg]               = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
-    colors[ImGuiCol_ChildBg]                = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
-    colors[ImGuiCol_PopupBg]                = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
-    colors[ImGuiCol_Border]                 = ImVec4(0.43f, 0.43f, 0.50f, 0.50f);
-    colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    colors[ImGuiCol_FrameBg]                = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.38f, 0.38f, 0.38f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]          = ImVec4(0.67f, 0.67f, 0.67f, 0.39f);
-    colors[ImGuiCol_TitleBg]                = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]          = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
-    colors[ImGuiCol_TitleBgCollapsed]       = ImVec4(0.00f, 0.00f, 0.00f, 0.51f);
-    colors[ImGuiCol_MenuBarBg]              = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
-    colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.02f, 0.02f, 0.02f, 0.53f);
-    colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.31f, 0.31f, 0.31f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.41f, 0.41f, 0.41f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.51f, 0.51f, 0.51f, 1.00f);
-    colors[ImGuiCol_CheckMark]              = ImVec4(0.11f, 0.64f, 0.92f, 1.00f);
-    colors[ImGuiCol_SliderGrab]             = ImVec4(0.11f, 0.64f, 0.92f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.08f, 0.50f, 0.72f, 1.00f);
-    colors[ImGuiCol_Button]                 = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_ButtonHovered]          = ImVec4(0.38f, 0.38f, 0.38f, 1.00f);
-    colors[ImGuiCol_ButtonActive]           = ImVec4(0.67f, 0.67f, 0.67f, 0.39f);
-    colors[ImGuiCol_Header]                 = ImVec4(0.22f, 0.22f, 0.22f, 1.00f);
-    colors[ImGuiCol_HeaderHovered]          = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_HeaderActive]           = ImVec4(0.67f, 0.67f, 0.67f, 0.39f);
-    colors[ImGuiCol_Separator]              = style.Colors[ImGuiCol_Border];
-    colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.41f, 0.42f, 0.44f, 1.00f);
-    colors[ImGuiCol_SeparatorActive]        = ImVec4(0.26f, 0.59f, 0.98f, 0.95f);
-    colors[ImGuiCol_Tab]                    = ImLerp(colors[ImGuiCol_Header], colors[ImGuiCol_TitleBgActive], 0.80f);
-    colors[ImGuiCol_TabHovered]             = colors[ImGuiCol_HeaderHovered];
-    colors[ImGuiCol_TabActive]              = ImLerp(colors[ImGuiCol_HeaderActive], colors[ImGuiCol_TitleBgActive], 0.60f);
-    colors[ImGuiCol_TabUnfocused]           = ImLerp(colors[ImGuiCol_Tab], colors[ImGuiCol_TitleBg], 0.80f);
-    colors[ImGuiCol_TabUnfocusedActive]     = ImLerp(colors[ImGuiCol_TabActive], colors[ImGuiCol_TitleBg], 0.40f);
-    ImVec4 headerCol = colors[ImGuiCol_Header];
-    colors[ImGuiCol_DockingPreview]         = ImVec4(headerCol.x, headerCol.y, headerCol.z, headerCol.w * 0.7f);
-    colors[ImGuiCol_DockingEmptyBg]         = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
 
     // Main styles
     style.WindowPadding            = ImVec2(8.00f, 8.00f);
@@ -285,11 +301,16 @@ void UIManager::render() {
         ImGui::Text("OHAO Engine v0.1");
         ImGui::Text("A modern game engine built with Vulkan");
         ImGui::Separator();
-        ImGui::Text("Created by [Your Name]");
+        ImGui::Text("Created by Qervas@github");
         ImGui::End();
     }
 
     ImGui::End(); // DockSpace
+
+
+    if(preferencesWindow){
+        preferencesWindow->render(nullptr);
+    }
 
     // End the frame
     ImGui::EndFrame();
@@ -342,7 +363,9 @@ void UIManager::renderEditMenu() {
     if (ImGui::MenuItem("Copy", "Ctrl+C")) {}
     if (ImGui::MenuItem("Paste", "Ctrl+V")) {}
     ImGui::Separator();
-    if (ImGui::MenuItem("Project Settings")) {}
+    if (ImGui::MenuItem("Preferences", "Ctrl+,")) {
+        preferencesWindow->open();
+    }
 }
 
 void UIManager::renderViewMenu() {

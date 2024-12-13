@@ -1,6 +1,7 @@
 #pragma once
 #include "imgui.h"
 #include "renderer/vulkan_context.hpp"
+#include "ui/components/preferences_window.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
@@ -18,6 +19,8 @@ public:
     bool wantsInputCapture() const;
     bool isSceneViewportHovered() const;
     ViewportSize getSceneViewportSize() const;
+    static UIManager* getInstance() { return instance; }
+    void applyTheme(const std::string& theme);
 
 private:
     void setupImGuiStyle();
@@ -35,6 +38,10 @@ private:
     void shutdownImGui();
     void setupDefaultLayout();
 
+
+    // statiac instance pointer
+    static UIManager* instance;
+
     // Temporary state variables for menu items
     bool showStyleEditor = false;
     bool showMetricsWindow = false;
@@ -47,11 +54,14 @@ private:
     VulkanContext* vulkanContext;
     ImGuiStyle* style;
 
+
     VkDescriptorPool imguiPool{VK_NULL_HANDLE};
 
     ImVec2 sceneViewportSize{1280, 720};
     bool isSceneWindowHovered{false};
     bool layoutInitialized{false};
+
+    std::unique_ptr<PreferencesWindow> preferencesWindow;
 
 
 };

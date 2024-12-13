@@ -20,6 +20,7 @@ void ConsoleWidget::render() {
     if (ImGui::BeginPopup("Options")) {
         ImGui::Checkbox("Auto-scroll", &autoScroll);
         ImGui::Checkbox("Show timestamps", &showTimestamps);
+        ImGui::Checkbox("Show categories", &showCategories);
         ImGui::EndPopup();
     }
 
@@ -40,6 +41,11 @@ void ConsoleWidget::render() {
         if (showTimestamps) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
                 "[%.2f] ", entry.timestamp);
+            ImGui::SameLine();
+        }
+        if (showCategories) {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+                "[%s] ", entry.category.c_str());
             ImGui::SameLine();
         }
         ImGui::TextColored(entry.color, "%s", entry.message.c_str());
@@ -64,19 +70,24 @@ void ConsoleWidget::logError(const std::string& message) {
     addEntry(message, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
 }
 
+void ConsoleWidget::logDebug(const std::string& message) {
+    addEntry(message, ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Debug");
+}
+
 void ConsoleWidget::clear() {
     std::lock_guard<std::mutex> lock(mutex);
     entries.clear();
 }
 
-void ConsoleWidget::addEntry(const std::string& message, const ImVec4& color) {
+void ConsoleWidget::addEntry(const std::string& message, const ImVec4& color,
+                            const std::string& category) {
     std::lock_guard<std::mutex> lock(mutex);
 
     static auto startTime = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
     float timestamp = std::chrono::duration<float>(now - startTime).count();
 
-    entries.push_back({message, color, timestamp});
+    entries.push_back({message, color, timestamp, category});
 }
 
 
