@@ -1,9 +1,9 @@
 #pragma once
 #include <memory>
 #include <vulkan/vulkan.h>
-#include "ohao_vk_uniform_buffer.hpp"
-#include "rhi/vk/ohao_vk_texture_handle.hpp"
-#include "rhi/vk/ohao_vk_pipeline.hpp"
+#include <renderer/rhi/vk/ohao_vk_uniform_buffer.hpp>
+#include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
+#include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
 
 namespace ohao {
 

@@ -12,9 +12,6 @@ add_library(ohao_renderer
 
 target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/camera
-    ${CMAKE_CURRENT_SOURCE_DIR}/rhi/vk
-    ${CMAKE_CURRENT_SOURCE_DIR}/subsystems
     ${CMAKE_SOURCE_DIR}/external/imgui
     ${CMAKE_SOURCE_DIR}/external/imgui/backends
     ${CMAKE_SOURCE_DIR}/src
