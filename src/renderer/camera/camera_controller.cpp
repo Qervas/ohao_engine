@@ -1,7 +1,7 @@
-#include "camera/camera_controller.hpp"
 #include <GLFW/glfw3.h>
-#include <camera.hpp>
 #include <glm/geometric.hpp>
+#include <camera/camera.hpp>
+#include <camera/camera_controller.hpp>
 
 namespace ohao {
 
