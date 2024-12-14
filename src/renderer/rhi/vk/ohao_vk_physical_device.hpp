@@ -41,6 +41,7 @@ public:
     VkPhysicalDeviceFeatures getFeatures() const;
     VkSampleCountFlagBits getMaxUsableSampleCount() const;
     auto&& getRequiredExtensions() const {return requiredExtensions;}
+    const VkPhysicalDeviceFeatures& getEnabledFeatures() const { return enabledFeatures; }
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;
 
     // Device support queries
@@ -66,6 +67,7 @@ private:
     const std::vector<const char*> requiredExtensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
+    VkPhysicalDeviceFeatures enabledFeatures{};
 };
 
 } // namespace ohao

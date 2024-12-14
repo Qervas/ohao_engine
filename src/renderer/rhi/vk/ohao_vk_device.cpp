@@ -65,11 +65,7 @@ bool OhaoVkDevice::createLogicalDevice(const std::vector<const char*>& validatio
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
-    // Specify device features
-    VkPhysicalDeviceFeatures deviceFeatures{};
-    // Enable any required features here
-    deviceFeatures.samplerAnisotropy = VK_TRUE;
-
+    auto deviceFeatures = physicalDevice->getEnabledFeatures();
     // Create the logical device
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

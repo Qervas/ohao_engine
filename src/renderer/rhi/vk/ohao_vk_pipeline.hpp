@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -27,6 +28,11 @@ struct PipelineConfigInfo {
 
 class OhaoVkPipeline {
 public:
+    enum class RenderMode {
+        SOLID,
+        WIREFRAME,
+        GIZMO
+    };
     OhaoVkPipeline() = default;
     ~OhaoVkPipeline();
 
@@ -35,7 +41,8 @@ public:
         OhaoVkRenderPass* renderPass,
         OhaoVkShaderModule* shaderModule,
         VkExtent2D swapChainExtent,
-        VkDescriptorSetLayout descriptorSetLayout);
+        VkDescriptorSetLayout descriptorSetLayout,
+        RenderMode mode);
 
     void cleanup();
 
@@ -48,7 +55,7 @@ public:
 
 private:
     bool createPipelineLayout(VkDescriptorSetLayout descriptorSetLayout);
-    bool createPipeline();
+    bool createPipeline(RenderMode mode);
 
     OhaoVkDevice* device{nullptr};
     OhaoVkRenderPass* renderPass{nullptr};
@@ -57,6 +64,7 @@ private:
 
     VkPipeline graphicsPipeline{VK_NULL_HANDLE};
     VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
+    RenderMode renderMode{RenderMode::SOLID};
 };
 
 } // namespace ohao

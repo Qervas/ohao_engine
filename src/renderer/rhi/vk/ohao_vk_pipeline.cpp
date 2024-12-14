@@ -4,6 +4,7 @@
 #include "ohao_vk_shader_module.hpp"
 #include "core/asset/model.hpp"
 #include <iostream>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
@@ -29,17 +30,19 @@ bool OhaoVkPipeline::initialize(
     OhaoVkRenderPass* renderPass,
     OhaoVkShaderModule* shaderModule,
     VkExtent2D swapChainExtent,
-    VkDescriptorSetLayout descriptorSetLayout)
+    VkDescriptorSetLayout descriptorSetLayout,
+    RenderMode mode)
 {
     this->device = device;
     this->renderPass = renderPass;
     this->shaderModule = shaderModule;
     this->extent = swapChainExtent;
+    this->renderMode = mode;
 
     if (!createPipelineLayout(descriptorSetLayout)) {
         return false;
     }
-    if (!createPipeline()) {
+    if (!createPipeline(mode)) {
         return false;
     }
     return true;
@@ -70,10 +73,18 @@ bool OhaoVkPipeline::createPipelineLayout(VkDescriptorSetLayout descriptorSetLay
     return true;
 }
 
-bool OhaoVkPipeline::createPipeline() {
+bool OhaoVkPipeline::createPipeline(RenderMode mode) {
     // Get shader stages
-    auto vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
-    auto fragShaderStageInfo = shaderModule->getShaderStageInfo("frag");
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo;
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo;
+
+    if (mode == RenderMode::GIZMO) {
+        vertShaderStageInfo = shaderModule->getShaderStageInfo("gizmo_vert");
+        fragShaderStageInfo = shaderModule->getShaderStageInfo("gizmo_frag");
+    } else {
+        vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
+        fragShaderStageInfo = shaderModule->getShaderStageInfo("frag");
+    }
     std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages = {
         vertShaderStageInfo,
         fragShaderStageInfo
@@ -92,7 +103,8 @@ bool OhaoVkPipeline::createPipeline() {
     // Input assembly
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.topology = (mode == RenderMode::GIZMO) ?
+        VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
     // Viewport and scissor
@@ -120,7 +132,12 @@ bool OhaoVkPipeline::createPipeline() {
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    // Set polygon mode based on render mode
+    if (mode == RenderMode::GIZMO || mode == RenderMode::WIREFRAME) {
+        rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+    } else {
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    }
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_NONE;
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
@@ -154,6 +171,18 @@ bool OhaoVkPipeline::createPipeline() {
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
+    std::vector<VkDynamicState> dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
+    if (mode == RenderMode::GIZMO || mode == RenderMode::WIREFRAME) {
+        dynamicStates.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+    }
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
     // Create the graphics pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -169,6 +198,9 @@ bool OhaoVkPipeline::createPipeline() {
     pipelineInfo.layout = pipelineLayout;
     pipelineInfo.renderPass = renderPass->getVkRenderPass();
     pipelineInfo.subpass = 0;
+    pipelineInfo.pDynamicState = &dynamicState;
+
+
 
     if (vkCreateGraphicsPipelines(
         device->getDevice(),

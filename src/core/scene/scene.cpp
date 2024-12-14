@@ -1,18 +1,38 @@
-#include "scene.hpp"
+#include "core/scene/scene.hpp"
+#include "scene/scene_node.hpp"
 #include <iostream>
 
 namespace ohao {
 
-void
-Scene::loadFromFile(const std::string& filename) {
-    auto sceneObject = std::make_shared<SceneObject>("cornell_box");
-    sceneObject->model = std::make_shared<Model>();
-    sceneObject->model->loadFromOBJ(filename);
+Scene::Scene() {
+    rootNode = std::make_shared<SceneNode>("Root");
+}
 
-    // Parse materials and lights from the model
-    parseModelMaterials(*sceneObject->model);
+bool Scene::loadFromFile(const std::string& filename) {
+    try {
+        auto sceneObject = std::make_shared<SceneObject>("cornell_box");
+        sceneObject->setModel(std::make_shared<Model>());
 
-    objects["cornell_box"] = sceneObject;
+        std::cout << "Attempting to load model from: " << filename << std::endl;
+
+        if (!sceneObject->getModel()->loadFromOBJ(filename)) {
+            std::cerr << "Failed to load OBJ file: " << filename << std::endl;
+            return false;
+        }
+
+        std::cout << "OBJ file loaded successfully, parsing materials..." << std::endl;
+        parseModelMaterials(*sceneObject->getModel());
+
+        getRootNode()->addChild(sceneObject);
+        addObject(sceneObject->getName(), sceneObject);  // Make sure to add to objects map
+
+        std::cout << "Scene setup complete. Objects in scene: " << objects.size() << std::endl;
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Exception while loading scene: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 void Scene::parseModelMaterials(const Model& model) {
@@ -40,13 +60,12 @@ void Scene::parseModelMaterials(const Model& model) {
 
         // Convert MTL material to our PBR material
         auto object = std::make_shared<SceneObject>(name);
-        object->material = convertMTLToMaterial(mtlData);
+        object->setMaterial(convertMTLToMaterial(mtlData));
         addObject(name, object);
     }
 }
 
-Material
-Scene::convertMTLToMaterial(const MaterialData& mtlData) {
+Material Scene::convertMTLToMaterial(const MaterialData& mtlData) {
     Material material;
 
     // Convert traditional material properties to PBR parameters
@@ -72,8 +91,7 @@ Scene::convertMTLToMaterial(const MaterialData& mtlData) {
     return material;
 }
 
-void
-Scene::setupDefaultMaterial(Material& material) {
+void Scene::setupDefaultMaterial(Material& material) {
     material.baseColor = glm::vec3(0.8f);
     material.metallic = 0.0f;
     material.roughness = 0.5f;
@@ -82,9 +100,33 @@ Scene::setupDefaultMaterial(Material& material) {
     material.ior = 1.45f;
 }
 
-void
-Scene::addObject(const std::string& name, std::shared_ptr<SceneObject> object) {
+template<typename Func>
+void Scene::traverseScene(Func&& callback) {
+    traverseNode(rootNode.get(), std::forward<Func>(callback));
+}
+
+void Scene::addObject(const std::string& name, std::shared_ptr<SceneObject> object) {
     objects[name] = object;
+}
+
+void Scene::addLight(const std::string& name, const Light& light) {
+    lights[name] = light;
+}
+
+void Scene::removeObject(const std::string& name) {
+    objects.erase(name);
+}
+
+void Scene::removeLight(const std::string& name) {
+    lights.erase(name);
+}
+
+
+SceneNode::Ptr Scene::getRootNode() { return rootNode; }
+
+const std::unordered_map<std::string, std::shared_ptr<SceneObject>>&
+Scene::getObjects() const{
+    return objects;
 }
 
 std::shared_ptr<SceneObject>
@@ -93,38 +135,39 @@ Scene::getObject(const std::string& name) {
     return (it != objects.end()) ? it->second : nullptr;
 }
 
-void
-Scene::removeObject(const std::string& name) {
-    objects.erase(name);
+const std::unordered_map<std::string, Light>&
+Scene::getLights() const {
+    return lights;
 }
 
-void
-Scene::addLight(const std::string& name, const Light& light) {
-    lights[name] = light;
-}
-
-Light*
-Scene::getLight(const std::string& name) {
+Light* Scene::getLight(const std::string& name) {
     auto it = lights.find(name);
     return (it != lights.end()) ? &it->second : nullptr;
 }
 
-void
-Scene::removeLight(const std::string& name) {
-    lights.erase(name);
-}
-
-void
-Scene::updateLight(const std::string& name, const Light& light) {
+void Scene::updateLight(const std::string& name, const Light& light) {
     if (lights.find(name) != lights.end()) {
         lights[name] = light;
     }
 }
 
-void
-Scene::setObjectMaterial(const std::string& objectName, const Material& material) {
+void Scene::setObjectMaterial(const std::string& objectName, const Material& material) {
     if (auto it = objects.find(objectName); it != objects.end()) {
-        it->second->material = material;
+        it->second->setMaterial(material);
+    }
+}
+
+void Scene::setRootNode(SceneNode::Ptr node) {
+    rootNode = node;
+}
+
+template <typename Func>
+void Scene::traverseNode(SceneNode::Ptr node, Func&& callback) {
+    if(!node) return;
+    callback(node);
+
+    for (auto& child : node->getChildren()) {
+        traverseNode(child, callback);
     }
 }
 

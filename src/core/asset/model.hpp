@@ -43,11 +43,11 @@ public:
     std::unordered_map<std::string, MaterialData> materials;
     std::vector<std::string> materialAssignments;
 
-    void loadFromOBJ(const std::string& filename);
+    bool loadFromOBJ(const std::string& filename);
+    bool loadMTL(const std::string& filename);
     void setupDefaultMaterial();
 
 private:
-    void loadMTL(const std::string& filename);
     void assignMaterialColors();
 };
 }

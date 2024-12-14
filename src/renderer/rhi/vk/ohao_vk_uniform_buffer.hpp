@@ -35,6 +35,7 @@ public:
     bool needsUpdating() const { return needsUpdate; }
     void markForUpdate() { needsUpdate = true; }
     void markAsUpdated() { needsUpdate = false; }
+    const UniformBufferObject& getCachedUBO() const { return cachedUBO; }
 
 private:
     OhaoVkDevice* device{nullptr};
