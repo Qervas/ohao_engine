@@ -1,4 +1,5 @@
 #include "console_widget.hpp"
+#include <imgui.h>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
@@ -10,6 +11,7 @@ ConsoleWidget::ConsoleWidget() {
 }
 
 void ConsoleWidget::render() {
+
     ImGui::SetNextWindowSize(ImVec2(520, 600), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Console")) {
         ImGui::End();

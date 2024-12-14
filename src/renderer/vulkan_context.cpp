@@ -33,21 +33,32 @@
 #include <iostream>
 #include "subsystems/scene/scene_renderer.hpp"
 #include "subsystems/scene/scene_render_target.hpp"
+#include "ui/components/console_widget.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/window/window.hpp"
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
 namespace ohao{
+VulkanContext* VulkanContext::contextInstance = nullptr;
 
 VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
+    contextInstance = this;
     int w, h;
     glfwGetFramebufferSize(window->getGLFWWindow(), &w, &h);
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
+    camera.setPosition(glm::vec3(0.3f, 0.0f, 3.0f));
+    camera.setRotation(0.0f, -90.0f);  // Look at origin
+    camera.setPerspectiveProjection(45.0f, float(width)/float(height), 0.1f, 100.0f);
 }
 
-VulkanContext::~VulkanContext(){cleanup();}
+VulkanContext::~VulkanContext(){
+    if(contextInstance == this){
+        contextInstance = nullptr;
+    }
+    cleanup();
+}
 
 void
 VulkanContext::initializeVulkan(){
@@ -89,12 +100,11 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("engine render pass initialization failed!");
     }
 
-    if (!shaderModules->createShaderModule(
-            "vert", "shaders/shader.vert.spv",
-            OhaoVkShaderModule::ShaderType::VERTEX) ||
-        !shaderModules->createShaderModule(
-            "frag", "shaders/shader.frag.spv",
-            OhaoVkShaderModule::ShaderType::FRAGMENT)) {
+    if (!shaderModules->createShaderModule( "vert", "shaders/shader.vert.spv",OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule("frag", "shaders/shader.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT) ||
+        !shaderModules->createShaderModule("gizmo_vert", "shaders/gizmo.vert.spv", OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule("gizmo_frag", "shaders/gizmo.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT)
+     ) {
         throw std::runtime_error("failed to create shader modules!");
     }
 
@@ -135,10 +145,33 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("failed to create descriptor sets!");
     }
 
-    pipeline = std::make_unique<OhaoVkPipeline>();
-    if(!pipeline->initialize(device.get(), renderPass.get(), shaderModules.get(), swapchain->getExtent(), descriptor->getLayout())){
-        throw std::runtime_error("engine pipeline initialization failed!");
+    axisGizmo = std::make_unique<AxisGizmo>();
+    if (!axisGizmo->initialize(this)) {
+        throw std::runtime_error("Failed to initialize axis gizmo!");
     }
+
+    // Initialize pipelines
+    modelPipeline = std::make_unique<OhaoVkPipeline>();
+    if (!modelPipeline->initialize(device.get(), renderPass.get(), shaderModules.get(),
+                                 swapchain->getExtent(), descriptor->getLayout(),
+                                 OhaoVkPipeline::RenderMode::SOLID)) {
+        throw std::runtime_error("Failed to create model pipeline!");
+    }
+
+    wireframePipeline = std::make_unique<OhaoVkPipeline>();
+    if (!wireframePipeline->initialize(device.get(), renderPass.get(), shaderModules.get(),
+                                     swapchain->getExtent(), descriptor->getLayout(),
+                                     OhaoVkPipeline::RenderMode::WIREFRAME)) {
+        throw std::runtime_error("Failed to create wireframe pipeline!");
+    }
+
+    gizmoPipeline = std::make_unique<OhaoVkPipeline>();
+    if (!gizmoPipeline->initialize(device.get(), renderPass.get(), shaderModules.get(),
+                                 swapchain->getExtent(), descriptor->getLayout(),
+                                 OhaoVkPipeline::RenderMode::GIZMO)) {
+        throw std::runtime_error("Failed to create gizmo pipeline!");
+    }
+
 
     syncObjects = std::make_unique<OhaoVkSyncObjects>();
     if(!syncObjects->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)){
@@ -162,8 +195,11 @@ VulkanContext::cleanup(){
     syncObjects.reset();
     commandManager.reset();
     framebufferManager.reset();
+    axisGizmo.reset();
+    wireframePipeline.reset();
+    gizmoPipeline.reset();
+    sceneGizmoPipeline.reset();
     scenePipeline.reset();
-    pipeline.reset();
     renderPass.reset();
     shaderModules.reset();
     swapchain.reset();
@@ -185,19 +221,31 @@ void VulkanContext::initializeSceneRenderer() {
         throw std::runtime_error("Failed to initialize scene render target");
     }
 
-    // Create scene-specific pipeline
+    // Create scene-specific pipelines
     scenePipeline = std::make_unique<OhaoVkPipeline>();
     if (!scenePipeline->initialize(
             device.get(),
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
             VkExtent2D{viewportSize.width, viewportSize.height},
-            descriptor->getLayout())) {
+            descriptor->getLayout(),
+            OhaoVkPipeline::RenderMode::SOLID)) {
         throw std::runtime_error("Failed to initialize scene pipeline!");
     }
 
-    // Update the scene renderer to use the new pipeline
-    sceneRenderer->setPipeline(scenePipeline.get());
+    sceneGizmoPipeline = std::make_unique<OhaoVkPipeline>();
+    if (!sceneGizmoPipeline->initialize(
+            device.get(),
+            sceneRenderer->getRenderTarget()->getRenderPass(),
+            shaderModules.get(),
+            VkExtent2D{viewportSize.width, viewportSize.height},
+            descriptor->getLayout(),
+            OhaoVkPipeline::RenderMode::GIZMO)) {
+        throw std::runtime_error("Failed to initialize scene gizmo pipeline!");
+    }
+
+    // Update the scene renderer to use both pipelines
+    sceneRenderer->setPipelines(scenePipeline.get(), sceneGizmoPipeline.get());
 }
 
 void VulkanContext::drawFrame() {
@@ -244,22 +292,12 @@ void VulkanContext::drawFrame() {
 
     uniformBuffer->updateFromCamera(currentFrame, camera);
     // First pass: Render scene to scene render target
-    if (hasLoadScene()) {
 
-        auto scene = getScene();
-        if (scene && !scene->getLights().empty()) {
-            const auto& light = scene->getLights().begin()->second;
-            uniformBuffer->setLightProperties(
-                light.position,
-                light.color,
-                light.intensity
-            );
-        }
-        if (!sceneRenderer->hasValidRenderTarget()) {
-            initializeSceneRenderer();
-        }
-        sceneRenderer->render(uniformBuffer.get(), currentFrame);
+    // Always initialize and render scene
+    if (!sceneRenderer->hasValidRenderTarget()) {
+        initializeSceneRenderer();
     }
+    sceneRenderer->render(uniformBuffer.get(), currentFrame);
 
     // Second pass: Main render pass with UI
     renderPass->begin(
@@ -327,7 +365,7 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
-    if(vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
 
@@ -338,7 +376,7 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
                      1.0f,
                      0);
 
-    // Set viewport and scissor for both scene and ImGui
+    // Set viewport and scissor
     VkViewport viewport{};
     viewport.x = 0.0f;
     viewport.y = 0.0f;
@@ -353,39 +391,11 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
     scissor.extent = swapchain->getExtent();
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    // Only render scene if we have one loaded
-    if (vertexBuffer && indexBuffer && scene) {
-        // Bind pipeline and set viewport/scissor
-        pipeline->bind(commandBuffer);
+    // Render model
+    renderModel(commandBuffer);
 
-        // Bind vertex and index buffers
-        VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
-
-        // Bind descriptor sets
-        vkCmdBindDescriptorSets(
-            commandBuffer,
-            VK_PIPELINE_BIND_POINT_GRAPHICS,
-            pipeline->getPipelineLayout(),
-            0, 1,
-            &descriptor->getSet(currentFrame),
-            0, nullptr
-        );
-
-        // Draw the scene
-        auto sceneObjects = scene->getObjects();
-        if(sceneObjects.empty()) {
-            throw std::runtime_error("Scene object is empty!");
-        }
-        auto mainObject = sceneObjects.begin()->second;
-        vkCmdDrawIndexed(
-            commandBuffer,
-            static_cast<uint32_t>(mainObject->model->indices.size()),
-            1, 0, 0, 0
-        );
-    }
+    // Render gizmos
+    renderGizmos(commandBuffer);
 
     // Render ImGui
     if (ImGui::GetDrawData()) {
@@ -393,16 +403,76 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
     }
 
     renderPass->end(commandBuffer);
-    if(vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer!");
     }
 }
 
-void
-VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices){
+void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
+    if (vertexBuffer && indexBuffer && scene) {
+        auto sceneObjects = scene->getObjects();
+        if (!sceneObjects.empty()) {
+            auto mainObject = sceneObjects.begin()->second;
+            if (mainObject && mainObject->getModel()) {
+                // Select appropriate pipeline
+                auto& currentPipeline = wireframeMode ? wireframePipeline : modelPipeline;
+                currentPipeline->bind(commandBuffer);
+
+                // Bind vertex and index buffers
+                VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+                vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+
+                // Bind descriptor sets
+                vkCmdBindDescriptorSets(commandBuffer,
+                                      VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      currentPipeline->getPipelineLayout(),
+                                      0, 1, &descriptor->getSet(currentFrame),
+                                      0, nullptr);
+
+                // Draw model
+                vkCmdDrawIndexed(commandBuffer,
+                               static_cast<uint32_t>(mainObject->getModel()->indices.size()),
+                               1, 0, 0, 0);
+            }
+        }
+    }
+}
+
+void VulkanContext::renderGizmos(VkCommandBuffer commandBuffer) {
+    if (axisGizmo) {
+        gizmoPipeline->bind(commandBuffer);
+
+        // Set dynamic states after binding pipeline
+        vkCmdSetLineWidth(commandBuffer, 2.0f);
+
+        // Bind buffers and render
+        VkBuffer vertexBuffers[] = {axisGizmo->getVertexBuffer()};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(commandBuffer, axisGizmo->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindDescriptorSets(commandBuffer,
+                               VK_PIPELINE_BIND_POINT_GRAPHICS,
+                               gizmoPipeline->getPipelineLayout(),
+                               0, 1, &descriptor->getSet(currentFrame),
+                               0, nullptr);
+        axisGizmo->render(commandBuffer, camera.getViewProjectionMatrix());
+    }
+}
+
+void VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices) {
+    if (vertices.empty()) {
+        throw std::runtime_error("Attempting to create vertex buffer with empty vertices");
+    }
+
     VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
     vertexBuffer = std::make_unique<OhaoVkBuffer>();
+    if (!vertexBuffer) {
+        throw std::runtime_error("Failed to allocate vertex buffer");
+    }
+
     vertexBuffer->initialize(device.get());
 
     if (!OhaoVkBuffer::createWithStaging(
@@ -416,11 +486,18 @@ VulkanContext::createVertexBuffer(const std::vector<Vertex>& vertices){
     }
 }
 
-void
-VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices){
+void VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices) {
+    if (indices.empty()) {
+        throw std::runtime_error("Attempting to create index buffer with empty indices");
+    }
+
     VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
     indexBuffer = std::make_unique<OhaoVkBuffer>();
+    if (!indexBuffer) {
+        throw std::runtime_error("Failed to allocate index buffer");
+    }
+
     indexBuffer->initialize(device.get());
 
     if (!OhaoVkBuffer::createWithStaging(
@@ -439,44 +516,52 @@ bool VulkanContext::loadModel(const std::string& filename) {
 
     try {
         scene = std::make_unique<Scene>();
-        scene->loadFromFile(filename);
+        if (!scene->loadFromFile(filename)) {
+            OHAO_LOG_ERROR("Scene::loadFromFile failed for: " + filename);
+            return false;
+        }
+
         auto sceneObjects = scene->getObjects();
         if (sceneObjects.empty()) {
-            throw std::runtime_error("No objects loaded in scene!");
+            OHAO_LOG_ERROR("No objects loaded in scene!");
+            return false;
         }
+
         auto mainObject = sceneObjects.begin()->second;
-        createVertexBuffer(mainObject->model->vertices);
-        createIndexBuffer(mainObject->model->indices);
-
-        // Initialize uniform buffer with scene data
-        UniformBufferObject initialUBO{};
-        initialUBO.model = glm::mat4(1.0f);
-        initialUBO.view = camera.getViewMatrix();
-        initialUBO.proj = camera.getProjectionMatrix();
-        initialUBO.viewPos = camera.getPosition();
-        initialUBO.proj[1][1] *= -1;
-
-        // Get light data from scene
-        const auto& lights = scene->getLights();
-        if (!lights.empty()) {
-            const auto& light = lights.begin()->second;
-            initialUBO.lightPos = light.position;
-            initialUBO.lightColor = light.color;
-            initialUBO.lightIntensity = light.intensity;
-        }else{
-            initialUBO.lightPos = glm::vec3(0.0f, 0.9f, 0.0f);
-            initialUBO.lightColor = glm::vec3(1.0f);
-            initialUBO.lightIntensity = 1.0f;
+        if (!mainObject || !mainObject->getModel()) {
+            OHAO_LOG_ERROR("Invalid main object or model!");
+            return false;
         }
 
-        // Write initial values to all uniform buffers
-        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            uniformBuffer->writeToBuffer(i, &initialUBO, sizeof(UniformBufferObject));
+        const auto& modelVertices = mainObject->getModel()->vertices;
+        const auto& modelIndices = mainObject->getModel()->indices;
+
+        OHAO_LOG_DEBUG("Model data: " + std::to_string(modelVertices.size()) + " vertices, "
+                      + std::to_string(modelIndices.size()) + " indices");
+
+        if (modelVertices.empty() || modelIndices.empty()) {
+            OHAO_LOG_ERROR("Model has no geometry data!");
+            return false;
         }
 
+        // Create vertex and index buffers
+        try {
+            createVertexBuffer(modelVertices);
+            OHAO_LOG_DEBUG("Vertex buffer created successfully");
+            createIndexBuffer(modelIndices);
+            OHAO_LOG_DEBUG("Index buffer created successfully");
+        } catch (const std::exception& e) {
+            OHAO_LOG_ERROR("Failed to create buffers: " + std::string(e.what()));
+            cleanupCurrentModel();
+            return false;
+        }
+
+        OHAO_LOG("Model loaded successfully: " + filename);
         return true;
+
     } catch (const std::exception& e) {
-        std::cerr << "Failed to load model: " << e.what() << std::endl;
+        OHAO_LOG_ERROR("Exception during model loading: " + std::string(e.what()));
+        cleanupCurrentModel();
         return false;
     }
 }

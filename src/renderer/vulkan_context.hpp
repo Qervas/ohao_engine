@@ -59,6 +59,7 @@ public:
 
     //Getters
     // === OhaoVk Object Getters ===
+    static VulkanContext* getContextInstance() { return contextInstance; }
     OhaoVkInstance* getInstance() const { return instance.get(); }
     OhaoVkSurface* getSurface() const { return surface.get(); }
     OhaoVkPhysicalDevice* getPhysicalDevice() const { return physicalDevice.get(); }
@@ -100,6 +101,8 @@ public:
     size_t getCurrentFrame() const { return currentFrame; }
 
     void drawFrame();
+    void renderModel(VkCommandBuffer commandBuffer);
+    void renderGizmos(VkCommandBuffer commandBuffer);
     bool hasLoadScene();
     bool loadModel(const std::string& filename);
     void cleanupCurrentModel();
@@ -111,8 +114,13 @@ public:
     std::shared_ptr<UIManager> getUIManager() const {return uiManager;}
     SceneRenderer* getSceneRenderer() const {return sceneRenderer.get();}
     Scene* getScene() const {return scene.get();}
+
+    void toggleWireframeMode() { wireframeMode = !wireframeMode; }
+    bool isWireframeMode() const { return wireframeMode; }
+    void setWireframeMode(bool enable) { wireframeMode = enable; }
 private:
     Window* window;
+    static VulkanContext* contextInstance;
 
     //vulkan
     const int MAX_FRAMES_IN_FLIGHT = 2;
@@ -129,7 +137,11 @@ private:
     std::unique_ptr<OhaoVkShaderModule> shaderModules;
     std::unique_ptr<OhaoVkRenderPass> renderPass;
     std::unique_ptr<OhaoVkPipeline> pipeline;
+    std::unique_ptr<OhaoVkPipeline> modelPipeline;      // For solid model rendering
+    std::unique_ptr<OhaoVkPipeline> wireframePipeline;  // For wireframe model rendering
+    std::unique_ptr<OhaoVkPipeline> gizmoPipeline;      // For gizmo
     std::unique_ptr<OhaoVkPipeline> scenePipeline;
+    std::unique_ptr<OhaoVkPipeline> sceneGizmoPipeline;
     std::unique_ptr<OhaoVkDescriptor> descriptor;
     std::unique_ptr<OhaoVkImage> depthImage;
     std::unique_ptr<OhaoVkFramebuffer> framebufferManager;
@@ -137,6 +149,8 @@ private:
     std::unique_ptr<OhaoVkSyncObjects> syncObjects;
     std::unique_ptr<OhaoVkBuffer> vertexBuffer;
     std::unique_ptr<OhaoVkBuffer> indexBuffer;
+    std::unique_ptr<OhaoVkBuffer> gizmoVertexBuffer;
+    std::unique_ptr<OhaoVkBuffer> gizmoIndexBuffer;
     std::unique_ptr<OhaoVkUniformBuffer> uniformBuffer;
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
     void createVertexBuffer(const std::vector<Vertex>& vertices);
@@ -155,6 +169,13 @@ private:
     bool needsResize{false};
     std::shared_ptr<UIManager> uiManager;
     std::unique_ptr<SceneRenderer> sceneRenderer;
+
+    bool wireframeMode{false};
+    uint32_t gizmoIndexCount{0};
+    std::unique_ptr<AxisGizmo> axisGizmo;
+
+
+
 
 };
 

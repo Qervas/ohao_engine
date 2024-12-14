@@ -2,6 +2,9 @@
 #include "imgui.h"
 #include "renderer/vulkan_context.hpp"
 #include "ui/components/preferences_window.hpp"
+#include "ui/panels/outliner/outliner_panel.hpp"
+#include "ui/panels/properties/properties_panel.hpp"
+#include "ui/panels/scene_settings/scene_settings_panel.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
@@ -23,8 +26,14 @@ public:
     void applyTheme(const std::string& theme);
 
 private:
-    void setupImGuiStyle();
+
+    static constexpr const char* DOCKSPACE_NAME = "OHAO_Dockspace";
+
+    void initializeDockspace();
     void initializeVulkanBackend();
+    void setupImGuiStyle();
+    void setupPanels();
+    void renderPanels();
     void renderMainMenuBar();
     void renderFileMenu();
     void renderEditMenu();
@@ -36,7 +45,7 @@ private:
     void enableCursor(bool enable);
     void handleModelImport();
     void shutdownImGui();
-    void setupDefaultLayout();
+    void resetLayout();
 
 
     // statiac instance pointer
@@ -60,8 +69,15 @@ private:
     ImVec2 sceneViewportSize{1280, 720};
     bool isSceneWindowHovered{false};
     bool layoutInitialized{false};
+    bool isDockspaceInitialized{false};
 
     std::unique_ptr<PreferencesWindow> preferencesWindow;
+
+    std::unique_ptr<OutlinerPanel> outlinerPanel;
+    std::unique_ptr<PropertiesPanel> propertiesPanel;
+    std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
+
+
 
 
 };

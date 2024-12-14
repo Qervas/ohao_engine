@@ -2,6 +2,7 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 #include <renderer/rhi/vk/ohao_vk_uniform_buffer.hpp>
+#include "gizmo/axis_gizmo.hpp"
 #include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
 #include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
 
@@ -33,13 +34,18 @@ public:
     ViewportSize getViewportSize() const;
     SceneRenderTarget* getRenderTarget() const { return renderTarget.get(); }
     bool hasValidRenderTarget() const;
-    void setPipeline(OhaoVkPipeline* p) { pipeline = p; }
+    void setPipelines(OhaoVkPipeline* mainPipeline, OhaoVkPipeline* gizmoPipeline) {
+        pipeline = mainPipeline;
+        this->gizmoPipeline = gizmoPipeline;
+    }
 
 
 private:
     VulkanContext* context{nullptr};
     std::unique_ptr<SceneRenderTarget> renderTarget;
     OhaoVkPipeline* pipeline{nullptr};
+    std::unique_ptr<AxisGizmo> axisGizmo;
+     OhaoVkPipeline* gizmoPipeline{nullptr};
 
     bool createRenderResources(uint32_t width, uint32_t height);
 };
