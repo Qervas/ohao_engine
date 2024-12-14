@@ -11,12 +11,45 @@ namespace ohao {
 bool OhaoVkPhysicalDevice::initialize(OhaoVkInstance* instance,
                                     OhaoVkSurface* surface,
                                     PreferredVendor preferredVendor) {
+
     if (!instance || !surface) {
         std::cerr << "Null instance or surface provided to OhaoVkPhysicalDevice::initialize" << std::endl;
         return false;
     }
 
-    return selectPhysicalDevice(instance, surface, preferredVendor);
+    // First select the physical device
+    if (!selectPhysicalDevice(instance, surface, preferredVendor)) {
+        return false;
+    }
+
+    // Now that we have a valid physical device, check features
+    VkPhysicalDeviceFeatures deviceFeatures{};
+    vkGetPhysicalDeviceFeatures(physicalDevice, &deviceFeatures);
+
+    // Store the features we want to enable
+    enabledFeatures = {};
+    if (deviceFeatures.wideLines) {
+        enabledFeatures.wideLines = VK_TRUE;
+    } else {
+        std::cout << "Warning: Wide lines not supported, falling back to 1.0 line width\n";
+        enabledFeatures.wideLines = VK_FALSE;
+    }
+
+    if(deviceFeatures.samplerAnisotropy){
+        enabledFeatures.samplerAnisotropy = VK_TRUE;
+    }else{
+        std::cout << "Warning: Anisotropic filtering not supported\n";
+        enabledFeatures.samplerAnisotropy = VK_FALSE;
+    }
+
+    if (deviceFeatures.fillModeNonSolid) {
+        enabledFeatures.fillModeNonSolid = VK_TRUE;
+    } else {
+        std::cout << "Warning: Fill mode non-solid not supported\n";
+        enabledFeatures.fillModeNonSolid = VK_FALSE;
+    }
+
+    return true;
 }
 
 bool OhaoVkPhysicalDevice::selectPhysicalDevice(OhaoVkInstance* instance,

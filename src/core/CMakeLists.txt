@@ -20,9 +20,7 @@ endforeach()
 
 target_include_directories(ohao_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/scene
-    ${CMAKE_CURRENT_SOURCE_DIR}/material
-    ${CMAKE_CURRENT_SOURCE_DIR}/asset
+    ${CMAKE_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
 )
 

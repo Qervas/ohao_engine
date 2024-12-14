@@ -4,6 +4,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include <renderer/rhi/vk/ohao_vk_texture_handle.hpp>
+#include "layout_manager.hpp"
 #include "window/window.hpp"
 #include "components/file_dialog.hpp"
 #include <GLFW/glfw3.h>
@@ -38,28 +39,15 @@ UIManager::~UIManager(){
 void UIManager::initialize() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;  // Enable docking
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // Enable multi-viewport
 
     // Load and apply preferences before setting up ImGui
     auto& prefs = Preferences::get();
     const auto& appearance = prefs.getAppearance();
 
-    // Configure ImGui with saved preferences
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
-    // Apply docking and viewport settings from preferences
-    if (appearance.enableDocking) {
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    }
-    if (appearance.enableViewports) {
-        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    }
-
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        io.ConfigViewportsNoAutoMerge = true;
-        io.ConfigViewportsNoTaskBarIcon = true;
-    }
-    // Initialize ImGui implementation
     ImGui_ImplGlfw_InitForVulkan(window->getGLFWWindow(), true);
     initializeVulkanBackend();
 
@@ -67,8 +55,7 @@ void UIManager::initialize() {
     io.FontGlobalScale = appearance.uiScale;
 
     setupImGuiStyle();
-
-
+    setupPanels();
 
     OHAO_LOG_DEBUG("UI Manager initialized with preferences:");
     OHAO_LOG_DEBUG("Theme: " + appearance.theme);
@@ -219,70 +206,37 @@ void UIManager::render() {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-
     // Begin dockspace with menubar
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
     ImGui::SetNextWindowViewport(viewport->ID);
-
+    // Set window properties for dockspace
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
     window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
     window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
+    // Begin dockspace window
     ImGui::Begin("DockSpace Demo", nullptr, window_flags);
     ImGui::PopStyleVar(3);
 
-    // Draw the main menu bar
-    renderMainMenuBar();
-
-    // DockSpace
-    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f));
-
-    // Setup default layout after first frame
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
+        ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f));
+    }
     if (!layoutInitialized) {
-        ImGui::DockBuilderRemoveNode(dockspace_id);
-        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
-
-        auto dock_id_main = dockspace_id;
-        auto dock_id_right = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Right, 0.2f, nullptr, &dock_id_main);
-        auto dock_id_bottom = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Down, 0.25f, nullptr, &dock_id_main);
-
-        ImGui::DockBuilderDockWindow("Scene Viewport", dock_id_main);
-        ImGui::DockBuilderDockWindow("Properties", dock_id_right);
-        ImGui::DockBuilderDockWindow("Console", dock_id_bottom);
-
-        ImGui::DockBuilderFinish(dockspace_id);
+        initializeDockspace();
         layoutInitialized = true;
     }
 
+    renderMainMenuBar();
+    renderPanels();
     renderSceneViewport();
-
-    // Properties Panel
-    ImGui::Begin("Properties");
-    if (ImGui::CollapsingHeader("Scene Info")) {
-        ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-
-        // Get actual vertex count from scene
-        size_t vertexCount = 0;
-        if (vulkanContext->hasLoadScene()) {
-            auto scene = vulkanContext->getScene();
-            auto mainObject = scene->getObjects().begin()->second;
-            vertexCount = mainObject->model->vertices.size();
-        }
-
-        ImGui::Text("Vertices: %zu", vertexCount);
-    }
-    ImGui::End();
-
-    // Console
     ConsoleWidget::get().render();
 
     // Debug windows
@@ -307,15 +261,12 @@ void UIManager::render() {
 
     ImGui::End(); // DockSpace
 
-
     if(preferencesWindow){
         preferencesWindow->render(nullptr);
     }
 
-    // End the frame
-    ImGui::EndFrame();
-
     ImGui::Render();
+
     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         GLFWwindow* backup_current_context = glfwGetCurrentContext();
         ImGui::UpdatePlatformWindows();
@@ -374,7 +325,9 @@ void UIManager::renderViewMenu() {
     if (ImGui::MenuItem("Asset Browser", nullptr, true)) {}
     if (ImGui::MenuItem("Console", nullptr, true)) {}
     ImGui::Separator();
-    if (ImGui::MenuItem("Reset Layout")) {}
+    if (ImGui::MenuItem("Reset Layout")) {
+        resetLayout();
+    }
 }
 
 void UIManager::renderBuildMenu() {
@@ -421,20 +374,23 @@ void UIManager::renderFileMenu() {
 void UIManager::handleModelImport() {
     enableCursor(true);
 
-    std::string filename = FileDialog::openFile(
-        "Select OBJ File",
-        "",
-        std::vector<const char*>{"*.obj"},
-        "Object Files (*.obj)"
-    );
+    try {
+        std::string filename = FileDialog::openFile(
+            "Select OBJ File",
+            "",
+            std::vector<const char*>{"*.obj"},
+            "Object Files (*.obj)"
+        );
 
-    if (!filename.empty()) {
-        if (vulkanContext->loadModel(filename)) {
-            OHAO_LOG("Successfully loaded model: " + filename);
-            window->enableCursor(true);  // Keep cursor enabled after loading
-        } else {
-            OHAO_LOG_ERROR("Failed to load model: " + filename);
+        if (!filename.empty()) {
+            if (vulkanContext->loadModel(filename)) {
+                OHAO_LOG("Successfully loaded model: " + filename);
+            } else {
+                OHAO_LOG_ERROR("Failed to load model: " + filename);
+            }
         }
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error during model import: " + std::string(e.what()));
     }
 
     enableCursor(false);
@@ -458,27 +414,6 @@ ViewportSize UIManager::getSceneViewportSize() const {
         static_cast<uint32_t>(sceneViewportSize.x),
         static_cast<uint32_t>(sceneViewportSize.y)
     };
-}
-
-void UIManager::setupDefaultLayout(){
-    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-
-    // Setup default docking layout
-    ImGui::DockBuilderRemoveNode(dockspace_id); // Clear any previous layout
-    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->Size);
-
-    // Split the docking space into sections
-    auto dock_id_main = dockspace_id; // Main dock space ID
-    auto dock_id_right = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Right, 0.2f, nullptr, &dock_id_main);
-    auto dock_id_bottom = ImGui::DockBuilderSplitNode(dock_id_main, ImGuiDir_Down, 0.25f, nullptr, &dock_id_main);
-
-    // Dock windows
-    ImGui::DockBuilderDockWindow("Scene Viewport", dock_id_main);
-    ImGui::DockBuilderDockWindow("Properties", dock_id_right);
-    ImGui::DockBuilderDockWindow("Console", dock_id_bottom);
-
-    ImGui::DockBuilderFinish(dockspace_id);
 }
 
 void UIManager::renderSceneViewport() {
@@ -508,6 +443,38 @@ void UIManager::renderSceneViewport() {
 
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+void UIManager::setupPanels() {
+    outlinerPanel = std::make_unique<OutlinerPanel>();
+    propertiesPanel = std::make_unique<PropertiesPanel>();
+    sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
+}
+
+void UIManager::renderPanels() {
+    if (outlinerPanel) outlinerPanel->render();
+    if (propertiesPanel) propertiesPanel->render();
+    if (sceneSettingsPanel) sceneSettingsPanel->render();
+}
+
+void UIManager::initializeDockspace() {
+    if (isDockspaceInitialized) return;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (!viewport) return;
+
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    if (dockspace_id == 0) return;
+
+    // Use Layout Manager to setup the default layout
+    LayoutManager::initializeLayout(dockspace_id);
+
+    isDockspaceInitialized = true;
+}
+
+void UIManager::resetLayout() {
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    LayoutManager::resetLayout(dockspace_id);
 }
 
 } // namespace ohao
