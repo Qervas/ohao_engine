@@ -36,6 +36,8 @@
 #include "ui/components/console_widget.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/window/window.hpp"
+#include <utils/common_types.hpp>
+
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
@@ -48,9 +50,9 @@ VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
     glfwGetFramebufferSize(window->getGLFWWindow(), &w, &h);
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
-    camera.setPosition(glm::vec3(0.3f, 0.0f, 3.0f));
-    camera.setRotation(0.0f, -90.0f);  // Look at origin
-    camera.setPerspectiveProjection(45.0f, float(width)/float(height), 0.1f, 100.0f);
+    camera.setPosition(glm::vec3(0.3f, 2.0f, 5.0f));
+    camera.setRotation(-30.0f, -90.0f);  // Look at origin
+    camera.setPerspectiveProjection(45.0f, float(width)/float(height), 0.01f, 1000.0f);
 }
 
 VulkanContext::~VulkanContext(){
@@ -100,13 +102,28 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("engine render pass initialization failed!");
     }
 
-    if (!shaderModules->createShaderModule( "vert", "shaders/shader.vert.spv",OhaoVkShaderModule::ShaderType::VERTEX) ||
-        !shaderModules->createShaderModule("frag", "shaders/shader.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT) ||
-        !shaderModules->createShaderModule("gizmo_vert", "shaders/gizmo.vert.spv", OhaoVkShaderModule::ShaderType::VERTEX) ||
-        !shaderModules->createShaderModule("gizmo_frag", "shaders/gizmo.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT)
-     ) {
-        throw std::runtime_error("failed to create shader modules!");
+    if (!shaderModules->createShaderModule(
+            "vert", "shaders/shader.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "frag", "shaders/shader.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT) ||
+        !shaderModules->createShaderModule(
+            "gizmo_vert", "shaders/gizmo.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "gizmo_frag", "shaders/gizmo.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT) ||
+        !shaderModules->createShaderModule(
+            "selection_vert", "shaders/selection.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "selection_frag", "shaders/selection.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT)
+    ) {
+        throw std::runtime_error("Failed to create shader modules!");
     }
+
 
     commandManager = std::make_unique<OhaoVkCommandManager>();
     if(!commandManager->initialize(device.get(), physicalDevice->getQueueFamilyIndices().graphicsFamily.value())){
@@ -675,24 +692,9 @@ bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, cons
     }
 
     try {
-        // Wait for the device to finish all operations
         device->waitIdle();
-
-        // Store old buffers
-        auto oldVertexBuffer = std::move(vertexBuffer);
-        auto oldIndexBuffer = std::move(indexBuffer);
-
-        // Create new buffers
         createVertexBuffer(vertices);
         createIndexBuffer(indices);
-
-        // Wait again to ensure new buffers are ready
-        device->waitIdle();
-
-        // Clean up old buffers after waiting
-        oldVertexBuffer.reset();
-        oldIndexBuffer.reset();
-
         return true;
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Failed to update model buffers: " + std::string(e.what()));
@@ -700,5 +702,36 @@ bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, cons
     }
 }
 
+bool VulkanContext::updateSceneBuffers() {
+    if (!scene) return false;
+
+    std::vector<Vertex> combinedVertices;
+    std::vector<uint32_t> combinedIndices;
+    meshBufferMap.clear();
+
+    // Combine all object meshes
+    for (const auto& [name, object] : scene->getObjects()) {
+        if (auto model = object->getModel()) {
+            MeshBufferInfo bufferInfo;
+            bufferInfo.vertexOffset = static_cast<uint32_t>(combinedVertices.size());
+            bufferInfo.indexOffset = static_cast<uint32_t>(combinedIndices.size());
+            bufferInfo.indexCount = static_cast<uint32_t>(model->indices.size());
+
+            // Add vertices
+            combinedVertices.insert(combinedVertices.end(),
+                model->vertices.begin(), model->vertices.end());
+
+            // Add indices with offset
+            for (uint32_t index : model->indices) {
+                combinedIndices.push_back(index + bufferInfo.vertexOffset);
+            }
+
+            meshBufferMap[object.get()] = bufferInfo;
+        }
+    }
+
+    // Use the existing updateModelBuffers function
+    return updateModelBuffers(combinedVertices, combinedIndices);
+}
 
 }//namespace ohao

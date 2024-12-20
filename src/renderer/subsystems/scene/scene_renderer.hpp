@@ -5,6 +5,8 @@
 #include "gizmo/axis_gizmo.hpp"
 #include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
 #include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
+#include "scene/scene_object.hpp"
+#include "utils/common_types.hpp"
 
 namespace ohao {
 
@@ -45,9 +47,18 @@ private:
     std::unique_ptr<SceneRenderTarget> renderTarget;
     OhaoVkPipeline* pipeline{nullptr};
     std::unique_ptr<AxisGizmo> axisGizmo;
-     OhaoVkPipeline* gizmoPipeline{nullptr};
+    OhaoVkPipeline* gizmoPipeline{nullptr};
+    std::unique_ptr<OhaoVkPipeline> selectionPipeline;
+    VkPipelineLayout selectionPipelineLayout{VK_NULL_HANDLE};
+
+    struct SelectionPushConstants {
+        glm::vec4 highlightColor;
+        float scaleOffset;
+    };
 
     bool createRenderResources(uint32_t width, uint32_t height);
+    bool initializeSelectionPipeline();
+    void drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* object, const MeshBufferInfo& bufferInfo);
 };
 
 } // namespace ohao

@@ -1,5 +1,6 @@
 #include "core/scene/scene.hpp"
 #include "scene/scene_node.hpp"
+#include "ui/components/console_widget.hpp"
 #include <iostream>
 
 namespace ohao {
@@ -107,6 +108,8 @@ void Scene::traverseScene(Func&& callback) {
 
 void Scene::addObject(const std::string& name, std::shared_ptr<SceneObject> object) {
     objects[name] = object;
+    // OHAO_LOG_DEBUG("Added object to scene: " + name);
+    // OHAO_LOG_DEBUG("Total objects in scene: " + std::to_string(objects.size()));
 }
 
 void Scene::addLight(const std::string& name, const Light& light) {
