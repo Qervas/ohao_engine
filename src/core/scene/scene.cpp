@@ -117,7 +117,16 @@ void Scene::addLight(const std::string& name, const Light& light) {
 }
 
 void Scene::removeObject(const std::string& name) {
-    objects.erase(name);
+    auto it = objects.find(name);
+    if (it != objects.end()) {
+        // First remove from root node if it's a direct child
+        if (rootNode) {
+            rootNode->removeChild(it->second);
+        }
+
+        // Then remove from objects map
+        objects.erase(it);
+    }
 }
 
 void Scene::removeLight(const std::string& name) {

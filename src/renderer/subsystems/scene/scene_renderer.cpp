@@ -125,28 +125,28 @@ void SceneRenderer::beginFrame() {
 void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame) {
     if (!renderTarget) return;
     VkCommandBuffer cmd = context->getCommandManager()->getCommandBuffer(context->getCurrentFrame());
-
     beginFrame();
-    // Always bind descriptor sets first
-    auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
-    vkCmdBindDescriptorSets(
-        cmd,
-        VK_PIPELINE_BIND_POINT_GRAPHICS,
-        pipeline->getPipelineLayout(),
-        0, 1,
-        &descriptorSet,
-        0, nullptr
-    );
-
     // Draw the scene if we have one and valid buffers
     if (context->hasLoadScene() && pipeline) {
         VkBuffer vertexBuffer = context->getVkVertexBuffer();
         VkBuffer indexBuffer = context->getVkIndexBuffer();
 
         if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
+            // First bind the pipeline
             pipeline->bind(cmd);
 
-            // Bind buffers once
+            // Then bind descriptor sets with the correct pipeline layout
+            auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
+            vkCmdBindDescriptorSets(
+                cmd,
+                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pipeline->getPipelineLayout(),  // Use the correct pipeline layout
+                0, 1,
+                &descriptorSet,
+                0, nullptr
+            );
+
+            // Bind buffers
             VkBuffer vertexBuffers[] = {vertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
@@ -157,7 +157,6 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             if (scene) {
                 for (const auto& [name, object] : scene->getObjects()) {
                     if (object && object->getModel()) {
-                        // Get buffer info for this object
                         auto bufferInfo = context->getMeshBufferInfo(object.get());
                         if (bufferInfo) {
                             // Draw object
@@ -168,12 +167,18 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
                                 bufferInfo->vertexOffset,
                                 0);
 
-                            // Draw selection highlight if object is selected
+                            // Draw selection highlight if selected
                             if (SelectionManager::get().isSelected(object.get())) {
-                                auto* bufferInfo = context->getMeshBufferInfo(object.get());
-                                if (bufferInfo) {
-                                    drawSelectionHighlight(cmd, object.get(), *bufferInfo);
-                                }
+                                // Bind descriptor sets again with selection pipeline layout
+                                vkCmdBindDescriptorSets(
+                                    cmd,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    selectionPipeline->getPipelineLayout(),
+                                    0, 1,
+                                    &descriptorSet,
+                                    0, nullptr
+                                );
+                                drawSelectionHighlight(cmd, object.get(), *bufferInfo);
                             }
                         }
                     }
@@ -184,6 +189,18 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
 
     // Draw the axis gizmo if it has valid buffers
     if (axisGizmo && gizmoPipeline) {
+        gizmoPipeline->bind(cmd);
+
+        // Bind descriptor sets with gizmo pipeline layout
+        auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
+        vkCmdBindDescriptorSets(
+            cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            gizmoPipeline->getPipelineLayout(),
+            0, 1,
+            &descriptorSet,
+            0, nullptr
+        );
         VkBuffer gizmoVertexBuffer = axisGizmo->getVertexBuffer();
         VkBuffer gizmoIndexBuffer = axisGizmo->getIndexBuffer();
 
