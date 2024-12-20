@@ -35,6 +35,7 @@ target_link_libraries(ohao_ui PUBLIC
     glfw
     ohao_core
     ohao_renderer
+    ohao_utils
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${UI_SOURCES})

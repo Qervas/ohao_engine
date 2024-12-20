@@ -21,12 +21,17 @@ endforeach()
 target_include_directories(ohao_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/external/imgui
+    ${CMAKE_SOURCE_DIR}/external/imgui/backends
     ${Vulkan_INCLUDE_DIRS}
 )
 
 target_link_libraries(ohao_core PUBLIC
     ${Vulkan_LIBRARIES}
     glfw
+    imgui
+    imgui_stdlib
+    ohao_utils
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${CORE_SOURCES})

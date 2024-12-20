@@ -11,7 +11,16 @@ SceneRenderTarget::~SceneRenderTarget() {
 }
 
 bool SceneRenderTarget::initialize(VulkanContext* contextPtr, uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) {
+        std::cerr << "Invalid dimensions for render target: " << width << "x" << height << std::endl;
+        return false;
+    }
+
     context = contextPtr;
+    if (!context) {
+        std::cerr << "Invalid context provided to render target" << std::endl;
+        return false;
+    }
 
     // Create resources in the correct order
     if (!createRenderTargets(width, height)) {

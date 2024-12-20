@@ -1,8 +1,10 @@
 #include "scene_renderer.hpp"
+#include "rhi/vk/ohao_vk_pipeline.hpp"
 #include "scene_render_target.hpp"
 #include "vulkan_context.hpp"
 #include "ui/system/ui_manager.hpp"
 #include <iostream>
+#include <vulkan/vulkan_core.h>
 
 namespace ohao {
 
@@ -16,11 +18,36 @@ bool SceneRenderer::initialize(VulkanContext* contextPtr) {
         std::cerr << "SceneRenderer: Invalid VulkanContext provided" << std::endl;
         return false;
     }
+
+    uint32_t initialWidth = 800;
+    uint32_t initialHeight = 600;
+
+    if (context->getUIManager()) {
+        auto viewportSize = context->getUIManager()->getSceneViewportSize();
+        initialWidth = static_cast<uint32_t>(viewportSize.width);
+        initialHeight = static_cast<uint32_t>(viewportSize.height);
+    }
+
+    // Initialize render target first
+    renderTarget = std::make_unique<SceneRenderTarget>();
+    if (!renderTarget->initialize(context, initialWidth, initialHeight)) {
+        std::cerr << "SceneRenderer: Failed to initialize render target" << std::endl;
+        return false;
+    }
+
+    // Initialize axis gizmo
     axisGizmo = std::make_unique<AxisGizmo>();
     if(!axisGizmo->initialize(context)){
         std::cerr << "SceneRenderer: Failed to initialize axis gizmo" << std::endl;
         return false;
     }
+
+    // Initialize selection pipeline last, after render target is ready
+    if (!initializeSelectionPipeline()) {
+        std::cerr << "SceneRenderer: Failed to initialize selection pipeline" << std::endl;
+        return false;
+    }
+
     return true;
 }
 
@@ -31,9 +58,15 @@ bool SceneRenderer::initializeRenderTarget(uint32_t width, uint32_t height) {
 void SceneRenderer::cleanup() {
     if (context) {
         context->getLogicalDevice()->waitIdle();
+        if (selectionPipelineLayout != VK_NULL_HANDLE) {
+            vkDestroyPipelineLayout(context->getVkDevice(), selectionPipelineLayout, nullptr);
+            selectionPipelineLayout = VK_NULL_HANDLE;
+        }
+        selectionPipeline.reset();
     }
     pipeline = nullptr;
     gizmoPipeline = nullptr;
+    selectionPipeline.reset();
     axisGizmo.reset();
     renderTarget.reset();
 }
@@ -113,34 +146,36 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
             pipeline->bind(cmd);
 
-            // Update light properties before drawing scene
-            auto scene = context->getScene();
-            if (scene && !scene->getLights().empty()) {
-                const auto& light = scene->getLights().begin()->second;
-                uniformBuffer->setLightProperties(
-                    light.position,
-                    light.color,
-                    light.intensity
-                );
-            }
-
-            // Bind vertex and index buffers for the scene
+            // Bind buffers once
             VkBuffer vertexBuffers[] = {vertexBuffer};
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // Draw the scene
+            // Draw each object
+            auto scene = context->getScene();
             if (scene) {
-                auto sceneObjects = scene->getObjects();
-                if (!sceneObjects.empty()) {
-                    auto mainObject = sceneObjects.begin()->second;
-                    if (mainObject && mainObject->getModel()) {
-                        vkCmdDrawIndexed(
-                            cmd,
-                            static_cast<uint32_t>(mainObject->getModel()->indices.size()),
-                            1, 0, 0, 0
-                        );
+                for (const auto& [name, object] : scene->getObjects()) {
+                    if (object && object->getModel()) {
+                        // Get buffer info for this object
+                        auto bufferInfo = context->getMeshBufferInfo(object.get());
+                        if (bufferInfo) {
+                            // Draw object
+                            vkCmdDrawIndexed(cmd,
+                                bufferInfo->indexCount,
+                                1,
+                                bufferInfo->indexOffset,
+                                bufferInfo->vertexOffset,
+                                0);
+
+                            // Draw selection highlight if object is selected
+                            if (SelectionManager::get().isSelected(object.get())) {
+                                auto* bufferInfo = context->getMeshBufferInfo(object.get());
+                                if (bufferInfo) {
+                                    drawSelectionHighlight(cmd, object.get(), *bufferInfo);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -154,7 +189,9 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
 
         if (gizmoVertexBuffer != VK_NULL_HANDLE && gizmoIndexBuffer != VK_NULL_HANDLE) {
             gizmoPipeline->bind(cmd);
-            vkCmdSetLineWidth(cmd, 2.0f);
+            if (gizmoPipeline->getRenderMode() == OhaoVkPipeline::RenderMode::GIZMO) {
+                vkCmdSetLineWidth(cmd, 2.0f);
+            }
 
             VkBuffer vertexBuffers[] = {gizmoVertexBuffer};
             VkDeviceSize offsets[] = {0};
@@ -219,4 +256,97 @@ ViewportSize SceneRenderer::getViewportSize() const {
 bool SceneRenderer::hasValidRenderTarget() const{
     return renderTarget->hasValidRenderTarget();
 }
+
+bool SceneRenderer::initializeSelectionPipeline() {
+    if (!context || !renderTarget) {
+        OHAO_LOG_ERROR("Context or render target not available");
+        return false;
+    }
+
+    if (renderTarget->getWidth() == 0 || renderTarget->getHeight() == 0) {
+        OHAO_LOG_ERROR("Invalid render target dimensions");
+        return false;
+    }
+    selectionPipeline = std::make_unique<OhaoVkPipeline>();
+
+    // Create pipeline configuration
+    PipelineConfigInfo configInfo{};
+    selectionPipeline->defaultPipelineConfigInfo(configInfo,
+        {renderTarget->getWidth(), renderTarget->getHeight()});
+
+    // Configure pipeline settings
+    configInfo.rasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
+    configInfo.rasterizationInfo.lineWidth = 2.0f;
+    configInfo.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
+
+    configInfo.colorBlendAttachment.blendEnable = VK_TRUE;
+    configInfo.colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    configInfo.colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    configInfo.colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    configInfo.colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    configInfo.colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+
+    configInfo.depthStencilInfo.depthTestEnable = VK_TRUE;
+    configInfo.depthStencilInfo.depthWriteEnable = VK_FALSE;
+    configInfo.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    configInfo.dynamicStateEnables.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+
+    // Create selection pipeline
+    selectionPipeline = std::make_unique<OhaoVkPipeline>();
+    bool success = selectionPipeline->initialize(
+        context->getLogicalDevice(),
+        renderTarget->getRenderPass(),
+        context->getShaderModules(),
+        context->getSwapChain()->getExtent(),
+        context->getVkDescriptorSetLayout(),
+        OhaoVkPipeline::RenderMode::WIREFRAME,
+        &configInfo
+    );
+
+    if (!success) {
+        OHAO_LOG_ERROR("Failed to create selection pipeline");
+        return false;
+    }
+
+    return true;
+}
+
+void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd,
+                                         SceneObject* object,
+                                         const MeshBufferInfo& bufferInfo) {
+    if (!selectionPipeline) return;
+
+    // Set selection pipeline
+    selectionPipeline->bind(cmd);
+
+    // Set line width for outline
+    vkCmdSetLineWidth(cmd, 2.0f);
+
+    // Push constants for highlight effect
+    OhaoVkPipeline::SelectionPushConstants pushConstants{
+        glm::vec4(1.0f, 0.5f, 0.0f, 1.0f),  // Orange highlight
+        0.02f  // Scale offset
+    };
+
+    vkCmdPushConstants(
+        cmd,
+        selectionPipeline->getPipelineLayout(),
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0,
+        sizeof(OhaoVkPipeline::SelectionPushConstants),
+        &pushConstants
+    );
+
+    // Draw the selection outline
+    vkCmdDrawIndexed(
+        cmd,
+        bufferInfo.indexCount,
+        1,
+        bufferInfo.indexOffset,
+        bufferInfo.vertexOffset,
+        0
+    );
+}
+
 } // namespace ohao
