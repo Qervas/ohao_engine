@@ -15,6 +15,12 @@ void OutlinerPanel::render() {
 
     ImGui::Begin(name.c_str(), &visible, windowFlags);
 
+    if (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+        if (selectedNode) {
+            handleObjectDeletion(selectedNode);
+        }
+    }
+
     // Toolbar
     if (ImGui::Button("Add")) {
         ImGui::OpenPopup("AddObjectPopup");
@@ -97,6 +103,11 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
         selectedNode = node;
         if (auto sceneObj = asSceneObject(node)) {
             SelectionManager::get().setSelectedObject(sceneObj);
+
+            // Ensure buffers are updated when selecting
+            if (auto context = VulkanContext::getContextInstance()) {
+                context->updateSceneBuffers();
+            }
         }
     }
 
@@ -156,14 +167,25 @@ void OutlinerPanel::showObjectContextMenu(SceneNode* node) {
 void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
     if (!node || !currentScene) return;
 
-    // Remove from parent
+    // If it's a SceneObject, handle it specially
+    if (auto sceneObj = asSceneObject(node)) {
+        // Clear selection first
+        SelectionManager::get().clearSelection();
+
+        // Remove from scene's object collection
+        currentScene->removeObject(sceneObj->getName());
+
+        // Update the buffers
+        if (auto context = VulkanContext::getContextInstance()) {
+            context->updateSceneBuffers();
+        }
+    }
+
+    // Remove from parent (scene graph)
     node->detachFromParent();
 
     if (selectedNode == node) {
         selectedNode = nullptr;
-        if (auto sceneObj = asSceneObject(node)) {
-            SelectionManager::get().clearSelection();
-        }
     }
 }
 
@@ -213,12 +235,13 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
 
             // Update all scene buffers after adding new object
             if (auto* vulkanContext = VulkanContext::getContextInstance()) {
+                vulkanContext->getLogicalDevice()->waitIdle();
                 if (!vulkanContext->updateSceneBuffers()) {
                     OHAO_LOG_ERROR("Failed to update scene buffers");
                     return;
                 }
             }
-
+            selectedNode = newObject.get();
             SelectionManager::get().setSelectedObject(newObject.get());
             OHAO_LOG("Created new " + name);
         }
