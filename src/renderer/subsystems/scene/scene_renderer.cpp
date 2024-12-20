@@ -32,6 +32,8 @@ void SceneRenderer::cleanup() {
     if (context) {
         context->getLogicalDevice()->waitIdle();
     }
+    pipeline = nullptr;
+    gizmoPipeline = nullptr;
     axisGizmo.reset();
     renderTarget.reset();
 }
@@ -103,60 +105,67 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         0, nullptr
     );
 
-    // Draw the scene if we have one
+    // Draw the scene if we have one and valid buffers
     if (context->hasLoadScene() && pipeline) {
-        pipeline->bind(cmd);
+        VkBuffer vertexBuffer = context->getVkVertexBuffer();
+        VkBuffer indexBuffer = context->getVkIndexBuffer();
 
+        if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
+            pipeline->bind(cmd);
 
-        // Update light properties before drawing scene
-        auto scene = context->getScene();
-        if (scene && !scene->getLights().empty()) {
-            const auto& light = scene->getLights().begin()->second;
-            uniformBuffer->setLightProperties(
-                light.position,
-                light.color,
-                light.intensity
-            );
-        }
-
-        // Bind vertex and index buffers for the scene
-        VkBuffer vertexBuffers[] = {context->getVkVertexBuffer()};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(cmd, context->getVkIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
-
-        // Draw the scene
-        if (scene) {
-            auto sceneObjects = scene->getObjects();
-            if (!sceneObjects.empty()) {
-                auto mainObject = sceneObjects.begin()->second;
-                vkCmdDrawIndexed(
-                    cmd,
-                    static_cast<uint32_t>(mainObject->getModel()->indices.size()),
-                    1, 0, 0, 0
+            // Update light properties before drawing scene
+            auto scene = context->getScene();
+            if (scene && !scene->getLights().empty()) {
+                const auto& light = scene->getLights().begin()->second;
+                uniformBuffer->setLightProperties(
+                    light.position,
+                    light.color,
+                    light.intensity
                 );
+            }
+
+            // Bind vertex and index buffers for the scene
+            VkBuffer vertexBuffers[] = {vertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            // Draw the scene
+            if (scene) {
+                auto sceneObjects = scene->getObjects();
+                if (!sceneObjects.empty()) {
+                    auto mainObject = sceneObjects.begin()->second;
+                    if (mainObject && mainObject->getModel()) {
+                        vkCmdDrawIndexed(
+                            cmd,
+                            static_cast<uint32_t>(mainObject->getModel()->indices.size()),
+                            1, 0, 0, 0
+                        );
+                    }
+                }
             }
         }
     }
 
-    // Draw the axis gizmo
+    // Draw the axis gizmo if it has valid buffers
     if (axisGizmo && gizmoPipeline) {
-         // Bind gizmo pipeline first
-        gizmoPipeline->bind(cmd);
+        VkBuffer gizmoVertexBuffer = axisGizmo->getVertexBuffer();
+        VkBuffer gizmoIndexBuffer = axisGizmo->getIndexBuffer();
 
-         // Now it's safe to set line width because gizmo pipeline has the dynamic state
-         vkCmdSetLineWidth(cmd, 2.0f);
+        if (gizmoVertexBuffer != VK_NULL_HANDLE && gizmoIndexBuffer != VK_NULL_HANDLE) {
+            gizmoPipeline->bind(cmd);
+            vkCmdSetLineWidth(cmd, 2.0f);
 
-         // Bind vertex and index buffers for the gizmo
-         VkBuffer vertexBuffers[] = {axisGizmo->getVertexBuffer()};
-         VkDeviceSize offsets[] = {0};
-         vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-         vkCmdBindIndexBuffer(cmd, axisGizmo->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
+            VkBuffer vertexBuffers[] = {gizmoVertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+            vkCmdBindIndexBuffer(cmd, gizmoIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-         const auto& ubo = uniformBuffer->getCachedUBO();
-         glm::mat4 viewProj = ubo.proj * ubo.view;
-         axisGizmo->render(cmd, viewProj);
-     }
+            const auto& ubo = uniformBuffer->getCachedUBO();
+            glm::mat4 viewProj = ubo.proj * ubo.view;
+            axisGizmo->render(cmd, viewProj);
+        }
+    }
 
     endFrame();
 }

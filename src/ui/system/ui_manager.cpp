@@ -385,6 +385,9 @@ void UIManager::handleModelImport() {
         if (!filename.empty()) {
             if (vulkanContext->loadModel(filename)) {
                 OHAO_LOG("Successfully loaded model: " + filename);
+                if (outlinerPanel) {
+                    outlinerPanel->setScene(vulkanContext->getScene());
+                }
             } else {
                 OHAO_LOG_ERROR("Failed to load model: " + filename);
             }
@@ -449,6 +452,11 @@ void UIManager::setupPanels() {
     outlinerPanel = std::make_unique<OutlinerPanel>();
     propertiesPanel = std::make_unique<PropertiesPanel>();
     sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
+    if (vulkanContext && vulkanContext->getScene()) {
+        outlinerPanel->setScene(vulkanContext->getScene());
+        propertiesPanel->setScene(vulkanContext->getScene());
+        sceneSettingsPanel->setScene(vulkanContext->getScene());
+    }
 }
 
 void UIManager::renderPanels() {
@@ -476,5 +484,9 @@ void UIManager::resetLayout() {
     ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
     LayoutManager::resetLayout(dockspace_id);
 }
+
+OutlinerPanel* UIManager::getOutlinerPanel() const { return outlinerPanel.get(); }
+PropertiesPanel* UIManager::getPropertiesPanel() const { return propertiesPanel.get(); }
+SceneSettingsPanel* UIManager::getSceneSettingsPanel() const { return sceneSettingsPanel.get(); }
 
 } // namespace ohao

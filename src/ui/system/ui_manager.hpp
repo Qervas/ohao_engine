@@ -23,6 +23,9 @@ public:
     bool isSceneViewportHovered() const;
     ViewportSize getSceneViewportSize() const;
     static UIManager* getInstance() { return instance; }
+    OutlinerPanel* getOutlinerPanel() const;
+    PropertiesPanel* getPropertiesPanel() const;
+    SceneSettingsPanel* getSceneSettingsPanel() const;
     void applyTheme(const std::string& theme);
 
 private:

@@ -52,6 +52,7 @@ public:
 
     void initializeVulkan();
     void initializeSceneRenderer();
+    void initializeDefaultScene();
     void cleanup();
     void recreateSwapChain();
     void cleanupSwapChain();
@@ -118,6 +119,9 @@ public:
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
     void setWireframeMode(bool enable) { wireframeMode = enable; }
+
+    bool updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+
 private:
     Window* window;
     static VulkanContext* contextInstance;

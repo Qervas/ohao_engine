@@ -182,9 +182,49 @@ VulkanContext::initializeVulkan(){
     if(!sceneRenderer->initialize(this)){
         throw std::runtime_error("engine scene renderer initializatin failed");
     }
+
+    initializeDefaultScene();
 }
-void
-VulkanContext::cleanup(){
+
+void VulkanContext::initializeDefaultScene() {
+    scene = std::make_unique<Scene>();
+    OHAO_LOG("Initializing default scene");
+
+    // Create minimal default buffers
+    std::vector<Vertex> defaultVertex = {
+        {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+    };
+    std::vector<uint32_t> defaultIndex = {0};
+
+    try {
+        createVertexBuffer(defaultVertex);
+        createIndexBuffer(defaultIndex);
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Failed to create default buffers: " + std::string(e.what()));
+    }
+
+    // Create a default light
+    Light defaultLight;
+    defaultLight.position = glm::vec3(0.0f, 5.0f, 0.0f);
+    defaultLight.color = glm::vec3(1.0f);
+    defaultLight.intensity = 1.0f;
+    scene->addLight("DefaultLight", defaultLight);
+
+    if (uiManager) {
+        if (auto outlinerPanel = uiManager->getOutlinerPanel()) {
+            outlinerPanel->setScene(scene.get());
+        }
+        if (auto propertiesPanel = uiManager->getPropertiesPanel()) {
+            propertiesPanel->setScene(scene.get());
+        }
+        if (auto sceneSettingsPanel = uiManager->getSceneSettingsPanel()) {
+            sceneSettingsPanel->setScene(scene.get());
+        }
+    }
+    OHAO_LOG("Default scene initialized");
+}
+
+void VulkanContext::cleanup(){
     if(device){device->waitIdle();}
     if(uiManager){uiManager.reset();}
     sceneRenderer.reset();
@@ -200,6 +240,8 @@ VulkanContext::cleanup(){
     gizmoPipeline.reset();
     sceneGizmoPipeline.reset();
     scenePipeline.reset();
+    modelPipeline.reset();
+    pipeline.reset();
     renderPass.reset();
     shaderModules.reset();
     swapchain.reset();
@@ -512,56 +554,34 @@ void VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices) {
 }
 
 bool VulkanContext::loadModel(const std::string& filename) {
-    cleanupCurrentModel();
+    if (!scene) {
+        OHAO_LOG_ERROR("No active scene!");
+        return false;
+    }
 
     try {
-        scene = std::make_unique<Scene>();
-        if (!scene->loadFromFile(filename)) {
-            OHAO_LOG_ERROR("Scene::loadFromFile failed for: " + filename);
-            return false;
-        }
+        cleanupCurrentModel(); // Clean up previous model buffers
 
-        auto sceneObjects = scene->getObjects();
-        if (sceneObjects.empty()) {
-            OHAO_LOG_ERROR("No objects loaded in scene!");
-            return false;
-        }
+        auto modelObject = std::make_shared<SceneObject>("ImportedModel");
+        modelObject->setModel(std::make_shared<Model>());
 
-        auto mainObject = sceneObjects.begin()->second;
-        if (!mainObject || !mainObject->getModel()) {
-            OHAO_LOG_ERROR("Invalid main object or model!");
-            return false;
-        }
-
-        const auto& modelVertices = mainObject->getModel()->vertices;
-        const auto& modelIndices = mainObject->getModel()->indices;
-
-        OHAO_LOG_DEBUG("Model data: " + std::to_string(modelVertices.size()) + " vertices, "
-                      + std::to_string(modelIndices.size()) + " indices");
-
-        if (modelVertices.empty() || modelIndices.empty()) {
-            OHAO_LOG_ERROR("Model has no geometry data!");
+        if (!modelObject->getModel()->loadFromOBJ(filename)) {
+            OHAO_LOG_ERROR("Failed to load OBJ file: " + filename);
             return false;
         }
 
         // Create vertex and index buffers
-        try {
-            createVertexBuffer(modelVertices);
-            OHAO_LOG_DEBUG("Vertex buffer created successfully");
-            createIndexBuffer(modelIndices);
-            OHAO_LOG_DEBUG("Index buffer created successfully");
-        } catch (const std::exception& e) {
-            OHAO_LOG_ERROR("Failed to create buffers: " + std::string(e.what()));
-            cleanupCurrentModel();
-            return false;
-        }
+        createVertexBuffer(modelObject->getModel()->vertices);
+        createIndexBuffer(modelObject->getModel()->indices);
 
-        OHAO_LOG("Model loaded successfully: " + filename);
+        // Add to scene
+        scene->getRootNode()->addChild(modelObject);
+
+        OHAO_LOG("Successfully loaded model: " + filename);
         return true;
 
     } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Exception during model loading: " + std::string(e.what()));
-        cleanupCurrentModel();
+        OHAO_LOG_ERROR("Error during model loading: " + std::string(e.what()));
         return false;
     }
 }
@@ -647,5 +667,38 @@ void VulkanContext::cleanupSwapChain() {
     renderPass->cleanup();
     swapchain->cleanup();
 }
+
+bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+    if (vertices.empty() || indices.empty()) {
+        OHAO_LOG_ERROR("Cannot update buffers with empty data");
+        return false;
+    }
+
+    try {
+        // Wait for the device to finish all operations
+        device->waitIdle();
+
+        // Store old buffers
+        auto oldVertexBuffer = std::move(vertexBuffer);
+        auto oldIndexBuffer = std::move(indexBuffer);
+
+        // Create new buffers
+        createVertexBuffer(vertices);
+        createIndexBuffer(indices);
+
+        // Wait again to ensure new buffers are ready
+        device->waitIdle();
+
+        // Clean up old buffers after waiting
+        oldVertexBuffer.reset();
+        oldIndexBuffer.reset();
+
+        return true;
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Failed to update model buffers: " + std::string(e.what()));
+        return false;
+    }
+}
+
 
 }//namespace ohao

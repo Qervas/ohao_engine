@@ -187,12 +187,13 @@ void PropertiesPanel::renderComponentProperties(SceneObject* object) {
             ImGui::Text("Indices: %zu", model->indices.size());
             ImGui::Text("Materials: %zu", model->materials.size());
 
-            // Add wireframe toggle here
+            // wireframe toggle
             if (auto* vulkanContext = VulkanContext::getContextInstance()) {
                 bool wireframe = vulkanContext->isWireframeMode();
                 if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
                     vulkanContext->setWireframeMode(wireframe);
                 }
+                // scene-wide properties
             }
         } else {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No model assigned");
