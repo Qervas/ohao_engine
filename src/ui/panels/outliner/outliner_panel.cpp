@@ -209,6 +209,16 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
 
         if (newObject) {
             currentScene->getRootNode()->addChild(newObject);
+            currentScene->addObject(name, newObject);
+
+            // Update all scene buffers after adding new object
+            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
+                if (!vulkanContext->updateSceneBuffers()) {
+                    OHAO_LOG_ERROR("Failed to update scene buffers");
+                    return;
+                }
+            }
+
             SelectionManager::get().setSelectedObject(newObject.get());
             OHAO_LOG("Created new " + name);
         }

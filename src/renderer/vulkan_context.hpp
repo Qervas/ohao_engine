@@ -30,6 +30,7 @@
 #include "subsystems/scene/scene_renderer.hpp"
 #include "renderer/shader/shader_uniforms.hpp"
 
+
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
 #define GPU_VENDOR_INTEL 2
@@ -121,6 +122,11 @@ public:
     void setWireframeMode(bool enable) { wireframeMode = enable; }
 
     bool updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+    bool updateSceneBuffers(); //update all scene objects buffers
+    const MeshBufferInfo* getMeshBufferInfo(SceneObject* object) const {
+        auto it = meshBufferMap.find(object);
+        return it != meshBufferMap.end() ? &it->second : nullptr;
+    }
 
 private:
     Window* window;
@@ -177,6 +183,9 @@ private:
     bool wireframeMode{false};
     uint32_t gizmoIndexCount{0};
     std::unique_ptr<AxisGizmo> axisGizmo;
+
+    std::unordered_map<SceneObject*, MeshBufferInfo> meshBufferMap;
+
 
 
 
