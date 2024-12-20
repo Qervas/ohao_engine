@@ -63,6 +63,25 @@ struct PipelineConfigInfo {
         colorBlendInfo.flags = 0;
         depthStencilInfo.flags = 0;
         dynamicStateInfo.flags = 0;
+        dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicStateInfo.pNext = nullptr;
+        dynamicStateInfo.dynamicStateCount = 0;
+        dynamicStateInfo.pDynamicStates = nullptr;
+    }
+
+    PipelineConfigInfo(const PipelineConfigInfo& other){
+        viewport = other.viewport;
+        scissor = other.scissor;
+        viewportInfo = other.viewportInfo;
+        inputAssemblyInfo = other.inputAssemblyInfo;
+        rasterizationInfo = other.rasterizationInfo;
+        multisampleInfo = other.multisampleInfo;
+        colorBlendAttachment = other.colorBlendAttachment;
+        colorBlendInfo = other.colorBlendInfo;
+        depthStencilInfo = other.depthStencilInfo;
+        dynamicStateEnables = other.dynamicStateEnables;
+        dynamicStateInfo = other.dynamicStateInfo;
+        dynamicStateInfo.pDynamicStates = dynamicStateEnables.data();
     }
 };
 

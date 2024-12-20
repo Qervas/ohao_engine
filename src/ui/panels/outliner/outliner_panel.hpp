@@ -37,6 +37,7 @@ private:
 
     void showObjectContextMenu(SceneNode* node);
     void handleObjectDeletion(SceneNode* node);
+    void handleDelete();
 
     // Helper method to check if node is a SceneObject
     SceneObject* asSceneObject(SceneNode* node) {
@@ -45,6 +46,8 @@ private:
 
     void createPrimitiveObject(PrimitiveType type);
     std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type);
+
+
 };
 
 } // namespace ohao

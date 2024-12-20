@@ -701,9 +701,10 @@ bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, cons
         return false;
     }
 }
-
 bool VulkanContext::updateSceneBuffers() {
     if (!scene) return false;
+
+    device->waitIdle();  // Wait for device to be idle before updating buffers
 
     std::vector<Vertex> combinedVertices;
     std::vector<uint32_t> combinedIndices;
@@ -711,18 +712,19 @@ bool VulkanContext::updateSceneBuffers() {
 
     // Combine all object meshes
     for (const auto& [name, object] : scene->getObjects()) {
-        if (auto model = object->getModel()) {
+        if (object && object->getModel()) {
             MeshBufferInfo bufferInfo;
             bufferInfo.vertexOffset = static_cast<uint32_t>(combinedVertices.size());
             bufferInfo.indexOffset = static_cast<uint32_t>(combinedIndices.size());
-            bufferInfo.indexCount = static_cast<uint32_t>(model->indices.size());
+            bufferInfo.indexCount = static_cast<uint32_t>(object->getModel()->indices.size());
 
             // Add vertices
             combinedVertices.insert(combinedVertices.end(),
-                model->vertices.begin(), model->vertices.end());
+                object->getModel()->vertices.begin(),
+                object->getModel()->vertices.end());
 
             // Add indices with offset
-            for (uint32_t index : model->indices) {
+            for (uint32_t index : object->getModel()->indices) {
                 combinedIndices.push_back(index + bufferInfo.vertexOffset);
             }
 
@@ -730,8 +732,19 @@ bool VulkanContext::updateSceneBuffers() {
         }
     }
 
-    // Use the existing updateModelBuffers function
-    return updateModelBuffers(combinedVertices, combinedIndices);
+    // Only update buffers if we have data
+    if (!combinedVertices.empty() && !combinedIndices.empty()) {
+        try {
+            createVertexBuffer(combinedVertices);
+            createIndexBuffer(combinedIndices);
+            return true;
+        } catch (const std::exception& e) {
+            OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
+            return false;
+        }
+    }
+
+    return false;
 }
 
 }//namespace ohao
