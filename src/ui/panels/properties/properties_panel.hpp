@@ -9,7 +9,7 @@ class PropertiesPanel : public PanelBase {
 public:
     PropertiesPanel();
     void render() override;
-
+    void setScene(Scene* scene) { currentScene = scene; }
 private:
     void renderNodeProperties(SceneNode* node);
     void renderTransformProperties(SceneNode* node);
@@ -28,6 +28,7 @@ private:
     glm::vec3 lastPosition{0.0f};
     glm::vec3 lastRotation{0.0f};
     glm::vec3 lastScale{1.0f};
+    Scene* currentScene{nullptr};
 };
 
 } // namespace ohao
