@@ -78,7 +78,7 @@ OhaoVkBuffer* OhaoVkUniformBuffer::getBuffer(uint32_t frameIndex) const {
 
 void OhaoVkUniformBuffer::updateFromCamera(uint32_t frameIndex, const Camera& camera) {
     // Always update camera-dependent properties
-    cachedUBO.model = glm::mat4(1.0f);
+    cachedUBO.model = cachedUBO.model;
     cachedUBO.view = camera.getViewMatrix();
     cachedUBO.proj = camera.getProjectionMatrix();
     cachedUBO.viewPos = camera.getPosition();
