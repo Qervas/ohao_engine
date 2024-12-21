@@ -215,16 +215,6 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                     newObject = std::make_shared<SceneObject>(name);
                     auto model = generatePrimitiveMesh(type);
                     newObject->setModel(model);
-
-                    // Update buffers in VulkanContext
-                    if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                        vulkanContext->getLogicalDevice()->waitIdle();  // Wait before update
-                        if (!vulkanContext->updateModelBuffers(model->vertices, model->indices)) {
-                            OHAO_LOG_ERROR("Failed to create buffers for " + name);
-                            return;
-                        }
-                        vulkanContext->getLogicalDevice()->waitIdle();  // Wait after update
-                    }
                 }
                 break;
         }
@@ -241,7 +231,7 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                     return;
                 }
             }
-            selectedNode = newObject.get();
+
             SelectionManager::get().setSelectedObject(newObject.get());
             OHAO_LOG("Created new " + name);
         }
