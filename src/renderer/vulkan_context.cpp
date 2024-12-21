@@ -349,8 +349,14 @@ void VulkanContext::drawFrame() {
         throw std::runtime_error("Failed to begin recording command buffer!");
     }
 
+    // Update camera and transform matrices
+    if (auto selectedObj = SelectionManager::get().getSelectedObject()) {
+        UniformBufferObject ubo = uniformBuffer->getCachedUBO();
+        ubo.model = selectedObj->getTransform().getWorldMatrix();
+        uniformBuffer->setCachedUBO(ubo);
+    }
     uniformBuffer->updateFromCamera(currentFrame, camera);
-    // First pass: Render scene to scene render target
+    uniformBuffer->update(currentFrame);
 
     // Always initialize and render scene
     if (!sceneRenderer->hasValidRenderTarget()) {

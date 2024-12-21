@@ -64,28 +64,39 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
 
 void PropertiesPanel::renderTransformProperties(SceneNode* node) {
     Transform& transform = node->getTransform();
+    bool transformChanged = false;
 
     glm::vec3 position = transform.getLocalPosition();
     glm::vec3 rotation = glm::degrees(glm::eulerAngles(transform.getLocalRotation()));
     glm::vec3 scale = transform.getLocalScale();
 
-    renderVec3Control("Position", position);
-    renderVec3Control("Rotation", rotation);
-    renderVec3Control("Scale", scale, 1.0f);
-
-    if (position != lastPosition) {
+    if (renderVec3Control("Position", position)) {
         transform.setLocalPosition(position);
-        lastPosition = position;
+        transformChanged = true;
     }
 
-    if (rotation != lastRotation) {
+    if (renderVec3Control("Rotation", rotation)) {
         transform.setLocalRotationEuler(glm::radians(rotation));
-        lastRotation = rotation;
+        transformChanged = true;
     }
 
-    if (scale != lastScale) {
+    if (renderVec3Control("Scale", scale, 1.0f)) {
         transform.setLocalScale(scale);
-        lastScale = scale;
+        transformChanged = true;
+    }
+
+    // If transform changed, update scene buffers
+    if (transformChanged && currentScene) {
+        if (auto context = VulkanContext::getContextInstance()) {
+            // Update uniform buffer with new transform
+            if (auto uniformBuffer = context->getUniformBuffer()) {
+                auto ubo = uniformBuffer->getCachedUBO();
+                ubo.model = transform.getWorldMatrix();
+                uniformBuffer->setCachedUBO(ubo);
+                uniformBuffer->update(context->getCurrentFrame());
+            }
+            context->updateSceneBuffers();
+        }
     }
 
     // Display world transform info
@@ -102,8 +113,8 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
     }
 }
 
-void PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& values,
-                                      float resetValue) {
+bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& values, float resetValue) {
+    bool changed = false;
     ImGui::PushID(label.c_str());
 
     ImGui::Columns(2);
@@ -120,12 +131,14 @@ void PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{0.8f, 0.1f, 0.15f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.9f, 0.2f, 0.2f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4{0.8f, 0.1f, 0.15f, 1.0f});
-    if (ImGui::Button("X", buttonSize))
+    if (ImGui::Button("X", buttonSize)) {
         values.x = resetValue;
+        changed = true;
+    }
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##X", &values.x, 0.1f);
+    if (ImGui::DragFloat("##X", &values.x, 0.1f)) changed = true;
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
@@ -133,12 +146,14 @@ void PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{0.2f, 0.7f, 0.2f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.3f, 0.8f, 0.3f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4{0.2f, 0.7f, 0.2f, 1.0f});
-    if (ImGui::Button("Y", buttonSize))
+    if (ImGui::Button("Y", buttonSize)) {
         values.y = resetValue;
+        changed = true;
+    }
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##Y", &values.y, 0.1f);
+    if (ImGui::DragFloat("##Y", &values.y, 0.1f)) changed = true;
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
@@ -146,36 +161,63 @@ void PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{0.1f, 0.25f, 0.8f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{0.2f, 0.35f, 0.9f, 1.0f});
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4{0.1f, 0.25f, 0.8f, 1.0f});
-    if (ImGui::Button("Z", buttonSize))
+    if (ImGui::Button("Z", buttonSize)) {
         values.z = resetValue;
+        changed = true;
+    }
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##Z", &values.z, 0.1f);
+    if (ImGui::DragFloat("##Z", &values.z, 0.1f)) changed = true;
     ImGui::PopItemWidth();
 
     ImGui::Columns(1);
     ImGui::PopID();
+
+    return changed;
 }
 
 void PropertiesPanel::renderMaterialProperties(SceneObject* object) {
     if (!object) return;
 
     Material& material = object->getMaterial();
+    bool materialChanged = false;
 
     // Base color
-    ImGui::ColorEdit3("Base Color", &material.baseColor[0]);
+    if (ImGui::ColorEdit3("Base Color", &material.baseColor[0])) {
+        materialChanged = true;
+    }
 
     // PBR parameters
-    ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
-    ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f);
-    ImGui::SliderFloat("AO", &material.ao, 0.0f, 1.0f);
+    if (ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f)) {
+        materialChanged = true;
+    }
+    if (ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f)) {
+        materialChanged = true;
+    }
+    if (ImGui::SliderFloat("AO", &material.ao, 0.0f, 1.0f)) {
+        materialChanged = true;
+    }
 
     // Emissive
-    ImGui::ColorEdit3("Emissive", &material.emissive[0]);
+    if (ImGui::ColorEdit3("Emissive", &material.emissive[0])) {
+        materialChanged = true;
+    }
 
     // IOR
-    ImGui::DragFloat("IOR", &material.ior, 0.01f, 1.0f, 3.0f);
+    if (ImGui::DragFloat("IOR", &material.ior, 0.01f, 1.0f, 3.0f)) {
+        materialChanged = true;
+    }
+
+    // If any material property changed, update the scene
+    if (materialChanged && currentScene) {
+        currentScene->setObjectMaterial(object->getName(), material);
+
+        // Update the scene buffers through VulkanContext
+        if (auto context = VulkanContext::getContextInstance()) {
+            context->updateSceneBuffers();
+        }
+    }
 }
 
 void PropertiesPanel::renderComponentProperties(SceneObject* object) {

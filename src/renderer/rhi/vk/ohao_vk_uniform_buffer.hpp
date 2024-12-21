@@ -36,6 +36,9 @@ public:
     void markForUpdate() { needsUpdate = true; }
     void markAsUpdated() { needsUpdate = false; }
     const UniformBufferObject& getCachedUBO() const { return cachedUBO; }
+    UniformBufferObject& getCachedUBO() { return cachedUBO; }
+    void setCachedUBO(const UniformBufferObject& ubo) { cachedUBO = ubo; }
+    void update(uint32_t frameIndex){writeToBuffer(frameIndex, &cachedUBO, sizeof(UniformBufferObject));}
 
 private:
     OhaoVkDevice* device{nullptr};
