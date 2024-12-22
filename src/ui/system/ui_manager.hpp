@@ -49,6 +49,12 @@ private:
     void handleModelImport();
     void shutdownImGui();
     void resetLayout();
+    void handleNewProject();
+    void handleOpenProject();
+    bool handleSaveProject();
+    bool handleSaveAsProject();
+    void handleExit();
+    bool showNewProjectDialog();
 
 
     // statiac instance pointer
@@ -79,6 +85,9 @@ private:
     std::unique_ptr<OutlinerPanel> outlinerPanel;
     std::unique_ptr<PropertiesPanel> propertiesPanel;
     std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
+
+    std::string currentProjectPath;
+    std::string newProjectName;
 
 
 

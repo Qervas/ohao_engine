@@ -106,7 +106,10 @@ public:
     void renderModel(VkCommandBuffer commandBuffer);
     void renderGizmos(VkCommandBuffer commandBuffer);
     bool hasLoadScene();
-    bool loadModel(const std::string& filename);
+    bool createNewScene(const std::string& name);
+    bool saveScene(const std::string& filename);
+    bool loadScene(const std::string& filename);
+    bool importModel(const std::string& filename);
     void cleanupCurrentModel();
     void updateViewport(uint32_t width, uint32_t height);
 
@@ -127,6 +130,12 @@ public:
         auto it = meshBufferMap.find(object);
         return it != meshBufferMap.end() ? &it->second : nullptr;
     }
+
+    bool hasUnsavedChanges() const { return sceneModified; }
+    void markSceneModified() { sceneModified = true; }
+    void clearSceneModified() { sceneModified = false; }
+
+
 
 private:
     Window* window;
@@ -185,6 +194,8 @@ private:
     std::unique_ptr<AxisGizmo> axisGizmo;
 
     std::unordered_map<SceneObject*, MeshBufferInfo> meshBufferMap;
+
+    bool sceneModified{false};
 
 
 

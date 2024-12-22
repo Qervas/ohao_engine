@@ -7,6 +7,7 @@
 #include "core/scene/scene_node.hpp"
 #include "core/scene/scene_object.hpp"
 #include "core/material/material.hpp"
+#include "nlohmann/json.hpp"
 
 namespace ohao {
 struct Light {
@@ -22,7 +23,7 @@ public:
     ~Scene() = default;
 
     // Scene management
-    bool loadFromFile(const std::string& filename);
+    bool loadModelFromFile(const std::string& filename);
     template<typename Func>
     void traverseScene(Func&& callback);
 
@@ -36,31 +37,44 @@ public:
 
     //getter
     SceneNode::Ptr getRootNode();
-    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>&
-                            getObjects() const;
+    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& getObjects() const;
     std::shared_ptr<SceneObject> getObject(const std::string& name);
     const std::unordered_map<std::string, Light>& getLights() const;
     Light* getLight(const std::string& name);
+    const std::string& getProjectPath() const { return projectPath; }
+    const std::string& getProjectDir() const { return projectDir; }
 
     //setter
     void setRootNode(SceneNode::Ptr node);
     void setObjectMaterial(const std::string& objectName, const Material& material);
     void updateLight(const std::string& name, const Light& light);
+    void setName(const std::string& name);
+    void setProjectPath(const std::string& path);
 
     // Material management
     void convertAndAssignMaterial(const std::string& objectName, const MaterialData& mtlData);
     Material convertMTLToMaterial(const MaterialData& mtlData);
 
+    // serialization
+    bool saveToFile(const std::string& filename);
+    bool loadFromFile(const std::string& filename);
+    static const std::string PROJECT_FILE_EXTENSION; // = ".ohao";
+
 private:
     std::unordered_map<std::string, std::shared_ptr<SceneObject>> objects;
     std::unordered_map<std::string, Light> lights;
     SceneNode::Ptr rootNode;
+    std::string sceneName;
+    std::string projectPath;
+    std::string projectDir;
 
     template <typename Func>
     void traverseNode(SceneNode::Ptr node, Func&& callback);
 
     void parseModelMaterials(const Model& model);
     void setupDefaultMaterial(Material& material);
+    nlohmann::json serializeToJson() const;
+    bool deserializeFromJson(const nlohmann::json& json);
 };
 
 } // namespace ohao

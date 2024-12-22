@@ -23,6 +23,7 @@ target_include_directories(ohao_core PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/external/imgui
     ${CMAKE_SOURCE_DIR}/external/imgui/backends
+    ${CMAKE_BUILD_DIR}/_deps/json-src/include
     ${Vulkan_INCLUDE_DIRS}
 )
 
@@ -31,6 +32,7 @@ target_link_libraries(ohao_core PUBLIC
     glfw
     imgui
     imgui_stdlib
+    nlohmann_json::nlohmann_json
     ohao_utils
 )
 
