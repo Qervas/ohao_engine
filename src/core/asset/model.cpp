@@ -54,6 +54,8 @@ Vertex::getAttributeDescriptions(){
 
 bool Model::loadFromOBJ(const std::string& filename) {
     try{
+        sourcePath = filename;
+
         vertices.clear();
         indices.clear();
         materials.clear();

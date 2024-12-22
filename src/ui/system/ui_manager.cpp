@@ -357,17 +357,25 @@ void UIManager::renderHelpMenu() {
 }
 
 void UIManager::renderFileMenu() {
-    if (ImGui::MenuItem("New Project", "Ctrl+N")) {}
-    if (ImGui::MenuItem("Open Project", "Ctrl+O")) {}
-    if (ImGui::MenuItem("Save", "Ctrl+S")) {}
-    if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {}
+    if (ImGui::MenuItem("New Project", "Ctrl+N")) {
+        handleNewProject();
+    }
+    if (ImGui::MenuItem("Open Project", "Ctrl+O")) {
+        handleOpenProject();
+    }
+    if (ImGui::MenuItem("Save", "Ctrl+S")) {
+        handleSaveProject();
+    }
+    if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
+        handleSaveAsProject();
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Import Model", "Ctrl+I")) {
         handleModelImport();
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Exit", "Alt+F4")) {
-        // TODO: Handle exit
+        handleExit();
     }
 }
 
@@ -383,7 +391,7 @@ void UIManager::handleModelImport() {
         );
 
         if (!filename.empty()) {
-            if (vulkanContext->loadModel(filename)) {
+            if (vulkanContext->importModel(filename)) {
                 OHAO_LOG("Successfully loaded model: " + filename);
                 if (outlinerPanel) {
                     outlinerPanel->setScene(vulkanContext->getScene());
@@ -488,5 +496,159 @@ void UIManager::resetLayout() {
 OutlinerPanel* UIManager::getOutlinerPanel() const { return outlinerPanel.get(); }
 PropertiesPanel* UIManager::getPropertiesPanel() const { return propertiesPanel.get(); }
 SceneSettingsPanel* UIManager::getSceneSettingsPanel() const { return sceneSettingsPanel.get(); }
+
+bool UIManager::showNewProjectDialog() {
+    static char nameBuffer[256] = "";
+    bool confirmed = false;
+
+    ImGui::OpenPopup("New Project");
+    if (ImGui::BeginPopupModal("New Project", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Project Name:");
+        if (ImGui::InputText("##ProjectName", nameBuffer, sizeof(nameBuffer))) {
+            newProjectName = nameBuffer;
+        }
+
+        if (ImGui::Button("Create", ImVec2(120, 0))) {
+            if (strlen(nameBuffer) > 0) {
+                newProjectName = nameBuffer;
+                confirmed = true;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    return confirmed;
+}
+
+void UIManager::handleNewProject() {
+    // Enable cursor for dialog interaction
+    enableCursor(true);
+
+    if (showNewProjectDialog()) {
+        if (vulkanContext->createNewScene(newProjectName)) {
+            currentProjectPath = "";
+            OHAO_LOG("Created new project: " + newProjectName);
+
+            // Update UI panels with new scene
+            if (outlinerPanel) outlinerPanel->setScene(vulkanContext->getScene());
+            if (propertiesPanel) propertiesPanel->setScene(vulkanContext->getScene());
+            if (sceneSettingsPanel) sceneSettingsPanel->setScene(vulkanContext->getScene());
+        } else {
+            OHAO_LOG_ERROR("Failed to create new project");
+        }
+    }
+
+    enableCursor(false);
+}
+
+void UIManager::handleOpenProject() {
+    enableCursor(true);
+
+    std::string filename = FileDialog::openFile(
+        "Open Project",
+        "",
+        std::vector<const char*>{".ohao"},
+        "OHAO Project Files (*.ohao)"
+    );
+
+    if (!filename.empty()) {
+        if (vulkanContext->loadScene(filename)) {
+            currentProjectPath = filename;
+            OHAO_LOG("Successfully opened project: " + filename);
+
+            // Update UI panels
+            if (outlinerPanel) outlinerPanel->setScene(vulkanContext->getScene());
+            if (propertiesPanel) propertiesPanel->setScene(vulkanContext->getScene());
+            if (sceneSettingsPanel) sceneSettingsPanel->setScene(vulkanContext->getScene());
+        } else {
+            OHAO_LOG_ERROR("Failed to open project: " + filename);
+        }
+    }
+
+    enableCursor(false);
+}
+
+bool UIManager::handleSaveProject() {
+    if (currentProjectPath.empty()) {
+         return handleSaveAsProject();
+     }
+
+     if (vulkanContext->saveScene(currentProjectPath)) {
+         OHAO_LOG("Project saved successfully: " + currentProjectPath);
+         return true;
+     } else {
+         OHAO_LOG_ERROR("Failed to save project: " + currentProjectPath);
+         return false;
+     }
+}
+
+bool UIManager::handleSaveAsProject() {
+    enableCursor(true);
+
+    std::string filename = FileDialog::saveFile(
+        "Save Project As",
+        "",
+        std::vector<const char*>{".ohao"},
+        "OHAO Project Files (*.ohao)"
+    );
+
+    if (!filename.empty()) {
+        // Add extension if not present
+        if (filename.substr(filename.find_last_of(".") + 1) != "ohao") {
+            filename += ".ohao";
+        }
+
+        if (vulkanContext->saveScene(filename)) {
+            currentProjectPath = filename;
+            OHAO_LOG("Project saved successfully: " + filename);
+            enableCursor(false);
+            return true;
+        } else {
+            OHAO_LOG_ERROR("Failed to save project: " + filename);
+        }
+    }
+
+    enableCursor(false);
+    return false;
+}
+
+void UIManager::handleExit() {
+    // Check for unsaved changes
+    if (vulkanContext->hasUnsavedChanges()) {
+        ImGui::OpenPopup("Unsaved Changes");
+    } else {
+        glfwSetWindowShouldClose(window->getGLFWWindow(), GLFW_TRUE);
+        return;
+    }
+
+    // Show confirmation dialog for unsaved changes
+    if (ImGui::BeginPopupModal("Unsaved Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("You have unsaved changes. Do you want to save before exiting?");
+
+        if (ImGui::Button("Save", ImVec2(120, 0))) {
+            if (handleSaveProject()) {
+                glfwSetWindowShouldClose(window->getGLFWWindow(), GLFW_TRUE);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Don't Save", ImVec2(120, 0))) {
+            glfwSetWindowShouldClose(window->getGLFWWindow(), GLFW_TRUE);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
 
 } // namespace ohao
