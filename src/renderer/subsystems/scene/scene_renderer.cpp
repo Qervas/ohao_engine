@@ -132,10 +132,9 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         VkBuffer indexBuffer = context->getVkIndexBuffer();
 
         if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
-            // First bind the pipeline
             pipeline->bind(cmd);
 
-            // Then bind descriptor sets with the correct pipeline layout
+            // Bind descriptor sets with the correct pipeline layout
             auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
             vkCmdBindDescriptorSets(
                 cmd,
@@ -152,11 +151,17 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // Draw each object
+            // Draw each object independently
             auto scene = context->getScene();
             if (scene) {
                 for (const auto& [name, object] : scene->getObjects()) {
                     if (object && object->getModel()) {
+                        // Update uniform buffer with object's transform
+                        auto ubo = uniformBuffer->getCachedUBO();
+                        ubo.model = object->getTransform().getWorldMatrix();
+                        uniformBuffer->setCachedUBO(ubo);
+                        uniformBuffer->update(currentFrame);
+
                         auto bufferInfo = context->getMeshBufferInfo(object.get());
                         if (bufferInfo) {
                             // Draw object
@@ -169,15 +174,6 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
 
                             // Draw selection highlight if selected
                             if (SelectionManager::get().isSelected(object.get())) {
-                                // Bind descriptor sets again with selection pipeline layout
-                                vkCmdBindDescriptorSets(
-                                    cmd,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    selectionPipeline->getPipelineLayout(),
-                                    0, 1,
-                                    &descriptorSet,
-                                    0, nullptr
-                                );
                                 drawSelectionHighlight(cmd, object.get(), *bufferInfo);
                             }
                         }
@@ -280,48 +276,24 @@ bool SceneRenderer::initializeSelectionPipeline() {
         return false;
     }
 
-    if (renderTarget->getWidth() == 0 || renderTarget->getHeight() == 0) {
-        OHAO_LOG_ERROR("Invalid render target dimensions");
-        return false;
-    }
-    selectionPipeline = std::make_unique<OhaoVkPipeline>();
-
     // Create pipeline configuration
     PipelineConfigInfo configInfo{};
-    selectionPipeline->defaultPipelineConfigInfo(configInfo,
+    defaultSelectionPipelineConfig(configInfo,
         {renderTarget->getWidth(), renderTarget->getHeight()});
 
-    // Configure pipeline settings
-    configInfo.rasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
-    configInfo.rasterizationInfo.lineWidth = 2.0f;
-    configInfo.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
+    // Create selection pipeline layout with same descriptor set layout
+    VkDescriptorSetLayout descriptorSetLayout = context->getVkDescriptorSetLayout();
 
-    configInfo.colorBlendAttachment.blendEnable = VK_TRUE;
-    configInfo.colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    configInfo.colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    configInfo.colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-    configInfo.colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    configInfo.colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-
-    configInfo.depthStencilInfo.depthTestEnable = VK_TRUE;
-    configInfo.depthStencilInfo.depthWriteEnable = VK_FALSE;
-    configInfo.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-
-    configInfo.dynamicStateEnables.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
-
-    // Create selection pipeline
+    // Use the same pipeline layout as the main pipeline
     selectionPipeline = std::make_unique<OhaoVkPipeline>();
-    bool success = selectionPipeline->initialize(
-        context->getLogicalDevice(),
-        renderTarget->getRenderPass(),
-        context->getShaderModules(),
-        context->getSwapChain()->getExtent(),
-        context->getVkDescriptorSetLayout(),
-        OhaoVkPipeline::RenderMode::WIREFRAME,
-        &configInfo
-    );
-
-    if (!success) {
+    if (!selectionPipeline->initialize(
+            context->getLogicalDevice(),
+            renderTarget->getRenderPass(),
+            context->getShaderModules(),
+            {renderTarget->getWidth(), renderTarget->getHeight()},
+            descriptorSetLayout,
+            OhaoVkPipeline::RenderMode::WIREFRAME,
+            &configInfo)) {
         OHAO_LOG_ERROR("Failed to create selection pipeline");
         return false;
     }
@@ -329,13 +301,21 @@ bool SceneRenderer::initializeSelectionPipeline() {
     return true;
 }
 
-void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd,
-                                         SceneObject* object,
-                                         const MeshBufferInfo& bufferInfo) {
+void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* object, const MeshBufferInfo& bufferInfo) {
     if (!selectionPipeline) return;
 
     // Set selection pipeline
     selectionPipeline->bind(cmd);
+
+    // Bind the same descriptor set that was used for the main pipeline
+    auto descriptorSet = context->getDescriptor()->getSet(context->getCurrentFrame());
+    vkCmdBindDescriptorSets(
+        cmd,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        selectionPipeline->getPipelineLayout(),  // Use selection pipeline's layout
+        0, 1, &descriptorSet,
+        0, nullptr
+    );
 
     // Set line width for outline
     vkCmdSetLineWidth(cmd, 2.0f);
@@ -364,6 +344,78 @@ void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd,
         bufferInfo.vertexOffset,
         0
     );
+}
+
+void SceneRenderer::defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent) {
+    // Input assembly
+    configInfo.inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    configInfo.inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    configInfo.inputAssemblyInfo.primitiveRestartEnable = VK_FALSE;
+
+    // Viewport and scissor
+    configInfo.viewport = {
+        0.0f, 0.0f,
+        static_cast<float>(extent.width), static_cast<float>(extent.height),
+        0.0f, 1.0f
+    };
+    configInfo.scissor = {{0, 0}, extent};
+
+    configInfo.viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    configInfo.viewportInfo.viewportCount = 1;
+    configInfo.viewportInfo.pViewports = &configInfo.viewport;
+    configInfo.viewportInfo.scissorCount = 1;
+    configInfo.viewportInfo.pScissors = &configInfo.scissor;
+
+    // Rasterization
+    configInfo.rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    configInfo.rasterizationInfo.depthClampEnable = VK_FALSE;
+    configInfo.rasterizationInfo.rasterizerDiscardEnable = VK_FALSE;
+    configInfo.rasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;  // Wireframe mode
+    configInfo.rasterizationInfo.lineWidth = 1.0f;
+    configInfo.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
+    configInfo.rasterizationInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    configInfo.rasterizationInfo.depthBiasEnable = VK_FALSE;
+
+    // Multisampling
+    configInfo.multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    configInfo.multisampleInfo.sampleShadingEnable = VK_FALSE;
+    configInfo.multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Depth and stencil
+    configInfo.depthStencilInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    configInfo.depthStencilInfo.depthTestEnable = VK_TRUE;
+    configInfo.depthStencilInfo.depthWriteEnable = VK_FALSE;  // Don't write to depth buffer
+    configInfo.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    configInfo.depthStencilInfo.depthBoundsTestEnable = VK_FALSE;
+    configInfo.depthStencilInfo.stencilTestEnable = VK_FALSE;
+
+    // Color blending
+    configInfo.colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    configInfo.colorBlendAttachment.blendEnable = VK_TRUE;
+    configInfo.colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    configInfo.colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    configInfo.colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    configInfo.colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    configInfo.colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    configInfo.colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    configInfo.colorBlendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    configInfo.colorBlendInfo.logicOpEnable = VK_FALSE;
+    configInfo.colorBlendInfo.attachmentCount = 1;
+    configInfo.colorBlendInfo.pAttachments = &configInfo.colorBlendAttachment;
+
+    // Dynamic states
+    configInfo.dynamicStateEnables = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_LINE_WIDTH
+    };
+
+    configInfo.dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    configInfo.dynamicStateInfo.dynamicStateCount = static_cast<uint32_t>(configInfo.dynamicStateEnables.size());
+    configInfo.dynamicStateInfo.pDynamicStates = configInfo.dynamicStateEnables.data();
 }
 
 } // namespace ohao

@@ -23,6 +23,8 @@ public:
 
     // Clone support
     virtual std::shared_ptr<SceneObject> clone() const;
+    virtual void setTransform(const Transform& transform) override;
+    virtual void markTransformDirty() override;
 
 protected:
     void onAddedToScene() override;

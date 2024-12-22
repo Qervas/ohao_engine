@@ -40,6 +40,7 @@ public:
         pipeline = mainPipeline;
         this->gizmoPipeline = gizmoPipeline;
     }
+        static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
 
 
 private:

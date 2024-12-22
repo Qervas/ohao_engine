@@ -1,4 +1,5 @@
 #include "scene_object.hpp"
+#include "scene/scene_node.hpp"
 
 namespace ohao {
 
@@ -19,6 +20,14 @@ void SceneObject::onAddedToScene() {
 
 void SceneObject::onRemovedFromScene() {
     // Override if needed
+}
+
+void SceneObject::setTransform(const Transform& transform) {
+    SceneNode::setTransform(transform);
+}
+
+void SceneObject::markTransformDirty() {
+    SceneNode::markTransformDirty();
 }
 
 } // namespace ohao

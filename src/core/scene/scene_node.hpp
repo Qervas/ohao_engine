@@ -43,6 +43,10 @@ public:
 
     // Virtual update method for derived classes
     virtual void update(float deltaTime);
+    virtual void setTransform(const Transform& transform);
+    virtual void markTransformDirty();
+    bool isTransformDirty() const { return transformDirty; }
+    void clearTransformDirty() { transformDirty = false; }
 
 protected:
     std::string name;
@@ -51,6 +55,7 @@ protected:
 
     WeakPtr parent;
     std::vector<Ptr> children;
+    bool transformDirty{false};
 
     virtual void onAddedToScene();
     virtual void onRemovedFromScene();
