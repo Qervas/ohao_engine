@@ -280,6 +280,8 @@ void VulkanContext::initializeSceneRenderer() {
         throw std::runtime_error("Failed to initialize scene render target");
     }
 
+    VkDescriptorSetLayout descriptorSetLayout = descriptor->getLayout();
+
     // Create scene-specific pipelines
     scenePipeline = std::make_unique<OhaoVkPipeline>();
     if (!scenePipeline->initialize(
@@ -287,7 +289,7 @@ void VulkanContext::initializeSceneRenderer() {
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
             VkExtent2D{viewportSize.width, viewportSize.height},
-            descriptor->getLayout(),
+            descriptorSetLayout,
             OhaoVkPipeline::RenderMode::SOLID)) {
         throw std::runtime_error("Failed to initialize scene pipeline!");
     }
@@ -298,7 +300,7 @@ void VulkanContext::initializeSceneRenderer() {
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
             VkExtent2D{viewportSize.width, viewportSize.height},
-            descriptor->getLayout(),
+            descriptorSetLayout,
             OhaoVkPipeline::RenderMode::GIZMO)) {
         throw std::runtime_error("Failed to initialize scene gizmo pipeline!");
     }
@@ -708,7 +710,7 @@ bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, cons
 bool VulkanContext::updateSceneBuffers() {
     if (!scene) return false;
 
-    device->waitIdle();  // Wait for device to be idle before updating buffers
+    device->waitIdle();
 
     std::vector<Vertex> combinedVertices;
     std::vector<uint32_t> combinedIndices;
@@ -723,9 +725,11 @@ bool VulkanContext::updateSceneBuffers() {
             bufferInfo.indexCount = static_cast<uint32_t>(object->getModel()->indices.size());
 
             // Add vertices
-            combinedVertices.insert(combinedVertices.end(),
-                object->getModel()->vertices.begin(),
-                object->getModel()->vertices.end());
+            combinedVertices.insert(
+                 combinedVertices.end(),
+                 object->getModel()->vertices.begin(),
+                 object->getModel()->vertices.end()
+             );
 
             // Add indices with offset
             for (uint32_t index : object->getModel()->indices) {
@@ -739,19 +743,14 @@ bool VulkanContext::updateSceneBuffers() {
         }
     }
 
-    // Only update buffers if we have data
-    if (!combinedVertices.empty() && !combinedIndices.empty()) {
-        try {
+    try {
+        if (!combinedVertices.empty() && !combinedIndices.empty()) {
             createVertexBuffer(combinedVertices);
             createIndexBuffer(combinedIndices);
-            OHAO_LOG_DEBUG("Updated scene buffers with total vertices: " +
-                         std::to_string(combinedVertices.size()) +
-                         ", total indices: " + std::to_string(combinedIndices.size()));
             return true;
-        } catch (const std::exception& e) {
-            OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
-            return false;
         }
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
     }
     return false;
 }
