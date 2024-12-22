@@ -102,6 +102,18 @@ void SceneNode::update(float deltaTime) {
     }
 }
 
+void SceneNode::setTransform(const Transform& transform) {
+    this->transform = transform;
+    markTransformDirty();
+}
+
+void SceneNode::markTransformDirty() {
+    transformDirty = true;
+    if (auto p = getParent()) {
+        p->markTransformDirty();
+    }
+}
+
 void SceneNode::onAddedToScene() {
     // Override in derived classes
 }

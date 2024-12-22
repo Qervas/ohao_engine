@@ -122,10 +122,9 @@ void Scene::removeObject(const std::string& name) {
     auto it = objects.find(name);
     if (it != objects.end()) {
         // First remove from root node if it's a direct child
-        if (rootNode) {
-            rootNode->removeChild(it->second);
+        if (it->second->getParent()) {
+            it->second->detachFromParent();
         }
-
         // Then remove from objects map
         objects.erase(it);
     }
