@@ -140,7 +140,7 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             vkCmdBindDescriptorSets(
                 cmd,
                 VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline->getPipelineLayout(),  // Use the correct pipeline layout
+                pipeline->getPipelineLayout(),
                 0, 1,
                 &descriptorSet,
                 0, nullptr

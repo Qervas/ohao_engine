@@ -337,7 +337,6 @@ void VulkanContext::drawFrame() {
 
     syncObjects->resetFence(currentFrame);
 
-
     // Reset and record command buffer
     commandManager->resetCommandBuffer(currentFrame);
     auto commandBuffer = commandManager->getCommandBuffer(currentFrame);
@@ -576,14 +575,13 @@ void VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices) {
     }
 }
 
-bool VulkanContext::loadModel(const std::string& filename) {
+bool VulkanContext::importModel(const std::string& filename) {
     if (!scene) {
         OHAO_LOG_ERROR("No active scene!");
         return false;
     }
 
     try {
-        cleanupCurrentModel(); // Clean up previous model buffers
 
         auto modelObject = std::make_shared<SceneObject>("ImportedModel");
         modelObject->setModel(std::make_shared<Model>());
@@ -593,12 +591,13 @@ bool VulkanContext::loadModel(const std::string& filename) {
             return false;
         }
 
-        // Create vertex and index buffers
-        createVertexBuffer(modelObject->getModel()->vertices);
-        createIndexBuffer(modelObject->getModel()->indices);
-
         // Add to scene
         scene->getRootNode()->addChild(modelObject);
+        scene->addObject(modelObject->getName(), modelObject);
+        if (!updateSceneBuffers()) {
+            OHAO_LOG_ERROR("Failed to update scene buffers");
+            return false;
+        }
 
         OHAO_LOG("Successfully loaded model: " + filename);
         return true;
@@ -612,7 +611,6 @@ bool VulkanContext::loadModel(const std::string& filename) {
 void VulkanContext::cleanupCurrentModel() {
     vertexBuffer.reset();
     indexBuffer.reset();
-    scene.reset();
 }
 
 bool VulkanContext::hasLoadScene(){
@@ -735,6 +733,9 @@ bool VulkanContext::updateSceneBuffers() {
             }
 
             meshBufferMap[object.get()] = bufferInfo;
+            OHAO_LOG_DEBUG("Added mesh for object: " + name +
+                         " (vertices: " + std::to_string(object->getModel()->vertices.size()) +
+                         ", indices: " + std::to_string(object->getModel()->indices.size()) + ")");
         }
     }
 
@@ -743,14 +744,47 @@ bool VulkanContext::updateSceneBuffers() {
         try {
             createVertexBuffer(combinedVertices);
             createIndexBuffer(combinedIndices);
+            OHAO_LOG_DEBUG("Updated scene buffers with total vertices: " +
+                         std::to_string(combinedVertices.size()) +
+                         ", total indices: " + std::to_string(combinedIndices.size()));
             return true;
         } catch (const std::exception& e) {
             OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
             return false;
         }
     }
-
     return false;
+}
+
+bool VulkanContext::createNewScene(const std::string& name) {
+    device->waitIdle();
+
+    scene = std::make_unique<Scene>();
+    scene->setName(name);
+
+    // Reset scene-related resources
+    cleanupCurrentModel();
+    initializeDefaultScene();
+
+    return true;
+}
+
+bool VulkanContext::saveScene(const std::string& filename) {
+    if (!scene) return false;
+
+    scene->setProjectPath(filename);
+    if (scene->saveToFile(filename)) {
+        sceneModified = false;
+        return true;
+    }
+    return false;
+}
+
+bool VulkanContext::loadScene(const std::string& filename) {
+    if (!scene) scene = std::make_unique<Scene>();
+
+    scene->setProjectPath(filename);
+    return scene->loadFromFile(filename);
 }
 
 }//namespace ohao
