@@ -36,6 +36,8 @@
 #include "ui/components/console_widget.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/window/window.hpp"
+#include <utils/common_types.hpp>
+
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
 
@@ -48,9 +50,9 @@ VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
     glfwGetFramebufferSize(window->getGLFWWindow(), &w, &h);
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
-    camera.setPosition(glm::vec3(0.3f, 0.0f, 3.0f));
-    camera.setRotation(0.0f, -90.0f);  // Look at origin
-    camera.setPerspectiveProjection(45.0f, float(width)/float(height), 0.1f, 100.0f);
+    camera.setPosition(glm::vec3(0.3f, 2.0f, 5.0f));
+    camera.setRotation(-30.0f, -90.0f);  // Look at origin
+    camera.setPerspectiveProjection(45.0f, float(width)/float(height), 0.01f, 1000.0f);
 }
 
 VulkanContext::~VulkanContext(){
@@ -100,13 +102,28 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("engine render pass initialization failed!");
     }
 
-    if (!shaderModules->createShaderModule( "vert", "shaders/shader.vert.spv",OhaoVkShaderModule::ShaderType::VERTEX) ||
-        !shaderModules->createShaderModule("frag", "shaders/shader.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT) ||
-        !shaderModules->createShaderModule("gizmo_vert", "shaders/gizmo.vert.spv", OhaoVkShaderModule::ShaderType::VERTEX) ||
-        !shaderModules->createShaderModule("gizmo_frag", "shaders/gizmo.frag.spv", OhaoVkShaderModule::ShaderType::FRAGMENT)
-     ) {
-        throw std::runtime_error("failed to create shader modules!");
+    if (!shaderModules->createShaderModule(
+            "vert", "shaders/shader.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "frag", "shaders/shader.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT) ||
+        !shaderModules->createShaderModule(
+            "gizmo_vert", "shaders/gizmo.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "gizmo_frag", "shaders/gizmo.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT) ||
+        !shaderModules->createShaderModule(
+            "selection_vert", "shaders/selection.vert.spv",
+            OhaoVkShaderModule::ShaderType::VERTEX) ||
+        !shaderModules->createShaderModule(
+            "selection_frag", "shaders/selection.frag.spv",
+            OhaoVkShaderModule::ShaderType::FRAGMENT)
+    ) {
+        throw std::runtime_error("Failed to create shader modules!");
     }
+
 
     commandManager = std::make_unique<OhaoVkCommandManager>();
     if(!commandManager->initialize(device.get(), physicalDevice->getQueueFamilyIndices().graphicsFamily.value())){
@@ -182,9 +199,49 @@ VulkanContext::initializeVulkan(){
     if(!sceneRenderer->initialize(this)){
         throw std::runtime_error("engine scene renderer initializatin failed");
     }
+
+    initializeDefaultScene();
 }
-void
-VulkanContext::cleanup(){
+
+void VulkanContext::initializeDefaultScene() {
+    scene = std::make_unique<Scene>();
+    OHAO_LOG("Initializing default scene");
+
+    // Create minimal default buffers
+    std::vector<Vertex> defaultVertex = {
+        {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+    };
+    std::vector<uint32_t> defaultIndex = {0};
+
+    try {
+        createVertexBuffer(defaultVertex);
+        createIndexBuffer(defaultIndex);
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Failed to create default buffers: " + std::string(e.what()));
+    }
+
+    // Create a default light
+    Light defaultLight;
+    defaultLight.position = glm::vec3(0.0f, 5.0f, 0.0f);
+    defaultLight.color = glm::vec3(1.0f);
+    defaultLight.intensity = 1.0f;
+    scene->addLight("DefaultLight", defaultLight);
+
+    if (uiManager) {
+        if (auto outlinerPanel = uiManager->getOutlinerPanel()) {
+            outlinerPanel->setScene(scene.get());
+        }
+        if (auto propertiesPanel = uiManager->getPropertiesPanel()) {
+            propertiesPanel->setScene(scene.get());
+        }
+        if (auto sceneSettingsPanel = uiManager->getSceneSettingsPanel()) {
+            sceneSettingsPanel->setScene(scene.get());
+        }
+    }
+    OHAO_LOG("Default scene initialized");
+}
+
+void VulkanContext::cleanup(){
     if(device){device->waitIdle();}
     if(uiManager){uiManager.reset();}
     sceneRenderer.reset();
@@ -200,6 +257,8 @@ VulkanContext::cleanup(){
     gizmoPipeline.reset();
     sceneGizmoPipeline.reset();
     scenePipeline.reset();
+    modelPipeline.reset();
+    pipeline.reset();
     renderPass.reset();
     shaderModules.reset();
     swapchain.reset();
@@ -208,6 +267,14 @@ VulkanContext::cleanup(){
     surface.reset();
     instance.reset();
 }
+
+void VulkanContext::cleanupSceneBuffers() {
+    device->waitIdle();
+    vertexBuffer.reset();
+    indexBuffer.reset();
+    meshBufferMap.clear();
+}
+
 
 void VulkanContext::initializeSceneRenderer() {
     if (!uiManager) {
@@ -221,6 +288,8 @@ void VulkanContext::initializeSceneRenderer() {
         throw std::runtime_error("Failed to initialize scene render target");
     }
 
+    VkDescriptorSetLayout descriptorSetLayout = descriptor->getLayout();
+
     // Create scene-specific pipelines
     scenePipeline = std::make_unique<OhaoVkPipeline>();
     if (!scenePipeline->initialize(
@@ -228,7 +297,7 @@ void VulkanContext::initializeSceneRenderer() {
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
             VkExtent2D{viewportSize.width, viewportSize.height},
-            descriptor->getLayout(),
+            descriptorSetLayout,
             OhaoVkPipeline::RenderMode::SOLID)) {
         throw std::runtime_error("Failed to initialize scene pipeline!");
     }
@@ -239,7 +308,7 @@ void VulkanContext::initializeSceneRenderer() {
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
             VkExtent2D{viewportSize.width, viewportSize.height},
-            descriptor->getLayout(),
+            descriptorSetLayout,
             OhaoVkPipeline::RenderMode::GIZMO)) {
         throw std::runtime_error("Failed to initialize scene gizmo pipeline!");
     }
@@ -278,7 +347,6 @@ void VulkanContext::drawFrame() {
 
     syncObjects->resetFence(currentFrame);
 
-
     // Reset and record command buffer
     commandManager->resetCommandBuffer(currentFrame);
     auto commandBuffer = commandManager->getCommandBuffer(currentFrame);
@@ -290,8 +358,14 @@ void VulkanContext::drawFrame() {
         throw std::runtime_error("Failed to begin recording command buffer!");
     }
 
+    // Update camera and transform matrices
+    if (auto selectedObj = SelectionManager::get().getSelectedObject()) {
+        UniformBufferObject ubo = uniformBuffer->getCachedUBO();
+        ubo.model = selectedObj->getTransform().getWorldMatrix();
+        uniformBuffer->setCachedUBO(ubo);
+    }
     uniformBuffer->updateFromCamera(currentFrame, camera);
-    // First pass: Render scene to scene render target
+    uniformBuffer->update(currentFrame);
 
     // Always initialize and render scene
     if (!sceneRenderer->hasValidRenderTarget()) {
@@ -511,57 +585,48 @@ void VulkanContext::createIndexBuffer(const std::vector<uint32_t>& indices) {
     }
 }
 
-bool VulkanContext::loadModel(const std::string& filename) {
-    cleanupCurrentModel();
+bool VulkanContext::importModel(const std::string& filename) {
+    if (!scene) {
+        OHAO_LOG_ERROR("No active scene!");
+        return false;
+    }
 
     try {
-        scene = std::make_unique<Scene>();
-        if (!scene->loadFromFile(filename)) {
-            OHAO_LOG_ERROR("Scene::loadFromFile failed for: " + filename);
+
+        auto modelObject = std::make_shared<SceneObject>("ImportedModel");
+        modelObject->setModel(std::make_shared<Model>());
+
+
+        if (!modelObject->getModel()->loadFromOBJ(filename)) {
+            OHAO_LOG_ERROR("Failed to load OBJ file: " + filename);
             return false;
         }
 
-        auto sceneObjects = scene->getObjects();
-        if (sceneObjects.empty()) {
-            OHAO_LOG_ERROR("No objects loaded in scene!");
+        scene->getRootNode()->addChild(modelObject);
+
+        // Generate unique name based on the file
+        std::string baseName = std::filesystem::path(filename).stem().string();
+        std::string uniqueName = baseName;
+        int counter = 1;
+        while (scene->getObjects().find(uniqueName) != scene->getObjects().end()) {
+            uniqueName = baseName + "_" + std::to_string(counter++);
+        }
+        modelObject->setName(uniqueName);
+
+        // add to scene's object map
+        scene->addObject(uniqueName, modelObject);
+
+        // Add to scene
+        if (!updateSceneBuffers()) {
+            OHAO_LOG_ERROR("Failed to update scene buffers");
             return false;
         }
 
-        auto mainObject = sceneObjects.begin()->second;
-        if (!mainObject || !mainObject->getModel()) {
-            OHAO_LOG_ERROR("Invalid main object or model!");
-            return false;
-        }
-
-        const auto& modelVertices = mainObject->getModel()->vertices;
-        const auto& modelIndices = mainObject->getModel()->indices;
-
-        OHAO_LOG_DEBUG("Model data: " + std::to_string(modelVertices.size()) + " vertices, "
-                      + std::to_string(modelIndices.size()) + " indices");
-
-        if (modelVertices.empty() || modelIndices.empty()) {
-            OHAO_LOG_ERROR("Model has no geometry data!");
-            return false;
-        }
-
-        // Create vertex and index buffers
-        try {
-            createVertexBuffer(modelVertices);
-            OHAO_LOG_DEBUG("Vertex buffer created successfully");
-            createIndexBuffer(modelIndices);
-            OHAO_LOG_DEBUG("Index buffer created successfully");
-        } catch (const std::exception& e) {
-            OHAO_LOG_ERROR("Failed to create buffers: " + std::string(e.what()));
-            cleanupCurrentModel();
-            return false;
-        }
-
-        OHAO_LOG("Model loaded successfully: " + filename);
+        OHAO_LOG("Successfully loaded model: " + filename);
         return true;
 
     } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Exception during model loading: " + std::string(e.what()));
-        cleanupCurrentModel();
+        OHAO_LOG_ERROR("Error during model loading: " + std::string(e.what()));
         return false;
     }
 }
@@ -569,7 +634,6 @@ bool VulkanContext::loadModel(const std::string& filename) {
 void VulkanContext::cleanupCurrentModel() {
     vertexBuffer.reset();
     indexBuffer.reset();
-    scene.reset();
 }
 
 bool VulkanContext::hasLoadScene(){
@@ -646,6 +710,135 @@ void VulkanContext::cleanupSwapChain() {
     depthImage->cleanup();
     renderPass->cleanup();
     swapchain->cleanup();
+}
+
+bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+    if (vertices.empty() || indices.empty()) {
+        OHAO_LOG_ERROR("Cannot update buffers with empty data");
+        return false;
+    }
+
+    try {
+        device->waitIdle();
+        createVertexBuffer(vertices);
+        createIndexBuffer(indices);
+        return true;
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Failed to update model buffers: " + std::string(e.what()));
+        return false;
+    }
+}
+bool VulkanContext::updateSceneBuffers() {
+    if (!scene) return false;
+    scene->validateTransformHierarchy();
+
+    device->waitIdle();
+
+    std::vector<Vertex> combinedVertices;
+    std::vector<uint32_t> combinedIndices;
+    meshBufferMap.clear();  // Clear old mappings
+
+    // Debug output for initial state
+    OHAO_LOG_DEBUG("Starting scene buffer update");
+    OHAO_LOG_DEBUG("Number of objects: " + std::to_string(scene->getObjects().size()));
+
+    // First pass: Calculate total required size
+    size_t totalVertices = 0;
+    size_t totalIndices = 0;
+    for (const auto& [name, object] : scene->getObjects()) {
+        if (object && object->getModel()) {
+            totalVertices += object->getModel()->vertices.size();
+            totalIndices += object->getModel()->indices.size();
+            OHAO_LOG_DEBUG("Object '" + name + "' requires " +
+                          std::to_string(object->getModel()->vertices.size()) + " vertices and " +
+                          std::to_string(object->getModel()->indices.size()) + " indices");
+        }
+    }
+
+    // Pre-allocate buffers
+    combinedVertices.reserve(totalVertices);
+    combinedIndices.reserve(totalIndices);
+
+    // Second pass: Build combined buffers
+    for (const auto& [name, object] : scene->getObjects()) {
+        if (!object || !object->getModel()) continue;
+
+        MeshBufferInfo bufferInfo{};
+        bufferInfo.vertexOffset = static_cast<uint32_t>(combinedVertices.size());
+        bufferInfo.indexOffset = static_cast<uint32_t>(combinedIndices.size());
+        bufferInfo.indexCount = static_cast<uint32_t>(object->getModel()->indices.size());
+
+        // Store mapping before modifying buffers
+        meshBufferMap[object.get()] = bufferInfo;
+
+        // Add vertices
+        const auto& modelVertices = object->getModel()->vertices;
+        combinedVertices.insert(combinedVertices.end(), modelVertices.begin(), modelVertices.end());
+
+        // Add indices with correct offset
+        for (uint32_t index : object->getModel()->indices) {
+            combinedIndices.push_back(index + bufferInfo.vertexOffset);
+        }
+
+        OHAO_LOG_DEBUG("Added object '" + name + "' to buffer at offset " +
+                       std::to_string(bufferInfo.vertexOffset) + " with " +
+                       std::to_string(bufferInfo.indexCount) + " indices");
+    }
+
+    if (combinedVertices.empty() || combinedIndices.empty()) {
+        OHAO_LOG_WARNING("No geometry to update");
+        return false;
+    }
+
+    try {
+        // Clean up old buffers first
+        vertexBuffer.reset();
+        indexBuffer.reset();
+
+        // Create new buffers
+        createVertexBuffer(combinedVertices);
+        createIndexBuffer(combinedIndices);
+
+        OHAO_LOG_DEBUG("Successfully updated scene buffers with " +
+                       std::to_string(combinedVertices.size()) + " vertices and " +
+                       std::to_string(combinedIndices.size()) + " indices");
+        return true;
+
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
+        return false;
+    }
+}
+
+bool VulkanContext::createNewScene(const std::string& name) {
+    device->waitIdle();
+
+    scene = std::make_unique<Scene>();
+    scene->setName(name);
+
+    // Reset scene-related resources
+    cleanupCurrentModel();
+    initializeDefaultScene();
+
+    return true;
+}
+
+bool VulkanContext::saveScene(const std::string& filename) {
+    if (!scene) return false;
+
+    scene->setProjectPath(filename);
+    if (scene->saveToFile(filename)) {
+        sceneModified = false;
+        return true;
+    }
+    return false;
+}
+
+bool VulkanContext::loadScene(const std::string& filename) {
+    if (!scene) scene = std::make_unique<Scene>();
+
+    scene->setProjectPath(filename);
+    return scene->loadFromFile(filename);
 }
 
 }//namespace ohao

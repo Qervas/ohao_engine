@@ -35,6 +35,7 @@ public:
     const Transform& getTransform() const { return transform; }
     SceneNode* getParent() const { return parent.lock().get(); }
     const std::vector<Ptr>& getChildren() const { return children; }
+    glm::mat4 getWorldTransform() const;
 
     // Setters
     void setName(const std::string& newName) { name = newName; }
@@ -43,6 +44,10 @@ public:
 
     // Virtual update method for derived classes
     virtual void update(float deltaTime);
+    virtual void setTransform(const Transform& transform);
+    virtual void markTransformDirty();
+    bool isTransformDirty() const { return transformDirty; }
+    void clearTransformDirty() { transformDirty = false; }
 
 protected:
     std::string name;
@@ -51,6 +56,7 @@ protected:
 
     WeakPtr parent;
     std::vector<Ptr> children;
+    bool transformDirty{false};
 
     virtual void onAddedToScene();
     virtual void onRemovedFromScene();

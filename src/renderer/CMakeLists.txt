@@ -22,9 +22,9 @@ target_link_libraries(ohao_renderer PUBLIC
     ${Vulkan_LIBRARIES}
     glfw
     ohao_core
+    ohao_utils
     imgui
     imgui_stdlib
-
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})
