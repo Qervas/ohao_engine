@@ -88,6 +88,7 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
                               ImGuiTreeNodeFlags_OpenOnDoubleClick |
                               ImGuiTreeNodeFlags_SpanAvailWidth;
 
+    // Allow selection for all nodes
     if (node == selectedNode) {
         flags |= ImGuiTreeNodeFlags_Selected;
     }
@@ -97,29 +98,52 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
         flags |= ImGuiTreeNodeFlags_Leaf;
     }
 
-    // Show different icon/text for SceneObjects vs regular nodes
-    std::string nodeLabel = node->getName();
-    if (auto sceneObj = asSceneObject(node)) {
-        nodeLabel = "[Object] " + nodeLabel;
+    // Format node label (Blender style)
+    std::string nodeLabel;
+    ImVec4 textColor;
+
+    if (isRoot(node)) {
+        nodeLabel = "Scene Collection";
+        textColor = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+    } else if (isSceneObject(node)) {
+        auto sceneObj = asSceneObject(node);
+        if (sceneObj->getModel()) {
+            nodeLabel = "\uf1b2 " + node->getName();  // Cube icon for mesh objects
+        } else {
+            nodeLabel = "\uf192 " + node->getName();  // Dot icon for empty objects
+        }
+        textColor = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+    } else {
+        nodeLabel = node->getName();
+        textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
     }
 
+    ImGui::PushStyleColor(ImGuiCol_Text, textColor);
     bool opened = ImGui::TreeNodeEx(nodeLabel.c_str(), flags);
+    ImGui::PopStyleColor();
 
+    // Handle selection
     if (ImGui::IsItemClicked()) {
         selectedNode = node;
-        if (auto sceneObj = asSceneObject(node)) {
-            SelectionManager::get().setSelectedObject(sceneObj);
-
-            // Ensure buffers are updated when selecting
-            if (auto context = VulkanContext::getContextInstance()) {
-                context->updateSceneBuffers();
-            }
+        if (!isRoot(node) && isSceneObject(node)) {
+            SelectionManager::get().setSelectedObject(asSceneObject(node));
+        } else {
+            // Allow root selection for parenting but clear viewport selection
+            SelectionManager::get().clearSelection();
         }
     }
 
+    // Context menu
     if (ImGui::IsItemClicked(1)) {
         contextMenuTarget = node;
         showContextMenu = true;
+    }
+
+    // Drag and drop
+    if (ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload("SCENE_NODE", &node, sizeof(SceneNode*));
+        ImGui::Text("Moving %s", node->getName().c_str());
+        ImGui::EndDragDropSource();
     }
 
     if (opened) {
@@ -145,29 +169,28 @@ void OutlinerPanel::handleDragAndDrop() {
 }
 
 void OutlinerPanel::showObjectContextMenu(SceneNode* node) {
-    if (ImGui::MenuItem("Rename")) {
-         // Start rename operation
-     }
-     if (ImGui::MenuItem("Duplicate")) {
-         // Duplicate node
-         if (auto sceneObj = asSceneObject(node)) {
-             auto duplicate = sceneObj->clone();
-             duplicate->setName(duplicate->getName() + "_copy");
-             if (auto parent = node->getParent()) {
-                 parent->addChild(duplicate);
-             }
-         }
-     }
-     if (ImGui::MenuItem("Delete")) {
-         handleObjectDeletion(node);
-     }
+    if (ImGui::MenuItem("Add Child")) {
+        // Create child under selected node
+        createPrimitiveObject(PrimitiveType::Empty);
+    }
 
-     ImGui::Separator();
-
-     if (ImGui::MenuItem("Add Child")) {
-         auto newChild = std::make_shared<SceneObject>("New Child");
-         node->addChild(newChild);
-     }
+    if (!isRoot(node)) {  // Don't allow these operations on root
+        if (ImGui::MenuItem("Rename")) {
+            // Start rename operation
+        }
+        if (ImGui::MenuItem("Duplicate")) {
+            if (auto sceneObj = asSceneObject(node)) {
+                auto duplicate = sceneObj->clone();
+                if (auto parent = node->getParent()) {
+                    parent->addChild(duplicate);
+                    currentScene->addObject(duplicate->getName(), duplicate);
+                }
+            }
+        }
+        if (ImGui::MenuItem("Delete")) {
+            handleObjectDeletion(node);
+        }
+    }
 }
 
 void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
@@ -216,6 +239,9 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
         return;
     }
 
+    // Get parent node - use selected node if available, otherwise use root
+    SceneNode* parentNode = selectedNode ? selectedNode : currentScene->getRootNode().get();
+
     try {
         std::shared_ptr<SceneObject> newObject;
         std::string baseName;
@@ -235,27 +261,30 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                 auto model = generatePrimitiveMesh(type);
                 newObject->setModel(model);
 
-                // Set initial transform at world origin
+                // Set initial transform
                 Transform transform;
-                transform.setLocalPosition(glm::vec3(0.0f));
+                // If parent is not root, offset slightly from parent's position
+                if (!isRoot(parentNode)) {
+                    auto parentPos = parentNode->getTransform().getWorldPosition();
+                    transform.setLocalPosition(parentPos + glm::vec3(0.5f, 0.5f, 0.0f));
+                } else {
+                    transform.setLocalPosition(glm::vec3(0.0f));
+                }
                 newObject->setTransform(transform);
                 break;
         }
 
         if (newObject) {
-            // Generate unique name
+            // Generate unique name (Blender style)
             std::string uniqueName = baseName;
             int counter = 1;
             while (currentScene->getObjects().find(uniqueName) != currentScene->getObjects().end()) {
-                uniqueName = baseName + "_" + std::to_string(counter++);
+                uniqueName = baseName + "." + std::to_string(counter++).substr(0, 3);
             }
             newObject->setName(uniqueName);
-
-            currentScene->getRootNode()->addChild(newObject);
-
-
-            // Add to scene (which will add to root node)
             currentScene->addObject(uniqueName, newObject);
+            parentNode->addChild(newObject);
+            OHAO_LOG_DEBUG("Created new " + uniqueName + " under parent: " + parentNode->getName());
 
             // Update buffers
             if (auto* vulkanContext = VulkanContext::getContextInstance()) {
@@ -265,10 +294,12 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                 }
             }
 
+            // Select the newly created object
+            selectedNode = newObject.get();
             SelectionManager::get().setSelectedObject(newObject.get());
-            OHAO_LOG("Created new " + uniqueName);
-        }
 
+            OHAO_LOG("Created new " + uniqueName + " under " + parentNode->getName());
+        }
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Failed to create primitive: " + std::string(e.what()));
     }
@@ -509,37 +540,67 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
     float scaledNodeSize = graphNodeSize * graphZoom;
     ImVec2 nodeSize(scaledNodeSize, scaledNodeSize);
 
-    // Node visuals
-    bool isSelected = (node == selectedNode);
-    ImU32 nodeColor = isSelected ? IM_COL32(255, 165, 0, 255) : IM_COL32(100, 100, 100, 255);
+    bool nodeIsRoot = isRoot(node);
+    bool isSelected = (node == selectedNode && !nodeIsRoot);
+
+    // Different colors for root, selected, and regular nodes
+    ImU32 nodeColor;
+    if (nodeIsRoot) {
+        nodeColor = IM_COL32(100, 100, 100, 200);
+    } else if (isSelected) {
+        nodeColor = IM_COL32(255, 165, 0, 255);
+    } else {
+        nodeColor = IM_COL32(100, 100, 100, 255);
+    }
+
     float rounding = scaledNodeSize * 0.2f;
 
-    // Draw node
-    drawList->AddRectFilled(
-        nodePos,
-        ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y),
-        nodeColor,
-        rounding
-    );
+    // Draw node with different style for root
+    if (nodeIsRoot) {
+        drawList->AddRect(
+            nodePos,
+            ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y),
+            nodeColor,
+            rounding,
+            ImDrawFlags_None,
+            2.0f
+        );
+    } else {
+        drawList->AddRectFilled(
+            nodePos,
+            ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y),
+            nodeColor,
+            rounding
+        );
+    }
 
-    // Draw node label
+    // Draw node label with different color for root
     ImVec2 textPos = nodePos;
     textPos.x += nodeSize.x * 0.5f;
     textPos.y += nodeSize.y + 5.0f;
+    ImU32 textColor = nodeIsRoot ?
+        IM_COL32(150, 150, 150, 255) :
+        IM_COL32(255, 255, 255, 255);
+
+    std::string label = nodeIsRoot ? "Root" : node->getName();
     drawList->AddText(
         textPos,
-        IM_COL32(255, 255, 255, 255),
-        node->getName().c_str()
+        textColor,
+        label.c_str()
     );
 
-    // Handle node selection
-    ImVec2 mousePos = ImGui::GetMousePos();
-    if (ImGui::IsMouseClicked(0)) {
-        if (mousePos.x >= nodePos.x && mousePos.x <= nodePos.x + nodeSize.x &&
-            mousePos.y >= nodePos.y && mousePos.y <= nodePos.y + nodeSize.y) {
-            selectedNode = node;
-            if (auto sceneObj = asSceneObject(node)) {
-                SelectionManager::get().setSelectedObject(sceneObj);
+    // Handle node selection (disable for root)
+    if (!nodeIsRoot) {
+        ImVec2 mousePos = ImGui::GetMousePos();
+        if (ImGui::IsMouseClicked(0)) {
+            if (mousePos.x >= nodePos.x && mousePos.x <= nodePos.x + nodeSize.x &&
+                mousePos.y >= nodePos.y && mousePos.y <= nodePos.y + nodeSize.y) {
+                selectedNode = node;
+                if (!isRoot(node) && isSceneObject(node)) {
+                    SelectionManager::get().setSelectedObject(asSceneObject(node));
+                } else {
+                    SelectionManager::get().clearSelection();
+                }
             }
         }
     }
@@ -579,6 +640,18 @@ void OutlinerPanel::handleGraphNavigation() {
         float zoomDelta = ImGui::GetIO().MouseWheel * 0.1f;
         graphZoom = std::clamp(graphZoom + zoomDelta, 0.1f, 2.0f);
     }
+}
+
+bool OutlinerPanel::isRoot(SceneNode* node) const {
+    return currentScene && node == currentScene->getRootNode().get();
+}
+
+bool OutlinerPanel::isSceneObject(SceneNode* node) const {
+    return asSceneObject(node) != nullptr;
+}
+
+bool OutlinerPanel::isSelected(SceneNode* node) const {
+    return node == selectedNode;
 }
 
 } // namespace ohao

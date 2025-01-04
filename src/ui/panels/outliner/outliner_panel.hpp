@@ -52,7 +52,7 @@ private:
     void handleDelete();
 
     // Helper method to check if node is a SceneObject
-    SceneObject* asSceneObject(SceneNode* node) {
+    SceneObject* asSceneObject(SceneNode* node) const{
         return dynamic_cast<SceneObject*>(node);
     }
 
@@ -65,6 +65,10 @@ private:
     ImVec2 calculateNodePosition(int depth, int index);
     void handleGraphNavigation();
     void renderViewModeSelector();
+    bool isRoot(SceneNode* node) const;
+
+    bool isSceneObject(SceneNode* node) const;
+    bool isSelected(SceneNode* node) const;
 
 
 };

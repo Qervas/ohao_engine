@@ -115,17 +115,6 @@ void Scene::traverseScene(Func&& callback) {
 
 void Scene::addObject(const std::string& name, std::shared_ptr<SceneObject> object) {
     if (!object) return;
-
-    // Remove from old parent if exists
-    if (object->getParent()) {
-        object->detachFromParent();
-    }
-
-    // Add to root node if not already in hierarchy
-    if (!object->getParent()) {
-        rootNode->addChild(object);
-    }
-
     // Add to objects map
     objects[name] = object;
     OHAO_LOG_DEBUG("Added object to scene: " + name);
