@@ -1,4 +1,5 @@
 #include "scene_object.hpp"
+#include "renderer/vulkan_context.hpp"
 #include "scene/scene_node.hpp"
 
 namespace ohao {
@@ -24,10 +25,15 @@ void SceneObject::onRemovedFromScene() {
 
 void SceneObject::setTransform(const Transform& transform) {
     SceneNode::setTransform(transform);
+    markTransformDirty();
 }
 
 void SceneObject::markTransformDirty() {
     SceneNode::markTransformDirty();
+    // Notify VulkanContext that scene needs update
+    if (auto context = VulkanContext::getContextInstance()) {
+        context->markSceneModified();
+    }
 }
 
 } // namespace ohao

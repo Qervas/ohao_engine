@@ -57,6 +57,7 @@ public:
     void cleanup();
     void recreateSwapChain();
     void cleanupSwapChain();
+    void cleanupSceneBuffers();
 
 
     //Getters

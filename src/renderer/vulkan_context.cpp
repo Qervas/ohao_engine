@@ -268,6 +268,14 @@ void VulkanContext::cleanup(){
     instance.reset();
 }
 
+void VulkanContext::cleanupSceneBuffers() {
+    device->waitIdle();
+    vertexBuffer.reset();
+    indexBuffer.reset();
+    meshBufferMap.clear();
+}
+
+
 void VulkanContext::initializeSceneRenderer() {
     if (!uiManager) {
         throw std::runtime_error("UIManager must be set before initializing scene renderer");
@@ -588,14 +596,27 @@ bool VulkanContext::importModel(const std::string& filename) {
         auto modelObject = std::make_shared<SceneObject>("ImportedModel");
         modelObject->setModel(std::make_shared<Model>());
 
+
         if (!modelObject->getModel()->loadFromOBJ(filename)) {
             OHAO_LOG_ERROR("Failed to load OBJ file: " + filename);
             return false;
         }
 
-        // Add to scene
         scene->getRootNode()->addChild(modelObject);
-        scene->addObject(modelObject->getName(), modelObject);
+
+        // Generate unique name based on the file
+        std::string baseName = std::filesystem::path(filename).stem().string();
+        std::string uniqueName = baseName;
+        int counter = 1;
+        while (scene->getObjects().find(uniqueName) != scene->getObjects().end()) {
+            uniqueName = baseName + "_" + std::to_string(counter++);
+        }
+        modelObject->setName(uniqueName);
+
+        // add to scene's object map
+        scene->addObject(uniqueName, modelObject);
+
+        // Add to scene
         if (!updateSceneBuffers()) {
             OHAO_LOG_ERROR("Failed to update scene buffers");
             return false;
@@ -714,45 +735,78 @@ bool VulkanContext::updateSceneBuffers() {
 
     std::vector<Vertex> combinedVertices;
     std::vector<uint32_t> combinedIndices;
-    meshBufferMap.clear();
+    meshBufferMap.clear();  // Clear old mappings
 
-    // Combine all object meshes
+    // Debug output for initial state
+    OHAO_LOG_DEBUG("Starting scene buffer update");
+    OHAO_LOG_DEBUG("Number of objects: " + std::to_string(scene->getObjects().size()));
+
+    // First pass: Calculate total required size
+    size_t totalVertices = 0;
+    size_t totalIndices = 0;
     for (const auto& [name, object] : scene->getObjects()) {
         if (object && object->getModel()) {
-            MeshBufferInfo bufferInfo;
-            bufferInfo.vertexOffset = static_cast<uint32_t>(combinedVertices.size());
-            bufferInfo.indexOffset = static_cast<uint32_t>(combinedIndices.size());
-            bufferInfo.indexCount = static_cast<uint32_t>(object->getModel()->indices.size());
-
-            // Add vertices
-            combinedVertices.insert(
-                 combinedVertices.end(),
-                 object->getModel()->vertices.begin(),
-                 object->getModel()->vertices.end()
-             );
-
-            // Add indices with offset
-            for (uint32_t index : object->getModel()->indices) {
-                combinedIndices.push_back(index + bufferInfo.vertexOffset);
-            }
-
-            meshBufferMap[object.get()] = bufferInfo;
-            OHAO_LOG_DEBUG("Added mesh for object: " + name +
-                         " (vertices: " + std::to_string(object->getModel()->vertices.size()) +
-                         ", indices: " + std::to_string(object->getModel()->indices.size()) + ")");
+            totalVertices += object->getModel()->vertices.size();
+            totalIndices += object->getModel()->indices.size();
+            OHAO_LOG_DEBUG("Object '" + name + "' requires " +
+                          std::to_string(object->getModel()->vertices.size()) + " vertices and " +
+                          std::to_string(object->getModel()->indices.size()) + " indices");
         }
+    }
+
+    // Pre-allocate buffers
+    combinedVertices.reserve(totalVertices);
+    combinedIndices.reserve(totalIndices);
+
+    // Second pass: Build combined buffers
+    for (const auto& [name, object] : scene->getObjects()) {
+        if (!object || !object->getModel()) continue;
+
+        MeshBufferInfo bufferInfo{};
+        bufferInfo.vertexOffset = static_cast<uint32_t>(combinedVertices.size());
+        bufferInfo.indexOffset = static_cast<uint32_t>(combinedIndices.size());
+        bufferInfo.indexCount = static_cast<uint32_t>(object->getModel()->indices.size());
+
+        // Store mapping before modifying buffers
+        meshBufferMap[object.get()] = bufferInfo;
+
+        // Add vertices
+        const auto& modelVertices = object->getModel()->vertices;
+        combinedVertices.insert(combinedVertices.end(), modelVertices.begin(), modelVertices.end());
+
+        // Add indices with correct offset
+        for (uint32_t index : object->getModel()->indices) {
+            combinedIndices.push_back(index + bufferInfo.vertexOffset);
+        }
+
+        OHAO_LOG_DEBUG("Added object '" + name + "' to buffer at offset " +
+                       std::to_string(bufferInfo.vertexOffset) + " with " +
+                       std::to_string(bufferInfo.indexCount) + " indices");
+    }
+
+    if (combinedVertices.empty() || combinedIndices.empty()) {
+        OHAO_LOG_WARNING("No geometry to update");
+        return false;
     }
 
     try {
-        if (!combinedVertices.empty() && !combinedIndices.empty()) {
-            createVertexBuffer(combinedVertices);
-            createIndexBuffer(combinedIndices);
-            return true;
-        }
+        // Clean up old buffers first
+        vertexBuffer.reset();
+        indexBuffer.reset();
+
+        // Create new buffers
+        createVertexBuffer(combinedVertices);
+        createIndexBuffer(combinedIndices);
+
+        OHAO_LOG_DEBUG("Successfully updated scene buffers with " +
+                       std::to_string(combinedVertices.size()) + " vertices and " +
+                       std::to_string(combinedIndices.size()) + " indices");
+        return true;
+
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
+        return false;
     }
-    return false;
 }
 
 bool VulkanContext::createNewScene(const std::string& name) {

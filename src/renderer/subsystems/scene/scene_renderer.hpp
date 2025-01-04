@@ -2,7 +2,7 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 #include <renderer/rhi/vk/ohao_vk_uniform_buffer.hpp>
-#include "gizmo/axis_gizmo.hpp"
+#include <renderer/gizmo/axis_gizmo.hpp>
 #include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
 #include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
 #include "scene/scene_object.hpp"

@@ -13,12 +13,19 @@ void SceneNode::addChild(Ptr child) {
 
     // Remove from old parent if exists
     if (auto oldParent = child->getParent()) {
-        oldParent->removeChild(child);
+        // Find child in old parent's children
+        auto& oldParentChildren = oldParent->children;
+        auto it = std::find_if(oldParentChildren.begin(), oldParentChildren.end(),
+            [child](const Ptr& ptr) { return ptr.get() == child.get(); });
+
+        if (it != oldParentChildren.end()) {
+            oldParentChildren.erase(it);
+        }
     }
 
     // Add to children
     children.push_back(child);
-    child->setParent(shared_from_this());
+    child->parent = weak_from_this();
     child->onAddedToScene();
 }
 
@@ -38,9 +45,24 @@ void SceneNode::setParent(Ptr newParent) {
 }
 
 void SceneNode::detachFromParent() {
-    if (auto p = parent.lock()) {
-        p->removeChild(shared_from_this());
+    auto parentPtr = parent.lock();
+    if (!parentPtr) {
+        // If no valid parent, just clear the weak pointer
+        parent.reset();
+        return;
     }
+
+    // Find and remove this node from parent's children
+    auto& parentChildren = parentPtr->children;
+    auto it = std::find_if(parentChildren.begin(), parentChildren.end(),
+        [this](const Ptr& child) { return child.get() == this; });
+
+    if (it != parentChildren.end()) {
+        parentChildren.erase(it);
+    }
+
+    // Clear parent pointer
+    parent.reset();
 }
 
 SceneNode* SceneNode::findChild(const std::string& searchName) {
@@ -120,6 +142,10 @@ void SceneNode::onAddedToScene() {
 
 void SceneNode::onRemovedFromScene() {
     // Override in derived classes
+}
+
+glm::mat4 SceneNode::getWorldTransform() const {
+    return transform.getWorldMatrix();
 }
 
 } // namespace ohao

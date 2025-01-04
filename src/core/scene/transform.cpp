@@ -43,6 +43,11 @@ void Transform::setDirty() {
     dirty = true;
 }
 
+void Transform::setOwner(SceneNode* node) {
+    owner = node;
+    setDirty();
+}
+
 void Transform::updateWorldMatrix() const {
     if (dirty) {
         localMatrix = glm::translate(glm::mat4(1.0f), localPosition) *

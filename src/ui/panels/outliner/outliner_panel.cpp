@@ -167,25 +167,40 @@ void OutlinerPanel::showObjectContextMenu(SceneNode* node) {
 void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
     if (!node || !currentScene) return;
 
-    // If it's a SceneObject, handle it specially
-    if (auto sceneObj = asSceneObject(node)) {
-        // Clear selection first
-        SelectionManager::get().clearSelection();
+    OHAO_LOG_DEBUG("Starting deletion of node: " + node->getName());
 
-        // Remove from scene's object collection
-        currentScene->removeObject(sceneObj->getName());
+    // Clear selection first if this object is selected
+    if (auto sceneObj = asSceneObject(node)) {
+        if (SelectionManager::get().isSelected(sceneObj)) {
+            SelectionManager::get().clearSelection();
+        }
+    }
+
+    try {
+        // Remove from scene's object collection first
+        if (auto sceneObj = asSceneObject(node)) {
+            currentScene->removeObject(sceneObj->getName());
+        }
+
+        // Remove from scene hierarchy
+        if (node->getParent()) {
+            node->detachFromParent();
+        }
+
+        // Clear selection if this was the selected node
+        if (selectedNode == node) {
+            selectedNode = nullptr;
+        }
 
         // Update the buffers
         if (auto context = VulkanContext::getContextInstance()) {
             context->updateSceneBuffers();
         }
-    }
 
-    // Remove from parent (scene graph)
-    node->detachFromParent();
+        OHAO_LOG_DEBUG("Successfully deleted node");
 
-    if (selectedNode == node) {
-        selectedNode = nullptr;
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error during node deletion: " + std::string(e.what()));
     }
 }
 
@@ -197,35 +212,47 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
 
     try {
         std::shared_ptr<SceneObject> newObject;
-        std::string name;
+        std::string baseName;
 
         switch (type) {
             case PrimitiveType::Empty:
-                name = "Empty";
-                newObject = std::make_shared<SceneObject>(name);
+                baseName = "Empty";
+                newObject = std::make_shared<SceneObject>(baseName);
                 break;
 
             case PrimitiveType::Cube:
             case PrimitiveType::Sphere:
             case PrimitiveType::Plane:
-                {
-                    name = (type == PrimitiveType::Cube) ? "Cube" :
+                baseName = (type == PrimitiveType::Cube) ? "Cube" :
                           (type == PrimitiveType::Sphere) ? "Sphere" : "Plane";
+                newObject = std::make_shared<SceneObject>(baseName);
+                auto model = generatePrimitiveMesh(type);
+                newObject->setModel(model);
 
-                    newObject = std::make_shared<SceneObject>(name);
-                    auto model = generatePrimitiveMesh(type);
-                    newObject->setModel(model);
-                }
+                // Set initial transform at world origin
+                Transform transform;
+                transform.setLocalPosition(glm::vec3(0.0f));
+                newObject->setTransform(transform);
                 break;
         }
 
         if (newObject) {
-            currentScene->getRootNode()->addChild(newObject);
-            currentScene->addObject(name, newObject);
+            // Generate unique name
+            std::string uniqueName = baseName;
+            int counter = 1;
+            while (currentScene->getObjects().find(uniqueName) != currentScene->getObjects().end()) {
+                uniqueName = baseName + "_" + std::to_string(counter++);
+            }
+            newObject->setName(uniqueName);
 
-            // Update all scene buffers after adding new object
+            currentScene->getRootNode()->addChild(newObject);
+
+
+            // Add to scene (which will add to root node)
+            currentScene->addObject(uniqueName, newObject);
+
+            // Update buffers
             if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                vulkanContext->getLogicalDevice()->waitIdle();
                 if (!vulkanContext->updateSceneBuffers()) {
                     OHAO_LOG_ERROR("Failed to update scene buffers");
                     return;
@@ -233,7 +260,7 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
             }
 
             SelectionManager::get().setSelectedObject(newObject.get());
-            OHAO_LOG("Created new " + name);
+            OHAO_LOG("Created new " + uniqueName);
         }
 
     } catch (const std::exception& e) {
