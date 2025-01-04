@@ -5,6 +5,7 @@
 #include "core/asset/model.hpp"
 #include <iostream>
 #include <vulkan/vulkan_core.h>
+#include <algorithm>
 
 namespace ohao {
 
@@ -31,7 +32,9 @@ bool OhaoVkPipeline::initialize(
     OhaoVkShaderModule* shaderModule,
     VkExtent2D swapChainExtent,
     VkDescriptorSetLayout descriptorSetLayout,
-    RenderMode mode)
+    RenderMode mode,
+    const PipelineConfigInfo* configInfo,
+    VkPipelineLayout layout)
 {
     this->device = device;
     this->renderPass = renderPass;
@@ -39,168 +42,105 @@ bool OhaoVkPipeline::initialize(
     this->extent = swapChainExtent;
     this->renderMode = mode;
 
-    if (!createPipelineLayout(descriptorSetLayout)) {
-        return false;
+
+    if (layout != VK_NULL_HANDLE) {
+        pipelineLayout = layout;
+        return createPipeline(mode, configInfo);
+    } else {
+        // Use push constants for selection pipeline
+        bool success = (mode == RenderMode::WIREFRAME) ?
+            createPipelineLayoutWithPushConstants(descriptorSetLayout) :
+            createDefaultPipelineLayout(descriptorSetLayout);
+
+        return success && createPipeline(mode, configInfo);
     }
-    if (!createPipeline(mode)) {
-        return false;
-    }
-    return true;
 }
 
 void OhaoVkPipeline::bind(VkCommandBuffer commandBuffer) {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
 }
 
-bool OhaoVkPipeline::createPipelineLayout(VkDescriptorSetLayout descriptorSetLayout) {
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-    pipelineLayoutInfo.pPushConstantRanges = nullptr;
-
-    if (vkCreatePipelineLayout(
-        device->getDevice(),
-        &pipelineLayoutInfo,
-        nullptr,
-        &pipelineLayout) != VK_SUCCESS)
-    {
-        std::cerr << "Failed to create pipeline layout!" << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-bool OhaoVkPipeline::createPipeline(RenderMode mode) {
-    // Get shader stages
+bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* configInfo) {
+    // Get shader stages based on mode
     VkPipelineShaderStageCreateInfo vertShaderStageInfo;
     VkPipelineShaderStageCreateInfo fragShaderStageInfo;
 
     if (mode == RenderMode::GIZMO) {
         vertShaderStageInfo = shaderModule->getShaderStageInfo("gizmo_vert");
         fragShaderStageInfo = shaderModule->getShaderStageInfo("gizmo_frag");
+    } else if (mode == RenderMode::WIREFRAME) {
+        vertShaderStageInfo = shaderModule->getShaderStageInfo("selection_vert");
+        fragShaderStageInfo = shaderModule->getShaderStageInfo("selection_frag");
     } else {
         vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
         fragShaderStageInfo = shaderModule->getShaderStageInfo("frag");
     }
+
     std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages = {
-        vertShaderStageInfo,
-        fragShaderStageInfo
+        vertShaderStageInfo, fragShaderStageInfo
     };
+
+    // Handle pipeline configuration
+    PipelineConfigInfo defaultConfig{};
+    PipelineConfigInfo localConfig{};  // Local copy of the config we'll use
+
+    if (!configInfo) {
+        defaultPipelineConfigInfo(defaultConfig, extent);
+        localConfig = defaultConfig;
+    } else {
+        localConfig = *configInfo;  // Make a local copy of the provided config
+    }
+
+    // Modify input assembly based on mode
+    if (mode == RenderMode::GIZMO) {
+        localConfig.inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    }
+
+    // Update dynamic states based on mode
+    if (mode == RenderMode::GIZMO || mode == RenderMode::WIREFRAME) {
+        if (std::find(localConfig.dynamicStateEnables.begin(),
+                      localConfig.dynamicStateEnables.end(),
+                      VK_DYNAMIC_STATE_LINE_WIDTH) == localConfig.dynamicStateEnables.end()) {
+            localConfig.dynamicStateEnables.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+        }
+    }
+
+    // Update dynamic state info to point to our local vector
+    localConfig.dynamicStateInfo.dynamicStateCount = static_cast<uint32_t>(localConfig.dynamicStateEnables.size());
+    localConfig.dynamicStateInfo.pDynamicStates = localConfig.dynamicStateEnables.data();
 
     // Vertex input state
     auto bindingDescription = Vertex::getBindingDescriptions();
     auto attributeDescriptions = Vertex::getAttributeDescriptions();
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.pNext = nullptr;
+    vertexInputInfo.flags = 0;
     vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescription.size());
     vertexInputInfo.pVertexBindingDescriptions = bindingDescription.data();
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
-    // Input assembly
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = (mode == RenderMode::GIZMO) ?
-        VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
-
-    // Viewport and scissor
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(extent.width);
-    viewport.height = static_cast<float>(extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = extent;
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.pViewports = &viewport;
-    viewportState.scissorCount = 1;
-    viewportState.pScissors = &scissor;
-
-    // Rasterizer
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    // Set polygon mode based on render mode
-    if (mode == RenderMode::GIZMO || mode == RenderMode::WIREFRAME) {
-        rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
-    } else {
-        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    }
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_FALSE;
-
-    // Multisampling
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    // Color blending
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
-
-    // Depth stencil
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
-    depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.stencilTestEnable = VK_FALSE;
-
-    std::vector<VkDynamicState> dynamicStates = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR
-    };
-    if (mode == RenderMode::GIZMO || mode == RenderMode::WIREFRAME) {
-        dynamicStates.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
-    }
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-    dynamicState.pDynamicStates = dynamicStates.data();
-
-    // Create the graphics pipeline
+    // Create pipeline
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = nullptr;
+    pipelineInfo.flags = 0;
     pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
     pipelineInfo.pStages = shaderStages.data();
     pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pInputAssemblyState = &localConfig.inputAssemblyInfo;
+    pipelineInfo.pViewportState = &localConfig.viewportInfo;
+    pipelineInfo.pRasterizationState = &localConfig.rasterizationInfo;
+    pipelineInfo.pMultisampleState = &localConfig.multisampleInfo;
+    pipelineInfo.pColorBlendState = &localConfig.colorBlendInfo;
+    pipelineInfo.pDepthStencilState = &localConfig.depthStencilInfo;
+    pipelineInfo.pDynamicState = &localConfig.dynamicStateInfo;
     pipelineInfo.layout = pipelineLayout;
     pipelineInfo.renderPass = renderPass->getVkRenderPass();
     pipelineInfo.subpass = 0;
-    pipelineInfo.pDynamicState = &dynamicState;
-
-
+    pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+    pipelineInfo.basePipelineIndex = -1;
 
     if (vkCreateGraphicsPipelines(
         device->getDevice(),
@@ -217,24 +157,67 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode) {
     return true;
 }
 
-void OhaoVkPipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo) {
+bool OhaoVkPipeline::createPipelineLayoutWithPushConstants(VkDescriptorSetLayout descriptorSetLayout) {
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(SelectionPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (vkCreatePipelineLayout(device->getDevice(), &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        std::cerr << "Failed to create pipeline layout with push constants!" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool OhaoVkPipeline::createDefaultPipelineLayout(VkDescriptorSetLayout descriptorSetLayout) {
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 0;
+    pipelineLayoutInfo.pPushConstantRanges = nullptr;
+
+    if (vkCreatePipelineLayout(device->getDevice(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        std::cerr << "Failed to create pipeline layout!" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+void OhaoVkPipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo, VkExtent2D extent) {
     // Input assembly
     configInfo.inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     configInfo.inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     configInfo.inputAssemblyInfo.primitiveRestartEnable = VK_FALSE;
 
     // Viewport and scissor
+    configInfo.viewport = {
+        0.0f, 0.0f,
+        static_cast<float>(extent.width), static_cast<float>(extent.height),
+        0.0f, 1.0f
+    };
+
+    configInfo.scissor = {{0, 0}, extent};
+
     configInfo.viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     configInfo.viewportInfo.viewportCount = 1;
-    configInfo.viewportInfo.pViewports = nullptr;
+    configInfo.viewportInfo.pViewports = &configInfo.viewport;
     configInfo.viewportInfo.scissorCount = 1;
-    configInfo.viewportInfo.pScissors = nullptr;
+    configInfo.viewportInfo.pScissors = &configInfo.scissor;
 
     // Rasterization
     configInfo.rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     configInfo.rasterizationInfo.depthClampEnable = VK_FALSE;
     configInfo.rasterizationInfo.rasterizerDiscardEnable = VK_FALSE;
-    configInfo.rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL;
+    configInfo.rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL; // Default, modified for WIREFRAME/GIZMO
     configInfo.rasterizationInfo.lineWidth = 1.0f;
     configInfo.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
     configInfo.rasterizationInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
@@ -264,13 +247,52 @@ void OhaoVkPipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo) {
     configInfo.depthStencilInfo.depthBoundsTestEnable = VK_FALSE;
     configInfo.depthStencilInfo.stencilTestEnable = VK_FALSE;
 
-    // Dynamic state
-    configInfo.dynamicStateEnables = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    // Dynamic states
+    configInfo.dynamicStateEnables.clear();
+    configInfo.dynamicStateEnables.push_back(VK_DYNAMIC_STATE_VIEWPORT);
+    configInfo.dynamicStateEnables.push_back(VK_DYNAMIC_STATE_SCISSOR);
+
+
+    if (renderMode == RenderMode::GIZMO || renderMode == RenderMode::WIREFRAME) {
+        configInfo.dynamicStateEnables.push_back(VK_DYNAMIC_STATE_LINE_WIDTH);
+    }
+    // Update dynamic state info
+    configInfo.dynamicStateInfo = {};
     configInfo.dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    configInfo.dynamicStateInfo.dynamicStateCount =
-        static_cast<uint32_t>(configInfo.dynamicStateEnables.size());
-    configInfo.dynamicStateInfo.pDynamicStates = configInfo.dynamicStateEnables.data();
+    configInfo.dynamicStateInfo.pNext = nullptr;
     configInfo.dynamicStateInfo.flags = 0;
+    configInfo.dynamicStateInfo.dynamicStateCount = static_cast<uint32_t>(configInfo.dynamicStateEnables.size());
+    configInfo.dynamicStateInfo.pDynamicStates = configInfo.dynamicStateEnables.data();
+
+    // Double check that the pointer is valid
+    if (configInfo.dynamicStateEnables.size() > 0) {
+        assert(configInfo.dynamicStateInfo.pDynamicStates != nullptr);
+    }
+}
+
+bool OhaoVkPipeline::createSelectionPipelineLayout(
+    VkDevice device,
+    VkDescriptorSetLayout descriptorSetLayout,
+    VkPipelineLayout& pipelineLayout) {
+
+    // Push constant range for selection shader
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(SelectionPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace ohao

@@ -23,6 +23,9 @@ public:
     bool isSceneViewportHovered() const;
     ViewportSize getSceneViewportSize() const;
     static UIManager* getInstance() { return instance; }
+    OutlinerPanel* getOutlinerPanel() const;
+    PropertiesPanel* getPropertiesPanel() const;
+    SceneSettingsPanel* getSceneSettingsPanel() const;
     void applyTheme(const std::string& theme);
 
 private:
@@ -46,6 +49,12 @@ private:
     void handleModelImport();
     void shutdownImGui();
     void resetLayout();
+    void handleNewProject();
+    void handleOpenProject();
+    bool handleSaveProject();
+    bool handleSaveAsProject();
+    void handleExit();
+    bool showNewProjectDialog();
 
 
     // statiac instance pointer
@@ -76,6 +85,9 @@ private:
     std::unique_ptr<OutlinerPanel> outlinerPanel;
     std::unique_ptr<PropertiesPanel> propertiesPanel;
     std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
+
+    std::string currentProjectPath;
+    std::string newProjectName;
 
 
 

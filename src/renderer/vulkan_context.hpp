@@ -30,6 +30,7 @@
 #include "subsystems/scene/scene_renderer.hpp"
 #include "renderer/shader/shader_uniforms.hpp"
 
+
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
 #define GPU_VENDOR_INTEL 2
@@ -52,9 +53,11 @@ public:
 
     void initializeVulkan();
     void initializeSceneRenderer();
+    void initializeDefaultScene();
     void cleanup();
     void recreateSwapChain();
     void cleanupSwapChain();
+    void cleanupSceneBuffers();
 
 
     //Getters
@@ -104,7 +107,10 @@ public:
     void renderModel(VkCommandBuffer commandBuffer);
     void renderGizmos(VkCommandBuffer commandBuffer);
     bool hasLoadScene();
-    bool loadModel(const std::string& filename);
+    bool createNewScene(const std::string& name);
+    bool saveScene(const std::string& filename);
+    bool loadScene(const std::string& filename);
+    bool importModel(const std::string& filename);
     void cleanupCurrentModel();
     void updateViewport(uint32_t width, uint32_t height);
 
@@ -118,6 +124,20 @@ public:
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
     void setWireframeMode(bool enable) { wireframeMode = enable; }
+
+    bool updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+    bool updateSceneBuffers(); //update all scene objects buffers
+    const MeshBufferInfo* getMeshBufferInfo(SceneObject* object) const {
+        auto it = meshBufferMap.find(object);
+        return it != meshBufferMap.end() ? &it->second : nullptr;
+    }
+
+    bool hasUnsavedChanges() const { return sceneModified; }
+    void markSceneModified() { sceneModified = true; }
+    void clearSceneModified() { sceneModified = false; }
+
+
+
 private:
     Window* window;
     static VulkanContext* contextInstance;
@@ -173,6 +193,11 @@ private:
     bool wireframeMode{false};
     uint32_t gizmoIndexCount{0};
     std::unique_ptr<AxisGizmo> axisGizmo;
+
+    std::unordered_map<SceneObject*, MeshBufferInfo> meshBufferMap;
+
+    bool sceneModified{false};
+
 
 
 

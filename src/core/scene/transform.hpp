@@ -17,7 +17,7 @@ public:
     void setLocalPosition(const glm::vec3& position);
     void setLocalRotation(const glm::quat& rotation);
     void setLocalScale(const glm::vec3& scale);
-    void setOwner(SceneNode* node) { owner = node; }
+    void setOwner(SceneNode* node) ;
 
 
     // Convenience euler angle rotation

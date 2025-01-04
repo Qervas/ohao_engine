@@ -10,7 +10,7 @@
 
 int main() {
     try {
-        ohao::Window window(1440, 900, "OHAO Engine");
+        ohao::Window window(1920, 1080, "OHAO Engine");
         ohao::VulkanContext vulkan(&window);
         vulkan.initializeVulkan();
 

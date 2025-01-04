@@ -47,7 +47,11 @@ public:
     bool loadMTL(const std::string& filename);
     void setupDefaultMaterial();
 
+    const std::string& getSourcePath() const { return sourcePath; }
+    void setSourcePath(const std::string& path) { sourcePath = path; }
+
 private:
     void assignMaterialColors();
+    std::string sourcePath;
 };
 }

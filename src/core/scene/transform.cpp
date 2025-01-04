@@ -41,21 +41,35 @@ glm::mat4 Transform::getLocalMatrix() const {
 
 void Transform::setDirty() {
     dirty = true;
+    // Propagate dirty state to children if owner exists
+    if (owner) {
+        for (const auto& child : owner->getChildren()) {
+            child->getTransform().setDirty();
+        }
+    }
+}
+
+void Transform::setOwner(SceneNode* node) {
+    owner = node;
+    setDirty();
 }
 
 void Transform::updateWorldMatrix() const {
-    if (dirty) {
-        localMatrix = glm::translate(glm::mat4(1.0f), localPosition) *
-                     glm::toMat4(localRotation) *
-                     glm::scale(glm::mat4(1.0f), localScale);
+    // Always recalculate local matrix
+    localMatrix = glm::translate(glm::mat4(1.0f), localPosition) *
+                 glm::toMat4(localRotation) *
+                 glm::scale(glm::mat4(1.0f), localScale);
 
-        if (owner && owner->getParent()) {
-            worldMatrix = owner->getParent()->getTransform().getWorldMatrix() * localMatrix;
-        } else {
-            worldMatrix = localMatrix;
-        }
-        dirty = false;
+    // Calculate world matrix based on parent
+    if (owner && owner->getParent()) {
+        // Get parent's world transform
+        const Transform& parentTransform = owner->getParent()->getTransform();
+        worldMatrix = parentTransform.getWorldMatrix() * localMatrix;
+    } else {
+        worldMatrix = localMatrix;
     }
+
+    dirty = false;
 }
 
 glm::vec3 Transform::getWorldPosition() const {

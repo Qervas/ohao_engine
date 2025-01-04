@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -12,6 +13,8 @@ class OhaoVkSwapChain;
 class OhaoVkShaderModule;
 
 struct PipelineConfigInfo {
+    VkViewport viewport;
+    VkRect2D scissor;
     VkPipelineViewportStateCreateInfo viewportInfo;
     VkPipelineInputAssemblyStateCreateInfo inputAssemblyInfo;
     VkPipelineRasterizationStateCreateInfo rasterizationInfo;
@@ -19,11 +22,67 @@ struct PipelineConfigInfo {
     VkPipelineColorBlendAttachmentState colorBlendAttachment;
     VkPipelineColorBlendStateCreateInfo colorBlendInfo;
     VkPipelineDepthStencilStateCreateInfo depthStencilInfo;
-    std::vector<VkDynamicState> dynamicStateEnables;
     VkPipelineDynamicStateCreateInfo dynamicStateInfo;
-    VkPipelineLayout pipelineLayout{nullptr};
-    VkRenderPass renderPass{nullptr};
-    uint32_t subpass{0};
+    std::vector<VkDynamicState> dynamicStateEnables;
+    PipelineConfigInfo() {
+        // Zero initialize all structs
+        viewport = {};
+        scissor = {};
+        viewportInfo = {};
+        inputAssemblyInfo = {};
+        rasterizationInfo = {};
+        multisampleInfo = {};
+        colorBlendAttachment = {};
+        colorBlendInfo = {};
+        depthStencilInfo = {};
+        dynamicStateInfo = {};
+
+        // Set sTypes
+        viewportInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        inputAssemblyInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        rasterizationInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        multisampleInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        colorBlendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        depthStencilInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+
+        // Initialize all pNext pointers to nullptr
+        viewportInfo.pNext = nullptr;
+        inputAssemblyInfo.pNext = nullptr;
+        rasterizationInfo.pNext = nullptr;
+        multisampleInfo.pNext = nullptr;
+        colorBlendInfo.pNext = nullptr;
+        depthStencilInfo.pNext = nullptr;
+        dynamicStateInfo.pNext = nullptr;
+
+        // Initialize all flags to 0
+        viewportInfo.flags = 0;
+        inputAssemblyInfo.flags = 0;
+        rasterizationInfo.flags = 0;
+        multisampleInfo.flags = 0;
+        colorBlendInfo.flags = 0;
+        depthStencilInfo.flags = 0;
+        dynamicStateInfo.flags = 0;
+        dynamicStateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicStateInfo.pNext = nullptr;
+        dynamicStateInfo.dynamicStateCount = 0;
+        dynamicStateInfo.pDynamicStates = nullptr;
+    }
+
+    PipelineConfigInfo(const PipelineConfigInfo& other){
+        viewport = other.viewport;
+        scissor = other.scissor;
+        viewportInfo = other.viewportInfo;
+        inputAssemblyInfo = other.inputAssemblyInfo;
+        rasterizationInfo = other.rasterizationInfo;
+        multisampleInfo = other.multisampleInfo;
+        colorBlendAttachment = other.colorBlendAttachment;
+        colorBlendInfo = other.colorBlendInfo;
+        depthStencilInfo = other.depthStencilInfo;
+        dynamicStateEnables = other.dynamicStateEnables;
+        dynamicStateInfo = other.dynamicStateInfo;
+        dynamicStateInfo.pDynamicStates = dynamicStateEnables.data();
+    }
 };
 
 class OhaoVkPipeline {
@@ -32,6 +91,10 @@ public:
         SOLID,
         WIREFRAME,
         GIZMO
+    };
+    struct SelectionPushConstants {
+        glm::vec4 highlightColor;
+        float scaleOffset;
     };
     OhaoVkPipeline() = default;
     ~OhaoVkPipeline();
@@ -42,7 +105,9 @@ public:
         OhaoVkShaderModule* shaderModule,
         VkExtent2D swapChainExtent,
         VkDescriptorSetLayout descriptorSetLayout,
-        RenderMode mode);
+        RenderMode mode,
+        const PipelineConfigInfo* configInfo = nullptr,
+        VkPipelineLayout layout = VK_NULL_HANDLE);
 
     void cleanup();
 
@@ -50,12 +115,19 @@ public:
 
     VkPipeline getPipeline() const { return graphicsPipeline; }
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
+    RenderMode getRenderMode() const { return renderMode; }
 
-    static void defaultPipelineConfigInfo(PipelineConfigInfo& configInfo);
+
+    void defaultPipelineConfigInfo(PipelineConfigInfo& configInfo, VkExtent2D extent);
+    static bool createSelectionPipelineLayout(
+        VkDevice device,
+        VkDescriptorSetLayout descriptorSetLayout,
+        VkPipelineLayout& pipelineLayout);
 
 private:
-    bool createPipelineLayout(VkDescriptorSetLayout descriptorSetLayout);
-    bool createPipeline(RenderMode mode);
+    bool createPipeline(RenderMode mode, const PipelineConfigInfo* configInfo = nullptr);
+    bool createPipelineLayoutWithPushConstants(VkDescriptorSetLayout descriptorSetLayout);
+    bool createDefaultPipelineLayout(VkDescriptorSetLayout descriptorSetLayout);
 
     OhaoVkDevice* device{nullptr};
     OhaoVkRenderPass* renderPass{nullptr};
