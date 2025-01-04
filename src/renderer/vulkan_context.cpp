@@ -730,6 +730,7 @@ bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, cons
 }
 bool VulkanContext::updateSceneBuffers() {
     if (!scene) return false;
+    scene->validateTransformHierarchy();
 
     device->waitIdle();
 

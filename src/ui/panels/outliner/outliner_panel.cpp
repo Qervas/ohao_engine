@@ -282,8 +282,31 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                 uniqueName = baseName + "." + std::to_string(counter++).substr(0, 3);
             }
             newObject->setName(uniqueName);
+
+            // Initialize transform with proper local coordinates
+            Transform transform;
+            if (!isRoot(parentNode)) {
+                // If parent is not root, offset from parent's position
+                glm::vec3 parentPos = parentNode->getTransform().getLocalPosition();
+                // Add a small offset to avoid overlap
+                glm::vec3 offset(1.0f, 0.0f, 0.0f); // Offset on X axis
+                transform.setLocalPosition(offset);
+                transform.setLocalRotation(parentNode->getTransform().getLocalRotation());
+                transform.setLocalScale(glm::vec3(1.0f));
+            } else {
+                // If parent is root, place at origin
+                transform.setLocalPosition(glm::vec3(0.0f));
+                transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+                transform.setLocalScale(glm::vec3(1.0f));
+            }
+            newObject->setTransform(transform);
+
+            // First add to scene's object map
             currentScene->addObject(uniqueName, newObject);
+
+            // Then add to hierarchy under parent
             parentNode->addChild(newObject);
+
             OHAO_LOG_DEBUG("Created new " + uniqueName + " under parent: " + parentNode->getName());
 
             // Update buffers
@@ -297,8 +320,6 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
             // Select the newly created object
             selectedNode = newObject.get();
             SelectionManager::get().setSelectedObject(newObject.get());
-
-            OHAO_LOG("Created new " + uniqueName + " under " + parentNode->getName());
         }
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Failed to create primitive: " + std::string(e.what()));

@@ -27,6 +27,12 @@ void SceneNode::addChild(Ptr child) {
     children.push_back(child);
     child->parent = weak_from_this();
     child->onAddedToScene();
+
+    // Update transform relationships
+    child->getTransform().setOwner(child.get());
+    child->markTransformDirty();
+
+    child->onAddedToScene();
 }
 
 void SceneNode::removeChild(Ptr child) {
@@ -124,8 +130,9 @@ void SceneNode::update(float deltaTime) {
     }
 }
 
-void SceneNode::setTransform(const Transform& transform) {
-    this->transform = transform;
+void SceneNode::setTransform(const Transform& newTransform) {
+    transform = newTransform;
+    transform.setOwner(this);  // Ensure owner is set
     markTransformDirty();
 }
 

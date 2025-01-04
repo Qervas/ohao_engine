@@ -59,6 +59,7 @@ public:
     bool saveToFile(const std::string& filename);
     bool loadFromFile(const std::string& filename);
     static const std::string PROJECT_FILE_EXTENSION; // = ".ohao";
+    void validateTransformHierarchy();
 
 private:
     std::unordered_map<std::string, std::shared_ptr<SceneObject>> objects;
@@ -75,6 +76,7 @@ private:
     void setupDefaultMaterial(Material& material);
     nlohmann::json serializeToJson() const;
     bool deserializeFromJson(const nlohmann::json& json);
+    void validateNodeTransforms(SceneNode* node);
 };
 
 } // namespace ohao
