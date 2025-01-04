@@ -19,6 +19,8 @@ void OhaoVkBuffer::cleanup() {
         if (mapped) {
             unmap();
         }
+        device->waitIdle();
+
         if (buffer != VK_NULL_HANDLE) {
             vkDestroyBuffer(device->getDevice(), buffer, nullptr);
             buffer = VK_NULL_HANDLE;

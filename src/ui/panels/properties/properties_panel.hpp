@@ -9,7 +9,7 @@ class PropertiesPanel : public PanelBase {
 public:
     PropertiesPanel();
     void render() override;
-
+    void setScene(Scene* scene) { currentScene = scene; }
 private:
     void renderNodeProperties(SceneNode* node);
     void renderTransformProperties(SceneNode* node);
@@ -17,7 +17,7 @@ private:
     void renderComponentProperties(SceneObject* object);
 
 
-    void renderVec3Control(const std::string& label, glm::vec3& values,
+    bool renderVec3Control(const std::string& label, glm::vec3& values,
                           float resetValue = 0.0f);
 
     SceneObject* asSceneObject(SceneNode* node) {
@@ -28,6 +28,7 @@ private:
     glm::vec3 lastPosition{0.0f};
     glm::vec3 lastRotation{0.0f};
     glm::vec3 lastScale{1.0f};
+    Scene* currentScene{nullptr};
 };
 
 } // namespace ohao
