@@ -39,8 +39,10 @@ private:
     struct LogEntry {
         std::string message;
         ImVec4 color;
-        float timestamp;
+        float relativeTime;
         std::string category;
+        std::string timeStr;
+        mutable bool selected{false};
     };
 
     std::vector<LogEntry> entries;
@@ -50,6 +52,11 @@ private:
     std::mutex mutex;  // For thread-safe logging
 
     void addEntry(const std::string& message, const ImVec4& color, const std::string& category = "Info");
+    void copySelectedEntries();
+    void copyAllEntries();
+    std::string formatTimestamp(float timestamp);
+
+
 };
 
 // Global logging functions
