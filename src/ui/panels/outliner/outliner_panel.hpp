@@ -9,6 +9,10 @@ namespace ohao {
 
 class OutlinerPanel : public PanelBase {
 public:
+    enum class ViewMode {
+        List,
+        Graph
+    };
     OutlinerPanel();
     void render() override;
     void setScene(Scene* scene) {
@@ -24,10 +28,6 @@ private:
         Plane
     };
 
-    void renderSceneTree();
-    void renderTreeNode(SceneNode* node);
-    void handleDragAndDrop();
-
     Scene* currentScene{nullptr};
     SceneNode* selectedNode{nullptr};
 
@@ -35,6 +35,18 @@ private:
     bool showContextMenu{false};
     SceneNode* contextMenuTarget{nullptr};
 
+    ViewMode currentViewMode{ViewMode::List};
+    bool showGraphView{false};
+    float graphNodeSize{50.0f};
+    float graphSpacingX{100.0f};
+    float graphSpacingY{80.0f};
+    ImVec2 graphOffset{0, 0};
+    float graphZoom{1.0f};
+
+
+    void renderSceneTree();
+    void renderTreeNode(SceneNode* node);
+    void handleDragAndDrop();
     void showObjectContextMenu(SceneNode* node);
     void handleObjectDeletion(SceneNode* node);
     void handleDelete();
@@ -46,6 +58,13 @@ private:
 
     void createPrimitiveObject(PrimitiveType type);
     std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type);
+
+    void renderGraphView();
+    void renderGraphNode(SceneNode* node, ImVec2& pos, int depth);
+    void drawNodeConnections(const ImVec2& start, const ImVec2& end);
+    ImVec2 calculateNodePosition(int depth, int index);
+    void handleGraphNavigation();
+    void renderViewModeSelector();
 
 
 };
