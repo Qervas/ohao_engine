@@ -1,6 +1,8 @@
 #include "core/scene/scene.hpp"
+#include "renderer/vulkan_context.hpp"
 #include "scene/scene_node.hpp"
 #include "ui/components/console_widget.hpp"
+#include "ui/selection/selection_manager.hpp"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -10,6 +12,9 @@ namespace ohao {
 Scene::Scene() {
     rootNode = std::make_shared<SceneNode>("Root");
 }
+
+SceneNode::Ptr Scene::getRootNode() { return rootNode; }
+
 
 bool Scene::loadModelFromFile(const std::string& filename) {
     try {
@@ -109,9 +114,21 @@ void Scene::traverseScene(Func&& callback) {
 }
 
 void Scene::addObject(const std::string& name, std::shared_ptr<SceneObject> object) {
+    if (!object) return;
+
+    // Remove from old parent if exists
+    if (object->getParent()) {
+        object->detachFromParent();
+    }
+
+    // Add to root node if not already in hierarchy
+    if (!object->getParent()) {
+        rootNode->addChild(object);
+    }
+
+    // Add to objects map
     objects[name] = object;
-    // OHAO_LOG_DEBUG("Added object to scene: " + name);
-    // OHAO_LOG_DEBUG("Total objects in scene: " + std::to_string(objects.size()));
+    OHAO_LOG_DEBUG("Added object to scene: " + name);
 }
 
 void Scene::addLight(const std::string& name, const Light& light) {
@@ -120,13 +137,29 @@ void Scene::addLight(const std::string& name, const Light& light) {
 
 void Scene::removeObject(const std::string& name) {
     auto it = objects.find(name);
-    if (it != objects.end()) {
-        // First remove from root node if it's a direct child
-        if (it->second->getParent()) {
-            it->second->detachFromParent();
-        }
-        // Then remove from objects map
+    if (it == objects.end()) {
+        OHAO_LOG_WARNING("Attempt to remove non-existent object: " + name);
+        return;
+    }
+
+    try {
+        // Get shared_ptr to object before removing from map
+        auto object = it->second;
+
+        // Remove from map first
         objects.erase(it);
+
+        // Then safely detach from hierarchy
+        if (object) {
+            if (object->getParent()) {
+                object->detachFromParent();
+            }
+        }
+
+        OHAO_LOG_DEBUG("Successfully removed object: " + name);
+
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error removing object: " + std::string(e.what()));
     }
 }
 
@@ -135,7 +168,6 @@ void Scene::removeLight(const std::string& name) {
 }
 
 
-SceneNode::Ptr Scene::getRootNode() { return rootNode; }
 
 const std::unordered_map<std::string, std::shared_ptr<SceneObject>>&
 Scene::getObjects() const{

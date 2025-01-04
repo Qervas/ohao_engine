@@ -151,33 +151,34 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // Draw each object independently
-            auto scene = context->getScene();
-            if (scene) {
-                for (const auto& [name, object] : scene->getObjects()) {
-                    if (object && object->getModel()) {
-                        // Update uniform buffer with object's transform
-                        auto ubo = uniformBuffer->getCachedUBO();
-                        ubo.model = object->getTransform().getWorldMatrix();
-                        uniformBuffer->setCachedUBO(ubo);
-                        uniformBuffer->update(currentFrame);
+            // Draw each object using its buffer info
+            for (const auto& [name, object] : context->getScene()->getObjects()) {
+                if (!object || !object->getModel()) continue;
 
-                        auto bufferInfo = context->getMeshBufferInfo(object.get());
-                        if (bufferInfo) {
-                            // Draw object
-                            vkCmdDrawIndexed(cmd,
-                                bufferInfo->indexCount,
-                                1,
-                                bufferInfo->indexOffset,
-                                bufferInfo->vertexOffset,
-                                0);
+                // Get buffer info for this object
+                auto bufferInfo = context->getMeshBufferInfo(object.get());
+                if (!bufferInfo) {
+                    OHAO_LOG_WARNING("No buffer info for object: " + name);
+                    continue;
+                }
 
-                            // Draw selection highlight if selected
-                            if (SelectionManager::get().isSelected(object.get())) {
-                                drawSelectionHighlight(cmd, object.get(), *bufferInfo);
-                            }
-                        }
-                    }
+                // Update uniform buffer with object's transform
+                auto ubo = uniformBuffer->getCachedUBO();
+                ubo.model = object->getTransform().getWorldMatrix();
+                uniformBuffer->setCachedUBO(ubo);
+                uniformBuffer->update(currentFrame);
+
+                // Draw the object
+                vkCmdDrawIndexed(cmd,
+                    bufferInfo->indexCount,
+                    1,
+                    bufferInfo->indexOffset,
+                    static_cast<int32_t>(bufferInfo->vertexOffset),
+                    0);
+
+                // Draw selection highlight if selected
+                if (SelectionManager::get().isSelected(object.get())) {
+                    drawSelectionHighlight(cmd, object.get(), *bufferInfo);
                 }
             }
         }

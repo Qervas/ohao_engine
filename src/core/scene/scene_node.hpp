@@ -35,6 +35,7 @@ public:
     const Transform& getTransform() const { return transform; }
     SceneNode* getParent() const { return parent.lock().get(); }
     const std::vector<Ptr>& getChildren() const { return children; }
+    glm::mat4 getWorldTransform() const;
 
     // Setters
     void setName(const std::string& newName) { name = newName; }
