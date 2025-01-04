@@ -521,4 +521,24 @@ void Scene::setProjectPath(const std::string& path) {
     }
 }
 
+void Scene::validateTransformHierarchy() {
+    if (!rootNode) return;
+    validateNodeTransforms(rootNode.get());
+}
+
+void Scene::validateNodeTransforms(SceneNode* node) {
+    if (!node) return;
+
+    // Ensure transform owner is set correctly
+    node->getTransform().setOwner(node);
+
+    // Mark dirty to force update
+    node->markTransformDirty();
+
+    // Recurse through children
+    for (const auto& child : node->getChildren()) {
+        validateNodeTransforms(child.get());
+    }
+}
+
 } // namespace ohao
