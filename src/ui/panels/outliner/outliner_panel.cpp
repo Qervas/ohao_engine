@@ -15,6 +15,8 @@ void OutlinerPanel::render() {
 
     ImGui::Begin(name.c_str(), &visible, windowFlags);
 
+    renderViewModeSelector();
+
     if (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
         if (selectedNode) {
             handleObjectDeletion(selectedNode);
@@ -50,8 +52,12 @@ void OutlinerPanel::render() {
     ImGui::Separator();
 
     // Scene Tree
-    if (currentScene && currentScene->getRootNode()) {
-        renderTreeNode(currentScene->getRootNode().get());
+    if (currentViewMode == ViewMode::List) {
+        if (currentScene && currentScene->getRootNode()) {
+            renderTreeNode(currentScene->getRootNode().get());
+        }
+    } else {
+        renderGraphView();
     }
 
     handleDragAndDrop();
@@ -454,6 +460,125 @@ std::shared_ptr<Model> OutlinerPanel::generatePrimitiveMesh(PrimitiveType type) 
     model->materials["default"] = defaultMaterial;
 
     return model;
+}
+
+void OutlinerPanel::renderViewModeSelector() {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+    if (ImGui::Button(currentViewMode == ViewMode::List ? "List View" : "Graph View")) {
+        currentViewMode = (currentViewMode == ViewMode::List) ? ViewMode::Graph : ViewMode::List;
+    }
+    ImGui::PopStyleVar();
+
+    if (currentViewMode == ViewMode::Graph) {
+        ImGui::SameLine();
+        ImGui::DragFloat("Zoom", &graphZoom, 0.01f, 0.1f, 2.0f);
+    }
+}
+
+void OutlinerPanel::renderGraphView() {
+    if (!currentScene || !currentScene->getRootNode()) return;
+
+    // Create a child window for the graph
+    ImGui::BeginChild("GraphView", ImVec2(0, 0), true,
+        ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
+
+    handleGraphNavigation();
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImVec2 windowPos = ImGui::GetWindowPos();
+    ImVec2 canvasPos = ImGui::GetCursorScreenPos();
+
+    // Start position for root node
+    ImVec2 startPos = canvasPos;
+    startPos.x += graphOffset.x;
+    startPos.y += graphOffset.y;
+
+    // Render nodes
+    renderGraphNode(currentScene->getRootNode().get(), startPos, 0);
+
+    ImGui::EndChild();
+}
+
+void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
+    if (!node) return;
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImVec2 nodePos = pos;
+
+    // Calculate node size based on zoom
+    float scaledNodeSize = graphNodeSize * graphZoom;
+    ImVec2 nodeSize(scaledNodeSize, scaledNodeSize);
+
+    // Node visuals
+    bool isSelected = (node == selectedNode);
+    ImU32 nodeColor = isSelected ? IM_COL32(255, 165, 0, 255) : IM_COL32(100, 100, 100, 255);
+    float rounding = scaledNodeSize * 0.2f;
+
+    // Draw node
+    drawList->AddRectFilled(
+        nodePos,
+        ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y),
+        nodeColor,
+        rounding
+    );
+
+    // Draw node label
+    ImVec2 textPos = nodePos;
+    textPos.x += nodeSize.x * 0.5f;
+    textPos.y += nodeSize.y + 5.0f;
+    drawList->AddText(
+        textPos,
+        IM_COL32(255, 255, 255, 255),
+        node->getName().c_str()
+    );
+
+    // Handle node selection
+    ImVec2 mousePos = ImGui::GetMousePos();
+    if (ImGui::IsMouseClicked(0)) {
+        if (mousePos.x >= nodePos.x && mousePos.x <= nodePos.x + nodeSize.x &&
+            mousePos.y >= nodePos.y && mousePos.y <= nodePos.y + nodeSize.y) {
+            selectedNode = node;
+            if (auto sceneObj = asSceneObject(node)) {
+                SelectionManager::get().setSelectedObject(sceneObj);
+            }
+        }
+    }
+
+    // Calculate and draw connections to children
+    float childSpacing = graphSpacingX * graphZoom;
+    float verticalSpacing = graphSpacingY * graphZoom;
+
+    const auto& children = node->getChildren();
+    for (size_t i = 0; i < children.size(); ++i) {
+        ImVec2 childPos = nodePos;
+        childPos.x += childSpacing;
+        childPos.y += verticalSpacing * (i - (children.size() - 1) * 0.5f);
+
+        // Draw connection line
+        drawList->AddLine(
+            ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y * 0.5f),
+            ImVec2(childPos.x, childPos.y + nodeSize.y * 0.5f),
+            IM_COL32(150, 150, 150, 255),
+            2.0f
+        );
+
+        // Render child node
+        renderGraphNode(children[i].get(), childPos, depth + 1);
+    }
+}
+
+void OutlinerPanel::handleGraphNavigation() {
+    // Pan with middle mouse button
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+        graphOffset.x += ImGui::GetIO().MouseDelta.x;
+        graphOffset.y += ImGui::GetIO().MouseDelta.y;
+    }
+
+    // Zoom with mouse wheel
+    if (ImGui::GetIO().MouseWheel != 0 && ImGui::IsWindowHovered()) {
+        float zoomDelta = ImGui::GetIO().MouseWheel * 0.1f;
+        graphZoom = std::clamp(graphZoom + zoomDelta, 0.1f, 2.0f);
+    }
 }
 
 } // namespace ohao
