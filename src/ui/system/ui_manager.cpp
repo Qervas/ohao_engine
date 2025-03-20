@@ -120,9 +120,13 @@ void UIManager::setupImGuiStyle() {
 }
 
 void UIManager::initializeVulkanBackend(){
-    ImGui_ImplVulkan_LoadFunctions([](const char* function_name, void* vulkan_instance) {
-        return vkGetInstanceProcAddr(static_cast<VkInstance>(vulkan_instance), function_name);
-    }, vulkanContext->getVkInstance());
+    ImGui_ImplVulkan_LoadFunctions(
+        VK_API_VERSION_1_3,
+        [](const char* function_name, void* user_data) -> PFN_vkVoidFunction {
+            return vkGetInstanceProcAddr(static_cast<VkInstance>(user_data), function_name);
+        },
+        vulkanContext->getVkInstance()
+    );
 
     VkDescriptorPoolSize pool_sizes[] = {
         { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
