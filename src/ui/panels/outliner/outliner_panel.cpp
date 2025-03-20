@@ -125,7 +125,7 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
     // Handle selection
     if (ImGui::IsItemClicked()) {
         selectedNode = node;
-        if (!isRoot(node) && isSceneObject(node)) {
+        if (isSceneObject(node)) {
             SelectionManager::get().setSelectedObject(asSceneObject(node));
         } else {
             // Allow root selection for parenting but clear viewport selection
@@ -562,14 +562,14 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
     ImVec2 nodeSize(scaledNodeSize, scaledNodeSize);
 
     bool nodeIsRoot = isRoot(node);
-    bool isSelected = (node == selectedNode && !nodeIsRoot);
+    bool isSelected = (node == selectedNode);
 
     // Different colors for root, selected, and regular nodes
     ImU32 nodeColor;
-    if (nodeIsRoot) {
-        nodeColor = IM_COL32(100, 100, 100, 200);
-    } else if (isSelected) {
-        nodeColor = IM_COL32(255, 165, 0, 255);
+    if (isSelected) {
+        nodeColor = IM_COL32(255, 165, 0, 255);  // Selected nodes are orange
+    } else if (nodeIsRoot) {
+        nodeColor = IM_COL32(100, 100, 100, 200);  // Root has slightly different appearance
     } else {
         nodeColor = IM_COL32(100, 100, 100, 255);
     }
@@ -611,17 +611,15 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
     );
 
     // Handle node selection (disable for root)
-    if (!nodeIsRoot) {
-        ImVec2 mousePos = ImGui::GetMousePos();
-        if (ImGui::IsMouseClicked(0)) {
-            if (mousePos.x >= nodePos.x && mousePos.x <= nodePos.x + nodeSize.x &&
-                mousePos.y >= nodePos.y && mousePos.y <= nodePos.y + nodeSize.y) {
-                selectedNode = node;
-                if (!isRoot(node) && isSceneObject(node)) {
-                    SelectionManager::get().setSelectedObject(asSceneObject(node));
-                } else {
-                    SelectionManager::get().clearSelection();
-                }
+    ImVec2 mousePos = ImGui::GetMousePos();
+    if (ImGui::IsMouseClicked(0)) {
+        if (mousePos.x >= nodePos.x && mousePos.x <= nodePos.x + nodeSize.x &&
+            mousePos.y >= nodePos.y && mousePos.y <= nodePos.y + nodeSize.y) {
+            selectedNode = node;
+            if (isSceneObject(node)) {
+                SelectionManager::get().setSelectedObject(asSceneObject(node));
+            } else {
+                SelectionManager::get().clearSelection();
             }
         }
     }
