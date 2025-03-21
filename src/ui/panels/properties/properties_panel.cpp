@@ -1,4 +1,5 @@
 #include "properties_panel.hpp"
+#include "console_widget.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "scene/scene_node.hpp"
@@ -70,6 +71,7 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
     glm::vec3 rotation = glm::degrees(glm::eulerAngles(transform.getLocalRotation()));
     glm::vec3 scale = transform.getLocalScale();
 
+
     if (renderVec3Control("Position", position)) {
         transform.setLocalPosition(position);
         transformChanged = true;
@@ -86,15 +88,16 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
     }
 
     // If transform changed, update scene buffers
-    if (transformChanged && currentScene) {
+    if (transformChanged) {
+        // Mark the transform as dirty and validate the hierarchy
+        node->markTransformDirty();
+        if (currentScene) {
+            currentScene->validateTransformHierarchy();
+        }
+
         if (auto context = VulkanContext::getContextInstance()) {
             // Update uniform buffer with new transform
-            if (auto uniformBuffer = context->getUniformBuffer()) {
-                auto ubo = uniformBuffer->getCachedUBO();
-                ubo.model = transform.getWorldMatrix();
-                uniformBuffer->setCachedUBO(ubo);
-                uniformBuffer->update(context->getCurrentFrame());
-            }
+            context->markSceneModified();
             context->updateSceneBuffers();
         }
     }

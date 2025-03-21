@@ -131,8 +131,29 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         VkBuffer vertexBuffer = context->getVkVertexBuffer();
         VkBuffer indexBuffer = context->getVkIndexBuffer();
 
+
         if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
             pipeline->bind(cmd);
+
+            // Add simple debug triangle at origin
+            if (true) {  // Always draw debug geometry
+                // Bind vertex/index buffers as usual
+
+                // Draw a simple triangle at origin
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(cmd, 0, 1, &vertexBuffer, offsets);
+                vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                // Push an identity matrix for this debug object
+                glm::mat4 identityMatrix(1.0f);
+                vkCmdPushConstants(cmd, pipeline->getPipelineLayout(),
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(glm::mat4), &identityMatrix);
+
+                // Draw the first triangle only
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+            }
+
 
             // Bind descriptor sets with the correct pipeline layout
             auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
@@ -151,7 +172,6 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // Draw each object using its buffer info
             for (const auto& [name, object] : context->getScene()->getObjects()) {
                 if (!object || !object->getModel()) continue;
 
@@ -162,11 +182,18 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
                     continue;
                 }
 
-                // Update uniform buffer with object's transform
-                auto ubo = uniformBuffer->getCachedUBO();
-                ubo.model = object->getTransform().getWorldMatrix();
-                uniformBuffer->setCachedUBO(ubo);
-                uniformBuffer->update(currentFrame);
+                // Set up push constants with model matrix
+                glm::mat4 modelMatrix = object->getTransform().getWorldMatrix();
+
+                // Push the model matrix to both vertex AND fragment shader stages
+                vkCmdPushConstants(
+                    cmd,
+                    pipeline->getPipelineLayout(),
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // Use both stages
+                    0,
+                    sizeof(glm::mat4),
+                    &modelMatrix
+                );
 
                 // Draw the object
                 vkCmdDrawIndexed(cmd,
@@ -313,7 +340,7 @@ void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* obj
     vkCmdBindDescriptorSets(
         cmd,
         VK_PIPELINE_BIND_POINT_GRAPHICS,
-        selectionPipeline->getPipelineLayout(),  // Use selection pipeline's layout
+        selectionPipeline->getPipelineLayout(),
         0, 1, &descriptorSet,
         0, nullptr
     );
@@ -321,18 +348,19 @@ void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* obj
     // Set line width for outline
     vkCmdSetLineWidth(cmd, 2.0f);
 
-    // Push constants for highlight effect
-    OhaoVkPipeline::SelectionPushConstants pushConstants{
-        glm::vec4(1.0f, 0.5f, 0.0f, 1.0f),  // Orange highlight
-        0.02f  // Scale offset
-    };
+    // Set up push constants for selection
+    OhaoVkPipeline::PushConstants pushConstants{};
+    pushConstants.model = object->getTransform().getWorldMatrix();
+    pushConstants.highlightColor = glm::vec4(1.0f, 0.5f, 0.0f, 1.0f);  // Orange highlight
+    pushConstants.scaleOffset = 0.02f;  // Scale offset
 
+    // Push the constants to the shader (full structure)
     vkCmdPushConstants(
         cmd,
         selectionPipeline->getPipelineLayout(),
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0,
-        sizeof(OhaoVkPipeline::SelectionPushConstants),
+        sizeof(OhaoVkPipeline::PushConstants),
         &pushConstants
     );
 

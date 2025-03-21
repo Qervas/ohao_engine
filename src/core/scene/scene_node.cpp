@@ -1,4 +1,5 @@
 #include "core/scene/scene_node.hpp"
+#include "ui/components/console_widget.hpp"
 #include <queue>
 #include <algorithm>
 
@@ -19,20 +20,29 @@ void SceneNode::addChild(Ptr child) {
             [child](const Ptr& ptr) { return ptr.get() == child.get(); });
 
         if (it != oldParentChildren.end()) {
+            // Store the actual shared_ptr before removing it
+            auto childPtr = *it;
             oldParentChildren.erase(it);
-        }
-    }
 
-    // Add to children
-    children.push_back(child);
-    child->parent = weak_from_this();
-    child->onAddedToScene();
+            // Add to new parent's children
+            children.push_back(childPtr);
+            child->parent = weak_from_this();
+
+            // Log the relationship for debugging
+            OHAO_LOG_DEBUG("Moved child: " + child->getName() +
+                          " from " + oldParent->getName() +
+                          " to " + this->getName());
+        }
+    } else {
+        // No old parent, just add directly
+        children.push_back(child);
+        child->parent = weak_from_this();
+        OHAO_LOG_DEBUG("Added new child: " + child->getName() + " to " + this->getName());
+    }
 
     // Update transform relationships
     child->getTransform().setOwner(child.get());
     child->markTransformDirty();
-
-    child->onAddedToScene();
 }
 
 void SceneNode::removeChild(Ptr child) {

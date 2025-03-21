@@ -2,7 +2,6 @@
 #define UNIFORMS_GLSL
 
 layout(binding = 0) uniform GlobalUniformBuffer {
-    mat4 model;
     mat4 view;
     mat4 proj;
     vec3 viewPos;

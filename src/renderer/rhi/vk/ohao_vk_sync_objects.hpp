@@ -14,9 +14,9 @@ public:
     bool initialize(OhaoVkDevice* device, uint32_t maxFramesInFlight);
     void cleanup();
 
-    VkSemaphore getImageAvailableSemaphore(uint32_t frameIndex) const;
-    VkSemaphore getRenderFinishedSemaphore(uint32_t frameIndex) const;
-    VkFence getInFlightFence(uint32_t frameIndex) const;
+    VkSemaphore& getImageAvailableSemaphore(uint32_t frameIndex);
+    VkSemaphore& getRenderFinishedSemaphore(uint32_t frameIndex);
+    VkFence& getInFlightFence(uint32_t frameIndex);
 
     void waitForFence(uint32_t frameIndex) const;
     void resetFence(uint32_t frameIndex) const;

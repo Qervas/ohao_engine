@@ -92,9 +92,11 @@ public:
         WIREFRAME,
         GIZMO
     };
-    struct SelectionPushConstants {
-        glm::vec4 highlightColor;
-        float scaleOffset;
+    struct PushConstants {
+        glm::mat4 model;           // Model matrix for regular rendering
+        glm::vec4 highlightColor;  // Used only by selection shader
+        float scaleOffset;         // Used only by selection shader
+        float padding[3];          // Padding to ensure 16-byte alignment
     };
     OhaoVkPipeline() = default;
     ~OhaoVkPipeline();

@@ -160,8 +160,32 @@ void OutlinerPanel::handleDragAndDrop() {
             SceneNode* droppedNode = *(SceneNode**)payload->Data;
             // Handle node reparenting
             if (droppedNode && selectedNode) {
-                droppedNode->detachFromParent();
-                selectedNode->addChild(std::shared_ptr<SceneNode>(droppedNode));
+                // Find the original shared_ptr that owns this node
+                std::shared_ptr<SceneNode> originalPtr;
+
+                // Lookup in the objects map if it's a SceneObject
+                if (auto sceneObj = asSceneObject(droppedNode)) {
+                    originalPtr = currentScene->getObject(sceneObj->getName());
+                }
+                // If not found or not a SceneObject, check the children of the parent
+                if (!originalPtr && droppedNode->getParent()) {
+                    auto& siblings = droppedNode->getParent()->getChildren();
+                    for (auto& sibling : siblings) {
+                        if (sibling.get() == droppedNode) {
+                            originalPtr = sibling;
+                            break;
+                        }
+                    }
+                }
+
+                if (originalPtr) {
+                    // First detach from parent (just changes the hierarchy)
+                    droppedNode->detachFromParent();
+                    // Then add to new parent using the original shared_ptr
+                    selectedNode->addChild(originalPtr);
+                } else {
+                    OHAO_LOG_ERROR("Failed to find original shared_ptr for node: " + droppedNode->getName());
+                }
             }
         }
         ImGui::EndDragDropTarget();
@@ -260,17 +284,6 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                 newObject = std::make_shared<SceneObject>(baseName);
                 auto model = generatePrimitiveMesh(type);
                 newObject->setModel(model);
-
-                // Set initial transform
-                Transform transform;
-                // If parent is not root, offset slightly from parent's position
-                if (!isRoot(parentNode)) {
-                    auto parentPos = parentNode->getTransform().getWorldPosition();
-                    transform.setLocalPosition(parentPos + glm::vec3(0.5f, 0.5f, 0.0f));
-                } else {
-                    transform.setLocalPosition(glm::vec3(0.0f));
-                }
-                newObject->setTransform(transform);
                 break;
         }
 
@@ -285,21 +298,16 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
 
             // Initialize transform with proper local coordinates
             Transform transform;
-            if (!isRoot(parentNode)) {
-                // If parent is not root, offset from parent's position
-                glm::vec3 parentPos = parentNode->getTransform().getLocalPosition();
-                // Add a small offset to avoid overlap
-                glm::vec3 offset(1.0f, 0.0f, 0.0f); // Offset on X axis
-                transform.setLocalPosition(offset);
-                transform.setLocalRotation(parentNode->getTransform().getLocalRotation());
-                transform.setLocalScale(glm::vec3(1.0f));
-            } else {
-                // If parent is root, place at origin
-                transform.setLocalPosition(glm::vec3(0.0f));
-                transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-                transform.setLocalScale(glm::vec3(1.0f));
-            }
+
+            // Always use local coordinates relative to the parent
+            transform.setLocalPosition(glm::vec3(1.0f, 0.0f, 0.0f)); // Offset on X axis
+            transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f)); // Identity rotation
+            transform.setLocalScale(glm::vec3(1.0f)); // Unit scale
+
             newObject->setTransform(transform);
+
+            // Debug output to help identify hierarchy issues
+            OHAO_LOG_DEBUG("Adding " + uniqueName + " as child of: " + parentNode->getName());
 
             // First add to scene's object map
             currentScene->addObject(uniqueName, newObject);
@@ -307,7 +315,8 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
             // Then add to hierarchy under parent
             parentNode->addChild(newObject);
 
-            OHAO_LOG_DEBUG("Created new " + uniqueName + " under parent: " + parentNode->getName());
+            // Make sure transform hierarchy is validated
+            currentScene->validateTransformHierarchy();
 
             // Update buffers
             if (auto* vulkanContext = VulkanContext::getContextInstance()) {

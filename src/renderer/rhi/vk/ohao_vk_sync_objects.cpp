@@ -52,15 +52,15 @@ bool OhaoVkSyncObjects::createSyncObjects() {
     return true;
 }
 
-VkSemaphore OhaoVkSyncObjects::getImageAvailableSemaphore(uint32_t frameIndex) const {
+VkSemaphore& OhaoVkSyncObjects::getImageAvailableSemaphore(uint32_t frameIndex) {
     return imageAvailableSemaphores[frameIndex];
 }
 
-VkSemaphore OhaoVkSyncObjects::getRenderFinishedSemaphore(uint32_t frameIndex) const {
+VkSemaphore& OhaoVkSyncObjects::getRenderFinishedSemaphore(uint32_t frameIndex)  {
     return renderFinishedSemaphores[frameIndex];
 }
 
-VkFence OhaoVkSyncObjects::getInFlightFence(uint32_t frameIndex) const {
+VkFence& OhaoVkSyncObjects::getInFlightFence(uint32_t frameIndex)  {
     return inFlightFences[frameIndex];
 }
 

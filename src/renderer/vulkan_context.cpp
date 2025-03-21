@@ -321,74 +321,50 @@ void VulkanContext::drawFrame() {
     if (!uiManager) {
         throw std::runtime_error("UI Manager not set!");
     }
+
     if(window->wasResized()){
         recreateSwapChain();
         return;
     }
 
-    // Wait for previous frame
-    syncObjects->waitForFence(currentFrame);
-    // Get next image
+    // Wait for previous frame to complete
+    vkWaitForFences(device->getDevice(), 1, &syncObjects->getInFlightFence(currentFrame), VK_TRUE, UINT64_MAX);
+
+    // Only reset the fence once we know we'll be submitting work
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(
         device->getDevice(),
         swapchain->getSwapChain(),
-        1000000000,
+        UINT64_MAX, // use maximum timeout
         syncObjects->getImageAvailableSemaphore(currentFrame),
         VK_NULL_HANDLE,
         &imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window->wasResized()) {
         recreateSwapChain();
-        return;
+        return; // Skip this frame, don't reset fence
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
 
-    syncObjects->resetFence(currentFrame);
+    // Reset fence AFTER successful image acquisition and BEFORE recording commands
+    vkResetFences(device->getDevice(), 1, &syncObjects->getInFlightFence(currentFrame));
 
-    // Reset and record command buffer
-    commandManager->resetCommandBuffer(currentFrame);
-    auto commandBuffer = commandManager->getCommandBuffer(currentFrame);
+    // Reset and begin command buffer
+    VkCommandBuffer commandBuffer = commandManager->getCommandBuffer(currentFrame);
+    vkResetCommandBuffer(commandBuffer, 0);
 
-    // Begin command buffer recording
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = 0; // Command buffer will only be used once per frame
+
     if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("Failed to begin recording command buffer!");
     }
 
-    // Update camera and transform matrices
-    if (auto selectedObj = SelectionManager::get().getSelectedObject()) {
-        UniformBufferObject ubo = uniformBuffer->getCachedUBO();
-        ubo.model = selectedObj->getTransform().getWorldMatrix();
-        uniformBuffer->setCachedUBO(ubo);
-    }
-    uniformBuffer->updateFromCamera(currentFrame, camera);
-    uniformBuffer->update(currentFrame);
+    // Rest of your function...
 
-    // Always initialize and render scene
-    if (!sceneRenderer->hasValidRenderTarget()) {
-        initializeSceneRenderer();
-    }
-    sceneRenderer->render(uniformBuffer.get(), currentFrame);
-
-    // Second pass: Main render pass with UI
-    renderPass->begin(
-        commandBuffer,
-        framebufferManager->getFramebuffer(imageIndex),
-        swapchain->getExtent(),
-        {0.2f, 0.2f, 0.2f, 1.0f},
-        1.0f,
-        0
-    );
-
-    // Render ImGui
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
-
-    renderPass->end(commandBuffer);
-
-    // End command buffer recording
+    // End command buffer
     if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("Failed to record command buffer!");
     }
@@ -403,17 +379,18 @@ void VulkanContext::drawFrame() {
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = commandManager->getCommandBufferPtr(currentFrame);
+    submitInfo.pCommandBuffers = &commandBuffer;
 
     VkSemaphore signalSemaphores[] = {syncObjects->getRenderFinishedSemaphore(currentFrame)};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
+    // Submit with fence so we can wait for this work to complete
     if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, syncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to submit draw command buffer");
+        throw std::runtime_error("Failed to submit draw command buffer!");
     }
 
-    // Present
+    // Present the frame
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
@@ -429,9 +406,10 @@ void VulkanContext::drawFrame() {
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window->wasResized()) {
         recreateSwapChain();
     } else if (result != VK_SUCCESS) {
-        throw std::runtime_error("failed to present swap chain image!");
+        throw std::runtime_error("Failed to present swap chain image!");
     }
-    // Advance to next frame
+
+    // Update current frame index AFTER successful submission
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
