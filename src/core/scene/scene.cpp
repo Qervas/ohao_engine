@@ -34,7 +34,7 @@ bool Scene::loadModelFromFile(const std::string& filename) {
         getRootNode()->addChild(sceneObject);
         addObject(sceneObject->getName(), sceneObject);  // Make sure to add to objects map
 
-        std::cout << "Scene setup complete. Objects in scene: " << objects.size() << std::endl;
+        std::cout << "Scene setup complete. Objects in scene: " << objectsByName.size() << std::endl;
         return true;
 
     } catch (const std::exception& e) {
@@ -115,9 +115,12 @@ void Scene::traverseScene(Func&& callback) {
 
 void Scene::addObject(const std::string& name, std::shared_ptr<SceneObject> object) {
     if (!object) return;
-    // Add to objects map
-    objects[name] = object;
-    OHAO_LOG_DEBUG("Added object to scene: " + name);
+    
+    // Add to both lookup maps
+    objectsByName[name] = object;
+    objectsByID[object->getID()] = object;
+    
+    OHAO_LOG_DEBUG("Added object to scene: " + name + " (ID: " + std::to_string(object->getID()) + ")");
 }
 
 void Scene::addLight(const std::string& name, const Light& light) {
@@ -125,8 +128,8 @@ void Scene::addLight(const std::string& name, const Light& light) {
 }
 
 void Scene::removeObject(const std::string& name) {
-    auto it = objects.find(name);
-    if (it == objects.end()) {
+    auto it = objectsByName.find(name);
+    if (it == objectsByName.end()) {
         OHAO_LOG_WARNING("Attempt to remove non-existent object: " + name);
         return;
     }
@@ -134,9 +137,11 @@ void Scene::removeObject(const std::string& name) {
     try {
         // Get shared_ptr to object before removing from map
         auto object = it->second;
+        ObjectID id = object->getID();
 
-        // Remove from map first
-        objects.erase(it);
+        // Remove from both maps
+        objectsByName.erase(it);
+        objectsByID.erase(id);
 
         // Then safely detach from hierarchy
         if (object) {
@@ -145,7 +150,37 @@ void Scene::removeObject(const std::string& name) {
             }
         }
 
-        OHAO_LOG_DEBUG("Successfully removed object: " + name);
+        OHAO_LOG_DEBUG("Successfully removed object: " + name + " (ID: " + std::to_string(id) + ")");
+
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error removing object: " + std::string(e.what()));
+    }
+}
+
+void Scene::removeObjectByID(ObjectID id) {
+    auto it = objectsByID.find(id);
+    if (it == objectsByID.end()) {
+        OHAO_LOG_WARNING("Attempt to remove non-existent object ID: " + std::to_string(id));
+        return;
+    }
+
+    try {
+        // Get shared_ptr to object before removing from map
+        auto object = it->second;
+        std::string name = object->getName();
+
+        // Remove from both maps
+        objectsByID.erase(id);
+        objectsByName.erase(name);
+
+        // Then safely detach from hierarchy
+        if (object) {
+            if (object->getParent()) {
+                object->detachFromParent();
+            }
+        }
+
+        OHAO_LOG_DEBUG("Successfully removed object: " + name + " (ID: " + std::to_string(id) + ")");
 
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Error removing object: " + std::string(e.what()));
@@ -156,17 +191,26 @@ void Scene::removeLight(const std::string& name) {
     lights.erase(name);
 }
 
-
-
 const std::unordered_map<std::string, std::shared_ptr<SceneObject>>&
-Scene::getObjects() const{
-    return objects;
+Scene::getObjectsByName() const {
+    return objectsByName;
+}
+
+const std::unordered_map<ObjectID, std::shared_ptr<SceneObject>>&
+Scene::getObjectsByID() const {
+    return objectsByID;
 }
 
 std::shared_ptr<SceneObject>
 Scene::getObject(const std::string& name) {
-    auto it = objects.find(name);
-    return (it != objects.end()) ? it->second : nullptr;
+    auto it = objectsByName.find(name);
+    return (it != objectsByName.end()) ? it->second : nullptr;
+}
+
+std::shared_ptr<SceneObject>
+Scene::getObjectByID(ObjectID id) {
+    auto it = objectsByID.find(id);
+    return (it != objectsByID.end()) ? it->second : nullptr;
 }
 
 const std::unordered_map<std::string, Light>&
@@ -186,7 +230,13 @@ void Scene::updateLight(const std::string& name, const Light& light) {
 }
 
 void Scene::setObjectMaterial(const std::string& objectName, const Material& material) {
-    if (auto it = objects.find(objectName); it != objects.end()) {
+    if (auto it = objectsByName.find(objectName); it != objectsByName.end()) {
+        it->second->setMaterial(material);
+    }
+}
+
+void Scene::setObjectMaterialByID(ObjectID objectID, const Material& material) {
+    if (auto it = objectsByID.find(objectID); it != objectsByID.end()) {
         it->second->setMaterial(material);
     }
 }
@@ -259,252 +309,129 @@ bool Scene::loadFromFile(const std::string& filename) {
 }
 
 nlohmann::json Scene::serializeToJson() const {
-    nlohmann::json j;
+    nlohmann::json json;
 
-    // Save scene metadata
-    j["name"] = sceneName;
-    j["version"] = "1.0";
+    // Serialize basic scene info
+    json["name"] = sceneName;
+    json["projectPath"] = projectPath;
 
-    // Save objects
-    j["objects"] = nlohmann::json::array();
-    for (const auto& [name, obj] : objects) {
-        nlohmann::json objData;
-        objData["name"] = obj->getName();
-
-        // Save transform
-        objData["transform"] = {
-            {"position", {
-                obj->getTransform().getLocalPosition().x,
-                obj->getTransform().getLocalPosition().y,
-                obj->getTransform().getLocalPosition().z
-            }},
-            {"rotation", {
-                glm::eulerAngles(obj->getTransform().getLocalRotation()).x,
-                glm::eulerAngles(obj->getTransform().getLocalRotation()).y,
-                glm::eulerAngles(obj->getTransform().getLocalRotation()).z
-            }},
-            {"scale", {
-                obj->getTransform().getLocalScale().x,
-                obj->getTransform().getLocalScale().y,
-                obj->getTransform().getLocalScale().z
-            }}
+    // Serialize scene objects
+    json["objects"] = nlohmann::json::array();
+    for (const auto& [name, obj] : objectsByName) {
+        nlohmann::json objectJson;
+        objectJson["name"] = obj->getName();
+        objectJson["id"] = obj->getID();
+        
+        // Serialize transform
+        const auto& transform = obj->getTransform();
+        auto pos = transform.getLocalPosition();
+        auto rot = transform.getLocalRotation();
+        auto scale = transform.getLocalScale();
+        
+        objectJson["transform"] = {
+            {"position", {pos.x, pos.y, pos.z}},
+            {"rotation", {rot.w, rot.x, rot.y, rot.z}},
+            {"scale", {scale.x, scale.y, scale.z}}
         };
 
-        // Save material
+        // Serialize material 
         const auto& material = obj->getMaterial();
-        objData["material"] = {
-            {"baseColor", {material.baseColor.x, material.baseColor.y, material.baseColor.z}},
+        objectJson["material"] = {
+            {"baseColor", {material.baseColor.r, material.baseColor.g, material.baseColor.b}},
             {"metallic", material.metallic},
             {"roughness", material.roughness},
             {"ao", material.ao},
-            {"ior", material.ior},
-            {"emissive", {material.emissive.x, material.emissive.y, material.emissive.z}}
+            {"emissive", {material.emissive.r, material.emissive.g, material.emissive.b}},
+            {"ior", material.ior}
         };
 
-        // Save model path if exists
-        if (obj->getModel()) {
-            std::string modelPath = obj->getModel()->getSourcePath();
-
-            // Convert to relative path if possible
-            if (!modelPath.empty()) {
-                try {
-                    // If we have a project path, make the model path relative to it
-                    if (!projectPath.empty()) {
-                        std::filesystem::path fullPath = std::filesystem::absolute(modelPath);
-                        std::filesystem::path projPath = std::filesystem::absolute(projectPath);
-
-                        // Try to make it relative to project path
-                        if (auto relPath = std::filesystem::relative(fullPath, projPath.parent_path());
-                            !relPath.empty()) {
-                            modelPath = relPath.string();
-                        }
-                    }
-
-                    objData["modelPath"] = modelPath;
-
-                    // Optionally save a hash or timestamp for file change detection
-                    auto lastWriteTime = std::filesystem::last_write_time(modelPath);
-                    auto timeStamp = std::chrono::duration_cast<std::chrono::seconds>(
-                        lastWriteTime.time_since_epoch()).count();
-                    objData["modelTimeStamp"] = timeStamp;
-
-                } catch (const std::filesystem::filesystem_error& e) {
-                    OHAO_LOG_WARNING("Failed to process model path: " + std::string(e.what()));
-                    objData["modelPath"] = modelPath;  // Save absolute path as fallback
-                }
-            }
-        }
-
-        j["objects"].push_back(objData);
+        json["objects"].push_back(objectJson);
     }
 
-    // Save lights
-    j["lights"] = nlohmann::json::array();
+    // Serialize lights
+    json["lights"] = nlohmann::json::array();
     for (const auto& [name, light] : lights) {
-        nlohmann::json lightData;
-        lightData["name"] = name;
-        lightData["position"] = {light.position.x, light.position.y, light.position.z};
-        lightData["color"] = {light.color.x, light.color.y, light.color.z};
-        lightData["intensity"] = light.intensity;
-        lightData["enabled"] = light.enabled;
-        j["lights"].push_back(lightData);
+        nlohmann::json lightJson;
+        lightJson["name"] = name;
+        lightJson["position"] = {light.position.x, light.position.y, light.position.z};
+        lightJson["color"] = {light.color.r, light.color.g, light.color.b};
+        lightJson["intensity"] = light.intensity;
+        lightJson["enabled"] = light.enabled;
+        
+        json["lights"].push_back(lightJson);
     }
 
-    return j;
+    return json;
 }
 
-bool Scene::deserializeFromJson(const nlohmann::json& j) {
+bool Scene::deserializeFromJson(const nlohmann::json& json) {
     try {
-        // Load scene metadata
-        sceneName = j["name"].get<std::string>();
-        std::string version = j["version"].get<std::string>();
-        OHAO_LOG_DEBUG("Loading scene: " + sceneName + " (version " + version + ")");
-
-        // Clear existing objects
-        objects.clear();
+        // Clear existing scene data
+        objectsByName.clear();
+        objectsByID.clear();
+        lights.clear();
         rootNode = std::make_shared<SceneNode>("Root");
-
+        
+        // Load basic scene info
+        sceneName = json["name"];
+        projectPath = json["projectPath"];
+        
         // Load objects
-        for (const auto& objData : j["objects"]) {
-            try {
-                // Create new object
-                auto obj = std::make_shared<SceneObject>(objData["name"].get<std::string>());
-
-                // Load transform
-                auto& transformData = objData["transform"];
-                auto& position = transformData["position"];
-                obj->getTransform().setLocalPosition(glm::vec3(
-                    position[0].get<float>(),
-                    position[1].get<float>(),
-                    position[2].get<float>()
-                ));
-
-                // Load rotation if present
-                if (transformData.contains("rotation")) {
-                    auto& rotation = transformData["rotation"];
-                    obj->getTransform().setLocalRotationEuler(glm::vec3(
-                        rotation[0].get<float>(),
-                        rotation[1].get<float>(),
-                        rotation[2].get<float>()
-                    ));
-                }
-
-                // Load scale if present
-                if (transformData.contains("scale")) {
-                    auto& scale = transformData["scale"];
-                    obj->getTransform().setLocalScale(glm::vec3(
-                        scale[0].get<float>(),
-                        scale[1].get<float>(),
-                        scale[2].get<float>()
-                    ));
-                }
-
-                // Load material if present
-                if (objData.contains("material")) {
-                    auto& matData = objData["material"];
-                    Material material;
-                    material.baseColor = glm::vec3(
-                        matData["baseColor"][0].get<float>(),
-                        matData["baseColor"][1].get<float>(),
-                        matData["baseColor"][2].get<float>()
-                    );
-                    material.metallic = matData["metallic"].get<float>();
-                    material.roughness = matData["roughness"].get<float>();
-                    material.ao = matData["ao"].get<float>();
-                    material.ior = matData["ior"].get<float>();
-
-                    if (matData.contains("emissive")) {
-                        material.emissive = glm::vec3(
-                            matData["emissive"][0].get<float>(),
-                            matData["emissive"][1].get<float>(),
-                            matData["emissive"][2].get<float>()
-                        );
-                    }
-
-                    obj->setMaterial(material);
-                }
-
-                // Load model data if present
-                if (objData.contains("modelPath")) {
-                    std::string modelPath = objData["modelPath"].get<std::string>();
-                    if (!modelPath.empty()) {
-                        // If path is relative, make it absolute using project directory
-                        std::filesystem::path fullPath = modelPath;
-                        if (fullPath.is_relative() && !projectDir.empty()) {
-                            fullPath = std::filesystem::path(projectDir) / modelPath;
-                        }
-
-                        auto model = std::make_shared<Model>();
-                        if (model->loadFromOBJ(fullPath.string())) {
-                            obj->setModel(model);
-
-                            // Verify timestamp if available
-                            if (objData.contains("modelTimeStamp")) {
-                                auto savedTime = objData["modelTimeStamp"].get<int64_t>();
-                                auto currentTime = std::chrono::duration_cast<std::chrono::seconds>(
-                                    std::filesystem::last_write_time(fullPath).time_since_epoch()).count();
-
-                                if (savedTime != currentTime) {
-                                    OHAO_LOG_WARNING("Model file has been modified since last save: " + modelPath);
-                                }
-                            }
-                        } else {
-                            OHAO_LOG_WARNING("Failed to load model: " + fullPath.string());
-                        }
-                    }
-                }
-
-                // Add to scene
-                rootNode->addChild(obj);
-                objects[obj->getName()] = obj;
-
-                OHAO_LOG_DEBUG("Loaded object: " + obj->getName());
-
-            } catch (const std::exception& e) {
-                OHAO_LOG_ERROR("Failed to load object: " + std::string(e.what()));
-                continue;
-            }
+        for (const auto& objJson : json["objects"]) {
+            auto obj = std::make_shared<SceneObject>(objJson["name"]);
+            
+            // Load transform
+            Transform transform;
+            auto& posJson = objJson["transform"]["position"];
+            auto& rotJson = objJson["transform"]["rotation"];
+            auto& scaleJson = objJson["transform"]["scale"];
+            
+            glm::vec3 position(posJson[0], posJson[1], posJson[2]);
+            glm::quat rotation(rotJson[0], rotJson[1], rotJson[2], rotJson[3]);
+            glm::vec3 scale(scaleJson[0], scaleJson[1], scaleJson[2]);
+            
+            transform.setLocalPosition(position);
+            transform.setLocalRotation(rotation);
+            transform.setLocalScale(scale);
+            obj->setTransform(transform);
+            
+            // Load material
+            Material material;
+            auto& matJson = objJson["material"];
+            auto& baseColorJson = matJson["baseColor"];
+            auto& emissiveJson = matJson["emissive"];
+            
+            material.baseColor = glm::vec3(baseColorJson[0], baseColorJson[1], baseColorJson[2]);
+            material.metallic = matJson["metallic"];
+            material.roughness = matJson["roughness"];
+            material.ao = matJson["ao"];
+            material.emissive = glm::vec3(emissiveJson[0], emissiveJson[1], emissiveJson[2]);
+            material.ior = matJson["ior"];
+            
+            obj->setMaterial(material);
+            
+            // Add to scene
+            rootNode->addChild(obj);
+            addObject(obj->getName(), obj);
         }
-
-        // Load lights if present
-        if (j.contains("lights")) {
-            for (const auto& lightData : j["lights"]) {
-                try {
-                    Light light;
-                    auto& position = lightData["position"];
-                    light.position = glm::vec3(
-                        position[0].get<float>(),
-                        position[1].get<float>(),
-                        position[2].get<float>()
-                    );
-
-                    auto& color = lightData["color"];
-                    light.color = glm::vec3(
-                        color[0].get<float>(),
-                        color[1].get<float>(),
-                        color[2].get<float>()
-                    );
-
-                    light.intensity = lightData["intensity"].get<float>();
-                    light.enabled = lightData["enabled"].get<bool>();
-
-                    std::string lightName = lightData["name"].get<std::string>();
-                    lights[lightName] = light;
-
-                    OHAO_LOG_DEBUG("Loaded light: " + lightName);
-
-                } catch (const std::exception& e) {
-                    OHAO_LOG_ERROR("Failed to load light: " + std::string(e.what()));
-                    continue;
-                }
-            }
+        
+        // Load lights
+        for (const auto& lightJson : json["lights"]) {
+            Light light;
+            auto& posJson = lightJson["position"];
+            auto& colorJson = lightJson["color"];
+            
+            light.position = glm::vec3(posJson[0], posJson[1], posJson[2]);
+            light.color = glm::vec3(colorJson[0], colorJson[1], colorJson[2]);
+            light.intensity = lightJson["intensity"];
+            light.enabled = lightJson["enabled"];
+            
+            lights[lightJson["name"]] = light;
         }
-
-        OHAO_LOG_DEBUG("Scene loaded successfully");
+        
         return true;
-
     } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Failed to deserialize scene: " + std::string(e.what()));
+        std::cerr << "Error deserializing scene: " << e.what() << std::endl;
         return false;
     }
 }

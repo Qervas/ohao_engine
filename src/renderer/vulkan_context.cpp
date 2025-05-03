@@ -182,6 +182,14 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("Failed to create wireframe pipeline!");
     }
 
+    // Initialize the push constant pipeline for model rendering
+    modelPushConstantPipeline = std::make_unique<OhaoVkPipeline>();
+    if (!modelPushConstantPipeline->initialize(device.get(), renderPass.get(), shaderModules.get(),
+                                 swapchain->getExtent(), descriptor->getLayout(),
+                                 OhaoVkPipeline::RenderMode::PUSH_CONSTANT_MODEL)) {
+        throw std::runtime_error("Failed to create model push constant pipeline!");
+    }
+
     gizmoPipeline = std::make_unique<OhaoVkPipeline>();
     if (!gizmoPipeline->initialize(device.get(), renderPass.get(), shaderModules.get(),
                                  swapchain->getExtent(), descriptor->getLayout(),
@@ -255,6 +263,7 @@ void VulkanContext::cleanup(){
     axisGizmo.reset();
     wireframePipeline.reset();
     gizmoPipeline.reset();
+    modelPushConstantPipeline.reset();
     sceneGizmoPipeline.reset();
     scenePipeline.reset();
     modelPipeline.reset();
@@ -484,7 +493,7 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
 
 void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
     if (vertexBuffer && indexBuffer && scene) {
-        auto sceneObjects = scene->getObjects();
+        auto sceneObjects = scene->getObjectsByName();
         if (!sceneObjects.empty()) {
             auto mainObject = sceneObjects.begin()->second;
             if (mainObject && mainObject->getModel()) {
@@ -504,6 +513,19 @@ void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
                                       currentPipeline->getPipelineLayout(),
                                       0, 1, &descriptor->getSet(currentFrame),
                                       0, nullptr);
+                
+                // Set model matrix push constant
+                OhaoVkPipeline::ModelPushConstants pushConstants;
+                pushConstants.model = mainObject->getTransform().getWorldMatrix();
+                
+                vkCmdPushConstants(
+                    commandBuffer,
+                    currentPipeline->getPipelineLayout(),
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // Use both stages
+                    0,
+                    sizeof(OhaoVkPipeline::ModelPushConstants),
+                    &pushConstants
+                );
 
                 // Draw model
                 vkCmdDrawIndexed(commandBuffer,
@@ -608,7 +630,7 @@ bool VulkanContext::importModel(const std::string& filename) {
         std::string baseName = std::filesystem::path(filename).stem().string();
         std::string uniqueName = baseName;
         int counter = 1;
-        while (scene->getObjects().find(uniqueName) != scene->getObjects().end()) {
+        while (scene->getObjectsByName().find(uniqueName) != scene->getObjectsByName().end()) {
             uniqueName = baseName + "_" + std::to_string(counter++);
         }
         modelObject->setName(uniqueName);
@@ -740,12 +762,12 @@ bool VulkanContext::updateSceneBuffers() {
 
     // Debug output for initial state
     OHAO_LOG_DEBUG("Starting scene buffer update");
-    OHAO_LOG_DEBUG("Number of objects: " + std::to_string(scene->getObjects().size()));
+    OHAO_LOG_DEBUG("Number of objects: " + std::to_string(scene->getObjectsByName().size()));
 
     // First pass: Calculate total required size
     size_t totalVertices = 0;
     size_t totalIndices = 0;
-    for (const auto& [name, object] : scene->getObjects()) {
+    for (const auto& [name, object] : scene->getObjectsByName()) {
         if (object && object->getModel()) {
             totalVertices += object->getModel()->vertices.size();
             totalIndices += object->getModel()->indices.size();
@@ -760,7 +782,7 @@ bool VulkanContext::updateSceneBuffers() {
     combinedIndices.reserve(totalIndices);
 
     // Second pass: Build combined buffers
-    for (const auto& [name, object] : scene->getObjects()) {
+    for (const auto& [name, object] : scene->getObjectsByName()) {
         if (!object || !object->getModel()) continue;
 
         MeshBufferInfo bufferInfo{};

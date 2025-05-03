@@ -63,12 +63,25 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
 
 
 void PropertiesPanel::renderTransformProperties(SceneNode* node) {
+    if (!node) return;
+    
+    SceneObject* sceneObject = asSceneObject(node);
+    if (!sceneObject) {
+        ImGui::TextDisabled("Transform properties only available for SceneObjects");
+        return;
+    }
+
+    // Directly access the transform from the node to ensure we're modifying the right object
     Transform& transform = node->getTransform();
     bool transformChanged = false;
-
+    
+    // Get current transform values
     glm::vec3 position = transform.getLocalPosition();
     glm::vec3 rotation = glm::degrees(glm::eulerAngles(transform.getLocalRotation()));
     glm::vec3 scale = transform.getLocalScale();
+
+    // Show transform ID in debug builds to help troubleshoot
+    ImGui::Text("Object: %s (addr: %p)", node->getName().c_str(), (void*)node);
 
     if (renderVec3Control("Position", position)) {
         transform.setLocalPosition(position);
@@ -86,15 +99,12 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
     }
 
     // If transform changed, update scene buffers
-    if (transformChanged && currentScene) {
+    if (transformChanged) {
+        // Mark the transform as dirty - this is crucial
+        node->markTransformDirty();
+        
         if (auto context = VulkanContext::getContextInstance()) {
-            // Update uniform buffer with new transform
-            if (auto uniformBuffer = context->getUniformBuffer()) {
-                auto ubo = uniformBuffer->getCachedUBO();
-                ubo.model = transform.getWorldMatrix();
-                uniformBuffer->setCachedUBO(ubo);
-                uniformBuffer->update(context->getCurrentFrame());
-            }
+            // Explicitly update scene buffers
             context->updateSceneBuffers();
         }
     }

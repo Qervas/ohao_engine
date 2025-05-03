@@ -76,7 +76,7 @@ void OutlinerPanel::render() {
 }
 
 void OutlinerPanel::renderSceneTree() {
-    for (const auto& [name, object] : currentScene->getObjects()) {
+    for (const auto& [name, object] : currentScene->getObjectsByName()) {
         renderTreeNode(object.get());
     }
 }
@@ -108,9 +108,10 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
     } else if (isSceneObject(node)) {
         auto sceneObj = asSceneObject(node);
         if (sceneObj->getModel()) {
-            nodeLabel = "\uf1b2 " + node->getName();  // Cube icon for mesh objects
+            // Add ID to label for debugging
+            nodeLabel = "\uf1b2 " + node->getName() + " [ID:" + std::to_string(sceneObj->getID()) + "]";
         } else {
-            nodeLabel = "\uf192 " + node->getName();  // Dot icon for empty objects
+            nodeLabel = "\uf192 " + node->getName() + " [ID:" + std::to_string(sceneObj->getID()) + "]";
         }
         textColor = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
     } else {
@@ -126,7 +127,9 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
     if (ImGui::IsItemClicked()) {
         selectedNode = node;
         if (isSceneObject(node)) {
-            SelectionManager::get().setSelectedObject(asSceneObject(node));
+            auto sceneObj = asSceneObject(node);
+            // Select by ID for better robustness
+            SelectionManager::get().selectByID(sceneObj->getID());
         } else {
             // Allow root selection for parenting but clear viewport selection
             SelectionManager::get().clearSelection();
@@ -141,8 +144,16 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
 
     // Drag and drop
     if (ImGui::BeginDragDropSource()) {
-        ImGui::SetDragDropPayload("SCENE_NODE", &node, sizeof(SceneNode*));
-        ImGui::Text("Moving %s", node->getName().c_str());
+        if (isSceneObject(node)) {
+            auto obj = asSceneObject(node);
+            ObjectID objID = obj->getID();
+            ImGui::SetDragDropPayload("SCENE_OBJECT_ID", &objID, sizeof(ObjectID));
+            ImGui::Text("Moving %s [ID:%zu]", node->getName().c_str(), objID);
+        } else {
+            // For non-scene objects use pointer
+            ImGui::SetDragDropPayload("SCENE_NODE", &node, sizeof(SceneNode*));
+            ImGui::Text("Moving %s", node->getName().c_str());
+        }
         ImGui::EndDragDropSource();
     }
 
@@ -156,12 +167,32 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
 
 void OutlinerPanel::handleDragAndDrop() {
     if (ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
+        // Handle object ID payloads (preferred)
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT_ID")) {
+            if (payload->DataSize == sizeof(ObjectID)) {
+                ObjectID droppedObjID = *(ObjectID*)payload->Data;
+                
+                // Find the object in the scene
+                if (currentScene) {
+                    auto obj = currentScene->getObjectByID(droppedObjID);
+                    if (obj && selectedNode) {
+                        obj->detachFromParent();
+                        selectedNode->addChild(obj);
+                        OHAO_LOG_DEBUG("Reparented object ID: " + std::to_string(droppedObjID) + 
+                                       " to parent: " + selectedNode->getName());
+                    }
+                }
+            }
+        }
+        // Fallback for non-scene-object nodes
+        else if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
             SceneNode* droppedNode = *(SceneNode**)payload->Data;
             // Handle node reparenting
             if (droppedNode && selectedNode) {
                 droppedNode->detachFromParent();
                 selectedNode->addChild(std::shared_ptr<SceneNode>(droppedNode));
+                OHAO_LOG_DEBUG("Reparented node: " + droppedNode->getName() + 
+                               " to parent: " + selectedNode->getName());
             }
         }
         ImGui::EndDragDropTarget();
@@ -261,65 +292,83 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
                 auto model = generatePrimitiveMesh(type);
                 newObject->setModel(model);
 
-                // Set initial transform
+                // Generate unique name (Blender style)
+                std::string uniqueName = baseName;
+                int counter = 1;
+                while (currentScene->getObjectsByName().find(uniqueName) != currentScene->getObjectsByName().end()) {
+                    uniqueName = baseName + "." + std::to_string(counter++);
+                }
+                newObject->setName(uniqueName);
+
+                // Store object ID for reference
+                ObjectID objectID = newObject->getID();
+                OHAO_LOG_DEBUG("Created object with ID: " + std::to_string(objectID));
+
+                // Initialize transform with proper local coordinates
                 Transform transform;
-                // If parent is not root, offset slightly from parent's position
                 if (!isRoot(parentNode)) {
-                    auto parentPos = parentNode->getTransform().getWorldPosition();
-                    transform.setLocalPosition(parentPos + glm::vec3(0.5f, 0.5f, 0.0f));
+                    // If parent is not root, offset from parent's position
+                    glm::vec3 parentPos = parentNode->getTransform().getLocalPosition();
+                    // Add a small offset to avoid overlap
+                    glm::vec3 offset(0.0f, 0.0f, 0.0f);
+                    
+                    // Set different positions for different primitive types
+                    if (type == PrimitiveType::Cube) {
+                        offset = glm::vec3(0.0f, 0.0f, 0.0f);
+                    } else if (type == PrimitiveType::Sphere) {
+                        offset = glm::vec3(-1.5f, 0.0f, 0.0f);
+                    } else if (type == PrimitiveType::Plane) {
+                        offset = glm::vec3(0.0f, -1.5f, 0.0f);
+                    }
+                    
+                    transform.setLocalPosition(offset);
+                    transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+                    transform.setLocalScale(glm::vec3(1.0f));
                 } else {
-                    transform.setLocalPosition(glm::vec3(0.0f));
+                    // If parent is root, place at origin with offset based on type
+                    glm::vec3 position(0.0f);
+                    
+                    // Set different positions for different primitive types
+                    if (type == PrimitiveType::Cube) {
+                        position = glm::vec3(0.0f, 0.0f, 0.0f);
+                    } else if (type == PrimitiveType::Sphere) {
+                        position = glm::vec3(-1.5f, 0.0f, 0.0f);
+                    } else if (type == PrimitiveType::Plane) {
+                        position = glm::vec3(0.0f, -1.5f, 0.0f);
+                    }
+                    
+                    transform.setLocalPosition(position);
+                    transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+                    transform.setLocalScale(glm::vec3(1.0f));
                 }
                 newObject->setTransform(transform);
-                break;
-        }
 
-        if (newObject) {
-            // Generate unique name (Blender style)
-            std::string uniqueName = baseName;
-            int counter = 1;
-            while (currentScene->getObjects().find(uniqueName) != currentScene->getObjects().end()) {
-                uniqueName = baseName + "." + std::to_string(counter++).substr(0, 3);
-            }
-            newObject->setName(uniqueName);
+                // First add to scene's object map
+                currentScene->addObject(uniqueName, newObject);
 
-            // Initialize transform with proper local coordinates
-            Transform transform;
-            if (!isRoot(parentNode)) {
-                // If parent is not root, offset from parent's position
-                glm::vec3 parentPos = parentNode->getTransform().getLocalPosition();
-                // Add a small offset to avoid overlap
-                glm::vec3 offset(1.0f, 0.0f, 0.0f); // Offset on X axis
-                transform.setLocalPosition(offset);
-                transform.setLocalRotation(parentNode->getTransform().getLocalRotation());
-                transform.setLocalScale(glm::vec3(1.0f));
-            } else {
-                // If parent is root, place at origin
-                transform.setLocalPosition(glm::vec3(0.0f));
-                transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-                transform.setLocalScale(glm::vec3(1.0f));
-            }
-            newObject->setTransform(transform);
+                // Then add to hierarchy under parent
+                parentNode->addChild(newObject);
 
-            // First add to scene's object map
-            currentScene->addObject(uniqueName, newObject);
+                OHAO_LOG_DEBUG("Created new " + uniqueName + " (ID: " + std::to_string(objectID) + ") under parent: " + parentNode->getName());
 
-            // Then add to hierarchy under parent
-            parentNode->addChild(newObject);
+                // Ensure transform is properly applied
+                newObject->markTransformDirty();
 
-            OHAO_LOG_DEBUG("Created new " + uniqueName + " under parent: " + parentNode->getName());
-
-            // Update buffers
-            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                if (!vulkanContext->updateSceneBuffers()) {
-                    OHAO_LOG_ERROR("Failed to update scene buffers");
-                    return;
+                // Update buffers
+                if (auto* vulkanContext = VulkanContext::getContextInstance()) {
+                    if (!vulkanContext->updateSceneBuffers()) {
+                        OHAO_LOG_ERROR("Failed to update scene buffers");
+                        return;
+                    }
                 }
-            }
 
-            // Select the newly created object
-            selectedNode = newObject.get();
-            SelectionManager::get().setSelectedObject(newObject.get());
+                // Make sure to clear selection before selecting the new object
+                SelectionManager::get().clearSelection();
+                
+                // Select the newly created object by ID to ensure proper selection
+                selectedNode = newObject.get();
+                SelectionManager::get().selectByID(objectID);
+                break;
         }
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Failed to create primitive: " + std::string(e.what()));

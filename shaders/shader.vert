@@ -11,12 +11,18 @@ layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec3 fragColor;
 
+// Push constant for model matrix only
+layout(push_constant) uniform PushConstantData {
+    mat4 model;
+} pc;
+
 void main() {
-    vec4 worldPos = ubo.model * vec4(inPosition, 1.0);
+    // Use push constant for model matrix instead of UBO
+    vec4 worldPos = pc.model * vec4(inPosition, 1.0);
     fragPos = worldPos.xyz;
 
     // Ensure proper normal transformation
-    mat3 normalMatrix = transpose(inverse(mat3(ubo.model)));
+    mat3 normalMatrix = transpose(inverse(mat3(pc.model)));
     fragNormal = normalize(normalMatrix * inNormal);
 
     fragTexCoord = inTexCoord;
