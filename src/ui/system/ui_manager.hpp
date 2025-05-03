@@ -1,4 +1,5 @@
 #pragma once
+#define GLFW_INCLUDE_VULKAN
 #include "imgui.h"
 #include "renderer/vulkan_context.hpp"
 #include "ui/components/preferences_window.hpp"

@@ -1,6 +1,7 @@
 #include "ui/system/ui_manager.hpp"
 #include "console_widget.hpp"
 #include "imgui.h"
+#define GLFW_INCLUDE_VULKAN
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include <renderer/rhi/vk/ohao_vk_texture_handle.hpp>
@@ -44,12 +45,29 @@ void UIManager::initialize() {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;  // Enable docking
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // Enable multi-viewport
 
+    // Setup Platform/Renderer backends
+    ImGui_ImplGlfw_InitForVulkan(window->getGLFWWindow(), true);
+    
+    // Set up the Platform_CreateVkSurface callback for multi-viewport support
+    ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+    platform_io.Platform_CreateVkSurface = [](ImGuiViewport* viewport, ImU64 vk_instance, const void* vk_allocator, ImU64* out_vk_surface) -> int {
+        VkSurfaceKHR surface;
+        VkResult err = glfwCreateWindowSurface(
+            (VkInstance)vk_instance,
+            (GLFWwindow*)viewport->PlatformHandle,
+            (const VkAllocationCallbacks*)vk_allocator,
+            &surface);
+        if (err != VK_SUCCESS)
+            return err;
+        *out_vk_surface = (ImU64)surface;
+        return VK_SUCCESS;
+    };
+    
+    initializeVulkanBackend();
+
     // Load and apply preferences before setting up ImGui
     auto& prefs = Preferences::get();
     const auto& appearance = prefs.getAppearance();
-
-    ImGui_ImplGlfw_InitForVulkan(window->getGLFWWindow(), true);
-    initializeVulkanBackend();
 
     applyTheme(appearance.theme);
     io.FontGlobalScale = appearance.uiScale;
