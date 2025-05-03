@@ -47,10 +47,16 @@ bool OhaoVkPipeline::initialize(
         pipelineLayout = layout;
         return createPipeline(mode, configInfo);
     } else {
-        // Use push constants for selection pipeline
-        bool success = (mode == RenderMode::WIREFRAME) ?
-            createPipelineLayoutWithPushConstants(descriptorSetLayout) :
-            createDefaultPipelineLayout(descriptorSetLayout);
+        // Choose appropriate pipeline layout creation based on mode
+        bool success = false;
+        
+        if (mode == RenderMode::WIREFRAME) {
+            success = createPipelineLayoutWithPushConstants(descriptorSetLayout);
+        } else if (mode == RenderMode::PUSH_CONSTANT_MODEL) {
+            success = createModelPushConstantPipelineLayout(descriptorSetLayout);
+        } else {
+            success = createDefaultPipelineLayout(descriptorSetLayout);
+        }
 
         return success && createPipeline(mode, configInfo);
     }
@@ -72,6 +78,7 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* c
         vertShaderStageInfo = shaderModule->getShaderStageInfo("selection_vert");
         fragShaderStageInfo = shaderModule->getShaderStageInfo("selection_frag");
     } else {
+        // Both SOLID and PUSH_CONSTANT_MODEL use the same shaders
         vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
         fragShaderStageInfo = shaderModule->getShaderStageInfo("frag");
     }
@@ -158,10 +165,13 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* c
 }
 
 bool OhaoVkPipeline::createPipelineLayoutWithPushConstants(VkDescriptorSetLayout descriptorSetLayout) {
+    // Set up a single combined push constant range that covers both model and selection data
     VkPushConstantRange pushConstantRange{};
+    
+    // Combined push constants for vertex and fragment shaders
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(SelectionPushConstants);
+    pushConstantRange.size = sizeof(ModelPushConstants) + sizeof(SelectionPushConstants);
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -178,15 +188,41 @@ bool OhaoVkPipeline::createPipelineLayoutWithPushConstants(VkDescriptorSetLayout
 }
 
 bool OhaoVkPipeline::createDefaultPipelineLayout(VkDescriptorSetLayout descriptorSetLayout) {
+    // Add push constant range for model matrix since the main shader now requires it
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(ModelPushConstants);
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 0;
-    pipelineLayoutInfo.pPushConstantRanges = nullptr;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
     if (vkCreatePipelineLayout(device->getDevice(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         std::cerr << "Failed to create pipeline layout!" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool OhaoVkPipeline::createModelPushConstantPipelineLayout(VkDescriptorSetLayout descriptorSetLayout) {
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(ModelPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    if (vkCreatePipelineLayout(device->getDevice(), &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        std::cerr << "Failed to create pipeline layout with model push constants!" << std::endl;
         return false;
     }
     return true;

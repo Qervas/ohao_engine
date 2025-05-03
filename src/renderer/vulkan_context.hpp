@@ -71,6 +71,10 @@ public:
     OhaoVkShaderModule* getShaderModules() const { return shaderModules.get(); }
     OhaoVkRenderPass* getRenderPass() const { return renderPass.get(); }
     OhaoVkPipeline* getPipeline() const { return pipeline.get(); }
+    OhaoVkPipeline* getModelPipeline() const { return modelPipeline.get(); }
+    OhaoVkPipeline* getWireframePipeline() const { return wireframePipeline.get(); }
+    OhaoVkPipeline* getGizmoPipeline() const { return gizmoPipeline.get(); }
+    OhaoVkPipeline* getModelPushConstantPipeline() const { return modelPushConstantPipeline.get(); }
     OhaoVkDescriptor* getDescriptor() const { return descriptor.get(); }
     OhaoVkImage* getDepthImage() const { return depthImage.get(); }
     OhaoVkFramebuffer* getFramebufferManager() const { return framebufferManager.get(); }
@@ -160,6 +164,7 @@ private:
     std::unique_ptr<OhaoVkPipeline> modelPipeline;      // For solid model rendering
     std::unique_ptr<OhaoVkPipeline> wireframePipeline;  // For wireframe model rendering
     std::unique_ptr<OhaoVkPipeline> gizmoPipeline;      // For gizmo
+    std::unique_ptr<OhaoVkPipeline> modelPushConstantPipeline; // For model rendering with push constants
     std::unique_ptr<OhaoVkPipeline> scenePipeline;
     std::unique_ptr<OhaoVkPipeline> sceneGizmoPipeline;
     std::unique_ptr<OhaoVkDescriptor> descriptor;

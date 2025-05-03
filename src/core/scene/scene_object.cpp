@@ -4,7 +4,12 @@
 
 namespace ohao {
 
+// Initialize static ID counter
+std::atomic<ObjectID> SceneObject::nextObjectID{1};
+
 SceneObject::SceneObject(const std::string& name) : SceneNode(name) {
+    // Assign a unique ID to each object at creation time
+    objectID = nextObjectID.fetch_add(1);
 }
 
 std::shared_ptr<SceneObject> SceneObject::clone() const {
@@ -12,6 +17,7 @@ std::shared_ptr<SceneObject> SceneObject::clone() const {
     cloned->material = material;
     cloned->model = model;  // Share the model data
     cloned->transform = transform;  // Copy transform data
+    // Note: objectID is already unique for the clone
     return cloned;
 }
 
