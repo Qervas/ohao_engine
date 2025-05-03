@@ -6,8 +6,12 @@ layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec3 inNormal;
 layout(location = 3) in vec2 inTexCoord;
 
-// Push constants for selection highlight
+// Combined push constants
 layout(push_constant) uniform PushConstants {
+    // Model matrix (first 64 bytes)
+    mat4 model;
+    
+    // Selection data (starts at offset 64)
     vec4 highlightColor;
     float scaleOffset;
 } push;
@@ -15,6 +19,6 @@ layout(push_constant) uniform PushConstants {
 void main() {
     // Scale the vertex position outward along its normal
     vec3 scaledPos = inPosition + (inNormal * push.scaleOffset);
-    vec4 worldPos = ubo.model * vec4(scaledPos, 1.0);
+    vec4 worldPos = push.model * vec4(scaledPos, 1.0);
     gl_Position = ubo.proj * ubo.view * worldPos;
 }

@@ -33,12 +33,15 @@ public:
 
     //remover
     void removeObject(const std::string& name);
+    void removeObjectByID(ObjectID id);
     void removeLight(const std::string& name);
 
     //getter
     SceneNode::Ptr getRootNode();
-    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& getObjects() const;
+    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& getObjectsByName() const;
+    const std::unordered_map<ObjectID, std::shared_ptr<SceneObject>>& getObjectsByID() const;
     std::shared_ptr<SceneObject> getObject(const std::string& name);
+    std::shared_ptr<SceneObject> getObjectByID(ObjectID id);
     const std::unordered_map<std::string, Light>& getLights() const;
     Light* getLight(const std::string& name);
     const std::string& getProjectPath() const { return projectPath; }
@@ -47,6 +50,7 @@ public:
     //setter
     void setRootNode(SceneNode::Ptr node);
     void setObjectMaterial(const std::string& objectName, const Material& material);
+    void setObjectMaterialByID(ObjectID objectID, const Material& material);
     void updateLight(const std::string& name, const Light& light);
     void setName(const std::string& name);
     void setProjectPath(const std::string& path);
@@ -62,7 +66,9 @@ public:
     void validateTransformHierarchy();
 
 private:
-    std::unordered_map<std::string, std::shared_ptr<SceneObject>> objects;
+    // Two maps for object lookup - by name and by ID
+    std::unordered_map<std::string, std::shared_ptr<SceneObject>> objectsByName;
+    std::unordered_map<ObjectID, std::shared_ptr<SceneObject>> objectsByID;
     std::unordered_map<std::string, Light> lights;
     SceneNode::Ptr rootNode;
     std::string sceneName;

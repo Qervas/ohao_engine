@@ -127,19 +127,21 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
     VkCommandBuffer cmd = context->getCommandManager()->getCommandBuffer(context->getCurrentFrame());
     beginFrame();
     // Draw the scene if we have one and valid buffers
-    if (context->hasLoadScene() && pipeline) {
+    if (context->hasLoadScene()) {
         VkBuffer vertexBuffer = context->getVkVertexBuffer();
         VkBuffer indexBuffer = context->getVkIndexBuffer();
 
         if (vertexBuffer != VK_NULL_HANDLE && indexBuffer != VK_NULL_HANDLE) {
-            pipeline->bind(cmd);
+            // Use the push constant pipeline
+            auto pushConstantPipeline = context->getModelPushConstantPipeline();
+            pushConstantPipeline->bind(cmd);
 
             // Bind descriptor sets with the correct pipeline layout
             auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
             vkCmdBindDescriptorSets(
                 cmd,
                 VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipeline->getPipelineLayout(),
+                pushConstantPipeline->getPipelineLayout(),
                 0, 1,
                 &descriptorSet,
                 0, nullptr
@@ -151,8 +153,11 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+            // Update the UBO with camera-dependent parts only
+            uniformBuffer->updateFromCamera(currentFrame, context->getCamera());
+
             // Draw each object using its buffer info
-            for (const auto& [name, object] : context->getScene()->getObjects()) {
+            for (const auto& [name, object] : context->getScene()->getObjectsByName()) {
                 if (!object || !object->getModel()) continue;
 
                 // Get buffer info for this object
@@ -162,14 +167,22 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
                     continue;
                 }
 
-                // Update uniform buffer with object's transform
-                auto ubo = uniformBuffer->getCachedUBO();
-                ubo.model = object->getTransform().getWorldMatrix();
-                uniformBuffer->setCachedUBO(ubo);
-                uniformBuffer->update(currentFrame);
+                // Push the model matrix as a push constant
+                OhaoVkPipeline::ModelPushConstants pushConstants;
+                pushConstants.model = object->getTransform().getWorldMatrix();
+                
+                vkCmdPushConstants(
+                    cmd, 
+                    pushConstantPipeline->getPipelineLayout(),
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // Use both stages
+                    0,
+                    sizeof(OhaoVkPipeline::ModelPushConstants),
+                    &pushConstants
+                );
 
-                // Draw the object
-                vkCmdDrawIndexed(cmd,
+                // Draw the object with its transform through push constant
+                vkCmdDrawIndexed(
+                    cmd,
                     bufferInfo->indexCount,
                     1,
                     bufferInfo->indexOffset,
@@ -321,6 +334,19 @@ void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* obj
     // Set line width for outline
     vkCmdSetLineWidth(cmd, 2.0f);
 
+    // Push the model matrix as a push constant (needed for vertex shader)
+    OhaoVkPipeline::ModelPushConstants modelPushConstants;
+    modelPushConstants.model = object->getTransform().getWorldMatrix();
+    
+    vkCmdPushConstants(
+        cmd, 
+        selectionPipeline->getPipelineLayout(),
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // Use both stages
+        0,
+        sizeof(OhaoVkPipeline::ModelPushConstants),
+        &modelPushConstants
+    );
+
     // Push constants for highlight effect
     OhaoVkPipeline::SelectionPushConstants pushConstants{
         glm::vec4(1.0f, 0.5f, 0.0f, 1.0f),  // Orange highlight
@@ -331,7 +357,7 @@ void SceneRenderer::drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* obj
         cmd,
         selectionPipeline->getPipelineLayout(),
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        0,
+        sizeof(OhaoVkPipeline::ModelPushConstants),  // Offset after model matrix
         sizeof(OhaoVkPipeline::SelectionPushConstants),
         &pushConstants
     );
