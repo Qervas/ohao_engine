@@ -4,6 +4,9 @@
 #include "core/scene/scene.hpp"
 #include "ui/components/console_widget.hpp"
 #include "ui/selection/selection_manager.hpp"
+#include "core/actor/actor.hpp"
+#include "core/component/mesh_component.hpp"
+#include "core/component/physics_component.hpp"
 
 namespace ohao {
 
@@ -21,11 +24,13 @@ public:
     }
 
 private:
-    enum class PrimitiveType{
+    enum class PrimitiveType {
         Empty,
         Cube,
         Sphere,
-        Plane
+        Plane,
+        Cylinder,
+        Cone
     };
 
     Scene* currentScene{nullptr};

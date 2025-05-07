@@ -53,3 +53,18 @@ target_link_libraries(ohao_core PUBLIC
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${CORE_SOURCES})
+
+# Add subdirectories for each subsystem
+add_subdirectory(asset)
+add_subdirectory(material)
+add_subdirectory(scene)
+add_subdirectory(component)
+add_subdirectory(actor)
+# Remove ECS system
+# add_subdirectory(ecs)
+add_subdirectory(physics)
+
+# Target include paths
+target_include_directories(ohao_core PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
