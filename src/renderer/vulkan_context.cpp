@@ -37,6 +37,7 @@
 #include "ui/system/ui_manager.hpp"
 #include "ui/window/window.hpp"
 #include <utils/common_types.hpp>
+#include <filesystem>
 
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
@@ -50,9 +51,11 @@ VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
     glfwGetFramebufferSize(window->getGLFWWindow(), &w, &h);
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
-    camera.setPosition(glm::vec3(0.3f, 2.0f, 5.0f));
-    camera.setRotation(-30.0f, -90.0f);  // Look at origin
-    camera.setPerspectiveProjection(45.0f, float(width)/float(height), 0.01f, 1000.0f);
+    
+    // Position camera to see objects at origin from a reasonable distance
+    camera.setPosition(glm::vec3(0.0f, 2.0f, 5.0f));
+    camera.setRotation(-15.0f, -90.0f);  // Look down slightly at origin
+    camera.setPerspectiveProjection(60.0f, float(width)/float(height), 0.1f, 1000.0f); // Wider FOV
 }
 
 VulkanContext::~VulkanContext(){
@@ -217,15 +220,52 @@ void VulkanContext::initializeDefaultScene() {
 
     // Create minimal default buffers
     std::vector<Vertex> defaultVertex = {
-        {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+        {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+        {{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        {{ 0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+        {{-0.5f,  0.5f, 0.0f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}}
     };
-    std::vector<uint32_t> defaultIndex = {0};
+    std::vector<uint32_t> defaultIndex = {0, 1, 2, 2, 3, 0};
 
     try {
+        // Clean up any existing buffers
+        device->waitIdle();
+        vertexBuffer.reset();
+        indexBuffer.reset();
+        
+        // Create new buffers
         createVertexBuffer(defaultVertex);
         createIndexBuffer(defaultIndex);
+        
+        // Verify buffers were created successfully
+        if (!vertexBuffer || vertexBuffer->getBuffer() == VK_NULL_HANDLE) {
+            throw std::runtime_error("Failed to create valid vertex buffer");
+        }
+        
+        if (!indexBuffer || indexBuffer->getBuffer() == VK_NULL_HANDLE) {
+            throw std::runtime_error("Failed to create valid index buffer");
+        }
+        
+        OHAO_LOG("Default buffers created successfully");
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Failed to create default buffers: " + std::string(e.what()));
+        // Try one more time with even simpler data
+        try {
+            std::vector<Vertex> singleVertex = {
+                {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}}
+            };
+            std::vector<uint32_t> singleIndex = {0};
+            
+            vertexBuffer.reset();
+            indexBuffer.reset();
+            
+            createVertexBuffer(singleVertex);
+            createIndexBuffer(singleIndex);
+            
+            OHAO_LOG("Created fallback minimal buffers");
+        } catch (const std::exception& e2) {
+            OHAO_LOG_ERROR("Critical failure creating minimal buffers: " + std::string(e2.what()));
+        }
     }
 
     // Create a default light
@@ -367,20 +407,48 @@ void VulkanContext::drawFrame() {
         throw std::runtime_error("Failed to begin recording command buffer!");
     }
 
-    // Update camera and transform matrices
-    if (auto selectedObj = SelectionManager::get().getSelectedObject()) {
-        UniformBufferObject ubo = uniformBuffer->getCachedUBO();
-        ubo.model = selectedObj->getTransform().getWorldMatrix();
-        uniformBuffer->setCachedUBO(ubo);
+    // Update uniform buffer with latest camera information
+    if (uniformBuffer) {
+        // Always update camera view/projection first
+        uniformBuffer->updateFromCamera(currentFrame, camera);
+        uniformBuffer->update(currentFrame);
+        
+        // Remove camera position debug output
+        // auto& ubo = uniformBuffer->getCachedUBO();
+        // OHAO_LOG("Camera pos: " + std::to_string(camera.getPosition().x) + ", " 
+        //          + std::to_string(camera.getPosition().y) + ", " 
+        //          + std::to_string(camera.getPosition().z));
     }
-    uniformBuffer->updateFromCamera(currentFrame, camera);
-    uniformBuffer->update(currentFrame);
 
-    // Always initialize and render scene
-    if (!sceneRenderer->hasValidRenderTarget()) {
-        initializeSceneRenderer();
+    // Explicitly begin the scene rendering pass
+    if (sceneRenderer && sceneRenderer->hasValidRenderTarget()) {
+        // Check if vertex and index buffers exist
+        if (!vertexBuffer || !indexBuffer) {
+            OHAO_LOG_ERROR("Vertex or index buffer is null before scene rendering");
+            // Try to reinitialize default buffers
+            initializeDefaultScene();
+            if (!vertexBuffer || !indexBuffer) {
+                OHAO_LOG_ERROR("Failed to recreate default buffers");
+                return;
+            }
+        }
+        
+        // Begin scene rendering pass
+        sceneRenderer->beginFrame();
+        
+        // Render scene
+        sceneRenderer->render(uniformBuffer.get(), currentFrame);
+        
+        // End scene rendering pass
+        sceneRenderer->endFrame();
+    } else {
+        OHAO_LOG("Warning: Scene renderer not initialized or render target invalid");
+        
+        // Try to initialize scene renderer if needed
+        if (sceneRenderer && !sceneRenderer->hasValidRenderTarget()) {
+            initializeSceneRenderer();
+        }
     }
-    sceneRenderer->render(uniformBuffer.get(), currentFrame);
 
     // Second pass: Main render pass with UI
     renderPass->begin(
@@ -492,47 +560,90 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
 }
 
 void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
-    if (vertexBuffer && indexBuffer && scene) {
-        auto sceneObjects = scene->getObjectsByName();
-        if (!sceneObjects.empty()) {
-            auto mainObject = sceneObjects.begin()->second;
-            if (mainObject && mainObject->getModel()) {
-                // Select appropriate pipeline
-                auto& currentPipeline = wireframeMode ? wireframePipeline : modelPipeline;
-                currentPipeline->bind(commandBuffer);
-
-                // Bind vertex and index buffers
-                VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
-                VkDeviceSize offsets[] = {0};
-                vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-                vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
-
-                // Bind descriptor sets
-                vkCmdBindDescriptorSets(commandBuffer,
-                                      VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                      currentPipeline->getPipelineLayout(),
-                                      0, 1, &descriptor->getSet(currentFrame),
-                                      0, nullptr);
-                
-                // Set model matrix push constant
-                OhaoVkPipeline::ModelPushConstants pushConstants;
-                pushConstants.model = mainObject->getTransform().getWorldMatrix();
-                
-                vkCmdPushConstants(
-                    commandBuffer,
-                    currentPipeline->getPipelineLayout(),
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,  // Use both stages
-                    0,
-                    sizeof(OhaoVkPipeline::ModelPushConstants),
-                    &pushConstants
-                );
-
-                // Draw model
-                vkCmdDrawIndexed(commandBuffer,
-                               static_cast<uint32_t>(mainObject->getModel()->indices.size()),
-                               1, 0, 0, 0);
-            }
+    if (!vertexBuffer || !indexBuffer || !scene) {
+        return;
+    }
+    
+    // Get actors from scene
+    const auto& actorsMap = scene->getAllActors();
+    if (actorsMap.empty()) return;
+    
+    // Create a sorted list of actors to ensure predictable drawing order
+    std::vector<Actor*> drawOrder;
+    drawOrder.reserve(actorsMap.size());
+    
+    // First, collect actors with mesh components
+    for (const auto& [actorId, actor] : actorsMap) {
+        if (actor->getComponent<MeshComponent>()) {
+            drawOrder.push_back(actor.get());
         }
+    }
+
+    // Sort by Z position to help with predictable rendering
+    std::sort(drawOrder.begin(), drawOrder.end(), [](Actor* a, Actor* b) {
+        // Sort back-to-front by Z position
+        return a->getTransform()->getPosition().z < b->getTransform()->getPosition().z;
+    });
+    
+    // Select appropriate pipeline
+    auto& currentPipeline = wireframeMode ? wireframePipeline : modelPipeline;
+    currentPipeline->bind(commandBuffer);
+
+    // Bind vertex and index buffers only once - will use offsets for each draw
+    VkBuffer vertexBuffers[] = {vertexBuffer->getBuffer()};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
+
+    // Bind descriptor sets
+    vkCmdBindDescriptorSets(commandBuffer,
+                         VK_PIPELINE_BIND_POINT_GRAPHICS,
+                         currentPipeline->getPipelineLayout(),
+                         0, 1, &descriptor->getSet(currentFrame),
+                         0, nullptr);
+
+    // Iterate through actors in our draw order
+    for (const auto* actor : drawOrder) {
+        auto meshComponent = actor->getComponent<MeshComponent>();
+        if (!meshComponent || !meshComponent->getModel()) continue;
+        
+        // Find buffer info for this actor
+        auto it = meshBufferMap.find(const_cast<Actor*>(actor));
+        if (it == meshBufferMap.end()) {
+            OHAO_LOG("Actor not found in mesh buffer map: " + actor->getName());
+            continue;
+        }
+        
+        const auto& bufferInfo = it->second;
+        
+        // Set up model push constants
+        OhaoVkPipeline::ModelPushConstants pushConstants{};
+        pushConstants.model = actor->getTransform()->getWorldMatrix();
+        
+        // Update push constants for this actor
+        vkCmdPushConstants(
+            commandBuffer,
+            currentPipeline->getPipelineLayout(),
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            sizeof(OhaoVkPipeline::ModelPushConstants),
+            &pushConstants
+        );
+        
+        // Draw using the actual indices - note we're using indexOffset and not vertexOffset here
+        vkCmdDrawIndexed(
+            commandBuffer,
+            bufferInfo.indexCount,
+            1,
+            bufferInfo.indexOffset,
+            0,
+            0
+        );
+        
+        // Debug log our draw command
+        OHAO_LOG_DEBUG("Drawing actor '" + actor->getName() + 
+                       "' with " + std::to_string(bufferInfo.indexCount) + 
+                       " indices at offset " + std::to_string(bufferInfo.indexOffset));
     }
 }
 
@@ -614,31 +725,35 @@ bool VulkanContext::importModel(const std::string& filename) {
     }
 
     try {
-
-        auto modelObject = std::make_shared<SceneObject>("ImportedModel");
-        modelObject->setModel(std::make_shared<Model>());
-
-
-        if (!modelObject->getModel()->loadFromOBJ(filename)) {
+        // Create a model actor with proper components
+        auto modelActor = scene->createActor("ImportedModel");
+        
+        // Add mesh component
+        auto meshComponent = modelActor->addComponent<MeshComponent>();
+        
+        // Create and load the model
+        auto model = std::make_shared<Model>();
+        if (!model->loadFromOBJ(filename)) {
             OHAO_LOG_ERROR("Failed to load OBJ file: " + filename);
             return false;
         }
+        
+        // Set the model on the mesh component
+        meshComponent->setModel(model);
 
-        scene->getRootNode()->addChild(modelObject);
-
-        // Generate unique name based on the file
-        std::string baseName = std::filesystem::path(filename).stem().string();
+        // Fix the path usage:
+        std::string baseName = std::filesystem::path(filename).filename().stem().string();
         std::string uniqueName = baseName;
         int counter = 1;
-        while (scene->getObjectsByName().find(uniqueName) != scene->getObjectsByName().end()) {
+        
+        // Make sure the name is unique
+        while (scene->findActor(uniqueName) != nullptr) {
             uniqueName = baseName + "_" + std::to_string(counter++);
         }
-        modelObject->setName(uniqueName);
+        
+        modelActor->setName(uniqueName);
 
-        // add to scene's object map
-        scene->addObject(uniqueName, modelObject);
-
-        // Add to scene
+        // Update scene buffers
         if (!updateSceneBuffers()) {
             OHAO_LOG_ERROR("Failed to update scene buffers");
             return false;
@@ -751,83 +866,130 @@ bool VulkanContext::updateModelBuffers(const std::vector<Vertex>& vertices, cons
     }
 }
 bool VulkanContext::updateSceneBuffers() {
-    if (!scene) return false;
-    scene->validateTransformHierarchy();
-
+    if (!scene) {
+        OHAO_LOG("Cannot update buffers - no scene exists");
+        return false;
+    }
+    
     device->waitIdle();
 
-    std::vector<Vertex> combinedVertices;
-    std::vector<uint32_t> combinedIndices;
-    meshBufferMap.clear();  // Clear old mappings
+    // Clear old mappings first
+    meshBufferMap.clear();
 
     // Debug output for initial state
-    OHAO_LOG_DEBUG("Starting scene buffer update");
-    OHAO_LOG_DEBUG("Number of objects: " + std::to_string(scene->getObjectsByName().size()));
+    OHAO_LOG("Starting scene buffer update");
+    OHAO_LOG("Number of actors: " + std::to_string(scene->getAllActors().size()));
 
-    // First pass: Calculate total required size
+    // First pass: Count actors with valid meshes
+    size_t actorsWithMeshes = 0;
     size_t totalVertices = 0;
     size_t totalIndices = 0;
-    for (const auto& [name, object] : scene->getObjectsByName()) {
-        if (object && object->getModel()) {
-            totalVertices += object->getModel()->vertices.size();
-            totalIndices += object->getModel()->indices.size();
-            OHAO_LOG_DEBUG("Object '" + name + "' requires " +
-                          std::to_string(object->getModel()->vertices.size()) + " vertices and " +
-                          std::to_string(object->getModel()->indices.size()) + " indices");
+    
+    // Get actors with valid mesh components for processing
+    std::vector<std::pair<Actor*, std::shared_ptr<Model>>> actorsWithModels;
+    
+    // Iterate through all actors with mesh components
+    for (const auto& [actorId, actor] : scene->getAllActors()) {
+        auto meshComponent = actor->getComponent<MeshComponent>();
+        if (meshComponent && meshComponent->getModel()) {
+            auto model = meshComponent->getModel();
+            totalVertices += model->vertices.size();
+            totalIndices += model->indices.size();
+            actorsWithMeshes++;
+            
+            // Store for second pass
+            actorsWithModels.push_back({actor.get(), model});
+            
+            OHAO_LOG("Actor '" + actor->getName() + 
+                     "' at position " + 
+                     std::to_string(actor->getTransform()->getPosition().x) + ", " +
+                     std::to_string(actor->getTransform()->getPosition().y) + ", " +
+                     std::to_string(actor->getTransform()->getPosition().z) +
+                     " requires " + std::to_string(model->vertices.size()) + 
+                     " vertices and " + std::to_string(model->indices.size()) + " indices");
         }
     }
+    
+    // Check if we have anything to render
+    if (actorsWithMeshes == 0) {
+        OHAO_LOG("No actors with mesh components found in scene");
+        cleanupCurrentModel(); // Clean up any old buffers
+        return false;
+    }
 
-    // Pre-allocate buffers
+    // Pre-allocate buffers with exact size
+    std::vector<Vertex> combinedVertices;
+    std::vector<uint32_t> combinedIndices;
     combinedVertices.reserve(totalVertices);
     combinedIndices.reserve(totalIndices);
 
-    // Second pass: Build combined buffers
-    for (const auto& [name, object] : scene->getObjectsByName()) {
-        if (!object || !object->getModel()) continue;
-
+    // Second pass: Build combined buffers in Z-order (optional sort by Z position)
+    OHAO_LOG("Building combined vertex and index buffers for " + std::to_string(actorsWithModels.size()) + " models");
+    
+    for (const auto& [actor, model] : actorsWithModels) {
+        // Store vertex and index counts for this model before adding
+        const uint32_t vertexOffset = static_cast<uint32_t>(combinedVertices.size());
+        const uint32_t indexOffset = static_cast<uint32_t>(combinedIndices.size());
+        const uint32_t indexCount = static_cast<uint32_t>(model->indices.size());
+        
+        // Create buffer info and store in our map with actor as key
         MeshBufferInfo bufferInfo{};
-        bufferInfo.vertexOffset = static_cast<uint32_t>(combinedVertices.size());
-        bufferInfo.indexOffset = static_cast<uint32_t>(combinedIndices.size());
-        bufferInfo.indexCount = static_cast<uint32_t>(object->getModel()->indices.size());
-
-        // Store mapping before modifying buffers
-        meshBufferMap[object.get()] = bufferInfo;
-
-        // Add vertices
-        const auto& modelVertices = object->getModel()->vertices;
-        combinedVertices.insert(combinedVertices.end(), modelVertices.begin(), modelVertices.end());
-
+        bufferInfo.vertexOffset = vertexOffset;
+        bufferInfo.indexOffset = indexOffset;
+        bufferInfo.indexCount = indexCount;
+        meshBufferMap[actor] = bufferInfo;
+        
+        // Add vertices directly without modification
+        combinedVertices.insert(combinedVertices.end(), model->vertices.begin(), model->vertices.end());
+        
         // Add indices with correct offset
-        for (uint32_t index : object->getModel()->indices) {
-            combinedIndices.push_back(index + bufferInfo.vertexOffset);
+        for (uint32_t index : model->indices) {
+            // Each index needs to be offset by the cumulative vertex count
+            combinedIndices.push_back(index + vertexOffset);
         }
-
-        OHAO_LOG_DEBUG("Added object '" + name + "' to buffer at offset " +
-                       std::to_string(bufferInfo.vertexOffset) + " with " +
-                       std::to_string(bufferInfo.indexCount) + " indices");
+        
+        OHAO_LOG("Added actor '" + actor->getName() + "' to buffer at vertex offset " +
+                 std::to_string(bufferInfo.vertexOffset) + ", index offset " +
+                 std::to_string(bufferInfo.indexOffset) + " with " +
+                 std::to_string(bufferInfo.indexCount) + " indices");
     }
 
+    // Extra verification step
+    if (combinedVertices.size() != totalVertices || combinedIndices.size() != totalIndices) {
+        OHAO_LOG("Buffer size mismatch! Expected " + std::to_string(totalVertices) + 
+                " vertices and " + std::to_string(totalIndices) + " indices, but got " +
+                std::to_string(combinedVertices.size()) + " vertices and " + 
+                std::to_string(combinedIndices.size()) + " indices");
+    }
+
+    // Verify we have data to upload
     if (combinedVertices.empty() || combinedIndices.empty()) {
-        OHAO_LOG_WARNING("No geometry to update");
+        OHAO_LOG("No geometry to update - empty buffers");
+        cleanupCurrentModel();
         return false;
     }
 
     try {
-        // Clean up old buffers first
-        vertexBuffer.reset();
-        indexBuffer.reset();
+        // Clean up old buffers before creating new ones
+        cleanupCurrentModel();
 
         // Create new buffers
         createVertexBuffer(combinedVertices);
         createIndexBuffer(combinedIndices);
 
-        OHAO_LOG_DEBUG("Successfully updated scene buffers with " +
-                       std::to_string(combinedVertices.size()) + " vertices and " +
-                       std::to_string(combinedIndices.size()) + " indices");
+        OHAO_LOG("Successfully updated scene buffers with " +
+                 std::to_string(combinedVertices.size()) + " vertices and " +
+                 std::to_string(combinedIndices.size()) + " indices across " +
+                 std::to_string(actorsWithMeshes) + " actors");
+        
+        // Mark scene as modified
+        markSceneModified();
         return true;
 
     } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Failed to update scene buffers: " + std::string(e.what()));
+        OHAO_LOG("Failed to update scene buffers: " + std::string(e.what()));
+        // Try to ensure clean state on failure
+        cleanupCurrentModel();
         return false;
     }
 }
@@ -848,7 +1010,6 @@ bool VulkanContext::createNewScene(const std::string& name) {
 bool VulkanContext::saveScene(const std::string& filename) {
     if (!scene) return false;
 
-    scene->setProjectPath(filename);
     if (scene->saveToFile(filename)) {
         sceneModified = false;
         return true;
@@ -859,8 +1020,9 @@ bool VulkanContext::saveScene(const std::string& filename) {
 bool VulkanContext::loadScene(const std::string& filename) {
     if (!scene) scene = std::make_unique<Scene>();
 
-    scene->setProjectPath(filename);
     return scene->loadFromFile(filename);
 }
 
 }//namespace ohao
+
+
