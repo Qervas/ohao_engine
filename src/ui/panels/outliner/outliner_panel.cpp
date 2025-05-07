@@ -53,9 +53,7 @@ void OutlinerPanel::render() {
 
     // Scene Tree
     if (currentViewMode == ViewMode::List) {
-        if (currentScene && currentScene->getRootNode()) {
-            renderTreeNode(currentScene->getRootNode().get());
-        }
+        renderSceneTree();
     } else {
         renderGraphView();
     }
@@ -76,8 +74,39 @@ void OutlinerPanel::render() {
 }
 
 void OutlinerPanel::renderSceneTree() {
-    for (const auto& [name, object] : currentScene->getObjects()) {
-        renderTreeNode(object.get());
+    if (!currentScene) return;
+    
+    // First render the root node and its hierarchy
+    if (auto rootNode = currentScene->getRootNode()) {
+        // Use PushID to create a unique context for the root node
+        ImGui::PushID("root");
+        renderTreeNode(rootNode.get());
+        ImGui::PopID();
+    }
+    
+    // Then render any actors that might not be in the hierarchy
+    // This ensures all objects are visible in the outliner
+    bool hasOrphanedActors = false;
+    
+    // Get all actors from the scene
+    const auto& allActors = currentScene->getAllActors();
+    if (!allActors.empty()) {
+        for (const auto& [id, actor] : allActors) {
+            // Only render actors that don't have a parent (top-level actors)
+            // AND are not the root node itself
+            if (actor && !actor->getParent() && 
+                (!currentScene->getRootNode() || actor.get() != currentScene->getRootNode().get())) {
+                if (!hasOrphanedActors) {
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 1.0f, 1.0f), "Scene Objects");
+                    hasOrphanedActors = true;
+                }
+                
+                ImGui::PushID(static_cast<int>(id));
+                renderTreeNode(actor.get());
+                ImGui::PopID();
+            }
+        }
     }
 }
 
@@ -93,7 +122,10 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
         flags |= ImGuiTreeNodeFlags_Selected;
     }
 
-    bool isLeaf = node->getChildren().empty();
+    // Check if this is an Actor
+    Actor* actorNode = dynamic_cast<Actor*>(node);
+    bool isLeaf = actorNode ? actorNode->getChildren().empty() : node->getChildren().empty();
+    
     if (isLeaf) {
         flags |= ImGuiTreeNodeFlags_Leaf;
     }
@@ -103,18 +135,31 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
     ImVec4 textColor;
 
     if (isRoot(node)) {
-        nodeLabel = "Scene Collection";
+        // Add a unique identifier to the root node to avoid ID conflicts
+        nodeLabel = "Scene Collection##SceneRoot";
         textColor = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+    } else if (auto actor = dynamic_cast<Actor*>(node)) {
+        // Use actor ID as a unique identifier
+        std::string idStr = "##" + std::to_string(actor->getID());
+        if (actor->getModel()) {
+            nodeLabel = "\uf1b2 " + node->getName() + idStr;
+        } else {
+            nodeLabel = "\uf192 " + node->getName() + idStr;
+        }
+        textColor = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
     } else if (isSceneObject(node)) {
         auto sceneObj = asSceneObject(node);
+        // Use object ID as a unique identifier
+        std::string idStr = "##" + std::to_string(sceneObj->getID());
         if (sceneObj->getModel()) {
-            nodeLabel = "\uf1b2 " + node->getName();  // Cube icon for mesh objects
+            nodeLabel = "\uf1b2 " + node->getName() + idStr;
         } else {
-            nodeLabel = "\uf192 " + node->getName();  // Dot icon for empty objects
+            nodeLabel = "\uf192 " + node->getName() + idStr;
         }
         textColor = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
     } else {
-        nodeLabel = node->getName();
+        // For other nodes, use pointer address as unique ID
+        nodeLabel = node->getName() + "##" + std::to_string(reinterpret_cast<uintptr_t>(node));
         textColor = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
     }
 
@@ -125,8 +170,13 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
     // Handle selection
     if (ImGui::IsItemClicked()) {
         selectedNode = node;
-        if (isSceneObject(node)) {
-            SelectionManager::get().setSelectedObject(asSceneObject(node));
+        if (auto actor = dynamic_cast<Actor*>(node)) {
+            // Use the new Actor selection system
+            SelectionManager::get().setSelectedActor(actor);
+        } else if (isSceneObject(node)) {
+            auto sceneObj = asSceneObject(node);
+            // Use backward compatibility method
+            SelectionManager::get().setSelectedObject(sceneObj);
         } else {
             // Allow root selection for parenting but clear viewport selection
             SelectionManager::get().clearSelection();
@@ -141,14 +191,28 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
 
     // Drag and drop
     if (ImGui::BeginDragDropSource()) {
-        ImGui::SetDragDropPayload("SCENE_NODE", &node, sizeof(SceneNode*));
-        ImGui::Text("Moving %s", node->getName().c_str());
+        if (isSceneObject(node)) {
+            auto obj = asSceneObject(node);
+            ObjectID objID = obj->getID();
+            ImGui::SetDragDropPayload("SCENE_OBJECT_ID", &objID, sizeof(ObjectID));
+            ImGui::Text("Moving %s", node->getName().c_str());
+        } else {
+            // For non-scene objects use pointer
+            ImGui::SetDragDropPayload("SCENE_NODE", &node, sizeof(SceneNode*));
+            ImGui::Text("Moving %s", node->getName().c_str());
+        }
         ImGui::EndDragDropSource();
     }
 
     if (opened) {
-        for (const auto& child : node->getChildren()) {
-            renderTreeNode(child.get());
+        if (actorNode) {
+            for (auto* child : actorNode->getChildren()) {
+                renderTreeNode(child);
+            }
+        } else {
+            for (const auto& child : node->getChildren()) {
+                renderTreeNode(child.get());
+            }
         }
         ImGui::TreePop();
     }
@@ -156,12 +220,65 @@ void OutlinerPanel::renderTreeNode(SceneNode* node) {
 
 void OutlinerPanel::handleDragAndDrop() {
     if (ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
+        // Handle object ID payloads (preferred)
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_OBJECT_ID")) {
+            if (payload->DataSize == sizeof(ObjectID)) {
+                ObjectID droppedObjID = *(ObjectID*)payload->Data;
+                
+                // Find the object in the scene
+                if (currentScene) {
+                    // Try to find it as an Actor first
+                    auto actor = currentScene->findActor(droppedObjID);
+                    if (actor && selectedNode) {
+                        // Check if the selected node is an Actor
+                        if (auto targetActor = dynamic_cast<Actor*>(selectedNode)) {
+                            // Actor-to-Actor parenting
+                            actor->setParent(targetActor);
+                            OHAO_LOG_DEBUG("Reparented actor ID: " + std::to_string(droppedObjID) + 
+                                        " to parent: " + targetActor->getName());
+                        } else {
+                            // Legacy fallback - may not work correctly
+                            actor->detachFromParent();
+                            selectedNode->addChild(actor);
+                            OHAO_LOG_DEBUG("Added actor to scene node: " + std::to_string(droppedObjID));
+                        }
+                    }
+                    
+                    // Legacy support for SceneObjects
+                    else {
+                        auto obj = currentScene->getObjectByID(droppedObjID);
+                        if (obj && selectedNode) {
+                            obj->detachFromParent();
+                            selectedNode->addChild(obj);
+                            OHAO_LOG_DEBUG("Reparented object ID: " + std::to_string(droppedObjID) + 
+                                        " to parent: " + selectedNode->getName());
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback for non-scene-object nodes
+        else if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
             SceneNode* droppedNode = *(SceneNode**)payload->Data;
             // Handle node reparenting
             if (droppedNode && selectedNode) {
-                droppedNode->detachFromParent();
-                selectedNode->addChild(std::shared_ptr<SceneNode>(droppedNode));
+                // Check if this is an Actor
+                if (auto actorNode = dynamic_cast<Actor*>(droppedNode)) {
+                    if (auto targetActor = dynamic_cast<Actor*>(selectedNode)) {
+                        // Actor-to-Actor parenting
+                        actorNode->setParent(targetActor);
+                    } else {
+                        // Legacy fallback
+                        droppedNode->detachFromParent();
+                        selectedNode->addChild(std::shared_ptr<SceneNode>(droppedNode));
+                    }
+                } else {
+                    // Legacy node handling
+                    droppedNode->detachFromParent();
+                    selectedNode->addChild(std::shared_ptr<SceneNode>(droppedNode));
+                }
+                OHAO_LOG_DEBUG("Reparented node: " + droppedNode->getName() + 
+                            " to parent: " + selectedNode->getName());
             }
         }
         ImGui::EndDragDropTarget();
@@ -169,6 +286,55 @@ void OutlinerPanel::handleDragAndDrop() {
 }
 
 void OutlinerPanel::showObjectContextMenu(SceneNode* node) {
+    // Check if node is an Actor
+    Actor* actorNode = dynamic_cast<Actor*>(node);
+    
+    // Actor-specific context menu
+    if (actorNode) {
+        if (ImGui::MenuItem("Add Child Actor")) {
+            // Create a new empty actor and set parent directly
+            auto childActor = std::make_shared<Actor>("Child");
+            childActor->setParent(actorNode);
+            currentScene->addActor(childActor);
+        }
+        
+        if (ImGui::BeginMenu("Add Component")) {
+            if (ImGui::MenuItem("Mesh Component")) {
+                actorNode->addComponent<MeshComponent>();
+            }
+            if (ImGui::MenuItem("Physics Component")) {
+                try {
+                    actorNode->addComponent<PhysicsComponent>();
+                } catch (const std::exception& e) {
+                    OHAO_LOG_WARNING("Could not add physics component: " + std::string(e.what()));
+                }
+            }
+            ImGui::EndMenu();
+        }
+        
+        ImGui::Separator();
+        
+        if (ImGui::MenuItem("Rename")) {
+            // Start rename operation
+        }
+        
+        if (ImGui::MenuItem("Duplicate")) {
+            if (currentScene) {
+                auto duplicate = std::make_shared<Actor>(*actorNode);
+                duplicate->setName(duplicate->getName() + " (Copy)");
+                currentScene->addActor(duplicate);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        
+        if (ImGui::MenuItem("Delete")) {
+            handleObjectDeletion(node);
+        }
+        
+        return;
+    }
+    
+    // Legacy context menu for non-Actor nodes
     if (ImGui::MenuItem("Add Child")) {
         // Create child under selected node
         createPrimitiveObject(PrimitiveType::Empty);
@@ -179,13 +345,16 @@ void OutlinerPanel::showObjectContextMenu(SceneNode* node) {
             // Start rename operation
         }
         if (ImGui::MenuItem("Duplicate")) {
-            if (auto sceneObj = asSceneObject(node)) {
+            auto sceneObj = dynamic_cast<SceneObject*>(node);
+            if (sceneObj && currentScene) {
                 auto duplicate = sceneObj->clone();
-                if (auto parent = node->getParent()) {
-                    parent->addChild(duplicate);
-                    currentScene->addObject(duplicate->getName(), duplicate);
-                }
+                duplicate->setName(duplicate->getName() + " (Copy)");
+                
+                // Create a new Actor with this data for the new system
+                auto newActor = std::make_shared<Actor>(duplicate->getName());
+                currentScene->addActor(newActor);
             }
+            ImGui::CloseCurrentPopup();
         }
         if (ImGui::MenuItem("Delete")) {
             handleObjectDeletion(node);
@@ -198,16 +367,32 @@ void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
 
     OHAO_LOG_DEBUG("Starting deletion of node: " + node->getName());
 
-    // Clear selection first if this object is selected
-    if (auto sceneObj = asSceneObject(node)) {
-        if (SelectionManager::get().isSelected(sceneObj)) {
+    // Check if this is an Actor first (new system)
+    if (auto actor = dynamic_cast<Actor*>(node)) {
+        // Clear selection first if this actor is selected
+        if (SelectionManager::get().isSelected(actor)) {
             SelectionManager::get().clearSelection();
         }
+        
+        // Remove from scene's actors collection
+        currentScene->removeActor(actor->getID());
+        
+        // Clear selection if this was the selected node
+        if (selectedNode == node) {
+            selectedNode = nullptr;
+        }
+        
+        OHAO_LOG_DEBUG("Successfully deleted actor: " + actor->getName());
     }
-
-    try {
-        // Remove from scene's object collection first
+    // Legacy system
+    else {
+        // Clear selection first if this object is selected
         if (auto sceneObj = asSceneObject(node)) {
+            if (SelectionManager::get().isSelected(sceneObj)) {
+                SelectionManager::get().clearSelection();
+            }
+            
+            // Remove from scene's object collection
             currentScene->removeObject(sceneObj->getName());
         }
 
@@ -220,109 +405,76 @@ void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
         if (selectedNode == node) {
             selectedNode = nullptr;
         }
+        
+        OHAO_LOG_DEBUG("Successfully deleted node: " + node->getName());
+    }
 
-        // Update the buffers
-        if (auto context = VulkanContext::getContextInstance()) {
-            context->updateSceneBuffers();
-        }
-
-        OHAO_LOG_DEBUG("Successfully deleted node");
-
-    } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Error during node deletion: " + std::string(e.what()));
+    // Update the buffers
+    if (auto context = VulkanContext::getContextInstance()) {
+        context->updateSceneBuffers();
     }
 }
 
 void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
-    if (!currentScene) {
-        OHAO_LOG_ERROR("No active scene!");
-        return;
+    if (!currentScene) return;
+
+    std::string objName;
+    switch (type) {
+        case PrimitiveType::Cube:
+            objName = "Cube";
+            break;
+        case PrimitiveType::Sphere:
+            objName = "Sphere";
+            break;
+        case PrimitiveType::Plane:
+            objName = "Plane";
+            break;
+        case PrimitiveType::Cylinder:
+            objName = "Cylinder";
+            break;
+        case PrimitiveType::Cone:
+            objName = "Cone";
+            break;
+        case PrimitiveType::Empty:
+        default:
+            objName = "Empty";
+            break;
     }
 
-    // Get parent node - use selected node if available, otherwise use root
-    SceneNode* parentNode = selectedNode ? selectedNode : currentScene->getRootNode().get();
+    // Create unique name
+    int counter = 1;
+    std::string baseName = objName;
+    while (currentScene->findActor(objName) != nullptr) {
+        objName = baseName + std::to_string(counter++);
+    }
 
-    try {
-        std::shared_ptr<SceneObject> newObject;
-        std::string baseName;
-
-        switch (type) {
-            case PrimitiveType::Empty:
-                baseName = "Empty";
-                newObject = std::make_shared<SceneObject>(baseName);
-                break;
-
-            case PrimitiveType::Cube:
-            case PrimitiveType::Sphere:
-            case PrimitiveType::Plane:
-                baseName = (type == PrimitiveType::Cube) ? "Cube" :
-                          (type == PrimitiveType::Sphere) ? "Sphere" : "Plane";
-                newObject = std::make_shared<SceneObject>(baseName);
-                auto model = generatePrimitiveMesh(type);
-                newObject->setModel(model);
-
-                // Set initial transform
-                Transform transform;
-                // If parent is not root, offset slightly from parent's position
-                if (!isRoot(parentNode)) {
-                    auto parentPos = parentNode->getTransform().getWorldPosition();
-                    transform.setLocalPosition(parentPos + glm::vec3(0.5f, 0.5f, 0.0f));
-                } else {
-                    transform.setLocalPosition(glm::vec3(0.0f));
-                }
-                newObject->setTransform(transform);
-                break;
+    // Create the actor with the given name
+    auto newActor = currentScene->createActor(objName);
+    
+    // Generate and assign the mesh if it's not an empty object
+    if (type != PrimitiveType::Empty && newActor) {
+        // Add a mesh component
+        auto meshComponent = newActor->addComponent<MeshComponent>();
+        
+        // Generate the appropriate mesh for this primitive type
+        auto mesh = generatePrimitiveMesh(type);
+        
+        // Assign the mesh to the component
+        if (meshComponent && mesh) {
+            meshComponent->setModel(mesh);
+            OHAO_LOG("Added " + objName + " with mesh component successfully");
         }
+    }
+    
+    // Select the new object
+    if (newActor) {
+        SelectionManager::get().setSelectedActor(newActor.get());
+        selectedNode = newActor.get();
+    }
 
-        if (newObject) {
-            // Generate unique name (Blender style)
-            std::string uniqueName = baseName;
-            int counter = 1;
-            while (currentScene->getObjects().find(uniqueName) != currentScene->getObjects().end()) {
-                uniqueName = baseName + "." + std::to_string(counter++).substr(0, 3);
-            }
-            newObject->setName(uniqueName);
-
-            // Initialize transform with proper local coordinates
-            Transform transform;
-            if (!isRoot(parentNode)) {
-                // If parent is not root, offset from parent's position
-                glm::vec3 parentPos = parentNode->getTransform().getLocalPosition();
-                // Add a small offset to avoid overlap
-                glm::vec3 offset(1.0f, 0.0f, 0.0f); // Offset on X axis
-                transform.setLocalPosition(offset);
-                transform.setLocalRotation(parentNode->getTransform().getLocalRotation());
-                transform.setLocalScale(glm::vec3(1.0f));
-            } else {
-                // If parent is root, place at origin
-                transform.setLocalPosition(glm::vec3(0.0f));
-                transform.setLocalRotation(glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-                transform.setLocalScale(glm::vec3(1.0f));
-            }
-            newObject->setTransform(transform);
-
-            // First add to scene's object map
-            currentScene->addObject(uniqueName, newObject);
-
-            // Then add to hierarchy under parent
-            parentNode->addChild(newObject);
-
-            OHAO_LOG_DEBUG("Created new " + uniqueName + " under parent: " + parentNode->getName());
-
-            // Update buffers
-            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                if (!vulkanContext->updateSceneBuffers()) {
-                    OHAO_LOG_ERROR("Failed to update scene buffers");
-                    return;
-                }
-            }
-
-            // Select the newly created object
-            selectedNode = newObject.get();
-            SelectionManager::get().setSelectedObject(newObject.get());
-        }
-    } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Failed to create primitive: " + std::string(e.what()));
+    // Update scene buffers to include the new object
+    if (auto context = VulkanContext::getContextInstance()) {
+        context->updateSceneBuffers();
     }
 }
 
@@ -563,6 +715,9 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
 
     bool nodeIsRoot = isRoot(node);
     bool isSelected = (node == selectedNode);
+    
+    // Check if node is an Actor (new system)
+    Actor* actorNode = dynamic_cast<Actor*>(node);
 
     // Different colors for root, selected, and regular nodes
     ImU32 nodeColor;
@@ -570,13 +725,15 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
         nodeColor = IM_COL32(255, 165, 0, 255);  // Selected nodes are orange
     } else if (nodeIsRoot) {
         nodeColor = IM_COL32(100, 100, 100, 200);  // Root has slightly different appearance
+    } else if (actorNode) {
+        nodeColor = IM_COL32(120, 150, 200, 255);  // Actors have a blue tint
     } else {
         nodeColor = IM_COL32(100, 100, 100, 255);
     }
 
     float rounding = scaledNodeSize * 0.2f;
 
-    // Draw node with different style for root
+    // Draw node with different style based on type
     if (nodeIsRoot) {
         drawList->AddRect(
             nodePos,
@@ -595,7 +752,7 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
         );
     }
 
-    // Draw node label with different color for root
+    // Draw node label with different text for different node types
     ImVec2 textPos = nodePos;
     textPos.x += nodeSize.x * 0.5f;
     textPos.y += nodeSize.y + 5.0f;
@@ -603,20 +760,33 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
         IM_COL32(150, 150, 150, 255) :
         IM_COL32(255, 255, 255, 255);
 
-    std::string label = nodeIsRoot ? "Root" : node->getName();
+    std::string label;
+    if (nodeIsRoot) {
+        label = "Root";
+    } else if (actorNode) {
+        // For Actor nodes, show the type
+        label = node->getName() + " (Actor)";
+    } else {
+        label = node->getName();
+    }
+    
     drawList->AddText(
         textPos,
         textColor,
         label.c_str()
     );
 
-    // Handle node selection (disable for root)
+    // Handle node selection
     ImVec2 mousePos = ImGui::GetMousePos();
     if (ImGui::IsMouseClicked(0)) {
         if (mousePos.x >= nodePos.x && mousePos.x <= nodePos.x + nodeSize.x &&
             mousePos.y >= nodePos.y && mousePos.y <= nodePos.y + nodeSize.y) {
             selectedNode = node;
-            if (isSceneObject(node)) {
+            if (actorNode) {
+                // Use the new Actor selection system
+                SelectionManager::get().setSelectedActor(actorNode);
+            } else if (isSceneObject(node)) {
+                // Legacy selection
                 SelectionManager::get().setSelectedObject(asSceneObject(node));
             } else {
                 SelectionManager::get().clearSelection();
@@ -628,22 +798,45 @@ void OutlinerPanel::renderGraphNode(SceneNode* node, ImVec2& pos, int depth) {
     float childSpacing = graphSpacingX * graphZoom;
     float verticalSpacing = graphSpacingY * graphZoom;
 
-    const auto& children = node->getChildren();
-    for (size_t i = 0; i < children.size(); ++i) {
-        ImVec2 childPos = nodePos;
-        childPos.x += childSpacing;
-        childPos.y += verticalSpacing * (i - (children.size() - 1) * 0.5f);
+    // Handle different child traversal based on node type
+    if (actorNode) {
+        // For Actors, use the Actor-specific children list
+        const auto& actorChildren = actorNode->getChildren();
+        for (size_t i = 0; i < actorChildren.size(); ++i) {
+            ImVec2 childPos = nodePos;
+            childPos.x += childSpacing;
+            childPos.y += verticalSpacing * (i - (actorChildren.size() - 1) * 0.5f);
 
-        // Draw connection line
-        drawList->AddLine(
-            ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y * 0.5f),
-            ImVec2(childPos.x, childPos.y + nodeSize.y * 0.5f),
-            IM_COL32(150, 150, 150, 255),
-            2.0f
-        );
+            // Draw connection line
+            drawList->AddLine(
+                ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y * 0.5f),
+                ImVec2(childPos.x, childPos.y + nodeSize.y * 0.5f),
+                IM_COL32(150, 150, 150, 255),
+                2.0f
+            );
 
-        // Render child node
-        renderGraphNode(children[i].get(), childPos, depth + 1);
+            // Render child node
+            renderGraphNode(actorChildren[i], childPos, depth + 1);
+        }
+    } else {
+        // Legacy SceneNode children
+        const auto& children = node->getChildren();
+        for (size_t i = 0; i < children.size(); ++i) {
+            ImVec2 childPos = nodePos;
+            childPos.x += childSpacing;
+            childPos.y += verticalSpacing * (i - (children.size() - 1) * 0.5f);
+
+            // Draw connection line
+            drawList->AddLine(
+                ImVec2(nodePos.x + nodeSize.x, nodePos.y + nodeSize.y * 0.5f),
+                ImVec2(childPos.x, childPos.y + nodeSize.y * 0.5f),
+                IM_COL32(150, 150, 150, 255),
+                2.0f
+            );
+
+            // Render child node
+            renderGraphNode(children[i].get(), childPos, depth + 1);
+        }
     }
 }
 

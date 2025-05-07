@@ -71,13 +71,27 @@ public:
     OhaoVkShaderModule* getShaderModules() const { return shaderModules.get(); }
     OhaoVkRenderPass* getRenderPass() const { return renderPass.get(); }
     OhaoVkPipeline* getPipeline() const { return pipeline.get(); }
+    OhaoVkPipeline* getModelPipeline() const { return modelPipeline.get(); }
+    OhaoVkPipeline* getWireframePipeline() const { return wireframePipeline.get(); }
+    OhaoVkPipeline* getGizmoPipeline() const { return gizmoPipeline.get(); }
+    OhaoVkPipeline* getModelPushConstantPipeline() const { return modelPushConstantPipeline.get(); }
     OhaoVkDescriptor* getDescriptor() const { return descriptor.get(); }
     OhaoVkImage* getDepthImage() const { return depthImage.get(); }
     OhaoVkFramebuffer* getFramebufferManager() const { return framebufferManager.get(); }
     OhaoVkCommandManager* getCommandManager() const { return commandManager.get(); }
     OhaoVkSyncObjects* getSyncObjects() const { return syncObjects.get(); }
-    OhaoVkBuffer* getVertexBuffer() const { return vertexBuffer.get(); }
-    OhaoVkBuffer* getIndexBuffer() const { return indexBuffer.get(); }
+    OhaoVkBuffer* getVertexBuffer() const { 
+        if (!vertexBuffer || !vertexBuffer->isValid()) {
+            fprintf(stderr, "Warning: Attempting to access null or invalid vertex buffer\n");
+        }
+        return vertexBuffer.get(); 
+    }
+    OhaoVkBuffer* getIndexBuffer() const { 
+        if (!indexBuffer || !indexBuffer->isValid()) {
+            fprintf(stderr, "Warning: Attempting to access null or invalid index buffer\n");
+        }
+        return indexBuffer.get(); 
+    }
     // === Raw Vulkan Handle Getters ===
     VkInstance getVkInstance() const { return instance ? instance->getInstance() : VK_NULL_HANDLE; }
     VkSurfaceKHR getVkSurface() const { return surface ? surface->getSurface() : VK_NULL_HANDLE; }
@@ -129,7 +143,20 @@ public:
     bool updateSceneBuffers(); //update all scene objects buffers
     const MeshBufferInfo* getMeshBufferInfo(SceneObject* object) const {
         auto it = meshBufferMap.find(object);
-        return it != meshBufferMap.end() ? &it->second : nullptr;
+        if (it != meshBufferMap.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
+    
+    // Overload that fills a reference with the data
+    bool getMeshBufferInfo(SceneObject* object, MeshBufferInfo& outInfo) const {
+        auto it = meshBufferMap.find(object);
+        if (it != meshBufferMap.end()) {
+            outInfo = it->second;
+            return true;
+        }
+        return false;
     }
 
     bool hasUnsavedChanges() const { return sceneModified; }
@@ -160,6 +187,7 @@ private:
     std::unique_ptr<OhaoVkPipeline> modelPipeline;      // For solid model rendering
     std::unique_ptr<OhaoVkPipeline> wireframePipeline;  // For wireframe model rendering
     std::unique_ptr<OhaoVkPipeline> gizmoPipeline;      // For gizmo
+    std::unique_ptr<OhaoVkPipeline> modelPushConstantPipeline; // For model rendering with push constants
     std::unique_ptr<OhaoVkPipeline> scenePipeline;
     std::unique_ptr<OhaoVkPipeline> sceneGizmoPipeline;
     std::unique_ptr<OhaoVkDescriptor> descriptor;

@@ -1,0 +1,6 @@
+file(GLOB_RECURSE ASSET_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+file(GLOB_RECURSE ASSET_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+
+target_sources(ohao_core PRIVATE ${ASSET_SOURCES} ${ASSET_HEADERS})
+ 
+target_include_directories(ohao_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}) 

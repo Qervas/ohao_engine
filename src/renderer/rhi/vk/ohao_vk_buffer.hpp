@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.h>
+#include <cstdio>
 
 namespace ohao {
 
@@ -41,10 +42,19 @@ public:
         OhaoVkBuffer& buffer
     );
 
-    VkBuffer getBuffer() const { return buffer; }
+    // Safe getter for buffer handle - checks if valid and logs errors
+    VkBuffer getBuffer() const { 
+        if (buffer == VK_NULL_HANDLE) {
+            // Use fprintf instead of logging in case logger depends on this
+            fprintf(stderr, "Warning: Attempting to get a null VkBuffer handle\n");
+        }
+        return buffer; 
+    }
+    
     VkDeviceMemory getMemory() const { return memory; }
     bool isMapped() const { return mapped != nullptr; }
     void* getMappedMemory() const { return mapped; }
+    bool isValid() const { return buffer != VK_NULL_HANDLE && memory != VK_NULL_HANDLE; }
 
 private:
     OhaoVkDevice* device{nullptr};

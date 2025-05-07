@@ -1,15 +1,26 @@
 #pragma once
+
 #include <string>
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
+#include <vector>
+#include <functional>
+#include "../actor/actor.hpp"
 #include <glm/glm.hpp>
-#include "core/asset/model.hpp"
-#include "core/scene/scene_node.hpp"
-#include "core/scene/scene_object.hpp"
-#include "core/material/material.hpp"
-#include "nlohmann/json.hpp"
+
+// Forward declarations
+namespace nlohmann {
+    class json;
+}
 
 namespace ohao {
+
+class MeshComponent;
+class TransformComponent;
+class PhysicsComponent;
+class Component;
+class SceneNode;
+
 struct Light {
     glm::vec3 position{0.0f};
     glm::vec3 color{1.0f};
@@ -19,64 +30,96 @@ struct Light {
 
 class Scene {
 public:
-    Scene();
-    ~Scene() = default;
-
-    // Scene management
-    bool loadModelFromFile(const std::string& filename);
-    template<typename Func>
-    void traverseScene(Func&& callback);
-
-    //adder
-    void addObject(const std::string& name, std::shared_ptr<SceneObject> object);
-    void addLight(const std::string& name, const Light& light);
-
-    //remover
-    void removeObject(const std::string& name);
-    void removeLight(const std::string& name);
-
-    //getter
-    SceneNode::Ptr getRootNode();
-    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& getObjects() const;
-    std::shared_ptr<SceneObject> getObject(const std::string& name);
-    const std::unordered_map<std::string, Light>& getLights() const;
-    Light* getLight(const std::string& name);
-    const std::string& getProjectPath() const { return projectPath; }
-    const std::string& getProjectDir() const { return projectDir; }
-
-    //setter
-    void setRootNode(SceneNode::Ptr node);
-    void setObjectMaterial(const std::string& objectName, const Material& material);
-    void updateLight(const std::string& name, const Light& light);
+    using Ptr = std::shared_ptr<Scene>;
+    
+    Scene(const std::string& name = "New Scene");
+    ~Scene();
+    
+    // Actor management
+    Actor::Ptr createActor(const std::string& name = "Actor");
+    void addActor(Actor::Ptr actor);
+    void removeActor(Actor::Ptr actor);
+    void removeActor(const std::string& name);
+    void removeActor(uint64_t id);
+    void removeAllActors();
+    
+    // Actor lookup
+    Actor::Ptr findActor(const std::string& name) const;
+    Actor::Ptr findActor(uint64_t id) const;
+    std::vector<Actor::Ptr> findActorsByName(const std::string& partialName) const;
+    std::vector<Actor::Ptr> findActorsByTag(const std::string& tag) const;
+    const std::unordered_map<uint64_t, Actor::Ptr>& getAllActors() const;
+    
+    // Legacy compatibility methods
+    void addObject(const std::string& name, Actor::Ptr actor) { actorsByName[name] = actor; actors[actor->getID()] = actor; }
+    void removeObject(const std::string& name) { removeActor(name); }
+    Actor::Ptr getObjectByID(uint64_t id) { return findActor(id); }
+    const std::unordered_map<std::string, Actor::Ptr>& getObjectsByName() const { return actorsByName; }
+    
+    // Component notifications
+    void onMeshComponentAdded(MeshComponent* component);
+    void onMeshComponentRemoved(MeshComponent* component);
+    void onMeshComponentChanged(MeshComponent* component);
+    
+    void onPhysicsComponentAdded(PhysicsComponent* component);
+    void onPhysicsComponentRemoved(PhysicsComponent* component);
+    
+    // Scene properties
+    const std::string& getName() const;
     void setName(const std::string& name);
-    void setProjectPath(const std::string& path);
-
-    // Material management
-    void convertAndAssignMaterial(const std::string& objectName, const MaterialData& mtlData);
-    Material convertMTLToMaterial(const MaterialData& mtlData);
-
-    // serialization
+    
+    // Light management
+    void addLight(const std::string& name, const Light& light);
+    void removeLight(const std::string& name);
+    void updateLight(const std::string& name, const Light& light);
+    Light* getLight(const std::string& name);
+    const std::unordered_map<std::string, Light>& getAllLights() const;
+    
+    // Scene lifecycle
+    void initialize();
+    void update(float deltaTime);
+    void render();
+    void destroy();
+    
+    // Model import
+    bool importModel(const std::string& filename, Actor::Ptr targetActor = nullptr);
+    
+    // Serialization
     bool saveToFile(const std::string& filename);
     bool loadFromFile(const std::string& filename);
-    static const std::string PROJECT_FILE_EXTENSION; // = ".ohao";
-    void validateTransformHierarchy();
-
+    
+    // Root node accessor for backwards compatibility
+    Actor::Ptr getRootNode() const { return rootNode; }
+    
+    // Buffer update
+    bool updateSceneBuffers();
+    
 private:
-    std::unordered_map<std::string, std::shared_ptr<SceneObject>> objects;
+    std::string name;
+    Actor::Ptr rootNode;
+    
+    // Actor tracking
+    std::unordered_map<uint64_t, Actor::Ptr> actors;
+    std::unordered_map<std::string, Actor::Ptr> actorsByName;
+    
+    // Component tracking
+    std::vector<MeshComponent*> meshComponents;
+    std::vector<PhysicsComponent*> physicsComponents;
+    
+    // Lighting
     std::unordered_map<std::string, Light> lights;
-    SceneNode::Ptr rootNode;
-    std::string sceneName;
-    std::string projectPath;
-    std::string projectDir;
-
-    template <typename Func>
-    void traverseNode(SceneNode::Ptr node, Func&& callback);
-
-    void parseModelMaterials(const Model& model);
-    void setupDefaultMaterial(Material& material);
-    nlohmann::json serializeToJson() const;
-    bool deserializeFromJson(const nlohmann::json& json);
-    void validateNodeTransforms(SceneNode* node);
+    
+    // Scene state
+    bool needsBufferUpdate;
+    
+    // Helper methods
+    void registerActor(Actor::Ptr actor);
+    void unregisterActor(Actor::Ptr actor);
+    void setupDefaultMaterial(class Material& material);
+    
+    // Hierarchy helpers
+    void registerActorHierarchy(Actor::Ptr actor);
+    void unregisterActorHierarchy(Actor::Ptr actor);
 };
 
-} // namespace ohao
+} // namespace ohao 
