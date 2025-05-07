@@ -6,6 +6,8 @@
 #include "core/component/transform_component.hpp"
 #include "core/component/mesh_component.hpp"
 #include "core/component/physics_component.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 namespace ohao {
 
@@ -61,6 +63,19 @@ private:
     // UI state
     bool showErrorPopup{false};
     std::string errorMessage;
+
+    // Primitive types for mesh generation
+    enum class PrimitiveType {
+        Empty,
+        Cube,
+        Sphere,
+        Plane,
+        Cylinder,
+        Cone
+    };
+
+    // Generate primitive meshes for MeshComponent
+    std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type);
 };
 
 } // namespace ohao

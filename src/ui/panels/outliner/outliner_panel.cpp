@@ -435,21 +435,41 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
         case PrimitiveType::Cone:
             objName = "Cone";
             break;
+        case PrimitiveType::Empty:
+        default:
+            objName = "Empty";
+            break;
     }
 
     // Create unique name
     int counter = 1;
     std::string baseName = objName;
     while (currentScene->findActor(objName) != nullptr) {
-        objName = baseName + "_" + std::to_string(counter++);
+        objName = baseName + std::to_string(counter++);
     }
 
     // Create the actor with the given name
-    auto newObject = currentScene->createActor(objName);
+    auto newActor = currentScene->createActor(objName);
+    
+    // Generate and assign the mesh if it's not an empty object
+    if (type != PrimitiveType::Empty && newActor) {
+        // Add a mesh component
+        auto meshComponent = newActor->addComponent<MeshComponent>();
+        
+        // Generate the appropriate mesh for this primitive type
+        auto mesh = generatePrimitiveMesh(type);
+        
+        // Assign the mesh to the component
+        if (meshComponent && mesh) {
+            meshComponent->setModel(mesh);
+            OHAO_LOG("Added " + objName + " with mesh component successfully");
+        }
+    }
     
     // Select the new object
-    if (newObject) {
-        SelectionManager::get().setSelectedActor(newObject.get());
+    if (newActor) {
+        SelectionManager::get().setSelectedActor(newActor.get());
+        selectedNode = newActor.get();
     }
 
     // Update scene buffers to include the new object
