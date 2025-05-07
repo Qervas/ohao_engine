@@ -90,12 +90,18 @@ public:
     enum class RenderMode {
         SOLID,
         WIREFRAME,
-        GIZMO
+        GIZMO,
+        PUSH_CONSTANT_MODEL
     };
     struct SelectionPushConstants {
         glm::vec4 highlightColor;
         float scaleOffset;
     };
+    
+    struct ModelPushConstants {
+        glm::mat4 model;
+    };
+    
     OhaoVkPipeline() = default;
     ~OhaoVkPipeline();
 
@@ -127,6 +133,7 @@ public:
 private:
     bool createPipeline(RenderMode mode, const PipelineConfigInfo* configInfo = nullptr);
     bool createPipelineLayoutWithPushConstants(VkDescriptorSetLayout descriptorSetLayout);
+    bool createModelPushConstantPipelineLayout(VkDescriptorSetLayout descriptorSetLayout);
     bool createDefaultPipelineLayout(VkDescriptorSetLayout descriptorSetLayout);
 
     OhaoVkDevice* device{nullptr};

@@ -2,13 +2,22 @@
 #include "core/asset/model.hpp"
 #include "core/scene/scene_node.hpp"
 #include "core/material/material.hpp"
+#include <string>
+#include <memory>
+#include <atomic>
 
 namespace ohao {
+
+// Generate unique IDs for scene objects
+using ObjectID = uint64_t;
 
 class SceneObject : public SceneNode {
 public:
     SceneObject(const std::string& name = "Object");
     ~SceneObject() override = default;
+
+    // Get the unique object ID
+    ObjectID getID() const { return objectID; }
 
     // Component accessors
     void setModel(std::shared_ptr<Model> model) { this->model = model; }
@@ -32,6 +41,13 @@ protected:
 
     Material material;
     std::shared_ptr<Model> model;
+    
+private:
+    // Unique ID for each object - never changes after creation
+    ObjectID objectID;
+    
+    // Static counter for generating unique IDs
+    static std::atomic<ObjectID> nextObjectID;
 };
 
 } // namespace ohao

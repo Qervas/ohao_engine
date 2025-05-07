@@ -5,7 +5,7 @@
 #include <renderer/gizmo/axis_gizmo.hpp>
 #include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
 #include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
-#include "scene/scene_object.hpp"
+#include "core/actor/actor.hpp"
 #include "utils/common_types.hpp"
 
 namespace ohao {
@@ -26,7 +26,6 @@ public:
 
     bool initializeRenderTarget(uint32_t width, uint32_t height);
 
-
     void beginFrame();
     void render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame);
     void endFrame();
@@ -40,8 +39,7 @@ public:
         pipeline = mainPipeline;
         this->gizmoPipeline = gizmoPipeline;
     }
-        static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
-
+    static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
 
 private:
     VulkanContext* context{nullptr};
@@ -51,6 +49,8 @@ private:
     OhaoVkPipeline* gizmoPipeline{nullptr};
     std::unique_ptr<OhaoVkPipeline> selectionPipeline;
     VkPipelineLayout selectionPipelineLayout{VK_NULL_HANDLE};
+    VkCommandBuffer currentCommandBuffer{VK_NULL_HANDLE};
+    bool isPipelineLayoutValid{false};  // Track if pipeline layout was successfully created
 
     struct SelectionPushConstants {
         glm::vec4 highlightColor;
@@ -59,7 +59,8 @@ private:
 
     bool createRenderResources(uint32_t width, uint32_t height);
     bool initializeSelectionPipeline();
-    void drawSelectionHighlight(VkCommandBuffer cmd, SceneObject* object, const MeshBufferInfo& bufferInfo);
+    void drawSelectionHighlight(VkCommandBuffer cmd, Actor* actor, const MeshBufferInfo& bufferInfo);
+    void renderAxisGizmo(VkCommandBuffer cmd, OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame);
 };
 
 } // namespace ohao

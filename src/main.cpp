@@ -3,10 +3,15 @@
 #include <GLFW/glfw3.h>
 #include <chrono>
 #include "renderer/camera/camera_controller.hpp"
-#include "ui_manager.hpp"
+#include "ui/system/ui_manager.hpp"
 #include <iostream>
 #include <memory>
 #include <vulkan/vulkan_core.h>
+
+// Forward declaration of demo functions
+namespace ohao {
+    void runMultiObjectDemo(VulkanContext* context);
+}
 
 int main() {
     try {
@@ -22,6 +27,7 @@ int main() {
 
         auto lastTime = std::chrono::high_resolution_clock::now();
         bool tabPressed = false;
+        bool demoPressed = false;
 
         while (!window.shouldClose()) {
             auto currentTime = std::chrono::high_resolution_clock::now();
@@ -38,6 +44,17 @@ int main() {
                 }
             }else {
                 tabPressed = false;
+            }
+            
+            // Check for the M key to load multi-object demo
+            if(window.isKeyPressed(GLFW_KEY_M)){
+                if(!demoPressed){
+                    std::cout << "Loading multi-object demo (press M)" << std::endl;
+                    ohao::runMultiObjectDemo(&vulkan);
+                    demoPressed = true;
+                }
+            }else {
+                demoPressed = false;
             }
 
             if (!uiManager->wantsInputCapture()) {
