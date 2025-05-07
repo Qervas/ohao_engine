@@ -17,7 +17,13 @@ void PropertiesPanel::render() {
 
     auto* selectedObject = SelectionManager::get().getSelectedObject();
     if (selectedObject) {
+        // Check if the object is an Actor first (new system)
+        if (auto actor = asActor(selectedObject)) {
+            renderActorProperties(actor);
+        } else {
+            // Fall back to the old system
         renderNodeProperties(selectedObject);
+        }
     } else {
         ImGui::TextDisabled("No object selected");
     }
@@ -36,7 +42,9 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
     }
 
     ImGui::SameLine();
-    if (auto obj = asSceneObject(node)) {
+    if (auto actor = asActor(node)) {
+        ImGui::TextDisabled("(Actor)");
+    } else if (auto obj = asSceneObject(node)) {
         ImGui::TextDisabled("(%s)", obj->getTypeName());
     } else {
         ImGui::TextDisabled("(Node)");
@@ -50,21 +58,178 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
     }
 
     // SceneObject-specific components
-    if (auto obj = asSceneObject(node)) {
-        // Material component
+    if (auto actor = asActor(node)) {
+        // If this is an Actor, use the Actor-specific component rendering
+        renderActorProperties(actor);
+    } else if (auto obj = asSceneObject(node)) {
+        // Material component for legacy scene objects
         if (ImGui::CollapsingHeader("Material")) {
             renderMaterialProperties(obj);
         }
-
-        // Other components
-        renderComponentProperties(obj);
     }
 }
 
+void PropertiesPanel::renderActorProperties(Actor* actor) {
+    if (!actor) return;
+    
+    // Actor name and type header
+    char nameBuf[256];
+    strcpy(nameBuf, actor->getName().c_str());
+    if (ImGui::InputText("##Name", nameBuf, sizeof(nameBuf))) {
+        actor->setName(nameBuf);
+    }
+    
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Actor)");
+    
+    ImGui::Separator();
+    
+    // Transform component
+    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto transformComponent = actor->getTransform();
+        if (transformComponent) {
+            renderTransformComponentProperties(transformComponent);
+        } else {
+            ImGui::TextDisabled("No transform component");
+            
+            // Add a transform component button
+            if (ImGui::Button("Add Transform Component")) {
+                actor->addComponent<TransformComponent>();
+            }
+        }
+    }
+    
+    // Model display (find MeshComponent if exists)
+    auto meshComponent = actor->getComponent<MeshComponent>();
+    if (meshComponent && meshComponent->getModel()) {
+        if (ImGui::CollapsingHeader("Model", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto model = meshComponent->getModel();
+            ImGui::Text("Vertices: %zu", model->vertices.size());
+            ImGui::Text("Indices: %zu", model->indices.size());
+            
+            // Material properties accessible through the MeshComponent UI
+            
+            // Wireframe toggle
+            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
+                bool wireframe = vulkanContext->isWireframeMode();
+                if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
+                    vulkanContext->setWireframeMode(wireframe);
+                }
+            }
+        }
+    }
+    
+    // Components list and management
+    renderComponentProperties(actor);
+}
+
+void PropertiesPanel::renderTransformComponentProperties(TransformComponent* transform) {
+    if (!transform) return;
+    
+    bool transformChanged = false;
+    
+    // Get current transform values
+    glm::vec3 position = transform->getPosition();
+    glm::vec3 rotation = glm::degrees(transform->getRotationEuler());
+    glm::vec3 scale = transform->getScale();
+    
+    // Display ID in debug builds
+    ImGui::Text("Transform Component (ID: %p)", (void*)transform);
+    
+    if (renderVec3Control("Position", position)) {
+        transform->setPosition(position);
+        transformChanged = true;
+    }
+    
+    if (renderVec3Control("Rotation", rotation)) {
+        transform->setRotationEuler(glm::radians(rotation));
+        transformChanged = true;
+    }
+    
+    if (renderVec3Control("Scale", scale, 1.0f)) {
+        transform->setScale(scale);
+        transformChanged = true;
+    }
+    
+    // Display world transform info
+    if (ImGui::TreeNode("World Transform")) {
+        glm::vec3 worldPos = transform->getWorldPosition();
+        glm::vec3 worldRot = glm::degrees(transform->getRotationEuler());
+        glm::vec3 worldScale = transform->getWorldScale();
+        
+        ImGui::Text("World Position: %.2f, %.2f, %.2f", worldPos.x, worldPos.y, worldPos.z);
+        ImGui::Text("World Rotation: %.2f, %.2f, %.2f", worldRot.x, worldRot.y, worldRot.z);
+        ImGui::Text("World Scale: %.2f, %.2f, %.2f", worldScale.x, worldScale.y, worldScale.z);
+        
+        ImGui::TreePop();
+    }
+    
+    // If transform changed, update scene buffers
+    if (transformChanged && VulkanContext::getContextInstance()) {
+        VulkanContext::getContextInstance()->updateSceneBuffers();
+    }
+}
 
 void PropertiesPanel::renderTransformProperties(SceneNode* node) {
     if (!node) return;
     
+    // Check if node is actually an Actor (new system)
+    Actor* actor = dynamic_cast<Actor*>(node);
+    if (actor) {
+        // Use the TransformComponent from the Actor
+        auto transformComponent = actor->getTransform();
+        if (!transformComponent) {
+            ImGui::TextDisabled("No transform component found");
+            return;
+        }
+        
+        bool transformChanged = false;
+        
+        // Get current transform values
+        glm::vec3 position = transformComponent->getPosition();
+        glm::vec3 rotation = glm::degrees(transformComponent->getRotationEuler());
+        glm::vec3 scale = transformComponent->getScale();
+        
+        // Show object info in debug builds
+        ImGui::Text("Object: %s (ID: %zu)", actor->getName().c_str(), actor->getID());
+        
+        if (renderVec3Control("Position", position)) {
+            transformComponent->setPosition(position);
+            transformChanged = true;
+        }
+        
+        if (renderVec3Control("Rotation", rotation)) {
+            transformComponent->setRotationEuler(glm::radians(rotation));
+            transformChanged = true;
+        }
+        
+        if (renderVec3Control("Scale", scale, 1.0f)) {
+            transformComponent->setScale(scale);
+            transformChanged = true;
+        }
+        
+        // Display world transform info
+        if (ImGui::TreeNode("World Transform")) {
+            glm::vec3 worldPos = transformComponent->getWorldPosition();
+            glm::vec3 worldRot = glm::degrees(transformComponent->getRotationEuler());
+            glm::vec3 worldScale = transformComponent->getWorldScale();
+            
+            ImGui::Text("World Position: %.2f, %.2f, %.2f", worldPos.x, worldPos.y, worldPos.z);
+            ImGui::Text("World Rotation: %.2f, %.2f, %.2f", worldRot.x, worldRot.y, worldRot.z);
+            ImGui::Text("World Scale: %.2f, %.2f, %.2f", worldScale.x, worldScale.y, worldScale.z);
+            
+            ImGui::TreePop();
+        }
+        
+        // If transform changed, update scene buffers
+        if (transformChanged && VulkanContext::getContextInstance()) {
+            VulkanContext::getContextInstance()->updateSceneBuffers();
+        }
+        
+        return;
+    }
+    
+    // Fall back to old system for backward compatibility
     SceneObject* sceneObject = asSceneObject(node);
     if (!sceneObject) {
         ImGui::TextDisabled("Transform properties only available for SceneObjects");
@@ -190,66 +355,305 @@ bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
 void PropertiesPanel::renderMaterialProperties(SceneObject* object) {
     if (!object) return;
 
+    ImGui::Separator();
+    
+    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
     Material& material = object->getMaterial();
-    bool materialChanged = false;
+        bool changed = false;
 
-    // Base color
-    if (ImGui::ColorEdit3("Base Color", &material.baseColor[0])) {
-        materialChanged = true;
+        // Base color picker
+        float color[3] = {
+            material.baseColor.r,
+            material.baseColor.g,
+            material.baseColor.b
+        };
+        
+        if (ImGui::ColorEdit3("Base Color", color)) {
+            material.baseColor = glm::vec3(color[0], color[1], color[2]);
+            changed = true;
     }
 
-    // PBR parameters
+        // PBR properties
     if (ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f)) {
-        materialChanged = true;
+            changed = true;
     }
+        
     if (ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f)) {
-        materialChanged = true;
+            changed = true;
     }
+        
     if (ImGui::SliderFloat("AO", &material.ao, 0.0f, 1.0f)) {
-        materialChanged = true;
+            changed = true;
     }
 
-    // Emissive
-    if (ImGui::ColorEdit3("Emissive", &material.emissive[0])) {
-        materialChanged = true;
+        // Emissive color
+        float emissive[3] = {
+            material.emissive.r,
+            material.emissive.g,
+            material.emissive.b
+        };
+        
+        if (ImGui::ColorEdit3("Emissive", emissive)) {
+            material.emissive = glm::vec3(emissive[0], emissive[1], emissive[2]);
+            changed = true;
     }
 
-    // IOR
-    if (ImGui::DragFloat("IOR", &material.ior, 0.01f, 1.0f, 3.0f)) {
-        materialChanged = true;
+        // IOR (Index of Refraction)
+        if (ImGui::SliderFloat("IOR", &material.ior, 1.0f, 2.5f)) {
+            changed = true;
     }
 
-    // If any material property changed, update the scene
-    if (materialChanged && currentScene) {
-        currentScene->setObjectMaterial(object->getName(), material);
-
-        // Update the scene buffers through VulkanContext
-        if (auto context = VulkanContext::getContextInstance()) {
-            context->updateSceneBuffers();
+        if (changed && object) {
+            // Update material - no need to call scene method since we're modifying it directly
+            object->setMaterial(material);
         }
     }
 }
 
-void PropertiesPanel::renderComponentProperties(SceneObject* object) {
-    if (!object) return;
-
-    if (ImGui::CollapsingHeader("Model")) {
-        if (auto model = object->getModel()) {
-            ImGui::Text("Vertices: %zu", model->vertices.size());
-            ImGui::Text("Indices: %zu", model->indices.size());
-            ImGui::Text("Materials: %zu", model->materials.size());
-
-            // wireframe toggle
-            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                bool wireframe = vulkanContext->isWireframeMode();
-                if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
-                    vulkanContext->setWireframeMode(wireframe);
-                }
-                // scene-wide properties
-            }
+void PropertiesPanel::renderComponentProperties(Actor* actor) {
+    if (!actor) return;
+    
+    if (ImGui::CollapsingHeader("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // List all components with an option to remove them
+        const auto& components = actor->getAllComponents();
+        if (components.empty()) {
+            ImGui::TextDisabled("No components attached");
         } else {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No model assigned");
+            // Create a table for better layout
+            if (ImGui::BeginTable("ComponentsTable", 2, ImGuiTableFlags_Borders)) {
+                ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableHeadersRow();
+                
+                // Track components to remove by index instead of pointer
+                std::vector<size_t> indicesToRemove;
+                
+                for (size_t i = 0; i < components.size(); i++) {
+                    auto& component = components[i];
+                    
+                    // Skip transform component as it's managed separately
+                    if (component.get() == actor->getTransform()) {
+                        continue;
         }
+                    
+                    ImGui::TableNextRow();
+                    
+                    // Component name and type
+                    ImGui::TableSetColumnIndex(0);
+                    // Create a unique ID using string + int
+                    std::string nodeLabel = std::string(component->getTypeName()) + "##" + std::to_string(i);
+                    bool isOpen = ImGui::TreeNodeEx(nodeLabel.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+                    
+                    // Removal button
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::Button("Remove")) {
+                        // Queue the index for removal
+                        indicesToRemove.push_back(i);
+                    }
+                    ImGui::PopID();
+                    
+                    // Component-specific properties
+                    if (isOpen) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Columns(1);
+                        
+                        // Render component-specific properties
+                        if (auto transformComponent = dynamic_cast<TransformComponent*>(component.get())) {
+                            // Transform is already displayed separately
+                            ImGui::TextDisabled("Transform properties are shown in the Transform section");
+                        } 
+                        else if (auto meshComponent = dynamic_cast<MeshComponent*>(component.get())) {
+                            // Mesh properties
+                            renderMeshComponentProperties(meshComponent);
+                        }
+                        else if (auto physicsComponent = dynamic_cast<PhysicsComponent*>(component.get())) {
+                            // Physics properties
+                            renderPhysicsComponentProperties(physicsComponent);
+                        }
+                        else {
+                            // Generic component properties
+                            ImGui::TextDisabled("No editable properties available for this component");
+                        }
+                        
+                        ImGui::TreePop();
+                    }
+                }
+                
+                ImGui::EndTable();
+
+                // Process removals (in reverse order to avoid invalidating indices)
+                std::sort(indicesToRemove.begin(), indicesToRemove.end(), std::greater<size_t>());
+                for (auto index : indicesToRemove) {
+                    // We can't directly call removeComponent with the component pointer
+                    // Instead, we'll check the type and use the appropriate template method
+                    
+                    auto& component = components[index];
+                    
+                    if (dynamic_cast<MeshComponent*>(component.get())) {
+                        actor->removeComponent<MeshComponent>();
+                    }
+                    else if (dynamic_cast<PhysicsComponent*>(component.get())) {
+                        actor->removeComponent<PhysicsComponent>();
+                    }
+                    // Add more component types here as needed
+                }
+            }
+        }
+        
+        // Add Component button and dropdown
+        if (ImGui::Button("Add Component")) {
+            ImGui::OpenPopup("AddComponentPopup");
+        }
+        
+        if (ImGui::BeginPopup("AddComponentPopup")) {
+            ImGui::TextUnformatted("Component Types");
+            ImGui::Separator();
+            
+            if (ImGui::MenuItem("Transform Component")) {
+                if (actor->getComponent<TransformComponent>() == nullptr) {
+                    actor->addComponent<TransformComponent>();
+        } else {
+                    ImGui::CloseCurrentPopup();
+                    ImGui::OpenPopup("TransformAlreadyExistsPopup");
+                }
+            }
+            
+            if (ImGui::MenuItem("Mesh Component")) {
+                actor->addComponent<MeshComponent>();
+            }
+            
+            if (ImGui::MenuItem("Physics Component")) {
+                try {
+                    actor->addComponent<PhysicsComponent>();
+                } catch (const std::exception& e) {
+                    ImGui::CloseCurrentPopup();
+                    errorMessage = "Failed to add Physics component: " + std::string(e.what());
+                    showErrorPopup = true;
+                }
+            }
+            
+            ImGui::EndPopup();
+        }
+        
+        // Error popup
+        if (showErrorPopup) {
+            ImGui::OpenPopup("ComponentErrorPopup");
+            showErrorPopup = false;
+        }
+        
+        if (ImGui::BeginPopupModal("ComponentErrorPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("%s", errorMessage.c_str());
+            if (ImGui::Button("OK", ImVec2(120, 0))) {
+                ImGui::CloseCurrentPopup();
+                errorMessage.clear();
+            }
+            ImGui::EndPopup();
+        }
+        
+        // Transform already exists popup
+        if (ImGui::BeginPopupModal("TransformAlreadyExistsPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped("An actor can only have one Transform component.");
+            if (ImGui::Button("OK", ImVec2(120, 0))) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+}
+
+void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
+    if (!component) return;
+    
+    // Model information
+    if (auto model = component->getModel()) {
+        ImGui::Text("Vertices: %zu", model->vertices.size());
+        ImGui::Text("Indices: %zu", model->indices.size());
+        
+        // Model loading button
+        if (ImGui::Button("Load Model...")) {
+            // We would open a file dialog here
+            // For now, just a placeholder
+            ImGui::OpenPopup("ModelLoadingNotImplemented");
+        }
+        
+        // Material properties
+        if (ImGui::CollapsingHeader("Material Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+            Material& material = component->getMaterial();
+            
+            // Base color picker
+            float color[3] = {
+                material.baseColor.r,
+                material.baseColor.g,
+                material.baseColor.b
+            };
+            
+            if (ImGui::ColorEdit3("Base Color", color)) {
+                material.baseColor = glm::vec3(color[0], color[1], color[2]);
+            }
+            
+            // PBR properties
+            ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
+            ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f);
+            ImGui::SliderFloat("AO", &material.ao, 0.0f, 1.0f);
+            
+            // Emissive properties
+            float emissive[3] = {
+                material.emissive.r,
+                material.emissive.g,
+                material.emissive.b
+            };
+            
+            if (ImGui::ColorEdit3("Emissive", emissive)) {
+                material.emissive = glm::vec3(emissive[0], emissive[1], emissive[2]);
+            }
+            
+            // IOR slider
+            ImGui::SliderFloat("IOR", &material.ior, 1.0f, 2.5f);
+        }
+    } else {
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No model assigned");
+        
+        if (ImGui::Button("Load Model...")) {
+            // We would open a file dialog here
+            // For now, just a placeholder
+            ImGui::OpenPopup("ModelLoadingNotImplemented");
+        }
+    }
+    
+    // Popup for unimplemented features
+    if (ImGui::BeginPopupModal("ModelLoadingNotImplemented", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Model loading from the component editor is not yet implemented.");
+        ImGui::Text("Please use the File > Import Model menu instead.");
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* component) {
+    if (!component) return;
+    
+    // For now, just display basic info since we don't know the actual PhysicsComponent API
+    ImGui::Text("Physics Component: %p", (void*)component);
+    ImGui::TextDisabled("Full physics component editor is coming soon!");
+    
+    // Basic properties that would be common for most physics systems
+    float density = 1.0f;  // Default value
+    if (ImGui::SliderFloat("Density", &density, 0.1f, 10.0f)) {
+        // component->setDensity(density);
+    }
+    
+    bool isStatic = false;  // Default value
+    if (ImGui::Checkbox("Static Object", &isStatic)) {
+        // component->setStatic(isStatic);
+    }
+    
+    float friction = 0.5f;  // Default value
+    if (ImGui::SliderFloat("Friction", &friction, 0.0f, 1.0f)) {
+        // component->setFriction(friction);
     }
 }
 

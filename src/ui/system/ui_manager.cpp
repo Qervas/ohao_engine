@@ -415,9 +415,20 @@ void UIManager::handleModelImport() {
         if (!filename.empty()) {
             if (vulkanContext->importModel(filename)) {
                 OHAO_LOG("Successfully loaded model: " + filename);
+                
+                // Get the scene after model import
+                auto scene = vulkanContext->getScene();
+                
+                // Make sure all UI components are updated with the new model
                 if (outlinerPanel) {
-                    outlinerPanel->setScene(vulkanContext->getScene());
+                    outlinerPanel->setScene(scene);
                 }
+                
+                // Update SelectionManager to ensure it has the latest scene data
+                SelectionManager::get().setScene(scene);
+                
+                // Ensure buffers are updated
+                vulkanContext->updateSceneBuffers();
             } else {
                 OHAO_LOG_ERROR("Failed to load model: " + filename);
             }
@@ -482,10 +493,20 @@ void UIManager::setupPanels() {
     outlinerPanel = std::make_unique<OutlinerPanel>();
     propertiesPanel = std::make_unique<PropertiesPanel>();
     sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
+    
+    // Initialize UI panels with the current scene if available
     if (vulkanContext && vulkanContext->getScene()) {
-        outlinerPanel->setScene(vulkanContext->getScene());
-        propertiesPanel->setScene(vulkanContext->getScene());
-        sceneSettingsPanel->setScene(vulkanContext->getScene());
+        auto scene = vulkanContext->getScene();
+        
+        // Set the scene reference in the SelectionManager first
+        SelectionManager::get().setScene(scene);
+        
+        // Then initialize the panels
+        outlinerPanel->setScene(scene);
+        propertiesPanel->setScene(scene);
+        sceneSettingsPanel->setScene(scene);
+        
+        OHAO_LOG_DEBUG("UI Panels initialized with scene");
     }
 }
 
@@ -557,10 +578,16 @@ void UIManager::handleNewProject() {
             currentProjectPath = "";
             OHAO_LOG("Created new project: " + newProjectName);
 
-            // Update UI panels with new scene
-            if (outlinerPanel) outlinerPanel->setScene(vulkanContext->getScene());
-            if (propertiesPanel) propertiesPanel->setScene(vulkanContext->getScene());
-            if (sceneSettingsPanel) sceneSettingsPanel->setScene(vulkanContext->getScene());
+            // Get the reference to the newly created scene
+            auto scene = vulkanContext->getScene();
+            
+            // Update SelectionManager first
+            SelectionManager::get().setScene(scene);
+            
+            // Then update UI panels
+            if (outlinerPanel) outlinerPanel->setScene(scene);
+            if (propertiesPanel) propertiesPanel->setScene(scene);
+            if (sceneSettingsPanel) sceneSettingsPanel->setScene(scene);
         } else {
             OHAO_LOG_ERROR("Failed to create new project");
         }
@@ -584,10 +611,16 @@ void UIManager::handleOpenProject() {
             currentProjectPath = filename;
             OHAO_LOG("Successfully opened project: " + filename);
 
-            // Update UI panels
-            if (outlinerPanel) outlinerPanel->setScene(vulkanContext->getScene());
-            if (propertiesPanel) propertiesPanel->setScene(vulkanContext->getScene());
-            if (sceneSettingsPanel) sceneSettingsPanel->setScene(vulkanContext->getScene());
+            // Get the loaded scene
+            auto scene = vulkanContext->getScene();
+            
+            // Update SelectionManager first
+            SelectionManager::get().setScene(scene);
+            
+            // Then update UI panels
+            if (outlinerPanel) outlinerPanel->setScene(scene);
+            if (propertiesPanel) propertiesPanel->setScene(scene);
+            if (sceneSettingsPanel) sceneSettingsPanel->setScene(scene);
         } else {
             OHAO_LOG_ERROR("Failed to open project: " + filename);
         }
