@@ -10,7 +10,7 @@ namespace ohao {
 
 class Window {
 public:
-    Window(uint32_t w, uint32_t h, const std::string& title);
+    Window(const std::string& title);
     ~Window();
 
     bool shouldClose();
