@@ -38,6 +38,7 @@
 #include "ui/window/window.hpp"
 #include <utils/common_types.hpp>
 #include <filesystem>
+#include <core/serialization/scene_serializer.hpp>
 
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
@@ -1021,6 +1022,187 @@ bool VulkanContext::loadScene(const std::string& filename) {
     if (!scene) scene = std::make_unique<Scene>();
 
     return scene->loadFromFile(filename);
+}
+
+bool VulkanContext::createScene(const std::string& name) {
+    // Check if a scene with this name already exists
+    if (loadedScenes.find(name) != loadedScenes.end()) {
+        OHAO_LOG_ERROR("Scene with name '" + name + "' already exists");
+        return false;
+    }
+    
+    // Create a new scene
+    auto newScene = std::make_shared<Scene>(name);
+    loadedScenes[name] = newScene;
+    
+    // If this is the first scene, make it active
+    if (!scene) {
+        scene = newScene;
+    }
+    
+    OHAO_LOG("Created new scene: " + name);
+    return true;
+}
+
+bool VulkanContext::loadSceneFromFile(const std::string& filename) {
+    try {
+        // Create a filesystem path
+        std::filesystem::path path(filename);
+        
+        // Get scene name from file name (without extension)
+        std::string sceneName = path.stem().string();
+        
+        // Check if a scene with this name is already loaded
+        if (loadedScenes.find(sceneName) != loadedScenes.end()) {
+            OHAO_LOG_ERROR("Scene with name '" + sceneName + "' already loaded");
+            return false;
+        }
+        
+        // Create a new scene
+        auto newScene = std::make_shared<Scene>(sceneName);
+        
+        // Load the scene data
+        SceneSerializer serializer(newScene.get());
+        if (!serializer.deserialize(filename)) {
+            OHAO_LOG_ERROR("Failed to load scene from file: " + filename);
+            return false;
+        }
+        
+        // Add to loaded scenes
+        loadedScenes[sceneName] = newScene;
+        
+        // If no active scene, make this one active
+        if (!scene) {
+            scene = newScene;
+            // Force buffers update for the active scene
+            updateSceneBuffers();
+        }
+        
+        OHAO_LOG("Loaded scene from file: " + filename);
+        return true;
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error loading scene: " + std::string(e.what()));
+        return false;
+    }
+}
+
+bool VulkanContext::saveSceneToFile(const std::string& filename) {
+    if (!scene) {
+        OHAO_LOG_ERROR("No active scene to save");
+        return false;
+    }
+    
+    try {
+        // Use the scene serializer to save the active scene
+        SceneSerializer serializer(scene.get());
+        if (!serializer.serialize(filename)) {
+            OHAO_LOG_ERROR("Failed to save scene to file: " + filename);
+            return false;
+        }
+        
+        clearSceneModified();
+        OHAO_LOG("Saved scene to file: " + filename);
+        return true;
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error saving scene: " + std::string(e.what()));
+        return false;
+    }
+}
+
+bool VulkanContext::activateScene(const std::string& name) {
+    // Check if scene exists
+    auto it = loadedScenes.find(name);
+    if (it == loadedScenes.end()) {
+        OHAO_LOG_ERROR("Scene '" + name + "' not found");
+        return false;
+    }
+    
+    // Set as active scene
+    scene = it->second;
+    
+    // Force update of scene buffers
+    updateSceneBuffers();
+    
+    OHAO_LOG("Activated scene: " + name);
+    return true;
+}
+
+bool VulkanContext::closeScene(const std::string& name) {
+    // Check if scene exists
+    auto it = loadedScenes.find(name);
+    if (it == loadedScenes.end()) {
+        OHAO_LOG_ERROR("Scene '" + name + "' not found");
+        return false;
+    }
+    
+    // If this is the active scene, need to switch to another one
+    if (scene == it->second) {
+        // Find another scene to activate
+        if (loadedScenes.size() > 1) {
+            for (const auto& [otherName, otherScene] : loadedScenes) {
+                if (otherName != name) {
+                    scene = otherScene;
+                    OHAO_LOG("Switched active scene to: " + otherName);
+                    break;
+                }
+            }
+        } else {
+            // No other scenes to switch to
+            scene = nullptr;
+            OHAO_LOG("No active scene after closing '" + name + "'");
+        }
+        
+        // Need to update buffers if we switched scenes
+        if (scene) {
+            updateSceneBuffers();
+        } else {
+            // Clear rendering data since there's no active scene
+            cleanupSceneBuffers();
+        }
+    }
+    
+    // Remove the scene
+    loadedScenes.erase(it);
+    OHAO_LOG("Closed scene: " + name);
+    return true;
+}
+
+bool VulkanContext::isSceneLoaded(const std::string& name) const {
+    return loadedScenes.find(name) != loadedScenes.end();
+}
+
+std::vector<std::string> VulkanContext::getLoadedSceneNames() const {
+    std::vector<std::string> names;
+    names.reserve(loadedScenes.size());
+    
+    for (const auto& [name, _] : loadedScenes) {
+        names.push_back(name);
+    }
+    
+    return names;
+}
+
+Scene* VulkanContext::getSceneByName(const std::string& name) const {
+    auto it = loadedScenes.find(name);
+    if (it != loadedScenes.end()) {
+        return it->second.get();
+    }
+    return nullptr;
+}
+
+std::string VulkanContext::getActiveSceneName() const {
+    if (!scene) {
+        return "";
+    }
+    
+    // Find the name of the active scene
+    for (const auto& [name, s] : loadedScenes) {
+        if (s == scene) {
+            return name;
+        }
+    }
+    
+    return "";
 }
 
 }//namespace ohao
