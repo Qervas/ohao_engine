@@ -1,6 +1,8 @@
 #include "scene_viewport.hpp"
+#include "imgui.h"
 #include "ui/components/console_widget.hpp"
 #include "ui/components/file_dialog.hpp"
+#include "core/scene/scene.hpp"
 #include <filesystem>
 #include <algorithm>
 
@@ -9,8 +11,29 @@ namespace ohao {
 SceneViewport::SceneViewport() {
 }
 
+void SceneViewport::ensureDefaultScene(VulkanContext* context) {
+    if (!context || m_defaultSceneInitialized) return;
+    
+    // Check if any scenes are loaded
+    auto loadedScenes = context->getLoadedSceneNames();
+    if (loadedScenes.empty()) {
+        // Create a default scene
+        if (context->createScene("DefaultScene")) {
+            context->activateScene("DefaultScene");
+            OHAO_LOG("Created default scene");
+            m_defaultSceneInitialized = true;
+            refreshTabsFromContext(context);
+        }
+    } else {
+        m_defaultSceneInitialized = true;
+    }
+}
+
 void SceneViewport::render(VulkanContext* context) {
     if (!context) return;
+    
+    // Ensure we have a default scene if needed
+    ensureDefaultScene(context);
     
     // First, refresh tabs to ensure we're showing current engine state
     refreshTabsFromContext(context);
@@ -87,6 +110,38 @@ void SceneViewport::render(VulkanContext* context) {
             ImGui::EndPopup();
         }
     }
+    
+    // Handle renaming a scene if dialog is open
+    if (m_renamingTab) {
+        ImGui::OpenPopup("Rename Scene");
+        ImGui::SetNextWindowSize(ImVec2(300, 120));
+        
+        if (ImGui::BeginPopupModal("Rename Scene", &m_renamingTab, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Enter a new name for the scene:");
+            ImGui::InputText("##NewSceneName", m_newSceneName, sizeof(m_newSceneName));
+            
+            ImGui::Separator();
+            
+            if (ImGui::Button("Rename", ImVec2(120, 0))) {
+                std::string newName = m_newSceneName;
+                if (!newName.empty()) {
+                    renameCurrentScene(context, newName);
+                    m_renamingTab = false;
+                    ImGui::CloseCurrentPopup();
+                    m_newSceneName[0] = '\0'; // Clear input buffer
+                }
+            }
+            
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                m_renamingTab = false;
+                ImGui::CloseCurrentPopup();
+                m_newSceneName[0] = '\0'; // Clear input buffer
+            }
+            
+            ImGui::EndPopup();
+        }
+    }
 }
 
 void SceneViewport::handleKeyboardShortcuts(VulkanContext* context) {
@@ -102,11 +157,17 @@ void SceneViewport::handleKeyboardShortcuts(VulkanContext* context) {
         m_creatingNewTab = true;
         strcpy(m_newSceneName, "NewScene");
     }
+    
+    // F2 to rename current scene
+    if (ImGui::IsKeyPressed(ImGuiKey_F2) && m_activeTabIndex >= 0) {
+        m_renamingTab = true;
+        strcpy(m_newSceneName, m_sceneTabs[m_activeTabIndex].name.c_str());
+    }
 }
 
 void SceneViewport::renderSceneTabs(VulkanContext* context) {
     if (m_sceneTabs.empty()) {
-        // If no tabs, just show a message and the "+" button
+        // If no tabs, show the message and the "+" button
         ImGui::Text("No scenes open");
         ImGui::SameLine(ImGui::GetWindowWidth() - 30);
         if (ImGui::Button("+")) {
@@ -136,6 +197,22 @@ void SceneViewport::renderSceneTabs(VulkanContext* context) {
                 if (m_activeTabIndex != i) {
                     activateTab(context, i);
                 }
+                
+                // Add context menu for tab
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem("Rename")) {
+                        m_renamingTab = true;
+                        strcpy(m_newSceneName, tab.name.c_str());
+                    }
+                    if (ImGui::MenuItem("Save")) {
+                        saveCurrentScene(context);
+                    }
+                    if (ImGui::MenuItem("Close")) {
+                        closeTab(context, i);
+                    }
+                    ImGui::EndPopup();
+                }
+                
                 ImGui::EndTabItem();
             }
             
@@ -331,9 +408,18 @@ void SceneViewport::createNewScene(VulkanContext* context, const std::string& na
 void SceneViewport::saveCurrentScene(VulkanContext* context) {
     // Get current active scene name
     std::string activeScene = context->getActiveSceneName();
+    
+    // Create default scene if no active scene
     if (activeScene.empty()) {
-        OHAO_LOG_ERROR("No active scene to save");
-        return;
+        OHAO_LOG("No active scene, creating default scene for saving");
+        ensureDefaultScene(context);
+        activeScene = context->getActiveSceneName();
+        
+        // If still no active scene, bail out
+        if (activeScene.empty()) {
+            OHAO_LOG_ERROR("No active scene to save");
+            return;
+        }
     }
     
     // If we don't have a project path yet, ask for one
@@ -357,16 +443,54 @@ void SceneViewport::saveCurrentScene(VulkanContext* context) {
         m_projectPath = projectPath;
     }
     
+    // Construct scene save path
+    // Get project directory
+    std::filesystem::path projectDir = std::filesystem::path(m_projectPath).parent_path();
+    
+    // Create a scenes directory if it doesn't exist
+    std::filesystem::path scenesDir = projectDir / "scenes";
+    if (!std::filesystem::exists(scenesDir)) {
+        std::filesystem::create_directories(scenesDir);
+    }
+    
+    // Create scene file path with scene extension
+    std::filesystem::path scenePath = scenesDir / (activeScene + Scene::FILE_EXTENSION);
+    std::string savePath = scenePath.string();
+    
     // Save the current scene to the project
-    if (context->saveSceneToFile(m_projectPath)) {
-        OHAO_LOG("Saved scene '" + activeScene + "' to project: " + m_projectPath);
+    if (context->saveSceneToFile(savePath)) {
+        OHAO_LOG("Saved scene '" + activeScene + "' to: " + savePath);
         
         // Update tab modified state
         if (m_activeTabIndex >= 0 && m_activeTabIndex < m_sceneTabs.size()) {
             m_sceneTabs[m_activeTabIndex].isModified = false;
         }
     } else {
-        OHAO_LOG_ERROR("Failed to save scene to project: " + m_projectPath);
+        OHAO_LOG_ERROR("Failed to save scene to: " + savePath);
+    }
+}
+
+void SceneViewport::renameCurrentScene(VulkanContext* context, const std::string& newName) {
+    if (m_activeTabIndex < 0 || m_activeTabIndex >= m_sceneTabs.size()) return;
+    
+    std::string oldName = m_sceneTabs[m_activeTabIndex].name;
+    
+    // Check if a scene with this name already exists
+    auto it = std::find_if(m_sceneTabs.begin(), m_sceneTabs.end(), 
+                         [&newName](const SceneTab& tab) { return tab.name == newName; });
+    
+    if (it != m_sceneTabs.end()) {
+        OHAO_LOG_ERROR("A scene with the name '" + newName + "' already exists");
+        return;
+    }
+    
+    // Rename the scene in the engine
+    if (context->renameScene(oldName, newName)) {
+        // Update the tab name
+        m_sceneTabs[m_activeTabIndex].name = newName;
+        OHAO_LOG("Renamed scene from '" + oldName + "' to '" + newName + "'");
+    } else {
+        OHAO_LOG_ERROR("Failed to rename scene from '" + oldName + "' to '" + newName + "'");
     }
 }
 

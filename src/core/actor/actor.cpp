@@ -2,6 +2,7 @@
 #include "../component/component.hpp"
 #include "../component/transform_component.hpp"
 #include "../component/mesh_component.hpp"
+#include "../component/physics_component.hpp"
 #include "../scene/scene.hpp"
 #include "../asset/model.hpp"
 #include "../material/material.hpp"
@@ -201,61 +202,90 @@ void Actor::removeAllComponents() {
 }
 
 void Actor::onComponentAdded(std::shared_ptr<Component> component) {
-    // Register component with scene if needed
+    // Notify scene of specific components like mesh/physics
     if (scene) {
-        // Handle special component types
-        auto meshComponent = std::dynamic_pointer_cast<MeshComponent>(component);
-        if (meshComponent) {
-            scene->onMeshComponentAdded(meshComponent.get());
+        // Handle mesh components
+        if (auto meshComp = std::dynamic_pointer_cast<MeshComponent>(component)) {
+            scene->onMeshComponentAdded(meshComp.get());
         }
+        
+        // Handle physics components
+        if (auto physicsComp = std::dynamic_pointer_cast<PhysicsComponent>(component)) {
+            scene->onPhysicsComponentAdded(physicsComp.get());
+        }
+        
+        // Mark scene as dirty since components have changed
+        scene->setDirty();
     }
 }
 
 void Actor::onComponentRemoved(std::shared_ptr<Component> component) {
-    // Unregister component from scene if needed
+    // Notify scene of specific components being removed
     if (scene) {
-        // Handle special component types
-        auto meshComponent = std::dynamic_pointer_cast<MeshComponent>(component);
-        if (meshComponent) {
-            scene->onMeshComponentRemoved(meshComponent.get());
+        // Handle mesh components
+        if (auto meshComp = std::dynamic_pointer_cast<MeshComponent>(component)) {
+            scene->onMeshComponentRemoved(meshComp.get());
         }
+        
+        // Handle physics components
+        if (auto physicsComp = std::dynamic_pointer_cast<PhysicsComponent>(component)) {
+            scene->onPhysicsComponentRemoved(physicsComp.get());
+        }
+        
+        // Mark scene as dirty since components have changed
+        scene->setDirty();
     }
 }
 
 void Actor::onAddedToScene() {
-    // Register components with scene
+    // Register components with the scene
     for (auto& component : components) {
-        onComponentAdded(component);
+        if (auto meshComp = std::dynamic_pointer_cast<MeshComponent>(component)) {
+            scene->onMeshComponentAdded(meshComp.get());
+        }
+        if (auto physicsComp = std::dynamic_pointer_cast<PhysicsComponent>(component)) {
+            scene->onPhysicsComponentAdded(physicsComp.get());
+        }
     }
     
-    // Process children
-    for (auto* child : children) {
-        child->setScene(scene);
+    // Mark scene as dirty
+    if (scene) {
+        scene->setDirty();
     }
 }
 
 void Actor::onRemovedFromScene() {
-    // Unregister components from scene
+    // Unregister components from the scene
     for (auto& component : components) {
-        onComponentRemoved(component);
+        if (auto meshComp = std::dynamic_pointer_cast<MeshComponent>(component)) {
+            scene->onMeshComponentRemoved(meshComp.get());
+        }
+        if (auto physicsComp = std::dynamic_pointer_cast<PhysicsComponent>(component)) {
+            scene->onPhysicsComponentRemoved(physicsComp.get());
+        }
     }
     
-    // Process children
-    for (auto* child : children) {
-        child->setScene(nullptr);
+    // Mark scene as dirty
+    if (scene) {
+        scene->setDirty();
     }
 }
 
 // SceneObject compatibility implementations
 void Actor::setModel(std::shared_ptr<Model> model) {
+    // Get or create MeshComponent
     auto meshComponent = getComponent<MeshComponent>();
     if (!meshComponent) {
         meshComponent = addComponent<MeshComponent>();
     }
+    
+    // Set the model on the component
     meshComponent->setModel(model);
     
-    // Also set in base class for compatibility
-    SceneObject::setModel(model);
+    // Mark scene as dirty
+    if (scene) {
+        scene->setDirty();
+    }
 }
 
 std::shared_ptr<Model> Actor::getModel() const {

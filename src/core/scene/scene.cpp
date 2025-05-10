@@ -22,6 +22,7 @@ const std::string Scene::FILE_EXTENSION = ".ohscene";
 Scene::Scene(const std::string& name)
     : name(name)
     , needsBufferUpdate(false)
+    , dirty(false)
 {
     // Create a root node for backward compatibility
     rootNode = std::make_shared<Actor>("Root");
@@ -35,6 +36,7 @@ Scene::~Scene() {
 Actor::Ptr Scene::createActor(const std::string& name) {
     Actor::Ptr actor = std::make_shared<Actor>(name);
     addActor(actor);
+    setDirty();
     return actor;
 }
 
@@ -47,6 +49,7 @@ void Scene::addActor(Actor::Ptr actor) {
     
     // Register actor with this scene
     registerActorHierarchy(actor);
+    setDirty();
 }
 
 void Scene::removeActor(Actor::Ptr actor) {
@@ -54,6 +57,7 @@ void Scene::removeActor(Actor::Ptr actor) {
     
     // Unregister from scene
     unregisterActorHierarchy(actor);
+    setDirty();
 }
 
 void Scene::removeActor(const std::string& name) {
@@ -175,18 +179,22 @@ const std::string& Scene::getName() const {
 
 void Scene::setName(const std::string& newName) {
     name = newName;
+    setDirty();
 }
 
 void Scene::addLight(const std::string& name, const Light& light) {
     lights[name] = light;
+    setDirty();
 }
 
 void Scene::removeLight(const std::string& name) {
     lights.erase(name);
+    setDirty();
 }
 
 void Scene::updateLight(const std::string& name, const Light& light) {
     lights[name] = light;
+    setDirty();
 }
 
 Light* Scene::getLight(const std::string& name) {
@@ -271,9 +279,12 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
 }
 
 bool Scene::saveToFile(const std::string& filename) {
-    // Use the SceneSerializer to save the scene
     SceneSerializer serializer(this);
-    return serializer.serialize(filename);
+    bool success = serializer.serialize(filename);
+    if (success) {
+        clearDirty();
+    }
+    return success;
 }
 
 bool Scene::loadFromFile(const std::string& filename) {
@@ -348,6 +359,28 @@ void Scene::unregisterActorHierarchy(Actor::Ptr actor) {
     
     // Unregister this actor
     unregisterActor(actor);
+}
+
+void Scene::setDirty(bool state) {
+    dirty = state;
+    
+    // Propagate to VulkanContext if available
+    if (auto context = VulkanContext::getContextInstance()) {
+        if (state) {
+            context->markSceneModified();
+        } else {
+            context->clearSceneModified();
+        }
+    }
+}
+
+void Scene::clearDirty() {
+    dirty = false;
+    
+    // Propagate to VulkanContext if available
+    if (auto context = VulkanContext::getContextInstance()) {
+        context->clearSceneModified();
+    }
 }
 
 } // namespace ohao

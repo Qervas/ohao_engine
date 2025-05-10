@@ -5,6 +5,8 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
+#include "../actor/actor.hpp"
+#include "../scene/scene.hpp"
 
 namespace ohao {
 
@@ -198,6 +200,13 @@ void TransformComponent::setDirty() {
     for (auto* child : children) {
         if (child) {
             child->setDirty();
+        }
+    }
+    
+    // Get actor and mark scene as dirty
+    if (auto actor = getOwner()) {
+        if (auto scene = actor->getScene()) {
+            scene->setDirty();
         }
     }
 }
