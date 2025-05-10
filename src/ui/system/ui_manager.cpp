@@ -258,7 +258,6 @@ void UIManager::render() {
 
     renderMainMenuBar();
     renderPanels();
-    renderSceneViewport();
     ConsoleWidget::get().render();
 
     // Debug windows
@@ -450,49 +449,25 @@ void UIManager::enableCursor(bool enable) {
 }
 
 bool UIManager::isSceneViewportHovered() const {
-    return isSceneWindowHovered;
+    return sceneViewport ? sceneViewport->isHovered() : false;
 }
 
 ViewportSize UIManager::getSceneViewportSize() const {
-    return {
-        static_cast<uint32_t>(sceneViewportSize.x),
-        static_cast<uint32_t>(sceneViewportSize.y)
-    };
-}
-
-void UIManager::renderSceneViewport() {
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::Begin("Scene Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-    sceneViewportSize = ImGui::GetContentRegionAvail();
-    isSceneWindowHovered = ImGui::IsWindowHovered();
-
-    ImVec2 pos = ImGui::GetCursorScreenPos();
-
-    auto sceneTexture = vulkanContext->getSceneRenderer()->getViewportTexture();
-    if (sceneTexture) {  // Now we can use the bool operator
-        ImTextureID imguiTexID = imgui::convertVulkanTextureToImGui(sceneTexture);
-        ImGui::GetWindowDrawList()->AddImage(
-            imguiTexID,
-            pos,
-            ImVec2(pos.x + sceneViewportSize.x, pos.y + sceneViewportSize.y),
-            ImVec2(0, 0),
-            ImVec2(1, 1)
-        );
+    if (sceneViewport) {
+        ImVec2 size = sceneViewport->getViewportSize();
+        return {
+            static_cast<uint32_t>(size.x),
+            static_cast<uint32_t>(size.y)
+        };
     }
-
-    // Viewport resolution text at the bottom
-    ImGui::SetCursorPos(ImVec2(10, sceneViewportSize.y - 30));
-    ImGui::Text("Viewport: %dx%d", (int)sceneViewportSize.x, (int)sceneViewportSize.y);
-
-    ImGui::End();
-    ImGui::PopStyleVar();
+    return { 1280, 720 };
 }
 
 void UIManager::setupPanels() {
     outlinerPanel = std::make_unique<OutlinerPanel>();
     propertiesPanel = std::make_unique<PropertiesPanel>();
     sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
+    sceneViewport = std::make_unique<SceneViewport>();
     
     // Initialize UI panels with the current scene if available
     if (vulkanContext && vulkanContext->getScene()) {
@@ -514,6 +489,7 @@ void UIManager::renderPanels() {
     if (outlinerPanel) outlinerPanel->render();
     if (propertiesPanel) propertiesPanel->render();
     if (sceneSettingsPanel) sceneSettingsPanel->render();
+    if (sceneViewport) sceneViewport->render(vulkanContext);
 }
 
 void UIManager::initializeDockspace() {

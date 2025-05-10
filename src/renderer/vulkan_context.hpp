@@ -17,6 +17,7 @@
 #include <renderer/rhi/vk/ohao_vk_swapchain.hpp>
 #include <renderer/rhi/vk/ohao_vk_sync_objects.hpp>
 #include <renderer/rhi/vk/ohao_vk_uniform_buffer.hpp>
+#include <core/serialization/scene_serializer.hpp>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -135,6 +136,17 @@ public:
     SceneRenderer* getSceneRenderer() const {return sceneRenderer.get();}
     Scene* getScene() const {return scene.get();}
 
+    // Multi-scene management methods
+    bool createScene(const std::string& name);
+    bool loadSceneFromFile(const std::string& filename);
+    bool saveSceneToFile(const std::string& filename);
+    bool activateScene(const std::string& name);
+    bool closeScene(const std::string& name);
+    bool isSceneLoaded(const std::string& name) const;
+    std::vector<std::string> getLoadedSceneNames() const;
+    Scene* getSceneByName(const std::string& name) const;
+    std::string getActiveSceneName() const;
+
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
     void setWireframeMode(bool enable) { wireframeMode = enable; }
@@ -210,7 +222,9 @@ private:
     VkDescriptorSet sceneTextureDescriptor{VK_NULL_HANDLE};
 
     Camera camera;
-    std::unique_ptr<Scene> scene;
+    // Multi-scene management
+    std::unordered_map<std::string, std::shared_ptr<Scene>> loadedScenes;
+    std::shared_ptr<Scene> scene; // Current active scene
 
     uint32_t lastWidth{0};
     uint32_t lastHeight{0};

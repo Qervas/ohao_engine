@@ -6,6 +6,7 @@
 #include "ui/panels/outliner/outliner_panel.hpp"
 #include "ui/panels/properties/properties_panel.hpp"
 #include "ui/panels/scene_settings/scene_settings_panel.hpp"
+#include "ui/viewport/scene_viewport.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
@@ -45,7 +46,6 @@ private:
     void renderBuildMenu();
     void renderDebugMenu();
     void renderHelpMenu();
-    void renderSceneViewport();
     void enableCursor(bool enable);
     void handleModelImport();
     void shutdownImGui();
@@ -76,7 +76,6 @@ private:
 
     VkDescriptorPool imguiPool{VK_NULL_HANDLE};
 
-    ImVec2 sceneViewportSize{1280, 720};
     bool isSceneWindowHovered{false};
     bool layoutInitialized{false};
     bool isDockspaceInitialized{false};
@@ -86,6 +85,7 @@ private:
     std::unique_ptr<OutlinerPanel> outlinerPanel;
     std::unique_ptr<PropertiesPanel> propertiesPanel;
     std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
+    std::unique_ptr<SceneViewport> sceneViewport;
 
     std::string currentProjectPath;
     std::string newProjectName;
