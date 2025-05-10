@@ -228,6 +228,12 @@ void UIManager::render() {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    
+    // Make sure we have a default scene
+    if (sceneViewport && vulkanContext) {
+        sceneViewport->ensureDefaultScene(vulkanContext);
+    }
+    
     // Begin dockspace with menubar
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);

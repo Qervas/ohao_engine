@@ -33,6 +33,7 @@ void MeshComponent::setModel(std::shared_ptr<Model> newModel) {
     if (auto actor = getOwner()) {
         if (auto scene = actor->getScene()) {
             scene->onMeshComponentChanged(this);
+            scene->setDirty();
         }
     }
 }
@@ -48,6 +49,7 @@ void MeshComponent::setMaterial(const Material& newMaterial) {
     if (auto actor = getOwner()) {
         if (auto scene = actor->getScene()) {
             scene->onMeshComponentChanged(this);
+            scene->setDirty();
         }
     }
 }
@@ -61,7 +63,16 @@ const Material& MeshComponent::getMaterial() const {
 }
 
 void MeshComponent::setVisible(bool isVisible) {
+    if (visible == isVisible) return;
+    
     visible = isVisible;
+    
+    // Mark scene as dirty
+    if (auto actor = getOwner()) {
+        if (auto scene = actor->getScene()) {
+            scene->setDirty();
+        }
+    }
 }
 
 bool MeshComponent::isVisible() const {
@@ -69,7 +80,16 @@ bool MeshComponent::isVisible() const {
 }
 
 void MeshComponent::setRenderMode(RenderMode mode) {
+    if (renderMode == mode) return;
+    
     renderMode = mode;
+    
+    // Mark scene as dirty
+    if (auto actor = getOwner()) {
+        if (auto scene = actor->getScene()) {
+            scene->setDirty();
+        }
+    }
 }
 
 MeshComponent::RenderMode MeshComponent::getRenderMode() const {

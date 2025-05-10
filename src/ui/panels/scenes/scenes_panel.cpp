@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "ui/components/console_widget.hpp"
 #include "ui/components/file_dialog.hpp"
+#include "core/scene/scene.hpp"
 #include <filesystem>
 
 namespace ohao {
@@ -416,12 +417,30 @@ bool ScenesPanel::saveCurrentScene() {
         m_projectPath = projectPath;
     }
     
-    // Use the project path as is since the active scene is part of this project
-    if (m_context->saveSceneToFile(m_projectPath)) {
-        OHAO_LOG("Saved scene '" + activeScene + "' to project: " + m_projectPath);
+    // Construct scene save path
+    // Get project directory
+    std::filesystem::path projectDir = std::filesystem::path(m_projectPath).parent_path();
+    
+    // Create a scenes directory if it doesn't exist
+    std::filesystem::path scenesDir = projectDir / "scenes";
+    if (!std::filesystem::exists(scenesDir)) {
+        std::filesystem::create_directories(scenesDir);
+    }
+    
+    // Create scene file path with scene extension
+    std::filesystem::path scenePath = scenesDir / (activeScene + Scene::FILE_EXTENSION);
+    savePath = scenePath.string();
+    
+    // Save the scene to the file
+    if (m_context->saveSceneToFile(savePath)) {
+        OHAO_LOG("Saved scene '" + activeScene + "' to: " + savePath);
+        
+        // Now update the project file to reference this scene
+        // TODO: Implement project file format with scene references
+        
         return true;
     } else {
-        OHAO_LOG_ERROR("Failed to save scene to project: " + m_projectPath);
+        OHAO_LOG_ERROR("Failed to save scene to: " + savePath);
         return false;
     }
 }

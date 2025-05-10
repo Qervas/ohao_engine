@@ -113,6 +113,11 @@ public:
     // Scene file extension
     static const std::string FILE_EXTENSION;
     
+    // Scene state tracking
+    bool isDirty() const { return dirty; }
+    void setDirty(bool state = true);
+    void clearDirty();
+    
 private:
     std::string name;
     SceneDescriptor descriptor;
@@ -136,6 +141,7 @@ private:
     
     // Scene state
     bool needsBufferUpdate;
+    bool dirty{false}; // Track if scene has unsaved changes
     
     // Helper methods
     void registerActor(Actor::Ptr actor);

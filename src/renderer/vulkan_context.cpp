@@ -1013,6 +1013,7 @@ bool VulkanContext::saveScene(const std::string& filename) {
 
     if (scene->saveToFile(filename)) {
         sceneModified = false;
+        scene->clearDirty();
         return true;
     }
     return false;
@@ -1093,15 +1094,31 @@ bool VulkanContext::saveSceneToFile(const std::string& filename) {
     }
     
     try {
+        // Make sure the target directory exists
+        std::filesystem::path filePath(filename);
+        std::filesystem::path directory = filePath.parent_path();
+        if (!directory.empty() && !std::filesystem::exists(directory)) {
+            if (!std::filesystem::create_directories(directory)) {
+                OHAO_LOG_ERROR("Failed to create directory: " + directory.string());
+                return false;
+            }
+        }
+        
+        // Add proper extension if missing
+        if (filePath.extension().empty()) {
+            filePath += Scene::FILE_EXTENSION;
+        }
+        
         // Use the scene serializer to save the active scene
         SceneSerializer serializer(scene.get());
-        if (!serializer.serialize(filename)) {
-            OHAO_LOG_ERROR("Failed to save scene to file: " + filename);
+        if (!serializer.serialize(filePath.string())) {
+            OHAO_LOG_ERROR("Failed to save scene to file: " + filePath.string());
             return false;
         }
         
         clearSceneModified();
-        OHAO_LOG("Saved scene to file: " + filename);
+        scene->clearDirty();
+        OHAO_LOG("Saved scene to file: " + filePath.string());
         return true;
     } catch (const std::exception& e) {
         OHAO_LOG_ERROR("Error saving scene: " + std::string(e.what()));
@@ -1119,6 +1136,9 @@ bool VulkanContext::activateScene(const std::string& name) {
     
     // Set as active scene
     scene = it->second;
+    
+    // Update scene modified flag based on scene's dirty state
+    sceneModified = scene->isDirty();
     
     // Force update of scene buffers
     updateSceneBuffers();
@@ -1203,6 +1223,48 @@ std::string VulkanContext::getActiveSceneName() const {
     }
     
     return "";
+}
+
+bool VulkanContext::renameScene(const std::string& oldName, const std::string& newName) {
+    // Check if old scene exists
+    auto it = loadedScenes.find(oldName);
+    if (it == loadedScenes.end()) {
+        OHAO_LOG_ERROR("Scene '" + oldName + "' not found for renaming");
+        return false;
+    }
+    
+    // Check if new name is already taken
+    if (loadedScenes.find(newName) != loadedScenes.end()) {
+        OHAO_LOG_ERROR("Cannot rename: Scene '" + newName + "' already exists");
+        return false;
+    }
+    
+    // Store a reference to the scene
+    auto scenePtr = it->second;
+    
+    // Set the new name in the Scene object
+    scenePtr->setName(newName);
+    
+    // Remove old entry and add with new name
+    loadedScenes.erase(it);
+    loadedScenes[newName] = scenePtr;
+    
+    OHAO_LOG("Renamed scene from '" + oldName + "' to '" + newName + "'");
+    
+    // Mark as modified if it's the active scene
+    if (scene == scenePtr) {
+        markSceneModified();
+    }
+    
+    return true;
+}
+
+bool VulkanContext::hasUnsavedChanges() const {
+    // Check if scene is dirty
+    if (scene && scene->isDirty()) {
+        return true;
+    }
+    return sceneModified;
 }
 
 }//namespace ohao

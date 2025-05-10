@@ -143,6 +143,7 @@ public:
     bool activateScene(const std::string& name);
     bool closeScene(const std::string& name);
     bool isSceneLoaded(const std::string& name) const;
+    bool renameScene(const std::string& oldName, const std::string& newName);
     std::vector<std::string> getLoadedSceneNames() const;
     Scene* getSceneByName(const std::string& name) const;
     std::string getActiveSceneName() const;
@@ -171,7 +172,7 @@ public:
         return false;
     }
 
-    bool hasUnsavedChanges() const { return sceneModified; }
+    bool hasUnsavedChanges() const;
     void markSceneModified() { sceneModified = true; }
     void clearSceneModified() { sceneModified = false; }
 
