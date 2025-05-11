@@ -39,6 +39,10 @@ public:
         pipeline = mainPipeline;
         this->gizmoPipeline = gizmoPipeline;
     }
+    
+    // Force refresh the renderer state when scene changes
+    void forceRefresh();
+    
     static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
 
 private:

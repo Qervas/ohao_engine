@@ -688,4 +688,32 @@ void UIManager::handleExit() {
     }
 }
 
+void UIManager::initializePanelsWithScene(Scene* scene) {
+    if (!scene) {
+        OHAO_LOG_ERROR("Cannot initialize UI panels with null scene");
+        return;
+    }
+
+    try {
+        // Update selection manager first
+        SelectionManager::get().clearSelection();
+        SelectionManager::get().setScene(scene);
+        
+        // Initialize panels with scene
+        if (outlinerPanel) outlinerPanel->setScene(scene);
+        if (propertiesPanel) propertiesPanel->setScene(scene);
+        if (sceneSettingsPanel) sceneSettingsPanel->setScene(scene);
+        
+        // Connect SceneViewport to panels for lifecycle management
+        if (sceneViewport) {
+            sceneViewport->setOutlinerPanel(outlinerPanel.get());
+            sceneViewport->setPropertiesPanel(propertiesPanel.get());
+        }
+        
+        OHAO_LOG_DEBUG("UI Panels initialized with scene");
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error initializing UI panels: " + std::string(e.what()));
+    }
+}
+
 } // namespace ohao

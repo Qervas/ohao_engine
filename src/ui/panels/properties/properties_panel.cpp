@@ -132,7 +132,7 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     
     // Get current transform values
     glm::vec3 position = transform->getPosition();
-    glm::vec3 rotation = glm::degrees(transform->getRotationEuler());
+    glm::vec3 rotation = transform->getEulerAngles();
     glm::vec3 scale = transform->getScale();
     
     // Display ID in debug builds
@@ -144,7 +144,7 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     }
     
     if (renderVec3Control("Rotation", rotation)) {
-        transform->setRotationEuler(glm::radians(rotation));
+        transform->setEulerAngles(rotation);
         transformChanged = true;
     }
     
@@ -156,7 +156,7 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     // Display world transform info
     if (ImGui::TreeNode("World Transform")) {
         glm::vec3 worldPos = transform->getWorldPosition();
-        glm::vec3 worldRot = glm::degrees(transform->getRotationEuler());
+        glm::vec3 worldRot = transform->getEulerAngles();
         glm::vec3 worldScale = transform->getWorldScale();
         
         ImGui::Text("World Position: %.2f, %.2f, %.2f", worldPos.x, worldPos.y, worldPos.z);
@@ -189,7 +189,7 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
         
         // Get current transform values
         glm::vec3 position = transformComponent->getPosition();
-        glm::vec3 rotation = glm::degrees(transformComponent->getRotationEuler());
+        glm::vec3 rotation = transformComponent->getEulerAngles();
         glm::vec3 scale = transformComponent->getScale();
         
         // Show object info in debug builds
@@ -201,7 +201,7 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
         }
         
         if (renderVec3Control("Rotation", rotation)) {
-            transformComponent->setRotationEuler(glm::radians(rotation));
+            transformComponent->setEulerAngles(rotation);
             transformChanged = true;
         }
         
@@ -213,7 +213,7 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
         // Display world transform info
         if (ImGui::TreeNode("World Transform")) {
             glm::vec3 worldPos = transformComponent->getWorldPosition();
-            glm::vec3 worldRot = glm::degrees(transformComponent->getRotationEuler());
+            glm::vec3 worldRot = transformComponent->getEulerAngles();
             glm::vec3 worldScale = transformComponent->getWorldScale();
             
             ImGui::Text("World Position: %.2f, %.2f, %.2f", worldPos.x, worldPos.y, worldPos.z);

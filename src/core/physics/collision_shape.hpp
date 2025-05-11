@@ -6,109 +6,59 @@
 
 namespace ohao {
 
-// Base class for all collision shapes
+// Forward declaration
+class Ray;
+
 class CollisionShape {
 public:
-    using Ptr = std::shared_ptr<CollisionShape>;
-    
-    enum class ShapeType {
+    enum class Type {
         BOX,
         SPHERE,
         CAPSULE,
         CONVEX_HULL,
-        MESH
+        TRIANGLE_MESH
     };
     
-    CollisionShape(ShapeType type);
+    CollisionShape();
     virtual ~CollisionShape() = default;
     
-    ShapeType getType() const { return type; }
+    // Shape creation
+    void createBox(const glm::vec3& size);
+    void createSphere(float radius);
+    void createCapsule(float radius, float height);
+    void createConvexHull(const std::vector<glm::vec3>& vertices);
+    void createTriangleMesh(const std::vector<glm::vec3>& vertices, const std::vector<unsigned int>& indices);
     
-    // Virtual methods for shape-specific operations
-    virtual glm::vec3 getCenter() const = 0;
-    virtual void setCenter(const glm::vec3& center) = 0;
+    // Shape type
+    Type getType() const { return shapeType; }
     
-    // Collision detection helpers - to be implemented by derived classes
-    virtual bool containsPoint(const glm::vec3& point) const = 0;
+    // Bounding info
+    virtual glm::vec3 getCenter() const { return center; }
+    virtual void setCenter(const glm::vec3& newCenter) { this->center = newCenter; }
+    
+    // Collision tests
+    virtual bool containsPoint(const glm::vec3& point) const;
+    virtual bool intersectsRay(const Ray& ray, float& outDistance) const;
+    
+    // Shape parameters
+    const glm::vec3& getBoxSize() const { return boxSize; }
+    float getSphereRadius() const { return sphereRadius; }
+    float getCapsuleRadius() const { return capsuleRadius; }
+    float getCapsuleHeight() const { return capsuleHeight; }
     
 protected:
-    ShapeType type;
-    glm::vec3 localCenter{0.0f}; // Center in local space
-};
-
-// Box shape - AABB in local space
-class BoxShape : public CollisionShape {
-public:
-    BoxShape(const glm::vec3& halfExtents);
-    ~BoxShape() override = default;
+    Type shapeType;
+    glm::vec3 center{0.0f};
     
-    const glm::vec3& getHalfExtents() const { return halfExtents; }
-    void setHalfExtents(const glm::vec3& extents) { halfExtents = extents; }
+    // Shape-specific parameters
+    glm::vec3 boxSize{1.0f};
+    float sphereRadius{0.5f};
+    float capsuleRadius{0.5f};
+    float capsuleHeight{1.0f};
     
-    // CollisionShape interface implementation
-    glm::vec3 getCenter() const override { return localCenter; }
-    void setCenter(const glm::vec3& center) override { localCenter = center; }
-    bool containsPoint(const glm::vec3& point) const override;
-    
-private:
-    glm::vec3 halfExtents;
-};
-
-// Sphere shape
-class SphereShape : public CollisionShape {
-public:
-    SphereShape(float radius);
-    ~SphereShape() override = default;
-    
-    float getRadius() const { return radius; }
-    void setRadius(float r) { radius = r; }
-    
-    // CollisionShape interface implementation
-    glm::vec3 getCenter() const override { return localCenter; }
-    void setCenter(const glm::vec3& center) override { localCenter = center; }
-    bool containsPoint(const glm::vec3& point) const override;
-    
-private:
-    float radius;
-};
-
-// Capsule shape
-class CapsuleShape : public CollisionShape {
-public:
-    CapsuleShape(float radius, float height);
-    ~CapsuleShape() override = default;
-    
-    float getRadius() const { return radius; }
-    void setRadius(float r) { radius = r; }
-    
-    float getHeight() const { return height; }
-    void setHeight(float h) { height = h; }
-    
-    // CollisionShape interface implementation
-    glm::vec3 getCenter() const override { return localCenter; }
-    void setCenter(const glm::vec3& center) override { localCenter = center; }
-    bool containsPoint(const glm::vec3& point) const override;
-    
-private:
-    float radius;
-    float height;
-};
-
-// Convex hull shape
-class ConvexHullShape : public CollisionShape {
-public:
-    ConvexHullShape(const std::vector<glm::vec3>& points);
-    ~ConvexHullShape() override = default;
-    
-    const std::vector<glm::vec3>& getPoints() const { return points; }
-    
-    // CollisionShape interface implementation
-    glm::vec3 getCenter() const override { return localCenter; }
-    void setCenter(const glm::vec3& center) override { localCenter = center; }
-    bool containsPoint(const glm::vec3& point) const override;
-    
-private:
-    std::vector<glm::vec3> points;
+    // Mesh data
+    std::vector<glm::vec3> vertices;
+    std::vector<unsigned int> indices;
 };
 
 } // namespace ohao 

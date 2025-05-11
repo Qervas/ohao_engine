@@ -39,6 +39,8 @@
 #include <utils/common_types.hpp>
 #include <filesystem>
 #include <core/serialization/scene_serializer.hpp>
+#include "../core/scene/scene.hpp"
+#include <fstream>
 
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
@@ -46,7 +48,7 @@
 namespace ohao{
 VulkanContext* VulkanContext::contextInstance = nullptr;
 
-VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
+VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle), sceneManager(std::make_unique<SceneManager>()) {
     contextInstance = this;
     int w, h;
     glfwGetFramebufferSize(window->getGLFWWindow(), &w, &h);
@@ -57,6 +59,9 @@ VulkanContext::VulkanContext(Window* windowHandle): window(windowHandle){
     camera.setPosition(glm::vec3(0.0f, 2.0f, 5.0f));
     camera.setRotation(-15.0f, -90.0f);  // Look down slightly at origin
     camera.setPerspectiveProjection(60.0f, float(width)/float(height), 0.1f, 1000.0f); // Wider FOV
+    
+    // Initialize a default scene instead of directly creating one
+    initScene();
 }
 
 VulkanContext::~VulkanContext(){
@@ -216,8 +221,14 @@ VulkanContext::initializeVulkan(){
 }
 
 void VulkanContext::initializeDefaultScene() {
-    scene = std::make_unique<Scene>();
-    OHAO_LOG("Initializing default scene");
+    // Create a default scene with a name
+    std::string defaultName = "DefaultScene";
+    scene = Scene::create(defaultName);
+    
+    // Make sure we register it in the loadedScenes map
+    loadedScenes[defaultName] = scene;
+    
+    OHAO_LOG("Initializing default scene: " + defaultName);
 
     // Create minimal default buffers
     std::vector<Vertex> defaultVertex = {
@@ -287,7 +298,11 @@ void VulkanContext::initializeDefaultScene() {
             sceneSettingsPanel->setScene(scene.get());
         }
     }
-    OHAO_LOG("Default scene initialized");
+    
+    // Notify listeners that a scene has been created/activated
+    notifySceneChanged(defaultName);
+    
+    OHAO_LOG("Default scene initialized and registered");
 }
 
 void VulkanContext::cleanup(){
@@ -891,9 +906,21 @@ bool VulkanContext::updateSceneBuffers() {
     
     // Iterate through all actors with mesh components
     for (const auto& [actorId, actor] : scene->getAllActors()) {
+        if (!actor) {
+            OHAO_LOG_WARNING("Null actor found in scene with ID: " + std::to_string(actorId));
+            continue;
+        }
+        
+        OHAO_LOG_DEBUG("Processing actor: " + actor->getName() + " (ID: " + std::to_string(actorId) + ")");
+        
+        // Safe check for mesh component
         auto meshComponent = actor->getComponent<MeshComponent>();
-        if (meshComponent && meshComponent->getModel()) {
+        if (meshComponent) {
+            OHAO_LOG_DEBUG("Actor has mesh component: " + actor->getName());
+            
             auto model = meshComponent->getModel();
+            if (model) {
+                OHAO_LOG_DEBUG("Actor has valid model: " + actor->getName());
             totalVertices += model->vertices.size();
             totalIndices += model->indices.size();
             actorsWithMeshes++;
@@ -908,6 +935,11 @@ bool VulkanContext::updateSceneBuffers() {
                      std::to_string(actor->getTransform()->getPosition().z) +
                      " requires " + std::to_string(model->vertices.size()) + 
                      " vertices and " + std::to_string(model->indices.size()) + " indices");
+            } else {
+                OHAO_LOG_WARNING("Actor has mesh component but no model: " + actor->getName());
+            }
+        } else {
+            OHAO_LOG_DEBUG("Actor has no mesh component: " + actor->getName());
         }
     }
     
@@ -998,31 +1030,83 @@ bool VulkanContext::updateSceneBuffers() {
 bool VulkanContext::createNewScene(const std::string& name) {
     device->waitIdle();
 
-    scene = std::make_unique<Scene>();
-    scene->setName(name);
-
-    // Reset scene-related resources
+    // Create a new scene with the given name
+    std::string actualName = name;
+    
+    // Make sure the name is unique in the loadedScenes map
+    int counter = 1;
+    while (loadedScenes.find(actualName) != loadedScenes.end()) {
+        actualName = name + std::to_string(counter++);
+    }
+    
+    // If we have an existing scene without a name, just rename it
+    if (scene && scene->getName().empty()) {
+        OHAO_LOG("Renaming existing unnamed scene to: " + actualName);
+        scene->setName(actualName);
+        loadedScenes[actualName] = scene;
+        
+        // Reset scene-related resources but keep the scene
+        updateSceneBuffers();
+    } else {
+        // Create the scene with the actual name
+        auto newScene = Scene::create(actualName);
+        if (!newScene) {
+            OHAO_LOG_ERROR("Failed to create scene '" + actualName + "'");
+            return false;
+        }
+        
+        // Add it to the loadedScenes map
+        loadedScenes[actualName] = newScene;
+        
+        // Set it as the active scene
+        scene = newScene;
+        
+        // Reset scene-related resources, but don't initialize default scene content
     cleanupCurrentModel();
-    initializeDefaultScene();
+        
+        // Update scene buffers for the new empty scene
+        updateSceneBuffers();
+    }
 
+    // Notify listeners about the scene change
+    notifySceneChanged(actualName);
+    
+    OHAO_LOG("Created new scene: " + actualName);
     return true;
 }
 
 bool VulkanContext::saveScene(const std::string& filename) {
-    if (!scene) return false;
+    if (!scene) {
+        OHAO_LOG_ERROR("No active scene to save");
+        return false;
+    }
 
     if (scene->saveToFile(filename)) {
         sceneModified = false;
         scene->clearDirty();
+        
+        // Notify listeners that the scene has been saved
+        notifySceneChanged(scene->getName());
+        
+        OHAO_LOG("Scene saved successfully: " + filename);
         return true;
     }
+    
+    OHAO_LOG_ERROR("Failed to save scene: " + filename);
     return false;
 }
 
 bool VulkanContext::loadScene(const std::string& filename) {
-    if (!scene) scene = std::make_unique<Scene>();
-
-    return scene->loadFromFile(filename);
+    // Find the scene by name
+    auto it = loadedScenes.find(filename);
+    if (it == loadedScenes.end()) {
+        OHAO_LOG_ERROR("Scene not found: " + filename);
+        return false;
+    }
+    
+    // Set as current scene
+    scene = it->second;
+    return true;
 }
 
 bool VulkanContext::createScene(const std::string& name) {
@@ -1033,58 +1117,53 @@ bool VulkanContext::createScene(const std::string& name) {
     }
     
     // Create a new scene
-    auto newScene = std::make_shared<Scene>(name);
-    loadedScenes[name] = newScene;
-    
-    // If this is the first scene, make it active
-    if (!scene) {
-        scene = newScene;
+    auto newScene = Scene::create(name);
+    if (!newScene) {
+        OHAO_LOG_ERROR("Failed to create scene '" + name + "'");
+        return false;
     }
     
-    OHAO_LOG("Created new scene: " + name);
+    // Add to loaded scenes
+    loadedScenes[name] = newScene;
+    
+    // Always set as the active scene
+        scene = newScene;
+    
+    // Make sure the scene buffers are updated
+    updateSceneBuffers();
+    
+    // Notify listeners about the scene change
+    notifySceneChanged(name);
+    
+    OHAO_LOG("Created and activated scene: " + name);
     return true;
 }
 
 bool VulkanContext::loadSceneFromFile(const std::string& filename) {
-    try {
-        // Create a filesystem path
-        std::filesystem::path path(filename);
-        
-        // Get scene name from file name (without extension)
-        std::string sceneName = path.stem().string();
-        
-        // Check if a scene with this name is already loaded
-        if (loadedScenes.find(sceneName) != loadedScenes.end()) {
-            OHAO_LOG_ERROR("Scene with name '" + sceneName + "' already loaded");
+    // Use the static loadFromFile method to load the scene
+    Scene::Ptr loadedScene;
+    if (!Scene::loadFromFile(filename, loadedScene)) {
+        OHAO_LOG_ERROR("Failed to load scene from file: " + filename);
             return false;
         }
         
-        // Create a new scene
-        auto newScene = std::make_shared<Scene>(sceneName);
+    // Get the scene name
+    std::string sceneName = loadedScene->getName();
         
-        // Load the scene data
-        SceneSerializer serializer(newScene.get());
-        if (!serializer.deserialize(filename)) {
-            OHAO_LOG_ERROR("Failed to load scene from file: " + filename);
-            return false;
+    // Check if a scene with this name already exists
+    if (loadedScenes.find(sceneName) != loadedScenes.end()) {
+        sceneName = sceneName + "_" + std::to_string(loadedScenes.size());
+        loadedScene->setName(sceneName);
         }
         
-        // Add to loaded scenes
-        loadedScenes[sceneName] = newScene;
+    // Register the loaded scene
+    loadedScenes[sceneName] = loadedScene;
         
-        // If no active scene, make this one active
-        if (!scene) {
-            scene = newScene;
-            // Force buffers update for the active scene
-            updateSceneBuffers();
-        }
+    // Set it as the current scene
+    scene = loadedScene;
         
-        OHAO_LOG("Loaded scene from file: " + filename);
+    OHAO_LOG("Loaded scene: " + sceneName);
         return true;
-    } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Error loading scene: " + std::string(e.what()));
-        return false;
-    }
 }
 
 bool VulkanContext::saveSceneToFile(const std::string& filename) {
@@ -1118,6 +1197,16 @@ bool VulkanContext::saveSceneToFile(const std::string& filename) {
         
         clearSceneModified();
         scene->clearDirty();
+        
+        // Make sure the scene is properly registered in the loadedScenes map
+        std::string sceneName = scene->getName();
+        if (loadedScenes.find(sceneName) == loadedScenes.end()) {
+            loadedScenes[sceneName] = scene;
+        }
+        
+        // Notify listeners that the scene has been saved
+        notifySceneChanged(sceneName);
+        
         OHAO_LOG("Saved scene to file: " + filePath.string());
         return true;
     } catch (const std::exception& e) {
@@ -1134,29 +1223,111 @@ bool VulkanContext::activateScene(const std::string& name) {
         return false;
     }
     
+    // If this scene is already active, just update UI
+    if (scene == it->second) {
+        OHAO_LOG_DEBUG("Scene '" + name + "' is already active, refreshing UI");
+        notifySceneChanged(name);
+        return true;
+    }
+    
+    // Get the old scene name for logging
+    std::string oldSceneName = "";
+    if (scene) {
+        for (const auto& [sceneName, scenePtr] : loadedScenes) {
+            if (scenePtr == scene) {
+                oldSceneName = sceneName;
+                break;
+            }
+        }
+    }
+    
+    OHAO_LOG("FORCE ACTIVATING scene '" + name + "'" + (oldSceneName.empty() ? "" : " (switching from '" + oldSceneName + "')"));
+    
+    // Wait for device to be idle before switching scenes
+    getLogicalDevice()->waitIdle();
+    
+    // Store the old scene
+    std::shared_ptr<Scene> oldScene = scene;
+    
     // Set as active scene
     scene = it->second;
+    
+    // Make sure the scene object name matches the key
+    if (scene->getName() != name) {
+        OHAO_LOG_WARNING("Scene object name '" + scene->getName() + "' doesn't match registry name '" + name + "', updating");
+        scene->setName(name);
+    }
     
     // Update scene modified flag based on scene's dirty state
     sceneModified = scene->isDirty();
     
+    // CRITICAL CHANGE: Force reset of scene buffers 
+    // Clear current buffers to force rebuild
+    cleanupSceneBuffers();
+    
     // Force update of scene buffers
     updateSceneBuffers();
     
-    OHAO_LOG("Activated scene: " + name);
+    // Update UI panels if available
+    if (uiManager) {
+        if (auto outlinerPanel = uiManager->getOutlinerPanel()) {
+            outlinerPanel->setScene(scene.get());
+            OHAO_LOG_DEBUG("Updated outliner panel with scene: " + name);
+        }
+        if (auto propertiesPanel = uiManager->getPropertiesPanel()) {
+            propertiesPanel->setScene(scene.get());
+            OHAO_LOG_DEBUG("Updated properties panel with scene: " + name);
+        }
+        if (auto sceneSettingsPanel = uiManager->getSceneSettingsPanel()) {
+            sceneSettingsPanel->setScene(scene.get());
+            OHAO_LOG_DEBUG("Updated scene settings panel with scene: " + name);
+        }
+    }
+    
+    // If we have a scene renderer, make sure it's showing the new scene
+    if (sceneRenderer) {
+        // SAFER RENDERER RESET: Don't completely destroy it, just force a full refresh
+        OHAO_LOG_DEBUG("Forcing scene renderer to refresh for scene: " + name);
+        
+        try {
+            // Wait for device to be idle before refreshing
+            getLogicalDevice()->waitIdle();
+            
+            // Force the renderer to refresh with the new scene
+            sceneRenderer->forceRefresh();
+            
+            // Trigger another manual refresh to be sure
+            OHAO_LOG("Trigger manual scene renderer refresh for active scene");
+            
+            // Don't try to access viewport directly, just rely on the notifySceneChanged call below
+        }
+        catch (const std::exception& e) {
+            OHAO_LOG_ERROR("Exception during renderer refresh: " + std::string(e.what()));
+        }
+    }
+    
+    // Force device to wait for all operations to complete
+    getLogicalDevice()->waitIdle();
+    
+    // Notify listeners that the scene has changed
+    notifySceneChanged(name);
+    
+    OHAO_LOG("Successfully activated scene: " + name);
     return true;
 }
 
 bool VulkanContext::closeScene(const std::string& name) {
-    // Check if scene exists
     auto it = loadedScenes.find(name);
     if (it == loadedScenes.end()) {
-        OHAO_LOG_ERROR("Scene '" + name + "' not found");
+        OHAO_LOG_ERROR("Cannot close scene '" + name + "': not found");
         return false;
     }
     
+    // Get a reference to the scene being closed
+    std::shared_ptr<Scene> sceneToClose = it->second;
+    
     // If this is the active scene, need to switch to another one
-    if (scene == it->second) {
+    if (scene == sceneToClose) {
         // Find another scene to activate
         if (loadedScenes.size() > 1) {
             for (const auto& [otherName, otherScene] : loadedScenes) {
@@ -1181,9 +1352,21 @@ bool VulkanContext::closeScene(const std::string& name) {
         }
     }
     
-    // Remove the scene
+    // Properly clean up the scene before removing it
+    try {
+        if (sceneToClose) {
+            // Clear all actors first to prevent circular references
+            sceneToClose->removeAllActors();
+            
+            // Remove the scene from the map - will destroy if this is the last reference
     loadedScenes.erase(it);
     OHAO_LOG("Closed scene: " + name);
+        }
+    } catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error while closing scene '" + name + "': " + e.what());
+        return false;
+    }
+    
     return true;
 }
 
@@ -1265,6 +1448,118 @@ bool VulkanContext::hasUnsavedChanges() const {
         return true;
     }
     return sceneModified;
+}
+
+void VulkanContext::beginSceneModification() {
+    if (scene) {
+        scene->beginModification();
+    }
+}
+
+void VulkanContext::endSceneModification() {
+    if (scene) {
+        scene->endModification();
+    }
+}
+
+bool VulkanContext::canUndo() const {
+    return scene && scene->canUndo();
+}
+
+bool VulkanContext::canRedo() const {
+    return scene && scene->canRedo();
+}
+
+void VulkanContext::undo() {
+    if (scene) {
+        scene->undo();
+    }
+}
+
+void VulkanContext::redo() {
+    if (scene) {
+        scene->redo();
+    }
+}
+
+void VulkanContext::clearHistory() {
+    if (scene) {
+        scene->clearHistory();
+    }
+}
+
+void VulkanContext::saveHistory(const std::string& filename) const {
+    if (scene) {
+        scene->saveHistory(filename);
+    }
+}
+
+void VulkanContext::loadHistory(const std::string& filename) {
+    if (scene) {
+        scene->loadHistory(filename);
+    }
+}
+
+// Scene access methods
+std::shared_ptr<Scene> VulkanContext::getActiveScene() const {
+    return scene;
+}
+
+const std::vector<std::shared_ptr<Scene>>& VulkanContext::getScenes() const {
+    static std::vector<std::shared_ptr<Scene>> sceneList;
+    sceneList.clear();
+    for (const auto& [name, scenePtr] : loadedScenes) {
+        sceneList.push_back(scenePtr);
+    }
+    return sceneList;
+}
+
+// Scene callback methods
+void VulkanContext::registerSceneChangeCallback(SceneChangeCallback callback) {
+    sceneChangeCallbacks.push_back(callback);
+}
+
+void VulkanContext::unregisterSceneChangeCallback(SceneChangeCallback callback) {
+    // We can't directly compare std::function objects, so we need to use target_type()
+    auto it = std::remove_if(sceneChangeCallbacks.begin(), sceneChangeCallbacks.end(),
+        [&callback](const SceneChangeCallback& cb) {
+            return cb.target_type() == callback.target_type();
+        });
+    
+    if (it != sceneChangeCallbacks.end()) {
+        sceneChangeCallbacks.erase(it, sceneChangeCallbacks.end());
+    }
+}
+
+void VulkanContext::notifySceneChanged(const std::string& sceneName) {
+    for (const auto& callback : sceneChangeCallbacks) {
+        callback(sceneName);
+    }
+}
+
+bool VulkanContext::createEmptyScene(const std::string& defaultName) {
+    // Create a default scene
+    scene = Scene::create(defaultName);
+    if (!scene) {
+        OHAO_LOG_ERROR("Failed to create default scene");
+        return false;
+    }
+    
+    // Register the scene
+    loadedScenes[defaultName] = scene;
+    
+    return true;
+}
+
+void VulkanContext::initScene() {
+    // Create a default scene if none exists
+    if (!scene) {
+        std::string defaultName = "DefaultScene";
+        if (!createEmptyScene(defaultName)) {
+            // Handle failure
+            OHAO_LOG_ERROR("Failed to create default scene");
+        }
+    }
 }
 
 }//namespace ohao

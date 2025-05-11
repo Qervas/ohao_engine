@@ -4,39 +4,44 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
+#include <nlohmann/json.hpp>
+#include "../physics/rigid_body.hpp"
+#include "../physics/collision_shape.hpp"
 
 namespace ohao {
 
 // Forward declarations
 class Actor;
 class CollisionShape;
+class PhysicsWorld;
+class RigidBody;
 
 class PhysicsComponent : public Component {
 public:
     using Ptr = std::shared_ptr<PhysicsComponent>;
     
-    PhysicsComponent();
+    enum class BodyType {
+        STATIC,
+        DYNAMIC,
+        KINEMATIC
+    };
+    
+    PhysicsComponent(Actor* owner = nullptr);
     ~PhysicsComponent() override;
     
-    // Physics properties
+    // Body type
+    void setStatic(bool isStatic);
+    void setDynamic(bool isDynamic);
+    void setKinematic(bool isKinematic);
+    void setBodyType(BodyType type);
+    BodyType getBodyType() const;
+    bool isStatic() const { return bodyType == BodyType::STATIC; }
+    bool isDynamic() const { return bodyType == BodyType::DYNAMIC; }
+    bool isKinematic() const { return bodyType == BodyType::KINEMATIC; }
+    
+    // Physical properties
     void setMass(float mass);
     float getMass() const;
-    
-    void setLinearVelocity(const glm::vec3& velocity);
-    glm::vec3 getLinearVelocity() const;
-    
-    void setAngularVelocity(const glm::vec3& velocity);
-    glm::vec3 getAngularVelocity() const;
-    
-    void applyForce(const glm::vec3& force);
-    void applyImpulse(const glm::vec3& impulse);
-    void applyTorque(const glm::vec3& torque);
-    
-    void setStatic(bool isStatic);
-    bool isStatic() const;
-    
-    void setGravityEnabled(bool enabled);
-    bool isGravityEnabled() const;
     
     void setFriction(float friction);
     float getFriction() const;
@@ -44,51 +49,70 @@ public:
     void setRestitution(float restitution);
     float getRestitution() const;
     
-    // Collision shape
-    void setCollisionShape(std::shared_ptr<CollisionShape> shape);
-    std::shared_ptr<CollisionShape> getCollisionShape() const;
+    void setLinearDamping(float damping);
+    float getLinearDamping() const;
     
-    // Automatic shape generation
-    void createBoxShape(const glm::vec3& halfExtents);
+    void setAngularDamping(float damping);
+    float getAngularDamping() const;
+    
+    // Collision detection
+    void createBoxShape(const glm::vec3& size);
     void createSphereShape(float radius);
     void createCapsuleShape(float radius, float height);
-    void createConvexHullShape(const std::vector<glm::vec3>& points);
+    void createConvexHullShape(const std::vector<glm::vec3>& vertices);
+    void createMeshShape(const std::vector<glm::vec3>& vertices, const std::vector<unsigned int>& indices);
     
-    // Component overrides
+    CollisionShape* getCollisionShape() const;
+    
+    // Motion states
+    void setLinearVelocity(const glm::vec3& velocity);
+    glm::vec3 getLinearVelocity() const;
+    
+    void setAngularVelocity(const glm::vec3& velocity);
+    glm::vec3 getAngularVelocity() const;
+    
+    void applyForce(const glm::vec3& force, const glm::vec3& relativePosition = glm::vec3(0.0f));
+    void applyImpulse(const glm::vec3& impulse, const glm::vec3& relativePosition = glm::vec3(0.0f));
+    void applyTorque(const glm::vec3& torque);
+    void applyTorqueImpulse(const glm::vec3& torque);
+    
+    // Constraint properties
+    void setGravityEnabled(bool enabled);
+    bool isGravityEnabled() const;
+    
+    void setCollisionEnabled(bool enabled);
+    bool isCollisionEnabled() const;
+    
+    // Component interface
     void initialize() override;
     void update(float deltaTime) override;
     void destroy() override;
-    const char* getTypeName() const override;
     
-    // Collision callbacks
-    void onCollisionBegin(PhysicsComponent* other);
-    void onCollisionEnd(PhysicsComponent* other);
+    // Type information
+    const char* getTypeName() const override;
+    static const char* staticTypeName() { return "PhysicsComponent"; }
     
     // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
+    nlohmann::json serialize() const override;
+    void deserialize(const nlohmann::json& data) override;
     
 private:
-    // Physics state
+    BodyType bodyType;
     float mass;
-    glm::vec3 linearVelocity;
-    glm::vec3 angularVelocity;
-    glm::vec3 force;
-    glm::vec3 torque;
-    
-    // Physics properties
-    bool isStaticBody;
-    bool gravityEnabled;
     float friction;
     float restitution;
+    float linearDamping;
+    float angularDamping;
+    bool gravityEnabled;
+    bool collisionEnabled;
     
-    // Collision detection
-    std::shared_ptr<CollisionShape> collisionShape;
+    std::unique_ptr<CollisionShape> collisionShape;
+    std::unique_ptr<RigidBody> rigidBody;
     
-    // Physics integration
-    void integrateForces(float deltaTime);
-    void integrateVelocity(float deltaTime);
-    void updateTransform();
+    // Internal helpers
+    void updateRigidBody();
+    void syncTransformToPhysics();
+    void syncPhysicsToTransform();
 };
 
 } // namespace ohao 

@@ -1,159 +1,120 @@
 #include "transform_component.hpp"
-// Enable experimental GLM features
-#define GLM_ENABLE_EXPERIMENTAL
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtx/matrix_decompose.hpp>
-#include <glm/gtx/quaternion.hpp>
-#include <algorithm>
 #include "../actor/actor.hpp"
-#include "../scene/scene.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 namespace ohao {
 
-TransformComponent::TransformComponent()
-    : dirty(true)
-    , worldDirty(true)
-    , position(0.0f, 0.0f, 0.0f)
-    , rotation(1.0f, 0.0f, 0.0f, 0.0f)
-    , scale(1.0f, 1.0f, 1.0f)
-    , localMatrix(1.0f)
-    , worldMatrix(1.0f)
-    , parent(nullptr)
+TransformComponent::TransformComponent(Actor* owner)
+    : Component(owner)
 {
 }
 
+TransformComponent::~TransformComponent() {
+    // Remove from parent if it exists
+    removeFromParent();
+    
+    // Release all children
+    for (auto* child : children) {
+        child->parent = nullptr;
+    }
+    children.clear();
+}
+
 void TransformComponent::setPosition(const glm::vec3& newPosition) {
+    if (position != newPosition) {
+        beginModification();
     position = newPosition;
-    setDirty();
+        markMatrixDirty();
+        endModification();
+    }
 }
 
 void TransformComponent::setRotation(const glm::quat& newRotation) {
+    if (rotation != newRotation) {
+        beginModification();
     rotation = newRotation;
-    setDirty();
+        markMatrixDirty();
+        endModification();
 }
-
-void TransformComponent::setRotationEuler(const glm::vec3& eulerAngles) {
-    rotation = glm::quat(eulerAngles);
-    setDirty();
 }
 
 void TransformComponent::setScale(const glm::vec3& newScale) {
+    if (scale != newScale) {
+        beginModification();
     scale = newScale;
-    setDirty();
-}
-
-void TransformComponent::setLocalMatrix(const glm::mat4& matrix) {
-    localMatrix = matrix;
-    
-    // Extract components from matrix
-    glm::vec3 skew;
-    glm::vec4 perspective;
-    glm::decompose(matrix, scale, rotation, position, skew, perspective);
-    
-    setDirty();
-}
-
-glm::vec3 TransformComponent::getPosition() const {
-    return position;
-}
-
-glm::quat TransformComponent::getRotation() const {
-    return rotation;
-}
-
-glm::vec3 TransformComponent::getRotationEuler() const {
-    return glm::eulerAngles(rotation);
-}
-
-glm::vec3 TransformComponent::getScale() const {
-    return scale;
-}
-
-glm::mat4 TransformComponent::getLocalMatrix() const {
-    return localMatrix;
-}
-
-void TransformComponent::translate(const glm::vec3& offset) {
-    position += offset;
-    setDirty();
-}
-
-void TransformComponent::rotate(const glm::quat& rot) {
-    rotation = rotation * rot;
-    setDirty();
-}
-
-void TransformComponent::rotateEuler(const glm::vec3& eulerAngles) {
-    rotate(glm::quat(eulerAngles));
-}
-
-void TransformComponent::scaleBy(const glm::vec3& scaleFactors) {
-    scale *= scaleFactors;
-    setDirty();
-}
-
-glm::mat4 TransformComponent::getWorldMatrix() const {
-    if (worldDirty) {
-        // Update world matrix if needed
-        const_cast<TransformComponent*>(this)->updateWorldMatrix();
+        markMatrixDirty();
+        endModification();
     }
-    return worldMatrix;
+}
+
+void TransformComponent::setEulerAngles(const glm::vec3& eulerAngles) {
+    // Convert euler angles to quaternion
+    setRotation(glm::quat(glm::radians(eulerAngles)));
+}
+
+glm::vec3 TransformComponent::getEulerAngles() const {
+    // Convert quaternion to euler angles (in degrees)
+    return glm::degrees(glm::eulerAngles(rotation));
 }
 
 glm::vec3 TransformComponent::getWorldPosition() const {
-    if (parent) {
         return glm::vec3(getWorldMatrix()[3]);
-    }
-    return position;
 }
 
 glm::quat TransformComponent::getWorldRotation() const {
     if (parent) {
-        // Extract rotation from world matrix
-        glm::vec3 scale;
-        glm::quat rotation;
-        glm::vec3 translation;
-        glm::vec3 skew;
-        glm::vec4 perspective;
-        glm::decompose(getWorldMatrix(), scale, rotation, translation, skew, perspective);
-        return rotation;
+        return parent->getWorldRotation() * rotation;
     }
     return rotation;
 }
 
 glm::vec3 TransformComponent::getWorldScale() const {
     if (parent) {
-        // Extract scale from world matrix
-        glm::vec3 scale;
-        glm::quat rotation;
-        glm::vec3 translation;
-        glm::vec3 skew;
-        glm::vec4 perspective;
-        glm::decompose(getWorldMatrix(), scale, rotation, translation, skew, perspective);
-        return scale;
+        auto parentScale = parent->getWorldScale();
+        return glm::vec3(parentScale.x * scale.x, parentScale.y * scale.y, parentScale.z * scale.z);
     }
     return scale;
 }
 
+glm::mat4 TransformComponent::getLocalMatrix() const {
+    if (localMatrixDirty) {
+        updateLocalMatrix();
+    }
+    return localMatrix;
+}
+
+glm::mat4 TransformComponent::getWorldMatrix() const {
+    if (worldMatrixDirty) {
+        updateWorldMatrix();
+    }
+    return worldMatrix;
+}
+
 glm::vec3 TransformComponent::getForward() const {
-    return glm::rotate(getWorldRotation(), glm::vec3(0.0f, 0.0f, -1.0f));
+    // Forward is negative Z in OpenGL
+    return glm::normalize(glm::rotate(getWorldRotation(), glm::vec3(0.0f, 0.0f, -1.0f)));
 }
 
 glm::vec3 TransformComponent::getRight() const {
-    return glm::rotate(getWorldRotation(), glm::vec3(1.0f, 0.0f, 0.0f));
+    // Right is positive X
+    return glm::normalize(glm::rotate(getWorldRotation(), glm::vec3(1.0f, 0.0f, 0.0f)));
 }
 
 glm::vec3 TransformComponent::getUp() const {
-    return glm::rotate(getWorldRotation(), glm::vec3(0.0f, 1.0f, 0.0f));
+    // Up is positive Y
+    return glm::normalize(glm::rotate(getWorldRotation(), glm::vec3(0.0f, 1.0f, 0.0f)));
 }
 
 void TransformComponent::setParent(TransformComponent* newParent) {
-    // Remove from old parent
-    if (parent && parent != newParent) {
-        parent->removeChild(this);
-    }
+    if (parent == newParent) return;
     
-    // Update parent
+    beginModification();
+    
+    // Remove from old parent
+    removeFromParent();
+    
+    // Set new parent
     parent = newParent;
     
     // Add to new parent
@@ -161,20 +122,82 @@ void TransformComponent::setParent(TransformComponent* newParent) {
         parent->addChild(this);
     }
     
-    // Mark dirty
-    setDirty();
+    // Mark matrix as dirty
+    markMatrixDirty();
+    
+    endModification();
 }
 
-TransformComponent* TransformComponent::getParent() const {
-    return parent;
+glm::vec3 TransformComponent::transformPoint(const glm::vec3& point) const {
+    return glm::vec3(getWorldMatrix() * glm::vec4(point, 1.0f));
+}
+
+glm::vec3 TransformComponent::inverseTransformPoint(const glm::vec3& worldPoint) const {
+    return glm::vec3(glm::inverse(getWorldMatrix()) * glm::vec4(worldPoint, 1.0f));
+}
+
+glm::vec3 TransformComponent::transformDirection(const glm::vec3& direction) const {
+    // For directions we don't apply translation
+    return glm::vec3(getWorldRotation() * direction);
+}
+
+glm::vec3 TransformComponent::inverseTransformDirection(const glm::vec3& worldDirection) const {
+    // For directions we don't apply translation
+    return glm::vec3(glm::inverse(getWorldRotation()) * worldDirection);
+}
+
+void TransformComponent::update(float deltaTime) {
+    // Nothing to do in update for transform component
+}
+
+const char* TransformComponent::getTypeName() const {
+    return "TransformComponent";
+}
+
+void TransformComponent::updateLocalMatrix() const {
+    glm::mat4 translationMatrix = glm::translate(glm::mat4(1.0f), position);
+    glm::mat4 rotationMatrix = glm::toMat4(rotation);
+    glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), scale);
+    
+    localMatrix = translationMatrix * rotationMatrix * scaleMatrix;
+    localMatrixDirty = false;
+}
+
+void TransformComponent::updateWorldMatrix() const {
+    if (parent) {
+        worldMatrix = parent->getWorldMatrix() * getLocalMatrix();
+    } else {
+        worldMatrix = getLocalMatrix();
+    }
+    worldMatrixDirty = false;
+}
+
+void TransformComponent::notifyChildrenOfDirtyMatrix() {
+    for (auto* child : children) {
+        child->markMatrixDirty();
+    }
+}
+
+void TransformComponent::removeFromParent() {
+    if (parent) {
+        parent->removeChild(this);
+        parent = nullptr;
+    }
+}
+
+void TransformComponent::markMatrixDirty() {
+    localMatrixDirty = true;
+    worldMatrixDirty = true;
+    
+    // Notify children that their world matrices need to be updated
+    notifyChildrenOfDirtyMatrix();
 }
 
 void TransformComponent::addChild(TransformComponent* child) {
     if (!child) return;
     
-    // Check if already child
-    auto it = std::find(children.begin(), children.end(), child);
-    if (it == children.end()) {
+    // Check if already a child
+    if (std::find(children.begin(), children.end(), child) == children.end()) {
         children.push_back(child);
     }
 }
@@ -188,71 +211,39 @@ void TransformComponent::removeChild(TransformComponent* child) {
     }
 }
 
-const std::vector<TransformComponent*>& TransformComponent::getChildren() const {
-    return children;
-}
-
-void TransformComponent::setDirty() {
-    dirty = true;
-    worldDirty = true;
+nlohmann::json TransformComponent::serialize() const {
+    nlohmann::json data;
     
-    // Mark all children dirty
-    for (auto* child : children) {
-        if (child) {
-            child->setDirty();
-        }
-    }
+    // Store transform properties
+    data["position"] = {position.x, position.y, position.z};
+    data["rotation"] = {rotation.x, rotation.y, rotation.z, rotation.w};
+    data["scale"] = {scale.x, scale.y, scale.z};
     
-    // Get actor and mark scene as dirty
-    if (auto actor = getOwner()) {
-        if (auto scene = actor->getScene()) {
-            scene->setDirty();
-        }
-    }
+    return data;
 }
 
-bool TransformComponent::isDirty() const {
-    return dirty;
-}
-
-const char* TransformComponent::getTypeName() const {
-    return "TransformComponent";
-}
-
-void TransformComponent::serialize(class Serializer& serializer) const {
-    // TODO: Implement serialization
-}
-
-void TransformComponent::deserialize(class Deserializer& deserializer) {
-    // TODO: Implement deserialization
-}
-
-void TransformComponent::updateLocalMatrix() {
-    if (dirty) {
-        // Build transform matrix: scale -> rotate -> translate
-        glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), scale);
-        glm::mat4 rotationMatrix = glm::toMat4(rotation);
-        glm::mat4 translationMatrix = glm::translate(glm::mat4(1.0f), position);
-        
-        localMatrix = translationMatrix * rotationMatrix * scaleMatrix;
-        dirty = false;
-    }
-}
-
-void TransformComponent::updateWorldMatrix() {
-    // Update local matrix if needed
-    if (dirty) {
-        updateLocalMatrix();
+void TransformComponent::deserialize(const nlohmann::json& data) {
+    beginModification();
+    
+    // Load transform properties
+    if (data.contains("position")) {
+        const auto& pos = data["position"];
+        position = glm::vec3(pos[0], pos[1], pos[2]);
     }
     
-    // Calculate world matrix
-    if (parent) {
-        worldMatrix = parent->getWorldMatrix() * localMatrix;
-    } else {
-        worldMatrix = localMatrix;
+    if (data.contains("rotation")) {
+        const auto& rot = data["rotation"];
+        rotation = glm::quat(rot[3], rot[0], rot[1], rot[2]);
     }
     
-    worldDirty = false;
+    if (data.contains("scale")) {
+        const auto& s = data["scale"];
+        scale = glm::vec3(s[0], s[1], s[2]);
+    }
+    
+    markMatrixDirty();
+    
+    endModification();
 }
 
 } // namespace ohao 

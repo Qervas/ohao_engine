@@ -4,14 +4,21 @@
 #include "../asset/model.hpp"
 #include "../material/material.hpp"
 #include <memory>
+#include <string>
+#include <vector>
+#include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
 
 namespace ohao {
+
+class Model;
+class Material;
 
 class MeshComponent : public Component {
 public:
     using Ptr = std::shared_ptr<MeshComponent>;
     
-    MeshComponent();
+    MeshComponent(Actor* owner = nullptr);
     ~MeshComponent() override;
     
     // Model management
@@ -22,6 +29,13 @@ public:
     void setMaterial(const Material& material);
     Material& getMaterial();
     const Material& getMaterial() const;
+    
+    // Mesh properties
+    void setCastShadows(bool castShadows);
+    bool getCastShadows() const;
+    
+    void setReceiveShadows(bool receiveShadows);
+    bool getReceiveShadows() const;
     
     // Visibility
     void setVisible(bool visible);
@@ -37,21 +51,31 @@ public:
     void setRenderMode(RenderMode mode);
     RenderMode getRenderMode() const;
     
-    // Component overrides
-    const char* getTypeName() const override;
+    // Component interface
     void initialize() override;
     void render() override;
     void destroy() override;
     
+    // Type information
+    const char* getTypeName() const override;
+    static const char* staticTypeName() { return "MeshComponent"; }
+    
     // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
+    nlohmann::json serialize() const override;
+    void deserialize(const nlohmann::json& data) override;
     
 private:
     std::shared_ptr<Model> model;
-    Material material;
+    Material* material;  // We own this material
+    bool ownsMaterial;   // Flag indicating if we should delete the material
+    
+    bool castShadows;
+    bool receiveShadows;
     bool visible;
-    RenderMode renderMode;
+    
+    // Helper methods
+    void onModelChanged();
+    void onMaterialChanged();
     
     // Cached buffers - specific to renderer implementation
     uint32_t vertexOffset;  // Offset in combined buffer
