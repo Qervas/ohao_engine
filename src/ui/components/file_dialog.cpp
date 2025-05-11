@@ -32,4 +32,16 @@ std::string FileDialog::saveFile(
     return path ? std::string(path) : std::string();
 }
 
+std::string FileDialog::selectDirectory(
+    const char* title,
+    const char* defaultPath)
+{
+    const char* path = tinyfd_selectFolderDialog(
+        title,
+        defaultPath
+    );
+    
+    return path ? std::string(path) : std::string();
+}
+
 }

@@ -3,48 +3,46 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "renderer/vulkan_context.hpp"
+#include <functional>
+#include "../../../core/scene/scene.hpp"
+#include "../../../renderer/vulkan_context.hpp"
 #include "ui/common/panel_base.hpp"
 
 namespace ohao {
 
 class ScenesPanel : public PanelBase {
 public:
-    ScenesPanel();
-    ~ScenesPanel() = default;
+    ScenesPanel(VulkanContext* context);
+    ~ScenesPanel();
 
     void render() override;
-    void setVulkanContext(VulkanContext* context) { m_context = context; }
 
 private:
-    VulkanContext* m_context = nullptr;
-    std::string m_newSceneName;
-    std::string m_sceneToLoad;
-    std::string m_sceneToSave;
-    std::string m_projectPath;
-    bool m_showCreateDialog = false;
-    bool m_showLoadDialog = false;
-    bool m_showSaveDialog = false;
-    bool m_showConfirmClose = false;
-    bool m_showSaveDirtyDialog = false;
-    std::string m_sceneToClose;
-    std::string m_pendingSceneToActivate; // Used when we need to save before activating a new scene
+    VulkanContext* context;
+    std::string newSceneName;
+    bool showNewSceneDialog;
+    bool showSaveSceneDialog;
+    bool showLoadSceneDialog;
+    std::string selectedScene;
+    std::string sceneToSave;
+    std::string sceneToLoad;
 
-    void renderCreateSceneDialog();
-    void renderLoadSceneDialog();
+    void renderSceneTabs();
+    void renderSceneContent();
+    void renderNewSceneDialog();
     void renderSaveSceneDialog();
-    void renderConfirmCloseDialog();
-    void renderSaveDirtySceneDialog();
+    void renderLoadSceneDialog();
+    void renderSceneToolbar();
+    void renderUndoRedoButtons();
+    void renderSceneHistory();
     
-    bool createNewScene(const std::string& name);
-    bool saveCurrentScene();
-    bool tryActivateScene(const std::string& name);
-    bool tryCloseScene(const std::string& name);
-    
-    // Project management
-    bool loadProject(const std::string& path);
-    bool saveProject();
-    bool createNewProject(const std::string& name);
+    void createNewScene();
+    void saveScene(const std::string& name);
+    void loadScene(const std::string& filename);
+    void activateScene(const std::string& name);
+    void removeScene(const std::string& name);
+
+    void onSceneChanged(const std::string& sceneName);
 };
 
 } // namespace ohao 

@@ -7,6 +7,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <vector>
+#include <memory>
+#include <nlohmann/json.hpp>
 
 namespace ohao {
 
@@ -14,76 +16,80 @@ class TransformComponent : public Component {
 public:
     using Ptr = std::shared_ptr<TransformComponent>;
     
-    TransformComponent();
-    ~TransformComponent() override = default;
+    TransformComponent(Actor* owner = nullptr);
+    ~TransformComponent() override;
     
-    // Local transform
+    // Local transform properties
     void setPosition(const glm::vec3& position);
     void setRotation(const glm::quat& rotation);
-    void setRotationEuler(const glm::vec3& eulerAngles);
     void setScale(const glm::vec3& scale);
-    void setLocalMatrix(const glm::mat4& matrix);
+    void setEulerAngles(const glm::vec3& eulerAngles);
     
-    glm::vec3 getPosition() const;
-    glm::quat getRotation() const;
-    glm::vec3 getRotationEuler() const;
-    glm::vec3 getScale() const;
-    glm::mat4 getLocalMatrix() const;
+    const glm::vec3& getPosition() const { return position; }
+    const glm::quat& getRotation() const { return rotation; }
+    const glm::vec3& getScale() const { return scale; }
+    glm::vec3 getEulerAngles() const;
     
-    // Relative transformations
-    void translate(const glm::vec3& offset);
-    void rotate(const glm::quat& rotation);
-    void rotateEuler(const glm::vec3& eulerAngles);
-    void scaleBy(const glm::vec3& scaleFactors);
-    
-    // World transform
-    glm::mat4 getWorldMatrix() const;
+    // World transform properties
     glm::vec3 getWorldPosition() const;
     glm::quat getWorldRotation() const;
     glm::vec3 getWorldScale() const;
+    
+    // Matrices
+    glm::mat4 getLocalMatrix() const;
+    glm::mat4 getWorldMatrix() const;
     
     // Directions
     glm::vec3 getForward() const;
     glm::vec3 getRight() const;
     glm::vec3 getUp() const;
     
-    // Hierarchy
+    // Parent-child hierarchy
     void setParent(TransformComponent* parent);
-    TransformComponent* getParent() const;
-    void addChild(TransformComponent* child);
-    void removeChild(TransformComponent* child);
-    const std::vector<TransformComponent*>& getChildren() const;
+    TransformComponent* getParent() const { return parent; }
+    const std::vector<TransformComponent*>& getChildren() const { return children; }
     
-    // Mark the transform as dirty (needs recalculation)
-    void setDirty();
-    bool isDirty() const;
+    // Coordinate space conversions
+    glm::vec3 transformPoint(const glm::vec3& point) const;
+    glm::vec3 inverseTransformPoint(const glm::vec3& worldPoint) const;
+    glm::vec3 transformDirection(const glm::vec3& direction) const;
+    glm::vec3 inverseTransformDirection(const glm::vec3& worldDirection) const;
     
     // Component interface
+    void update(float deltaTime) override;
+    
+    // Type information
     const char* getTypeName() const override;
+    static const char* staticTypeName() { return "TransformComponent"; }
     
     // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
+    nlohmann::json serialize() const override;
+    void deserialize(const nlohmann::json& data) override;
     
 private:
-    void updateLocalMatrix();
-    void updateWorldMatrix();
-    
-    bool dirty;
-    bool worldDirty;
-    
     // Local transform
-    glm::vec3 position;
-    glm::quat rotation;
-    glm::vec3 scale;
-    glm::mat4 localMatrix;
+    glm::vec3 position{0.0f};
+    glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f}; // Identity quaternion
+    glm::vec3 scale{1.0f};
     
-    // World transform
-    glm::mat4 worldMatrix;
+    // Cached matrices
+    mutable glm::mat4 localMatrix{1.0f};
+    mutable glm::mat4 worldMatrix{1.0f};
+    mutable bool localMatrixDirty{true};
+    mutable bool worldMatrixDirty{true};
     
     // Hierarchy
-    TransformComponent* parent;
+    TransformComponent* parent{nullptr};
     std::vector<TransformComponent*> children;
+    
+    // Helper methods
+    void updateLocalMatrix() const;
+    void updateWorldMatrix() const;
+    void notifyChildrenOfDirtyMatrix();
+    void removeFromParent();
+    void markMatrixDirty();
+    void addChild(TransformComponent* child);
+    void removeChild(TransformComponent* child);
 };
 
 } // namespace ohao 

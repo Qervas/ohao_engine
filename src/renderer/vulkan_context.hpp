@@ -30,6 +30,18 @@
 #include "core/scene/scene.hpp"
 #include "subsystems/scene/scene_renderer.hpp"
 #include "renderer/shader/shader_uniforms.hpp"
+#include "../core/scene/scene_manager.hpp"
+#include <string>
+#include <functional>
+#include <unordered_map>
+#include <chrono>
+#include <optional>
+#include <deque>
+#include <mutex>
+#include "../core/component/mesh_component.hpp"
+#include "../core/scene/scene_node.hpp"
+#include "camera/camera.hpp"
+#include "../core/scene/scene_manager.hpp"
 
 
 #define GPU_VENDOR_NVIDIA 0
@@ -41,16 +53,44 @@
 
 namespace ohao {
 
+// Forward declarations
+class Window;
+class SceneNode;
+class OhaoVkInstance;
+class OhaoVkSurface;
+class OhaoVkPhysicalDevice;
+class OhaoVkDevice;
+class OhaoVkSwapChain;
+class OhaoVkShaderModule;
+class OhaoVkRenderPass;
+class OhaoVkPipeline;
+class OhaoVkCommandManager;
+class OhaoVkBuffer;
+class OhaoVkImage;
+class OhaoVkFramebuffer;
+class OhaoVkDescriptor;
+class OhaoVkTexture;
+class OhaoVkUniformBuffer;
+class OhaoVkSyncObjects;
+class Scene;
 class SceneRenderer;
 class UIManager;
+class AxisGizmo;
+class SceneObject;
+class Model;
+
+// Scene callback type
+using SceneChangeCallback = std::function<void(const std::string&)>;
+
+class SceneRenderer;
 class VulkanContext {
 public:
 
     using UniformBufferObject = GlobalUniformBuffer;
 
-    VulkanContext() = delete;
     VulkanContext(Window* windowHandle);
     ~VulkanContext();
+    void initScene();
 
     void initializeVulkan();
     void initializeSceneRenderer();
@@ -138,6 +178,7 @@ public:
 
     // Multi-scene management methods
     bool createScene(const std::string& name);
+    bool createEmptyScene(const std::string& defaultName);
     bool loadSceneFromFile(const std::string& filename);
     bool saveSceneToFile(const std::string& filename);
     bool activateScene(const std::string& name);
@@ -176,7 +217,55 @@ public:
     void markSceneModified() { sceneModified = true; }
     void clearSceneModified() { sceneModified = false; }
 
+    // Scene management
+    std::shared_ptr<Scene> getActiveScene() const;
+    const std::vector<std::shared_ptr<Scene>>& getScenes() const;
 
+    // Scene change tracking
+    void beginSceneModification();
+    void endSceneModification();
+    bool canUndo() const;
+    bool canRedo() const;
+    void undo();
+    void redo();
+    void clearHistory();
+    void saveHistory(const std::string& filename) const;
+    void loadHistory(const std::string& filename);
+
+    // Rendering methods
+    void renderFrame();
+    void waitIdle();
+    
+    // Resource loading
+    void loadMesh(const std::string& filename, std::shared_ptr<Actor> targetActor = nullptr);
+    void loadTexture(const std::string& filename);
+    
+    // Material management
+    void createMaterial(const std::string& name);
+    void deleteMaterial(const std::string& name);
+    Material* getMaterial(const std::string& name);
+    
+    // Buffer management
+    void updateBuffers();
+    VkBuffer getGlobalTransformBuffer() const;
+    
+    // Instance management
+    bool initialize(Window* window);
+    void shutdown();
+    
+    // Current scene
+    std::shared_ptr<Scene> getCurrentScene() const;
+    void setCurrentScene(std::shared_ptr<Scene> scene);
+    
+    // Vulkan debug utilities
+    void submitDebugUtilsLabel(VkCommandBuffer cmdBuffer, const char* labelName, const float color[4]);
+    void beginDebugUtilsLabel(VkCommandBuffer cmdBuffer, const char* labelName, const float color[4]);
+    void endDebugUtilsLabel(VkCommandBuffer cmdBuffer);
+
+    // Scene change notification system
+    void registerSceneChangeCallback(SceneChangeCallback callback);
+    void unregisterSceneChangeCallback(SceneChangeCallback callback);
+    void notifySceneChanged(const std::string& sceneName);
 
 private:
     Window* window;
@@ -241,10 +330,20 @@ private:
 
     bool sceneModified{false};
 
+    std::unique_ptr<SceneManager> sceneManager;
 
+    // Vulkan debug utilities
+    VkDebugUtilsMessengerEXT debugMessenger;
 
+    // Materials
+    std::unordered_map<std::string, std::unique_ptr<Material>> materials;
 
+    // Global buffers for transform data
+    VkBuffer globalTransformBuffer;
+    VkDeviceMemory globalTransformBufferMemory;
 
+    // Add to the private section
+    std::vector<SceneChangeCallback> sceneChangeCallbacks;
 };
 
 } // namespace ohao

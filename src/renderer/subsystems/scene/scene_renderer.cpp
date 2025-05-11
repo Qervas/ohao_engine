@@ -583,4 +583,55 @@ void SceneRenderer::renderAxisGizmo(VkCommandBuffer cmd, OhaoVkUniformBuffer* un
     }
 }
 
+void SceneRenderer::forceRefresh() {
+    if (!context) {
+        OHAO_LOG_ERROR("Cannot refresh SceneRenderer: context is null");
+        return;
+    }
+    
+    // Get the current active scene
+    std::string activeSceneName = context->getActiveSceneName();
+    OHAO_LOG("FORCE REFRESHING renderer for active scene: '" + activeSceneName + "'");
+    
+    // Completely wait for device idle before making changes
+    if (context->getLogicalDevice()) {
+        context->getLogicalDevice()->waitIdle();
+    }
+    
+    // Force update of scene buffers
+    context->updateSceneBuffers();
+    
+    // Recreate any renderer-specific resources if needed
+    if (renderTarget) {
+        // If we have an active render target, get its current dimensions
+        uint32_t width = renderTarget->getWidth();
+        uint32_t height = renderTarget->getHeight();
+        
+        // Check if we should recreate render resources
+        if (width > 0 && height > 0) {
+            OHAO_LOG("Recreating render resources for viewport: " + 
+                     std::to_string(width) + "x" + std::to_string(height));
+            
+            try {
+                // Clear current render target - completely recreate
+                OHAO_LOG("Destroying and recreating render target...");
+                renderTarget.reset(); 
+                
+                // Create a new render target
+                renderTarget = std::make_unique<SceneRenderTarget>();
+                if (!renderTarget->initialize(context, width, height)) {
+                    OHAO_LOG_ERROR("Failed to recreate render target");
+                }
+                
+                // Force scene buffer update
+                context->updateSceneBuffers();
+                
+                OHAO_LOG("Render resources recreated successfully");
+            } catch (const std::exception& e) {
+                OHAO_LOG_ERROR("Exception during render target recreation: " + std::string(e.what()));
+            }
+        }
+    }
+}
+
 } // namespace ohao

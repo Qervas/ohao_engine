@@ -21,6 +21,11 @@ public:
         const char* filterDescription
     );
 
+    static std::string selectDirectory(
+        const char* title,
+        const char* defaultPath
+    );
+
 private:
     static const char* const OBJ_FILTER_PATTERNS[];
     static const char* const OBJ_FILTER_DESCRIPTION;

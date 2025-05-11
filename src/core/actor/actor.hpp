@@ -12,6 +12,10 @@
 #include "../scene/scene_object.hpp" // Include SceneObject
 #include "../component/component.hpp" // Include Component
 #include "../component/transform_component.hpp" // Include TransformComponent directly
+#include <nlohmann/json.hpp>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include "scene/scene_node.hpp"
 
 // Forward declarations
 namespace ohao {
@@ -28,7 +32,10 @@ public:
     using Ptr = std::shared_ptr<Actor>;
 
     Actor(const std::string& name = "Actor");
-    ~Actor() override;
+    virtual ~Actor();
+
+    // Friend declaration to give Scene full access during destruction
+    friend class Scene;
 
     // Scene management
     void setScene(Scene* scene);
@@ -41,13 +48,14 @@ public:
     virtual void render();
     virtual void destroy();
 
-    // Hierarchy management (now manages Actor* instead of SceneNode*)
+    // Parent-child hierarchy
     void setParent(Actor* parent);
-    Actor* getParent() const { return parent; }
+    Actor* getParent() const;
+    void detachFromParent();
     void addChild(Actor* child);
     void removeChild(Actor* child);
     const std::vector<Actor*>& getChildren() const { return children; }
-    void detachFromParent();
+    void updateWorldTransform();
 
     // Name properties are inherited from SceneObject
     const std::string& getName() const { return SceneObject::getName(); }
@@ -59,16 +67,15 @@ public:
 
     // Transform helpers
     TransformComponent* getTransform() const;
+    void setPosition(const glm::vec3& position);
+    void setRotation(const glm::quat& rotation);
+    void setRotation(float yaw, float pitch, float roll);
+    void setScale(const glm::vec3& scale);
+    glm::vec3 getPosition() const;
+    glm::quat getRotation() const;
+    glm::vec3 getScale() const;
     
-    // Transform compatibility with SceneObject
-    glm::mat4 getWorldMatrix() const { 
-        return getWorldTransform();
-    }
-
-    // Unique ID is inherited from SceneObject
-    ObjectID getID() const { return SceneObject::getID(); }
-
-    // Component management - implemented inline for simplicity
+    // Component management
     template<typename T, typename... Args>
     std::shared_ptr<T> addComponent(Args&&... args) {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
@@ -93,7 +100,7 @@ public:
         
         return component;
     }
-
+    
     template<typename T>
     std::shared_ptr<T> getComponent() const {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
@@ -107,7 +114,7 @@ public:
         
         return nullptr;
     }
-
+    
     template<typename T>
     bool hasComponent() const {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
@@ -116,7 +123,7 @@ public:
         auto it = componentsByType.find(std::type_index(typeid(T)));
         return it != componentsByType.end();
     }
-
+    
     template<typename T>
     bool removeComponent() {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
@@ -152,21 +159,67 @@ public:
         
         return false;
     }
-
+    
     void removeAllComponents();
-
-    const std::vector<std::shared_ptr<Component>>& getAllComponents() const { return components; }
-
-    // SceneObject compatibility methods are already inherited
-    // These will be implemented in actor.cpp for component integration
+    
+    const std::vector<std::shared_ptr<Component>>& getAllComponents() const { 
+        return components; 
+    }
+    
+    // Scene object identity
+    void setID(ObjectID newID) { id = newID; }
+    ObjectID getID() const { return id; }
+    
+    // Tag management
+    void addTag(const std::string& tag);
+    void removeTag(const std::string& tag);
+    bool hasTag(const std::string& tag) const;
+    const std::vector<std::string>& getTags() const;
+    
+    // Flag operations
+    void setFlag(int flag, bool value = true);
+    bool hasFlag(int flag) const;
+    void clearFlags();
+    
+    // Model loading
+    bool loadFromFile(const std::string& filename);
+    void setMesh(Model* model);
+    Model* getMesh() const;
+    
+    // Model compatibility with SceneObject
     void setModel(std::shared_ptr<Model> model);
     std::shared_ptr<Model> getModel() const;
+    
+    // Material management
     void setMaterial(const Material& material);
-    const Material& getMaterial() const;
     Material& getMaterial();
+    const Material& getMaterial() const;
     
     // Type information override
     const char* getTypeName() const override { return "Actor"; }
+
+    // Serialization
+    nlohmann::json serialize() const;
+    void deserialize(const nlohmann::json& data);
+
+    // Change tracking
+    void beginModification();
+    void endModification();
+    bool isModified() const { return modified; }
+    void clearModified() { modified = false; }
+    
+    // Metadata functionality
+    void setMetadata(const std::string& key, const std::string& value);
+    std::string getMetadata(const std::string& key) const;
+    bool hasMetadata(const std::string& key) const;
+    const std::unordered_map<std::string, std::string>& getAllMetadata() const { return metadata; }
+
+    // New member variables
+    std::string name;
+    uint64_t id;
+    glm::vec3 position;
+    glm::quat rotation;
+    glm::vec3 scale;
 
 protected:
     // Called when a component is added to this actor
@@ -187,6 +240,9 @@ protected:
     std::vector<Actor*> children;
     std::vector<std::shared_ptr<Component>> components;
     std::unordered_map<std::type_index, std::shared_ptr<Component>> componentsByType;
+    bool modified;
+    nlohmann::json oldState;
+    std::unordered_map<std::string, std::string> metadata;
 };
 
 } // namespace ohao 

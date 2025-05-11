@@ -5,6 +5,7 @@
 #include "ui/components/console_widget.hpp"
 #include "ui/selection/selection_manager.hpp"
 #include "core/actor/actor.hpp"
+#include "core/actor/light_actor.hpp"
 #include "core/component/mesh_component.hpp"
 #include "core/component/physics_component.hpp"
 
@@ -48,34 +49,35 @@ private:
     ImVec2 graphOffset{0, 0};
     float graphZoom{1.0f};
 
-
+    // Core rendering methods
     void renderSceneTree();
     void renderTreeNode(SceneNode* node);
-    void handleDragAndDrop();
+    void renderOrphanedActors();
+    void handleDragAndDrop(SceneNode* targetNode, const ImGuiPayload* payload);
+    void handleGlobalDragAndDrop(); // Legacy method for backward compatibility
     void showObjectContextMenu(SceneNode* node);
+    
+    // Object management methods
     void handleObjectDeletion(SceneNode* node);
     void handleDelete();
-
-    // Helper method to check if node is a SceneObject
-    SceneObject* asSceneObject(SceneNode* node) const{
-        return dynamic_cast<SceneObject*>(node);
-    }
-
     void createPrimitiveObject(PrimitiveType type);
+    void createLightActor(LightActor::LightActorType type);
     std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type);
+    std::string generateUniqueName(const std::string& baseName);
 
+    // Graph view methods
     void renderGraphView();
-    void renderGraphNode(SceneNode* node, ImVec2& pos, int depth);
+    void renderActorNode(Actor* actor, ImVec2& pos);
     void drawNodeConnections(const ImVec2& start, const ImVec2& end);
     ImVec2 calculateNodePosition(int depth, int index);
     void handleGraphNavigation();
     void renderViewModeSelector();
+    
+    // Type safety helpers
     bool isRoot(SceneNode* node) const;
-
     bool isSceneObject(SceneNode* node) const;
+    SceneObject* asSceneObject(SceneNode* node) const;
     bool isSelected(SceneNode* node) const;
-
-
 };
 
 } // namespace ohao

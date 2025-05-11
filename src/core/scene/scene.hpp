@@ -5,8 +5,11 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
+#include <iostream>
 #include "../actor/actor.hpp"
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
+#include "scene_change_tracker.hpp"
 
 namespace ohao {
 
@@ -39,16 +42,82 @@ class Scene {
 public:
     using Ptr = std::shared_ptr<Scene>;
     
+    // Private creation helper to work around protected constructor
+    class SceneFactory {
+    private:
+        friend class Scene;
+        
+    public:
+        // Factory method for creating scenes
+        static Scene::Ptr create(const std::string& name = "New Scene") {
+            auto scene = std::shared_ptr<Scene>(new Scene(name));
+            if (!scene->setupRootNode()) {
+                return nullptr;
+            }
+            return scene;
+        }
+    };
+    
+    // Static factory method for proper construction
+    static Scene::Ptr create(const std::string& name = "New Scene") {
+        return SceneFactory::create(name);
+    }
+    
+    // Disable copying
+    Scene(const Scene&) = delete;
+    Scene& operator=(const Scene&) = delete;
+    
+    // Constructor is now protected - use create() factory method
+protected:
     Scene(const std::string& name = "New Scene");
+public:
     ~Scene();
     
+    // Explicit initialization to be called after construction 
+    // This ensures proper setup of the scene
+    bool setupRootNode();
+    
+    // Scene management
+    void setName(const std::string& name);
+    const std::string& getName() const;
+    void setDirty(bool dirty = true);
+    bool isDirty() const;
+    
     // Actor management
-    Actor::Ptr createActor(const std::string& name = "Actor");
-    void addActor(Actor::Ptr actor);
-    void removeActor(Actor::Ptr actor);
+    void addActor(std::shared_ptr<Actor> actor);
+    void removeActor(std::shared_ptr<Actor> actor);
     void removeActor(const std::string& name);
     void removeActor(uint64_t id);
     void removeAllActors();
+    std::shared_ptr<Actor> getActor(const std::string& name);
+    const std::vector<std::shared_ptr<Actor>>& getActors() const;
+    Actor::Ptr createActor(const std::string& name);
+    
+    // Root node access - now has validation and safe handling
+    std::shared_ptr<Actor> getRootNode() const;
+    bool hasValidRoot() const;
+    
+    // Scene reset/cleanup - clears everything but maintains a valid root
+    void reset();
+    
+    // Scene lifecycle methods
+    void initialize(); // Initialize all actors 
+    void reinitialize(bool forceNewRoot = false); // Recreate root node if needed
+    void update(float deltaTime);
+    void render();
+    void destroy();
+    
+    // Project path management
+    void setProjectPath(const std::string& path) { projectPath = path; }
+    const std::string& getProjectPath() const { return projectPath; }
+    std::string getProjectDirPath() const;
+    
+    // Import methods
+    bool importModel(const std::string& filename, Actor::Ptr targetActor = nullptr);
+    
+    // File operations
+    bool saveToFile(const std::string& filePath);
+    static bool loadFromFile(const std::string& filePath, Scene::Ptr& outScene);
     
     // Actor lookup
     Actor::Ptr findActor(const std::string& name) const;
@@ -56,6 +125,28 @@ public:
     std::vector<Actor::Ptr> findActorsByName(const std::string& partialName) const;
     std::vector<Actor::Ptr> findActorsByTag(const std::string& tag) const;
     const std::unordered_map<uint64_t, Actor::Ptr>& getAllActors() const;
+    
+    // Change tracking
+    SceneChangeTracker* getChangeTracker() const { return changeTracker.get(); }
+    void beginModification();
+    void endModification();
+    void trackActorAdded(std::shared_ptr<Actor> actor);
+    void trackActorRemoved(std::shared_ptr<Actor> actor);
+    void trackActorModified(Actor* actor, const nlohmann::json& oldState, const nlohmann::json& newState);
+    void trackComponentModified(Component* component, const nlohmann::json& oldState, const nlohmann::json& newState);
+    bool canUndo() const;
+    bool canRedo() const;
+    void undo();
+    void redo();
+    void clearHistory();
+    void saveHistory(const std::string& filename) const;
+    void loadHistory(const std::string& filename);
+    std::string getLastChangeDescription() const;
+    std::vector<std::string> getChangeHistory() const;
+    
+    // Serialization
+    nlohmann::json serialize() const;
+    void deserialize(const nlohmann::json& data);
     
     // Legacy compatibility methods
     void addObject(const std::string& name, Actor::Ptr actor) { actorsByName[name] = actor; actors[actor->getID()] = actor; }
@@ -72,8 +163,11 @@ public:
     void onPhysicsComponentRemoved(PhysicsComponent* component);
     
     // Scene properties
-    const std::string& getName() const;
-    void setName(const std::string& name);
+    const SceneDescriptor& getDescriptor() const { return descriptor; }
+    void setDescriptor(const SceneDescriptor& desc) { descriptor = desc; }
+    
+    // Scene file extension
+    static const std::string FILE_EXTENSION;
     
     // Light management
     void addLight(const std::string& name, const Light& light);
@@ -82,40 +176,11 @@ public:
     Light* getLight(const std::string& name);
     const std::unordered_map<std::string, Light>& getAllLights() const;
     
-    // Scene lifecycle
-    void initialize();
-    void update(float deltaTime);
-    void render();
-    void destroy();
-    
-    // Model import
-    bool importModel(const std::string& filename, Actor::Ptr targetActor = nullptr);
-    
-    // Serialization
-    bool saveToFile(const std::string& filename);
-    bool loadFromFile(const std::string& filename);
-    
-    // Root node accessor for backwards compatibility
-    Actor::Ptr getRootNode() const { return rootNode; }
-    
     // Buffer update
     bool updateSceneBuffers();
     bool hasBufferUpdateNeeded() const { return needsBufferUpdate; }
     
-    // Scene descriptor methods
-    const SceneDescriptor& getDescriptor() const { return descriptor; }
-    void setDescriptor(const SceneDescriptor& desc) { descriptor = desc; }
-    
-    // Project path management 
-    const std::string& getProjectPath() const { return projectPath; }
-    void setProjectPath(const std::string& path) { projectPath = path; }
-    
-    // Scene file extension
-    static const std::string FILE_EXTENSION;
-    
     // Scene state tracking
-    bool isDirty() const { return dirty; }
-    void setDirty(bool state = true);
     void clearDirty();
     
 private:
@@ -151,6 +216,8 @@ private:
     // Hierarchy helpers
     void registerActorHierarchy(Actor::Ptr actor);
     void unregisterActorHierarchy(Actor::Ptr actor);
+    
+    std::unique_ptr<SceneChangeTracker> changeTracker;
 };
 
 } // namespace ohao 

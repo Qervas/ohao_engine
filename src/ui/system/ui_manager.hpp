@@ -8,6 +8,7 @@
 #include "ui/panels/scene_settings/scene_settings_panel.hpp"
 #include "ui/viewport/scene_viewport.hpp"
 #include "ui/window/window.hpp"
+#include "ui/components/console_widget.hpp"
 #include <memory>
 #include <string>
 
@@ -29,6 +30,7 @@ public:
     PropertiesPanel* getPropertiesPanel() const;
     SceneSettingsPanel* getSceneSettingsPanel() const;
     void applyTheme(const std::string& theme);
+    void initializePanelsWithScene(Scene* scene);
 
 private:
 

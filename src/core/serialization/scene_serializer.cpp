@@ -46,11 +46,9 @@ bool SceneSerializer::serialize(const std::string& filePath) {
         // Add actors
         nlohmann::json actorsJson = nlohmann::json::array();
         
-        // Serialize each actor (excluding the root node)
+        // Serialize each actor
         for (const auto& [id, actor] : m_scene->getAllActors()) {
-            if (actor != m_scene->getRootNode()) {
-                actorsJson.push_back(ActorSerializer::serializeActor(actor.get()));
-            }
+            actorsJson.push_back(ActorSerializer::serializeActor(actor.get()));
         }
         
         sceneJson["actors"] = actorsJson;
@@ -128,7 +126,7 @@ bool SceneSerializer::deserialize(const std::string& filePath) {
         m_scene->setProjectPath(path.parent_path().string());
         
         // Clear existing scene data
-        m_scene->removeAllActors();
+        m_scene->reset();
         
         // Load scene properties
         if (sceneJson.contains("name")) {
@@ -169,7 +167,7 @@ bool SceneSerializer::deserialize(const std::string& filePath) {
         
         // Load actors
         if (sceneJson.contains("actors") && sceneJson["actors"].is_array()) {
-            // First pass: create all actors with basic properties
+            // Create all actors with properties from file
             std::unordered_map<uint64_t, Actor::Ptr> actorsById;
             
             for (const auto& actorJson : sceneJson["actors"]) {
@@ -177,7 +175,7 @@ bool SceneSerializer::deserialize(const std::string& filePath) {
                 if (actor) {
                     m_scene->addActor(actor);
                     
-                    // Store for second pass
+                    // Store for second pass if needed
                     if (actorJson.contains("id")) {
                         uint64_t id = actorJson["id"].get<uint64_t>();
                         actorsById[id] = actor;
@@ -185,21 +183,9 @@ bool SceneSerializer::deserialize(const std::string& filePath) {
                 }
             }
             
-            // Second pass: resolve parent-child relationships
-            for (const auto& actorJson : sceneJson["actors"]) {
-                if (actorJson.contains("id") && actorJson.contains("parentId")) {
-                    uint64_t id = actorJson["id"].get<uint64_t>();
-                    uint64_t parentId = actorJson["parentId"].get<uint64_t>();
-                    
-                    if (parentId > 0 && actorsById.find(id) != actorsById.end()) {
-                        auto actor = actorsById[id];
-                        auto parent = m_scene->findActor(parentId);
-                        if (parent) {
-                            actor->setParent(parent.get());
-                        }
-                    }
-                }
-            }
+            // No parent-child relationships in non-hierarchical model
+        } else {
+            std::cerr << "Warning: No actors found in scene file" << std::endl;
         }
         
         // Load lights

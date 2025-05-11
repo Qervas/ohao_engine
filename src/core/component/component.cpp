@@ -1,33 +1,17 @@
 #include "component.hpp"
 #include "../actor/actor.hpp"
+#include "../scene/scene.hpp"
 
 namespace ohao {
 
 uint64_t Component::nextComponentID = 1;
 
-Component::Component() 
-    : owner(nullptr), enabled(true), componentID(nextComponentID++) 
+Component::Component(Actor* owner)
+    : owner(owner)
+    , enabled(true)
+    , componentID(nextComponentID++)
+    , modified(false)
 {
-}
-
-void Component::setOwner(Actor* newOwner) {
-    if (owner == newOwner) return;
-    
-    // If we had a previous owner, handle detachment
-    if (owner && !newOwner) {
-        onDetached();
-    }
-    
-    owner = newOwner;
-    
-    // If we have a new owner, handle attachment
-    if (owner) {
-        onAttached();
-    }
-}
-
-Actor* Component::getOwner() const {
-    return owner;
 }
 
 void Component::setEnabled(bool isEnabled) {
@@ -44,6 +28,27 @@ const char* Component::getTypeName() const {
 
 std::type_index Component::getTypeIndex() const {
     return std::type_index(typeid(*this));
+}
+
+Scene* Component::getScene() const {
+    return owner ? owner->getScene() : nullptr;
+}
+
+void Component::beginModification() {
+    if (!modified) {
+        oldState = serialize();
+        modified = true;
+    }
+}
+
+void Component::endModification() {
+    if (modified) {
+        auto scene = getScene();
+        if (scene) {
+            scene->trackComponentModified(this, oldState, serialize());
+        }
+        modified = false;
+    }
 }
 
 } // namespace ohao 
