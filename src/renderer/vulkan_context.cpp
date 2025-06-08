@@ -212,6 +212,9 @@ VulkanContext::initializeVulkan(){
         throw std::runtime_error("engine sync objects initialization failed!");
     }
 
+    // Create per-image semaphores for proper synchronization
+    syncObjects->createPerImageSemaphores(swapchain->getImages().size());
+
     sceneRenderer = std::make_unique<SceneRenderer>();
     if(!sceneRenderer->initialize(this)){
         throw std::runtime_error("engine scene renderer initializatin failed");
@@ -498,7 +501,11 @@ void VulkanContext::drawFrame() {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = commandManager->getCommandBufferPtr(currentFrame);
 
-    VkSemaphore signalSemaphores[] = {syncObjects->getRenderFinishedSemaphore(currentFrame)};
+    VkSemaphore signalSemaphores[] = {
+        syncObjects->hasPerImageSemaphores() ? 
+            syncObjects->getRenderFinishedSemaphoreForImage(imageIndex) :
+            syncObjects->getRenderFinishedSemaphore(currentFrame)
+    };
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -850,6 +857,9 @@ void VulkanContext::recreateSwapChain(){
     if (!framebufferManager->initialize(device.get(), swapchain.get(), renderPass.get(), depthImage.get())) {
         throw std::runtime_error("Failed to recreate framebuffers!");
     }
+
+    // Recreate per-image semaphores for the new swapchain
+    syncObjects->createPerImageSemaphores(swapchain->getImages().size());
 }
 
 void VulkanContext::cleanupSwapChain() {
