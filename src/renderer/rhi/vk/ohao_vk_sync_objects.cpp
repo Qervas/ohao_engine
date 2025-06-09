@@ -13,8 +13,28 @@ bool OhaoVkSyncObjects::initialize(OhaoVkDevice* devicePtr, uint32_t maxFramesIn
     return createSyncObjects();
 }
 
+bool OhaoVkSyncObjects::initializeSwapchainSemaphores(uint32_t imageCount) {
+    // Clean up existing swapchain semaphores first
+    if (device) {
+        for (size_t i = 0; i < swapchainImageCount; i++) {
+            if (swapchainRenderFinishedSemaphores[i]) {
+                vkDestroySemaphore(device->getDevice(), swapchainRenderFinishedSemaphores[i], nullptr);
+            }
+            if (swapchainImageAvailableSemaphores[i]) {
+                vkDestroySemaphore(device->getDevice(), swapchainImageAvailableSemaphores[i], nullptr);
+            }
+        }
+        swapchainRenderFinishedSemaphores.clear();
+        swapchainImageAvailableSemaphores.clear();
+    }
+    
+    swapchainImageCount = imageCount;
+    return createSwapchainSemaphores();
+}
+
 void OhaoVkSyncObjects::cleanup() {
     if (device) {
+        // Cleanup per-frame sync objects
         for (size_t i = 0; i < maxFrames; i++) {
             if (renderFinishedSemaphores[i]) {
                 vkDestroySemaphore(device->getDevice(), renderFinishedSemaphores[i], nullptr);
@@ -26,6 +46,23 @@ void OhaoVkSyncObjects::cleanup() {
                 vkDestroyFence(device->getDevice(), inFlightFences[i], nullptr);
             }
         }
+        
+        // Cleanup per-swapchain-image semaphores
+        for (size_t i = 0; i < swapchainImageCount; i++) {
+            if (swapchainRenderFinishedSemaphores[i]) {
+                vkDestroySemaphore(device->getDevice(), swapchainRenderFinishedSemaphores[i], nullptr);
+            }
+            if (swapchainImageAvailableSemaphores[i]) {
+                vkDestroySemaphore(device->getDevice(), swapchainImageAvailableSemaphores[i], nullptr);
+            }
+        }
+        
+        // Clear vectors
+        renderFinishedSemaphores.clear();
+        imageAvailableSemaphores.clear();
+        inFlightFences.clear();
+        swapchainRenderFinishedSemaphores.clear();
+        swapchainImageAvailableSemaphores.clear();
     }
 }
 
@@ -52,12 +89,37 @@ bool OhaoVkSyncObjects::createSyncObjects() {
     return true;
 }
 
+bool OhaoVkSyncObjects::createSwapchainSemaphores() {
+    swapchainImageAvailableSemaphores.resize(swapchainImageCount);
+    swapchainRenderFinishedSemaphores.resize(swapchainImageCount);
+
+    VkSemaphoreCreateInfo semaphoreInfo{};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    for (size_t i = 0; i < swapchainImageCount; i++) {
+        if (vkCreateSemaphore(device->getDevice(), &semaphoreInfo, nullptr, &swapchainImageAvailableSemaphores[i]) != VK_SUCCESS ||
+            vkCreateSemaphore(device->getDevice(), &semaphoreInfo, nullptr, &swapchainRenderFinishedSemaphores[i]) != VK_SUCCESS) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 VkSemaphore OhaoVkSyncObjects::getImageAvailableSemaphore(uint32_t frameIndex) const {
     return imageAvailableSemaphores[frameIndex];
 }
 
 VkSemaphore OhaoVkSyncObjects::getRenderFinishedSemaphore(uint32_t frameIndex) const {
     return renderFinishedSemaphores[frameIndex];
+}
+
+VkSemaphore OhaoVkSyncObjects::getSwapchainImageAvailableSemaphore(uint32_t imageIndex) const {
+    return swapchainImageAvailableSemaphores[imageIndex];
+}
+
+VkSemaphore OhaoVkSyncObjects::getSwapchainRenderFinishedSemaphore(uint32_t imageIndex) const {
+    return swapchainRenderFinishedSemaphores[imageIndex];
 }
 
 VkFence OhaoVkSyncObjects::getInFlightFence(uint32_t frameIndex) const {
