@@ -38,3 +38,21 @@ add_custom_target(link_assets ALL
 add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(src)
+
+# Add your tests here
+file(GLOB TEST_FILES "src/tests/*.cpp")
+message(STATUS "Including test files: ${TEST_FILES}")
+# Don't include test files in the main engine executable
+# target_sources(ohao_engine PRIVATE ${TEST_FILES})
+
+# Optional standalone test executables
+# Removed serialization_simple_test due to dependency issues
+# add_executable(serialization_simple_test
+#   src/tests/serialization_simple_test.cpp
+# )
+# target_link_libraries(serialization_simple_test ohao_core)
+
+add_executable(serialization_minimal_test
+  src/tests/serialization_minimal_test.cpp
+)
+target_link_libraries(serialization_minimal_test nlohmann_json::nlohmann_json)
