@@ -15,7 +15,7 @@ namespace ohao {
 
 int main() {
     try {
-        ohao::Window window(1920, 1080, "OHAO Engine");
+        ohao::Window window("OHAO Engine");
         ohao::VulkanContext vulkan(&window);
         vulkan.initializeVulkan();
 
@@ -45,7 +45,7 @@ int main() {
             }else {
                 tabPressed = false;
             }
-            
+
             // Check for the M key to load multi-object demo
             if(window.isKeyPressed(GLFW_KEY_M)){
                 if(!demoPressed){
