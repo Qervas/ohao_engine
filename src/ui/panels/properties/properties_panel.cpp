@@ -575,10 +575,10 @@ void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
     auto model = component->getModel();
     if (model) {
         ImGui::Text("Model Information:");
-        ImGui::Text("Vertices: %zu", model->vertices.size());
-        ImGui::Text("Indices: %zu", model->indices.size());
-        ImGui::Text("Materials: %zu", model->materials.size());
-        
+            ImGui::Text("Vertices: %zu", model->vertices.size());
+            ImGui::Text("Indices: %zu", model->indices.size());
+            ImGui::Text("Materials: %zu", model->materials.size());
+
         // Option to replace the model
         if (ImGui::Button("Replace Model")) {
             ImGui::OpenPopup("ReplaceModelPopup");
@@ -637,11 +637,11 @@ void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
     }
     
     // Wireframe toggle
-    if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-        bool wireframe = vulkanContext->isWireframeMode();
-        if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
-            vulkanContext->setWireframeMode(wireframe);
-        }
+            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
+                bool wireframe = vulkanContext->isWireframeMode();
+                if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
+                    vulkanContext->setWireframeMode(wireframe);
+                }
     }
     
     // Material properties (basic)

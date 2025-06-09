@@ -205,6 +205,11 @@ VulkanContext::initializeVulkan(){
     if(!syncObjects->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)){
         throw std::runtime_error("engine sync objects initialization failed!");
     }
+    
+    // Initialize swapchain-specific semaphores
+    if(!syncObjects->initializeSwapchainSemaphores(swapchain->getImages().size())){
+        throw std::runtime_error("engine swapchain sync objects initialization failed!");
+    }
 
     sceneRenderer = std::make_unique<SceneRenderer>();
     if(!sceneRenderer->initialize(this)){
@@ -482,7 +487,7 @@ void VulkanContext::drawFrame() {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = commandManager->getCommandBufferPtr(currentFrame);
 
-    VkSemaphore signalSemaphores[] = {syncObjects->getRenderFinishedSemaphore(currentFrame)};
+    VkSemaphore signalSemaphores[] = {syncObjects->getSwapchainRenderFinishedSemaphore(imageIndex)};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -821,6 +826,11 @@ void VulkanContext::recreateSwapChain(){
 
     if (!swapchain->recreate(width, height)) {
         throw std::runtime_error("Failed to recreate swap chain!");
+    }
+
+    // Reinitialize swapchain-specific semaphores with new image count
+    if(!syncObjects->initializeSwapchainSemaphores(swapchain->getImages().size())){
+        throw std::runtime_error("Failed to recreate swapchain sync objects!");
     }
 
     if (!renderPass->initialize(device.get(), swapchain.get())) {

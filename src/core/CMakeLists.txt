@@ -63,6 +63,7 @@ add_subdirectory(actor)
 # Remove ECS system
 # add_subdirectory(ecs)
 add_subdirectory(physics)
+add_subdirectory(serialization)
 
 # Target include paths
 target_include_directories(ohao_core PRIVATE 

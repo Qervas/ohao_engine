@@ -8,11 +8,6 @@
 #include "../actor/actor.hpp"
 #include <glm/glm.hpp>
 
-// Forward declarations
-namespace nlohmann {
-    class json;
-}
-
 namespace ohao {
 
 class MeshComponent;
@@ -20,6 +15,18 @@ class TransformComponent;
 class PhysicsComponent;
 class Component;
 class SceneNode;
+
+// Scene descriptor for serialization
+struct SceneDescriptor {
+    std::string name;
+    std::string version = "1.0";
+    std::vector<std::string> tags;
+    std::string createdBy;
+    std::string lastModified;
+    
+    // Optional metadata
+    std::unordered_map<std::string, std::string> metadata;
+};
 
 struct Light {
     glm::vec3 position{0.0f};
@@ -93,10 +100,22 @@ public:
     
     // Buffer update
     bool updateSceneBuffers();
+    bool hasBufferUpdateNeeded() const { return needsBufferUpdate; }
+    
+    // Scene descriptor methods
+    const SceneDescriptor& getDescriptor() const { return descriptor; }
+    void setDescriptor(const SceneDescriptor& desc) { descriptor = desc; }
+    
+    // Project path management 
+    const std::string& getProjectPath() const { return projectPath; }
+    void setProjectPath(const std::string& path) { projectPath = path; }
+    
+    // Scene file extension
+    static const std::string FILE_EXTENSION;
     
 private:
     std::string name;
-    Actor::Ptr rootNode;
+    SceneDescriptor descriptor;
     
     // Actor tracking
     std::unordered_map<uint64_t, Actor::Ptr> actors;
@@ -108,6 +127,12 @@ private:
     
     // Lighting
     std::unordered_map<std::string, Light> lights;
+    
+    // The root actor for the scene hierarchy
+    Actor::Ptr rootNode;
+    
+    // Project path
+    std::string projectPath;
     
     // Scene state
     bool needsBufferUpdate;
