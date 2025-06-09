@@ -3,11 +3,21 @@
 #include "../component/physics_component.hpp"
 #include "../actor/actor.hpp"
 #include "../asset/model.hpp"
+#include "../physics/collision_shape.hpp"
+#include "../serialization/scene_serializer.hpp"
+#include "../../renderer/vulkan_context.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <ctime>
+#include <iomanip>
+#include <nlohmann/json.hpp>
 
 namespace ohao {
+
+// Define file extension
+const std::string Scene::FILE_EXTENSION = ".ohscene";
 
 Scene::Scene(const std::string& name)
     : name(name)
@@ -261,23 +271,27 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
 }
 
 bool Scene::saveToFile(const std::string& filename) {
-    // TODO: Implement serialization
-    return false;
+    // Use the SceneSerializer to save the scene
+    SceneSerializer serializer(this);
+    return serializer.serialize(filename);
 }
 
 bool Scene::loadFromFile(const std::string& filename) {
-    // TODO: Implement deserialization
-    return false;
+    // Use the SceneSerializer to load the scene
+    SceneSerializer serializer(this);
+    return serializer.deserialize(filename);
 }
 
 bool Scene::updateSceneBuffers() {
-    // This will need to interface with your Vulkan renderer
-    // to rebuild the combined vertex/index buffers
-    
     // Mark as up-to-date
     needsBufferUpdate = false;
     
-    return true;
+    // Call VulkanContext to update actual buffers in GPU memory
+    if (auto* vulkanContext = VulkanContext::getContextInstance()) {
+        return vulkanContext->updateSceneBuffers();
+    }
+    
+    return false;
 }
 
 void Scene::registerActor(Actor::Ptr actor) {
