@@ -15,25 +15,27 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find packages
+# Find Vulkan package
 find_package(Vulkan REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(glm REQUIRED)
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/models)
 
-# Symlink assets
-add_custom_target(link_assets ALL
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
+# Copy assets
+add_custom_target(copy_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/assets/models/cornell_box.obj
         ${CMAKE_BINARY_DIR}/assets/models/cornell_box.obj
 
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/assets/models/cornell_box.mtl
         ${CMAKE_BINARY_DIR}/assets/models/cornell_box.mtl
 )
 
+
+# Set explicit GLFW paths
+set(GLFW_INCLUDE_DIR "$ENV{USERPROFILE}/scoop/apps/glfw/current/include")
+set(GLFW_LIBRARY "$ENV{USERPROFILE}/scoop/apps/glfw/current/lib-vc2022/glfw3.lib")
 
 add_subdirectory(external)
 add_subdirectory(shaders)
@@ -55,4 +57,7 @@ message(STATUS "Including test files: ${TEST_FILES}")
 add_executable(serialization_minimal_test
   src/tests/serialization_minimal_test.cpp
 )
-target_link_libraries(serialization_minimal_test nlohmann_json::nlohmann_json)
+target_link_libraries(serialization_minimal_test
+    nlohmann_json::nlohmann_json
+    glm
+)

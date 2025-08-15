@@ -301,7 +301,7 @@ bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
 
     ImGui::PushMultiItemsWidths(3, ImGui::CalcItemWidth());
 
-    float lineHeight = GImGui->Font->FontSize + GImGui->Style.FramePadding.y * 2.0f;
+    float lineHeight = ImGui::GetFontSize() + GImGui->Style.FramePadding.y * 2.0f;
     ImVec2 buttonSize = { lineHeight + 3.0f, lineHeight };
 
     // X component

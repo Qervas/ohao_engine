@@ -16,11 +16,11 @@ macro(add_imgui_library)
     )
 
     find_package(Vulkan REQUIRED)
-    find_package(glfw3 REQUIRED)
+    # GLFW is already available from our external/cmake/glfw.cmake
 
     target_link_libraries(imgui PUBLIC
         Vulkan::Vulkan
-        glfw
+        glfw # This now refers to our downloaded and built GLFW
     )
 
     target_compile_definitions(imgui PUBLIC
