@@ -11,6 +11,7 @@ namespace ohao {
 class Actor;
 class CollisionShape;
 
+/* Physics system temporarily disabled
 class PhysicsComponent : public Component {
 public:
     using Ptr = std::shared_ptr<PhysicsComponent>;
@@ -90,5 +91,25 @@ private:
     void integrateVelocity(float deltaTime);
     void updateTransform();
 };
+*/
 
-} // namespace ohao 
+// Temporary stub for PhysicsComponent while system is disabled
+class PhysicsComponent : public Component {
+public:
+    using Ptr = std::shared_ptr<PhysicsComponent>;
+    
+    PhysicsComponent() {}
+    ~PhysicsComponent() override {}
+    
+    // Component overrides
+    void initialize() override {}
+    void update(float deltaTime) override {}
+    void destroy() override {}
+    const char* getTypeName() const override { return "PhysicsComponent"; }
+    
+    // Serialization
+    void serialize(class Serializer& serializer) const override {}
+    void deserialize(class Deserializer& deserializer) override {}
+};
+
+} // namespace ohao
