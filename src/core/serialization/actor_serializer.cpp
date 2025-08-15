@@ -3,7 +3,6 @@
 #include "../component/transform_component.hpp"
 #include "../component/mesh_component.hpp"
 #include "../component/physics_component.hpp"
-#include "../physics/collision_shape.hpp"
 #include "../asset/model.hpp"
 #include "../asset/primitive_mesh_generator.hpp"
 #include <nlohmann/json.hpp>
@@ -259,56 +258,9 @@ nlohmann::json ActorSerializer::serializePhysicsComponent(const PhysicsComponent
     if (!component) return nlohmann::json();
     
     nlohmann::json physicsJson;
-    
     physicsJson["enabled"] = component->isEnabled();
-    physicsJson["static"] = component->isStatic();
-    physicsJson["mass"] = component->getMass();
-    physicsJson["friction"] = component->getFriction();
-    physicsJson["restitution"] = component->getRestitution();
     
-    // Serialize collision shape
-    auto shape = component->getCollisionShape();
-    if (shape) {
-        nlohmann::json shapeJson;
-        shapeJson["type"] = static_cast<int>(shape->getType());
-        
-        // Serialize shape-specific properties
-        switch(shape->getType()) {
-            case CollisionShape::ShapeType::BOX: {
-                auto boxShape = dynamic_cast<const BoxShape*>(shape.get());
-                if (boxShape) {
-                    auto halfExtents = boxShape->getHalfExtents();
-                    shapeJson["halfExtents"] = {
-                        halfExtents.x,
-                        halfExtents.y,
-                        halfExtents.z
-                    };
-                }
-                break;
-            }
-            case CollisionShape::ShapeType::SPHERE: {
-                auto sphereShape = dynamic_cast<const SphereShape*>(shape.get());
-                if (sphereShape) {
-                    shapeJson["radius"] = sphereShape->getRadius();
-                }
-                break;
-            }
-            case CollisionShape::ShapeType::CAPSULE: {
-                auto capsuleShape = dynamic_cast<const CapsuleShape*>(shape.get());
-                if (capsuleShape) {
-                    shapeJson["radius"] = capsuleShape->getRadius();
-                    shapeJson["height"] = capsuleShape->getHeight();
-                }
-                break;
-            }
-            // TODO: Add other shape types as needed
-            default:
-                break;
-        }
-        
-        physicsJson["shape"] = shapeJson;
-    }
-    
+    // Physics system temporarily disabled
     return physicsJson;
 }
 
@@ -320,71 +272,7 @@ void ActorSerializer::deserializePhysicsComponent(PhysicsComponent* component, c
         component->setEnabled(json["enabled"].get<bool>());
     }
     
-    // Set physics properties
-    if (json.contains("static")) {
-        component->setStatic(json["static"].get<bool>());
-    }
-    
-    if (json.contains("mass")) {
-        component->setMass(json["mass"].get<float>());
-    }
-    
-    if (json.contains("friction")) {
-        component->setFriction(json["friction"].get<float>());
-    }
-    
-    if (json.contains("restitution")) {
-        component->setRestitution(json["restitution"].get<float>());
-    }
-    
-    // Deserialize collision shape
-    if (json.contains("shape") && json["shape"].is_object()) {
-        const auto& shapeJson = json["shape"];
-        
-        if (shapeJson.contains("type")) {
-            int shapeType = shapeJson["type"].get<int>();
-            
-            // Create appropriate shape
-            switch(static_cast<CollisionShape::ShapeType>(shapeType)) {
-                case CollisionShape::ShapeType::BOX: {
-                    glm::vec3 halfExtents(1.0f);
-                    if (shapeJson.contains("halfExtents") && shapeJson["halfExtents"].is_array() && 
-                        shapeJson["halfExtents"].size() == 3) {
-                        halfExtents = glm::vec3(
-                            shapeJson["halfExtents"][0].get<float>(),
-                            shapeJson["halfExtents"][1].get<float>(),
-                            shapeJson["halfExtents"][2].get<float>()
-                        );
-                    }
-                    component->createBoxShape(halfExtents);
-                    break;
-                }
-                case CollisionShape::ShapeType::SPHERE: {
-                    float radius = 1.0f;
-                    if (shapeJson.contains("radius")) {
-                        radius = shapeJson["radius"].get<float>();
-                    }
-                    component->createSphereShape(radius);
-                    break;
-                }
-                case CollisionShape::ShapeType::CAPSULE: {
-                    float radius = 0.5f;
-                    float height = 2.0f;
-                    if (shapeJson.contains("radius")) {
-                        radius = shapeJson["radius"].get<float>();
-                    }
-                    if (shapeJson.contains("height")) {
-                        height = shapeJson["height"].get<float>();
-                    }
-                    component->createCapsuleShape(radius, height);
-                    break;
-                }
-                // TODO: Add other shape types as needed
-                default:
-                    break;
-            }
-        }
-    }
+    // Physics system temporarily disabled
 }
 
 } // namespace ohao 

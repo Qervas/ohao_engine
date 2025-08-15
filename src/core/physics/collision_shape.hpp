@@ -1,5 +1,7 @@
 #pragma once
 
+// Physics system temporarily disabled
+/*
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
@@ -111,4 +113,5 @@ private:
     std::vector<glm::vec3> points;
 };
 
-} // namespace ohao 
+} // namespace ohao
+*/

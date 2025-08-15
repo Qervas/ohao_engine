@@ -191,11 +191,10 @@ void UIManager::initializeVulkanBackend(){
     }
 
 
-    // Upload fonts
-    VkCommandBuffer commandBuffer = vulkanContext->getCommandManager()->beginSingleTime();
-    ImGui_ImplVulkan_CreateFontsTexture();
-    vulkanContext->getCommandManager()->endSingleTime(commandBuffer);
-    ImGui_ImplVulkan_DestroyFontsTexture();
+    // Upload fonts - modern ImGui handles this automatically
+    // The font atlas is automatically uploaded when needed
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Build();
 
     imguiInitialized = true;
 }

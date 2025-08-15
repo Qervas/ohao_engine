@@ -367,51 +367,63 @@ void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
 
     OHAO_LOG_DEBUG("Starting deletion of node: " + node->getName());
 
+    // Clear selection first to avoid dangling references
+    if (selectedNode == node) {
+        selectedNode = nullptr;
+    }
+    SelectionManager::get().clearSelection();
+
     // Check if this is an Actor first (new system)
     if (auto actor = dynamic_cast<Actor*>(node)) {
-        // Clear selection first if this actor is selected
-        if (SelectionManager::get().isSelected(actor)) {
-            SelectionManager::get().clearSelection();
+        try {
+            // Store actor info before deletion for logging
+            std::string actorName = actor->getName();
+            uint64_t actorId = actor->getID();
+            
+            // Safely detach from parent first
+            if (actor->getParent()) {
+                actor->detachFromParent();
+            }
+            
+            // Remove from scene's actors collection
+            // This should handle cleanup of children as well
+            currentScene->removeActor(actorId);
+            
+            OHAO_LOG_DEBUG("Successfully deleted actor: " + actorName);
         }
-        
-        // Remove from scene's actors collection
-        currentScene->removeActor(actor->getID());
-        
-        // Clear selection if this was the selected node
-        if (selectedNode == node) {
-            selectedNode = nullptr;
+        catch (const std::exception& e) {
+            OHAO_LOG_ERROR("Error deleting actor: " + std::string(e.what()));
         }
-        
-        OHAO_LOG_DEBUG("Successfully deleted actor: " + actor->getName());
     }
     // Legacy system
     else {
-        // Clear selection first if this object is selected
-        if (auto sceneObj = asSceneObject(node)) {
-            if (SelectionManager::get().isSelected(sceneObj)) {
-                SelectionManager::get().clearSelection();
+        try {
+            // Clear selection first if this object is selected
+            if (auto sceneObj = asSceneObject(node)) {
+                // Remove from scene's object collection
+                currentScene->removeObject(sceneObj->getName());
+            }
+
+            // Remove from scene hierarchy
+            if (node->getParent()) {
+                node->detachFromParent();
             }
             
-            // Remove from scene's object collection
-            currentScene->removeObject(sceneObj->getName());
+            OHAO_LOG_DEBUG("Successfully deleted node: " + node->getName());
         }
-
-        // Remove from scene hierarchy
-        if (node->getParent()) {
-            node->detachFromParent();
+        catch (const std::exception& e) {
+            OHAO_LOG_ERROR("Error deleting node: " + std::string(e.what()));
         }
-
-        // Clear selection if this was the selected node
-        if (selectedNode == node) {
-            selectedNode = nullptr;
-        }
-        
-        OHAO_LOG_DEBUG("Successfully deleted node: " + node->getName());
     }
 
-    // Update the buffers
-    if (auto context = VulkanContext::getContextInstance()) {
-        context->updateSceneBuffers();
+    // Update the buffers safely
+    try {
+        if (auto context = VulkanContext::getContextInstance()) {
+            context->updateSceneBuffers();
+        }
+    }
+    catch (const std::exception& e) {
+        OHAO_LOG_ERROR("Error updating scene buffers after deletion: " + std::string(e.what()));
     }
 }
 

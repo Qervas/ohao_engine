@@ -34,10 +34,9 @@ Actor::~Actor() {
     // Clear all components
     removeAllComponents();
     
-    // Ensure we're not in a scene
-    if (scene) {
-        scene->removeActor(std::dynamic_pointer_cast<Actor>(shared_from_this()));
-    }
+    // Note: Don't remove from scene here as it can cause circular references
+    // The scene should handle cleanup when removing actors
+    scene = nullptr;
 }
 
 void Actor::setScene(Scene* newScene) {

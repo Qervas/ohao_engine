@@ -3,7 +3,7 @@
 #include "../component/physics_component.hpp"
 #include "../actor/actor.hpp"
 #include "../asset/model.hpp"
-#include "../physics/collision_shape.hpp"
+// #include "../physics/collision_shape.hpp" // Physics system temporarily disabled
 #include "../serialization/scene_serializer.hpp"
 #include "../../renderer/vulkan_context.hpp"
 #include <algorithm>
@@ -151,15 +151,20 @@ void Scene::onMeshComponentChanged(MeshComponent* component) {
 }
 
 void Scene::onPhysicsComponentAdded(PhysicsComponent* component) {
+    // Physics system temporarily disabled
+    /*
     if (!component) return;
     
     // Add to physics components list if not already there
     if (std::find(physicsComponents.begin(), physicsComponents.end(), component) == physicsComponents.end()) {
         physicsComponents.push_back(component);
     }
+    */
 }
 
 void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
+    // Physics system temporarily disabled
+    /*
     if (!component) return;
     
     // Remove from physics components list
@@ -167,6 +172,7 @@ void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
     if (it != physicsComponents.end()) {
         physicsComponents.erase(it);
     }
+    */
 }
 
 const std::string& Scene::getName() const {
@@ -257,7 +263,8 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
     // Set the model
     meshComponent->setModel(model);
     
-    // Add physics component with default parameters
+    // Physics system temporarily disabled
+    /*
     if (!targetActor->hasComponent<PhysicsComponent>()) {
         auto physicsComponent = targetActor->addComponent<PhysicsComponent>();
         
@@ -266,6 +273,7 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
         physicsComponent->createBoxShape(glm::vec3(1.0f));
         physicsComponent->setStatic(true); // Static by default
     }
+    */
     
     return true;
 }
@@ -334,8 +342,11 @@ void Scene::registerActorHierarchy(Actor::Ptr actor) {
 }
 
 void Scene::unregisterActorHierarchy(Actor::Ptr actor) {
+    // Make a copy of children to avoid modification during iteration
+    std::vector<Actor*> childrenCopy = actor->getChildren();
+    
     // Get immediate children
-    for (auto* childPtr : actor->getChildren()) {
+    for (auto* childPtr : childrenCopy) {
         // Convert to shared_ptr
         auto childIt = actors.find(childPtr->getID());
         if (childIt != actors.end()) {

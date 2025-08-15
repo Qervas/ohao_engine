@@ -1,10 +1,12 @@
 #include "physics_component.hpp"
+
+namespace ohao {
+
+/* Physics system temporarily disabled
 #include "../actor/actor.hpp"
 #include "transform_component.hpp"
 #include "../scene/scene.hpp"
 #include "../physics/collision_shape.hpp"
-
-namespace ohao {
 
 PhysicsComponent::PhysicsComponent()
     : mass(1.0f)
@@ -21,7 +23,8 @@ PhysicsComponent::PhysicsComponent()
 
 PhysicsComponent::~PhysicsComponent() {
     destroy();
-}
+    }
+/* Physics implementation temporarily disabled
 
 void PhysicsComponent::setMass(float newMass) {
     if (newMass <= 0.0f) {
@@ -228,5 +231,6 @@ void PhysicsComponent::updateTransform() {
     // Update the transform from physics state
     // Already handled by integrateVelocity for now
 }
+*/ // End of physics implementation
 
-} // namespace ohao 
+} // namespace ohao

@@ -2,7 +2,11 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#include <malloc.h>
+#else
 #include <alloca.h>
+#endif
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
