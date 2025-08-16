@@ -6,6 +6,7 @@
 #include "core/component/transform_component.hpp"
 #include "core/component/mesh_component.hpp"
 #include "core/component/physics_component.hpp"
+#include "core/component/light_component.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -38,6 +39,7 @@ private:
     // Component-specific property editors
     void renderMeshComponentProperties(MeshComponent* component);
     void renderPhysicsComponentProperties(PhysicsComponent* component);
+    void renderLightComponentProperties(LightComponent* component);
 
     // UI Helper methods
     bool renderVec3Control(const std::string& label, glm::vec3& values,

@@ -46,6 +46,7 @@ private:
     void renderDebugMenu();
     void renderHelpMenu();
     void renderSceneViewport();
+    void renderLightIndicators(ImVec2 viewportPos, ImVec2 viewportSize);
     void enableCursor(bool enable);
     void handleModelImport();
     void shutdownImGui();
