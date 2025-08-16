@@ -29,6 +29,7 @@
 #include "core/scene/scene.hpp"
 #include "subsystems/scene/scene_renderer.hpp"
 #include "renderer/shader/shader_uniforms.hpp"
+#include "renderer/gizmo/axis_gizmo.hpp"
 
 
 #define GPU_VENDOR_NVIDIA 0
@@ -134,6 +135,9 @@ public:
     std::shared_ptr<UIManager> getUIManager() const {return uiManager;}
     SceneRenderer* getSceneRenderer() const {return sceneRenderer.get();}
     Scene* getScene() const {return scene.get();}
+    AxisGizmo* getAxisGizmo() const { 
+        return sceneRenderer ? sceneRenderer->getAxisGizmo() : nullptr; 
+    }
 
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
