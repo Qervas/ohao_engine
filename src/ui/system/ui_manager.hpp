@@ -6,6 +6,7 @@
 #include "ui/panels/outliner/outliner_panel.hpp"
 #include "ui/panels/properties/properties_panel.hpp"
 #include "ui/panels/scene_settings/scene_settings_panel.hpp"
+#include "ui/panels/viewport/viewport_toolbar.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
@@ -27,6 +28,7 @@ public:
     OutlinerPanel* getOutlinerPanel() const;
     PropertiesPanel* getPropertiesPanel() const;
     SceneSettingsPanel* getSceneSettingsPanel() const;
+    ViewportToolbar* getViewportToolbar() const;
     void applyTheme(const std::string& theme);
 
 private:
@@ -87,6 +89,7 @@ private:
     std::unique_ptr<OutlinerPanel> outlinerPanel;
     std::unique_ptr<PropertiesPanel> propertiesPanel;
     std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
+    std::unique_ptr<ViewportToolbar> viewportToolbar;
 
     std::string currentProjectPath;
     std::string newProjectName;

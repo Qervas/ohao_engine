@@ -498,6 +498,12 @@ void UIManager::setupPanels() {
     outlinerPanel = std::make_unique<OutlinerPanel>();
     propertiesPanel = std::make_unique<PropertiesPanel>();
     sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
+    viewportToolbar = std::make_unique<ViewportToolbar>();
+    
+    // Connect viewport toolbar to axis gizmo system
+    if (vulkanContext && vulkanContext->getAxisGizmo()) {
+        viewportToolbar->setAxisGizmo(vulkanContext->getAxisGizmo());
+    }
     
     // Initialize UI panels with the current scene if available
     if (vulkanContext && vulkanContext->getScene()) {
@@ -519,6 +525,7 @@ void UIManager::renderPanels() {
     if (outlinerPanel) outlinerPanel->render();
     if (propertiesPanel) propertiesPanel->render();
     if (sceneSettingsPanel) sceneSettingsPanel->render();
+    if (viewportToolbar) viewportToolbar->render();
 }
 
 void UIManager::initializeDockspace() {
@@ -544,6 +551,7 @@ void UIManager::resetLayout() {
 OutlinerPanel* UIManager::getOutlinerPanel() const { return outlinerPanel.get(); }
 PropertiesPanel* UIManager::getPropertiesPanel() const { return propertiesPanel.get(); }
 SceneSettingsPanel* UIManager::getSceneSettingsPanel() const { return sceneSettingsPanel.get(); }
+ViewportToolbar* UIManager::getViewportToolbar() const { return viewportToolbar.get(); }
 
 bool UIManager::showNewProjectDialog() {
     static char nameBuffer[256] = "";

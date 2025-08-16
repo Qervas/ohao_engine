@@ -14,100 +14,108 @@ layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265359;
 
-// Blinn-Phong lighting calculation
-vec3 calculateBlinnPhong(vec3 lightPos, vec3 lightColor, float lightIntensity, 
-                         vec3 fragPos, vec3 normal, vec3 viewDir, 
-                         vec3 baseColor, float metallic, float roughness) {
-    vec3 lightDir = normalize(lightPos - fragPos);
-    float distance = length(lightPos - fragPos);
-    float attenuation = max(lightIntensity / (distance * distance), 0.01);
-    
-    // Diffuse component
-    float NdotL = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = baseColor * NdotL;
-    
-    // Specular component (Blinn-Phong)
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float NdotH = max(dot(normal, halfwayDir), 0.0);
-    
-    // Convert roughness to shininess (inverse relationship)
-    float shininess = mix(128.0, 8.0, roughness);
-    float spec = pow(NdotH, shininess);
-    
-    // Fresnel approximation for metals
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-    vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - max(dot(halfwayDir, viewDir), 0.0), 0.0, 1.0), 5.0);
-    
-    vec3 specular = F * spec;
-    
-    return (diffuse + specular) * lightColor * attenuation;
+// PBR Functions
+float DistributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float nom = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+
+    return nom / denom;
 }
 
-// Point light calculation
-vec3 calculatePointLight(RenderLight light, vec3 fragPos, vec3 normal, vec3 viewDir,
-                         vec3 baseColor, float metallic, float roughness) {
-    vec3 lightDir = normalize(light.position - fragPos);
-    float distance = length(light.position - fragPos);
-    
-    // Attenuation with range
-    float attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-    if (distance > light.range) attenuation = 0.0;
-    
-    return calculateBlinnPhong(light.position, light.color, light.intensity * attenuation,
-                               fragPos, normal, viewDir, baseColor, metallic, roughness);
+float GeometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r * r) / 8.0;
+
+    float nom = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return nom / denom;
 }
 
-// Directional light calculation
-vec3 calculateDirectionalLight(RenderLight light, vec3 normal, vec3 viewDir,
-                               vec3 baseColor, float metallic, float roughness) {
-    vec3 lightDir = normalize(-light.direction);
-    
-    // Diffuse component
-    float NdotL = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = baseColor * NdotL;
-    
-    // Specular component (Blinn-Phong)
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float NdotH = max(dot(normal, halfwayDir), 0.0);
-    
-    float shininess = mix(128.0, 8.0, roughness);
-    float spec = pow(NdotH, shininess);
-    
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-    vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - max(dot(halfwayDir, viewDir), 0.0), 0.0, 1.0), 5.0);
-    
-    vec3 specular = F * spec;
-    
-    return (diffuse + specular) * light.color * light.intensity;
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+
+    return ggx1 * ggx2;
 }
 
-// Spot light calculation
-vec3 calculateSpotLight(RenderLight light, vec3 fragPos, vec3 normal, vec3 viewDir,
-                        vec3 baseColor, float metallic, float roughness) {
-    vec3 lightDir = normalize(light.position - fragPos);
-    float distance = length(light.position - fragPos);
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// PBR Lighting calculation for a single light
+vec3 calculatePBRLight(RenderLight light, vec3 fragPos, vec3 N, vec3 V, 
+                       vec3 albedo, float metallic, float roughness, float ao) {
+    vec3 L, radiance;
+    float attenuation = 1.0;
     
-    // Basic attenuation with range
-    float attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
-    if (distance > light.range) attenuation = 0.0;
+    if (light.type == 0.0) { // Directional light
+        L = normalize(-light.direction);
+        radiance = light.color * light.intensity;
+    } else if (light.type == 1.0) { // Point light
+        L = normalize(light.position - fragPos);
+        float distance = length(light.position - fragPos);
+        attenuation = 1.0 / (distance * distance);
+        if (distance > light.range) attenuation = 0.0;
+        radiance = light.color * light.intensity * attenuation;
+    } else if (light.type == 2.0) { // Spot light
+        L = normalize(light.position - fragPos);
+        float distance = length(light.position - fragPos);
+        attenuation = 1.0 / (distance * distance);
+        if (distance > light.range) attenuation = 0.0;
+        
+        // Spot light cone calculation
+        vec3 spotDir = normalize(light.direction);
+        float theta = dot(L, -spotDir);
+        float innerCutoff = cos(radians(light.innerCone));
+        float outerCutoff = cos(radians(light.outerCone));
+        float epsilon = innerCutoff - outerCutoff;
+        float intensity = clamp((theta - outerCutoff) / epsilon, 0.0, 1.0);
+        attenuation *= intensity;
+        
+        radiance = light.color * light.intensity * attenuation;
+    } else {
+        return vec3(0.0); // Unknown light type
+    }
     
-    // Spot light cone calculation
-    vec3 spotDir = normalize(light.direction);
-    float theta = dot(lightDir, -spotDir); // Angle between light direction and direction to fragment
+    vec3 H = normalize(V + L);
     
-    // Convert angles from degrees to cosine values for comparison
-    float innerCutoff = cos(radians(light.innerCone));
-    float outerCutoff = cos(radians(light.outerCone));
+    // Calculate F0 (reflectance at normal incidence)
+    vec3 F0 = vec3(0.04); // Default for dielectrics
+    F0 = mix(F0, albedo, metallic); // Metals use albedo as F0
     
-    // Smooth falloff between inner and outer cone
-    float epsilon = innerCutoff - outerCutoff;
-    float intensity = clamp((theta - outerCutoff) / epsilon, 0.0, 1.0);
+    // Cook-Torrance BRDF
+    float NDF = DistributionGGX(N, H, roughness);   
+    float G = GeometrySmith(N, V, L, roughness);      
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
     
-    // Apply spotlight intensity to attenuation
-    attenuation *= intensity;
+    vec3 numerator = NDF * G * F;
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001; // + 0.0001 to prevent divide by zero
+    vec3 specular = numerator / denominator;
     
-    return calculateBlinnPhong(light.position, light.color, light.intensity * attenuation,
-                               fragPos, normal, viewDir, baseColor, metallic, roughness);
+    // Energy conservation
+    vec3 kS = F; // Fresnel represents the ratio of light that gets reflected
+    vec3 kD = vec3(1.0) - kS; // The remaining light gets refracted (diffuse)
+    kD *= 1.0 - metallic; // Metals don't have diffuse lighting
+    
+    float NdotL = max(dot(N, L), 0.0);
+    
+    // Lambertian diffuse
+    vec3 diffuse = kD * albedo / PI;
+    
+    return (diffuse + specular) * radiance * NdotL;
 }
 
 void main() {
@@ -123,38 +131,51 @@ void main() {
     }
 
     // Use material properties from push constants
-    vec3 materialColor = fragBaseColor;
+    vec3 albedo = fragBaseColor;
     float metallic = fragMetallic;
-    float roughness = fragRoughness;
+    float roughness = max(fragRoughness, 0.04); // Minimum roughness to prevent artifacts
     float ao = fragAo;
 
-    // Initialize lighting with ambient
-    vec3 ambient = 0.2 * materialColor * ao;
+    // Calculate F0 for ambient lighting
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, albedo, metallic);
+
+    // Initialize lighting with IBL-style ambient
+    vec3 F = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    vec3 kS = F;
+    vec3 kD = 1.0 - kS;
+    kD *= 1.0 - metallic;
+    
+    vec3 irradiance = vec3(0.3) * albedo; // Simple ambient approximation
+    vec3 diffuse = irradiance * albedo;
+    
+    // Simple specular environment approximation
+    vec3 specular = vec3(0.1) * F;
+    
+    vec3 ambient = (kD * diffuse + specular) * ao;
     vec3 lighting = ambient;
 
-    // Process multiple lights
+    // Process multiple lights with PBR
     for (int i = 0; i < min(ubo.numLights, MAX_LIGHTS); ++i) {
         RenderLight light = ubo.lights[i];
-        
-        if (light.type == 0.0) { // Directional light
-            lighting += calculateDirectionalLight(light, N, V, materialColor, metallic, roughness);
-        }
-        else if (light.type == 1.0) { // Point light
-            lighting += calculatePointLight(light, fragPos, N, V, materialColor, metallic, roughness);
-        }
-        else if (light.type == 2.0) { // Spot light
-            lighting += calculateSpotLight(light, fragPos, N, V, materialColor, metallic, roughness);
-        }
+        lighting += calculatePBRLight(light, fragPos, N, V, albedo, metallic, roughness, ao);
     }
     
     // Fallback to legacy single light if no lights are defined
     if (ubo.numLights == 0) {
-        lighting += calculateBlinnPhong(ubo.lightPos, ubo.lightColor, ubo.lightIntensity,
-                                       fragPos, N, V, materialColor, metallic, roughness);
+        RenderLight legacyLight;
+        legacyLight.type = 1.0; // Point light
+        legacyLight.position = ubo.lightPos;
+        legacyLight.color = ubo.lightColor;
+        legacyLight.intensity = ubo.lightIntensity;
+        legacyLight.range = 100.0; // Large range for legacy compatibility
+        
+        lighting += calculatePBRLight(legacyLight, fragPos, N, V, albedo, metallic, roughness, ao);
     }
 
-    // HDR tone mapping
-    vec3 color = lighting / (lighting + vec3(1.0));
+    // HDR tone mapping (ACES approximation)
+    vec3 color = lighting;
+    color = color / (color + vec3(1.0));
 
     // Gamma correction
     color = pow(color, vec3(1.0 / 2.2));

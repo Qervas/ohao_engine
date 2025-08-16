@@ -50,8 +50,12 @@ public:
     void setWireframeMode(bool wireframe) {
         if (solidPipeline && wireframePipeline) {
             pipeline = wireframe ? wireframePipeline : solidPipeline;
+            isWireframeMode = wireframe;
         }
     }
+    
+    AxisGizmo* getAxisGizmo() const { return axisGizmo.get(); }
+    
     static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
 
 private:
@@ -66,6 +70,7 @@ private:
     VkPipelineLayout selectionPipelineLayout{VK_NULL_HANDLE};
     VkCommandBuffer currentCommandBuffer{VK_NULL_HANDLE};
     bool isPipelineLayoutValid{false};  // Track if pipeline layout was successfully created
+    bool isWireframeMode{false};  // Track wireframe state
 
     struct SelectionPushConstants {
         glm::vec4 highlightColor;

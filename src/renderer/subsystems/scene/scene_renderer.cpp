@@ -287,12 +287,18 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         
         // Get material properties from mesh component
         auto meshComponent = actor->getComponent<MeshComponent>();
-        if (meshComponent) {
+        if (meshComponent && !isWireframeMode) {
             const auto& material = meshComponent->getMaterial();
             pushConstants.baseColor = material.baseColor;
             pushConstants.metallic = material.metallic;
             pushConstants.roughness = material.roughness;
             pushConstants.ao = material.ao;
+        } else if (isWireframeMode) {
+            // Bright orange for wireframe mode
+            pushConstants.baseColor = glm::vec3(1.0f, 0.5f, 0.0f); // Bright orange
+            pushConstants.metallic = 0.0f;
+            pushConstants.roughness = 0.8f;
+            pushConstants.ao = 1.0f;
         } else {
             // Default material if no mesh component
             pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
@@ -331,12 +337,18 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         
         // Get material properties from mesh component
         auto meshComponent = actor->getComponent<MeshComponent>();
-        if (meshComponent) {
+        if (meshComponent && !isWireframeMode) {
             const auto& material = meshComponent->getMaterial();
             pushConstants.baseColor = material.baseColor;
             pushConstants.metallic = material.metallic;
             pushConstants.roughness = material.roughness;
             pushConstants.ao = material.ao;
+        } else if (isWireframeMode) {
+            // Bright orange for wireframe mode
+            pushConstants.baseColor = glm::vec3(1.0f, 0.5f, 0.0f); // Bright orange
+            pushConstants.metallic = 0.0f;
+            pushConstants.roughness = 0.8f;
+            pushConstants.ao = 1.0f;
         } else {
             // Default material if no mesh component
             pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
