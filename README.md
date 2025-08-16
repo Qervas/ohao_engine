@@ -1,26 +1,18 @@
 # OHAO Engine
 
-OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
-
+OHAO Engine is my physics engine developing on Linux/Windows platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
 
 <div style="display: flex;">
   <div style="flex: 1;">
-    <img src="image/README/1733708535551.png" alt="Image 1" style="width: 50%;">
-  </div>
-  <div style="flex: 1;">
-    <img src="image/README/1734118037401.png" alt="Image 2" style="width: 50%;">
+    <img src="image/README/1755343194290.png" alt="Image 1" style="width: 100%;">
   </div>
 </div>
-
-
 
 ## Building
 
 ### Required Dependencies
 
-- CMake 3.20+
-- Vulkan SDK
-- GLFW3
+- CMake 3.20+, Vulkan SDK
 
 ### Installation on Fedora Linux
 
