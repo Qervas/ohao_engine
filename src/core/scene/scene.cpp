@@ -183,29 +183,6 @@ void Scene::setName(const std::string& newName) {
     name = newName;
 }
 
-void Scene::addLight(const std::string& name, const Light& light) {
-    lights[name] = light;
-}
-
-void Scene::removeLight(const std::string& name) {
-    lights.erase(name);
-}
-
-void Scene::updateLight(const std::string& name, const Light& light) {
-    lights[name] = light;
-}
-
-Light* Scene::getLight(const std::string& name) {
-    auto it = lights.find(name);
-    if (it != lights.end()) {
-        return &it->second;
-    }
-    return nullptr;
-}
-
-const std::unordered_map<std::string, Light>& Scene::getAllLights() const {
-    return lights;
-}
 
 void Scene::initialize() {
     // Initialize all actors
@@ -230,7 +207,6 @@ void Scene::render() {
 
 void Scene::destroy() {
     removeAllActors();
-    lights.clear();
 }
 
 bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {

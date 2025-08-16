@@ -55,20 +55,6 @@ bool SceneSerializer::serialize(const std::string& filePath) {
         
         sceneJson["actors"] = actorsJson;
         
-        // Add lights
-        nlohmann::json lightsJson = nlohmann::json::object();
-        for (const auto& [name, light] : m_scene->getAllLights()) {
-            nlohmann::json lightJson;
-            lightJson["position"] = {light.position.x, light.position.y, light.position.z};
-            lightJson["color"] = {light.color.r, light.color.g, light.color.b};
-            lightJson["intensity"] = light.intensity;
-            lightJson["enabled"] = light.enabled;
-            
-            lightsJson[name] = lightJson;
-        }
-        
-        sceneJson["lights"] = lightsJson;
-        
         // Determine proper file path
         std::filesystem::path outPath(filePath);
         if (outPath.extension().empty()) {
@@ -199,44 +185,6 @@ bool SceneSerializer::deserialize(const std::string& filePath) {
                         }
                     }
                 }
-            }
-        }
-        
-        // Load lights
-        if (sceneJson.contains("lights") && sceneJson["lights"].is_object()) {
-            for (auto it = sceneJson["lights"].begin(); it != sceneJson["lights"].end(); ++it) {
-                std::string lightName = it.key();
-                const auto& lightJson = it.value();
-                
-                Light light;
-                
-                if (lightJson.contains("position") && lightJson["position"].is_array() && 
-                    lightJson["position"].size() == 3) {
-                    light.position = glm::vec3(
-                        lightJson["position"][0].get<float>(),
-                        lightJson["position"][1].get<float>(),
-                        lightJson["position"][2].get<float>()
-                    );
-                }
-                
-                if (lightJson.contains("color") && lightJson["color"].is_array() && 
-                    lightJson["color"].size() == 3) {
-                    light.color = glm::vec3(
-                        lightJson["color"][0].get<float>(),
-                        lightJson["color"][1].get<float>(),
-                        lightJson["color"][2].get<float>()
-                    );
-                }
-                
-                if (lightJson.contains("intensity")) {
-                    light.intensity = lightJson["intensity"].get<float>();
-                }
-                
-                if (lightJson.contains("enabled")) {
-                    light.enabled = lightJson["enabled"].get<bool>();
-                }
-                
-                m_scene->addLight(lightName, light);
             }
         }
         

@@ -2,6 +2,7 @@
 #include "../core/actor/actor.hpp"
 #include "../core/component/mesh_component.hpp"
 #include "../core/component/physics_component.hpp"
+#include "../core/component/light_component.hpp"
 #include "../core/serialization/scene_serializer.hpp"
 #include <iostream>
 #include <memory>
@@ -26,12 +27,13 @@ void testSceneSerialization() {
     auto spherePhysics = sphere->addComponent<PhysicsComponent>();
     spherePhysics->createSphereShape(1.0f);
     
-    // Add a light
-    Light mainLight;
-    mainLight.position = glm::vec3(5.0f, 5.0f, 5.0f);
-    mainLight.color = glm::vec3(1.0f, 0.9f, 0.8f);
-    mainLight.intensity = 1.5f;
-    scene->addLight("MainLight", mainLight);
+    // Create a test light using LightComponent
+    auto lightActor = scene->createActor("TestLight");
+    auto lightComponent = lightActor->addComponent<LightComponent>();
+    lightComponent->setLightType(LightType::Point);
+    lightComponent->setPosition(glm::vec3(5.0f, 5.0f, 5.0f));
+    lightComponent->setColor(glm::vec3(1.0f, 0.9f, 0.8f));
+    lightComponent->setIntensity(1.5f);
     
     // Set scene descriptor information
     SceneDescriptor desc;
@@ -65,7 +67,15 @@ void testSceneSerialization() {
         // Verify the scene was loaded correctly
         std::cout << "Loaded scene name: " << loadedScene->getName() << std::endl;
         std::cout << "Number of actors: " << loadedScene->getAllActors().size() << std::endl;
-        std::cout << "Number of lights: " << loadedScene->getAllLights().size() << std::endl;
+        
+        // Count light components instead of legacy lights
+        int lightCount = 0;
+        for (const auto& [id, actor] : loadedScene->getAllActors()) {
+            if (actor->getComponent<LightComponent>()) {
+                lightCount++;
+            }
+        }
+        std::cout << "Number of light components: " << lightCount << std::endl;
         
         // Get the first actor
         if (!loadedScene->getAllActors().empty()) {
