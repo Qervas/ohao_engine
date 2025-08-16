@@ -4,6 +4,8 @@
 #include "vulkan_context.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/components/console_widget.hpp"
+#include "core/material/material.hpp"
+#include "core/component/mesh_component.hpp"
 #include <iostream>
 #include <vulkan/vulkan_core.h>
 
@@ -279,9 +281,25 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
     for (const auto& [actor, bufferInfo] : sortedActors) {
         if (SelectionManager::get().isSelected(actor)) continue; // Skip selected actors for now
         
-        // Set model matrix as push constant
+        // Set model matrix and material properties as push constants
         OhaoVkPipeline::ModelPushConstants pushConstants{};
         pushConstants.model = actor->getTransform()->getWorldMatrix();
+        
+        // Get material properties from mesh component
+        auto meshComponent = actor->getComponent<MeshComponent>();
+        if (meshComponent) {
+            const auto& material = meshComponent->getMaterial();
+            pushConstants.baseColor = material.baseColor;
+            pushConstants.metallic = material.metallic;
+            pushConstants.roughness = material.roughness;
+            pushConstants.ao = material.ao;
+        } else {
+            // Default material if no mesh component
+            pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
+            pushConstants.metallic = 0.0f;
+            pushConstants.roughness = 0.5f;
+            pushConstants.ao = 1.0f;
+        }
 
         vkCmdPushConstants(
             cmd,
@@ -310,6 +328,22 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         // First draw the normal model
         OhaoVkPipeline::ModelPushConstants pushConstants{};
         pushConstants.model = actor->getTransform()->getWorldMatrix();
+        
+        // Get material properties from mesh component
+        auto meshComponent = actor->getComponent<MeshComponent>();
+        if (meshComponent) {
+            const auto& material = meshComponent->getMaterial();
+            pushConstants.baseColor = material.baseColor;
+            pushConstants.metallic = material.metallic;
+            pushConstants.roughness = material.roughness;
+            pushConstants.ao = material.ao;
+        } else {
+            // Default material if no mesh component
+            pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
+            pushConstants.metallic = 0.0f;
+            pushConstants.roughness = 0.5f;
+            pushConstants.ao = 1.0f;
+        }
 
         vkCmdPushConstants(
             cmd,

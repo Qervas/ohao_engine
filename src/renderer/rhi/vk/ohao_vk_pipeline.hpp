@@ -100,6 +100,11 @@ public:
     
     struct ModelPushConstants {
         glm::mat4 model;
+        glm::vec3 baseColor;
+        float metallic;
+        float roughness;
+        float ao;
+        glm::vec2 padding; // Ensure 16-byte alignment
     };
     
     OhaoVkPipeline() = default;

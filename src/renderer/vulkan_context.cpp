@@ -13,6 +13,9 @@
 #include <cstring>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/geometric.hpp>
+#include "core/material/material.hpp"
+#include "core/component/mesh_component.hpp"
+#include "core/component/light_component.hpp"
 #include <glm/trigonometric.hpp>
 #include <memory>
 #include <stdexcept>
@@ -372,7 +375,7 @@ void VulkanContext::initializeSceneRenderer() {
     }
 
     // Update the scene renderer to use both pipelines
-    sceneRenderer->setPipelines(scenePipeline.get(), sceneGizmoPipeline.get());
+    sceneRenderer->setPipelinesWithWireframe(scenePipeline.get(), wireframePipeline.get(), sceneGizmoPipeline.get());
 }
 
 void VulkanContext::drawFrame() {
@@ -418,9 +421,32 @@ void VulkanContext::drawFrame() {
 
     // Update uniform buffer with latest camera information
     if (uniformBuffer) {
-        // Always update camera view/projection first
+        // Collect lights from the scene first
+        std::vector<RenderLight> sceneLights;
+        if (scene) {
+            for (const auto& [actorId, actor] : scene->getAllActors()) {
+                if (auto lightComponent = actor->getComponent<LightComponent>()) {
+                    RenderLight light{};
+                    light.position = actor->getTransform()->getPosition();
+                    light.type = static_cast<float>(lightComponent->getLightType());
+                    light.color = lightComponent->getColor();
+                    light.intensity = lightComponent->getIntensity();
+                    light.range = lightComponent->getRange();
+                    light.direction = lightComponent->getDirection();
+                    light.innerCone = lightComponent->getInnerConeAngle();
+                    light.outerCone = lightComponent->getOuterConeAngle();
+                    light.padding = glm::vec2(0.0f);
+                    
+                    sceneLights.push_back(light);
+                }
+            }
+        }
+        
+        // Update lights in uniform buffer
+        uniformBuffer->setLights(sceneLights);
+        
+        // Then update camera and write everything to GPU
         uniformBuffer->updateFromCamera(currentFrame, camera);
-        uniformBuffer->update(currentFrame);
         
         // Remove camera position debug output
         // auto& ubo = uniformBuffer->getCachedUBO();
@@ -444,6 +470,9 @@ void VulkanContext::drawFrame() {
         
         // Begin scene rendering pass
         sceneRenderer->beginFrame();
+        
+        // Update wireframe mode
+        sceneRenderer->setWireframeMode(wireframeMode);
         
         // Render scene
         sceneRenderer->render(uniformBuffer.get(), currentFrame);
@@ -628,6 +657,13 @@ void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
         // Set up model push constants
         OhaoVkPipeline::ModelPushConstants pushConstants{};
         pushConstants.model = actor->getTransform()->getWorldMatrix();
+        
+        // Get material properties from mesh component
+        const auto& material = meshComponent->getMaterial();
+        pushConstants.baseColor = material.baseColor;
+        pushConstants.metallic = material.metallic;
+        pushConstants.roughness = material.roughness;
+        pushConstants.ao = material.ao;
         
         // Update push constants for this actor
         vkCmdPushConstants(

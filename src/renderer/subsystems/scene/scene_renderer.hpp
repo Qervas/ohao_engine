@@ -39,12 +39,27 @@ public:
         pipeline = mainPipeline;
         this->gizmoPipeline = gizmoPipeline;
     }
+    
+    void setPipelinesWithWireframe(OhaoVkPipeline* solidPipeline, OhaoVkPipeline* wireframePipeline, OhaoVkPipeline* gizmoPipeline) {
+        this->solidPipeline = solidPipeline;
+        this->wireframePipeline = wireframePipeline;
+        this->gizmoPipeline = gizmoPipeline;
+        pipeline = solidPipeline;  // Default to solid
+    }
+    
+    void setWireframeMode(bool wireframe) {
+        if (solidPipeline && wireframePipeline) {
+            pipeline = wireframe ? wireframePipeline : solidPipeline;
+        }
+    }
     static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
 
 private:
     VulkanContext* context{nullptr};
     std::unique_ptr<SceneRenderTarget> renderTarget;
     OhaoVkPipeline* pipeline{nullptr};
+    OhaoVkPipeline* solidPipeline{nullptr};
+    OhaoVkPipeline* wireframePipeline{nullptr};
     std::unique_ptr<AxisGizmo> axisGizmo;
     OhaoVkPipeline* gizmoPipeline{nullptr};
     std::unique_ptr<OhaoVkPipeline> selectionPipeline;

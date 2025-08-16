@@ -13,6 +13,9 @@
 #include <vulkan/vulkan_core.h>
 #include "imgui.h"
 #include "imgui_vulkan_utils.hpp"
+#include "core/component/light_component.hpp"
+#include "ui/selection/selection_manager.hpp"
+#include <glm/glm.hpp>
 
 namespace ohao {
 
@@ -480,6 +483,9 @@ void UIManager::renderSceneViewport() {
         );
     }
 
+    // Render light indicators for selected lights
+    renderLightIndicators(pos, sceneViewportSize);
+
     // Viewport resolution text at the bottom
     ImGui::SetCursorPos(ImVec2(10, sceneViewportSize.y - 30));
     ImGui::Text("Viewport: %dx%d", (int)sceneViewportSize.x, (int)sceneViewportSize.y);
@@ -702,6 +708,134 @@ void UIManager::handleExit() {
         }
 
         ImGui::EndPopup();
+    }
+}
+
+void UIManager::renderLightIndicators(ImVec2 viewportPos, ImVec2 viewportSize) {
+    // Get the current scene from the vulkan context
+    auto scene = vulkanContext->getScene();
+    if (!scene) return;
+    
+    // Get the current camera for world-to-screen projection
+    auto camera = vulkanContext->getCamera();
+    
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    
+    // Get all actors with light components
+    for (const auto& [actorId, actor] : scene->getAllActors()) {
+        auto lightComponent = actor->getComponent<LightComponent>();
+        if (!lightComponent) continue;
+        
+        // Check if this light actor is selected
+        bool isSelected = SelectionManager::get().isSelected(actor.get());
+        if (!isSelected) continue;  // Only show indicators for selected lights
+        
+        // Get light world position
+        glm::vec3 worldPos = actor->getTransform()->getPosition();
+        
+        // Project world position to screen space
+        glm::mat4 viewMatrix = camera.getViewMatrix();
+        glm::mat4 projMatrix = camera.getProjectionMatrix();
+        projMatrix[1][1] *= -1;  // Flip Y for Vulkan
+        
+        glm::mat4 viewProj = projMatrix * viewMatrix;
+        glm::vec4 clipPos = viewProj * glm::vec4(worldPos, 1.0f);
+        
+        // Perspective divide
+        if (clipPos.w <= 0.001f) continue;  // Behind camera
+        
+        glm::vec3 ndc = glm::vec3(clipPos) / clipPos.w;
+        
+        // Check if the light is in front of the camera and within NDC bounds
+        if (ndc.z < 0.0f || ndc.z > 1.0f) continue;
+        if (ndc.x < -1.0f || ndc.x > 1.0f) continue;
+        if (ndc.y < -1.0f || ndc.y > 1.0f) continue;
+        
+        // Convert NDC to screen coordinates
+        float screenX = (ndc.x * 0.5f + 0.5f) * viewportSize.x;
+        float screenY = (ndc.y * 0.5f + 0.5f) * viewportSize.y;
+        
+        ImVec2 screenPos(viewportPos.x + screenX, viewportPos.y + screenY);
+        
+        // Draw light bulb icon (different for each type)
+        float iconSize = 16.0f;
+        ImU32 lightColor, outlineColor;
+        
+        // Different colors for different light types
+        switch (lightComponent->getLightType()) {
+            case LightType::Point:
+                lightColor = IM_COL32(255, 255, 100, 255);  // Yellow for point light
+                break;
+            case LightType::Directional:
+                lightColor = IM_COL32(255, 200, 100, 255);  // Orange for directional light
+                break;
+            case LightType::Spot:
+                lightColor = IM_COL32(100, 255, 100, 255);  // Green for spot light
+                break;
+            default:
+                lightColor = IM_COL32(255, 255, 255, 255);  // White fallback
+                break;
+        }
+        outlineColor = IM_COL32(0, 0, 0, 255);      // Black outline
+        
+        // Draw bulb shape (circle for all types)
+        drawList->AddCircleFilled(screenPos, iconSize * 0.4f, lightColor, 8);
+        drawList->AddCircle(screenPos, iconSize * 0.4f, outlineColor, 8, 2.0f);
+        
+        // Draw different patterns for different light types
+        if (lightComponent->getLightType() == LightType::Point) {
+            // Draw light rays for point light
+            for (int i = 0; i < 8; i++) {
+                float angle = (i * 45.0f) * (3.14159f / 180.0f);
+                float rayLength = iconSize * 0.3f;
+                ImVec2 rayStart(
+                    screenPos.x + cos(angle) * (iconSize * 0.5f),
+                    screenPos.y + sin(angle) * (iconSize * 0.5f)
+                );
+                ImVec2 rayEnd(
+                    screenPos.x + cos(angle) * (iconSize * 0.5f + rayLength),
+                    screenPos.y + sin(angle) * (iconSize * 0.5f + rayLength)
+                );
+                drawList->AddLine(rayStart, rayEnd, lightColor, 2.0f);
+            }
+        } else if (lightComponent->getLightType() == LightType::Directional) {
+            // Draw parallel arrows for directional light
+            for (int i = 0; i < 3; i++) {
+                float offset = (i - 1) * 6.0f;
+                ImVec2 arrowStart(screenPos.x + offset, screenPos.y - iconSize * 0.6f);
+                ImVec2 arrowEnd(screenPos.x + offset, screenPos.y + iconSize * 0.6f);
+                drawList->AddLine(arrowStart, arrowEnd, lightColor, 2.0f);
+                
+                // Arrow head
+                ImVec2 arrowTip1(screenPos.x + offset - 3.0f, screenPos.y + iconSize * 0.4f);
+                ImVec2 arrowTip2(screenPos.x + offset + 3.0f, screenPos.y + iconSize * 0.4f);
+                drawList->AddLine(arrowEnd, arrowTip1, lightColor, 2.0f);
+                drawList->AddLine(arrowEnd, arrowTip2, lightColor, 2.0f);
+            }
+        } else if (lightComponent->getLightType() == LightType::Spot) {
+            // Draw cone shape for spot light
+            float coneHeight = iconSize * 0.8f;
+            float coneWidth = iconSize * 0.6f;
+            
+            ImVec2 coneTop(screenPos.x, screenPos.y - coneHeight * 0.3f);
+            ImVec2 coneLeft(screenPos.x - coneWidth * 0.5f, screenPos.y + coneHeight * 0.5f);
+            ImVec2 coneRight(screenPos.x + coneWidth * 0.5f, screenPos.y + coneHeight * 0.5f);
+            
+            drawList->AddLine(coneTop, coneLeft, lightColor, 2.0f);
+            drawList->AddLine(coneTop, coneRight, lightColor, 2.0f);
+            drawList->AddLine(coneLeft, coneRight, lightColor, 2.0f);
+        }
+        
+        // Draw light type text below the icon
+        const char* lightTypeText = "";
+        switch (lightComponent->getLightType()) {
+            case LightType::Point: lightTypeText = "Point"; break;
+            case LightType::Directional: lightTypeText = "Directional"; break;
+            case LightType::Spot: lightTypeText = "Spot"; break;
+        }
+        
+        ImVec2 textPos(screenPos.x - ImGui::CalcTextSize(lightTypeText).x * 0.5f, screenPos.y + iconSize * 0.6f);
+        drawList->AddText(textPos, IM_COL32(255, 255, 255, 255), lightTypeText);
     }
 }
 

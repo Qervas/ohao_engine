@@ -30,7 +30,10 @@ private:
         Sphere,
         Plane,
         Cylinder,
-        Cone
+        Cone,
+        PointLight,
+        DirectionalLight,
+        SpotLight
     };
 
     Scene* currentScene{nullptr};

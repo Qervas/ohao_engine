@@ -84,20 +84,19 @@ void OhaoVkUniformBuffer::updateFromCamera(uint32_t frameIndex, const Camera& ca
     cachedUBO.viewPos = camera.getPosition();
     cachedUBO.proj[1][1] *= -1;
 
-    // Only copy other properties if this is the first update or they've changed
-    if (needsUpdate) {
-        UniformBufferObject* currentUBO = static_cast<UniformBufferObject*>(getMappedMemory(frameIndex));
-        cachedUBO.lightPos = currentUBO->lightPos;
-        cachedUBO.lightColor = currentUBO->lightColor;
-        cachedUBO.lightIntensity = currentUBO->lightIntensity;
-        cachedUBO.baseColor = currentUBO->baseColor;
-        cachedUBO.metallic = currentUBO->metallic;
-        cachedUBO.roughness = currentUBO->roughness;
-        cachedUBO.ao = currentUBO->ao;
-        needsUpdate = false;
+    // Ensure legacy light properties are zeroed if we have new lights
+    if (cachedUBO.numLights > 0) {
+        cachedUBO.lightPos = glm::vec3(0.0f);
+        cachedUBO.lightColor = glm::vec3(0.0f);
+        cachedUBO.lightIntensity = 0.0f;
     }
 
+    // Always write the current cached UBO to the buffer
+    // The lights and other properties should already be up-to-date in cachedUBO
     writeToBuffer(frameIndex, &cachedUBO, sizeof(UniformBufferObject));
+    
+    // Reset the update flag
+    needsUpdate = false;
 }
 
 void OhaoVkUniformBuffer::setLightProperties(
@@ -120,6 +119,37 @@ void OhaoVkUniformBuffer::setMaterialProperties(
     cachedUBO.roughness = roughness;
     cachedUBO.ao = ao;
     needsUpdate = true;
+}
+
+void OhaoVkUniformBuffer::setLights(const std::vector<RenderLight>& lights) {
+    cachedUBO.numLights = std::min(static_cast<int>(lights.size()), MAX_LIGHTS);
+    
+    for (int i = 0; i < cachedUBO.numLights; ++i) {
+        cachedUBO.lights[i] = lights[i];
+    }
+    
+    // Clear unused slots
+    for (int i = cachedUBO.numLights; i < MAX_LIGHTS; ++i) {
+        cachedUBO.lights[i] = {};
+    }
+    
+    needsUpdate = true;
+}
+
+void OhaoVkUniformBuffer::clearLights() {
+    cachedUBO.numLights = 0;
+    for (int i = 0; i < MAX_LIGHTS; ++i) {
+        cachedUBO.lights[i] = {};
+    }
+    needsUpdate = true;
+}
+
+void OhaoVkUniformBuffer::addLight(const RenderLight& light) {
+    if (cachedUBO.numLights < MAX_LIGHTS) {
+        cachedUBO.lights[cachedUBO.numLights] = light;
+        cachedUBO.numLights++;
+        needsUpdate = true;
+    }
 }
 
 } // namespace ohao
