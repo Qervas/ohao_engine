@@ -280,12 +280,49 @@ void VulkanContext::initializeDefaultScene() {
         }
     }
 
-    // Create a default light
-    Light defaultLight;
-    defaultLight.position = glm::vec3(0.0f, 5.0f, 0.0f);
-    defaultLight.color = glm::vec3(1.0f);
-    defaultLight.intensity = 1.0f;
-    scene->addLight("DefaultLight", defaultLight);
+    // Create default scene objects like Blender
+    // 1. Default Directional Light
+    auto defaultLightActor = scene->createActor("Directional Light");
+    auto lightComponent = defaultLightActor->addComponent<LightComponent>();
+    lightComponent->setLightType(LightType::Directional);
+    lightComponent->setColor(glm::vec3(1.0f, 1.0f, 1.0f));
+    lightComponent->setIntensity(3.0f);
+    lightComponent->setDirection(glm::vec3(0.2f, -1.0f, 0.3f)); // Angled like Blender's default
+    
+    // Position the light actor
+    auto lightTransform = defaultLightActor->getTransform();
+    if (lightTransform) {
+        lightTransform->setPosition(glm::vec3(4.0f, 8.0f, 7.0f)); // Above and to the side
+        // Point the light towards the origin
+        glm::vec3 lightPos = lightTransform->getPosition();
+        glm::vec3 target = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3 direction = glm::normalize(target - lightPos);
+        lightComponent->setDirection(direction);
+    }
+    
+    // 2. Default Sphere (like Blender's default cube)
+    auto defaultSphere = scene->createActor("Sphere");
+    auto meshComponent = defaultSphere->addComponent<MeshComponent>();
+    
+    // Generate sphere geometry
+    auto sphereModel = generateSphereMesh();
+    meshComponent->setModel(sphereModel);
+    
+    // Set default material - nice blue-gray like Blender
+    Material defaultMaterial;
+    defaultMaterial.baseColor = glm::vec3(0.6f, 0.7f, 0.8f); // Light blue-gray
+    defaultMaterial.metallic = 0.0f;
+    defaultMaterial.roughness = 0.5f;
+    defaultMaterial.ao = 1.0f;
+    defaultMaterial.name = "Default Material";
+    meshComponent->setMaterial(defaultMaterial);
+    
+    // Position the sphere at origin
+    auto sphereTransform = defaultSphere->getTransform();
+    if (sphereTransform) {
+        sphereTransform->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+        sphereTransform->setScale(glm::vec3(1.0f)); // Default scale
+    }
 
     if (uiManager) {
         if (auto outlinerPanel = uiManager->getOutlinerPanel()) {
@@ -298,6 +335,10 @@ void VulkanContext::initializeDefaultScene() {
             sceneSettingsPanel->setScene(scene.get());
         }
     }
+    
+    // Update scene buffers to include the sphere geometry
+    updateSceneBuffers();
+    
     OHAO_LOG("Default scene initialized");
 }
 
@@ -1071,6 +1112,72 @@ bool VulkanContext::loadScene(const std::string& filename) {
     if (!scene) scene = std::make_unique<Scene>();
 
     return scene->loadFromFile(filename);
+}
+
+std::shared_ptr<Model> VulkanContext::generateSphereMesh() {
+    auto model = std::make_shared<Model>();
+    
+    const float radius = 1.0f;
+    const int sectors = 36;  // longitude
+    const int stacks = 18;   // latitude
+    
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    
+    // Generate vertices
+    for (int i = 0; i <= stacks; ++i) {
+        float phi = glm::pi<float>() * float(i) / float(stacks);
+        float sinPhi = sin(phi);
+        float cosPhi = cos(phi);
+        
+        for (int j = 0; j <= sectors; ++j) {
+            float theta = 2.0f * glm::pi<float>() * float(j) / float(sectors);
+            float sinTheta = sin(theta);
+            float cosTheta = cos(theta);
+            
+            float x = cosTheta * sinPhi;
+            float y = cosPhi;
+            float z = sinTheta * sinPhi;
+            
+            Vertex vertex;
+            vertex.position = {x * radius, y * radius, z * radius};
+            vertex.normal = {x, y, z};  // Normalized position = normal for sphere
+            vertex.color = {1.0f, 1.0f, 1.0f};
+            vertex.texCoord = {float(j) / sectors, float(i) / stacks};
+            
+            vertices.push_back(vertex);
+        }
+    }
+    
+    // Generate indices
+    for (int i = 0; i < stacks; ++i) {
+        for (int j = 0; j < sectors; ++j) {
+            int first = i * (sectors + 1) + j;
+            int second = first + sectors + 1;
+            
+            indices.push_back(first);
+            indices.push_back(second);
+            indices.push_back(first + 1);
+            
+            indices.push_back(second);
+            indices.push_back(second + 1);
+            indices.push_back(first + 1);
+        }
+    }
+    
+    model->vertices = vertices;
+    model->indices = indices;
+    
+    // Setup default material
+    MaterialData defaultMaterial;
+    defaultMaterial.name = "Default";
+    defaultMaterial.ambient = glm::vec3(0.2f);
+    defaultMaterial.diffuse = glm::vec3(0.8f);
+    defaultMaterial.specular = glm::vec3(0.5f);
+    defaultMaterial.shininess = 32.0f;
+    model->materials["default"] = defaultMaterial;
+    
+    return model;
 }
 
 }//namespace ohao

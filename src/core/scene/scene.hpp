@@ -28,13 +28,6 @@ struct SceneDescriptor {
     std::unordered_map<std::string, std::string> metadata;
 };
 
-struct Light {
-    glm::vec3 position{0.0f};
-    glm::vec3 color{1.0f};
-    float intensity{1.0f};
-    bool enabled{true};
-};
-
 class Scene {
 public:
     using Ptr = std::shared_ptr<Scene>;
@@ -74,13 +67,6 @@ public:
     // Scene properties
     const std::string& getName() const;
     void setName(const std::string& name);
-    
-    // Light management
-    void addLight(const std::string& name, const Light& light);
-    void removeLight(const std::string& name);
-    void updateLight(const std::string& name, const Light& light);
-    Light* getLight(const std::string& name);
-    const std::unordered_map<std::string, Light>& getAllLights() const;
     
     // Scene lifecycle
     void initialize();
@@ -124,9 +110,6 @@ private:
     // Component tracking
     std::vector<MeshComponent*> meshComponents;
     std::vector<PhysicsComponent*> physicsComponents;
-    
-    // Lighting
-    std::unordered_map<std::string, Light> lights;
     
     // The root actor for the scene hierarchy
     Actor::Ptr rootNode;

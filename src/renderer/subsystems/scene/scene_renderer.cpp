@@ -294,10 +294,10 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             pushConstants.roughness = material.roughness;
             pushConstants.ao = material.ao;
         } else if (isWireframeMode) {
-            // Bright orange for wireframe mode
-            pushConstants.baseColor = glm::vec3(1.0f, 0.5f, 0.0f); // Bright orange
+            // Bright orange for wireframe mode - much brighter and more visible
+            pushConstants.baseColor = glm::vec3(1.0f, 0.7f, 0.0f); // Bright amber/orange
             pushConstants.metallic = 0.0f;
-            pushConstants.roughness = 0.8f;
+            pushConstants.roughness = 1.0f; // No shine for wireframe
             pushConstants.ao = 1.0f;
         } else {
             // Default material if no mesh component
@@ -344,10 +344,10 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             pushConstants.roughness = material.roughness;
             pushConstants.ao = material.ao;
         } else if (isWireframeMode) {
-            // Bright orange for wireframe mode
-            pushConstants.baseColor = glm::vec3(1.0f, 0.5f, 0.0f); // Bright orange
+            // Bright orange for wireframe mode - much brighter and more visible
+            pushConstants.baseColor = glm::vec3(1.0f, 0.7f, 0.0f); // Bright amber/orange
             pushConstants.metallic = 0.0f;
-            pushConstants.roughness = 0.8f;
+            pushConstants.roughness = 1.0f; // No shine for wireframe
             pushConstants.ao = 1.0f;
         } else {
             // Default material if no mesh component

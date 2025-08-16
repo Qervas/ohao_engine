@@ -75,8 +75,9 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* c
         vertShaderStageInfo = shaderModule->getShaderStageInfo("gizmo_vert");
         fragShaderStageInfo = shaderModule->getShaderStageInfo("gizmo_frag");
     } else if (mode == RenderMode::WIREFRAME) {
-        vertShaderStageInfo = shaderModule->getShaderStageInfo("selection_vert");
-        fragShaderStageInfo = shaderModule->getShaderStageInfo("selection_frag");
+        // Use regular shaders for wireframe rendering, not selection shaders
+        vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
+        fragShaderStageInfo = shaderModule->getShaderStageInfo("frag");
     } else {
         // Both SOLID and PUSH_CONSTANT_MODEL use the same shaders
         vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
@@ -102,10 +103,10 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* c
     if (mode == RenderMode::GIZMO) {
         localConfig.inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
     } else if (mode == RenderMode::WIREFRAME) {
-        // For selection wireframe, we want edge highlighting
+        // For wireframe mode, use line drawing with proper line width
         localConfig.rasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
         localConfig.rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
-        localConfig.rasterizationInfo.lineWidth = 2.0f;
+        localConfig.rasterizationInfo.lineWidth = 1.0f; // Authentic wireframe line width
     }
 
     // Update dynamic states based on mode
