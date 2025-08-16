@@ -7,6 +7,7 @@
 #include "core/component/mesh_component.hpp"
 #include "core/component/physics_component.hpp"
 #include "core/component/light_component.hpp"
+#include "core/material/material.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -40,6 +41,7 @@ private:
     void renderMeshComponentProperties(MeshComponent* component);
     void renderPhysicsComponentProperties(PhysicsComponent* component);
     void renderLightComponentProperties(LightComponent* component);
+    void renderPBRMaterialProperties(Material& material);
 
     // UI Helper methods
     bool renderVec3Control(const std::string& label, glm::vec3& values,

@@ -5,6 +5,7 @@
 #include "console_widget.hpp"
 #include "vulkan_context.hpp"
 #include "core/component/light_component.hpp"
+#include "core/material/material.hpp"
 
 
 namespace ohao {
@@ -360,55 +361,13 @@ void PropertiesPanel::renderMaterialProperties(SceneObject* object) {
 
     ImGui::Separator();
     
-    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-    Material& material = object->getMaterial();
-        bool changed = false;
-
-        // Base color picker
-        float color[3] = {
-            material.baseColor.r,
-            material.baseColor.g,
-            material.baseColor.b
-        };
+    if (ImGui::CollapsingHeader("PBR Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+        Material& material = object->getMaterial();
+        renderPBRMaterialProperties(material);
         
-        if (ImGui::ColorEdit3("Base Color", color)) {
-            material.baseColor = glm::vec3(color[0], color[1], color[2]);
-            changed = true;
-    }
-
-        // PBR properties
-    if (ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f)) {
-            changed = true;
-    }
-        
-    if (ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f)) {
-            changed = true;
-    }
-        
-    if (ImGui::SliderFloat("AO", &material.ao, 0.0f, 1.0f)) {
-            changed = true;
-    }
-
-        // Emissive color
-        float emissive[3] = {
-            material.emissive.r,
-            material.emissive.g,
-            material.emissive.b
-        };
-        
-        if (ImGui::ColorEdit3("Emissive", emissive)) {
-            material.emissive = glm::vec3(emissive[0], emissive[1], emissive[2]);
-            changed = true;
-    }
-
-        // IOR (Index of Refraction)
-        if (ImGui::SliderFloat("IOR", &material.ior, 1.0f, 2.5f)) {
-            changed = true;
-    }
-
-        if (changed && object) {
-            // Update material - no need to call scene method since we're modifying it directly
-            object->setMaterial(material);
+        // Update scene buffers when material changes
+        if (VulkanContext::getContextInstance()) {
+            VulkanContext::getContextInstance()->updateSceneBuffers();
         }
     }
 }
@@ -649,31 +608,11 @@ void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
                 }
     }
     
-    // Material properties (basic)
-    if (model && !model->materials.empty()) {
-        if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-            auto& material = model->materials.begin()->second;
-            
-            // Base color
-            glm::vec3 ambient = material.ambient;
-            if (ImGui::ColorEdit3("Ambient", glm::value_ptr(ambient))) {
-                material.ambient = ambient;
-            }
-            
-            glm::vec3 diffuse = material.diffuse;
-            if (ImGui::ColorEdit3("Diffuse", glm::value_ptr(diffuse))) {
-                material.diffuse = diffuse;
-            }
-            
-            glm::vec3 specular = material.specular;
-            if (ImGui::ColorEdit3("Specular", glm::value_ptr(specular))) {
-                material.specular = specular;
-            }
-            
-            float shininess = material.shininess;
-            if (ImGui::SliderFloat("Shininess", &shininess, 1.0f, 128.0f)) {
-                material.shininess = shininess;
-            }
+    // Material properties (PBR)
+    if (model) {
+        if (ImGui::CollapsingHeader("PBR Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+            Material& material = component->getMaterial();
+            renderPBRMaterialProperties(material);
         }
     }
 }
@@ -978,6 +917,144 @@ void PropertiesPanel::renderLightComponentProperties(LightComponent* component) 
     if (lightType == LightType::Spot) {
         ImGui::Text("Inner Cone: %.1f°", component->getInnerConeAngle());
         ImGui::Text("Outer Cone: %.1f°", component->getOuterConeAngle());
+    }
+}
+
+void PropertiesPanel::renderPBRMaterialProperties(Material& material) {
+    ImGui::Text("PBR Material Properties");
+    ImGui::Separator();
+    
+    // Material Type Preset Selection
+    const char* materialTypeNames[] = { 
+        "Custom", "Metal", "Plastic", "Glass", "Rubber", "Fabric", 
+        "Skin", "Wood", "Concrete", "Gold", "Silver", "Copper", "Chrome" 
+    };
+    int currentType = static_cast<int>(material.type);
+    if (ImGui::Combo("Material Preset", &currentType, materialTypeNames, 13)) {
+        material.type = static_cast<Material::Type>(currentType);
+        material.applyPreset();
+    }
+    
+    // Core PBR Properties
+    ImGui::Separator();
+    ImGui::Text("Core PBR Properties");
+    
+    // Base Color
+    if (ImGui::ColorEdit3("Base Color", glm::value_ptr(material.baseColor))) {
+        // Color changed
+    }
+    
+    // Metallic
+    if (ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f)) {
+        // Metallic changed
+    }
+    
+    // Roughness
+    if (ImGui::SliderFloat("Roughness", &material.roughness, 0.0f, 1.0f)) {
+        // Roughness changed
+    }
+    
+    // Ambient Occlusion
+    if (ImGui::SliderFloat("Ambient Occlusion", &material.ao, 0.0f, 1.0f)) {
+        // AO changed
+    }
+    
+    // Advanced Properties
+    if (ImGui::CollapsingHeader("Advanced Properties")) {
+        // Emissive
+        if (ImGui::ColorEdit3("Emissive", glm::value_ptr(material.emissive))) {
+            // Emissive changed
+        }
+        
+        // Index of Refraction
+        if (ImGui::SliderFloat("IOR", &material.ior, 1.0f, 2.5f)) {
+            // IOR changed
+        }
+        
+        // Transmission (for glass)
+        if (ImGui::SliderFloat("Transmission", &material.transmission, 0.0f, 1.0f)) {
+            // Transmission changed
+        }
+        
+        // Clear Coat
+        if (ImGui::SliderFloat("Clear Coat", &material.clearCoat, 0.0f, 1.0f)) {
+            // Clear coat changed
+        }
+        
+        if (material.clearCoat > 0.0f) {
+            if (ImGui::SliderFloat("Clear Coat Roughness", &material.clearCoatRoughness, 0.0f, 1.0f)) {
+                // Clear coat roughness changed
+            }
+        }
+        
+        // Subsurface Scattering
+        if (ImGui::ColorEdit3("Subsurface Scattering", glm::value_ptr(material.subsurface))) {
+            // Subsurface changed
+        }
+        
+        if (glm::length(material.subsurface) > 0.0f) {
+            if (ImGui::SliderFloat("Subsurface Radius", &material.subsurfaceRadius, 0.1f, 10.0f)) {
+                // Subsurface radius changed
+            }
+        }
+        
+        // Normal and Height mapping
+        if (ImGui::SliderFloat("Normal Intensity", &material.normalIntensity, 0.0f, 2.0f)) {
+            // Normal intensity changed
+        }
+        
+        if (ImGui::SliderFloat("Height Scale", &material.heightScale, 0.0f, 0.2f)) {
+            // Height scale changed
+        }
+    }
+    
+    // Material Information
+    if (ImGui::CollapsingHeader("Material Info")) {
+        ImGui::Text("Name: %s", material.name.c_str());
+        ImGui::Text("Type: %s", materialTypeNames[currentType]);
+        
+        // Display computed F0 value for reference
+        glm::vec3 F0 = glm::mix(glm::vec3(0.04f), material.baseColor, material.metallic);
+        ImGui::Text("F0: (%.3f, %.3f, %.3f)", F0.x, F0.y, F0.z);
+        
+        // Display whether material is metal or dielectric
+        ImGui::Text("Classification: %s", material.metallic > 0.5f ? "Metallic" : "Dielectric");
+    }
+    
+    // Quick Preset Buttons
+    if (ImGui::CollapsingHeader("Quick Presets")) {
+        ImGui::Columns(3, nullptr, false);
+        
+        if (ImGui::Button("Gold", ImVec2(-1, 0))) {
+            material = Material::createGold();
+        }
+        ImGui::NextColumn();
+        
+        if (ImGui::Button("Silver", ImVec2(-1, 0))) {
+            material = Material::createSilver();
+        }
+        ImGui::NextColumn();
+        
+        if (ImGui::Button("Chrome", ImVec2(-1, 0))) {
+            material = Material::createChrome();
+        }
+        ImGui::NextColumn();
+        
+        if (ImGui::Button("Plastic", ImVec2(-1, 0))) {
+            material = Material::createPlastic(glm::vec3(0.8f, 0.2f, 0.2f));
+        }
+        ImGui::NextColumn();
+        
+        if (ImGui::Button("Glass", ImVec2(-1, 0))) {
+            material = Material::createGlass();
+        }
+        ImGui::NextColumn();
+        
+        if (ImGui::Button("Rubber", ImVec2(-1, 0))) {
+            material = Material::createRubber(glm::vec3(0.2f, 0.2f, 0.2f));
+        }
+        
+        ImGui::Columns(1);
     }
 }
 
