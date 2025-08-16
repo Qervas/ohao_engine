@@ -55,6 +55,7 @@ public:
     void initializeVulkan();
     void initializeSceneRenderer();
     void initializeDefaultScene();
+    std::shared_ptr<Model> generateSphereMesh();
     void cleanup();
     void recreateSwapChain();
     void cleanupSwapChain();
