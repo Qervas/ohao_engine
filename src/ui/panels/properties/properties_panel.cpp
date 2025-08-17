@@ -5,7 +5,9 @@
 #include "console_widget.hpp"
 #include "vulkan_context.hpp"
 #include "core/component/light_component.hpp"
+#include "core/component/material_component.hpp"
 #include "core/material/material.hpp"
+#include <cstring>
 
 
 namespace ohao {
@@ -61,15 +63,13 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
         renderTransformProperties(node);
     }
 
-    // SceneObject-specific components
+    // Modern Actor-Component system only
     if (auto actor = asActor(node)) {
-        // If this is an Actor, use the Actor-specific component rendering
+        // Use the modern Actor-Component system
         renderActorProperties(actor);
-    } else if (auto obj = asSceneObject(node)) {
-        // Material component for legacy scene objects
-        if (ImGui::CollapsingHeader("Material")) {
-            renderMaterialProperties(obj);
-        }
+    } else {
+        // Non-Actor nodes (should be rare in modern architecture)
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Basic scene node (no components)");
     }
 }
 
@@ -112,14 +112,6 @@ void PropertiesPanel::renderActorProperties(Actor* actor) {
             ImGui::Text("Indices: %zu", model->indices.size());
             
             // Material properties accessible through the MeshComponent UI
-            
-            // Wireframe toggle
-            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                bool wireframe = vulkanContext->isWireframeMode();
-                if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
-                    vulkanContext->setWireframeMode(wireframe);
-                }
-            }
         }
     }
     
@@ -356,22 +348,6 @@ bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
     return changed;
 }
 
-void PropertiesPanel::renderMaterialProperties(SceneObject* object) {
-    if (!object) return;
-
-    ImGui::Separator();
-    
-    if (ImGui::CollapsingHeader("PBR Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-        Material& material = object->getMaterial();
-        renderPBRMaterialProperties(material);
-        
-        // Update scene buffers when material changes
-        if (VulkanContext::getContextInstance()) {
-            VulkanContext::getContextInstance()->updateSceneBuffers();
-        }
-    }
-}
-
 void PropertiesPanel::renderComponentProperties(Actor* actor) {
     if (!actor) return;
     
@@ -437,6 +413,10 @@ void PropertiesPanel::renderComponentProperties(Actor* actor) {
                         else if (auto lightComponent = dynamic_cast<LightComponent*>(component.get())) {
                             // Light properties
                             renderLightComponentProperties(lightComponent);
+                        }
+                        else if (auto materialComponent = dynamic_cast<MaterialComponent*>(component.get())) {
+                            // Material properties
+                            renderMaterialComponentProperties(materialComponent);
                         }
                         else {
                             // Generic component properties
@@ -598,22 +578,6 @@ void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
         }
         
         ImGui::EndPopup();
-    }
-    
-    // Wireframe toggle
-            if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-                bool wireframe = vulkanContext->isWireframeMode();
-                if (ImGui::Checkbox("Wireframe Mode", &wireframe)) {
-                    vulkanContext->setWireframeMode(wireframe);
-                }
-    }
-    
-    // Material properties (PBR)
-    if (model) {
-        if (ImGui::CollapsingHeader("PBR Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-            Material& material = component->getMaterial();
-            renderPBRMaterialProperties(material);
-        }
     }
 }
 
@@ -920,23 +884,169 @@ void PropertiesPanel::renderLightComponentProperties(LightComponent* component) 
     }
 }
 
+void PropertiesPanel::renderMaterialComponentProperties(MaterialComponent* component) {
+    if (!component) return;
+    
+    ImGui::Text("Material Component Properties");
+    ImGui::Separator();
+    
+    // Material preset selection
+    const char* materialTypeNames[] = { 
+        "Custom", "Metal", "Plastic", "Glass", "Rubber", 
+        "Fabric", "Skin", "Wood", "Concrete", "Gold", 
+        "Silver", "Copper", "Chrome" 
+    };
+    
+    int currentType = static_cast<int>(component->getMaterial().type);
+    if (ImGui::Combo("Material Preset##material_preset", &currentType, materialTypeNames, 13)) {
+        component->applyPreset(static_cast<Material::Type>(currentType));
+    }
+    
+    // Material name
+    Material& material = component->getMaterial();
+    char nameBuffer[256];
+    strcpy_s(nameBuffer, material.name.c_str());
+    if (ImGui::InputText("Material Name##material_name", nameBuffer, sizeof(nameBuffer))) {
+        material.name = std::string(nameBuffer);
+    }
+    
+    // PBR Material Properties
+    if (ImGui::CollapsingHeader("PBR Properties##pbr_props", ImGuiTreeNodeFlags_DefaultOpen)) {
+        renderPBRMaterialProperties(material);
+    }
+    
+    // Texture Properties
+    if (ImGui::CollapsingHeader("Textures##texture_props", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Texture Maps:");
+        
+        // Albedo texture
+        if (material.useAlbedoTexture && !material.albedoTexture.empty()) {
+            ImGui::Text("Albedo: %s", material.albedoTexture.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Remove##albedo")) {
+                component->setAlbedoTexture("");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No albedo texture");
+            ImGui::SameLine();
+            if (ImGui::Button("Add##albedo")) {
+                // TODO: Open file dialog for texture selection
+                ImGui::OpenPopup("AlbedoTextureDialog");
+            }
+        }
+        
+        // Normal texture
+        if (material.useNormalTexture && !material.normalTexture.empty()) {
+            ImGui::Text("Normal: %s", material.normalTexture.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Remove##normal")) {
+                component->setNormalTexture("");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No normal texture");
+            ImGui::SameLine();
+            if (ImGui::Button("Add##normal")) {
+                // TODO: Open file dialog for texture selection
+                ImGui::OpenPopup("NormalTextureDialog");
+            }
+        }
+        
+        // Metallic texture
+        if (material.useMetallicTexture && !material.metallicTexture.empty()) {
+            ImGui::Text("Metallic: %s", material.metallicTexture.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Remove##metallic")) {
+                component->setMetallicTexture("");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No metallic texture");
+            ImGui::SameLine();
+            if (ImGui::Button("Add##metallic")) {
+                // TODO: Open file dialog for texture selection
+                ImGui::OpenPopup("MetallicTextureDialog");
+            }
+        }
+        
+        // Roughness texture
+        if (material.useRoughnessTexture && !material.roughnessTexture.empty()) {
+            ImGui::Text("Roughness: %s", material.roughnessTexture.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Remove##roughness")) {
+                component->setRoughnessTexture("");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No roughness texture");
+            ImGui::SameLine();
+            if (ImGui::Button("Add##roughness")) {
+                // TODO: Open file dialog for texture selection
+                ImGui::OpenPopup("RoughnessTextureDialog");
+            }
+        }
+        
+        // AO texture
+        if (material.useAoTexture && !material.aoTexture.empty()) {
+            ImGui::Text("AO: %s", material.aoTexture.c_str());
+            ImGui::SameLine();
+            if (ImGui::Button("Remove##ao")) {
+                component->setAoTexture("");
+            }
+        } else {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No AO texture");
+            ImGui::SameLine();
+            if (ImGui::Button("Add##ao")) {
+                // TODO: Open file dialog for texture selection
+                ImGui::OpenPopup("AoTextureDialog");
+            }
+        }
+        
+        // Texture file dialogs (unique for each texture type)
+        if (ImGui::BeginPopup("AlbedoTextureDialog")) {
+            ImGui::Text("Albedo texture file selection not yet implemented");
+            if (ImGui::Button("Close##albedo_close")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        
+        if (ImGui::BeginPopup("NormalTextureDialog")) {
+            ImGui::Text("Normal texture file selection not yet implemented");
+            if (ImGui::Button("Close##normal_close")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        
+        if (ImGui::BeginPopup("MetallicTextureDialog")) {
+            ImGui::Text("Metallic texture file selection not yet implemented");
+            if (ImGui::Button("Close##metallic_close")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        
+        if (ImGui::BeginPopup("RoughnessTextureDialog")) {
+            ImGui::Text("Roughness texture file selection not yet implemented");
+            if (ImGui::Button("Close##roughness_close")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        
+        if (ImGui::BeginPopup("AoTextureDialog")) {
+            ImGui::Text("AO texture file selection not yet implemented");
+            if (ImGui::Button("Close##ao_close")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+}
+
 void PropertiesPanel::renderPBRMaterialProperties(Material& material) {
     ImGui::Text("PBR Material Properties");
     ImGui::Separator();
     
-    // Material Type Preset Selection
-    const char* materialTypeNames[] = { 
-        "Custom", "Metal", "Plastic", "Glass", "Rubber", "Fabric", 
-        "Skin", "Wood", "Concrete", "Gold", "Silver", "Copper", "Chrome" 
-    };
-    int currentType = static_cast<int>(material.type);
-    if (ImGui::Combo("Material Preset", &currentType, materialTypeNames, 13)) {
-        material.type = static_cast<Material::Type>(currentType);
-        material.applyPreset();
-    }
-    
     // Core PBR Properties
-    ImGui::Separator();
     ImGui::Text("Core PBR Properties");
     
     // Base Color
@@ -1011,7 +1121,18 @@ void PropertiesPanel::renderPBRMaterialProperties(Material& material) {
     // Material Information
     if (ImGui::CollapsingHeader("Material Info")) {
         ImGui::Text("Name: %s", material.name.c_str());
-        ImGui::Text("Type: %s", materialTypeNames[currentType]);
+        
+        // Display material type name
+        const char* typeNames[] = { 
+            "Custom", "Metal", "Plastic", "Glass", "Rubber", "Fabric", 
+            "Skin", "Wood", "Concrete", "Gold", "Silver", "Copper", "Chrome" 
+        };
+        int typeIndex = static_cast<int>(material.type);
+        if (typeIndex >= 0 && typeIndex < 13) {
+            ImGui::Text("Type: %s", typeNames[typeIndex]);
+        } else {
+            ImGui::Text("Type: Unknown");
+        }
         
         // Display computed F0 value for reference
         glm::vec3 F0 = glm::mix(glm::vec3(0.04f), material.baseColor, material.metallic);

@@ -6,6 +6,7 @@
 #include "ui/components/console_widget.hpp"
 #include "core/material/material.hpp"
 #include "core/component/mesh_component.hpp"
+#include "core/component/material_component.hpp"
 #include <iostream>
 #include <vulkan/vulkan_core.h>
 
@@ -285,10 +286,10 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         OhaoVkPipeline::ModelPushConstants pushConstants{};
         pushConstants.model = actor->getTransform()->getWorldMatrix();
         
-        // Get material properties from mesh component
-        auto meshComponent = actor->getComponent<MeshComponent>();
-        if (meshComponent && !isWireframeMode) {
-            const auto& material = meshComponent->getMaterial();
+        // Get material properties from material component
+        auto materialComponent = actor->getComponent<MaterialComponent>();
+        if (materialComponent && !isWireframeMode) {
+            const auto& material = materialComponent->getMaterial();
             pushConstants.baseColor = material.baseColor;
             pushConstants.metallic = material.metallic;
             pushConstants.roughness = material.roughness;
@@ -300,7 +301,7 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             pushConstants.roughness = 1.0f; // No shine for wireframe
             pushConstants.ao = 1.0f;
         } else {
-            // Default material if no mesh component
+            // Default material if no material component
             pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
             pushConstants.metallic = 0.0f;
             pushConstants.roughness = 0.5f;
@@ -335,10 +336,10 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
         OhaoVkPipeline::ModelPushConstants pushConstants{};
         pushConstants.model = actor->getTransform()->getWorldMatrix();
         
-        // Get material properties from mesh component
-        auto meshComponent = actor->getComponent<MeshComponent>();
-        if (meshComponent && !isWireframeMode) {
-            const auto& material = meshComponent->getMaterial();
+        // Get material properties from material component
+        auto materialComponent = actor->getComponent<MaterialComponent>();
+        if (materialComponent && !isWireframeMode) {
+            const auto& material = materialComponent->getMaterial();
             pushConstants.baseColor = material.baseColor;
             pushConstants.metallic = material.metallic;
             pushConstants.roughness = material.roughness;
@@ -350,7 +351,7 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
             pushConstants.roughness = 1.0f; // No shine for wireframe
             pushConstants.ao = 1.0f;
         } else {
-            // Default material if no mesh component
+            // Default material if no material component
             pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
             pushConstants.metallic = 0.0f;
             pushConstants.roughness = 0.5f;

@@ -41,25 +41,6 @@ std::shared_ptr<Model> MeshComponent::getModel() const {
     return model;
 }
 
-void MeshComponent::setMaterial(const Material& newMaterial) {
-    material = newMaterial;
-    
-    // Notify scene if material changes
-    if (auto actor = getOwner()) {
-        if (auto scene = actor->getScene()) {
-            scene->onMeshComponentChanged(this);
-        }
-    }
-}
-
-Material& MeshComponent::getMaterial() {
-    return material;
-}
-
-const Material& MeshComponent::getMaterial() const {
-    return material;
-}
-
 void MeshComponent::setVisible(bool isVisible) {
     visible = isVisible;
 }
@@ -74,6 +55,20 @@ void MeshComponent::setRenderMode(RenderMode mode) {
 
 MeshComponent::RenderMode MeshComponent::getRenderMode() const {
     return renderMode;
+}
+
+uint32_t MeshComponent::getVertexCount() const {
+    return model ? static_cast<uint32_t>(model->vertices.size()) : 0;
+}
+
+uint32_t MeshComponent::getIndexCount() const {
+    return model ? static_cast<uint32_t>(model->indices.size()) : 0;
+}
+
+void MeshComponent::setBufferOffsets(uint32_t vOffset, uint32_t iOffset, uint32_t iCount) {
+    vertexOffset = vOffset;
+    indexOffset = iOffset;
+    indexCount = iCount;
 }
 
 const char* MeshComponent::getTypeName() const {

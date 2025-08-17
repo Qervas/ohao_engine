@@ -26,6 +26,28 @@ struct Material {
     float normalIntensity{1.0f};               // Normal map intensity
     float heightScale{0.05f};                  // Height/displacement scale
     
+    // Texture Maps
+    std::string albedoTexture;                 // Base color/diffuse texture
+    std::string normalTexture;                 // Normal map
+    std::string metallicTexture;               // Metallic map
+    std::string roughnessTexture;              // Roughness map
+    std::string aoTexture;                     // Ambient occlusion map
+    std::string emissiveTexture;               // Emissive map
+    std::string heightTexture;                 // Height/displacement map
+    
+    // Combined maps (common in game engines)
+    std::string metallicRoughnessTexture;      // R=?, G=roughness, B=metallic
+    std::string occlusionRoughnessMetallicTexture; // R=AO, G=roughness, B=metallic (ORM)
+    
+    // Texture Usage Flags
+    bool useAlbedoTexture{false};
+    bool useNormalTexture{false};
+    bool useMetallicTexture{false};
+    bool useRoughnessTexture{false};
+    bool useAoTexture{false};
+    bool useEmissiveTexture{false};
+    bool useHeightTexture{false};
+    
     // Material Type Presets
     enum class Type {
         Custom,
@@ -55,8 +77,25 @@ struct Material {
     static Material createSilver();
     static Material createChrome();
     
+    // Texture utility methods
+    static Material createTexturedMaterial(const std::string& albedoPath, 
+                                         const std::string& normalPath = "",
+                                         const std::string& roughnessPath = "",
+                                         const std::string& metallicPath = "");
+    
     // Apply preset based on type
     void applyPreset();
+    
+    // Texture management
+    void setAlbedoTexture(const std::string& path);
+    void setNormalTexture(const std::string& path);
+    void setMetallicTexture(const std::string& path);
+    void setRoughnessTexture(const std::string& path);
+    void setAoTexture(const std::string& path);
+    void setEmissiveTexture(const std::string& path);
+    
+    // Check if material has any textures
+    bool hasTextures() const;
 };
 
 } // namespace ohao

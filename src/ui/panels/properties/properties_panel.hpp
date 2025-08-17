@@ -5,6 +5,7 @@
 #include "core/actor/actor.hpp"
 #include "core/component/transform_component.hpp"
 #include "core/component/mesh_component.hpp"
+#include "core/component/material_component.hpp"
 #include "core/component/physics_component.hpp"
 #include "core/component/light_component.hpp"
 #include "core/material/material.hpp"
@@ -30,7 +31,6 @@ private:
     // Core rendering methods
     void renderNodeProperties(SceneNode* node);
     void renderTransformProperties(SceneNode* node);
-    void renderMaterialProperties(SceneObject* object);
     
     // Actor-Component system methods
     void renderActorProperties(Actor* actor);
@@ -39,6 +39,7 @@ private:
     
     // Component-specific property editors
     void renderMeshComponentProperties(MeshComponent* component);
+    void renderMaterialComponentProperties(MaterialComponent* component);
     void renderPhysicsComponentProperties(PhysicsComponent* component);
     void renderLightComponentProperties(LightComponent* component);
     void renderPBRMaterialProperties(Material& material);

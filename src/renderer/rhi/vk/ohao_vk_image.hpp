@@ -31,6 +31,9 @@ public:
         VkImageAspectFlags aspectFlags
     );
 
+    // Texture creation
+    bool createTextureImage(OhaoVkDevice* device, int width, int height, unsigned char* data);
+
     bool createDepthResources(VkExtent2D extent, VkSampleCountFlagBits msaaSamples);
 
     // Depth buffer specific functions

@@ -2,7 +2,6 @@
 
 #include "component.hpp"
 #include "../asset/model.hpp"
-#include "../material/material.hpp"
 #include <memory>
 
 namespace ohao {
@@ -14,28 +13,27 @@ public:
     MeshComponent();
     ~MeshComponent() override;
     
-    // Model management
+    // Model/Geometry management
     void setModel(std::shared_ptr<Model> model);
     std::shared_ptr<Model> getModel() const;
-    
-    // Material management
-    void setMaterial(const Material& material);
-    Material& getMaterial();
-    const Material& getMaterial() const;
     
     // Visibility
     void setVisible(bool visible);
     bool isVisible() const;
     
-    // Rendering mode
+    // Rendering mode (affects how geometry is rendered)
     enum class RenderMode {
         SOLID,
         WIREFRAME,
-        TRANSPARENT
+        POINTS
     };
     
     void setRenderMode(RenderMode mode);
     RenderMode getRenderMode() const;
+    
+    // Geometry properties
+    uint32_t getVertexCount() const;
+    uint32_t getIndexCount() const;
     
     // Component overrides
     const char* getTypeName() const override;
@@ -47,16 +45,21 @@ public:
     void serialize(class Serializer& serializer) const override;
     void deserialize(class Deserializer& deserializer) override;
     
+    // Buffer management (used by renderer)
+    void setBufferOffsets(uint32_t vertexOffset, uint32_t indexOffset, uint32_t indexCount);
+    uint32_t getVertexOffset() const { return vertexOffset; }
+    uint32_t getIndexOffset() const { return indexOffset; }
+    uint32_t getBufferIndexCount() const { return indexCount; }
+    
 private:
     std::shared_ptr<Model> model;
-    Material material;
     bool visible;
     RenderMode renderMode;
     
-    // Cached buffers - specific to renderer implementation
-    uint32_t vertexOffset;  // Offset in combined buffer
-    uint32_t indexOffset;   // Offset in combined buffer
-    uint32_t indexCount;    // Number of indices for this mesh
+    // Cached buffer data - specific to renderer implementation
+    uint32_t vertexOffset{0};  // Offset in combined buffer
+    uint32_t indexOffset{0};   // Offset in combined buffer
+    uint32_t indexCount{0};    // Number of indices for this mesh
 };
 
 } // namespace ohao 

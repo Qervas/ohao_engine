@@ -2,6 +2,7 @@
 #include "../component/component.hpp"
 #include "../component/transform_component.hpp"
 #include "../component/mesh_component.hpp"
+#include "../component/material_component.hpp"
 #include "../scene/scene.hpp"
 #include "../asset/model.hpp"
 #include "../material/material.hpp"
@@ -266,28 +267,32 @@ std::shared_ptr<Model> Actor::getModel() const {
 }
 
 void Actor::setMaterial(const Material& material) {
-    auto meshComponent = getComponent<MeshComponent>();
-    if (meshComponent) {
-        meshComponent->setMaterial(material);
+    auto materialComponent = getComponent<MaterialComponent>();
+    if (!materialComponent) {
+        // If no material component exists, create one
+        materialComponent = addComponent<MaterialComponent>();
     }
+    materialComponent->setMaterial(material);
+    
     // Set in base class for compatibility
     SceneObject::setMaterial(material);
 }
 
 const Material& Actor::getMaterial() const {
-    auto meshComponent = getComponent<MeshComponent>();
-    if (meshComponent) {
-        return meshComponent->getMaterial();
+    auto materialComponent = getComponent<MaterialComponent>();
+    if (materialComponent) {
+        return materialComponent->getMaterial();
     }
     return SceneObject::getMaterial();
 }
 
 Material& Actor::getMaterial() {
-    auto meshComponent = getComponent<MeshComponent>();
-    if (meshComponent) {
-        return meshComponent->getMaterial();
+    auto materialComponent = getComponent<MaterialComponent>();
+    if (!materialComponent) {
+        // If no material component exists, create one
+        materialComponent = addComponent<MaterialComponent>();
     }
-    return SceneObject::getMaterial();
+    return materialComponent->getMaterial();
 }
 
 } // namespace ohao 

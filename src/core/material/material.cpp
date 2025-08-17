@@ -164,4 +164,63 @@ void Material::applyPreset() {
     }
 }
 
+Material Material::createTexturedMaterial(const std::string& albedoPath, 
+                                         const std::string& normalPath,
+                                         const std::string& roughnessPath,
+                                         const std::string& metallicPath) {
+    Material mat;
+    mat.type = Type::Custom;
+    mat.name = "Textured Material";
+    
+    if (!albedoPath.empty()) {
+        mat.setAlbedoTexture(albedoPath);
+    }
+    if (!normalPath.empty()) {
+        mat.setNormalTexture(normalPath);
+    }
+    if (!roughnessPath.empty()) {
+        mat.setRoughnessTexture(roughnessPath);
+    }
+    if (!metallicPath.empty()) {
+        mat.setMetallicTexture(metallicPath);
+    }
+    
+    return mat;
+}
+
+void Material::setAlbedoTexture(const std::string& path) {
+    albedoTexture = path;
+    useAlbedoTexture = !path.empty();
+}
+
+void Material::setNormalTexture(const std::string& path) {
+    normalTexture = path;
+    useNormalTexture = !path.empty();
+}
+
+void Material::setMetallicTexture(const std::string& path) {
+    metallicTexture = path;
+    useMetallicTexture = !path.empty();
+}
+
+void Material::setRoughnessTexture(const std::string& path) {
+    roughnessTexture = path;
+    useRoughnessTexture = !path.empty();
+}
+
+void Material::setAoTexture(const std::string& path) {
+    aoTexture = path;
+    useAoTexture = !path.empty();
+}
+
+void Material::setEmissiveTexture(const std::string& path) {
+    emissiveTexture = path;
+    useEmissiveTexture = !path.empty();
+}
+
+bool Material::hasTextures() const {
+    return useAlbedoTexture || useNormalTexture || useMetallicTexture || 
+           useRoughnessTexture || useAoTexture || useEmissiveTexture || useHeightTexture;
+}
+
 } // namespace ohao
