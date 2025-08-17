@@ -16,6 +16,7 @@ target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_SOURCE_DIR}/external/imgui/backends
     ${CMAKE_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
+    ${stb_SOURCE_DIR}
 )
 
 target_link_libraries(ohao_renderer PUBLIC
