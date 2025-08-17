@@ -15,6 +15,7 @@
 #include <glm/geometric.hpp>
 #include "core/material/material.hpp"
 #include "core/component/mesh_component.hpp"
+#include "core/component/material_component.hpp"
 #include "core/component/light_component.hpp"
 #include <glm/trigonometric.hpp>
 #include <memory>
@@ -303,6 +304,7 @@ void VulkanContext::initializeDefaultScene() {
     // 2. Default Sphere (like Blender's default cube)
     auto defaultSphere = scene->createActor("Sphere");
     auto meshComponent = defaultSphere->addComponent<MeshComponent>();
+    auto materialComponent = defaultSphere->addComponent<MaterialComponent>();
     
     // Generate sphere geometry
     auto sphereModel = generateSphereMesh();
@@ -315,7 +317,7 @@ void VulkanContext::initializeDefaultScene() {
     defaultMaterial.roughness = 0.5f;
     defaultMaterial.ao = 1.0f;
     defaultMaterial.name = "Default Material";
-    meshComponent->setMaterial(defaultMaterial);
+    materialComponent->setMaterial(defaultMaterial);
     
     // Position the sphere at origin
     auto sphereTransform = defaultSphere->getTransform();
@@ -621,11 +623,11 @@ void VulkanContext::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t 
     scissor.extent = swapchain->getExtent();
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    // Render model
-    renderModel(commandBuffer);
+    // Legacy model rendering disabled - now using SceneRenderer
+    // renderModel(commandBuffer);
 
-    // Render gizmos
-    renderGizmos(commandBuffer);
+    // Gizmo rendering temporarily disabled to debug outline issue
+    // renderGizmos(commandBuffer);
 
     // Render ImGui
     if (ImGui::GetDrawData()) {
@@ -699,12 +701,21 @@ void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
         OhaoVkPipeline::ModelPushConstants pushConstants{};
         pushConstants.model = actor->getTransform()->getWorldMatrix();
         
-        // Get material properties from mesh component
-        const auto& material = meshComponent->getMaterial();
-        pushConstants.baseColor = material.baseColor;
-        pushConstants.metallic = material.metallic;
-        pushConstants.roughness = material.roughness;
-        pushConstants.ao = material.ao;
+        // Get material properties from material component
+        auto materialComponent = actor->getComponent<MaterialComponent>();
+        if (materialComponent) {
+            const auto& material = materialComponent->getMaterial();
+            pushConstants.baseColor = material.baseColor;
+            pushConstants.metallic = material.metallic;
+            pushConstants.roughness = material.roughness;
+            pushConstants.ao = material.ao;
+        } else {
+            // Default material if no material component
+            pushConstants.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);
+            pushConstants.metallic = 0.0f;
+            pushConstants.roughness = 0.5f;
+            pushConstants.ao = 1.0f;
+        }
         
         // Update push constants for this actor
         vkCmdPushConstants(

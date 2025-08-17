@@ -6,6 +6,8 @@ set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Include FetchContent module
+include(FetchContent)
 
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -17,6 +19,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find Vulkan package
 find_package(Vulkan REQUIRED)
+
+# Fetch stb (stb_image, stb_image_write, etc.)
+FetchContent_Declare(
+  stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG master
+)
+FetchContent_MakeAvailable(stb)
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets/models)
