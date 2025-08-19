@@ -7,8 +7,10 @@
 #include "core/component/light_component.hpp"
 #include "core/component/material_component.hpp"
 #include "core/material/material.hpp"
-#include "core/physics/rigid_body.hpp"
-#include "core/physics/collision_shape.hpp"
+#include "core/physics/dynamics/rigid_body.hpp"
+#include "core/physics/collision/shapes/collision_shape.hpp"
+#include "core/physics/collision/shapes/box_shape.hpp"
+#include "core/physics/collision/shapes/sphere_shape.hpp"
 #include <cstring>
 
 
@@ -595,14 +597,14 @@ void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* compone
         const char* rigidBodyTypeNames[] = { "Static", "Kinematic", "Dynamic" };
         int currentType = static_cast<int>(component->getRigidBodyType());
         if (ImGui::Combo("Rigid Body Type", &currentType, rigidBodyTypeNames, 3)) {
-            component->setRigidBodyType(static_cast<RigidBodyType>(currentType));
+            component->setRigidBodyType(static_cast<physics::dynamics::RigidBodyType>(currentType));
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Static: Never moves (ground, walls)\nKinematic: Moves but not affected by forces\nDynamic: Full physics simulation");
         }
         
         // Mass (only for dynamic bodies)
-        if (component->getRigidBodyType() == RigidBodyType::DYNAMIC) {
+        if (component->getRigidBodyType() == physics::dynamics::RigidBodyType::DYNAMIC) {
             float mass = component->getMass();
             if (ImGui::DragFloat("Mass", &mass, 0.1f, 0.01f, 1000.0f, "%.2f kg")) {
                 component->setMass(mass);
@@ -732,16 +734,18 @@ void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* compone
             }
             
             // Shape-specific properties
-            if (auto boxShape = std::dynamic_pointer_cast<BoxShape>(collisionShape)) {
+            if (auto boxShape = std::dynamic_pointer_cast<physics::collision::BoxShape>(collisionShape)) {
                 glm::vec3 halfExtents = boxShape->getHalfExtents();
                 ImGui::Text("Half Extents: %.3f, %.3f, %.3f", halfExtents.x, halfExtents.y, halfExtents.z);
                 ImGui::Text("Full Size: %.3f, %.3f, %.3f", halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2);
             }
-            else if (auto sphereShape = std::dynamic_pointer_cast<SphereShape>(collisionShape)) {
+            else if (auto sphereShape = std::dynamic_pointer_cast<physics::collision::SphereShape>(collisionShape)) {
                 float radius = sphereShape->getRadius();
                 ImGui::Text("Radius: %.3f", radius);
                 ImGui::Text("Diameter: %.3f", radius * 2);
             }
+            // TODO: Implement CapsuleShape and ConvexHullShape
+            /*
             else if (auto capsuleShape = std::dynamic_pointer_cast<CapsuleShape>(collisionShape)) {
                 float radius = capsuleShape->getRadius();
                 float height = capsuleShape->getHeight();
@@ -751,6 +755,7 @@ void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* compone
             else if (auto hullShape = std::dynamic_pointer_cast<ConvexHullShape>(collisionShape)) {
                 ImGui::Text("Vertices: %zu", hullShape->getPoints().size());
             }
+            */
             
             if (ImGui::Button("Remove Shape", ImVec2(120, 25))) {
                 component->setCollisionShape(nullptr);
@@ -775,13 +780,15 @@ void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* compone
                 component->createSphereShape(sphereRadius);
             }
             
+            // TODO: Implement capsule shape creation
             // Capsule Shape
             static float capsuleRadius = 0.5f;
             static float capsuleHeight = 2.0f;
             ImGui::DragFloat("Capsule Radius", &capsuleRadius, 0.01f, 0.01f, 10.0f, "%.3f");
             ImGui::DragFloat("Capsule Height", &capsuleHeight, 0.01f, 0.01f, 10.0f, "%.3f");
             if (ImGui::Button("Create Capsule Shape", ImVec2(150, 25))) {
-                component->createCapsuleShape(capsuleRadius, capsuleHeight);
+                // component->createCapsuleShape(capsuleRadius, capsuleHeight);
+                OHAO_LOG_WARNING("Capsule shape not yet implemented");
             }
         }
     }
@@ -796,7 +803,7 @@ void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* compone
                        rigidBody->getPosition().y, 
                        rigidBody->getPosition().z);
             ImGui::Text("Mass: %.2f kg", rigidBody->getMass());
-            ImGui::Text("Active: %s", rigidBody->isActive() ? "Yes" : "No");
+            ImGui::Text("Awake: %s", rigidBody->isAwake() ? "Yes" : "No");
             
             // Force info
             glm::vec3 accumulatedForce = rigidBody->getAccumulatedForce();

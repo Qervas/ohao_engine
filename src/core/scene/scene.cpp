@@ -4,7 +4,8 @@
 #include "../component/component_factory.hpp"
 #include "../actor/actor.hpp"
 #include "../asset/model.hpp"
-#include "../physics/collision_shape.hpp"
+#include "../physics/collision/shapes/collision_shape.hpp"
+#include "../physics/world/physics_settings.hpp"
 #include "../serialization/scene_serializer.hpp"
 #include "../../renderer/vulkan_context.hpp"
 #include "../../ui/components/console_widget.hpp"
@@ -30,8 +31,8 @@ Scene::Scene(const std::string& name)
     registerActor(rootNode);
     
     // Initialize physics world
-    physicsWorld = std::make_unique<PhysicsWorld>();
-    PhysicsSettings settings;
+    physicsWorld = std::make_unique<physics::PhysicsWorld>();
+    physics::PhysicsSettings settings;
     settings.gravity = glm::vec3(0.0f, -9.81f, 0.0f);
     physicsWorld->initialize(settings);
     
@@ -206,6 +207,13 @@ void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
 }
 
 void Scene::updatePhysics(float deltaTime) {
+    static bool hasLoggedOnce = false;
+    
+    if (!hasLoggedOnce) {
+        printf("Scene::updatePhysics FIRST CALL with deltaTime=%f\n", deltaTime);
+        hasLoggedOnce = true;
+    }
+    
     if (physicsWorld) {
         physicsWorld->stepSimulation(deltaTime);
         
@@ -215,6 +223,8 @@ void Scene::updatePhysics(float deltaTime) {
                 component->update(deltaTime);
             }
         }
+    } else {
+        printf("Scene::updatePhysics - NO PHYSICS WORLD!\n");
     }
 }
 
