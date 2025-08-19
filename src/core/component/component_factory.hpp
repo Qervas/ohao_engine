@@ -6,6 +6,7 @@
 #include "core/component/material_component.hpp"
 #include "core/component/light_component.hpp"
 #include "core/component/transform_component.hpp"
+#include "core/physics/dynamics/rigid_body.hpp"
 #include <memory>
 #include <glm/glm.hpp>
 
@@ -36,7 +37,7 @@ struct ComponentSet {
     bool needsLight = false;
     
     // Physics settings
-    RigidBodyType physicsType = RigidBodyType::DYNAMIC;
+    physics::dynamics::RigidBodyType physicsType = physics::dynamics::RigidBodyType::DYNAMIC;
     float mass = 1.0f;
     float friction = 0.5f;
     float restitution = 0.3f;

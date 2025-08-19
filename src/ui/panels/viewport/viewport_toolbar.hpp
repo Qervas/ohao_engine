@@ -1,6 +1,7 @@
 #pragma once
 #include "ui/common/panel_base.hpp"
 #include "renderer/gizmo/axis_gizmo.hpp"
+#include "core/physics/world/simulation_state.hpp"
 #include <memory>
 
 namespace ohao {
@@ -8,11 +9,8 @@ namespace ohao {
 class AxisGizmo;
 class PhysicsWorld;
 
-enum class PhysicsSimulationState {
-    STOPPED,
-    PLAYING,
-    PAUSED
-};
+// Use the new physics simulation state enum
+using PhysicsSimulationState = physics::SimulationState;
 
 class ViewportToolbar : public PanelBase {
 public:

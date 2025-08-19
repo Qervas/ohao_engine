@@ -392,14 +392,25 @@ void VulkanContext::updateScene(float deltaTime) {
             // Update physics world simulation state
             auto* physicsWorld = scene->getPhysicsWorld();
             if (physicsWorld) {
-                physicsWorld->setSimulationState(toolbar->getPhysicsState());
+                auto currentState = physicsWorld->getSimulationState();
+                auto newState = toolbar->getPhysicsState();
+                
+                // Only log state changes, not every frame
+                if (currentState != newState) {
+                    printf("SYNC: Physics world state %d -> %d\n", static_cast<int>(currentState), static_cast<int>(newState));
+                }
+                physicsWorld->setSimulationState(newState);
             }
             
-            if (toolbar->getPhysicsState() == PhysicsSimulationState::PLAYING && toolbar->isPhysicsEnabled()) {
+            // Check if we should run physics
+            auto toolbarState = toolbar->getPhysicsState();
+            bool physicsEnabled = toolbar->isPhysicsEnabled();
+            
+            if (toolbarState == physics::SimulationState::RUNNING && physicsEnabled) {
                 // Apply simulation speed multiplier
                 float scaledDeltaTime = deltaTime * toolbar->getSimulationSpeed();
                 
-                // Update physics simulation
+                // Update physics simulation (no spam)
                 scene->updatePhysics(scaledDeltaTime);
             }
         }
@@ -488,28 +499,23 @@ void VulkanContext::drawFrame() {
 
     // Explicitly begin the scene rendering pass
     if (sceneRenderer && sceneRenderer->hasValidRenderTarget()) {
-        // Check if vertex and index buffers exist
+        // Check if scene has any geometry to render
         if (!vertexBuffer || !indexBuffer) {
-            OHAO_LOG_ERROR("Vertex or index buffer is null before scene rendering");
-            // Try to reinitialize default buffers
-            initializeDefaultScene();
-            if (!vertexBuffer || !indexBuffer) {
-                OHAO_LOG_ERROR("Failed to recreate default buffers");
-                return;
-            }
+            // Empty scene is valid - skip rendering but don't recreate default objects
+            OHAO_LOG_DEBUG("Scene is empty - no geometry to render");
+        } else {
+            // Begin scene rendering pass
+            sceneRenderer->beginFrame();
+            
+            // Update wireframe mode
+            sceneRenderer->setWireframeMode(wireframeMode);
+            
+            // Render scene
+            sceneRenderer->render(uniformBuffer.get(), currentFrame);
+            
+            // End scene rendering pass
+            sceneRenderer->endFrame();
         }
-        
-        // Begin scene rendering pass
-        sceneRenderer->beginFrame();
-        
-        // Update wireframe mode
-        sceneRenderer->setWireframeMode(wireframeMode);
-        
-        // Render scene
-        sceneRenderer->render(uniformBuffer.get(), currentFrame);
-        
-        // End scene rendering pass
-        sceneRenderer->endFrame();
     } else {
         OHAO_LOG("Warning: Scene renderer not initialized or render target invalid");
         

@@ -1,5 +1,5 @@
 #include "viewport_toolbar.hpp"
-#include "core/physics/physics_world.hpp"
+#include "core/physics/world/physics_world.hpp"
 #include "imgui.h"
 #include "renderer/vulkan_context.hpp"
 
@@ -47,11 +47,11 @@ void ViewportToolbar::render() {
 void ViewportToolbar::renderPhysicsControls() {
     ImGui::Text("[PHYSICS] Simulation");
     
-    // Play/Pause/Stop buttons
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, spacing));
+    // Play/Pause/Stop buttons - make them behave like radio buttons
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, spacing)); // Increased spacing to prevent overlap
     
     // Play button
-    bool isPlaying = (physicsState == PhysicsSimulationState::PLAYING);
+    bool isPlaying = (physicsState == PhysicsSimulationState::RUNNING);
     if (isPlaying) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.8f, 0.2f, 0.8f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.9f, 0.3f, 0.8f));
@@ -62,8 +62,10 @@ void ViewportToolbar::renderPhysicsControls() {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
     }
     
-    if (ImGui::Button("PLAY", ImVec2(buttonSize + 10, buttonSize))) {
-        physicsState = PhysicsSimulationState::PLAYING;
+    // Only process PLAY if not already playing
+    if (ImGui::Button("PLAY##physics_play", ImVec2(buttonSize + 10, buttonSize)) && !isPlaying) {
+        printf("PLAY button clicked! Changing state from %d to RUNNING\n", static_cast<int>(physicsState));
+        physicsState = PhysicsSimulationState::RUNNING;
         printf("Physics simulation: PLAYING\n");
     }
     if (ImGui::IsItemHovered()) {
@@ -85,7 +87,9 @@ void ViewportToolbar::renderPhysicsControls() {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
     }
     
-    if (ImGui::Button("PAUSE", ImVec2(buttonSize + 10, buttonSize))) {
+    // Only process PAUSE if not already paused
+    if (ImGui::Button("PAUSE##physics_pause", ImVec2(buttonSize + 10, buttonSize)) && !isPaused) {
+        printf("PAUSE button clicked! Changing state from %d to PAUSED\n", static_cast<int>(physicsState));
         physicsState = PhysicsSimulationState::PAUSED;
         printf("Physics simulation: PAUSED\n");
     }
@@ -96,7 +100,7 @@ void ViewportToolbar::renderPhysicsControls() {
     
     ImGui::SameLine();
     
-    // Stop button
+    // Stop button - temporarily disable to test physics
     bool isStopped = (physicsState == PhysicsSimulationState::STOPPED);
     if (isStopped) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.8f));
@@ -108,12 +112,19 @@ void ViewportToolbar::renderPhysicsControls() {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
     }
     
-    if (ImGui::Button("STOP", ImVec2(buttonSize + 10, buttonSize))) {
+    // TEMPORARILY DISABLE STOP BUTTON TO TEST PHYSICS
+    if (false && ImGui::Button("STOP##physics_stop", ImVec2(buttonSize + 10, buttonSize)) && !isStopped) {
+        printf("STOP button clicked! Changing state from %d to STOPPED\n", static_cast<int>(physicsState));
         physicsState = PhysicsSimulationState::STOPPED;
         printf("Physics simulation: STOPPED\n");
     }
+    // Show disabled button
+    ImGui::BeginDisabled(true);
+    ImGui::Button("STOP##physics_stop_disabled", ImVec2(buttonSize + 10, buttonSize));
+    ImGui::EndDisabled();
+    
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Stop and reset physics simulation");
+        ImGui::SetTooltip("Stop button temporarily disabled for physics testing");
     }
     ImGui::PopStyleColor(3);
     
@@ -148,7 +159,7 @@ void ViewportToolbar::renderPhysicsControls() {
     const char* statusText = "";
     ImVec4 statusColor;
     switch (physicsState) {
-        case PhysicsSimulationState::PLAYING:
+        case PhysicsSimulationState::RUNNING:
             statusText = "[RUNNING]";
             statusColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
             break;

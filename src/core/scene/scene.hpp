@@ -6,7 +6,7 @@
 #include <vector>
 #include <functional>
 #include "../actor/actor.hpp"
-#include "../physics/physics_world.hpp"
+#include "../physics/world/physics_world.hpp"
 #include "../component/component_factory.hpp"
 #include <glm/glm.hpp>
 
@@ -72,8 +72,8 @@ public:
     
     // Physics simulation
     void updatePhysics(float deltaTime);
-    PhysicsWorld* getPhysicsWorld() { return physicsWorld.get(); }
-    const PhysicsWorld* getPhysicsWorld() const { return physicsWorld.get(); }
+    physics::PhysicsWorld* getPhysicsWorld() { return physicsWorld.get(); }
+    const physics::PhysicsWorld* getPhysicsWorld() const { return physicsWorld.get(); }
     
     // Helper method to add physics to objects
     void addPhysicsToAllObjects();
@@ -126,7 +126,7 @@ private:
     std::vector<PhysicsComponent*> physicsComponents;
     
     // Physics world
-    std::unique_ptr<PhysicsWorld> physicsWorld;
+    std::unique_ptr<physics::PhysicsWorld> physicsWorld;
     
     // The root actor for the scene hierarchy
     Actor::Ptr rootNode;

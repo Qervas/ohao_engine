@@ -104,7 +104,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.needsMesh = true;
             config.needsPhysics = true;
             config.needsMaterial = true;
-            config.physicsType = RigidBodyType::DYNAMIC;
+            config.physicsType = physics::dynamics::RigidBodyType::DYNAMIC;
             config.mass = 1.0f;
             config.materialColor = glm::vec3(0.7f, 0.7f, 0.8f);
             break;
@@ -113,7 +113,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.needsMesh = true;
             config.needsPhysics = true;
             config.needsMaterial = true;
-            config.physicsType = RigidBodyType::DYNAMIC;
+            config.physicsType = physics::dynamics::RigidBodyType::DYNAMIC;
             config.mass = 1.0f;
             config.materialColor = glm::vec3(0.6f, 0.7f, 0.8f);
             break;
@@ -122,7 +122,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.needsMesh = true;
             config.needsPhysics = true;
             config.needsMaterial = true;
-            config.physicsType = RigidBodyType::STATIC;
+            config.physicsType = physics::dynamics::RigidBodyType::STATIC;
             config.mass = 0.0f;
             config.friction = 0.8f;
             config.restitution = 0.2f;
@@ -133,7 +133,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.needsMesh = true;
             config.needsPhysics = true;
             config.needsMaterial = true;
-            config.physicsType = RigidBodyType::DYNAMIC;
+            config.physicsType = physics::dynamics::RigidBodyType::DYNAMIC;
             config.mass = 1.5f;
             config.materialColor = glm::vec3(0.8f, 0.6f, 0.7f);
             break;
@@ -142,7 +142,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.needsMesh = true;
             config.needsPhysics = true;
             config.needsMaterial = true;
-            config.physicsType = RigidBodyType::DYNAMIC;
+            config.physicsType = physics::dynamics::RigidBodyType::DYNAMIC;
             config.mass = 0.8f;
             config.materialColor = glm::vec3(0.7f, 0.8f, 0.6f);
             break;
@@ -216,7 +216,9 @@ void ComponentFactory::setupPhysicsShape(PhysicsComponent* physics, PrimitiveTyp
             break;
             
         case PrimitiveType::Cylinder:
-            physics->createCapsuleShape(0.5f, 1.0f);
+            // TODO: Implement CapsuleShape and createCapsuleShape method
+            // physics->createCapsuleShape(0.5f, 1.0f);
+            physics->createBoxShape(0.5f, 1.0f, 0.5f); // Use box as temporary fallback
             break;
             
         case PrimitiveType::Cone:
