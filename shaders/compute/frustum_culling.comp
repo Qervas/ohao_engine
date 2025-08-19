@@ -1,0 +1,171 @@
+#version 450
+
+// GPU-based frustum culling compute shader
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Object data structure
+struct RenderObject {
+    mat4 modelMatrix;
+    vec3 boundingBoxMin;
+    float padding1;
+    vec3 boundingBoxMax;
+    float padding2;
+    uint materialIndex;
+    uint meshIndex;
+    uint visible; // Output: 1 if visible, 0 if culled
+    uint padding3;
+};
+
+// Frustum planes (6 planes: left, right, bottom, top, near, far)
+struct FrustumPlane {
+    vec3 normal;
+    float distance;
+};
+
+// Input: All objects to test
+layout(set = 0, binding = 0, std430) restrict buffer ObjectBuffer {
+    RenderObject objects[];
+};
+
+// Input: Camera frustum planes
+layout(set = 0, binding = 1, std430) restrict readonly buffer FrustumBuffer {
+    FrustumPlane frustumPlanes[6];
+};
+
+// Output: Visible object indices (compacted)
+layout(set = 0, binding = 2, std430) restrict writeonly buffer VisibleObjectsBuffer {
+    uint visibleObjects[];
+};
+
+// Atomic counter for visible objects
+layout(set = 0, binding = 3, std430) restrict buffer CounterBuffer {
+    uint visibleCount;
+};
+
+// Camera and culling parameters
+layout(set = 0, binding = 4) uniform CullingParams {
+    mat4 viewMatrix;
+    mat4 projMatrix;
+    vec3 cameraPosition;
+    float padding1;
+    float nearPlane;
+    float farPlane;
+    float fovY;
+    float aspectRatio;
+    uint objectCount;
+    uint enableOcclusionCulling; // 0 = disabled, 1 = enabled
+    uint enableDistanceCulling;  // 0 = disabled, 1 = enabled
+    float maxDrawDistance;
+} culling;
+
+// Push constants for per-frame data
+layout(push_constant) uniform PushConstants {
+    uint frameIndex;
+    float deltaTime;
+    vec2 screenSize;
+} pc;
+
+// Test if a bounding box is outside a frustum plane
+bool isBoxOutsidePlane(vec3 boxMin, vec3 boxMax, FrustumPlane plane) {
+    // Get the positive vertex (furthest in direction of plane normal)
+    vec3 positiveVertex;
+    positiveVertex.x = (plane.normal.x >= 0.0) ? boxMax.x : boxMin.x;
+    positiveVertex.y = (plane.normal.y >= 0.0) ? boxMax.y : boxMin.y;
+    positiveVertex.z = (plane.normal.z >= 0.0) ? boxMax.z : boxMin.z;
+    
+    // Test if positive vertex is behind the plane
+    return dot(plane.normal, positiveVertex) + plane.distance < 0.0;
+}
+
+// Test if bounding box is visible in frustum
+bool isBoxInFrustum(vec3 boxMin, vec3 boxMax) {
+    // Test against all 6 frustum planes
+    for (int i = 0; i < 6; ++i) {
+        if (isBoxOutsidePlane(boxMin, boxMax, frustumPlanes[i])) {
+            return false; // Box is completely outside this plane
+        }
+    }
+    return true; // Box intersects or is inside frustum
+}
+
+// Distance culling test
+bool passesDistanceCulling(vec3 objectCenter) {
+    if (culling.enableDistanceCulling == 0) {
+        return true;
+    }
+    
+    float distance = length(objectCenter - culling.cameraPosition);
+    return distance <= culling.maxDrawDistance;
+}
+
+// Simple occlusion culling (placeholder - in real implementation would use depth buffer)
+bool passesOcclusionCulling(vec3 objectCenter, vec3 boxMin, vec3 boxMax) {
+    if (culling.enableOcclusionCulling == 0) {
+        return true;
+    }
+    
+    // TODO: Implement hierarchical Z-buffer occlusion culling
+    // For now, just return true (no occlusion culling)
+    return true;
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    
+    // Bounds check
+    if (index >= culling.objectCount) {
+        return;
+    }
+    
+    RenderObject obj = objects[index];
+    
+    // Transform bounding box to world space
+    vec4 corners[8] = {
+        obj.modelMatrix * vec4(obj.boundingBoxMin.x, obj.boundingBoxMin.y, obj.boundingBoxMin.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMax.x, obj.boundingBoxMin.y, obj.boundingBoxMin.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMin.x, obj.boundingBoxMax.y, obj.boundingBoxMin.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMax.x, obj.boundingBoxMax.y, obj.boundingBoxMin.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMin.x, obj.boundingBoxMin.y, obj.boundingBoxMax.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMax.x, obj.boundingBoxMin.y, obj.boundingBoxMax.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMin.x, obj.boundingBoxMax.y, obj.boundingBoxMax.z, 1.0),
+        obj.modelMatrix * vec4(obj.boundingBoxMax.x, obj.boundingBoxMax.y, obj.boundingBoxMax.z, 1.0)
+    };
+    
+    // Calculate world space AABB
+    vec3 worldBoxMin = corners[0].xyz;
+    vec3 worldBoxMax = corners[0].xyz;
+    
+    for (int i = 1; i < 8; ++i) {
+        worldBoxMin = min(worldBoxMin, corners[i].xyz);
+        worldBoxMax = max(worldBoxMax, corners[i].xyz);
+    }
+    
+    vec3 objectCenter = (worldBoxMin + worldBoxMax) * 0.5;
+    
+    // Perform culling tests
+    bool visible = true;
+    
+    // Frustum culling
+    if (!isBoxInFrustum(worldBoxMin, worldBoxMax)) {
+        visible = false;
+    }
+    
+    // Distance culling
+    if (visible && !passesDistanceCulling(objectCenter)) {
+        visible = false;
+    }
+    
+    // Occlusion culling
+    if (visible && !passesOcclusionCulling(objectCenter, worldBoxMin, worldBoxMax)) {
+        visible = false;
+    }
+    
+    // Update object visibility
+    objects[index].visible = visible ? 1 : 0;
+    
+    // If visible, add to visible objects list
+    if (visible) {
+        uint visibleIndex = atomicAdd(visibleCount, 1);
+        visibleObjects[visibleIndex] = index;
+    }
+}

@@ -1,11 +1,13 @@
 #include "scene.hpp"
 #include "../component/mesh_component.hpp"
 #include "../component/physics_component.hpp"
+#include "../component/component_factory.hpp"
 #include "../actor/actor.hpp"
 #include "../asset/model.hpp"
-// #include "../physics/collision_shape.hpp" // Physics system temporarily disabled
+#include "../physics/collision_shape.hpp"
 #include "../serialization/scene_serializer.hpp"
 #include "../../renderer/vulkan_context.hpp"
+#include "../../ui/components/console_widget.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -26,6 +28,14 @@ Scene::Scene(const std::string& name)
     // Create a root node for backward compatibility
     rootNode = std::make_shared<Actor>("Root");
     registerActor(rootNode);
+    
+    // Initialize physics world
+    physicsWorld = std::make_unique<PhysicsWorld>();
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f, -9.81f, 0.0f);
+    physicsWorld->initialize(settings);
+    
+    std::cout << "Scene '" << name << "' created with physics world" << std::endl;
 }
 
 Scene::~Scene() {
@@ -35,6 +45,20 @@ Scene::~Scene() {
 Actor::Ptr Scene::createActor(const std::string& name) {
     Actor::Ptr actor = std::make_shared<Actor>(name);
     addActor(actor);
+    return actor;
+}
+
+Actor::Ptr Scene::createActorWithComponents(const std::string& name, PrimitiveType primitiveType) {
+    // Use ComponentFactory to create actor with appropriate components
+    auto actor = ComponentFactory::createActorWithComponents(this, name, primitiveType);
+    
+    if (actor) {
+        OHAO_LOG("Created actor '" + name + "' with components for primitive type: " + 
+                 std::to_string(static_cast<int>(primitiveType)));
+    } else {
+        OHAO_LOG_ERROR("Failed to create actor '" + name + "' with components");
+    }
+    
     return actor;
 }
 
@@ -151,28 +175,47 @@ void Scene::onMeshComponentChanged(MeshComponent* component) {
 }
 
 void Scene::onPhysicsComponentAdded(PhysicsComponent* component) {
-    // Physics system temporarily disabled
-    /*
     if (!component) return;
     
     // Add to physics components list if not already there
     if (std::find(physicsComponents.begin(), physicsComponents.end(), component) == physicsComponents.end()) {
         physicsComponents.push_back(component);
     }
-    */
+    
+    // Connect the component to our physics world
+    component->setPhysicsWorld(physicsWorld.get());
+    
+    // Initialize the component to ensure it creates a rigid body
+    component->initialize();
+    
+    std::cout << "Physics component added to scene (total: " << physicsComponents.size() << ", rigid bodies: " << physicsWorld->getRigidBodyCount() << ")" << std::endl;
 }
 
 void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
-    // Physics system temporarily disabled
-    /*
     if (!component) return;
     
     // Remove from physics components list
     auto it = std::find(physicsComponents.begin(), physicsComponents.end(), component);
     if (it != physicsComponents.end()) {
         physicsComponents.erase(it);
+        std::cout << "Physics component removed from scene (remaining: " << physicsComponents.size() << ")" << std::endl;
     }
-    */
+    
+    // Disconnect from physics world
+    component->setPhysicsWorld(nullptr);
+}
+
+void Scene::updatePhysics(float deltaTime) {
+    if (physicsWorld) {
+        physicsWorld->stepSimulation(deltaTime);
+        
+        // Update all physics components
+        for (auto* component : physicsComponents) {
+            if (component) {
+                component->update(deltaTime);
+            }
+        }
+    }
 }
 
 const std::string& Scene::getName() const {

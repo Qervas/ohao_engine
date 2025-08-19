@@ -6,6 +6,8 @@
 #include <vector>
 #include <functional>
 #include "../actor/actor.hpp"
+#include "../physics/physics_world.hpp"
+#include "../component/component_factory.hpp"
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -37,6 +39,10 @@ public:
     
     // Actor management
     Actor::Ptr createActor(const std::string& name = "Actor");
+    
+    // NEW: ComponentFactory-based actor creation with automatic components
+    Actor::Ptr createActorWithComponents(const std::string& name, PrimitiveType primitiveType);
+    
     void addActor(Actor::Ptr actor);
     void removeActor(Actor::Ptr actor);
     void removeActor(const std::string& name);
@@ -63,6 +69,14 @@ public:
     
     void onPhysicsComponentAdded(PhysicsComponent* component);
     void onPhysicsComponentRemoved(PhysicsComponent* component);
+    
+    // Physics simulation
+    void updatePhysics(float deltaTime);
+    PhysicsWorld* getPhysicsWorld() { return physicsWorld.get(); }
+    const PhysicsWorld* getPhysicsWorld() const { return physicsWorld.get(); }
+    
+    // Helper method to add physics to objects
+    void addPhysicsToAllObjects();
     
     // Scene properties
     const std::string& getName() const;
@@ -110,6 +124,9 @@ private:
     // Component tracking
     std::vector<MeshComponent*> meshComponents;
     std::vector<PhysicsComponent*> physicsComponents;
+    
+    // Physics world
+    std::unique_ptr<PhysicsWorld> physicsWorld;
     
     // The root actor for the scene hierarchy
     Actor::Ptr rootNode;

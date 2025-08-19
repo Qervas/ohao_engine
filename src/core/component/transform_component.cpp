@@ -206,6 +206,11 @@ bool TransformComponent::isDirty() const {
     return dirty;
 }
 
+void TransformComponent::clearDirty() {
+    dirty = false;
+    // Note: We don't clear worldDirty here as it might still need updating
+}
+
 const char* TransformComponent::getTypeName() const {
     return "TransformComponent";
 }

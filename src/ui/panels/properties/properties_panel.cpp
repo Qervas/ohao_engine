@@ -7,6 +7,8 @@
 #include "core/component/light_component.hpp"
 #include "core/component/material_component.hpp"
 #include "core/material/material.hpp"
+#include "core/physics/rigid_body.hpp"
+#include "core/physics/collision_shape.hpp"
 #include <cstring>
 
 
@@ -584,24 +586,236 @@ void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
 void PropertiesPanel::renderPhysicsComponentProperties(PhysicsComponent* component) {
     if (!component) return;
     
-    // For now, just display basic info since we don't know the actual PhysicsComponent API
-    ImGui::Text("Physics Component: %p", (void*)component);
-    ImGui::TextDisabled("Full physics component editor is coming soon!");
+    ImGui::Text("Physics Component Properties");
+    ImGui::Separator();
     
-    // Basic properties that would be common for most physics systems
-    float density = 1.0f;  // Default value
-    if (ImGui::SliderFloat("Density", &density, 0.1f, 10.0f)) {
-        // component->setDensity(density);
+    // === Basic Physics Properties ===
+    if (ImGui::CollapsingHeader("Basic Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Rigid Body Type
+        const char* rigidBodyTypeNames[] = { "Static", "Kinematic", "Dynamic" };
+        int currentType = static_cast<int>(component->getRigidBodyType());
+        if (ImGui::Combo("Rigid Body Type", &currentType, rigidBodyTypeNames, 3)) {
+            component->setRigidBodyType(static_cast<RigidBodyType>(currentType));
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Static: Never moves (ground, walls)\nKinematic: Moves but not affected by forces\nDynamic: Full physics simulation");
+        }
+        
+        // Mass (only for dynamic bodies)
+        if (component->getRigidBodyType() == RigidBodyType::DYNAMIC) {
+            float mass = component->getMass();
+            if (ImGui::DragFloat("Mass", &mass, 0.1f, 0.01f, 1000.0f, "%.2f kg")) {
+                component->setMass(mass);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Mass affects how the object responds to forces");
+            }
+        } else {
+            ImGui::TextDisabled("Mass: Infinite (Static/Kinematic)");
+        }
+        
+        // Gravity toggle
+        bool gravityEnabled = component->isGravityEnabled();
+        if (ImGui::Checkbox("Gravity Enabled", &gravityEnabled)) {
+            component->setGravityEnabled(gravityEnabled);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Whether this object is affected by gravity");
+        }
     }
     
-    bool isStatic = false;  // Default value
-    if (ImGui::Checkbox("Static Object", &isStatic)) {
-        // component->setStatic(isStatic);
+    // === Material Properties ===
+    if (ImGui::CollapsingHeader("Material Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // Friction
+        float friction = component->getFriction();
+        if (ImGui::SliderFloat("Friction", &friction, 0.0f, 2.0f, "%.3f")) {
+            component->setFriction(friction);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Surface friction (0 = slippery, 1 = normal, >1 = grippy)");
+        }
+        
+        // Restitution (Bounciness)
+        float restitution = component->getRestitution();
+        if (ImGui::SliderFloat("Restitution", &restitution, 0.0f, 1.0f, "%.3f")) {
+            component->setRestitution(restitution);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Bounciness (0 = no bounce, 1 = perfect bounce)");
+        }
+        
+        // Linear Damping
+        float linearDamping = component->getLinearDamping();
+        if (ImGui::SliderFloat("Linear Damping", &linearDamping, 0.0f, 1.0f, "%.3f")) {
+            component->setLinearDamping(linearDamping);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Air resistance for linear motion (0 = no damping, 1 = high damping)");
+        }
+        
+        // Angular Damping
+        float angularDamping = component->getAngularDamping();
+        if (ImGui::SliderFloat("Angular Damping", &angularDamping, 0.0f, 1.0f, "%.3f")) {
+            component->setAngularDamping(angularDamping);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Air resistance for rotational motion (0 = no damping, 1 = high damping)");
+        }
     }
     
-    float friction = 0.5f;  // Default value
-    if (ImGui::SliderFloat("Friction", &friction, 0.0f, 1.0f)) {
-        // component->setFriction(friction);
+    // === Velocity Controls ===
+    if (ImGui::CollapsingHeader("Velocity & Forces")) {
+        // Linear Velocity
+        glm::vec3 linearVel = component->getLinearVelocity();
+        if (renderVec3Control("Linear Velocity", linearVel, 0.0f)) {
+            component->setLinearVelocity(linearVel);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Current velocity in world space (m/s)");
+        }
+        
+        // Angular Velocity  
+        glm::vec3 angularVel = component->getAngularVelocity();
+        if (renderVec3Control("Angular Velocity", angularVel, 0.0f)) {
+            component->setAngularVelocity(angularVel);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Current angular velocity (rad/s)");
+        }
+        
+        // Force Application
+        ImGui::Separator();
+        ImGui::Text("Apply Forces:");
+        
+        static glm::vec3 forceToApply{0.0f, 0.0f, 0.0f};
+        renderVec3Control("Force", forceToApply, 0.0f);
+        
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 0.8f));
+        if (ImGui::Button("Apply Force", ImVec2(100, 25))) {
+            component->applyForce(forceToApply);
+        }
+        ImGui::PopStyleColor();
+        
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 0.8f));
+        if (ImGui::Button("Clear Forces", ImVec2(100, 25))) {
+            component->clearForces();
+        }
+        ImGui::PopStyleColor();
+        
+        // Quick force presets
+        ImGui::Text("Quick Forces:");
+        if (ImGui::Button("Jump (+Y)", ImVec2(60, 20))) {
+            component->applyForce(glm::vec3(0.0f, 500.0f, 0.0f));
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Push (+X)", ImVec2(60, 20))) {
+            component->applyForce(glm::vec3(100.0f, 0.0f, 0.0f));
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Push (+Z)", ImVec2(60, 20))) {
+            component->applyForce(glm::vec3(0.0f, 0.0f, 100.0f));
+        }
+    }
+    
+    // === Collision Shape ===
+    if (ImGui::CollapsingHeader("Collision Shape")) {
+        auto collisionShape = component->getCollisionShape();
+        if (collisionShape) {
+            // Show shape type and details
+            const char* shapeTypeNames[] = { "Box", "Sphere", "Capsule", "Convex Hull", "Mesh" };
+            int shapeType = static_cast<int>(collisionShape->getType());
+            if (shapeType >= 0 && shapeType < 5) {
+                ImGui::Text("Shape Type: %s", shapeTypeNames[shapeType]);
+            } else {
+                ImGui::Text("Shape Type: Unknown");
+            }
+            
+            // Shape-specific properties
+            if (auto boxShape = std::dynamic_pointer_cast<BoxShape>(collisionShape)) {
+                glm::vec3 halfExtents = boxShape->getHalfExtents();
+                ImGui::Text("Half Extents: %.3f, %.3f, %.3f", halfExtents.x, halfExtents.y, halfExtents.z);
+                ImGui::Text("Full Size: %.3f, %.3f, %.3f", halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2);
+            }
+            else if (auto sphereShape = std::dynamic_pointer_cast<SphereShape>(collisionShape)) {
+                float radius = sphereShape->getRadius();
+                ImGui::Text("Radius: %.3f", radius);
+                ImGui::Text("Diameter: %.3f", radius * 2);
+            }
+            else if (auto capsuleShape = std::dynamic_pointer_cast<CapsuleShape>(collisionShape)) {
+                float radius = capsuleShape->getRadius();
+                float height = capsuleShape->getHeight();
+                ImGui::Text("Radius: %.3f", radius);
+                ImGui::Text("Height: %.3f", height);
+            }
+            else if (auto hullShape = std::dynamic_pointer_cast<ConvexHullShape>(collisionShape)) {
+                ImGui::Text("Vertices: %zu", hullShape->getPoints().size());
+            }
+            
+            if (ImGui::Button("Remove Shape", ImVec2(120, 25))) {
+                component->setCollisionShape(nullptr);
+            }
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "No collision shape assigned");
+            
+            ImGui::Text("Create Shape:");
+            
+            // Box Shape
+            static glm::vec3 boxHalfExtents{0.5f, 0.5f, 0.5f};
+            ImGui::Text("Box Half Extents:");
+            renderVec3Control("Box Size", boxHalfExtents, 0.5f);
+            if (ImGui::Button("Create Box Shape", ImVec2(150, 25))) {
+                component->createBoxShape(boxHalfExtents);
+            }
+            
+            // Sphere Shape
+            static float sphereRadius = 0.5f;
+            ImGui::DragFloat("Sphere Radius", &sphereRadius, 0.01f, 0.01f, 10.0f, "%.3f");
+            if (ImGui::Button("Create Sphere Shape", ImVec2(150, 25))) {
+                component->createSphereShape(sphereRadius);
+            }
+            
+            // Capsule Shape
+            static float capsuleRadius = 0.5f;
+            static float capsuleHeight = 2.0f;
+            ImGui::DragFloat("Capsule Radius", &capsuleRadius, 0.01f, 0.01f, 10.0f, "%.3f");
+            ImGui::DragFloat("Capsule Height", &capsuleHeight, 0.01f, 0.01f, 10.0f, "%.3f");
+            if (ImGui::Button("Create Capsule Shape", ImVec2(150, 25))) {
+                component->createCapsuleShape(capsuleRadius, capsuleHeight);
+            }
+        }
+    }
+    
+    // === Debug Information ===
+    if (ImGui::CollapsingHeader("Debug Info")) {
+        auto rigidBody = component->getRigidBody();
+        if (rigidBody) {
+            ImGui::Text("RigidBody: %p", (void*)rigidBody.get());
+            ImGui::Text("Position: %.2f, %.2f, %.2f", 
+                       rigidBody->getPosition().x, 
+                       rigidBody->getPosition().y, 
+                       rigidBody->getPosition().z);
+            ImGui::Text("Mass: %.2f kg", rigidBody->getMass());
+            ImGui::Text("Active: %s", rigidBody->isActive() ? "Yes" : "No");
+            
+            // Force info
+            glm::vec3 accumulatedForce = rigidBody->getAccumulatedForce();
+            ImGui::Text("Accumulated Force: %.2f, %.2f, %.2f",
+                       accumulatedForce.x, accumulatedForce.y, accumulatedForce.z);
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "No RigidBody instance");
+        }
+        
+        auto physicsWorld = component->getPhysicsWorld();
+        ImGui::Text("Physics World: %p", (void*)physicsWorld);
+        
+        auto transformComponent = component->getTransformComponent();
+        ImGui::Text("Transform Component: %p", (void*)transformComponent);
+        
+        if (transformComponent) {
+            glm::vec3 pos = transformComponent->getPosition();
+            ImGui::Text("Transform Position: %.2f, %.2f, %.2f", pos.x, pos.y, pos.z);
+        }
     }
 }
 

@@ -64,10 +64,4 @@ message(STATUS "Including test files: ${TEST_FILES}")
 # )
 # target_link_libraries(serialization_simple_test ohao_core)
 
-add_executable(serialization_minimal_test
-  src/tests/serialization_minimal_test.cpp
-)
-target_link_libraries(serialization_minimal_test
-    nlohmann_json::nlohmann_json
-    glm
-)
+# Tests are now managed in src/tests/CMakeLists.txt

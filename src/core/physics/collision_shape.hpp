@@ -1,7 +1,5 @@
 #pragma once
 
-// Physics system temporarily disabled
-/*
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
@@ -114,4 +112,3 @@ private:
 };
 
 } // namespace ohao
-*/

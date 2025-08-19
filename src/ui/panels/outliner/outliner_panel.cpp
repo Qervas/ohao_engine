@@ -4,6 +4,8 @@
 #include "scene/scene_node.hpp"
 #include "vulkan_context.hpp"
 #include "core/component/light_component.hpp"
+#include "core/component/physics_component.hpp"
+#include "core/component/component_factory.hpp"
 
 namespace ohao {
 
@@ -31,26 +33,26 @@ void OutlinerPanel::render() {
 
     if (ImGui::BeginPopup("AddObjectPopup")) {
         if (ImGui::MenuItem("Empty")) {
-            createPrimitiveObject(PrimitiveType::Empty);
+            createPrimitiveObject(ohao::PrimitiveType::Empty);
         }
         if (ImGui::MenuItem("Cube")) {
-            createPrimitiveObject(PrimitiveType::Cube);
+            createPrimitiveObject(ohao::PrimitiveType::Cube);
         }
         if (ImGui::MenuItem("Sphere")) {
-            createPrimitiveObject(PrimitiveType::Sphere);
+            createPrimitiveObject(ohao::PrimitiveType::Sphere);
         }
         if (ImGui::MenuItem("Plane")) {
-            createPrimitiveObject(PrimitiveType::Plane);
+            createPrimitiveObject(ohao::PrimitiveType::Plane);
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Point Light")) {
-            createPrimitiveObject(PrimitiveType::PointLight);
+            createPrimitiveObject(ohao::PrimitiveType::PointLight);
         }
         if (ImGui::MenuItem("Directional Light")) {
-            createPrimitiveObject(PrimitiveType::DirectionalLight);
+            createPrimitiveObject(ohao::PrimitiveType::DirectionalLight);
         }
         if (ImGui::MenuItem("Spot Light")) {
-            createPrimitiveObject(PrimitiveType::SpotLight);
+            createPrimitiveObject(ohao::PrimitiveType::SpotLight);
         }
         ImGui::EndPopup();
     }
@@ -438,36 +440,36 @@ void OutlinerPanel::handleObjectDeletion(SceneNode* node) {
     }
 }
 
-void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
+void OutlinerPanel::createPrimitiveObject(ohao::PrimitiveType type) {
     if (!currentScene) return;
 
     std::string objName;
     switch (type) {
-        case PrimitiveType::Cube:
+        case ohao::PrimitiveType::Cube:
             objName = "Cube";
             break;
-        case PrimitiveType::Sphere:
+        case ohao::PrimitiveType::Sphere:
             objName = "Sphere";
             break;
-        case PrimitiveType::Plane:
+        case ohao::PrimitiveType::Plane:
             objName = "Plane";
             break;
-        case PrimitiveType::Cylinder:
+        case ohao::PrimitiveType::Cylinder:
             objName = "Cylinder";
             break;
-        case PrimitiveType::Cone:
+        case ohao::PrimitiveType::Cone:
             objName = "Cone";
             break;
-        case PrimitiveType::PointLight:
+        case ohao::PrimitiveType::PointLight:
             objName = "Point Light";
             break;
-        case PrimitiveType::DirectionalLight:
+        case ohao::PrimitiveType::DirectionalLight:
             objName = "Directional Light";
             break;
-        case PrimitiveType::SpotLight:
+        case ohao::PrimitiveType::SpotLight:
             objName = "Spot Light";
             break;
-        case PrimitiveType::Empty:
+        case ohao::PrimitiveType::Empty:
         default:
             objName = "Empty";
             break;
@@ -480,59 +482,29 @@ void OutlinerPanel::createPrimitiveObject(PrimitiveType type) {
         objName = baseName + std::to_string(counter++);
     }
 
-    // Create the actor with the given name
-    auto newActor = currentScene->createActor(objName);
+    // NEW: Use ComponentFactory for clean, automatic component creation
+    auto newActor = currentScene->createActorWithComponents(objName, type);
     
-    // Generate and assign the mesh if it's not an empty object or light
-    if (type != PrimitiveType::Empty && 
-        type != PrimitiveType::PointLight && 
-        type != PrimitiveType::DirectionalLight && 
-        type != PrimitiveType::SpotLight && 
-        newActor) {
-        // Add a mesh component
-        auto meshComponent = newActor->addComponent<MeshComponent>();
-        
-        // Generate the appropriate mesh for this primitive type
-        auto mesh = generatePrimitiveMesh(type);
-        
-        // Assign the mesh to the component
-        if (meshComponent && mesh) {
-            meshComponent->setModel(mesh);
-            OHAO_LOG("Added " + objName + " with mesh component successfully");
-        }
-    }
-    
-    // Add a light component if it's any type of light
-    if ((type == PrimitiveType::PointLight || type == PrimitiveType::DirectionalLight || type == PrimitiveType::SpotLight) && newActor) {
-        auto lightComponent = newActor->addComponent<LightComponent>();
-        if (lightComponent) {
-            // Set appropriate light type
-            if (type == PrimitiveType::PointLight) {
-                lightComponent->setLightType(LightType::Point);
-                lightComponent->setRange(10.0f);
-            } else if (type == PrimitiveType::DirectionalLight) {
-                lightComponent->setLightType(LightType::Directional);
-                lightComponent->setDirection(glm::vec3(0.0f, -1.0f, 0.0f)); // Default down direction
-            } else if (type == PrimitiveType::SpotLight) {
-                lightComponent->setLightType(LightType::Spot);
-                lightComponent->setDirection(glm::vec3(0.0f, -1.0f, 0.0f)); // Default down direction
-                lightComponent->setRange(15.0f);
-                lightComponent->setInnerConeAngle(30.0f);
-                lightComponent->setOuterConeAngle(45.0f);
-            }
-            
-            // Common light properties
-            lightComponent->setColor(glm::vec3(1.0f, 1.0f, 1.0f));
-            lightComponent->setIntensity(1.0f);
-            
-            OHAO_LOG("Added " + objName + " with light component successfully");
-        }
-    }
-    
-    // Select the new object
     if (newActor) {
+        // Set initial position for dynamic objects
+        auto transformComponent = newActor->getTransform();
+        if (transformComponent) {
+            // Start dynamic objects above ground, static objects at ground level
+            ComponentSet config = ComponentFactory::getComponentSet(type);
+            if (config.physicsType == RigidBodyType::DYNAMIC) {
+                transformComponent->setPosition(glm::vec3(0.0f, 2.0f, 0.0f));
+            } else {
+                transformComponent->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+            }
+        }
+        
+        // Select the new object
         SelectionManager::get().setSelectedActor(newActor.get());
         selectedNode = newActor.get();
+        
+        OHAO_LOG("Successfully created " + objName + " with automatic components");
+    } else {
+        OHAO_LOG_ERROR("Failed to create " + objName + " with components");
     }
 
     // Update scene buffers to include the new object
