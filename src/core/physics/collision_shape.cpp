@@ -1,5 +1,3 @@
-// Physics system temporarily disabled
-/*
 #include "collision_shape.hpp"
 // Enable experimental GLM features
 #define GLM_ENABLE_EXPERIMENTAL
@@ -89,4 +87,3 @@ bool ConvexHullShape::containsPoint(const glm::vec3& point) const {
 }
 
 } // namespace ohao
-*/

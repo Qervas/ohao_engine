@@ -1,0 +1,90 @@
+#version 450
+
+// Compute shader for generating shadow maps in parallel
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Shadow map texture output
+layout(set = 0, binding = 0, r32f) uniform writeonly image2D shadowMap;
+
+// Depth texture input (from light's perspective)
+layout(set = 0, binding = 1) uniform sampler2D depthTexture;
+
+// Light parameters
+layout(set = 0, binding = 2) uniform LightParams {
+    mat4 lightViewMatrix;
+    mat4 lightProjMatrix;
+    vec3 lightPosition;
+    float lightRadius; // For point lights
+    vec3 lightDirection; // For directional/spot lights
+    float lightFOV; // For spot lights
+    int lightType; // 0=directional, 1=point, 2=spot
+    float nearPlane;
+    float farPlane;
+    float shadowBias;
+} light;
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    uvec2 shadowMapSize;
+    uint cascadeIndex; // For cascaded shadow maps
+    float cascadeDepth;
+} pc;
+
+// Variance Shadow Map calculation
+vec2 calculateVSM(float depth) {
+    float moment1 = depth;
+    float moment2 = depth * depth;
+    
+    // Add some bias to prevent light bleeding
+    float dx = dFdx(depth);
+    float dy = dFdy(depth);
+    moment2 += 0.25 * (dx * dx + dy * dy);
+    
+    return vec2(moment1, moment2);
+}
+
+// Exponential Shadow Map calculation
+float calculateESM(float depth, float c) {
+    return exp(c * depth);
+}
+
+void main() {
+    ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
+    
+    // Check bounds
+    if (texelCoord.x >= pc.shadowMapSize.x || texelCoord.y >= pc.shadowMapSize.y) {
+        return;
+    }
+    
+    // Convert to normalized coordinates
+    vec2 uv = (vec2(texelCoord) + 0.5) / vec2(pc.shadowMapSize);
+    
+    // Sample depth from the depth texture
+    float depth = texture(depthTexture, uv).r;
+    
+    // Handle different shadow mapping techniques
+    float shadowValue = 0.0;
+    
+#ifdef VARIANCE_SHADOW_MAP
+    // Variance Shadow Map - store first two moments
+    vec2 moments = calculateVSM(depth);
+    shadowValue = moments.x; // Store first moment in red channel
+    // Note: For VSM, you'd typically use a RG32F format and store both moments
+#elif defined(EXPONENTIAL_SHADOW_MAP)
+    // Exponential Shadow Map
+    const float ESM_C = 80.0; // Exponential constant
+    shadowValue = calculateESM(depth, ESM_C);
+#else
+    // Standard shadow map - just store depth
+    shadowValue = depth;
+#endif
+    
+    // Apply shadow bias
+    shadowValue += light.shadowBias;
+    
+    // Clamp to valid range
+    shadowValue = clamp(shadowValue, 0.0, 1.0);
+    
+    // Write to shadow map
+    imageStore(shadowMap, texelCoord, vec4(shadowValue, 0.0, 0.0, 1.0));
+}

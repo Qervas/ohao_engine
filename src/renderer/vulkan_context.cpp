@@ -1,6 +1,8 @@
 #include "vulkan_context.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "ui/panels/viewport/viewport_toolbar.hpp"
+#include "core/scene/default_scene_factory.hpp"
 #include <GLFW/glfw3.h>
 #ifdef _WIN32
 #include <malloc.h>
@@ -228,10 +230,16 @@ VulkanContext::initializeVulkan(){
 }
 
 void VulkanContext::initializeDefaultScene() {
-    scene = std::make_unique<Scene>();
-    OHAO_LOG("Initializing default scene");
+    // Use DefaultSceneFactory for clean, modular scene creation
+    scene = DefaultSceneFactory::createBlenderLikeScene();
+    
+    if (!scene) {
+        OHAO_LOG_ERROR("Failed to create default scene");
+        throw std::runtime_error("Failed to initialize default scene");
+    }
+    OHAO_LOG("Default scene created with ComponentFactory");
 
-    // Create minimal default buffers
+    // Create minimal default buffers for legacy support
     std::vector<Vertex> defaultVertex = {
         {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
         {{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
@@ -281,51 +289,7 @@ void VulkanContext::initializeDefaultScene() {
         }
     }
 
-    // Create default scene objects like Blender
-    // 1. Default Directional Light
-    auto defaultLightActor = scene->createActor("Directional Light");
-    auto lightComponent = defaultLightActor->addComponent<LightComponent>();
-    lightComponent->setLightType(LightType::Directional);
-    lightComponent->setColor(glm::vec3(1.0f, 1.0f, 1.0f));
-    lightComponent->setIntensity(3.0f);
-    lightComponent->setDirection(glm::vec3(0.2f, -1.0f, 0.3f)); // Angled like Blender's default
-    
-    // Position the light actor
-    auto lightTransform = defaultLightActor->getTransform();
-    if (lightTransform) {
-        lightTransform->setPosition(glm::vec3(4.0f, 8.0f, 7.0f)); // Above and to the side
-        // Point the light towards the origin
-        glm::vec3 lightPos = lightTransform->getPosition();
-        glm::vec3 target = glm::vec3(0.0f, 0.0f, 0.0f);
-        glm::vec3 direction = glm::normalize(target - lightPos);
-        lightComponent->setDirection(direction);
-    }
-    
-    // 2. Default Sphere (like Blender's default cube)
-    auto defaultSphere = scene->createActor("Sphere");
-    auto meshComponent = defaultSphere->addComponent<MeshComponent>();
-    auto materialComponent = defaultSphere->addComponent<MaterialComponent>();
-    
-    // Generate sphere geometry
-    auto sphereModel = generateSphereMesh();
-    meshComponent->setModel(sphereModel);
-    
-    // Set default material - nice blue-gray like Blender
-    Material defaultMaterial;
-    defaultMaterial.baseColor = glm::vec3(0.6f, 0.7f, 0.8f); // Light blue-gray
-    defaultMaterial.metallic = 0.0f;
-    defaultMaterial.roughness = 0.5f;
-    defaultMaterial.ao = 1.0f;
-    defaultMaterial.name = "Default Material";
-    materialComponent->setMaterial(defaultMaterial);
-    
-    // Position the sphere at origin
-    auto sphereTransform = defaultSphere->getTransform();
-    if (sphereTransform) {
-        sphereTransform->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
-        sphereTransform->setScale(glm::vec3(1.0f)); // Default scale
-    }
-
+    // Connect UI panels to the scene
     if (uiManager) {
         if (auto outlinerPanel = uiManager->getOutlinerPanel()) {
             outlinerPanel->setScene(scene.get());
@@ -338,10 +302,10 @@ void VulkanContext::initializeDefaultScene() {
         }
     }
     
-    // Update scene buffers to include the sphere geometry
+    // Update scene buffers to include the scene geometry
     updateSceneBuffers();
     
-    OHAO_LOG("Default scene initialized");
+    OHAO_LOG("Default scene initialization complete with ComponentFactory");
 }
 
 void VulkanContext::cleanup(){
@@ -419,6 +383,30 @@ void VulkanContext::initializeSceneRenderer() {
 
     // Update the scene renderer to use both pipelines
     sceneRenderer->setPipelinesWithWireframe(scenePipeline.get(), wireframePipeline.get(), sceneGizmoPipeline.get());
+}
+
+void VulkanContext::updateScene(float deltaTime) {
+    if (scene && uiManager) {
+        auto* toolbar = uiManager->getViewportToolbar();
+        if (toolbar) {
+            // Update physics world simulation state
+            auto* physicsWorld = scene->getPhysicsWorld();
+            if (physicsWorld) {
+                physicsWorld->setSimulationState(toolbar->getPhysicsState());
+            }
+            
+            if (toolbar->getPhysicsState() == PhysicsSimulationState::PLAYING && toolbar->isPhysicsEnabled()) {
+                // Apply simulation speed multiplier
+                float scaledDeltaTime = deltaTime * toolbar->getSimulationSpeed();
+                
+                // Update physics simulation
+                scene->updatePhysics(scaledDeltaTime);
+            }
+        }
+        
+        // Always update scene components for proper sync
+        scene->update(deltaTime);
+    }
 }
 
 void VulkanContext::drawFrame() {

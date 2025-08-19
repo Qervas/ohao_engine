@@ -143,6 +143,9 @@ public:
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
     void setWireframeMode(bool enable) { wireframeMode = enable; }
+    
+    // Scene updates
+    void updateScene(float deltaTime);
 
     bool updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
     bool updateSceneBuffers(); //update all scene objects buffers
