@@ -136,19 +136,82 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     // Display ID in debug builds
     ImGui::Text("Transform Component (ID: %p)", (void*)transform);
     
-    if (renderVec3Control("Position", position)) {
-        transform->setPosition(position);
-        transformChanged = true;
+    // Check physics state - get the actor owner to check for physics component
+    bool allowManualEdit = true;
+    if (currentScene && currentScene->getPhysicsWorld()) {
+        // Find the actor that owns this transform component
+        for (const auto& [actorId, actor] : currentScene->getAllActors()) {
+            if (actor->getTransform() == transform) {
+                auto physicsComponent = actor->getComponent<PhysicsComponent>();
+                if (physicsComponent) {
+                    auto physicsState = currentScene->getPhysicsWorld()->getSimulationState();
+                    allowManualEdit = (physicsState != physics::SimulationState::RUNNING);
+                    
+                    if (!allowManualEdit) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                        ImGui::Text("🔒 Transform locked - Physics simulation is running");
+                        ImGui::Text("   Pause or stop physics to edit manually");
+                        ImGui::PopStyleColor();
+                        ImGui::Separator();
+                    }
+                }
+                break;
+            }
+        }
     }
     
-    if (renderVec3Control("Rotation", rotation)) {
-        transform->setRotationEuler(glm::radians(rotation));
-        transformChanged = true;
-    }
-    
-    if (renderVec3Control("Scale", scale, 1.0f)) {
-        transform->setScale(scale);
-        transformChanged = true;
+    if (allowManualEdit) {
+        if (renderVec3Control("Position", position)) {
+            transform->setPosition(position);
+            transformChanged = true;
+            
+            // Find and sync to physics component if it exists
+            if (currentScene) {
+                for (const auto& [actorId, actor] : currentScene->getAllActors()) {
+                    if (actor->getTransform() == transform) {
+                        auto physicsComponent = actor->getComponent<PhysicsComponent>();
+                        if (physicsComponent) {
+                            physicsComponent->updateRigidBodyFromTransform();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (renderVec3Control("Rotation", rotation)) {
+            transform->setRotationEuler(glm::radians(rotation));
+            transformChanged = true;
+            
+            // Find and sync to physics component if it exists
+            if (currentScene) {
+                for (const auto& [actorId, actor] : currentScene->getAllActors()) {
+                    if (actor->getTransform() == transform) {
+                        auto physicsComponent = actor->getComponent<PhysicsComponent>();
+                        if (physicsComponent) {
+                            physicsComponent->updateRigidBodyFromTransform();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (renderVec3Control("Scale", scale, 1.0f)) {
+            transform->setScale(scale);
+            transformChanged = true;
+        }
+    } else {
+        // Show read-only values when physics is running
+        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
+        
+        renderVec3Control("Position", position);
+        renderVec3Control("Rotation", rotation);
+        renderVec3Control("Scale", scale, 1.0f);
+        
+        ImGui::PopStyleVar();
+        ImGui::PopItemFlag();
     }
     
     // Display world transform info
@@ -193,19 +256,60 @@ void PropertiesPanel::renderTransformProperties(SceneNode* node) {
         // Show object info in debug builds
         ImGui::Text("Object: %s (ID: %zu)", actor->getName().c_str(), actor->getID());
         
-        if (renderVec3Control("Position", position)) {
-            transformComponent->setPosition(position);
-            transformChanged = true;
+        // Check physics state to determine if manual editing is allowed
+        bool allowManualEdit = true;
+        auto physicsComponent = actor->getComponent<PhysicsComponent>();
+        
+        if (physicsComponent && currentScene && currentScene->getPhysicsWorld()) {
+            auto physicsState = currentScene->getPhysicsWorld()->getSimulationState();
+            allowManualEdit = (physicsState != physics::SimulationState::RUNNING);
+            
+            if (!allowManualEdit) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                ImGui::Text("🔒 Transform locked - Physics simulation is running");
+                ImGui::Text("   Pause or stop physics to edit manually");
+                ImGui::PopStyleColor();
+                ImGui::Separator();
+            }
         }
         
-        if (renderVec3Control("Rotation", rotation)) {
-            transformComponent->setRotationEuler(glm::radians(rotation));
-            transformChanged = true;
-        }
-        
-        if (renderVec3Control("Scale", scale, 1.0f)) {
-            transformComponent->setScale(scale);
-            transformChanged = true;
+        if (allowManualEdit) {
+            if (renderVec3Control("Position", position)) {
+                transformComponent->setPosition(position);
+                transformChanged = true;
+                
+                // If physics component exists, sync the change to physics body
+                if (physicsComponent) {
+                    physicsComponent->updateRigidBodyFromTransform();
+                }
+            }
+            
+            if (renderVec3Control("Rotation", rotation)) {
+                transformComponent->setRotationEuler(glm::radians(rotation));
+                transformChanged = true;
+                
+                // If physics component exists, sync the change to physics body
+                if (physicsComponent) {
+                    physicsComponent->updateRigidBodyFromTransform();
+                }
+            }
+            
+            if (renderVec3Control("Scale", scale, 1.0f)) {
+                transformComponent->setScale(scale);
+                transformChanged = true;
+                // Note: Scale changes don't typically sync to physics body
+            }
+        } else {
+            // Show read-only values when physics is running
+            ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
+            
+            renderVec3Control("Position", position);
+            renderVec3Control("Rotation", rotation);
+            renderVec3Control("Scale", scale, 1.0f);
+            
+            ImGui::PopStyleVar();
+            ImGui::PopItemFlag();
         }
         
         // Display world transform info

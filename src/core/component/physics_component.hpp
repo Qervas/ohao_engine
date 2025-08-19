@@ -70,6 +70,7 @@ public:
     // === TRANSFORM SYNC ===
     void setTransformComponent(TransformComponent* transform);
     TransformComponent* getTransformComponent() const;
+    void updateRigidBodyFromTransform(); // Sync transform changes to physics body
     
     // === RIGID BODY ACCESS ===
     std::shared_ptr<physics::dynamics::RigidBody> getRigidBody() const { return m_rigidBody; }
@@ -103,7 +104,6 @@ private:
     
     // Sync between physics and transform
     void updateTransformFromRigidBody();
-    void updateRigidBodyFromTransform();
     
     // Component references
     physics::PhysicsWorld* m_physicsWorld{nullptr};

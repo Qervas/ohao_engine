@@ -7,6 +7,7 @@
 #include "ui/panels/properties/properties_panel.hpp"
 #include "ui/panels/scene_settings/scene_settings_panel.hpp"
 #include "ui/panels/viewport/viewport_toolbar.hpp"
+#include "ui/panels/physics/physics_panel.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@ public:
     PropertiesPanel* getPropertiesPanel() const;
     SceneSettingsPanel* getSceneSettingsPanel() const;
     ViewportToolbar* getViewportToolbar() const;
+    PhysicsPanel* getPhysicsPanel() const;
     void applyTheme(const std::string& theme);
 
 private:
@@ -90,6 +92,7 @@ private:
     std::unique_ptr<PropertiesPanel> propertiesPanel;
     std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
     std::unique_ptr<ViewportToolbar> viewportToolbar;
+    std::unique_ptr<PhysicsPanel> physicsPanel;
 
     std::string currentProjectPath;
     std::string newProjectName;

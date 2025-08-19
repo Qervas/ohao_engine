@@ -387,30 +387,27 @@ void VulkanContext::initializeSceneRenderer() {
 
 void VulkanContext::updateScene(float deltaTime) {
     if (scene && uiManager) {
-        auto* toolbar = uiManager->getViewportToolbar();
-        if (toolbar) {
-            // Update physics world simulation state
+        auto* physicsPanel = uiManager->getPhysicsPanel();
+        if (physicsPanel) {
+            // Update physics world simulation state from the physics panel
             auto* physicsWorld = scene->getPhysicsWorld();
             if (physicsWorld) {
                 auto currentState = physicsWorld->getSimulationState();
-                auto newState = toolbar->getPhysicsState();
+                auto newState = physicsPanel->getPhysicsState();
                 
                 // Only log state changes, not every frame
                 if (currentState != newState) {
-                    printf("SYNC: Physics world state %d -> %d\n", static_cast<int>(currentState), static_cast<int>(newState));
+                    printf("PHYSICS PANEL SYNC: Physics world state %d -> %d\n", static_cast<int>(currentState), static_cast<int>(newState));
                 }
                 physicsWorld->setSimulationState(newState);
             }
             
             // Check if we should run physics
-            auto toolbarState = toolbar->getPhysicsState();
-            bool physicsEnabled = toolbar->isPhysicsEnabled();
-            
-            if (toolbarState == physics::SimulationState::RUNNING && physicsEnabled) {
+            if (physicsPanel->getPhysicsState() == physics::SimulationState::RUNNING && physicsPanel->isPhysicsEnabled()) {
                 // Apply simulation speed multiplier
-                float scaledDeltaTime = deltaTime * toolbar->getSimulationSpeed();
+                float scaledDeltaTime = deltaTime * physicsPanel->getSimulationSpeed();
                 
-                // Update physics simulation (no spam)
+                // Update physics simulation
                 scene->updatePhysics(scaledDeltaTime);
             }
         }
