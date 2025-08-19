@@ -57,6 +57,7 @@ public:
     // Mark the transform as dirty (needs recalculation)
     void setDirty();
     bool isDirty() const;
+    void clearDirty();
     
     // Component interface
     const char* getTypeName() const override;

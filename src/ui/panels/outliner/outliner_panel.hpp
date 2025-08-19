@@ -24,18 +24,6 @@ public:
     }
 
 private:
-    enum class PrimitiveType {
-        Empty,
-        Cube,
-        Sphere,
-        Plane,
-        Cylinder,
-        Cone,
-        PointLight,
-        DirectionalLight,
-        SpotLight
-    };
-
     Scene* currentScene{nullptr};
     SceneNode* selectedNode{nullptr};
 
@@ -64,8 +52,8 @@ private:
         return dynamic_cast<SceneObject*>(node);
     }
 
-    void createPrimitiveObject(PrimitiveType type);
-    std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type);
+    void createPrimitiveObject(ohao::PrimitiveType type);
+    std::shared_ptr<Model> generatePrimitiveMesh(ohao::PrimitiveType type);
 
     void renderGraphView();
     void renderGraphNode(SceneNode* node, ImVec2& pos, int depth);

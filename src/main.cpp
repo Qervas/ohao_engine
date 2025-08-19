@@ -61,6 +61,9 @@ int main() {
                 cameraController.update(deltaTime);
             }
 
+            // Update physics simulation
+            vulkan.updateScene(deltaTime);
+
             uiManager->render();
             vulkan.drawFrame();
             if(window.isKeyPressed(GLFW_KEY_ESCAPE)){
