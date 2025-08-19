@@ -3,6 +3,7 @@
 #include "renderer/gizmo/axis_gizmo.hpp"
 #include "core/physics/world/simulation_state.hpp"
 #include <memory>
+#include "imgui.h"
 
 namespace ohao {
 
@@ -11,6 +12,19 @@ class PhysicsWorld;
 
 // Use the new physics simulation state enum
 using PhysicsSimulationState = physics::SimulationState;
+
+// Modern UI Icons using ASCII and basic Unicode symbols
+#define ICON_PHYSICS "PHY"
+#define ICON_PLAY " > "
+#define ICON_PAUSE "||"
+#define ICON_STOP "[]"
+#define ICON_VIEW "VIEW"
+#define ICON_AXIS " X "
+#define ICON_GRID " # "
+#define ICON_WIREFRAME " <> "
+#define ICON_STATUS_RUNNING "*"
+#define ICON_STATUS_PAUSED "-"
+#define ICON_STATUS_STOPPED "o"
 
 class ViewportToolbar : public PanelBase {
 public:
@@ -38,9 +52,21 @@ public:
     bool isPhysicsEnabled() const { return physicsEnabled; }
 
 private:
-    void renderToolbarButton(const char* label, bool& toggle, const char* tooltip = nullptr);
-    void renderPhysicsControls();
-    void renderVisualAidControls();
+    // Modern UI rendering methods
+    void renderModernPhysicsControls();
+    void renderModernVisualAidControls();
+    
+    // Modern UI helper methods
+    void renderModernButton(const char* icon, bool isActive, 
+                          const ImVec4& activeColor, const ImVec4& inactiveColor,
+                          float size, const char* tooltip);
+    void renderModernToggleButton(const char* icon, bool& toggle, float size,
+                                const ImVec4& activeColor, const char* tooltip);
+    void renderSpeedPresetButton(const char* label, float speed);
+    void renderModernCheckbox(const char* id, bool* value, const char* tooltip);
+    void renderPhysicsStatusIndicator();
+    void renderSectionSeparator();
+    void applyVisualAidSettings();
     
     AxisGizmo* axisGizmo = nullptr;
     PhysicsWorld* physicsWorld = nullptr;

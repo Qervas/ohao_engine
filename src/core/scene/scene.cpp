@@ -207,13 +207,6 @@ void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
 }
 
 void Scene::updatePhysics(float deltaTime) {
-    static bool hasLoggedOnce = false;
-    
-    if (!hasLoggedOnce) {
-        printf("Scene::updatePhysics FIRST CALL with deltaTime=%f\n", deltaTime);
-        hasLoggedOnce = true;
-    }
-    
     if (physicsWorld) {
         physicsWorld->stepSimulation(deltaTime);
         
@@ -223,8 +216,6 @@ void Scene::updatePhysics(float deltaTime) {
                 component->update(deltaTime);
             }
         }
-    } else {
-        printf("Scene::updatePhysics - NO PHYSICS WORLD!\n");
     }
 }
 

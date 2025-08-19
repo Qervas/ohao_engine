@@ -499,6 +499,7 @@ void UIManager::setupPanels() {
     propertiesPanel = std::make_unique<PropertiesPanel>();
     sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
     viewportToolbar = std::make_unique<ViewportToolbar>();
+    physicsPanel = std::make_unique<PhysicsPanel>();
     
     // Connect viewport toolbar to axis gizmo system
     if (vulkanContext && vulkanContext->getAxisGizmo()) {
@@ -517,6 +518,9 @@ void UIManager::setupPanels() {
         propertiesPanel->setScene(scene);
         sceneSettingsPanel->setScene(scene);
         
+        // Connect physics panel to physics world
+        physicsPanel->setPhysicsWorld(scene->getPhysicsWorld());
+        
         OHAO_LOG_DEBUG("UI Panels initialized with scene");
     }
 }
@@ -526,6 +530,7 @@ void UIManager::renderPanels() {
     if (propertiesPanel) propertiesPanel->render();
     if (sceneSettingsPanel) sceneSettingsPanel->render();
     if (viewportToolbar) viewportToolbar->render();
+    if (physicsPanel) physicsPanel->render();
 }
 
 void UIManager::initializeDockspace() {
@@ -552,6 +557,8 @@ OutlinerPanel* UIManager::getOutlinerPanel() const { return outlinerPanel.get();
 PropertiesPanel* UIManager::getPropertiesPanel() const { return propertiesPanel.get(); }
 SceneSettingsPanel* UIManager::getSceneSettingsPanel() const { return sceneSettingsPanel.get(); }
 ViewportToolbar* UIManager::getViewportToolbar() const { return viewportToolbar.get(); }
+
+PhysicsPanel* UIManager::getPhysicsPanel() const { return physicsPanel.get(); }
 
 bool UIManager::showNewProjectDialog() {
     static char nameBuffer[256] = "";

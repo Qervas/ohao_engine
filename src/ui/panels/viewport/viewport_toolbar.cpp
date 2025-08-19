@@ -6,193 +6,289 @@
 namespace ohao {
 
 ViewportToolbar::ViewportToolbar() : PanelBase("Viewport Toolbar") {
-    // Set up as a floating toolbar
+    // Set up as a modern floating toolbar
     windowFlags = ImGuiWindowFlags_NoCollapse | 
                   ImGuiWindowFlags_NoResize | 
                   ImGuiWindowFlags_NoTitleBar | 
                   ImGuiWindowFlags_AlwaysAutoResize |
-                  ImGuiWindowFlags_NoBackground;
+                  ImGuiWindowFlags_NoBackground |
+                  ImGuiWindowFlags_NoScrollbar |
+                  ImGuiWindowFlags_NoScrollWithMouse;
 }
 
 void ViewportToolbar::render() {
     if (!visible) return;
 
-    // Position the toolbar in the top-left of the viewport
+    // Position the toolbar in the top-left of the viewport with better positioning
     ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImVec2 toolbarPos = ImVec2(viewport->Pos.x + 10, viewport->Pos.y + 30);
+    ImVec2 toolbarPos = ImVec2(viewport->Pos.x + 20, viewport->Pos.y + 60);
     ImGui::SetNextWindowPos(toolbarPos, ImGuiCond_Always);
     
-    // Style the toolbar with a modern look
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, spacing));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.15f, 0.15f, 0.95f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.4f, 0.4f, 0.4f, 0.8f));
+    // Modern professional styling
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 12));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(6, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+    
+    // Professional dark theme colors
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.08f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.28f, 0.28f, 0.28f, 0.6f));
+    ImGui::PushStyleColor(ImGuiCol_BorderShadow, ImVec4(0.0f, 0.0f, 0.0f, 0.4f));
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.25f, 0.25f, 0.25f, 0.8f));
     
     if (ImGui::Begin("##ViewportToolbar", &visible, windowFlags)) {
-        // Physics Simulation Controls
-        renderPhysicsControls();
+        // Create horizontal layout with sections
+        renderModernPhysicsControls();
         
-        ImGui::Separator();
+        // Elegant separator
+        renderSectionSeparator();
         
         // Visual Aid Controls  
-        renderVisualAidControls();
+        renderModernVisualAidControls();
     }
     ImGui::End();
     
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(6);
 }
 
-void ViewportToolbar::renderPhysicsControls() {
-    ImGui::Text("[PHYSICS] Simulation");
+void ViewportToolbar::renderModernPhysicsControls() {
+    // Physics section with subtle header
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    ImGui::Text(ICON_PHYSICS " Physics");
+    ImGui::PopStyleColor();
     
-    // Play/Pause/Stop buttons - make them behave like radio buttons
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, spacing)); // Increased spacing to prevent overlap
+    // Create horizontal layout for control buttons
+    const float buttonSize = 36.0f;
+    const float iconSize = 16.0f;
     
-    // Play button
+    // Play button with modern icon
     bool isPlaying = (physicsState == PhysicsSimulationState::RUNNING);
-    if (isPlaying) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.8f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.9f, 0.3f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.7f, 0.1f, 0.8f));
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.4f, 0.4f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.5f, 0.5f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
-    }
+    renderModernButton(ICON_PLAY, isPlaying, 
+        ImVec4(0.15f, 0.75f, 0.15f, 1.0f), // Active color - vibrant green
+        ImVec4(0.12f, 0.12f, 0.12f, 1.0f), // Inactive color - dark
+        buttonSize, "Start physics simulation");
     
-    // Only process PLAY if not already playing
-    if (ImGui::Button("PLAY##physics_play", ImVec2(buttonSize + 10, buttonSize)) && !isPlaying) {
-        printf("PLAY button clicked! Changing state from %d to RUNNING\n", static_cast<int>(physicsState));
+    if (ImGui::IsItemClicked() && !isPlaying) {
         physicsState = PhysicsSimulationState::RUNNING;
         printf("Physics simulation: PLAYING\n");
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Start physics simulation");
-    }
-    ImGui::PopStyleColor(3);
     
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, 4.0f);
     
     // Pause button
     bool isPaused = (physicsState == PhysicsSimulationState::PAUSED);
-    if (isPaused) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.7f, 0.3f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.7f, 0.5f, 0.1f, 0.8f));
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.4f, 0.4f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.5f, 0.5f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
-    }
+    renderModernButton(ICON_PAUSE, isPaused,
+        ImVec4(0.85f, 0.65f, 0.15f, 1.0f), // Active color - amber
+        ImVec4(0.12f, 0.12f, 0.12f, 1.0f), // Inactive color
+        buttonSize, "Pause physics simulation");
     
-    // Only process PAUSE if not already paused
-    if (ImGui::Button("PAUSE##physics_pause", ImVec2(buttonSize + 10, buttonSize)) && !isPaused) {
-        printf("PAUSE button clicked! Changing state from %d to PAUSED\n", static_cast<int>(physicsState));
+    if (ImGui::IsItemClicked() && !isPaused) {
         physicsState = PhysicsSimulationState::PAUSED;
         printf("Physics simulation: PAUSED\n");
     }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Pause physics simulation");
-    }
-    ImGui::PopStyleColor(3);
     
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, 4.0f);
     
-    // Stop button - temporarily disable to test physics
+    // Stop button (keep disabled for testing as in original)
     bool isStopped = (physicsState == PhysicsSimulationState::STOPPED);
-    if (isStopped) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.3f, 0.3f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.7f, 0.1f, 0.1f, 0.8f));
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.4f, 0.4f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.5f, 0.5f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
-    }
-    
-    // TEMPORARILY DISABLE STOP BUTTON TO TEST PHYSICS
-    if (false && ImGui::Button("STOP##physics_stop", ImVec2(buttonSize + 10, buttonSize)) && !isStopped) {
-        printf("STOP button clicked! Changing state from %d to STOPPED\n", static_cast<int>(physicsState));
-        physicsState = PhysicsSimulationState::STOPPED;
-        printf("Physics simulation: STOPPED\n");
-    }
-    // Show disabled button
     ImGui::BeginDisabled(true);
-    ImGui::Button("STOP##physics_stop_disabled", ImVec2(buttonSize + 10, buttonSize));
+    renderModernButton(ICON_STOP, isStopped,
+        ImVec4(0.85f, 0.25f, 0.25f, 1.0f), // Active color - red
+        ImVec4(0.12f, 0.12f, 0.12f, 1.0f), // Inactive color
+        buttonSize, "Stop physics simulation (temporarily disabled)");
     ImGui::EndDisabled();
     
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Stop button temporarily disabled for physics testing");
+    ImGui::SameLine(0.0f, 12.0f); // Extra space before speed controls
+    
+    // Speed control with modern styling
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+    ImGui::Text("%.1fx", simulationSpeed);
+    ImGui::PopStyleColor();
+    
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.4f, 0.65f, 0.95f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.5f, 0.75f, 1.0f, 1.0f));
+    if (ImGui::SliderFloat("##Speed", &simulationSpeed, 0.1f, 3.0f, "")) {
+        printf("Physics speed: %.1fx\n", simulationSpeed);
     }
     ImGui::PopStyleColor(3);
     
-    ImGui::PopStyleVar();
-    
-    // Speed control slider
-    ImGui::Text("Speed: %.1fx", simulationSpeed);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    if (ImGui::SliderFloat("##Speed", &simulationSpeed, 0.1f, 3.0f, "%.1fx")) {
-        printf("Physics speed: %.1fx\n", simulationSpeed);
-    }
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Adjust simulation speed\n0.1x = Slow motion\n1.0x = Normal speed\n3.0x = Fast forward");
+        ImGui::SetTooltip("Simulation Speed\n0.1x - Slow motion\n1.0x - Normal speed\n3.0x - Fast forward");
     }
     
-    // Quick speed buttons
+    // Quick speed presets with modern mini buttons
     ImGui::SameLine();
-    if (ImGui::Button("0.5x", ImVec2(35, 20))) simulationSpeed = 0.5f;
+    renderSpeedPresetButton("0.5x", 0.5f);
+    ImGui::SameLine(0.0f, 2.0f);
+    renderSpeedPresetButton("1x", 1.0f);  
+    ImGui::SameLine(0.0f, 2.0f);
+    renderSpeedPresetButton("2x", 2.0f);
+    
+    // Physics enabled toggle with modern styling
+    ImGui::SameLine(0.0f, 8.0f);
+    renderModernCheckbox("##PhysicsEnabled", &physicsEnabled, "Enable/disable physics simulation");
+    
+    // Compact status indicator
     ImGui::SameLine();
-    if (ImGui::Button("1x", ImVec2(25, 20))) simulationSpeed = 1.0f;
-    ImGui::SameLine();
-    if (ImGui::Button("2x", ImVec2(25, 20))) simulationSpeed = 2.0f;
-    
-    // Physics enabled toggle
-    ImGui::Checkbox("Physics Enabled", &physicsEnabled);
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Enable/disable physics simulation globally");
-    }
-    
-    // Status display
-    const char* statusText = "";
-    ImVec4 statusColor;
-    switch (physicsState) {
-        case PhysicsSimulationState::RUNNING:
-            statusText = "[RUNNING]";
-            statusColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-            break;
-        case PhysicsSimulationState::PAUSED:
-            statusText = "[PAUSED]";
-            statusColor = ImVec4(0.8f, 0.6f, 0.2f, 1.0f);
-            break;
-        case PhysicsSimulationState::STOPPED:
-            statusText = "[STOPPED]";
-            statusColor = ImVec4(0.8f, 0.2f, 0.2f, 1.0f);
-            break;
-    }
-    
-    ImGui::TextColored(statusColor, "%s", statusText);
+    renderPhysicsStatusIndicator();
 }
 
-void ViewportToolbar::renderVisualAidControls() {
-    ImGui::Text("[VIEW] Visual Aids");
+void ViewportToolbar::renderModernVisualAidControls() {
+    // Visual aids section header
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    ImGui::Text(ICON_VIEW " View");
+    ImGui::PopStyleColor();
     
-    // Axis gizmo toggle
-    renderToolbarButton("Axis", showAxis, "Toggle XYZ axis gizmo with ruler markings");
+    const float toggleSize = 32.0f;
     
-    ImGui::SameLine();
+    // Axis gizmo toggle with modern icon
+    renderModernToggleButton(ICON_AXIS, showAxis, toggleSize, 
+        ImVec4(0.25f, 0.65f, 0.95f, 1.0f), // Active - blue
+        "Toggle XYZ axis gizmo with ruler markings");
+    
+    ImGui::SameLine(0.0f, 4.0f);
     
     // Grid toggle
-    renderToolbarButton("Grid", showGrid, "Toggle XOY plane grid");
+    renderModernToggleButton(ICON_GRID, showGrid, toggleSize,
+        ImVec4(0.65f, 0.35f, 0.95f, 1.0f), // Active - purple  
+        "Toggle XOY plane grid");
     
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, 4.0f);
     
     // Wireframe toggle
-    renderToolbarButton("Wireframe", wireframeMode, "Toggle wireframe rendering mode");
+    renderModernToggleButton(ICON_WIREFRAME, wireframeMode, toggleSize,
+        ImVec4(0.95f, 0.55f, 0.15f, 1.0f), // Active - orange
+        "Toggle wireframe rendering mode");
     
-    // Apply changes to the systems
+    // Apply changes to the systems (same logic as before)
+    applyVisualAidSettings();
+}
+
+// === Modern UI Helper Methods ===
+
+void ViewportToolbar::renderModernButton(const char* icon, bool isActive, 
+                                       const ImVec4& activeColor, const ImVec4& inactiveColor,
+                                       float size, const char* tooltip) {
+    ImVec4 buttonColor = isActive ? activeColor : inactiveColor;
+    ImVec4 hoverColor = isActive ? 
+        ImVec4(activeColor.x + 0.1f, activeColor.y + 0.1f, activeColor.z + 0.1f, activeColor.w) :
+        ImVec4(0.18f, 0.18f, 0.18f, 1.0f);
+    ImVec4 pressColor = isActive ? 
+        ImVec4(activeColor.x - 0.1f, activeColor.y - 0.1f, activeColor.z - 0.1f, activeColor.w) :
+        ImVec4(0.08f, 0.08f, 0.08f, 1.0f);
+    
+    ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, pressColor);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+    
+    ImGui::Button(icon, ImVec2(size, size));
+    
+    if (tooltip && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+}
+
+void ViewportToolbar::renderModernToggleButton(const char* icon, bool& toggle, float size,
+                                             const ImVec4& activeColor, const char* tooltip) {
+    ImVec4 buttonColor = toggle ? activeColor : ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
+    ImVec4 hoverColor = toggle ? 
+        ImVec4(activeColor.x + 0.1f, activeColor.y + 0.1f, activeColor.z + 0.1f, activeColor.w) :
+        ImVec4(0.18f, 0.18f, 0.18f, 1.0f);
+    
+    ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, buttonColor);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
+    
+    if (ImGui::Button(icon, ImVec2(size, size))) {
+        toggle = !toggle;
+        printf("Toggle %s: %s\n", icon, toggle ? "ON" : "OFF");
+    }
+    
+    if (tooltip && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+}
+
+void ViewportToolbar::renderSpeedPresetButton(const char* label, float speed) {
+    bool isActive = (fabs(simulationSpeed - speed) < 0.01f);
+    ImVec4 color = isActive ? ImVec4(0.4f, 0.65f, 0.95f, 1.0f) : ImVec4(0.15f, 0.15f, 0.15f, 1.0f);
+    
+    ImGui::PushStyleColor(ImGuiCol_Button, color);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(color.x + 0.1f, color.y + 0.1f, color.z + 0.1f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    
+    if (ImGui::Button(label, ImVec2(28, 20))) {
+        simulationSpeed = speed;
+    }
+    
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+}
+
+void ViewportToolbar::renderModernCheckbox(const char* id, bool* value, const char* tooltip) {
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.4f, 0.75f, 0.4f, 1.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    
+    ImGui::Checkbox(id, value);
+    
+    if (tooltip && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+    
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(2);
+}
+
+void ViewportToolbar::renderPhysicsStatusIndicator() {
+    const char* icon = "";
+    ImVec4 color;
+    
+    switch (physicsState) {
+        case PhysicsSimulationState::RUNNING:
+            icon = ICON_STATUS_RUNNING;
+            color = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
+            break;
+        case PhysicsSimulationState::PAUSED:
+            icon = ICON_STATUS_PAUSED;
+            color = ImVec4(0.8f, 0.6f, 0.2f, 1.0f);
+            break;
+        case PhysicsSimulationState::STOPPED:
+            icon = ICON_STATUS_STOPPED;
+            color = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+            break;
+    }
+    
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::Text("%s", icon);
+    ImGui::PopStyleColor();
+}
+
+void ViewportToolbar::renderSectionSeparator() {
+    ImGui::SameLine();
+    // Create a vertical separator using text
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+    ImGui::Text("|");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+}
+
+void ViewportToolbar::applyVisualAidSettings() {
+    // Apply changes to the systems (same logic as original)
     if (axisGizmo) {
         axisGizmo->setVisible(showAxis);
         axisGizmo->setGridVisible(showGrid);
@@ -222,31 +318,6 @@ void ViewportToolbar::renderVisualAidControls() {
     if (auto* vulkanContext = VulkanContext::getContextInstance()) {
         vulkanContext->setWireframeMode(wireframeMode);
     }
-}
-
-void ViewportToolbar::renderToolbarButton(const char* label, bool& toggle, const char* tooltip) {
-    // Style the button based on toggle state
-    if (toggle) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.5f, 0.1f, 0.8f));
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.4f, 0.4f, 0.6f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.5f, 0.5f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
-    }
-    
-    if (ImGui::Button(label, ImVec2(buttonSize * 2, buttonSize))) {
-        toggle = !toggle;
-        printf("Toolbar toggle %s: %s\n", label, toggle ? "ON" : "OFF");
-    }
-    
-    // Show tooltip on hover
-    if (tooltip && ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("%s", tooltip);
-    }
-    
-    ImGui::PopStyleColor(3);
 }
 
 } // namespace ohao

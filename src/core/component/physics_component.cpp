@@ -224,8 +224,13 @@ void PhysicsComponent::initialize() {
 }
 
 void PhysicsComponent::update(float deltaTime) {
-    if (m_rigidBody && m_transformComponent) {
-        updateTransformFromRigidBody();
+    if (m_rigidBody && m_transformComponent && m_physicsWorld) {
+        // Only update transform from physics when physics simulation is running
+        // This allows manual editing when physics is paused/stopped
+        auto physicsState = m_physicsWorld->getSimulationState();
+        if (physicsState == physics::SimulationState::RUNNING) {
+            updateTransformFromRigidBody();
+        }
     }
 }
 
