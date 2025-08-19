@@ -6,6 +6,7 @@
 #include "core/component/light_component.hpp"
 #include "core/component/physics_component.hpp"
 #include "core/component/component_factory.hpp"
+#include "core/physics/dynamics/rigid_body.hpp"
 
 namespace ohao {
 
@@ -491,7 +492,7 @@ void OutlinerPanel::createPrimitiveObject(ohao::PrimitiveType type) {
         if (transformComponent) {
             // Start dynamic objects above ground, static objects at ground level
             ComponentSet config = ComponentFactory::getComponentSet(type);
-            if (config.physicsType == RigidBodyType::DYNAMIC) {
+            if (config.physicsType == physics::dynamics::RigidBodyType::DYNAMIC) {
                 transformComponent->setPosition(glm::vec3(0.0f, 2.0f, 0.0f));
             } else {
                 transformComponent->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
