@@ -12,6 +12,7 @@ void CollisionResolver::resolveContact(
     
     if (!contact.hasContact || !bodyA || !bodyB) return;
     
+    
     // Skip if both bodies are static
     if (bodyA->isStatic() && bodyB->isStatic()) {
         return;
@@ -44,6 +45,7 @@ void CollisionResolver::separateObjects(
     
     if (!contact.hasContact || contact.penetrationDepth <= 0.0f) return;
     
+    
     // Calculate how much to move each object
     float totalInverseMass = bodyA->getInverseMass() + bodyB->getInverseMass();
     
@@ -57,6 +59,7 @@ void CollisionResolver::separateObjects(
     // Move objects based on their inverse mass ratio
     float moveA = bodyA->getInverseMass() / totalInverseMass;
     float moveB = bodyB->getInverseMass() / totalInverseMass;
+    
     
     // Apply position corrections
     if (!bodyA->isStatic()) {
@@ -80,12 +83,15 @@ void CollisionResolver::resolveVelocity(
     
     // Check if objects are separating (relative velocity along normal > 0)
     float separatingVelocity = glm::dot(relativeVelocity, contact.contactNormal);
+    
+    
     if (separatingVelocity > 0.0f) {
         return; // Objects already separating
     }
     
     // Calculate impulse magnitude needed to resolve collision
     float impulseMagnitude = calculateImpulseMagnitude(contact, relativeVelocity, bodyA, bodyB);
+    
     
     // Apply impulse to both bodies
     glm::vec3 impulse = contact.contactNormal * impulseMagnitude;

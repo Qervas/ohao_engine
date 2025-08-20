@@ -497,6 +497,12 @@ void OutlinerPanel::createPrimitiveObject(ohao::PrimitiveType type) {
             } else {
                 transformComponent->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
             }
+            
+            // CRITICAL FIX: Sync physics body with updated transform position
+            auto physicsComponent = newActor->getComponent<PhysicsComponent>();
+            if (physicsComponent) {
+                physicsComponent->updateRigidBodyFromTransform();
+            }
         }
         
         // Select the new object

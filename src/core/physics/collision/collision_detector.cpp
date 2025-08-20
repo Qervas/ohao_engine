@@ -25,7 +25,10 @@ ContactInfo CollisionDetector::detectCollision(dynamics::RigidBody* bodyA, dynam
     auto shapeA = bodyA->getCollisionShape();
     auto shapeB = bodyB->getCollisionShape();
     
-    if (!shapeA || !shapeB) return contact;
+    if (!shapeA || !shapeB) {
+        return contact;
+    }
+    
     
     contact = narrowPhaseCheck(
         shapeA.get(), bodyA->getPosition(), bodyA->getRotation(),
@@ -57,17 +60,20 @@ ContactInfo CollisionDetector::narrowPhaseCheck(
     ShapeType typeA = shapeA->getType();
     ShapeType typeB = shapeB->getType();
     
+    
     // Box vs Box
     if (typeA == ShapeType::BOX && typeB == ShapeType::BOX) {
         const BoxShape* boxA = static_cast<const BoxShape*>(shapeA);
         const BoxShape* boxB = static_cast<const BoxShape*>(shapeB);
         contact = testBoxVsBox(boxA, posA, rotA, boxB, posB, rotB);
+        
     }
     // Sphere vs Sphere
     else if (typeA == ShapeType::SPHERE && typeB == ShapeType::SPHERE) {
         const SphereShape* sphereA = static_cast<const SphereShape*>(shapeA);
         const SphereShape* sphereB = static_cast<const SphereShape*>(shapeB);
         contact = testSphereVsSphere(sphereA, posA, sphereB, posB);
+        
     }
     // Box vs Sphere (or Sphere vs Box)
     else if ((typeA == ShapeType::BOX && typeB == ShapeType::SPHERE) ||
@@ -85,6 +91,7 @@ ContactInfo CollisionDetector::narrowPhaseCheck(
                 contact.flip(); // Reverse contact normal
             }
         }
+        
     }
     
     return contact;

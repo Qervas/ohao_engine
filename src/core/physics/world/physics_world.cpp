@@ -62,24 +62,8 @@ void PhysicsWorld::cleanup() {
 
 // === SIMULATION CONTROL ===
 void PhysicsWorld::stepSimulation(float deltaTime) {
-    static bool hasLoggedOnce = false;
-    static int skipCount = 0;
-    
     if (!m_initialized || m_simulationState != SimulationState::RUNNING) {
-        skipCount++;
-        if (!hasLoggedOnce) {
-            printf("PhysicsWorld::stepSimulation SKIPPED - initialized=%d, state=%d (need %d=RUNNING)\n", 
-                   m_initialized, static_cast<int>(m_simulationState), static_cast<int>(SimulationState::RUNNING));
-            hasLoggedOnce = true;
-        }
         return;
-    }
-    
-    if (skipCount > 0) {
-        printf("PhysicsWorld::stepSimulation NOW RUNNING after %d skips - deltaTime=%f, rigidBodies=%zu\n", 
-               skipCount, deltaTime, m_rigidBodies.size());
-        skipCount = 0;
-        hasLoggedOnce = false; // Reset so we can log skip again if needed
     }
     
     auto startTime = std::chrono::high_resolution_clock::now();
@@ -190,6 +174,7 @@ void PhysicsWorld::detectCollisions() {
     m_contacts.clear();
     m_contactPairs.clear();
     
+    
     // Broad phase: check all pairs of rigid bodies
     for (size_t i = 0; i < m_rigidBodies.size(); ++i) {
         for (size_t j = i + 1; j < m_rigidBodies.size(); ++j) {
@@ -206,12 +191,14 @@ void PhysicsWorld::detectCollisions() {
             if (contact.hasContact) {
                 m_contacts.push_back(contact);
                 m_contactPairs.push_back({bodyA.get(), bodyB.get()});
+                
             }
         }
     }
     
     m_debugStats.numCollisionPairs = (m_rigidBodies.size() * (m_rigidBodies.size() - 1)) / 2;
     m_debugStats.numContacts = m_contacts.size();
+    
 }
 
 void PhysicsWorld::resolveCollisions() {

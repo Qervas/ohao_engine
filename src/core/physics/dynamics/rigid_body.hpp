@@ -19,7 +19,11 @@ public:
     ~RigidBody();
     
     // === TYPE & STATE ===
-    void setType(RigidBodyType type) { m_type = type; }
+    void setType(RigidBodyType type) { 
+        m_type = type; 
+        // Update mass calculations when type changes
+        setMass(m_mass);
+    }
     RigidBodyType getType() const { return m_type; }
     
     bool isStatic() const { return m_type == RigidBodyType::STATIC; }
@@ -44,8 +48,13 @@ public:
     
     // === PHYSICS PROPERTIES ===
     void setMass(float mass) { 
-        m_mass = glm::max(mass, math::constants::EPSILON);
-        m_invMass = (m_mass > 0.0f) ? 1.0f / m_mass : 0.0f;
+        if (isStatic()) {
+            m_mass = 0.0f;
+            m_invMass = 0.0f;
+        } else {
+            m_mass = glm::max(mass, math::constants::EPSILON);
+            m_invMass = (m_mass > 0.0f) ? 1.0f / m_mass : 0.0f;
+        }
     }
     float getMass() const { return m_mass; }
     float getInverseMass() const { return m_invMass; }

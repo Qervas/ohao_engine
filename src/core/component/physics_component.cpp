@@ -283,6 +283,7 @@ void PhysicsComponent::createRigidBody() {
             m_rigidBody->setCollisionShape(m_collisionShape);
         }
         
+        // Sync physics body position with current transform position
         updateRigidBodyFromTransform();
         
         OHAO_LOG("Created rigid body for PhysicsComponent");
@@ -316,7 +317,7 @@ void PhysicsComponent::updateRigidBodyFromTransform() {
         return;
     }
     
-    // Update physics from visual transform
+    // Update physics body from visual transform
     glm::vec3 position = m_transformComponent->getPosition();
     glm::quat rotation = m_transformComponent->getRotation();
     m_rigidBody->setPosition(position);
