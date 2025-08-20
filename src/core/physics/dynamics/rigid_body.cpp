@@ -22,9 +22,9 @@ void RigidBody::updateTransformComponent() {
     if (m_component) {
         auto transform = m_component->getTransformComponent();
         if (transform) {
-            // TODO: Update transform component from physics state
-            // transform->setPosition(m_position);
-            // transform->setRotation(m_rotation);
+            // Update transform component from physics state
+            transform->setPosition(m_position);
+            transform->setRotation(m_rotation);
         }
     }
 }

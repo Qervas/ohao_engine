@@ -23,6 +23,12 @@ std::unique_ptr<Scene> DefaultSceneFactory::createBlenderLikeScene() {
         auto transform = sphereActor->getTransform();
         if (transform) {
             transform->setPosition(glm::vec3(0.0f, 2.0f, 0.0f)); // Start above ground
+            
+            // CRITICAL FIX: Sync physics body with updated transform position
+            auto physicsComponent = sphereActor->getComponent<PhysicsComponent>();
+            if (physicsComponent) {
+                physicsComponent->updateRigidBodyFromTransform();
+            }
         }
     }
     
@@ -33,6 +39,12 @@ std::unique_ptr<Scene> DefaultSceneFactory::createBlenderLikeScene() {
         if (transform) {
             transform->setPosition(glm::vec3(0.0f, -0.1f, 0.0f));
             transform->setScale(glm::vec3(10.0f, 1.0f, 10.0f)); // Large ground
+            
+            // CRITICAL FIX: Sync physics body with updated transform position  
+            auto physicsComponent = groundActor->getComponent<PhysicsComponent>();
+            if (physicsComponent) {
+                physicsComponent->updateRigidBodyFromTransform();
+            }
         }
     }
     
@@ -70,6 +82,12 @@ std::unique_ptr<Scene> DefaultSceneFactory::createPhysicsTestScene() {
         if (transform) {
             transform->setPosition(glm::vec3(0.0f, -0.1f, 0.0f));
             transform->setScale(glm::vec3(15.0f, 1.0f, 15.0f));
+            
+            // CRITICAL FIX: Sync physics body with updated transform position
+            auto physicsComponent = ground->getComponent<PhysicsComponent>();
+            if (physicsComponent) {
+                physicsComponent->updateRigidBodyFromTransform();
+            }
         }
     }
     
@@ -88,6 +106,13 @@ std::unique_ptr<Scene> DefaultSceneFactory::createPhysicsTestScene() {
             auto transform = actor->getTransform();
             if (transform) {
                 transform->setPosition(glm::vec3(xOffset, 3.0f, 0.0f));
+                
+                // CRITICAL FIX: Sync physics body with updated transform position
+                auto physicsComponent = actor->getComponent<PhysicsComponent>();
+                if (physicsComponent) {
+                    physicsComponent->updateRigidBodyFromTransform();
+                }
+                
                 xOffset += 2.0f;
             }
         }
