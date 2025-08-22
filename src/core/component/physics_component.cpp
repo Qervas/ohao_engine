@@ -1,9 +1,12 @@
 #include "physics_component.hpp"
 #include "transform_component.hpp"
+#include "mesh_component.hpp"
+#include "../actor/actor.hpp"
 #include "../physics/world/physics_world.hpp"
 #include "../physics/dynamics/rigid_body.hpp"
 #include "../physics/collision/shapes/collision_shape.hpp"
 #include "../physics/collision/shapes/shape_factory.hpp"
+#include "../asset/model.hpp"
 #include "../../ui/components/console_widget.hpp"
 
 namespace ohao {
@@ -180,8 +183,51 @@ void PhysicsComponent::createCubeShape(float size) {
     setCollisionShape(shape);
 }
 
+void PhysicsComponent::createCapsuleShape(float radius, float height) {
+    auto shape = physics::collision::ShapeFactory::createCapsule(radius, height);
+    setCollisionShape(shape);
+}
+
+void PhysicsComponent::createCylinderShape(float radius, float height) {
+    auto shape = physics::collision::ShapeFactory::createCylinder(radius, height);
+    setCollisionShape(shape);
+}
+
+void PhysicsComponent::createPlaneShape(const glm::vec3& normal, float distance) {
+    auto shape = physics::collision::ShapeFactory::createPlane(normal, distance);
+    setCollisionShape(shape);
+}
+
+void PhysicsComponent::createTriangleMeshShape(const std::vector<glm::vec3>& vertices, const std::vector<uint32_t>& indices) {
+    auto shape = physics::collision::ShapeFactory::createTriangleMesh(vertices, indices);
+    setCollisionShape(shape);
+}
+
 void PhysicsComponent::createMeshShape(const std::vector<glm::vec3>& vertices, const std::vector<uint32_t>& indices) {
-    OHAO_LOG_WARNING("Mesh collision shapes not yet implemented");
+    // Alias for createTriangleMeshShape for backward compatibility
+    createTriangleMeshShape(vertices, indices);
+}
+
+void PhysicsComponent::createCollisionShapeFromModel(const Model& model) {
+    if (model.vertices.empty() || model.indices.empty()) {
+        OHAO_LOG_WARNING("Cannot create collision shape: model has no vertices or indices");
+        return;
+    }
+    
+    // Extract positions from vertex data
+    std::vector<glm::vec3> positions;
+    positions.reserve(model.vertices.size());
+    
+    for (const auto& vertex : model.vertices) {
+        positions.push_back(vertex.position);
+    }
+    
+    // Create triangle mesh collision shape
+    createTriangleMeshShape(positions, model.indices);
+    
+    OHAO_LOG("Created triangle mesh collision shape with " + 
+             std::to_string(model.vertices.size()) + " vertices and " + 
+             std::to_string(model.indices.size() / 3) + " triangles");
 }
 
 // === PHYSICS WORLD INTEGRATION ===

@@ -1,6 +1,10 @@
 #include "collision_detector.hpp"
 #include "shapes/box_shape.hpp"
 #include "shapes/sphere_shape.hpp"
+#include "shapes/capsule_shape.hpp"
+#include "shapes/cylinder_shape.hpp"
+#include "shapes/plane_shape.hpp"
+#include "shapes/triangle_mesh_shape.hpp"
 
 namespace ohao {
 namespace physics {
@@ -92,6 +96,57 @@ ContactInfo CollisionDetector::narrowPhaseCheck(
             }
         }
         
+    }
+    // Sphere vs Capsule (or Capsule vs Sphere)
+    else if ((typeA == ShapeType::SPHERE && typeB == ShapeType::CAPSULE) ||
+             (typeA == ShapeType::CAPSULE && typeB == ShapeType::SPHERE)) {
+        
+        if (typeA == ShapeType::SPHERE) {
+            const SphereShape* sphere = static_cast<const SphereShape*>(shapeA);
+            const CapsuleShape* capsule = static_cast<const CapsuleShape*>(shapeB);
+            contact = testSphereVsCapsule(sphere, posA, capsule, posB, rotB);
+        } else {
+            const CapsuleShape* capsule = static_cast<const CapsuleShape*>(shapeA);
+            const SphereShape* sphere = static_cast<const SphereShape*>(shapeB);
+            contact = testSphereVsCapsule(sphere, posB, capsule, posA, rotA);
+            if (contact.hasContact) {
+                contact.flip(); // Reverse contact normal
+            }
+        }
+    }
+    // Box vs Plane (or Plane vs Box)
+    else if ((typeA == ShapeType::BOX && typeB == ShapeType::PLANE) ||
+             (typeA == ShapeType::PLANE && typeB == ShapeType::BOX)) {
+        
+        if (typeA == ShapeType::BOX) {
+            const BoxShape* box = static_cast<const BoxShape*>(shapeA);
+            const PlaneShape* plane = static_cast<const PlaneShape*>(shapeB);
+            contact = testBoxVsPlane(box, posA, rotA, plane, posB, rotB);
+        } else {
+            const PlaneShape* plane = static_cast<const PlaneShape*>(shapeA);
+            const BoxShape* box = static_cast<const BoxShape*>(shapeB);
+            contact = testBoxVsPlane(box, posB, rotB, plane, posA, rotA);
+            if (contact.hasContact) {
+                contact.flip(); // Reverse contact normal
+            }
+        }
+    }
+    // Sphere vs Plane (or Plane vs Sphere)
+    else if ((typeA == ShapeType::SPHERE && typeB == ShapeType::PLANE) ||
+             (typeA == ShapeType::PLANE && typeB == ShapeType::SPHERE)) {
+        
+        if (typeA == ShapeType::SPHERE) {
+            const SphereShape* sphere = static_cast<const SphereShape*>(shapeA);
+            const PlaneShape* plane = static_cast<const PlaneShape*>(shapeB);
+            contact = testSphereVsPlane(sphere, posA, plane, posB, rotB);
+        } else {
+            const PlaneShape* plane = static_cast<const PlaneShape*>(shapeA);
+            const SphereShape* sphere = static_cast<const SphereShape*>(shapeB);
+            contact = testSphereVsPlane(sphere, posB, plane, posA, rotA);
+            if (contact.hasContact) {
+                contact.flip(); // Reverse contact normal
+            }
+        }
     }
     
     return contact;
@@ -203,6 +258,114 @@ ContactInfo CollisionDetector::createBoxBoxContact(
         contact.penetrationDepth = overlap.z;
         contact.contactNormal = glm::vec3(0.0f, 0.0f, distance.z > 0 ? 1.0f : -1.0f);
         contact.contactPoint = posA + glm::vec3(0.0f, 0.0f, distance.z > 0 ? halfExtentsA.z : -halfExtentsA.z);
+    }
+    
+    return contact;
+}
+
+// New collision test methods for additional shapes
+
+ContactInfo CollisionDetector::testSphereVsCapsule(
+    const SphereShape* sphere, const glm::vec3& spherePos,
+    const CapsuleShape* capsule, const glm::vec3& capsulePos, const glm::quat& capsuleRot) {
+    
+    ContactInfo contact;
+    
+    // Get the capsule's line segment
+    glm::vec3 capsuleStart, capsuleEnd;
+    capsule->getLineSegment(capsulePos, capsuleRot, capsuleStart, capsuleEnd);
+    
+    // Find closest point on capsule's line segment to sphere center
+    glm::vec3 closestPoint = capsule->closestPointOnLineSegment(spherePos, capsuleStart, capsuleEnd);
+    
+    // Calculate distance between sphere center and closest point on capsule
+    glm::vec3 distance = spherePos - closestPoint;
+    float distanceLength = glm::length(distance);
+    float totalRadius = sphere->getRadius() + capsule->getRadius();
+    
+    if (distanceLength < totalRadius && distanceLength > math::constants::EPSILON) {
+        contact.hasContact = true;
+        contact.penetrationDepth = totalRadius - distanceLength;
+        contact.contactNormal = distance / distanceLength;
+        contact.contactPoint = closestPoint + contact.contactNormal * capsule->getRadius();
+    }
+    
+    return contact;
+}
+
+ContactInfo CollisionDetector::testSphereVsPlane(
+    const SphereShape* sphere, const glm::vec3& spherePos,
+    const PlaneShape* plane, const glm::vec3& planePos, const glm::quat& planeRot) {
+    
+    ContactInfo contact;
+    
+    // Get signed distance from sphere center to plane
+    float signedDistance = plane->getSignedDistanceToPoint(spherePos, planePos, planeRot);
+    float sphereRadius = sphere->getRadius();
+    
+    // Check if sphere intersects plane (distance is less than radius)
+    if (glm::abs(signedDistance) < sphereRadius) {
+        contact.hasContact = true;
+        
+        // Get plane normal (always pointing "up" from the plane)
+        glm::vec3 planeNormal = plane->getWorldNormal(planeRot);
+        
+        if (signedDistance >= 0.0f) {
+            // Sphere is on the "positive" side of the plane
+            contact.contactNormal = planeNormal;
+            contact.penetrationDepth = sphereRadius - signedDistance;
+        } else {
+            // Sphere is on the "negative" side of the plane  
+            contact.contactNormal = -planeNormal;
+            contact.penetrationDepth = sphereRadius - glm::abs(signedDistance);
+        }
+        
+        // Contact point is on the sphere surface closest to the plane
+        contact.contactPoint = spherePos - contact.contactNormal * sphereRadius;
+    }
+    
+    return contact;
+}
+
+ContactInfo CollisionDetector::testBoxVsPlane(
+    const BoxShape* box, const glm::vec3& boxPos, const glm::quat& boxRot,
+    const PlaneShape* plane, const glm::vec3& planePos, const glm::quat& planeRot) {
+    
+    ContactInfo contact;
+    
+    // Get plane normal in world space
+    glm::vec3 planeNormal = plane->getWorldNormal(planeRot);
+    
+    // Get box half-extents
+    glm::vec3 halfExtents = box->getHalfExtents();
+    
+    // Transform box axes to world space
+    glm::vec3 boxAxisX = boxRot * glm::vec3(1, 0, 0);
+    glm::vec3 boxAxisY = boxRot * glm::vec3(0, 1, 0);
+    glm::vec3 boxAxisZ = boxRot * glm::vec3(0, 0, 1);
+    
+    // Calculate the projection of the box onto the plane normal
+    float boxProjection = halfExtents.x * glm::abs(glm::dot(planeNormal, boxAxisX)) +
+                         halfExtents.y * glm::abs(glm::dot(planeNormal, boxAxisY)) +
+                         halfExtents.z * glm::abs(glm::dot(planeNormal, boxAxisZ));
+    
+    // Get distance from box center to plane
+    float signedDistance = plane->getSignedDistanceToPoint(boxPos, planePos, planeRot);
+    
+    // Check if box intersects plane
+    if (signedDistance < boxProjection) {
+        contact.hasContact = true;
+        contact.penetrationDepth = boxProjection - signedDistance;
+        contact.contactNormal = planeNormal;
+        
+        // If box is behind the plane, flip the normal
+        if (signedDistance < 0.0f) {
+            contact.contactNormal = -contact.contactNormal;
+            contact.penetrationDepth = boxProjection + glm::abs(signedDistance);
+        }
+        
+        // Contact point is approximately at the box center projected onto the plane
+        contact.contactPoint = plane->getClosestPointOnPlane(boxPos, planePos, planeRot);
     }
     
     return contact;

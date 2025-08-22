@@ -61,7 +61,14 @@ public:
     void createBoxShape(float width, float height, float depth);
     void createSphereShape(float radius);
     void createCubeShape(float size);
+    void createCapsuleShape(float radius, float height);
+    void createCylinderShape(float radius, float height);
+    void createPlaneShape(const glm::vec3& normal, float distance = 0.0f);
+    void createTriangleMeshShape(const std::vector<glm::vec3>& vertices, const std::vector<uint32_t>& indices);
     void createMeshShape(const std::vector<glm::vec3>& vertices, const std::vector<uint32_t>& indices);
+    
+    // Create collision shape from rendered model
+    void createCollisionShapeFromModel(const class Model& model);
     
     // === PHYSICS WORLD INTEGRATION ===
     void setPhysicsWorld(physics::PhysicsWorld* world);
