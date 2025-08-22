@@ -14,7 +14,7 @@ namespace ohao {
 enum class PrimitiveType {
     Cube,
     Sphere,
-    Plane,
+    Platform,
     Cylinder,
     Cone
 };
@@ -30,8 +30,8 @@ std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type) {
         case PrimitiveType::Sphere:
             PrimitiveMeshGenerator::generateSphere(*model);
             break;
-        case PrimitiveType::Plane:
-            PrimitiveMeshGenerator::generatePlane(*model);
+        case PrimitiveType::Platform:
+            PrimitiveMeshGenerator::generatePlatform(*model);
             break;
         case PrimitiveType::Cylinder:
             PrimitiveMeshGenerator::generateCylinder(*model);
@@ -238,8 +238,8 @@ void ActorSerializer::deserializeMeshComponent(MeshComponent* component, const n
                 primitiveType = PrimitiveType::Sphere;
             } else if (name.find("cube") != std::string::npos) {
                 primitiveType = PrimitiveType::Cube;
-            } else if (name.find("plane") != std::string::npos) {
-                primitiveType = PrimitiveType::Plane;
+            } else if (name.find("platform") != std::string::npos) {
+                primitiveType = PrimitiveType::Platform;
             } else if (name.find("cylinder") != std::string::npos) {
                 primitiveType = PrimitiveType::Cylinder;
             } else if (name.find("cone") != std::string::npos) {

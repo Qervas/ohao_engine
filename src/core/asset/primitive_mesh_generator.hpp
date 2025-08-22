@@ -10,7 +10,7 @@ class PrimitiveMeshGenerator {
 public:
     static void generateCube(Model& model, float size = 1.0f);
     static void generateSphere(Model& model, float radius = 0.5f, int segments = 16);
-    static void generatePlane(Model& model, float width = 1.0f, float height = 1.0f);
+    static void generatePlatform(Model& model, float width = 2.0f, float height = 0.4f, float depth = 2.0f);
     static void generateCylinder(Model& model, float radius = 0.5f, float height = 1.0f, int segments = 16);
     static void generateCone(Model& model, float radius = 0.5f, float height = 1.0f, int segments = 16);
 };

@@ -33,7 +33,7 @@ std::unique_ptr<Scene> DefaultSceneFactory::createBlenderLikeScene() {
     }
     
     // 3. Ground Plane for physics interaction
-    auto groundActor = scene->createActorWithComponents("Ground Plane", PrimitiveType::Plane);
+    auto groundActor = scene->createActorWithComponents("Ground Platform", PrimitiveType::Platform);
     if (groundActor) {
         auto transform = groundActor->getTransform();
         if (transform) {
@@ -76,7 +76,7 @@ std::unique_ptr<Scene> DefaultSceneFactory::createPhysicsTestScene() {
     OHAO_LOG("Creating physics test scene...");
     
     // Ground plane
-    auto ground = scene->createActorWithComponents("Ground", PrimitiveType::Plane);
+    auto ground = scene->createActorWithComponents("Ground", PrimitiveType::Platform);
     if (ground) {
         auto transform = ground->getTransform();
         if (transform) {
