@@ -74,7 +74,7 @@ private:
         Empty,
         Cube,
         Sphere,
-        Plane,
+        Platform,
         Cylinder,
         Cone
     };

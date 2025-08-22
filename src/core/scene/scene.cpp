@@ -283,18 +283,6 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
     // Set the model
     meshComponent->setModel(model);
     
-    // Physics system temporarily disabled
-    /*
-    if (!targetActor->hasComponent<PhysicsComponent>()) {
-        auto physicsComponent = targetActor->addComponent<PhysicsComponent>();
-        
-        // Create a bounding box shape based on model dimensions
-        // TODO: Calculate proper bounds from model
-        physicsComponent->createBoxShape(glm::vec3(1.0f));
-        physicsComponent->setStatic(true); // Static by default
-    }
-    */
-    
     return true;
 }
 

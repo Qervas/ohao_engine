@@ -118,7 +118,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.materialColor = glm::vec3(0.6f, 0.7f, 0.8f);
             break;
             
-        case PrimitiveType::Plane:
+        case PrimitiveType::Platform:
             config.needsMesh = true;
             config.needsPhysics = true;
             config.needsMaterial = true;
@@ -126,7 +126,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.mass = 0.0f;
             config.friction = 0.8f;
             config.restitution = 0.2f;
-            config.materialColor = glm::vec3(0.4f, 0.6f, 0.4f);
+            config.materialColor = glm::vec3(0.4f, 0.6f, 0.4f); // Green platform color
             break;
             
         case PrimitiveType::Cylinder:
@@ -211,18 +211,19 @@ void ComponentFactory::setupPhysicsShape(PhysicsComponent* physics, PrimitiveTyp
             physics->createSphereShape(0.5f);
             break;
             
-        case PrimitiveType::Plane:
-            physics->createBoxShape(glm::vec3(5.0f, 0.1f, 5.0f)); // Large thin box
+        case PrimitiveType::Platform:
+            // Use thick platform box - perfect for floors, bridges, ledges
+            physics->createBoxShape(glm::vec3(2.0f, 0.2f, 2.0f)); // width=4, height=0.4, depth=4
             break;
             
         case PrimitiveType::Cylinder:
-            // TODO: Implement CapsuleShape and createCapsuleShape method
-            // physics->createCapsuleShape(0.5f, 1.0f);
-            physics->createBoxShape(0.5f, 1.0f, 0.5f); // Use box as temporary fallback
+            // Use proper cylinder shape instead of box approximation
+            physics->createCylinderShape(0.5f, 1.0f); // radius=0.5, height=1.0
             break;
             
         case PrimitiveType::Cone:
-            physics->createBoxShape(glm::vec3(0.5f, 0.5f, 0.5f)); // Approximate with box for now
+            // For cone, use a capsule as approximation (better than box)
+            physics->createCapsuleShape(0.5f, 1.0f); // radius=0.5, height=1.0
             break;
             
         default:
@@ -278,8 +279,8 @@ std::shared_ptr<Model> ComponentFactory::generateMeshForPrimitive(PrimitiveType 
             return generateCubeMesh();
         case PrimitiveType::Sphere:
             return generateSphereMesh();
-        case PrimitiveType::Plane:
-            return generatePlaneMesh();
+        case PrimitiveType::Platform:
+            return generatePlatformMesh();
         case PrimitiveType::Cylinder:
             return generateCylinderMesh();
         case PrimitiveType::Cone:
@@ -408,48 +409,79 @@ std::shared_ptr<Model> ComponentFactory::generateSphereMesh() {
     return model;
 }
 
-std::shared_ptr<Model> ComponentFactory::generatePlaneMesh(float size) {
+std::shared_ptr<Model> ComponentFactory::generatePlatformMesh(float width, float height, float depth) {
     auto model = std::make_shared<Model>();
     
-    const int subdivisions = 1;  // Increase for more detailed plane
-    const float step = size / subdivisions;
-    const float uvStep = 1.0f / subdivisions;
-
+    // Generate a thick platform (essentially a flattened box)
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
-    // Generate vertices
-    for (int i = 0; i <= subdivisions; ++i) {
-        for (int j = 0; j <= subdivisions; ++j) {
-            float x = -size/2 + j * step;
-            float z = -size/2 + i * step;
+    float halfWidth = width * 0.5f;
+    float halfHeight = height * 0.5f;
+    float halfDepth = depth * 0.5f;
 
+    // Define the 8 corners of the platform box
+    glm::vec3 corners[8] = {
+        {-halfWidth, -halfHeight, -halfDepth}, // 0: bottom-left-back
+        { halfWidth, -halfHeight, -halfDepth}, // 1: bottom-right-back
+        { halfWidth, -halfHeight,  halfDepth}, // 2: bottom-right-front
+        {-halfWidth, -halfHeight,  halfDepth}, // 3: bottom-left-front
+        {-halfWidth,  halfHeight, -halfDepth}, // 4: top-left-back
+        { halfWidth,  halfHeight, -halfDepth}, // 5: top-right-back
+        { halfWidth,  halfHeight,  halfDepth}, // 6: top-right-front
+        {-halfWidth,  halfHeight,  halfDepth}  // 7: top-left-front
+    };
+
+    // Face normals
+    glm::vec3 normals[6] = {
+        { 0.0f,  1.0f,  0.0f}, // top
+        { 0.0f, -1.0f,  0.0f}, // bottom
+        { 0.0f,  0.0f,  1.0f}, // front
+        { 0.0f,  0.0f, -1.0f}, // back
+        { 1.0f,  0.0f,  0.0f}, // right
+        {-1.0f,  0.0f,  0.0f}  // left
+    };
+
+    // Define faces (each face has 4 vertices)
+    int faceVertices[6][4] = {
+        {7, 6, 5, 4}, // top face
+        {0, 1, 2, 3}, // bottom face
+        {3, 2, 6, 7}, // front face
+        {4, 5, 1, 0}, // back face
+        {2, 1, 5, 6}, // right face
+        {0, 3, 7, 4}  // left face
+    };
+
+    // UV coordinates for each face
+    glm::vec2 faceUVs[4] = {
+        {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}
+    };
+
+    // Generate vertices for each face
+    for (int face = 0; face < 6; ++face) {
+        for (int vert = 0; vert < 4; ++vert) {
             Vertex vertex;
-            vertex.position = {x, 0.0f, z};
-            vertex.normal = {0.0f, 1.0f, 0.0f};
-            vertex.color = {1.0f, 1.0f, 1.0f};
-            vertex.texCoord = {j * uvStep, i * uvStep};
-
+            vertex.position = corners[faceVertices[face][vert]];
+            vertex.normal = normals[face];
+            vertex.color = glm::vec3(1.0f); // White color
+            vertex.texCoord = faceUVs[vert];
             vertices.push_back(vertex);
         }
     }
 
-    // Generate indices
-    for (int i = 0; i < subdivisions; ++i) {
-        for (int j = 0; j < subdivisions; ++j) {
-            int row1 = i * (subdivisions + 1);
-            int row2 = (i + 1) * (subdivisions + 1);
-
-            // Triangle 1
-            indices.push_back(row1 + j);
-            indices.push_back(row1 + j + 1);
-            indices.push_back(row2 + j + 1);
-
-            // Triangle 2
-            indices.push_back(row1 + j);
-            indices.push_back(row2 + j + 1);
-            indices.push_back(row2 + j);
-        }
+    // Generate indices (2 triangles per face)
+    for (int face = 0; face < 6; ++face) {
+        int baseIndex = face * 4;
+        
+        // First triangle
+        indices.push_back(baseIndex + 0);
+        indices.push_back(baseIndex + 1);
+        indices.push_back(baseIndex + 2);
+        
+        // Second triangle
+        indices.push_back(baseIndex + 2);
+        indices.push_back(baseIndex + 3);
+        indices.push_back(baseIndex + 0);
     }
 
     model->vertices = vertices;
@@ -532,6 +564,26 @@ bool ComponentManager::validateComponentSetup(std::shared_ptr<Actor> actor, Prim
     
     OHAO_LOG("Component setup validation passed for actor: " + actor->getName());
     return true;
+}
+
+void ComponentFactory::setupPhysicsShapeFromMesh(PhysicsComponent* physics, MeshComponent* mesh) {
+    if (!physics || !mesh) {
+        OHAO_LOG_WARNING("Cannot setup physics shape: physics or mesh component is null");
+        return;
+    }
+    
+    // Get the model from mesh component
+    auto model = mesh->getModel();
+    if (!model) {
+        OHAO_LOG_WARNING("Cannot setup physics shape: mesh component has no model");
+        return;
+    }
+    
+    // Create collision shape from the model's geometry
+    physics->createCollisionShapeFromModel(*model);
+    
+    OHAO_LOG("Created collision shape from mesh with " + 
+             std::to_string(model->vertices.size()) + " vertices");
 }
 
 } // namespace ohao

@@ -48,6 +48,21 @@ private:
         const class SphereShape* sphere, const glm::vec3& spherePos
     );
     
+    static ContactInfo testSphereVsCapsule(
+        const class SphereShape* sphere, const glm::vec3& spherePos,
+        const class CapsuleShape* capsule, const glm::vec3& capsulePos, const glm::quat& capsuleRot
+    );
+    
+    static ContactInfo testSphereVsPlane(
+        const class SphereShape* sphere, const glm::vec3& spherePos,
+        const class PlaneShape* plane, const glm::vec3& planePos, const glm::quat& planeRot
+    );
+    
+    static ContactInfo testBoxVsPlane(
+        const class BoxShape* box, const glm::vec3& boxPos, const glm::quat& boxRot,
+        const class PlaneShape* plane, const glm::vec3& planePos, const glm::quat& planeRot
+    );
+    
     // Helper functions
     static glm::vec3 closestPointOnBox(
         const glm::vec3& point, 

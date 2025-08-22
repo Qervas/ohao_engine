@@ -19,7 +19,7 @@ enum class PrimitiveType {
     Empty,
     Cube,
     Sphere,
-    Plane,
+    Platform,
     Cylinder,
     Cone,
     PointLight,
@@ -89,12 +89,17 @@ public:
      * Create appropriate collision shape for physics component
      */
     static void setupPhysicsShape(PhysicsComponent* physics, PrimitiveType type);
+    
+    /**
+     * Create triangle mesh collision shape from MeshComponent
+     */
+    static void setupPhysicsShapeFromMesh(PhysicsComponent* physics, MeshComponent* mesh);
 
 private:
     // Mesh generation helpers
     static std::shared_ptr<Model> generateCubeMesh();
     static std::shared_ptr<Model> generateSphereMesh();
-    static std::shared_ptr<Model> generatePlaneMesh(float size = 1.0f);
+    static std::shared_ptr<Model> generatePlatformMesh(float width = 2.0f, float height = 0.4f, float depth = 2.0f);
     static std::shared_ptr<Model> generateCylinderMesh();
     static std::shared_ptr<Model> generateConeMesh();
     

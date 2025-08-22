@@ -31,7 +31,7 @@ private:
     physics::PhysicsWorld* m_physicsWorld = nullptr;
     
     // Physics state (migrated from toolbar)
-    physics::SimulationState m_simulationState = physics::SimulationState::STOPPED;
+    physics::SimulationState m_simulationState = physics::SimulationState::STOPPED;  // Start stopped by default
     float m_simulationSpeed = 1.0f;
     bool m_physicsEnabled = true;
     

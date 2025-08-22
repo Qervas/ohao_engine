@@ -148,30 +148,78 @@ void PrimitiveMeshGenerator::generateSphere(Model& model, float radius, int segm
     }
 }
 
-void PrimitiveMeshGenerator::generatePlane(Model& model, float width, float height) {
+void PrimitiveMeshGenerator::generatePlatform(Model& model, float width, float height, float depth) {
     model.vertices.clear();
     model.indices.clear();
     
+    // Generate a thick platform (essentially a flattened box)
     float halfWidth = width * 0.5f;
     float halfHeight = height * 0.5f;
-    
-    // Create 4 vertices for the quad
-    glm::vec3 normal(0.0f, 1.0f, 0.0f);
-    glm::vec3 color(1.0f, 1.0f, 1.0f);
-    
-    model.vertices.push_back({ { -halfWidth, 0.0f, -halfHeight }, color, normal, { 0.0f, 0.0f } });
-    model.vertices.push_back({ { halfWidth, 0.0f, -halfHeight }, color, normal, { 1.0f, 0.0f } });
-    model.vertices.push_back({ { halfWidth, 0.0f, halfHeight }, color, normal, { 1.0f, 1.0f } });
-    model.vertices.push_back({ { -halfWidth, 0.0f, halfHeight }, color, normal, { 0.0f, 1.0f } });
-    
-    // Add indices for 2 triangles
-    model.indices.push_back(0);
-    model.indices.push_back(1);
-    model.indices.push_back(2);
-    
-    model.indices.push_back(0);
-    model.indices.push_back(2);
-    model.indices.push_back(3);
+    float halfDepth = depth * 0.5f;
+
+    // Define the 8 corners of the platform box
+    glm::vec3 corners[8] = {
+        {-halfWidth, -halfHeight, -halfDepth}, // 0: bottom-left-back
+        { halfWidth, -halfHeight, -halfDepth}, // 1: bottom-right-back
+        { halfWidth, -halfHeight,  halfDepth}, // 2: bottom-right-front
+        {-halfWidth, -halfHeight,  halfDepth}, // 3: bottom-left-front
+        {-halfWidth,  halfHeight, -halfDepth}, // 4: top-left-back
+        { halfWidth,  halfHeight, -halfDepth}, // 5: top-right-back
+        { halfWidth,  halfHeight,  halfDepth}, // 6: top-right-front
+        {-halfWidth,  halfHeight,  halfDepth}  // 7: top-left-front
+    };
+
+    // Face normals
+    glm::vec3 normals[6] = {
+        { 0.0f,  1.0f,  0.0f}, // top
+        { 0.0f, -1.0f,  0.0f}, // bottom
+        { 0.0f,  0.0f,  1.0f}, // front
+        { 0.0f,  0.0f, -1.0f}, // back
+        { 1.0f,  0.0f,  0.0f}, // right
+        {-1.0f,  0.0f,  0.0f}  // left
+    };
+
+    // Define faces (each face has 4 vertices)
+    int faceVertices[6][4] = {
+        {7, 6, 5, 4}, // top face
+        {0, 1, 2, 3}, // bottom face
+        {3, 2, 6, 7}, // front face
+        {4, 5, 1, 0}, // back face
+        {2, 1, 5, 6}, // right face
+        {0, 3, 7, 4}  // left face
+    };
+
+    // UV coordinates for each face
+    glm::vec2 faceUVs[4] = {
+        {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}
+    };
+
+    // Generate vertices for each face
+    for (int face = 0; face < 6; ++face) {
+        for (int vert = 0; vert < 4; ++vert) {
+            Vertex vertex;
+            vertex.position = corners[faceVertices[face][vert]];
+            vertex.normal = normals[face];
+            vertex.color = glm::vec3(1.0f); // White color
+            vertex.texCoord = faceUVs[vert];
+            model.vertices.push_back(vertex);
+        }
+    }
+
+    // Generate indices (2 triangles per face)
+    for (int face = 0; face < 6; ++face) {
+        int baseIndex = face * 4;
+        
+        // First triangle
+        model.indices.push_back(baseIndex + 0);
+        model.indices.push_back(baseIndex + 1);
+        model.indices.push_back(baseIndex + 2);
+        
+        // Second triangle
+        model.indices.push_back(baseIndex + 2);
+        model.indices.push_back(baseIndex + 3);
+        model.indices.push_back(baseIndex + 0);
+    }
 }
 
 void PrimitiveMeshGenerator::generateCylinder(Model& model, float radius, float height, int segments) {

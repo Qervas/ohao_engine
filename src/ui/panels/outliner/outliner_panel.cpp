@@ -42,8 +42,8 @@ void OutlinerPanel::render() {
         if (ImGui::MenuItem("Sphere")) {
             createPrimitiveObject(ohao::PrimitiveType::Sphere);
         }
-        if (ImGui::MenuItem("Plane")) {
-            createPrimitiveObject(ohao::PrimitiveType::Plane);
+        if (ImGui::MenuItem("Platform")) {
+            createPrimitiveObject(ohao::PrimitiveType::Platform);
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Point Light")) {
@@ -452,7 +452,7 @@ void OutlinerPanel::createPrimitiveObject(ohao::PrimitiveType type) {
         case ohao::PrimitiveType::Sphere:
             objName = "Sphere";
             break;
-        case ohao::PrimitiveType::Plane:
+        case ohao::PrimitiveType::Platform:
             objName = "Plane";
             break;
         case ohao::PrimitiveType::Cylinder:
@@ -640,7 +640,7 @@ std::shared_ptr<Model> OutlinerPanel::generatePrimitiveMesh(PrimitiveType type) 
             break;
         }
 
-        case PrimitiveType::Plane:
+        case PrimitiveType::Platform:
         {
             const float size = 1.0f;
             const int subdivisions = 1;  // Increase for more detailed plane

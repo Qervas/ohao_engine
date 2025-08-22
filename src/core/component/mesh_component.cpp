@@ -1,6 +1,7 @@
 #include "mesh_component.hpp"
 #include "../actor/actor.hpp"
 #include "../component/transform_component.hpp"
+#include "../component/physics_component.hpp"
 #include "../scene/scene.hpp"
 
 namespace ohao {
@@ -29,8 +30,16 @@ void MeshComponent::setModel(std::shared_ptr<Model> newModel) {
     indexOffset = 0;
     indexCount = model ? static_cast<uint32_t>(model->indices.size()) : 0;
     
-    // Register with scene if part of one
+    // UNIFIED MESH-TO-PHYSICS PIPELINE
+    // Automatically sync with any PhysicsComponent on the same actor
     if (auto actor = getOwner()) {
+        auto physicsComponent = actor->getComponent<PhysicsComponent>();
+        if (physicsComponent && model) {
+            // Auto-create triangle mesh collision shape from the mesh
+            physicsComponent->createCollisionShapeFromModel(*model);
+        }
+        
+        // Register with scene if part of one
         if (auto scene = actor->getScene()) {
             scene->onMeshComponentChanged(this);
         }

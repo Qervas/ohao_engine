@@ -12,8 +12,12 @@ enum class ShapeType {
     BOX = 0,
     SPHERE = 1,
     CAPSULE = 2,
-    CONVEX_HULL = 3,
-    MESH = 4
+    CYLINDER = 3,
+    PLANE = 4,
+    CONVEX_HULL = 5,
+    TRIANGLE_MESH = 6,
+    CONE = 7,
+    ELLIPSOID = 8
 };
 
 // Base class for all collision shapes

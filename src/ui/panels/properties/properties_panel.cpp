@@ -6,6 +6,7 @@
 #include "vulkan_context.hpp"
 #include "core/component/light_component.hpp"
 #include "core/component/material_component.hpp"
+#include "core/component/component_factory.hpp"
 #include "core/material/material.hpp"
 #include "core/physics/dynamics/rigid_body.hpp"
 #include "core/physics/collision/shapes/collision_shape.hpp"
@@ -670,9 +671,9 @@ void PropertiesPanel::renderMeshComponentProperties(MeshComponent* component) {
             }
         }
         
-        if (ImGui::Selectable("Plane")) {
-            auto planeModel = generatePrimitiveMesh(PrimitiveType::Plane);
-            component->setModel(planeModel);
+        if (ImGui::Selectable("Platform")) {
+            auto platformModel = generatePrimitiveMesh(PrimitiveType::Platform);
+            component->setModel(platformModel);
             ImGui::CloseCurrentPopup();
             
             // Update scene buffers
@@ -1050,7 +1051,7 @@ std::shared_ptr<Model> PropertiesPanel::generatePrimitiveMesh(PrimitiveType type
             break;
         }
 
-        case PrimitiveType::Plane:
+        case PrimitiveType::Platform:
         {
             const float size = 1.0f;
             const int subdivisions = 1;  // Increase for more detailed plane
