@@ -20,6 +20,7 @@ public:
     VkSemaphore getSwapchainImageAvailableSemaphore(uint32_t imageIndex) const;
     VkSemaphore getSwapchainRenderFinishedSemaphore(uint32_t imageIndex) const;
     VkFence getInFlightFence(uint32_t frameIndex) const;
+    VkFence getAcquireFence(uint32_t frameIndex) const;
 
     void waitForFence(uint32_t frameIndex) const;
     void resetFence(uint32_t frameIndex) const;
@@ -31,6 +32,7 @@ private:
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
+    std::vector<VkFence> acquireFences;  // Separate fences for vkAcquireNextImageKHR
     uint32_t maxFrames{0};
     
     // Per-swapchain-image semaphores (for swapchain images)
