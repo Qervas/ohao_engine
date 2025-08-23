@@ -428,14 +428,20 @@ void VulkanContext::drawFrame() {
 
     // Wait for previous frame
     syncObjects->waitForFence(currentFrame);
-    // Get next image
+    syncObjects->resetFence(currentFrame);
+    
+    // Reset acquire fence before using it (it must be unsignaled)
+    VkFence acquireFence = syncObjects->getAcquireFence(currentFrame);
+    vkResetFences(device->getDevice(), 1, &acquireFence);
+    
+    // Get next image - Use a separate fence for synchronization 
     uint32_t imageIndex;
     VkResult result = vkAcquireNextImageKHR(
         device->getDevice(),
         swapchain->getSwapChain(),
-        1000000000,
-        syncObjects->getImageAvailableSemaphore(currentFrame),
+        UINT64_MAX,
         VK_NULL_HANDLE,
+        acquireFence,
         &imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window->wasResized()) {
@@ -444,8 +450,10 @@ void VulkanContext::drawFrame() {
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to acquire swap chain image!");
     }
-
-    syncObjects->resetFence(currentFrame);
+    
+    // Wait for the acquire fence to be signaled, then reset it
+    vkWaitForFences(device->getDevice(), 1, &acquireFence, VK_TRUE, UINT64_MAX);
+    vkResetFences(device->getDevice(), 1, &acquireFence);
 
     // Reset and record command buffer
     commandManager->resetCommandBuffer(currentFrame);
@@ -545,12 +553,11 @@ void VulkanContext::drawFrame() {
     // Submit command buffer
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-    VkSemaphore waitSemaphores[] = {syncObjects->getImageAvailableSemaphore(currentFrame)};
-    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = waitSemaphores;
-    submitInfo.pWaitDstStageMask = waitStages;
+    
+    // No wait semaphores since we're using fence-based synchronization
+    submitInfo.waitSemaphoreCount = 0;
+    submitInfo.pWaitSemaphores = nullptr;
+    submitInfo.pWaitDstStageMask = nullptr;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = commandManager->getCommandBufferPtr(currentFrame);
 

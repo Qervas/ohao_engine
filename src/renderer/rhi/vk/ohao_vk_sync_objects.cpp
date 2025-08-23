@@ -45,6 +45,9 @@ void OhaoVkSyncObjects::cleanup() {
             if (inFlightFences[i]) {
                 vkDestroyFence(device->getDevice(), inFlightFences[i], nullptr);
             }
+            if (acquireFences[i]) {
+                vkDestroyFence(device->getDevice(), acquireFences[i], nullptr);
+            }
         }
         
         // Cleanup per-swapchain-image semaphores
@@ -61,6 +64,7 @@ void OhaoVkSyncObjects::cleanup() {
         renderFinishedSemaphores.clear();
         imageAvailableSemaphores.clear();
         inFlightFences.clear();
+        acquireFences.clear();
         swapchainRenderFinishedSemaphores.clear();
         swapchainImageAvailableSemaphores.clear();
     }
@@ -70,6 +74,7 @@ bool OhaoVkSyncObjects::createSyncObjects() {
     imageAvailableSemaphores.resize(maxFrames);
     renderFinishedSemaphores.resize(maxFrames);
     inFlightFences.resize(maxFrames);
+    acquireFences.resize(maxFrames);
 
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -81,7 +86,8 @@ bool OhaoVkSyncObjects::createSyncObjects() {
     for (size_t i = 0; i < maxFrames; i++) {
         if (vkCreateSemaphore(device->getDevice(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device->getDevice(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
-            vkCreateFence(device->getDevice(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
+            vkCreateFence(device->getDevice(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS ||
+            vkCreateFence(device->getDevice(), &fenceInfo, nullptr, &acquireFences[i]) != VK_SUCCESS) {
             return false;
         }
     }
@@ -124,6 +130,10 @@ VkSemaphore OhaoVkSyncObjects::getSwapchainRenderFinishedSemaphore(uint32_t imag
 
 VkFence OhaoVkSyncObjects::getInFlightFence(uint32_t frameIndex) const {
     return inFlightFences[frameIndex];
+}
+
+VkFence OhaoVkSyncObjects::getAcquireFence(uint32_t frameIndex) const {
+    return acquireFences[frameIndex];
 }
 
 void OhaoVkSyncObjects::waitForFence(uint32_t frameIndex) const {
