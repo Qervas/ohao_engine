@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ui/common/panel_base.hpp"
-#include "core/physics/world/physics_world.hpp"
-#include "core/physics/world/simulation_state.hpp"
+#include "physics/world/physics_world.hpp"
+#include "physics/world/simulation_state.hpp"
 #include <memory>
 
 namespace ohao {

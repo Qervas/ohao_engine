@@ -1,5 +1,5 @@
 #include "viewport_toolbar.hpp"
-#include "core/physics/world/physics_world.hpp"
+#include "physics/world/physics_world.hpp"
 #include "imgui.h"
 #include "renderer/vulkan_context.hpp"
 

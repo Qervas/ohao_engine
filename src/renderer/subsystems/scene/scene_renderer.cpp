@@ -4,9 +4,9 @@
 #include "vulkan_context.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/components/console_widget.hpp"
-#include "core/material/material.hpp"
-#include "core/component/mesh_component.hpp"
-#include "core/component/material_component.hpp"
+#include "renderer/material/material.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "renderer/components/material_component.hpp"
 #include <iostream>
 #include <vulkan/vulkan_core.h>
 

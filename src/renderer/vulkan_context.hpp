@@ -24,9 +24,9 @@
 #include <vector>
 #include <vulkan/vulkan_core.h>
 #include "renderer/camera/camera.hpp"
-#include "core/asset/model.hpp"
-#include "core/material/material.hpp"
-#include "core/scene/scene.hpp"
+#include "engine/asset/model.hpp"
+#include "renderer/material/material.hpp"
+#include "engine/scene/scene.hpp"
 #include "subsystems/scene/scene_renderer.hpp"
 #include "renderer/shader/shader_uniforms.hpp"
 #include "renderer/gizmo/axis_gizmo.hpp"

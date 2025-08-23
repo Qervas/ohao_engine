@@ -4,14 +4,14 @@
 #include "scene/scene_node.hpp"
 #include "console_widget.hpp"
 #include "vulkan_context.hpp"
-#include "core/component/light_component.hpp"
-#include "core/component/material_component.hpp"
-#include "core/component/component_factory.hpp"
-#include "core/material/material.hpp"
-#include "core/physics/dynamics/rigid_body.hpp"
-#include "core/physics/collision/shapes/collision_shape.hpp"
-#include "core/physics/collision/shapes/box_shape.hpp"
-#include "core/physics/collision/shapes/sphere_shape.hpp"
+#include "renderer/components/light_component.hpp"
+#include "renderer/components/material_component.hpp"
+#include "engine/component/component_factory.hpp"
+#include "renderer/material/material.hpp"
+#include "physics/dynamics/rigid_body.hpp"
+#include "physics/collision/shapes/collision_shape.hpp"
+#include "physics/collision/shapes/box_shape.hpp"
+#include "physics/collision/shapes/sphere_shape.hpp"
 #include <cstring>
 
 

@@ -2,8 +2,8 @@
 #include <vector>
 #include <functional>
 #include <unordered_set>
-#include "core/scene/scene.hpp"
-#include "core/actor/actor.hpp"
+#include "engine/scene/scene.hpp"
+#include "engine/actor/actor.hpp"
 
 namespace ohao {
 
