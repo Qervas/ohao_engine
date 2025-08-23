@@ -5,7 +5,7 @@
 #include <renderer/gizmo/axis_gizmo.hpp>
 #include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
 #include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
-#include "core/actor/actor.hpp"
+#include "engine/actor/actor.hpp"
 #include "utils/common_types.hpp"
 
 namespace ohao {

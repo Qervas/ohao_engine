@@ -13,7 +13,7 @@
 #include <vulkan/vulkan_core.h>
 #include "imgui.h"
 #include "imgui_vulkan_utils.hpp"
-#include "core/component/light_component.hpp"
+#include "renderer/components/light_component.hpp"
 #include "ui/selection/selection_manager.hpp"
 #include <glm/glm.hpp>
 

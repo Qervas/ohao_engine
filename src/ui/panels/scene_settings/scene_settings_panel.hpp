@@ -1,6 +1,6 @@
 #pragma once
 #include "ui/common/panel_base.hpp"
-#include "core/scene/scene.hpp"
+#include "engine/scene/scene.hpp"
 
 namespace ohao {
 
