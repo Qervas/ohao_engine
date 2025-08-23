@@ -12,9 +12,6 @@ foreach(file ${INCLUDED_TEST_FILES})
     message(STATUS "Including test file: ${file}")
 endforeach()
 
-# Add include directories
-target_include_directories(ohao_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}) 
-
 # ========== Test Executables ==========
 
 # Physics test executable
@@ -22,7 +19,9 @@ add_executable(physics_test
     physics_test.cpp
 )
 target_link_libraries(physics_test
-    ohao_core
+    ohao_engine
+    ohao_physics
+    ohao_renderer
     ohao_ui
     glm
 )

@@ -2,12 +2,12 @@
 #include <memory>
 #include <string>
 
-#include "core/actor/actor.hpp"
-#include "core/component/component.hpp"
-#include "core/component/transform_component.hpp"
-#include "core/component/mesh_component.hpp"
-#include "core/component/physics_component.hpp"
-#include "core/scene/scene.hpp"
+#include "engine/actor/actor.hpp"
+#include "engine/component/component.hpp"
+#include "engine/component/transform_component.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "engine/scene/scene.hpp"
 
 using namespace ohao;
 

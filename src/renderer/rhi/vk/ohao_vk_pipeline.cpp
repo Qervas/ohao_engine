@@ -2,7 +2,7 @@
 #include "ohao_vk_device.hpp"
 #include "ohao_vk_render_pass.hpp"
 #include "ohao_vk_shader_module.hpp"
-#include "core/asset/model.hpp"
+#include "engine/asset/model.hpp"
 #include <iostream>
 #include <vulkan/vulkan_core.h>
 #include <algorithm>

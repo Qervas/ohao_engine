@@ -1,9 +1,9 @@
 #include <iostream>
 #include <memory>
-#include "../core/physics/world/physics_world.hpp"
-#include "../core/physics/world/physics_settings.hpp"
-#include "../core/physics/dynamics/rigid_body.hpp"
-#include "../core/component/physics_component.hpp"
+#include "physics/world/physics_world.hpp"
+#include "physics/world/physics_settings.hpp"
+#include "physics/dynamics/rigid_body.hpp"
+#include "physics/components/physics_component.hpp"
 
 using namespace ohao;
 

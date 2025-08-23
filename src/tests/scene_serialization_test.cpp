@@ -1,9 +1,9 @@
-#include "../core/scene/scene.hpp"
-#include "../core/actor/actor.hpp"
-#include "../core/component/mesh_component.hpp"
-#include "../core/component/physics_component.hpp"
-#include "../core/component/light_component.hpp"
-#include "../core/serialization/scene_serializer.hpp"
+#include "engine/scene/scene.hpp"
+#include "engine/actor/actor.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "renderer/components/light_component.hpp"
+#include "engine/serialization/scene_serializer.hpp"
 #include <iostream>
 #include <memory>
 

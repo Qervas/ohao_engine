@@ -1,14 +1,14 @@
 #pragma once
 #include "ui/common/panel_base.hpp"
-#include "core/scene/scene.hpp"
+#include "engine/scene/scene.hpp"
 #include "ui/selection/selection_manager.hpp"
-#include "core/actor/actor.hpp"
-#include "core/component/transform_component.hpp"
-#include "core/component/mesh_component.hpp"
-#include "core/component/material_component.hpp"
-#include "core/component/physics_component.hpp"
-#include "core/component/light_component.hpp"
-#include "core/material/material.hpp"
+#include "engine/actor/actor.hpp"
+#include "engine/component/transform_component.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "renderer/components/material_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "renderer/components/light_component.hpp"
+#include "renderer/material/material.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 

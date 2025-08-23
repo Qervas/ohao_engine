@@ -1,7 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <vector>
-#include "core/asset/model.hpp"
+#include "engine/asset/model.hpp"
 #include <memory>
 #include <vulkan/vulkan_core.h>
 

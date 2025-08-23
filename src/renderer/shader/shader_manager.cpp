@@ -1,7 +1,7 @@
 #include "shader_manager.hpp"
 #include "shader_compiler.hpp"
-#include "../rhi/vk/ohao_vk_device.hpp"
-#include "../../ui/components/console_widget.hpp"
+#include "renderer/rhi/vk/ohao_vk_device.hpp"
+#include "ui/components/console_widget.hpp"
 #include <fstream>
 #include <sstream>
 #include <memory>

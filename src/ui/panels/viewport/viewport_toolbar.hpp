@@ -1,7 +1,7 @@
 #pragma once
 #include "ui/common/panel_base.hpp"
 #include "renderer/gizmo/axis_gizmo.hpp"
-#include "core/physics/world/simulation_state.hpp"
+#include "physics/world/simulation_state.hpp"
 #include <memory>
 #include "imgui.h"
 

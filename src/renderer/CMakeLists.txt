@@ -1,4 +1,4 @@
-# Find all source files in vk directory
+# Find all source files including components
 file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
@@ -22,10 +22,11 @@ target_include_directories(ohao_renderer PUBLIC
 target_link_libraries(ohao_renderer PUBLIC
     ${Vulkan_LIBRARIES}
     glfw
-    ohao_core
+    ohao_engine
     ohao_utils
     imgui
     imgui_stdlib
+    glm
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})

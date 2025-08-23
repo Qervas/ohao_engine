@@ -1,12 +1,12 @@
 #pragma once
 #include "scene/scene_node.hpp"
 #include "ui/common/panel_base.hpp"
-#include "core/scene/scene.hpp"
+#include "engine/scene/scene.hpp"
 #include "ui/components/console_widget.hpp"
 #include "ui/selection/selection_manager.hpp"
-#include "core/actor/actor.hpp"
-#include "core/component/mesh_component.hpp"
-#include "core/component/physics_component.hpp"
+#include "engine/actor/actor.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "physics/components/physics_component.hpp"
 
 namespace ohao {
 

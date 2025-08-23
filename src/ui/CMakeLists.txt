@@ -33,7 +33,8 @@ target_link_libraries(ohao_ui PUBLIC
     nlohmann_json::nlohmann_json
     ${Vulkan_LIBRARIES}
     glfw
-    ohao_core
+    ohao_engine
+    ohao_physics
     ohao_renderer
     ohao_utils
 )

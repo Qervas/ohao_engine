@@ -3,10 +3,10 @@
 #include "imgui.h"
 #include "scene/scene_node.hpp"
 #include "vulkan_context.hpp"
-#include "core/component/light_component.hpp"
-#include "core/component/physics_component.hpp"
-#include "core/component/component_factory.hpp"
-#include "core/physics/dynamics/rigid_body.hpp"
+#include "renderer/components/light_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "engine/component/component_factory.hpp"
+#include "physics/dynamics/rigid_body.hpp"
 
 namespace ohao {
 

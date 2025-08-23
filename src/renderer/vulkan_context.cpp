@@ -2,7 +2,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "ui/panels/viewport/viewport_toolbar.hpp"
-#include "core/scene/default_scene_factory.hpp"
+#include "engine/scene/default_scene_factory.hpp"
 #include <GLFW/glfw3.h>
 #ifdef _WIN32
 #include <malloc.h>
@@ -15,10 +15,10 @@
 #include <cstring>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/geometric.hpp>
-#include "core/material/material.hpp"
-#include "core/component/mesh_component.hpp"
-#include "core/component/material_component.hpp"
-#include "core/component/light_component.hpp"
+#include "renderer/material/material.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "renderer/components/material_component.hpp"
+#include "renderer/components/light_component.hpp"
 #include <glm/trigonometric.hpp>
 #include <memory>
 #include <stdexcept>

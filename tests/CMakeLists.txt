@@ -4,7 +4,8 @@ add_executable(engine_tests
 )
 
 target_link_libraries(engine_tests
-    ohao_core
+    ohao_engine
+    ohao_physics
     ohao_renderer
     ohao_ui
     gtest

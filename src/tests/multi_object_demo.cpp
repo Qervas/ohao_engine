@@ -2,10 +2,10 @@
 #include <memory>
 #include <string>
 
-#include "core/actor/actor.hpp"
-#include "core/component/mesh_component.hpp"
-#include "core/component/transform_component.hpp"
-#include "core/scene/scene.hpp"
+#include "engine/actor/actor.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "engine/component/transform_component.hpp"
+#include "engine/scene/scene.hpp"
 #include "utils/common_types.hpp"
 #include "renderer/vulkan_context.hpp"
 
