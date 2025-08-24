@@ -369,4 +369,59 @@ void Scene::unregisterActorHierarchy(Actor::Ptr actor) {
     unregisterActor(actor);
 }
 
+void Scene::addPhysicsToAllObjects() {
+    std::cout << "Adding physics components to all objects in scene..." << std::endl;
+    
+    int physicsObjectsCreated = 0;
+    
+    // Iterate through all actors in the scene
+    for (const auto& [id, actor] : actors) {
+        if (!actor) continue;
+        
+        // Skip actors that already have physics components
+        if (actor->getComponent<PhysicsComponent>()) {
+            std::cout << "Actor '" << actor->getName() << "' already has physics component" << std::endl;
+            continue;
+        }
+        
+        // Only add physics to actors that have mesh components (visual objects)
+        auto meshComponent = actor->getComponent<MeshComponent>();
+        if (!meshComponent) {
+            std::cout << "Skipping actor '" << actor->getName() << "' - no mesh component" << std::endl;
+            continue;
+        }
+        
+        // Add physics component
+        auto physicsComponent = actor->addComponent<PhysicsComponent>();
+        if (physicsComponent) {
+            // Set up physics properties for a dynamic object
+            physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::DYNAMIC);
+            physicsComponent->setMass(1.0f);  // 1 kg
+            physicsComponent->setRestitution(0.3f);  // Some bounce
+            physicsComponent->setFriction(0.5f);     // Medium friction
+            
+            // Create a box collision shape based on object scale
+            auto transform = actor->getTransform();
+            if (transform) {
+                glm::vec3 scale = transform->getScale();
+                // Create box collision shape (half-extents = scale / 2)
+                physicsComponent->createBoxShape(scale * 0.5f);
+            } else {
+                // Default box shape if no transform
+                physicsComponent->createBoxShape(0.5f, 0.5f, 0.5f);
+            }
+            
+            // Set transform component reference for synchronization
+            physicsComponent->setTransformComponent(actor->getTransform());
+            
+            std::cout << "Added physics to actor '" << actor->getName() << "' with box collision shape" << std::endl;
+            physicsObjectsCreated++;
+        }
+    }
+    
+    std::cout << "Physics setup complete. Created " << physicsObjectsCreated << " physics objects." << std::endl;
+    std::cout << "Total physics components in scene: " << physicsComponents.size() << std::endl;
+    std::cout << "Total rigid bodies in physics world: " << physicsWorld->getRigidBodyCount() << std::endl;
+}
+
 } // namespace ohao

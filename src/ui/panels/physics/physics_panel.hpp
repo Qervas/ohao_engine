@@ -2,10 +2,12 @@
 
 #include "ui/common/panel_base.hpp"
 #include "physics/world/physics_world.hpp"
-#include "physics/world/simulation_state.hpp"
 #include <memory>
 
 namespace ohao {
+
+// Forward declaration
+class Scene;
 
 class PhysicsPanel : public PanelBase {
 public:
@@ -14,6 +16,7 @@ public:
     
     void render() override;
     void setPhysicsWorld(physics::PhysicsWorld* world);
+    void setScene(Scene* scene) { m_scene = scene; }
     
     // Physics state getters for external systems (replacing toolbar)
     physics::SimulationState getPhysicsState() const { return m_simulationState; }
@@ -27,8 +30,9 @@ private:
     void renderDebugTools();
     void renderPerformanceStats();
     
-    // Physics world reference
+    // References
     physics::PhysicsWorld* m_physicsWorld = nullptr;
+    Scene* m_scene = nullptr;
     
     // Physics state (migrated from toolbar)
     physics::SimulationState m_simulationState = physics::SimulationState::STOPPED;  // Start stopped by default
