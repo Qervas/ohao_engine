@@ -1,5 +1,4 @@
 #include "viewport_toolbar.hpp"
-#include "physics/world/physics_world.hpp"
 #include "imgui.h"
 #include "renderer/vulkan_context.hpp"
 
@@ -39,104 +38,13 @@ void ViewportToolbar::render() {
     ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.25f, 0.25f, 0.25f, 0.8f));
     
     if (ImGui::Begin("##ViewportToolbar", &visible, windowFlags)) {
-        // Create horizontal layout with sections
-        renderModernPhysicsControls();
-        
-        // Elegant separator
-        renderSectionSeparator();
-        
-        // Visual Aid Controls  
+        // Only render visual aid controls now
         renderModernVisualAidControls();
     }
     ImGui::End();
     
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar(6);
-}
-
-void ViewportToolbar::renderModernPhysicsControls() {
-    // Physics section with subtle header
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
-    ImGui::Text(ICON_PHYSICS " Physics");
-    ImGui::PopStyleColor();
-    
-    // Create horizontal layout for control buttons
-    const float buttonSize = 36.0f;
-    const float iconSize = 16.0f;
-    
-    // Play button with modern icon
-    bool isPlaying = (physicsState == PhysicsSimulationState::RUNNING);
-    renderModernButton(ICON_PLAY, isPlaying, 
-        ImVec4(0.15f, 0.75f, 0.15f, 1.0f), // Active color - vibrant green
-        ImVec4(0.12f, 0.12f, 0.12f, 1.0f), // Inactive color - dark
-        buttonSize, "Start physics simulation");
-    
-    if (ImGui::IsItemClicked() && !isPlaying) {
-        physicsState = PhysicsSimulationState::RUNNING;
-        printf("Physics simulation: PLAYING\n");
-    }
-    
-    ImGui::SameLine(0.0f, 4.0f);
-    
-    // Pause button
-    bool isPaused = (physicsState == PhysicsSimulationState::PAUSED);
-    renderModernButton(ICON_PAUSE, isPaused,
-        ImVec4(0.85f, 0.65f, 0.15f, 1.0f), // Active color - amber
-        ImVec4(0.12f, 0.12f, 0.12f, 1.0f), // Inactive color
-        buttonSize, "Pause physics simulation");
-    
-    if (ImGui::IsItemClicked() && !isPaused) {
-        physicsState = PhysicsSimulationState::PAUSED;
-        printf("Physics simulation: PAUSED\n");
-    }
-    
-    ImGui::SameLine(0.0f, 4.0f);
-    
-    // Stop button (keep disabled for testing as in original)
-    bool isStopped = (physicsState == PhysicsSimulationState::STOPPED);
-    ImGui::BeginDisabled(true);
-    renderModernButton(ICON_STOP, isStopped,
-        ImVec4(0.85f, 0.25f, 0.25f, 1.0f), // Active color - red
-        ImVec4(0.12f, 0.12f, 0.12f, 1.0f), // Inactive color
-        buttonSize, "Stop physics simulation (temporarily disabled)");
-    ImGui::EndDisabled();
-    
-    ImGui::SameLine(0.0f, 12.0f); // Extra space before speed controls
-    
-    // Speed control with modern styling
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
-    ImGui::Text("%.1fx", simulationSpeed);
-    ImGui::PopStyleColor();
-    
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(80);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.4f, 0.65f, 0.95f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.5f, 0.75f, 1.0f, 1.0f));
-    if (ImGui::SliderFloat("##Speed", &simulationSpeed, 0.1f, 3.0f, "")) {
-        printf("Physics speed: %.1fx\n", simulationSpeed);
-    }
-    ImGui::PopStyleColor(3);
-    
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Simulation Speed\n0.1x - Slow motion\n1.0x - Normal speed\n3.0x - Fast forward");
-    }
-    
-    // Quick speed presets with modern mini buttons
-    ImGui::SameLine();
-    renderSpeedPresetButton("0.5x", 0.5f);
-    ImGui::SameLine(0.0f, 2.0f);
-    renderSpeedPresetButton("1x", 1.0f);  
-    ImGui::SameLine(0.0f, 2.0f);
-    renderSpeedPresetButton("2x", 2.0f);
-    
-    // Physics enabled toggle with modern styling
-    ImGui::SameLine(0.0f, 8.0f);
-    renderModernCheckbox("##PhysicsEnabled", &physicsEnabled, "Enable/disable physics simulation");
-    
-    // Compact status indicator
-    ImGui::SameLine();
-    renderPhysicsStatusIndicator();
 }
 
 void ViewportToolbar::renderModernVisualAidControls() {
@@ -166,7 +74,7 @@ void ViewportToolbar::renderModernVisualAidControls() {
         ImVec4(0.95f, 0.55f, 0.15f, 1.0f), // Active - orange
         "Toggle wireframe rendering mode");
     
-    // Apply changes to the systems (same logic as before)
+    // Apply changes to the systems
     applyVisualAidSettings();
 }
 
@@ -223,22 +131,6 @@ void ViewportToolbar::renderModernToggleButton(const char* icon, bool& toggle, f
     ImGui::PopStyleColor(3);
 }
 
-void ViewportToolbar::renderSpeedPresetButton(const char* label, float speed) {
-    bool isActive = (fabs(simulationSpeed - speed) < 0.01f);
-    ImVec4 color = isActive ? ImVec4(0.4f, 0.65f, 0.95f, 1.0f) : ImVec4(0.15f, 0.15f, 0.15f, 1.0f);
-    
-    ImGui::PushStyleColor(ImGuiCol_Button, color);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(color.x + 0.1f, color.y + 0.1f, color.z + 0.1f, 1.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
-    
-    if (ImGui::Button(label, ImVec2(28, 20))) {
-        simulationSpeed = speed;
-    }
-    
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor(2);
-}
-
 void ViewportToolbar::renderModernCheckbox(const char* id, bool* value, const char* tooltip) {
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.15f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(0.4f, 0.75f, 0.4f, 1.0f));
@@ -252,30 +144,6 @@ void ViewportToolbar::renderModernCheckbox(const char* id, bool* value, const ch
     
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
-}
-
-void ViewportToolbar::renderPhysicsStatusIndicator() {
-    const char* icon = "";
-    ImVec4 color;
-    
-    switch (physicsState) {
-        case PhysicsSimulationState::RUNNING:
-            icon = ICON_STATUS_RUNNING;
-            color = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-            break;
-        case PhysicsSimulationState::PAUSED:
-            icon = ICON_STATUS_PAUSED;
-            color = ImVec4(0.8f, 0.6f, 0.2f, 1.0f);
-            break;
-        case PhysicsSimulationState::STOPPED:
-            icon = ICON_STATUS_STOPPED;
-            color = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-            break;
-    }
-    
-    ImGui::PushStyleColor(ImGuiCol_Text, color);
-    ImGui::Text("%s", icon);
-    ImGui::PopStyleColor();
 }
 
 void ViewportToolbar::renderSectionSeparator() {

@@ -1,4 +1,5 @@
 #include "collision_resolver.hpp"
+#include "physics/dynamics/rigid_body.hpp"
 #include "physics/utils/physics_math.hpp"
 
 namespace ohao {

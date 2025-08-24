@@ -1,6 +1,6 @@
 #pragma once
 
-#include "contact_info.hpp"
+#include "contact_manifold.hpp"
 #include "physics/dynamics/rigid_body.hpp"
 #include <vector>
 

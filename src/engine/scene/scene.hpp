@@ -75,6 +75,9 @@ public:
     physics::PhysicsWorld* getPhysicsWorld() { return physicsWorld.get(); }
     const physics::PhysicsWorld* getPhysicsWorld() const { return physicsWorld.get(); }
     
+    // Physics components access
+    const std::vector<PhysicsComponent*>& getPhysicsComponents() const { return physicsComponents; }
+    
     // Helper method to add physics to objects
     void addPhysicsToAllObjects();
     

@@ -1,4 +1,5 @@
 #include "physics_panel.hpp"
+#include "engine/scene/scene.hpp"
 #include "ui/components/console_widget.hpp"
 #include <imgui.h>
 #include <algorithm>
@@ -183,13 +184,25 @@ void PhysicsPanel::renderWorldSettings() {
     ImGui::SliderFloat3("##Gravity", &m_gravity.x, -20.0f, 20.0f, "%.2f");
     
     // Gravity presets
-    if (ImGui::Button("Earth")) m_gravity = glm::vec3(0.0f, -9.81f, 0.0f);
+    if (ImGui::Button("Earth")) {
+        m_gravity = glm::vec3(0.0f, -9.81f, 0.0f);
+        if (m_physicsWorld) m_physicsWorld->setGravity(m_gravity);
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Moon")) m_gravity = glm::vec3(0.0f, -1.62f, 0.0f);
+    if (ImGui::Button("Moon")) {
+        m_gravity = glm::vec3(0.0f, -1.62f, 0.0f);
+        if (m_physicsWorld) m_physicsWorld->setGravity(m_gravity);
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Zero-G")) m_gravity = glm::vec3(0.0f, 0.0f, 0.0f);
+    if (ImGui::Button("Zero-G")) {
+        m_gravity = glm::vec3(0.0f, 0.0f, 0.0f);
+        if (m_physicsWorld) m_physicsWorld->setGravity(m_gravity);
+    }
     
-    // TODO: Apply gravity to physics world
+    // Apply gravity changes to physics world
+    if (m_physicsWorld) {
+        m_physicsWorld->setGravity(m_gravity);
+    }
 }
 
 void PhysicsPanel::renderDebugTools() {
@@ -206,6 +219,32 @@ void PhysicsPanel::renderDebugTools() {
         m_showForces = newState;
     }
     
+    ImGui::Separator();
+    ImGui::Text("Physics Setup");
+    
+    // Add physics to all objects button
+    if (ImGui::Button("Add Physics to All Objects", ImVec2(-1.0f, 0.0f))) {
+        if (m_physicsWorld) {
+            // Try to get the scene from the physics world context
+            // We need to access the scene somehow - let's see if we can get it through a callback
+            OHAO_LOG("Adding physics components to all scene objects...");
+            
+            // For now, we'll add a member to store scene reference
+            if (m_scene) {
+                m_scene->addPhysicsToAllObjects();
+                OHAO_LOG("Physics components added to all objects!");
+            } else {
+                OHAO_LOG("ERROR: No scene reference available");
+            }
+        } else {
+            OHAO_LOG("ERROR: No physics world connected");
+        }
+    }
+    
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Add physics components to all visual objects in the scene.\nThis will make them fall when physics simulation is running.");
+    }
+    
     // TODO: Connect to debug renderer
 }
 
@@ -214,6 +253,14 @@ void PhysicsPanel::renderPerformanceStats() {
     
     if (m_physicsWorld) {
         ImGui::Text("Rigid Bodies: %zu", m_physicsWorld->getRigidBodyCount());
+        ImGui::Text("Simulation State: %d", static_cast<int>(m_physicsWorld->getSimulationState()));
+        ImGui::Text("Panel State: %d", static_cast<int>(m_simulationState));
+        
+        // DEBUG: Show scene physics components count
+        if (m_scene) {
+            ImGui::Text("Scene Physics Components: %zu", m_scene->getPhysicsComponents().size());
+        }
+        
         // TODO: Add more stats from physics world
     } else {
         ImGui::Text("No physics world connected");
@@ -227,9 +274,11 @@ void PhysicsPanel::renderPerformanceStats() {
 void PhysicsPanel::setPhysicsWorld(physics::PhysicsWorld* world) {
     m_physicsWorld = world;
     
-    // Sync initial state
+    // Sync initial state and gravity
     if (m_physicsWorld) {
         m_physicsWorld->setSimulationState(m_simulationState);
+        // Apply the panel's gravity settings to the physics world
+        m_physicsWorld->setGravity(m_gravity);
     }
 }
 

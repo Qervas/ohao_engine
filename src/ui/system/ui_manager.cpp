@@ -518,8 +518,9 @@ void UIManager::setupPanels() {
         propertiesPanel->setScene(scene);
         sceneSettingsPanel->setScene(scene);
         
-        // Connect physics panel to physics world
+        // Connect physics panel to physics world and scene
         physicsPanel->setPhysicsWorld(scene->getPhysicsWorld());
+        physicsPanel->setScene(scene);
         
         OHAO_LOG_DEBUG("UI Panels initialized with scene");
     }

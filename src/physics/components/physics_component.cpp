@@ -6,8 +6,10 @@
 #include "physics/dynamics/rigid_body.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/collision/shapes/shape_factory.hpp"
+#include "physics/material/physics_material.hpp"
 #include "engine/asset/model.hpp"
 #include "ui/components/console_widget.hpp"
+#include <map>
 
 namespace ohao {
 
@@ -48,8 +50,16 @@ float PhysicsComponent::getMass() const {
 }
 
 void PhysicsComponent::setRestitution(float restitution) {
+    // Create or modify material with new restitution
     if (m_rigidBody) {
-        m_rigidBody->setRestitution(restitution);
+        auto material = m_rigidBody->getPhysicsMaterial();
+        if (!material) {
+            material = physics::MaterialLibrary::getInstance().getDefault();
+        }
+        // Create a copy with modified restitution
+        auto newMaterial = std::make_shared<physics::PhysicsMaterial>(*material);
+        newMaterial->setRestitution(restitution);
+        m_rigidBody->setPhysicsMaterial(newMaterial);
     }
 }
 
@@ -61,14 +71,23 @@ float PhysicsComponent::getRestitution() const {
 }
 
 void PhysicsComponent::setFriction(float friction) {
+    // Create or modify material with new friction
     if (m_rigidBody) {
-        m_rigidBody->setFriction(friction);
+        auto material = m_rigidBody->getPhysicsMaterial();
+        if (!material) {
+            material = physics::MaterialLibrary::getInstance().getDefault();
+        }
+        // Create a copy with modified friction
+        auto newMaterial = std::make_shared<physics::PhysicsMaterial>(*material);
+        newMaterial->setStaticFriction(friction);
+        newMaterial->setDynamicFriction(friction);
+        m_rigidBody->setPhysicsMaterial(newMaterial);
     }
 }
 
 float PhysicsComponent::getFriction() const {
     if (m_rigidBody) {
-        return m_rigidBody->getFriction();
+        return m_rigidBody->getStaticFriction();
     }
     return 0.5f;
 }
@@ -354,6 +373,16 @@ void PhysicsComponent::updateTransformFromRigidBody() {
     // Update visual transform from physics
     glm::vec3 position = m_rigidBody->getPosition();
     glm::quat rotation = m_rigidBody->getRotation();
+    
+    // DEBUG: Log position changes
+    static std::map<void*, glm::vec3> lastPositions;
+    auto& lastPos = lastPositions[this];
+    if (glm::length(position - lastPos) > 0.001f) { // Only log if moved significantly
+        printf("PHYSICS SYNC DEBUG: Body moved from (%.3f,%.3f,%.3f) to (%.3f,%.3f,%.3f)\n",
+               lastPos.x, lastPos.y, lastPos.z, position.x, position.y, position.z);
+        lastPos = position;
+    }
+    
     m_transformComponent->setPosition(position);
     m_transformComponent->setRotation(rotation);
 }
