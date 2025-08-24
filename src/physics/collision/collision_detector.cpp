@@ -1,4 +1,5 @@
 #include "collision_detector.hpp"
+#include "physics/dynamics/rigid_body.hpp"
 #include "shapes/box_shape.hpp"
 #include "shapes/sphere_shape.hpp"
 #include "shapes/capsule_shape.hpp"
@@ -42,7 +43,7 @@ ContactInfo CollisionDetector::detectCollision(dynamics::RigidBody* bodyA, dynam
     // Set contact properties from body materials
     if (contact.hasContact) {
         contact.restitution = (bodyA->getRestitution() + bodyB->getRestitution()) * 0.5f;
-        contact.friction = glm::sqrt(bodyA->getFriction() * bodyB->getFriction());
+        contact.friction = glm::sqrt(bodyA->getStaticFriction() * bodyB->getStaticFriction());
     }
     
     return contact;
