@@ -108,23 +108,89 @@ public:
     }
     
     static std::shared_ptr<TriangleMeshShape> createIcosphere(float radius = 1.0f, int subdivisions = 2) {
-        // TODO: Implement icosphere generation for smooth sphere approximation
-        // For now, return a simple octahedron
+        // Implement icosphere generation for smooth sphere approximation
+        
+        // Golden ratio constant
+        const float phi = (1.0f + std::sqrt(5.0f)) / 2.0f;
+        const float a = 1.0f;
+        const float b = 1.0f / phi;
+        
+        // Create initial icosahedron vertices (12 vertices)
         std::vector<glm::vec3> vertices = {
-            glm::vec3( 0,  radius,  0),  // Top
-            glm::vec3( 0, -radius,  0),  // Bottom
-            glm::vec3( radius,  0,  0),  // Right
-            glm::vec3(-radius,  0,  0),  // Left
-            glm::vec3( 0,  0,  radius),  // Front
-            glm::vec3( 0,  0, -radius)   // Back
+            // Top cap
+            glm::vec3( 0,  b, -a), glm::vec3( b,  a,  0), glm::vec3(-b,  a,  0),
+            glm::vec3( 0,  b,  a), glm::vec3( 0, -b,  a), glm::vec3(-a,  0,  b),
+            glm::vec3( 0, -b, -a), glm::vec3( a,  0, -b), glm::vec3( a,  0,  b),
+            glm::vec3(-a,  0, -b), glm::vec3( b, -a,  0), glm::vec3(-b, -a,  0)
         };
         
+        // Normalize to unit sphere
+        for (auto& vertex : vertices) {
+            vertex = glm::normalize(vertex) * radius;
+        }
+        
+        // Create initial icosahedron faces (20 triangles)
         std::vector<uint32_t> indices = {
-            0, 2, 4,  0, 4, 3,  0, 3, 5,  0, 5, 2,  // Top faces
-            1, 4, 2,  1, 3, 4,  1, 5, 3,  1, 2, 5   // Bottom faces
+            // Top cap
+            2, 1, 0,   1, 2, 3,   5, 4, 3,   4, 8, 3,   7, 6, 0,   6, 9, 0,
+            11, 10, 4, 10, 11, 6, 9, 5, 2,   5, 9, 11,  8, 7, 1,   7, 8, 10,
+            // Middle
+            2, 5, 3,   8, 1, 3,   9, 2, 0,   1, 7, 0,   11, 9, 6,  7, 10, 6,
+            5, 11, 4,  10, 8, 4
         };
+        
+        // Subdivide the mesh for smoother approximation
+        for (int sub = 0; sub < subdivisions; ++sub) {
+            std::vector<uint32_t> newIndices;
+            std::unordered_map<uint64_t, uint32_t> edgeMap;
+            
+            // Process each triangle
+            for (size_t i = 0; i < indices.size(); i += 3) {
+                uint32_t v0 = indices[i];
+                uint32_t v1 = indices[i + 1];
+                uint32_t v2 = indices[i + 2];
+                
+                // Get or create midpoint vertices
+                uint32_t a = getOrCreateMidpoint(v0, v1, vertices, edgeMap, radius);
+                uint32_t b = getOrCreateMidpoint(v1, v2, vertices, edgeMap, radius);
+                uint32_t c = getOrCreateMidpoint(v2, v0, vertices, edgeMap, radius);
+                
+                // Create 4 new triangles
+                newIndices.insert(newIndices.end(), {v0, a, c});
+                newIndices.insert(newIndices.end(), {v1, b, a});
+                newIndices.insert(newIndices.end(), {v2, c, b});
+                newIndices.insert(newIndices.end(), {a, b, c});
+            }
+            
+            indices = std::move(newIndices);
+        }
         
         return createTriangleMesh(vertices, indices);
+    }
+
+private:
+    // Helper function for icosphere subdivision
+    static uint32_t getOrCreateMidpoint(uint32_t i1, uint32_t i2, 
+                                       std::vector<glm::vec3>& vertices,
+                                       std::unordered_map<uint64_t, uint32_t>& edgeMap,
+                                       float radius) {
+        // Create edge key (ensure consistent ordering)
+        uint64_t key = (static_cast<uint64_t>(std::min(i1, i2)) << 32) | std::max(i1, i2);
+        
+        auto it = edgeMap.find(key);
+        if (it != edgeMap.end()) {
+            return it->second;
+        }
+        
+        // Create new midpoint vertex
+        glm::vec3 midpoint = (vertices[i1] + vertices[i2]) * 0.5f;
+        midpoint = glm::normalize(midpoint) * radius;
+        
+        uint32_t index = static_cast<uint32_t>(vertices.size());
+        vertices.push_back(midpoint);
+        edgeMap[key] = index;
+        
+        return index;
     }
 };
 
