@@ -157,10 +157,124 @@ ContactInfo CollisionDetector::testBoxVsBox(
     const BoxShape* boxA, const glm::vec3& posA, const glm::quat& rotA,
     const BoxShape* boxB, const glm::vec3& posB, const glm::quat& rotB) {
     
-    // For now, assume axis-aligned boxes (no rotation)
-    // TODO: Implement SAT (Separating Axis Theorem) for oriented boxes
+    // Implement SAT (Separating Axis Theorem) for oriented boxes
+    ContactInfo contact;
     
-    return createBoxBoxContact(posA, boxA->getHalfExtents(), posB, boxB->getHalfExtents());
+    // Get half extents and create rotation matrices
+    glm::vec3 extentsA = boxA->getHalfExtents();
+    glm::vec3 extentsB = boxB->getHalfExtents();
+    glm::mat3 rotMatA = glm::mat3_cast(rotA);
+    glm::mat3 rotMatB = glm::mat3_cast(rotB);
+    
+    // Translation vector between box centers
+    glm::vec3 translation = posB - posA;
+    
+    // Rotation matrix from A to B coordinate system
+    glm::mat3 rotAToB = glm::transpose(rotMatA) * rotMatB;
+    glm::mat3 absRotAToB = glm::mat3(
+        glm::abs(rotAToB[0]),
+        glm::abs(rotAToB[1]),
+        glm::abs(rotAToB[2])
+    );
+    
+    // Translation in A's coordinate system
+    glm::vec3 t = glm::transpose(rotMatA) * translation;
+    
+    float minSeparation = std::numeric_limits<float>::max();
+    glm::vec3 separatingAxis;
+    int axisType = -1; // 0=A axis, 1=B axis, 2=edge-edge
+    int axisIndex = 0;
+    
+    // Test 15 potential separating axes
+    
+    // Test A's face normals (3 axes)
+    for (int i = 0; i < 3; i++) {
+        float projection = glm::dot(absRotAToB[i], extentsB);
+        float separation = std::abs(t[i]) - (extentsA[i] + projection);
+        
+        if (separation > 0) {
+            return contact; // Separated - no collision
+        }
+        
+        if (separation > minSeparation) {
+            minSeparation = separation;
+            separatingAxis = rotMatA[i];
+            if (t[i] < 0) separatingAxis = -separatingAxis;
+            axisType = 0;
+            axisIndex = i;
+        }
+    }
+    
+    // Test B's face normals (3 axes)
+    for (int i = 0; i < 3; i++) {
+        float projection = glm::dot(glm::vec3(absRotAToB[0][i], absRotAToB[1][i], absRotAToB[2][i]), extentsA);
+        float separation = std::abs(glm::dot(t, glm::vec3(rotAToB[0][i], rotAToB[1][i], rotAToB[2][i]))) - 
+                          (projection + extentsB[i]);
+        
+        if (separation > 0) {
+            return contact; // Separated - no collision
+        }
+        
+        if (separation > minSeparation) {
+            minSeparation = separation;
+            separatingAxis = rotMatB[i];
+            if (glm::dot(translation, rotMatB[i]) < 0) separatingAxis = -separatingAxis;
+            axisType = 1;
+            axisIndex = i;
+        }
+    }
+    
+    // Test edge-edge combinations (9 axes)
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            glm::vec3 axis = glm::cross(rotMatA[i], rotMatB[j]);
+            float axisLength = glm::length(axis);
+            
+            if (axisLength < math::constants::EPSILON) continue; // Parallel edges
+            
+            axis /= axisLength;
+            
+            // Project both boxes onto this axis
+            float projA = 0, projB = 0;
+            for (int k = 0; k < 3; k++) {
+                projA += extentsA[k] * std::abs(glm::dot(axis, rotMatA[k]));
+                projB += extentsB[k] * std::abs(glm::dot(axis, rotMatB[k]));
+            }
+            
+            float separation = std::abs(glm::dot(translation, axis)) - (projA + projB);
+            
+            if (separation > 0) {
+                return contact; // Separated - no collision
+            }
+            
+            if (separation > minSeparation) {
+                minSeparation = separation;
+                separatingAxis = axis;
+                if (glm::dot(translation, axis) < 0) separatingAxis = -separatingAxis;
+                axisType = 2;
+                axisIndex = i * 3 + j;
+            }
+        }
+    }
+    
+    // Collision detected - calculate contact info
+    contact.hasContact = true;
+    contact.penetrationDepth = -minSeparation;
+    contact.contactNormal = glm::normalize(separatingAxis);
+    
+    // Calculate contact point (simplified - use closest point on separating axis)
+    if (axisType == 0) {
+        // Face of A is the separating axis
+        contact.contactPoint = posA + rotMatA[axisIndex] * extentsA[axisIndex];
+    } else if (axisType == 1) {
+        // Face of B is the separating axis
+        contact.contactPoint = posB - rotMatB[axisIndex] * extentsB[axisIndex];
+    } else {
+        // Edge-edge contact - use midpoint
+        contact.contactPoint = (posA + posB) * 0.5f;
+    }
+    
+    return contact;
 }
 
 ContactInfo CollisionDetector::testSphereVsSphere(
