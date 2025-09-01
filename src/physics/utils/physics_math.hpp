@@ -161,6 +161,10 @@ struct AABB {
         glm::vec3 distance = glm::max(glm::vec3(0.0f), glm::max(min - other.max, other.min - max));
         return lengthSquared(distance);
     }
+    
+    glm::vec3 getClosestPoint(const glm::vec3& point) const {
+        return glm::clamp(point, min, max);
+    }
 };
 
 // Plane representation for collision detection

@@ -356,6 +356,50 @@ void RigidBody::validateState() {
     m_rotation = math::safeNormalize(m_rotation);
 }
 
+// === FORCE SYSTEM INTEGRATION ===
+void RigidBody::applyForceTracked(const glm::vec3& force, const glm::vec3& relativePos, const std::string& sourceId) {
+    // Apply the force using the standard method
+    applyForce(force, relativePos);
+    
+    // Update statistics
+    m_forceStats.totalForceApplied += force;
+    m_forceStats.forceApplicationCount++;
+    
+    float forceMagnitude = glm::length(force);
+    m_forceStats.maxForceThisFrame = std::max(m_forceStats.maxForceThisFrame, forceMagnitude);
+    
+    // Add torque contribution if applied at offset
+    if (!math::isNearZero(relativePos)) {
+        glm::vec3 torque = glm::cross(relativePos, force);
+        m_forceStats.totalTorqueApplied += torque;
+        
+        float torqueMagnitude = glm::length(torque);
+        m_forceStats.maxTorqueThisFrame = std::max(m_forceStats.maxTorqueThisFrame, torqueMagnitude);
+    }
+    
+    // Track force source if provided
+    if (!sourceId.empty()) {
+        m_activeForces.insert(sourceId);
+    }
+}
+
+void RigidBody::applyTorqueTracked(const glm::vec3& torque, const std::string& sourceId) {
+    // Apply the torque using the standard method
+    applyTorque(torque);
+    
+    // Update statistics
+    m_forceStats.totalTorqueApplied += torque;
+    m_forceStats.forceApplicationCount++;
+    
+    float torqueMagnitude = glm::length(torque);
+    m_forceStats.maxTorqueThisFrame = std::max(m_forceStats.maxTorqueThisFrame, torqueMagnitude);
+    
+    // Track force source if provided
+    if (!sourceId.empty()) {
+        m_activeForces.insert(sourceId);
+    }
+}
+
 } // namespace dynamics
 } // namespace physics
 } // namespace ohao

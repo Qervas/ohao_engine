@@ -61,6 +61,7 @@ private:
 
 // Global logging functions
 #define OHAO_LOG(msg) ohao::ConsoleWidget::get().log(msg)
+#define OHAO_LOG_INFO(msg) ohao::ConsoleWidget::get().log(msg)
 #define OHAO_LOG_WARNING(msg) ohao::ConsoleWidget::get().logWarning(msg)
 #define OHAO_LOG_ERROR(msg) ohao::ConsoleWidget::get().logError(msg)
 #define OHAO_LOG_DEBUG(msg) ohao::ConsoleWidget::get().logDebug(msg)
