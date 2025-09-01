@@ -2,6 +2,8 @@
 #include "physics/components/physics_component.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/collision/collision_system.hpp"
+#include "physics/forces/forces.hpp"
+#include "physics/debug/force_debugger.hpp"
 #include <chrono>
 
 namespace ohao {
@@ -54,6 +56,9 @@ void PhysicsWorld::initialize() {
     
     // Reserve capacity for performance
     m_rigidBodies.reserve(m_config.initialBodyCapacity);
+    
+    // Initialize force debugger
+    m_forceDebugger = std::make_unique<debug::ForceDebugger>();
 }
 
 void PhysicsWorld::shutdown() {
@@ -69,6 +74,7 @@ void PhysicsWorld::shutdown() {
     m_constraintManager.reset();
     m_integrator.reset();
     m_collisionQueries.reset();
+    m_forceDebugger.reset();
     
     m_state = SimulationState::STOPPED;
 }
@@ -217,7 +223,22 @@ void PhysicsWorld::initializeSubsystems() {
     // Initialize collision system
     m_collisionSystem = std::make_unique<collision::CollisionSystem>(m_config.collisionConfig);
     
-    // TODO: Initialize other subsystems (integrator, constraint manager, etc.)
+    // Initialize constraint manager
+    m_constraintManager = std::make_unique<constraints::ConstraintManager>();
+    m_constraintManager->setConfig(m_config.constraintConfig);
+    
+    // Initialize physics integrator
+    m_integrator = std::make_unique<dynamics::PhysicsIntegrator>();
+    m_integrator->setConfig(m_config.integratorConfig);
+    
+    // Initialize collision queries (for raycasting, etc.)
+    m_collisionQueries = std::make_unique<collision::CollisionQueries>(m_collisionSystem.get());
+    
+    // Initialize force debugger if needed
+    if (m_config.enableForceDebugging) {
+        m_forceDebugger = std::make_unique<debug::ForceDebugger>();
+        m_forceDebuggingEnabled = true;
+    }
 }
 
 void PhysicsWorld::updateActiveBodyPointers() {
@@ -233,28 +254,65 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
     // Simplified single-threaded step
     updateActiveBodyPointers();
     
-    // Apply gravity and integrate
+    // Convert to raw pointers for force application
+    std::vector<dynamics::RigidBody*> bodyPtrs;
+    bodyPtrs.reserve(m_rigidBodies.size());
+    for (auto& body : m_rigidBodies) {
+        if (body) {
+            bodyPtrs.push_back(body.get());
+        }
+    }
+    
+    // Start force debugging frame if enabled
+    if (m_forceDebuggingEnabled && m_forceDebugger) {
+        m_forceDebugger->startFrame();
+    }
+    
+    // Apply forces from force registry (includes gravity, drag, etc.)
+    m_forceRegistry.applyForces(bodyPtrs, deltaTime);
+    
+    // Apply legacy gravity for backward compatibility if no gravity forces are registered
+    if (m_forceRegistry.getForceCount() == 0) {
+        for (auto* body : m_activeBodyPointers) {
+            if (body && !body->isStatic()) {
+                glm::vec3 gravityForce = m_config.gravity * body->getMass();
+                body->applyForce(gravityForce);
+                
+                // Record legacy gravity in force debugger
+                if (m_forceDebuggingEnabled && m_forceDebugger) {
+                    m_forceDebugger->recordForceApplication(body, gravityForce, body->getPosition(), "legacy_gravity");
+                }
+            }
+        }
+    }
+    
+    // Analyze forces if debugging is enabled
+    if (m_forceDebuggingEnabled && m_forceDebugger) {
+        m_forceDebugger->analyzeForceRegistry(m_forceRegistry, bodyPtrs);
+    }
+    
+    // Integrate physics
     for (auto* body : m_activeBodyPointers) {
         if (body && !body->isStatic()) {
-            // Apply gravity force before integration
-            glm::vec3 gravityForce = m_config.gravity * body->getMass();
-            body->applyForce(gravityForce);
             body->integrate(deltaTime);
         }
     }
     
     // COLLISION DETECTION AND RESOLUTION
     if (m_collisionSystem && !m_rigidBodies.empty()) {
-        // Convert to raw pointers for collision system
-        std::vector<dynamics::RigidBody*> bodyPtrs;
-        bodyPtrs.reserve(m_rigidBodies.size());
-        for (auto& body : m_rigidBodies) {
-            if (body) {
-                bodyPtrs.push_back(body.get());
-            }
-        }
-        
         m_collisionSystem->detectAndResolveCollisions(bodyPtrs, deltaTime);
+    }
+    
+    // Clear accumulated forces after integration
+    for (auto* body : m_activeBodyPointers) {
+        if (body) {
+            body->clearForces();
+        }
+    }
+    
+    // End force debugging frame if enabled
+    if (m_forceDebuggingEnabled && m_forceDebugger) {
+        m_forceDebugger->endFrame();
     }
 }
 
@@ -281,6 +339,18 @@ void PhysicsWorld::enableDebugVisualization(bool enable) {
     m_config.enableDebugVisualization = enable;
 }
 
+void PhysicsWorld::enableForceDebugging(bool enable) {
+    m_forceDebuggingEnabled = enable;
+    
+    if (enable && !m_forceDebugger) {
+        m_forceDebugger = std::make_unique<debug::ForceDebugger>();
+    }
+}
+
+bool PhysicsWorld::isForceDebuggingEnabled() const {
+    return m_forceDebuggingEnabled && m_forceDebugger != nullptr;
+}
+
 size_t PhysicsWorld::getMemoryUsage() const {
     size_t usage = 0;
     usage += sizeof(PhysicsWorld);
@@ -301,6 +371,85 @@ void PhysicsWorld::compactMemory() {
     
     m_rigidBodies.shrink_to_fit();
     m_activeBodyPointers.shrink_to_fit();
+}
+
+// === FORCE SYSTEM INTEGRATION ===
+size_t PhysicsWorld::registerForce(std::unique_ptr<forces::ForceGenerator> generator, 
+                                  const std::string& name,
+                                  const std::vector<dynamics::RigidBody*>& targetBodies) {
+    return m_forceRegistry.registerForce(std::move(generator), name, targetBodies);
+}
+
+bool PhysicsWorld::unregisterForce(size_t forceId) {
+    return m_forceRegistry.unregisterForce(forceId);
+}
+
+void PhysicsWorld::clearAllForces() {
+    m_forceRegistry.clear();
+}
+
+void PhysicsWorld::setupEarthEnvironment() {
+    // Clear existing forces
+    clearAllForces();
+    
+    // Convert to raw pointers
+    std::vector<dynamics::RigidBody*> bodyPtrs;
+    bodyPtrs.reserve(m_rigidBodies.size());
+    for (auto& body : m_rigidBodies) {
+        if (body) {
+            bodyPtrs.push_back(body.get());
+        }
+    }
+    
+    forces::ForcePresets::setupEarthEnvironment(m_forceRegistry, bodyPtrs);
+}
+
+void PhysicsWorld::setupSpaceEnvironment() {
+    // Clear existing forces
+    clearAllForces();
+    
+    // Convert to raw pointers
+    std::vector<dynamics::RigidBody*> bodyPtrs;
+    bodyPtrs.reserve(m_rigidBodies.size());
+    for (auto& body : m_rigidBodies) {
+        if (body) {
+            bodyPtrs.push_back(body.get());
+        }
+    }
+    
+    forces::ForcePresets::setupSpaceEnvironment(m_forceRegistry, bodyPtrs);
+}
+
+void PhysicsWorld::setupUnderwaterEnvironment() {
+    // Clear existing forces
+    clearAllForces();
+    
+    // Convert to raw pointers
+    std::vector<dynamics::RigidBody*> bodyPtrs;
+    bodyPtrs.reserve(m_rigidBodies.size());
+    for (auto& body : m_rigidBodies) {
+        if (body) {
+            bodyPtrs.push_back(body.get());
+        }
+    }
+    
+    forces::ForcePresets::setupUnderwaterEnvironment(m_forceRegistry, bodyPtrs);
+}
+
+void PhysicsWorld::setupGamePhysics() {
+    // Clear existing forces
+    clearAllForces();
+    
+    // Convert to raw pointers
+    std::vector<dynamics::RigidBody*> bodyPtrs;
+    bodyPtrs.reserve(m_rigidBodies.size());
+    for (auto& body : m_rigidBodies) {
+        if (body) {
+            bodyPtrs.push_back(body.get());
+        }
+    }
+    
+    forces::ForcePresets::setupGamePhysics(m_forceRegistry, bodyPtrs);
 }
 
 } // namespace physics

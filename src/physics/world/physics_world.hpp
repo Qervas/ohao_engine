@@ -4,6 +4,8 @@
 #include "physics/dynamics/physics_integrator.hpp"
 #include "physics/collision/collision_system.hpp"
 #include "physics/constraints/constraint_solver.hpp"
+#include "physics/forces/force_registry.hpp"
+#include "physics/debug/force_debugger.hpp"
 #include "physics/utils/physics_math.hpp"
 
 #include <vector>
@@ -120,6 +122,23 @@ public:
     dynamics::PhysicsIntegrator& getIntegrator() { return *m_integrator; }
     const dynamics::PhysicsIntegrator& getIntegrator() const { return *m_integrator; }
     
+    // Force system access
+    forces::ForceRegistry& getForceRegistry() { return m_forceRegistry; }
+    const forces::ForceRegistry& getForceRegistry() const { return m_forceRegistry; }
+    
+    // Convenience methods for force management
+    size_t registerForce(std::unique_ptr<forces::ForceGenerator> generator, 
+                        const std::string& name = "",
+                        const std::vector<dynamics::RigidBody*>& targetBodies = {});
+    bool unregisterForce(size_t forceId);
+    void clearAllForces();
+    
+    // Setup common force configurations
+    void setupEarthEnvironment();
+    void setupSpaceEnvironment();
+    void setupUnderwaterEnvironment();
+    void setupGamePhysics();
+    
     // Queries
     collision::CollisionQueries* getCollisionQueries() { return m_collisionQueries.get(); }
     
@@ -169,6 +188,12 @@ public:
     void enableDebugVisualization(bool enable);
     bool isDebugVisualizationEnabled() const { return m_config.enableDebugVisualization; }
     
+    // Force debugging
+    void enableForceDebugging(bool enable);
+    bool isForceDebuggingEnabled() const;
+    debug::ForceDebugger* getForceDebugger() { return m_forceDebugger.get(); }
+    const debug::ForceDebugger* getForceDebugger() const { return m_forceDebugger.get(); }
+    
     // Thread safety
     void lockBodies() { m_bodiesMutex.lock(); }
     void unlockBodies() { m_bodiesMutex.unlock(); }
@@ -187,6 +212,9 @@ private:
     std::unique_ptr<dynamics::PhysicsIntegrator> m_integrator;
     std::unique_ptr<collision::CollisionQueries> m_collisionQueries;
     
+    // Force system
+    forces::ForceRegistry m_forceRegistry;
+    
     // Body management
     std::vector<std::shared_ptr<dynamics::RigidBody>> m_rigidBodies;
     std::vector<dynamics::RigidBody*> m_activeBodyPointers; // Cache for performance
@@ -202,6 +230,10 @@ private:
     PhysicsStats m_stats;
     DebugVisualization m_debugViz;
     std::chrono::high_resolution_clock::time_point m_stepStartTime;
+    
+    // Force debugging
+    std::unique_ptr<debug::ForceDebugger> m_forceDebugger;
+    bool m_forceDebuggingEnabled{false};
     
     // Internal methods
     void initializeSubsystems();

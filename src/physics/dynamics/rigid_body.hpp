@@ -6,6 +6,9 @@
 #include "physics/common/physics_constants.hpp"
 #include "physics/utils/physics_math.hpp"
 #include <memory>
+#include <unordered_set>
+#include <unordered_map>
+#include <string>
 
 namespace ohao {
 
@@ -130,6 +133,38 @@ public:
         m_kinematicTargetRot = rotation;
     }
     
+    // === FORCE SYSTEM INTEGRATION ===
+    // These methods are used by the force registry system
+    void addForceGeneratorRef(const std::string& forceId) { m_activeForces.insert(forceId); }
+    void removeForceGeneratorRef(const std::string& forceId) { m_activeForces.erase(forceId); }
+    const std::unordered_set<std::string>& getActiveForces() const { return m_activeForces; }
+    size_t getActiveForceCount() const { return m_activeForces.size(); }
+    
+    // Force application statistics (for debugging/profiling)
+    struct ForceStats {
+        glm::vec3 totalForceApplied{0.0f};
+        glm::vec3 totalTorqueApplied{0.0f};
+        size_t forceApplicationCount = 0;
+        float maxForceThisFrame = 0.0f;
+        float maxTorqueThisFrame = 0.0f;
+    };
+    
+    const ForceStats& getForceStats() const { return m_forceStats; }
+    void resetForceStats() { m_forceStats = ForceStats{}; }
+    
+    // Enhanced force application with tracking
+    void applyForceTracked(const glm::vec3& force, const glm::vec3& relativePos = glm::vec3(0.0f), const std::string& sourceId = "");
+    void applyTorqueTracked(const glm::vec3& torque, const std::string& sourceId = "");
+    
+    // User data for force generators
+    void setUserData(const std::string& key, float value) { m_userData[key] = value; }
+    float getUserData(const std::string& key, float defaultValue = 0.0f) const {
+        auto it = m_userData.find(key);
+        return (it != m_userData.end()) ? it->second : defaultValue;
+    }
+    bool hasUserData(const std::string& key) const { return m_userData.find(key) != m_userData.end(); }
+    void clearUserData() { m_userData.clear(); }
+    
 private:
     // Component reference
     PhysicsComponent* m_component;
@@ -176,6 +211,11 @@ private:
     // Kinematic targets (for kinematic bodies)
     glm::vec3 m_kinematicTargetPos{0.0f};
     glm::quat m_kinematicTargetRot{1, 0, 0, 0};
+    
+    // Force system integration
+    std::unordered_set<std::string> m_activeForces;     // IDs of forces affecting this body
+    ForceStats m_forceStats;                            // Force application statistics
+    std::unordered_map<std::string, float> m_userData;  // Generic data storage for force generators
     
     // Helper methods
     void updateMassProperties();

@@ -115,9 +115,8 @@ std::unique_ptr<DistanceConstraint> ConstraintFactory::createDistance(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // TODO: Implement proper DistanceConstraint constructor
-    // For now, return nullptr to avoid compilation errors
-    return nullptr;
+    // Create distance constraint with specified distance or current distance
+    return std::make_unique<DistanceConstraint>(bodyA, anchorA, bodyB, anchorB, distance);
 }
 
 std::unique_ptr<BallSocketConstraint> ConstraintFactory::createBallSocket(
@@ -126,8 +125,8 @@ std::unique_ptr<BallSocketConstraint> ConstraintFactory::createBallSocket(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // TODO: Implement proper BallSocketConstraint constructor
-    return nullptr;
+    // Create ball socket constraint
+    return std::make_unique<BallSocketConstraint>(bodyA, anchorA, bodyB, anchorB);
 }
 
 std::unique_ptr<HingeConstraint> ConstraintFactory::createHinge(
@@ -136,8 +135,8 @@ std::unique_ptr<HingeConstraint> ConstraintFactory::createHinge(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // TODO: Implement proper HingeConstraint constructor
-    return nullptr;
+    // Create hinge constraint
+    return std::make_unique<HingeConstraint>(bodyA, anchorA, axisA, bodyB, anchorB, axisB);
 }
 
 std::unique_ptr<SpringConstraint> ConstraintFactory::createSpring(
@@ -147,8 +146,8 @@ std::unique_ptr<SpringConstraint> ConstraintFactory::createSpring(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // TODO: Implement proper SpringConstraint constructor
-    return nullptr;
+    // Create spring constraint
+    return std::make_unique<SpringConstraint>(bodyA, anchorA, bodyB, anchorB, restLength, stiffness, damping);
 }
 
 std::unique_ptr<ContactConstraint> ConstraintFactory::createContact(
@@ -157,8 +156,8 @@ std::unique_ptr<ContactConstraint> ConstraintFactory::createContact(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // TODO: Implement proper ContactConstraint constructor
-    return nullptr;
+    // Create contact constraint
+    return std::make_unique<ContactConstraint>(bodyA, bodyB, contactData);
 }
 
 } // namespace constraints

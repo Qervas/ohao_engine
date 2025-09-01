@@ -153,7 +153,7 @@ void BroadPhase::update(const std::vector<dynamics::RigidBody*>& bodies) {
     switch (m_algorithm) {
         case Algorithm::SPATIAL_HASH:
             for (auto* body : bodies) {
-                if (body && !body->isStatic()) { // Only insert dynamic bodies
+                if (body) { // Insert both dynamic and static bodies
                     m_spatialHash->insertBody(body);
                     getBodyId(body); // Ensure body has an ID
                 }
