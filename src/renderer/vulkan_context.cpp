@@ -819,48 +819,19 @@ bool VulkanContext::importModel(const std::string& filename) {
         return false;
     }
 
-    try {
-        // Create a model actor with proper components
-        auto modelActor = scene->createActor("ImportedModel");
-        
-        // Add mesh component
-        auto meshComponent = modelActor->addComponent<MeshComponent>();
-        
-        // Create and load the model
-        auto model = std::make_shared<Model>();
-        if (!model->loadFromOBJ(filename)) {
-            OHAO_LOG_ERROR("Failed to load OBJ file: " + filename);
-            return false;
-        }
-        
-        // Set the model on the mesh component
-        meshComponent->setModel(model);
-
-        // Fix the path usage:
-        std::string baseName = std::filesystem::path(filename).filename().stem().string();
-        std::string uniqueName = baseName;
-        int counter = 1;
-        
-        // Make sure the name is unique
-        while (scene->findActor(uniqueName) != nullptr) {
-            uniqueName = baseName + "_" + std::to_string(counter++);
-        }
-        
-        modelActor->setName(uniqueName);
-
-        // Update scene buffers
+    // Delegate to scene's new component pack-based import system
+    bool success = scene->importModel(filename);
+    
+    if (success) {
+        // Update scene buffers after successful import
         if (!updateSceneBuffers()) {
-            OHAO_LOG_ERROR("Failed to update scene buffers");
+            OHAO_LOG_ERROR("Failed to update scene buffers after model import");
             return false;
         }
-
-        OHAO_LOG("Successfully loaded model: " + filename);
-        return true;
-
-    } catch (const std::exception& e) {
-        OHAO_LOG_ERROR("Error during model loading: " + std::string(e.what()));
-        return false;
+        OHAO_LOG("Successfully imported model via new component pack system: " + filename);
     }
+    
+    return success;
 }
 
 void VulkanContext::cleanupCurrentModel() {

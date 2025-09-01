@@ -79,22 +79,8 @@ void PhysicsWorld::reset() {
 }
 
 void PhysicsWorld::step(float deltaTime) {
-    // DEBUG: Log physics world step calls
-    static int debugCount = 0;
-    debugCount++;
-    if (debugCount % 60 == 0) {
-        printf("PHYSICS WORLD DEBUG: step() called - State=%d, deltaTime=%.4f\n", static_cast<int>(m_state), deltaTime);
-    }
-    
     if (m_state != SimulationState::RUNNING) {
-        if (debugCount % 60 == 0) {
-            printf("PHYSICS WORLD DEBUG: Skipping step - not running (state=%d)\n", static_cast<int>(m_state));
-        }
         return;
-    }
-    
-    if (debugCount % 60 == 0) {
-        printf("PHYSICS WORLD DEBUG: Actually stepping physics!\n");
     }
     
     m_stepStartTime = std::chrono::high_resolution_clock::now();
@@ -248,37 +234,17 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
     updateActiveBodyPointers();
     
     // Apply gravity and integrate
-    static int debugIntegrateCount = 0;
-    debugIntegrateCount++;
-    
     for (auto* body : m_activeBodyPointers) {
         if (body && !body->isStatic()) {
-            // CRITICAL FIX: Apply gravity force before integration
+            // Apply gravity force before integration
             glm::vec3 gravityForce = m_config.gravity * body->getMass();
             body->applyForce(gravityForce);
-            
-            // DEBUG: Log integration calls occasionally
-            if (debugIntegrateCount % 60 == 0) {
-                glm::vec3 pos = body->getPosition();
-                glm::vec3 vel = body->getLinearVelocity();
-                printf("PHYSICS INTEGRATE DEBUG: Integrating body at (%.3f,%.3f,%.3f), mass=%.3f, vel=(%.3f,%.3f,%.3f), gravity_force=(%.3f,%.3f,%.3f)\n",
-                       pos.x, pos.y, pos.z, body->getMass(), vel.x, vel.y, vel.z, gravityForce.x, gravityForce.y, gravityForce.z);
-            }
             body->integrate(deltaTime);
-        } else if (debugIntegrateCount % 60 == 0) {
-            if (body) {
-                printf("PHYSICS INTEGRATE DEBUG: Skipping static body at (%.3f,%.3f,%.3f)\n",
-                       body->getPosition().x, body->getPosition().y, body->getPosition().z);
-            }
         }
     }
     
     // COLLISION DETECTION AND RESOLUTION
     if (m_collisionSystem && !m_rigidBodies.empty()) {
-        if (debugIntegrateCount % 60 == 0) {
-            printf("COLLISION DEBUG: Running collision detection on %zu bodies\n", m_rigidBodies.size());
-        }
-        
         // Convert to raw pointers for collision system
         std::vector<dynamics::RigidBody*> bodyPtrs;
         bodyPtrs.reserve(m_rigidBodies.size());

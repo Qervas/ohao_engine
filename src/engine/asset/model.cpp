@@ -60,6 +60,8 @@ bool Model::loadFromOBJ(const std::string& filename) {
         indices.clear();
         materials.clear();
         materialAssignments.clear();
+        vertexMap.clear(); // Clear vertex deduplication map
+        
         std::vector<glm::vec3> positions;
         std::vector<glm::vec3> normals;
         std::vector<glm::vec2> texCoords;
@@ -118,49 +120,56 @@ bool Model::loadFromOBJ(const std::string& filename) {
                 texCoords.push_back(texCoord);
             }
             else if (type == "f") {
-                std::string v1, v2, v3;
-                iss >> v1 >> v2 >> v3;
-
-                auto processVertex = [&](const std::string& vertex) {
-                    std::istringstream viss(vertex);
-                    std::string indexStr;
-                    std::vector<int> indices;
-
-                    while (std::getline(viss, indexStr, '/')) {
-                        if (indexStr.empty()) {
-                            indices.push_back(0);
-                        } else {
-                            indices.push_back(std::stoi(indexStr));
-                        }
+                std::vector<std::string> faceVertices;
+                std::string vertex;
+                
+                // Read all vertices in this face (could be triangle or quad)
+                while (iss >> vertex) {
+                    faceVertices.push_back(vertex);
+                }
+                
+                // Process each vertex in the face and get/create indices
+                std::vector<uint32_t> faceIndices;
+                for (const auto& vertexStr : faceVertices) {
+                    uint32_t index = getOrCreateVertex(vertexStr, positions, normals, texCoords);
+                    faceIndices.push_back(index);
+                }
+                
+                // Triangulate the face (handles both triangles and quads)
+                if (faceIndices.size() == 3) {
+                    // Triangle - direct add
+                    indices.push_back(faceIndices[0]);
+                    indices.push_back(faceIndices[1]);
+                    indices.push_back(faceIndices[2]);
+                    
+                    materialAssignments.push_back(currentMaterial);
+                } else if (faceIndices.size() == 4) {
+                    // Quad - split into two triangles (0,1,2) and (0,2,3)
+                    // First triangle
+                    indices.push_back(faceIndices[0]);
+                    indices.push_back(faceIndices[1]);
+                    indices.push_back(faceIndices[2]);
+                    materialAssignments.push_back(currentMaterial);
+                    
+                    // Second triangle
+                    indices.push_back(faceIndices[0]);
+                    indices.push_back(faceIndices[2]);
+                    indices.push_back(faceIndices[3]);
+                    materialAssignments.push_back(currentMaterial);
+                } else if (faceIndices.size() > 4) {
+                    // N-gon - fan triangulation from first vertex
+                    for (size_t i = 1; i < faceIndices.size() - 1; ++i) {
+                        indices.push_back(faceIndices[0]);
+                        indices.push_back(faceIndices[i]);
+                        indices.push_back(faceIndices[i + 1]);
+                        materialAssignments.push_back(currentMaterial);
                     }
-
-                    Vertex v{};
-                    v.position = positions[indices[0] - 1];
-                    if (indices.size() > 1 && indices[1] > 0) {
-                        v.texCoord = texCoords[indices[1] - 1];
-                    }
-                    if (indices.size() > 2 && indices[2] > 0) {
-                        v.normal = normals[indices[2] - 1];
-                    }
-
-                    // Set default color (will be updated in assignMaterialColors)
-                    v.color = glm::vec3(0.8f);
-                    return v;
-                };
-
-                vertices.push_back(processVertex(v1));
-                vertices.push_back(processVertex(v2));
-                vertices.push_back(processVertex(v3));
-
-                // Add indices
-                uint32_t baseIndex = static_cast<uint32_t>(vertices.size()) - 3;
-                indices.push_back(baseIndex);
-                indices.push_back(baseIndex + 1);
-                indices.push_back(baseIndex + 2);
-
-                // Store the current material for this face
-                materialAssignments.push_back(currentMaterial);
-                std::cout << "Added face with material: '" << currentMaterial << "'" << std::endl;
+                }
+                
+                // Only log occasionally for very large models to reduce console spam
+                if ((faceIndices.size() >= 4) || (faceVertices.size() % 1000 == 0)) {
+                    std::cout << "Added face with " << faceIndices.size() << " vertices, material: '" << currentMaterial << "'" << std::endl;
+                }
             }
         }
         if (vertices.empty() || indices.empty()) {
@@ -183,6 +192,64 @@ bool Model::loadFromOBJ(const std::string& filename) {
         std::cerr << "Error during model import: " << e.what() << std::endl;
         return false;
     }
+}
+
+uint32_t Model::getOrCreateVertex(const std::string& vertexStr, 
+                                 const std::vector<glm::vec3>& positions,
+                                 const std::vector<glm::vec3>& normals, 
+                                 const std::vector<glm::vec2>& texCoords) {
+    
+    // Check if we've already created this vertex
+    auto it = vertexMap.find(vertexStr);
+    if (it != vertexMap.end()) {
+        return it->second;
+    }
+    
+    // Parse the vertex string (format: "v/vt/vn" or "v//vn" or "v/vt" or "v")
+    std::istringstream viss(vertexStr);
+    std::string indexStr;
+    std::vector<int> vertexIndices;
+
+    while (std::getline(viss, indexStr, '/')) {
+        if (indexStr.empty()) {
+            vertexIndices.push_back(0);
+        } else {
+            vertexIndices.push_back(std::stoi(indexStr));
+        }
+    }
+
+    // Create the vertex
+    Vertex vertex{};
+    
+    // Position (required)
+    if (!vertexIndices.empty() && vertexIndices[0] > 0) {
+        vertex.position = positions[vertexIndices[0] - 1];
+    }
+    
+    // Texture coordinates (optional)
+    if (vertexIndices.size() > 1 && vertexIndices[1] > 0 && vertexIndices[1] <= texCoords.size()) {
+        vertex.texCoord = texCoords[vertexIndices[1] - 1];
+    } else {
+        vertex.texCoord = glm::vec2(0.0f, 0.0f);
+    }
+    
+    // Normal (optional)
+    if (vertexIndices.size() > 2 && vertexIndices[2] > 0 && vertexIndices[2] <= normals.size()) {
+        vertex.normal = normals[vertexIndices[2] - 1];
+    } else {
+        // Generate a default normal if none provided
+        vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+
+    // Set default color (will be updated by material assignment)
+    vertex.color = glm::vec3(0.8f);
+    
+    // Add vertex to our list and map
+    uint32_t index = static_cast<uint32_t>(vertices.size());
+    vertices.push_back(vertex);
+    vertexMap[vertexStr] = index;
+    
+    return index;
 }
 
 bool Model::loadMTL(const std::string& filename) {
@@ -265,6 +332,37 @@ bool Model::loadMTL(const std::string& filename) {
                 else if (token == "Light_Intensity") {
                     iss >> currentMaterial->lightIntensity;
                 }
+                // Texture maps
+                else if (token == "map_Kd") {
+                    std::string texturePath;
+                    iss >> texturePath;
+                    currentMaterial->diffuseTexture = texturePath;
+                    std::cout << "  Diffuse texture: " << texturePath << std::endl;
+                }
+                else if (token == "map_Ka") {
+                    std::string texturePath;
+                    iss >> texturePath;
+                    currentMaterial->ambientTexture = texturePath;
+                    std::cout << "  Ambient texture: " << texturePath << std::endl;
+                }
+                else if (token == "map_Ks") {
+                    std::string texturePath;
+                    iss >> texturePath;
+                    currentMaterial->specularTexture = texturePath;
+                    std::cout << "  Specular texture: " << texturePath << std::endl;
+                }
+                else if (token == "map_Bump" || token == "bump") {
+                    std::string texturePath;
+                    iss >> texturePath;
+                    currentMaterial->normalTexture = texturePath;
+                    std::cout << "  Normal texture: " << texturePath << std::endl;
+                }
+                else if (token == "map_d" || token == "map_disp") {
+                    std::string texturePath;
+                    iss >> texturePath;
+                    currentMaterial->heightTexture = texturePath;
+                    std::cout << "  Height texture: " << texturePath << std::endl;
+                }
             }
         }
         if (materials.empty()) {
@@ -292,60 +390,61 @@ Model::assignMaterialColors() {
     }
 
     std::cout << "Assigning colors to " << vertices.size() << " vertices with "
-              << materialAssignments.size() << " material assignments" << std::endl;
+              << materialAssignments.size() << " material assignments (indexed mesh)" << std::endl;
 
-    // Use a default color for faces without material assignments
+    // Initialize all vertices with default color
     glm::vec3 defaultColor(0.8f, 0.8f, 0.8f);
+    for (auto& vertex : vertices) {
+        vertex.color = defaultColor;
+    }
 
-    for (size_t i = 0; i < vertices.size(); i += 3) {
-        // Calculate which face this vertex belongs to
+    // Create a map to track which material each vertex should use
+    // If a vertex is shared by multiple faces with different materials,
+    // we'll use the first material encountered
+    std::vector<bool> vertexAssigned(vertices.size(), false);
+
+    // Process each triangle (3 indices per triangle)
+    for (size_t i = 0; i < indices.size(); i += 3) {
         size_t faceIndex = i / 3;
-
+        
         // Check if we have a material assignment for this face
         if (faceIndex >= materialAssignments.size()) {
             std::cout << "Face " << faceIndex << " has no material assignment, using default color" << std::endl;
-            for (size_t j = 0; j < 3; ++j) {
-                vertices[i + j].color = defaultColor;
-            }
             continue;
         }
 
         // Get the material name for this face
         const std::string& matName = materialAssignments[faceIndex];
         auto matIt = materials.find(matName.empty() ? "default" : matName);
-        // if (matName.empty()) {
-        //     std::cout << "Face " << faceIndex << " has empty material name, using default color" << std::endl;
-        //     for (size_t j = 0; j < 3; ++j) {
-        //         vertices[i + j].color = defaultColor;
-        //     }
-        //     continue;
-        // }
-
-        // Find the material
-        // auto matIt = materials.find(matName);
-        if (matIt != materials.end()) {
-            const auto& material = matIt->second;
-            for (size_t j = 0; j < 3 && (i + j) < vertices.size(); ++j) {
-                vertices[i + j].color = material.diffuse;
-            }
-            std::cout << "Face " << faceIndex << ": Assigned material '" << matName
-                     << "' with color: " << material.diffuse.x << ", "
-                     << material.diffuse.y << ", "
-                     << material.diffuse.z << std::endl;
-        } else {
-            std::cout << "Face " << faceIndex << ": Material '" << matName
-                     << "' not found, using default color" << std::endl;
-            auto defaultMatIt = materials.find("default");
-            const glm::vec3& color = defaultMatIt != materials.end() ?
-                defaultMatIt->second.diffuse : defaultColor;
-
-            for (size_t j = 0; j < 3 && (i + j) < vertices.size(); ++j) {
-                vertices[i + j].color = color;
+        
+        if (matIt == materials.end()) {
+            std::cout << "Face " << std::hex << faceIndex << std::dec 
+                     << ": Material '" << matName << "' not found, using default color" << std::endl;
+            continue;
+        }
+        
+        const MaterialData& material = matIt->second;
+        glm::vec3 materialColor = material.diffuse;
+        
+        // Assign color to the three vertices of this face
+        // Only assign if vertex hasn't been assigned a color yet
+        for (int j = 0; j < 3; j++) {
+            uint32_t vertexIndex = indices[i + j];
+            if (vertexIndex < vertices.size() && !vertexAssigned[vertexIndex]) {
+                vertices[vertexIndex].color = materialColor;
+                vertexAssigned[vertexIndex] = true;
             }
         }
+        
+        // Only log occasionally for large models to reduce console spam
+        if (faceIndex % 1000 == 0 || faceIndex < 10) {
+            std::cout << "Face " << std::hex << faceIndex << std::dec 
+                     << ": Assigned material '" << matName << "' with color: " 
+                     << materialColor.x << ", " << materialColor.y << ", " << materialColor.z << std::endl;
+        }
     }
-
-    std::cout << "Finished assigning colors to all vertices" << std::endl;
+    
+    std::cout << "Finished assigning colors to indexed mesh" << std::endl;
 }
 
 void Model::setupDefaultMaterial() {

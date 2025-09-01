@@ -1,4 +1,5 @@
 #include "component_factory.hpp"
+#include "component_pack.hpp"
 #include "engine/scene/scene.hpp"
 #include "engine/asset/model.hpp"
 #include "ui/components/console_widget.hpp"
@@ -41,56 +42,37 @@ std::shared_ptr<Actor> ComponentFactory::createActorWithComponents(
 bool ComponentFactory::addComponentsToActor(std::shared_ptr<Actor> actor, PrimitiveType type) {
     if (!actor) return false;
     
+    // Use appropriate component pack based on primitive type
     ComponentSet config = getComponentSet(type);
     
-    // Always add transform (actors should have this by default, but ensure it)
-    if (!actor->getTransform()) {
-        OHAO_LOG_WARNING("Actor missing transform component, this shouldn't happen");
-        return false;
-    }
-    
-    // Add mesh component if needed
-    if (config.needsMesh) {
-        auto meshComponent = actor->addComponent<MeshComponent>();
-        if (meshComponent) {
-            setupMeshComponent(meshComponent.get(), type);
-        } else {
-            OHAO_LOG_ERROR("Failed to add mesh component");
-            return false;
-        }
-    }
-    
-    // Add physics component if needed
-    if (config.needsPhysics) {
-        auto physicsComponent = actor->addComponent<PhysicsComponent>();
-        if (physicsComponent) {
-            setupPhysicsComponent(physicsComponent.get(), config, type);
-        } else {
-            OHAO_LOG_ERROR("Failed to add physics component");
-            return false;
-        }
-    }
-    
-    // Add material component if needed
-    if (config.needsMaterial) {
-        auto materialComponent = actor->addComponent<MaterialComponent>();
-        if (materialComponent) {
-            setupMaterialComponent(materialComponent.get(), config);
-        } else {
-            OHAO_LOG_ERROR("Failed to add material component");
-            return false;
-        }
-    }
-    
-    // Add light component if needed
     if (config.needsLight) {
-        auto lightComponent = actor->addComponent<LightComponent>();
-        if (lightComponent) {
-            setupLightComponent(lightComponent.get(), config);
-        } else {
-            OHAO_LOG_ERROR("Failed to add light component");
-            return false;
-        }
+        // Light objects (DirectionalLight, PointLight, SpotLight)
+        LightOnlyPack::applyTo(actor);
+        OHAO_LOG("Applied LightOnlyPack to light primitive '" + actor->getName() + "'");
+        
+        // Setup light component
+        auto lightComponent = actor->getComponent<LightComponent>();
+        setupLightComponent(lightComponent.get(), config);
+    } else {
+        // Standard objects (Cube, Sphere, Platform, etc.)
+        StandardObjectPack::applyTo(actor);
+        OHAO_LOG("Applied StandardObjectPack to primitive '" + actor->getName() + "'");
+        
+        // Setup physics component
+        auto physicsComponent = actor->getComponent<PhysicsComponent>();
+        setupPhysicsComponent(physicsComponent.get(), config, type);
+    }
+    
+    // All objects get mesh and material setup if they have those components
+    auto meshComponent = actor->getComponent<MeshComponent>();
+    auto materialComponent = actor->getComponent<MaterialComponent>();
+    
+    if (meshComponent && config.needsMesh) {
+        setupMeshComponent(meshComponent.get(), type);
+    }
+    
+    if (materialComponent && config.needsMaterial) {
+        setupMaterialComponent(materialComponent.get(), config);
     }
     
     return true;
@@ -149,6 +131,9 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             
         case PrimitiveType::PointLight:
             config.needsLight = true;
+            config.needsMesh = false;     // Lights are invisible
+            config.needsMaterial = false; // No material needed for lights
+            config.needsPhysics = false;  // Lights don't need physics
             config.lightType = LightType::Point;
             config.intensity = 1.0f;
             config.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
@@ -156,6 +141,9 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             
         case PrimitiveType::DirectionalLight:
             config.needsLight = true;
+            config.needsMesh = false;     // Lights are invisible
+            config.needsMaterial = false; // No material needed for lights
+            config.needsPhysics = false;  // Lights don't need physics
             config.lightType = LightType::Directional;
             config.intensity = 3.0f;
             config.lightColor = glm::vec3(1.0f, 1.0f, 0.9f);
@@ -163,6 +151,9 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             
         case PrimitiveType::SpotLight:
             config.needsLight = true;
+            config.needsMesh = false;     // Lights are invisible
+            config.needsMaterial = false; // No material needed for lights
+            config.needsPhysics = false;  // Lights don't need physics
             config.lightType = LightType::Spot;
             config.intensity = 2.0f;
             config.lightColor = glm::vec3(1.0f, 0.9f, 0.8f);

@@ -1,7 +1,9 @@
 #include "scene.hpp"
 #include "renderer/components/mesh_component.hpp"
+#include "renderer/components/material_component.hpp"
 #include "physics/components/physics_component.hpp"
 #include "engine/component/component_factory.hpp"
+#include "engine/component/component_pack.hpp"
 #include "engine/actor/actor.hpp"
 #include "engine/asset/model.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
@@ -267,21 +269,121 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
         return false;
     }
     
+    // Generate a name from the filename for later use
+    std::string baseName = std::filesystem::path(filename).filename().stem().string();
+    
     // If no target actor was provided, create a new one
     if (!targetActor) {
-        // Generate a name from the filename
-        std::string baseName = std::filesystem::path(filename).filename().stem().string();
         targetActor = createActor(baseName);
     }
     
-    // Add mesh component if it doesn't exist
+    // STANDARDIZED COMPONENT SETUP using Component Packs
+    // This ensures all imported models get the same components as primitives
+    
+    // Apply standard component pack (mesh + material + physics)
+    StandardObjectPack::applyTo(targetActor);
+    
+    std::cout << "Applied StandardObjectPack to '" << targetActor->getName() 
+              << "' (" << StandardObjectPack::count() << " components)" << std::endl;
+    
+    // Get the components (they're guaranteed to exist now)
     auto meshComponent = targetActor->getComponent<MeshComponent>();
-    if (!meshComponent) {
-        meshComponent = targetActor->addComponent<MeshComponent>();
-    }
+    auto materialComponent = targetActor->getComponent<MaterialComponent>();
+    auto physicsComponent = targetActor->getComponent<PhysicsComponent>();
     
     // Set the model
     meshComponent->setModel(model);
+    
+    // Configure physics properties based on model type
+    // TODO: Add import option to choose static vs dynamic
+    bool shouldBeStatic = (baseName.find("room") != std::string::npos || 
+                          baseName.find("cornell") != std::string::npos ||
+                          baseName.find("building") != std::string::npos ||
+                          baseName.find("wall") != std::string::npos);
+    
+    if (shouldBeStatic) {
+        physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::STATIC);
+        physicsComponent->setMass(0.0f);
+        physicsComponent->setFriction(0.8f);
+        physicsComponent->setRestitution(0.2f);
+        std::cout << "Set imported model '" << targetActor->getName() << "' as STATIC (room/building detected)" << std::endl;
+    } else {
+        physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::DYNAMIC);
+        physicsComponent->setMass(1.0f);
+        physicsComponent->setRestitution(0.3f);
+        physicsComponent->setFriction(0.5f);
+        std::cout << "Set imported model '" << targetActor->getName() << "' as DYNAMIC" << std::endl;
+    }
+    
+    // Create appropriate collision shape based on model bounds
+    // For now, use a bounding box - could be improved with mesh collision later
+    auto transform = targetActor->getTransform();
+    if (transform) {
+        glm::vec3 scale = transform->getScale();
+        physicsComponent->createBoxShape(scale * 0.5f);
+    } else {
+        // Default box shape if no transform
+        physicsComponent->createBoxShape(1.0f, 1.0f, 1.0f);
+    }
+    
+    // Connect to physics world
+    physicsComponent->setTransformComponent(targetActor->getTransform());
+    
+    std::cout << "Added PhysicsComponent to imported model '" << targetActor->getName() 
+              << "' - Collision shape configured" << std::endl;
+    
+    // Convert MTL materials to PBR materials
+    if (!model->materials.empty()) {
+        // For now, use the first material found in the MTL
+        // TODO: Handle multi-material objects properly
+        const auto& mtlMaterial = model->materials.begin()->second;
+        
+        Material pbrMaterial;
+        pbrMaterial.name = mtlMaterial.name;
+        
+        // Convert MTL properties to PBR properties
+        pbrMaterial.baseColor = mtlMaterial.diffuse;
+        pbrMaterial.emissive = mtlMaterial.emission;
+        
+        // Estimate PBR properties from MTL properties
+        // MTL shininess to PBR roughness conversion (rough approximation)
+        pbrMaterial.roughness = glm::clamp(1.0f - (mtlMaterial.shininess / 128.0f), 0.0f, 1.0f);
+        
+        // Use specular intensity to estimate metallic property
+        float specularIntensity = glm::length(mtlMaterial.specular);
+        pbrMaterial.metallic = specularIntensity > 0.8f ? 0.8f : 0.0f; // Conservative metallic estimation
+        
+        // Set opacity
+        pbrMaterial.ao = mtlMaterial.opacity;
+        
+        // Convert texture paths (make them relative to the model file directory)
+        std::string modelDirectory = std::filesystem::path(filename).parent_path().string();
+        if (!modelDirectory.empty() && modelDirectory.back() != '/' && modelDirectory.back() != '\\') {
+            modelDirectory += "/";
+        }
+        
+        if (!mtlMaterial.diffuseTexture.empty()) {
+            pbrMaterial.albedoTexture = modelDirectory + mtlMaterial.diffuseTexture;
+            pbrMaterial.useAlbedoTexture = true;
+            std::cout << "  -> Albedo texture: " << pbrMaterial.albedoTexture << std::endl;
+        }
+        if (!mtlMaterial.normalTexture.empty()) {
+            pbrMaterial.normalTexture = modelDirectory + mtlMaterial.normalTexture;
+            pbrMaterial.useNormalTexture = true;
+            std::cout << "  -> Normal texture: " << pbrMaterial.normalTexture << std::endl;
+        }
+        if (!mtlMaterial.specularTexture.empty()) {
+            pbrMaterial.metallicTexture = modelDirectory + mtlMaterial.specularTexture;
+            pbrMaterial.useMetallicTexture = true;
+            std::cout << "  -> Metallic texture: " << pbrMaterial.metallicTexture << std::endl;
+        }
+        
+        materialComponent->setMaterial(pbrMaterial);
+        
+        std::cout << "Applied material '" << pbrMaterial.name << "' to actor '" << targetActor->getName() 
+                  << "' - baseColor(" << pbrMaterial.baseColor.x << "," << pbrMaterial.baseColor.y << "," << pbrMaterial.baseColor.z 
+                  << "), roughness=" << pbrMaterial.roughness << ", metallic=" << pbrMaterial.metallic << std::endl;
+    }
     
     return true;
 }

@@ -26,10 +26,7 @@ void CollisionSystem::setConfig(const Config& config) {
 }
 
 void CollisionSystem::detectAndResolveCollisions(std::vector<dynamics::RigidBody*>& bodies, float deltaTime) {
-    // SIMPLIFIED: Skip broad phase for now and test all pairs directly
-    printf("COLLISION DEBUG: Testing all %zu bodies for collisions\n", bodies.size());
-    
-    // Simple O(n^2) collision detection for debugging
+    // Simple O(n^2) collision detection
     for (size_t i = 0; i < bodies.size(); ++i) {
         for (size_t j = i + 1; j < bodies.size(); ++j) {
             dynamics::RigidBody* bodyA = bodies[i];
@@ -86,11 +83,6 @@ void CollisionSystem::detectAndResolveCollisions(std::vector<dynamics::RigidBody
                     // Sphere center is inside box, use Y-up as normal (assume hitting from above)
                     collisionNormal = glm::vec3(0.0f, 1.0f, 0.0f);
                 }
-                
-                printf("COLLISION DETECTED: Sphere at (%.3f,%.3f,%.3f), closest point (%.3f,%.3f,%.3f), penetration=%.3f\n", 
-                       spherePos.x, spherePos.y, spherePos.z,
-                       closestPoint.x, closestPoint.y, closestPoint.z,
-                       penetrationDepth);
             }
             
             if (collisionDetected) {
@@ -109,10 +101,6 @@ void CollisionSystem::detectAndResolveCollisions(std::vector<dynamics::RigidBody
                 if (velocityAlongNormal < 0.0f) {
                     glm::vec3 newVelocity = velocity - (1.0f + restitution) * velocityAlongNormal * collisionNormal;
                     sphere->setLinearVelocity(newVelocity);
-                    
-                    printf("COLLISION RESOLVED: Correction=(%.3f,%.3f,%.3f), new velocity=(%.3f,%.3f,%.3f)\n", 
-                           correction.x, correction.y, correction.z,
-                           newVelocity.x, newVelocity.y, newVelocity.z);
                 }
             }
         }
