@@ -9,7 +9,6 @@
 #include "physics/material/physics_material.hpp"
 #include "engine/asset/model.hpp"
 #include "ui/components/console_widget.hpp"
-#include <map>
 
 namespace ohao {
 
@@ -373,15 +372,6 @@ void PhysicsComponent::updateTransformFromRigidBody() {
     // Update visual transform from physics
     glm::vec3 position = m_rigidBody->getPosition();
     glm::quat rotation = m_rigidBody->getRotation();
-    
-    // DEBUG: Log position changes
-    static std::map<void*, glm::vec3> lastPositions;
-    auto& lastPos = lastPositions[this];
-    if (glm::length(position - lastPos) > 0.001f) { // Only log if moved significantly
-        printf("PHYSICS SYNC DEBUG: Body moved from (%.3f,%.3f,%.3f) to (%.3f,%.3f,%.3f)\n",
-               lastPos.x, lastPos.y, lastPos.z, position.x, position.y, position.z);
-        lastPos = position;
-    }
     
     m_transformComponent->setPosition(position);
     m_transformComponent->setRotation(rotation);
