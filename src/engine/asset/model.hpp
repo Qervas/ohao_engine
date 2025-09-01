@@ -31,6 +31,13 @@ struct MaterialData{
     float opacity;
     int illum;      // Illumination model
 
+    // Texture maps
+    std::string diffuseTexture;     // map_Kd
+    std::string ambientTexture;     // map_Ka  
+    std::string specularTexture;    // map_Ks
+    std::string normalTexture;      // map_Bump or bump
+    std::string heightTexture;      // map_d or map_disp
+    
     bool isLight{false};
     glm::vec3 lightPosition{0.0f};
     float lightIntensity{1.0f};
@@ -52,6 +59,12 @@ public:
 
 private:
     void assignMaterialColors();
+    uint32_t getOrCreateVertex(const std::string& vertexStr, 
+                              const std::vector<glm::vec3>& positions,
+                              const std::vector<glm::vec3>& normals, 
+                              const std::vector<glm::vec2>& texCoords);
+    
     std::string sourcePath;
+    std::unordered_map<std::string, uint32_t> vertexMap; // For vertex deduplication
 };
 }
