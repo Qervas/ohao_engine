@@ -116,10 +116,16 @@ glm::vec3 CollisionResolver::calculateRelativeVelocity(
     dynamics::RigidBody* bodyA,
     dynamics::RigidBody* bodyB) {
     
-    // For now, simplified calculation using center of mass velocities
-    // TODO: Include angular velocity contributions for more accurate physics
+    // Include angular velocity contributions for more accurate physics
     glm::vec3 velA = bodyA->getLinearVelocity();
     glm::vec3 velB = bodyB->getLinearVelocity();
+    
+    // Add angular velocity contributions at contact point
+    glm::vec3 rA = contact.contactPoint - bodyA->getPosition();
+    glm::vec3 rB = contact.contactPoint - bodyB->getPosition();
+    
+    velA += glm::cross(bodyA->getAngularVelocity(), rA);
+    velB += glm::cross(bodyB->getAngularVelocity(), rB);
     
     return velB - velA;
 }

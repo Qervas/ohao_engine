@@ -46,6 +46,11 @@ public:
     void performNarrowPhase();
     void resolveContacts(float deltaTime);
     
+    // Collision resolution
+    void resolveCollision(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                         const glm::vec3& normal, float penetration,
+                         const glm::vec3& contactPoint, float deltaTime);
+    
     // Access to sub-systems
     BroadPhase& getBroadPhase() { return *m_broadPhase; }
     const BroadPhase& getBroadPhase() const { return *m_broadPhase; }
@@ -106,6 +111,36 @@ private:
     void initializeSubSystems();
     void updateConfiguration();
     void collectDebugData();
+    
+    // Collision detection methods
+    bool detectCollisionBetweenShapes(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                                     CollisionShape* shapeA, CollisionShape* shapeB,
+                                     glm::vec3& normal, float& penetration, glm::vec3& contactPoint);
+    
+    bool detectSphereSphere(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                           CollisionShape* shapeA, CollisionShape* shapeB,
+                           glm::vec3& normal, float& penetration, glm::vec3& contactPoint);
+                           
+    bool detectBoxBox(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                     CollisionShape* shapeA, CollisionShape* shapeB,
+                     glm::vec3& normal, float& penetration, glm::vec3& contactPoint);
+                     
+    bool detectSphereBox(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                        CollisionShape* shapeA, CollisionShape* shapeB,
+                        glm::vec3& normal, float& penetration, glm::vec3& contactPoint);
+    
+    // Contact manifold generation methods
+    bool generateContactManifold(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB, ContactManifold* manifold);
+    bool generateSphereSphereManifold(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB, ContactManifold* manifold);
+    bool generateBoxBoxManifold(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB, ContactManifold* manifold);
+    bool generateSphereBoxManifold(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB, ContactManifold* manifold);
+    
+    // Material and constraint solving methods
+    void updateManifoldMaterialProperties(ContactManifold* manifold);
+    void solveContactConstraints(float deltaTime);
+    void solveManifoldConstraints(ContactManifold* manifold, float deltaTime);
+    void solveFrictionConstraints(ContactManifold* manifold, ContactPoint& contact, const glm::vec3& relativeVelocity);
+    void applyPositionCorrection(ContactManifold* manifold);
     
     // Body management
     std::unordered_map<dynamics::RigidBody*, uint32_t> m_bodyIds;
