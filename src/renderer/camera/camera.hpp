@@ -29,10 +29,14 @@ public:
     void setRotation(float pitch, float yaw);
     void move(const glm::vec3& offset);
     void rotate(float deltaPitch, float deltaYaw);
+    void focusOnPoint(const glm::vec3& targetPoint, float distance = 5.0f);
 
     void setProjectionType(ProjectionType type);
     void setPerspectiveProjection(float fov, float aspect, float nearPlane, float farPlane);
     void setOrthographicProjection(float left, float right, float bottom, float top, float nearPlane, float farPlane);
+    void setAspectRatio(float aspect) { aspectRatio = aspect; updateVectors(); }
+    float getFov() const { return fov; }
+    void setFov(float newFov) { fov = newFov; updateVectors(); }
 
     glm::vec3 getPosition() const {return position;}
     glm::vec3 getFront() const { return front; }

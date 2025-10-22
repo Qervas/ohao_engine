@@ -11,6 +11,7 @@ class AxisGizmo;
 
 // Viewport Toolbar Icons using FontAwesome
 #define ICON_VIEW "View"  // Header text, not an icon
+#define ICON_PLAY ICON_FA_PLAY                       // Play/focus icon
 #define ICON_AXIS ICON_FA_ARROWS_UP_DOWN_LEFT_RIGHT  // 3D axis gizmo icon
 #define ICON_GRID ICON_FA_BORDER_ALL                 // Grid pattern icon
 #define ICON_WIREFRAME ICON_FA_DRAW_POLYGON          // Wireframe/polygon icon
@@ -31,6 +32,10 @@ public:
     void setAxisVisible(bool visible) { showAxis = visible; }
     void setGridVisible(bool visible) { showGrid = visible; }
     void setWireframeEnabled(bool enabled) { wireframeMode = enabled; }
+
+    // Viewport focus control
+    bool isViewportFocused() const { return viewportFocused; }
+    void setViewportFocused(bool focused) { viewportFocused = focused; }
 
 private:
     // Modern UI rendering methods
@@ -53,7 +58,10 @@ private:
     bool showGrid = true;
     bool wireframeMode = false;
     bool hasInitializedGizmo = false;
-    
+
+    // Viewport focus state
+    bool viewportFocused = false;
+
     // UI state
     const float buttonSize = 32.0f;
     const float spacing = 4.0f;

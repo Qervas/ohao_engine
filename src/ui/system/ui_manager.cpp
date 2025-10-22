@@ -585,14 +585,26 @@ void UIManager::renderSceneViewport() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::Begin("Scene Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-    sceneViewportSize = ImGui::GetContentRegionAvail();
+    ImVec2 newSize = ImGui::GetContentRegionAvail();
+    // Notify renderer if viewport size changed (avoid 0-dimensions)
+    if ((newSize.x > 0 && newSize.y > 0) &&
+        (newSize.x != sceneViewportSize.x || newSize.y != sceneViewportSize.y)) {
+        sceneViewportSize = newSize;
+        if (vulkanContext) {
+            vulkanContext->setViewportSize(static_cast<uint32_t>(sceneViewportSize.x),
+                                           static_cast<uint32_t>(sceneViewportSize.y));
+        }
+    } else {
+        sceneViewportSize = newSize;
+    }
     isSceneWindowHovered = ImGui::IsWindowHovered();
 
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
     auto sceneTexture = vulkanContext->getSceneRenderer()->getViewportTexture();
-    if (sceneTexture) {  // Now we can use the bool operator
+    if (sceneTexture) {
         ImTextureID imguiTexID = imgui::convertVulkanTextureToImGui(sceneTexture);
+        // Restore previous behavior: fill the entire panel; renderer resizes RT to panel
         ImGui::GetWindowDrawList()->AddImage(
             imguiTexID,
             pos,
