@@ -13,4 +13,5 @@ target_include_directories(ohao_physics PUBLIC
 target_link_libraries(ohao_physics PUBLIC
     glm
     imgui
+    nlohmann_json::nlohmann_json
 ) 

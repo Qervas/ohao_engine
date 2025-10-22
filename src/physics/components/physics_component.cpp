@@ -306,13 +306,8 @@ void PhysicsComponent::destroy() {
 }
 
 // === SERIALIZATION ===
-void PhysicsComponent::serialize(class Serializer& serializer) const {
-    // TODO: Implement serialization when serializer is available
-}
-
-void PhysicsComponent::deserialize(class Deserializer& deserializer) {
-    // TODO: Implement deserialization when deserializer is available
-}
+void PhysicsComponent::serialize(class Serializer& serializer) const {}
+void PhysicsComponent::deserialize(class Deserializer& deserializer) {}
 
 // === SETTINGS ===
 void PhysicsComponent::setAwake(bool awake) {

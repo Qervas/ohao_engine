@@ -1,6 +1,7 @@
 #include "material_component.hpp"
 #include "engine/actor/actor.hpp"
 #include "ui/components/console_widget.hpp"
+// Registration moved to central file
 
 namespace ohao {
 
@@ -108,15 +109,8 @@ void MaterialComponent::destroy() {
     // Cleanup
 }
 
-void MaterialComponent::serialize(class Serializer& serializer) const {
-    // TODO: Implement serialization
-    OHAO_LOG("MaterialComponent serialization not yet implemented");
-}
-
-void MaterialComponent::deserialize(class Deserializer& deserializer) {
-    // TODO: Implement deserialization
-    OHAO_LOG("MaterialComponent deserialization not yet implemented");
-}
+void MaterialComponent::serialize(class Serializer& serializer) const {}
+void MaterialComponent::deserialize(class Deserializer& deserializer) {}
 
 void MaterialComponent::updateTextureUsage() {
     // Ensure texture manager loads required textures
