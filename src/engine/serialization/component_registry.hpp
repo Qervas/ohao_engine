@@ -11,8 +11,8 @@ class Component;
 
 struct ComponentEntry {
     std::function<Component*(Actor*)> create;
-    std::function<nlohmann::json(const Component&)> serialize;
-    std::function<void(Component&, const nlohmann::json&)> deserialize;
+    std::function<nlohmann::json_abi_v3_11_3::json(const Component&)> serialize;
+    std::function<void(Component&, const nlohmann::json_abi_v3_11_3::json&)> deserialize;
 };
 
 class ComponentRegistry {

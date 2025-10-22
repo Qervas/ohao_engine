@@ -1,4 +1,5 @@
 #include "transform_component.hpp"
+// Registration moved to central file
 // Enable experimental GLM features
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/matrix_transform.hpp>
@@ -250,5 +251,7 @@ void TransformComponent::updateWorldMatrix() {
     
     worldDirty = false;
 }
+
+// Registration moved to central file
 
 } // namespace ohao 

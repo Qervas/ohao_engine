@@ -14,5 +14,6 @@ target_include_directories(ohao_component PUBLIC
 target_link_libraries(ohao_component PUBLIC
     glm
     imgui
+    nlohmann_json::nlohmann_json
     ${Vulkan_LIBRARIES}
 ) 
