@@ -8,7 +8,7 @@
 #include "engine/asset/model.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/world/physics_settings.hpp"
-#include "engine/serialization/scene_serializer.hpp"
+#include "engine/serialization/map_io.hpp"
 #include "renderer/vulkan_context.hpp"
 #include "ui/components/console_widget.hpp"
 #include <algorithm>
@@ -389,15 +389,13 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
 }
 
 bool Scene::saveToFile(const std::string& filename) {
-    // Use the SceneSerializer to save the scene
-    SceneSerializer serializer(this);
-    return serializer.serialize(filename);
+    MapIO io(this);
+    return io.save(filename);
 }
 
 bool Scene::loadFromFile(const std::string& filename) {
-    // Use the SceneSerializer to load the scene
-    SceneSerializer serializer(this);
-    return serializer.deserialize(filename);
+    MapIO io(this);
+    return io.load(filename);
 }
 
 bool Scene::updateSceneBuffers() {

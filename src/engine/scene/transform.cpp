@@ -1,5 +1,4 @@
 #include "transform.hpp"
-#include "engine/scene/scene_node.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
 
@@ -35,41 +34,22 @@ glm::mat4 Transform::getLocalMatrix() const {
         localMatrix = glm::translate(glm::mat4(1.0f), localPosition) *
                      glm::toMat4(localRotation) *
                      glm::scale(glm::mat4(1.0f), localScale);
+        worldMatrix = localMatrix;
+        dirty = false;
     }
     return localMatrix;
 }
 
 void Transform::setDirty() {
     dirty = true;
-    // Propagate dirty state to children if owner exists
-    if (owner) {
-        for (const auto& child : owner->getChildren()) {
-            child->getTransform().setDirty();
-        }
-    }
-}
-
-void Transform::setOwner(SceneNode* node) {
-    owner = node;
-    setDirty();
 }
 
 void Transform::updateWorldMatrix() const {
-    // Always recalculate local matrix
+    // Local == world for now; parent-based composition can be added via Actor hierarchy
     localMatrix = glm::translate(glm::mat4(1.0f), localPosition) *
                  glm::toMat4(localRotation) *
                  glm::scale(glm::mat4(1.0f), localScale);
-
-    // Calculate world matrix based on parent
-    if (owner && owner->getParent()) {
-        // Get parent's world transform
-        const Transform& parentTransform = owner->getParent()->getTransform();
-        worldMatrix = parentTransform.getWorldMatrix() * localMatrix;
-    } else {
-        worldMatrix = localMatrix;
-    }
-
-    dirty = false;
+    worldMatrix = localMatrix;
 }
 
 glm::vec3 Transform::getWorldPosition() const {
