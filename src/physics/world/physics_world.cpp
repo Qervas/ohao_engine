@@ -5,6 +5,7 @@
 #include "physics/forces/forces.hpp"
 #include "physics/debug/force_debugger.hpp"
 #include <chrono>
+#include <algorithm>
 
 namespace ohao {
 namespace physics {
@@ -225,20 +226,24 @@ void PhysicsWorld::initializeSubsystems() {
     
     // Initialize constraint manager
     m_constraintManager = std::make_unique<constraints::ConstraintManager>();
-    m_constraintManager->setConfig(m_config.constraintConfig);
+    // TODO: Add constraintConfig to PhysicsWorldConfig
+    // m_constraintManager->setConfig(m_config.constraintConfig);
     
     // Initialize physics integrator
-    m_integrator = std::make_unique<dynamics::PhysicsIntegrator>();
-    m_integrator->setConfig(m_config.integratorConfig);
+    // TODO: PhysicsIntegrator class not implemented yet
+    // m_integrator = std::make_unique<dynamics::PhysicsIntegrator>();
+    // m_integrator->setConfig(m_config.integratorConfig);
     
     // Initialize collision queries (for raycasting, etc.)
-    m_collisionQueries = std::make_unique<collision::CollisionQueries>(m_collisionSystem.get());
+    // TODO: CollisionQueries class not implemented yet
+    // m_collisionQueries = std::make_unique<collision::CollisionQueries>(m_collisionSystem.get());
     
     // Initialize force debugger if needed
-    if (m_config.enableForceDebugging) {
-        m_forceDebugger = std::make_unique<debug::ForceDebugger>();
-        m_forceDebuggingEnabled = true;
-    }
+    // TODO: Add enableForceDebugging to PhysicsWorldConfig
+    // if (m_config.enableForceDebugging) {
+    //     m_forceDebugger = std::make_unique<debug::ForceDebugger>();
+    //     m_forceDebuggingEnabled = true;
+    // }
 }
 
 void PhysicsWorld::updateActiveBodyPointers() {
