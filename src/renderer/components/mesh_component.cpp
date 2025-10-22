@@ -1,6 +1,4 @@
 #include "mesh_component.hpp"
-#include "engine/serialization/component_registry.hpp"
-#include <nlohmann/json.hpp>
 #include "engine/actor/actor.hpp"
 #include "engine/component/transform_component.hpp"
 #include "physics/components/physics_component.hpp"
@@ -116,21 +114,6 @@ void MeshComponent::deserialize(class Deserializer& deserializer) {
     // TODO: Implement deserialization
 }
 
-// Registry hooks
-static Component* MeshCreate(ohao::Actor* actor){
-    auto mc = actor->getComponent<ohao::MeshComponent>();
-    if(!mc) mc = actor->addComponent<ohao::MeshComponent>();
-    return mc.get();
-}
-static nlohmann::json MeshSerialize(const ohao::Component& c){
-    const auto& mc = static_cast<const ohao::MeshComponent&>(c);
-    nlohmann::json j; j["enabled"] = mc.isEnabled(); return j;
-}
-static void MeshDeserialize(ohao::Component& c, const nlohmann::json& j){
-    auto& mc = static_cast<ohao::MeshComponent&>(c);
-    if(j.contains("enabled")) mc.setEnabled(j["enabled"].get<bool>());
-}
-
-OHAO_REGISTER_COMPONENT(MeshComponent, "MeshComponent", MeshCreate, MeshSerialize, MeshDeserialize)
+// Registration moved to central file
 
 } // namespace ohao 

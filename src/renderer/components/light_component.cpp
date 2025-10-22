@@ -1,5 +1,6 @@
 #include "light_component.hpp"
 #include "engine/actor/actor.hpp"
+// Registration moved to central file
 
 namespace ohao {
 
@@ -24,12 +25,7 @@ void LightComponent::update(float deltaTime) {
     // Update light parameters if needed
 }
 
-void LightComponent::serialize(class Serializer& serializer) const {
-    // TODO: Implement serialization when serializer is available
-}
-
-void LightComponent::deserialize(class Deserializer& deserializer) {
-    // TODO: Implement deserialization when deserializer is available
-}
+void LightComponent::serialize(class Serializer& serializer) const {}
+void LightComponent::deserialize(class Deserializer& deserializer) {}
 
 } // namespace ohao
