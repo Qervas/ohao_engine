@@ -1,7 +1,7 @@
 #pragma once
 #include "engine/asset/model.hpp"
-#include "engine/scene/scene_node.hpp"
 #include "renderer/material/material.hpp"
+#include "engine/scene/transform.hpp"
 #include <string>
 #include <memory>
 #include <atomic>
@@ -11,15 +11,22 @@ namespace ohao {
 // Generate unique IDs for scene objects
 using ObjectID = uint64_t;
 
-class SceneObject : public SceneNode {
+class SceneObject {
 public:
     SceneObject(const std::string& name = "Object");
-    ~SceneObject() override = default;
+    virtual ~SceneObject() = default;
 
-    // Get the unique object ID
     ObjectID getID() const { return objectID; }
 
-    // Component accessors
+    // Name
+    const std::string& getName() const { return name; }
+    void setName(const std::string& n) { name = n; }
+
+    // Transform accessors
+    Transform& getTransform() { return transform; }
+    const Transform& getTransform() const { return transform; }
+
+    // Component-style material/model
     void setModel(std::shared_ptr<Model> model) { this->model = model; }
     void setMaterial(const Material& material) { this->material = material; }
 
@@ -27,27 +34,17 @@ public:
     const Material& getMaterial() const { return material; }
     Material& getMaterial() { return material; }
 
-    // Type information
     virtual const char* getTypeName() const { return "SceneObject"; }
 
-    // Clone support
-    virtual std::shared_ptr<SceneObject> clone() const;
-    virtual void setTransform(const Transform& transform) override;
-    virtual void markTransformDirty() override;
-
 protected:
-    void onAddedToScene() override;
-    void onRemovedFromScene() override;
-
     Material material;
     std::shared_ptr<Model> model;
-    
+
 private:
-    // Unique ID for each object - never changes after creation
     ObjectID objectID;
-    
-    // Static counter for generating unique IDs
     static std::atomic<ObjectID> nextObjectID;
+    std::string name;
+    Transform transform;
 };
 
 } // namespace ohao

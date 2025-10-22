@@ -1,6 +1,6 @@
 file(GLOB_RECURSE SERIALIZATION_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/map_io.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/map_io.hpp"
 )
 
 add_library(ohao_serialization STATIC ${SERIALIZATION_SOURCES})

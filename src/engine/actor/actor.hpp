@@ -37,7 +37,7 @@ public:
     // Lifecycle methods
     virtual void initialize();
     virtual void start();
-    virtual void update(float deltaTime) override;
+    virtual void update(float deltaTime);
     virtual void render();
     virtual void destroy();
 
@@ -62,7 +62,7 @@ public:
     
     // Transform compatibility with SceneObject
     glm::mat4 getWorldMatrix() const { 
-        return getWorldTransform();
+        return getTransform() ? getTransform()->getWorldMatrix() : glm::mat4(1.0f);
     }
 
     // Unique ID is inherited from SceneObject
@@ -72,47 +72,28 @@ public:
     template<typename T, typename... Args>
     std::shared_ptr<T> addComponent(Args&&... args) {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-        
-        // Create new component with provided arguments
         std::shared_ptr<T> component = std::make_shared<T>(std::forward<Args>(args)...);
-        
-        // Set this actor as the owner
         component->setOwner(this);
-        
-        // Add to component lists
         components.push_back(component);
         componentsByType[std::type_index(typeid(T))] = component;
-        
-        // Initialize the component if actor is already active
-        if (isActive()) {
-            component->initialize();
-        }
-        
-        // Notify deriving classes
+        if (isActive()) { component->initialize(); }
         onComponentAdded(component);
-        
         return component;
     }
 
     template<typename T>
     std::shared_ptr<T> getComponent() const {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-        
-        // Look for the component type in our map
         auto it = componentsByType.find(std::type_index(typeid(T)));
         if (it != componentsByType.end()) {
-            // Cast the component to the requested type
             return std::static_pointer_cast<T>(it->second);
         }
-        
         return nullptr;
     }
 
     template<typename T>
     bool hasComponent() const {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-        
-        // Look for the component type in our map
         auto it = componentsByType.find(std::type_index(typeid(T)));
         return it != componentsByType.end();
     }
@@ -120,36 +101,18 @@ public:
     template<typename T>
     bool removeComponent() {
         static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-        
-        // Look for the component type in our map
         auto it = componentsByType.find(std::type_index(typeid(T)));
         if (it != componentsByType.end()) {
-            // Get the component
             std::shared_ptr<Component> component = it->second;
-            
-            // Remove from type map
             componentsByType.erase(it);
-            
-            // Remove from components vector using std::find
             auto compIt = std::find_if(components.begin(), components.end(), 
-                [&component](const std::shared_ptr<Component>& comp) {
-                    return comp == component;
-                });
-                
-            if (compIt != components.end()) {
-                components.erase(compIt);
-            }
-            
-            // Clean up component
+                [&component](const std::shared_ptr<Component>& comp) { return comp == component; });
+            if (compIt != components.end()) { components.erase(compIt); }
             component->destroy();
             component->setOwner(nullptr);
-            
-            // Notify deriving classes
             onComponentRemoved(component);
-            
             return true;
         }
-        
         return false;
     }
 
@@ -157,29 +120,19 @@ public:
 
     const std::vector<std::shared_ptr<Component>>& getAllComponents() const { return components; }
 
-    // SceneObject compatibility methods are already inherited
-    // These will be implemented in actor.cpp for component integration
     void setModel(std::shared_ptr<Model> model);
     std::shared_ptr<Model> getModel() const;
     void setMaterial(const Material& material);
     const Material& getMaterial() const;
     Material& getMaterial();
     
-    // Type information override
     const char* getTypeName() const override { return "Actor"; }
 
 protected:
-    // Called when a component is added to this actor
     virtual void onComponentAdded(std::shared_ptr<Component> component);
-    
-    // Called when a component is removed from this actor
     virtual void onComponentRemoved(std::shared_ptr<Component> component);
-    
-    // Called when this actor is added to a scene
-    void onAddedToScene() override;
-    
-    // Called when this actor is removed from a scene
-    void onRemovedFromScene() override;
+    void onAddedToScene();
+    void onRemovedFromScene();
 
     Scene* scene;
     Actor* parent;

@@ -12,6 +12,7 @@ add_executable(ohao_app
 
 target_link_libraries(ohao_app PRIVATE
     ohao_engine
+    ohao_component
     ohao_physics
     ohao_renderer
     ohao_utils

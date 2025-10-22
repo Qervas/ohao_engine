@@ -1,7 +1,7 @@
 #include "properties_panel.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "scene/scene_node.hpp"
+#include "engine/scene/scene_object.hpp"
 #include "console_widget.hpp"
 #include "vulkan_context.hpp"
 #include "renderer/components/light_component.hpp"
@@ -41,7 +41,7 @@ void PropertiesPanel::render() {
             if (auto actor = asActor(selectedObject)) {
                 renderActorProperties(actor);
             } else {
-                // Fall back to the old system
+                // Fall back: show basic name/transform for SceneObject
                 renderNodeProperties(selectedObject);
             }
         } else {
@@ -54,7 +54,7 @@ void PropertiesPanel::render() {
     }
 }
 
-void PropertiesPanel::renderNodeProperties(SceneNode* node) {
+void PropertiesPanel::renderNodeProperties(SceneObject* node) {
     if (!node) return;
 
     // Node name and type header
@@ -67,10 +67,8 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
     ImGui::SameLine();
     if (auto actor = asActor(node)) {
         ImGui::TextDisabled("(Actor)");
-    } else if (auto obj = asSceneObject(node)) {
-        ImGui::TextDisabled("(%s)", obj->getTypeName());
     } else {
-        ImGui::TextDisabled("(Node)");
+        ImGui::TextDisabled("(Object)");
     }
 
     ImGui::Separator();
@@ -82,11 +80,9 @@ void PropertiesPanel::renderNodeProperties(SceneNode* node) {
 
     // Modern Actor-Component system only
     if (auto actor = asActor(node)) {
-        // Use the modern Actor-Component system
         renderActorProperties(actor);
     } else {
-        // Non-Actor nodes (should be rare in modern architecture)
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Basic scene node (no components)");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Basic scene object (no components)");
     }
 }
 
@@ -112,27 +108,21 @@ void PropertiesPanel::renderActorProperties(Actor* actor) {
             renderTransformComponentProperties(transformComponent);
         } else {
             ImGui::TextDisabled("No transform component");
-            
-            // Add a transform component button
             if (ImGui::Button("Add Transform Component")) {
                 actor->addComponent<TransformComponent>();
             }
         }
     }
     
-    // Model display (find MeshComponent if exists)
     auto meshComponent = actor->getComponent<MeshComponent>();
     if (meshComponent && meshComponent->getModel()) {
         if (ImGui::CollapsingHeader("Model", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto model = meshComponent->getModel();
             ImGui::Text("Vertices: %zu", model->vertices.size());
             ImGui::Text("Indices: %zu", model->indices.size());
-            
-            // Material properties accessible through the MeshComponent UI
         }
     }
     
-    // Components list and management
     renderComponentProperties(actor);
 }
 
@@ -246,163 +236,18 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     }
 }
 
-void PropertiesPanel::renderTransformProperties(SceneNode* node) {
+void PropertiesPanel::renderTransformProperties(SceneObject* node) {
     if (!node) return;
     
-    // Check if node is actually an Actor (new system)
-    Actor* actor = dynamic_cast<Actor*>(node);
-    if (actor) {
-        // Use the TransformComponent from the Actor
-        auto transformComponent = actor->getTransform();
-        if (!transformComponent) {
-            ImGui::TextDisabled("No transform component found");
-            return;
-        }
-        
-        bool transformChanged = false;
-        
-        // Get current transform values
-        glm::vec3 position = transformComponent->getPosition();
-        glm::vec3 rotation = glm::degrees(transformComponent->getRotationEuler());
-        glm::vec3 scale = transformComponent->getScale();
-        
-        // Show object info in debug builds
-        ImGui::Text("Object: %s (ID: %zu)", actor->getName().c_str(), actor->getID());
-        
-        // Check physics state to determine if manual editing is allowed
-        bool allowManualEdit = true;
-        auto physicsComponent = actor->getComponent<PhysicsComponent>();
-        
-        if (physicsComponent && currentScene && currentScene->getPhysicsWorld()) {
-            auto physicsState = currentScene->getPhysicsWorld()->getSimulationState();
-            allowManualEdit = (physicsState != physics::SimulationState::RUNNING);
-            
-            if (!allowManualEdit) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-                ImGui::Text("🔒 Transform locked - Physics simulation is running");
-                ImGui::Text("   Pause or stop physics to edit manually");
-                ImGui::PopStyleColor();
-                ImGui::Separator();
-            }
-        }
-        
-        if (allowManualEdit) {
-            if (renderVec3Control("Position", position)) {
-                transformComponent->setPosition(position);
-                transformChanged = true;
-                
-                // If physics component exists, sync the change to physics body
-                if (physicsComponent) {
-                    physicsComponent->updateRigidBodyFromTransform();
-                }
-            }
-            
-            if (renderVec3Control("Rotation", rotation)) {
-                transformComponent->setRotationEuler(glm::radians(rotation));
-                transformChanged = true;
-                
-                // If physics component exists, sync the change to physics body
-                if (physicsComponent) {
-                    physicsComponent->updateRigidBodyFromTransform();
-                }
-            }
-            
-            if (renderVec3Control("Scale", scale, 1.0f)) {
-                transformComponent->setScale(scale);
-                transformChanged = true;
-                // Note: Scale changes don't typically sync to physics body
-            }
-        } else {
-            // Show read-only values when physics is running
-            ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.6f);
-            
-            renderVec3Control("Position", position);
-            renderVec3Control("Rotation", rotation);
-            renderVec3Control("Scale", scale, 1.0f);
-            
-            ImGui::PopStyleVar();
-            ImGui::PopItemFlag();
-        }
-        
-        // Display world transform info
-        if (ImGui::TreeNode("World Transform")) {
-            glm::vec3 worldPos = transformComponent->getWorldPosition();
-            glm::vec3 worldRot = glm::degrees(transformComponent->getRotationEuler());
-            glm::vec3 worldScale = transformComponent->getWorldScale();
-            
-            ImGui::Text("World Position: %.2f, %.2f, %.2f", worldPos.x, worldPos.y, worldPos.z);
-            ImGui::Text("World Rotation: %.2f, %.2f, %.2f", worldRot.x, worldRot.y, worldRot.z);
-            ImGui::Text("World Scale: %.2f, %.2f, %.2f", worldScale.x, worldScale.y, worldScale.z);
-            
-            ImGui::TreePop();
-        }
-        
-        // If transform changed, update scene buffers
-        if (transformChanged && VulkanContext::getContextInstance()) {
-            VulkanContext::getContextInstance()->updateSceneBuffers();
-        }
-        
-        return;
-    }
-    
-    // Fall back to old system for backward compatibility
-    SceneObject* sceneObject = asSceneObject(node);
-    if (!sceneObject) {
-        ImGui::TextDisabled("Transform properties only available for SceneObjects");
-        return;
-    }
+    Transform& t = node->getTransform();
+    glm::vec3 pos = t.getLocalPosition();
+    if (renderVec3Control("Position", pos)) { t.setLocalPosition(pos); }
 
-    // Directly access the transform from the node to ensure we're modifying the right object
-    Transform& transform = node->getTransform();
-    bool transformChanged = false;
-    
-    // Get current transform values
-    glm::vec3 position = transform.getLocalPosition();
-    glm::vec3 rotation = glm::degrees(glm::eulerAngles(transform.getLocalRotation()));
-    glm::vec3 scale = transform.getLocalScale();
+    glm::vec3 euler = glm::eulerAngles(t.getLocalRotation());
+    if (renderVec3Control("Rotation", euler)) { t.setLocalRotationEuler(euler); }
 
-    // Show transform ID in debug builds to help troubleshoot
-    ImGui::Text("Object: %s (addr: %p)", node->getName().c_str(), (void*)node);
-
-    if (renderVec3Control("Position", position)) {
-        transform.setLocalPosition(position);
-        transformChanged = true;
-    }
-
-    if (renderVec3Control("Rotation", rotation)) {
-        transform.setLocalRotationEuler(glm::radians(rotation));
-        transformChanged = true;
-    }
-
-    if (renderVec3Control("Scale", scale, 1.0f)) {
-        transform.setLocalScale(scale);
-        transformChanged = true;
-    }
-
-    // If transform changed, update scene buffers
-    if (transformChanged) {
-        // Mark the transform as dirty - this is crucial
-        node->markTransformDirty();
-        
-        if (auto context = VulkanContext::getContextInstance()) {
-            // Explicitly update scene buffers
-            context->updateSceneBuffers();
-        }
-    }
-
-    // Display world transform info
-    if (ImGui::TreeNode("World Transform")) {
-        glm::vec3 worldPos = transform.getWorldPosition();
-        glm::vec3 worldRot = glm::degrees(glm::eulerAngles(transform.getWorldRotation()));
-        glm::vec3 worldScale = transform.getWorldScale();
-
-        ImGui::Text("World Position: %.2f, %.2f, %.2f", worldPos.x, worldPos.y, worldPos.z);
-        ImGui::Text("World Rotation: %.2f, %.2f, %.2f", worldRot.x, worldRot.y, worldRot.z);
-        ImGui::Text("World Scale: %.2f, %.2f, %.2f", worldScale.x, worldScale.y, worldScale.z);
-
-        ImGui::TreePop();
-    }
+    glm::vec3 scale = t.getLocalScale();
+    if (renderVec3Control("Scale", scale, 1.0f)) { t.setLocalScale(scale); }
 }
 
 bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& values, float resetValue) {
