@@ -15,8 +15,7 @@ public:
 
 private:
     void renderEnvironmentSettings();
-    void renderRenderSettings();
-    void renderPhysicsSettings();
+    void renderLightingSettings();
 
     Scene* currentScene{nullptr};
 };

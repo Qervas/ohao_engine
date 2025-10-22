@@ -1,6 +1,7 @@
 #pragma once
 #include "ui/common/panel_base.hpp"
 #include "renderer/gizmo/axis_gizmo.hpp"
+#include "ui/icons/font_awesome_icons.hpp"
 #include <memory>
 #include "imgui.h"
 
@@ -8,11 +9,11 @@ namespace ohao {
 
 class AxisGizmo;
 
-// Modern UI Icons using ASCII and basic Unicode symbols
-#define ICON_VIEW "VIEW"
-#define ICON_AXIS " X "
-#define ICON_GRID " # "
-#define ICON_WIREFRAME " <> "
+// Viewport Toolbar Icons using FontAwesome
+#define ICON_VIEW "View"  // Header text, not an icon
+#define ICON_AXIS ICON_FA_ARROWS_UP_DOWN_LEFT_RIGHT  // 3D axis gizmo icon
+#define ICON_GRID ICON_FA_BORDER_ALL                 // Grid pattern icon
+#define ICON_WIREFRAME ICON_FA_DRAW_POLYGON          // Wireframe/polygon icon
 
 class ViewportToolbar : public PanelBase {
 public:

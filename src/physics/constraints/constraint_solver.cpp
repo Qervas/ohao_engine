@@ -1,6 +1,7 @@
 #include "constraint_solver.hpp"
 #include "constraint.hpp"
 #include "physics/utils/physics_math.hpp"
+#include <algorithm>
 
 namespace ohao {
 namespace physics {
@@ -135,8 +136,9 @@ std::unique_ptr<HingeConstraint> ConstraintFactory::createHinge(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // Create hinge constraint
-    return std::make_unique<HingeConstraint>(bodyA, anchorA, axisA, bodyB, anchorB, axisB);
+    // TODO: HingeConstraint class not implemented yet
+    return nullptr;
+    // return std::make_unique<HingeConstraint>(bodyA, anchorA, axisA, bodyB, anchorB, axisB);
 }
 
 std::unique_ptr<SpringConstraint> ConstraintFactory::createSpring(
@@ -146,8 +148,9 @@ std::unique_ptr<SpringConstraint> ConstraintFactory::createSpring(
     
     if (!bodyA || !bodyB) return nullptr;
     
-    // Create spring constraint
-    return std::make_unique<SpringConstraint>(bodyA, anchorA, bodyB, anchorB, restLength, stiffness, damping);
+    // TODO: SpringConstraint class not implemented yet
+    return nullptr;
+    // return std::make_unique<SpringConstraint>(bodyA, anchorA, bodyB, anchorB, restLength, stiffness, damping);
 }
 
 std::unique_ptr<ContactConstraint> ConstraintFactory::createContact(

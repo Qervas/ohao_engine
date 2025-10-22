@@ -2,6 +2,7 @@
 #include "engine/scene/scene.hpp"
 #include "ui/components/console_widget.hpp"
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <algorithm>
 
 namespace ohao {
@@ -12,40 +13,52 @@ PhysicsPanel::PhysicsPanel() : PanelBase("Physics Simulation") {
 void PhysicsPanel::render() {
     if (!visible) return;
 
-    if (ImGui::Begin("Physics Simulation", &visible, ImGuiWindowFlags_None)) {
-        
+    // Check if we're in a docked/child window context (used by SidePanelManager)
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    bool isInChildWindow = (window && window->ParentWindow != nullptr);
+
+    bool shouldRenderContent = true;
+
+    if (!isInChildWindow) {
+        shouldRenderContent = ImGui::Begin("Physics Simulation", &visible, ImGuiWindowFlags_None);
+    }
+
+    if (shouldRenderContent) {
         // Main playback controls at the top
         renderPlaybackControls();
-        
+
         ImGui::Separator();
-        
+
         // Tabbed interface for different sections
         if (ImGui::BeginTabBar("PhysicsTabBar")) {
-            
+
             if (ImGui::BeginTabItem("Simulation")) {
                 renderSimulationSettings();
                 ImGui::EndTabItem();
             }
-            
+
             if (ImGui::BeginTabItem("World")) {
                 renderWorldSettings();
                 ImGui::EndTabItem();
             }
-            
+
             if (ImGui::BeginTabItem("Debug")) {
                 renderDebugTools();
                 ImGui::EndTabItem();
             }
-            
+
             if (ImGui::BeginTabItem("Stats")) {
                 renderPerformanceStats();
                 ImGui::EndTabItem();
             }
-            
+
             ImGui::EndTabBar();
         }
     }
-    ImGui::End();
+
+    if (!isInChildWindow) {
+        ImGui::End();
+    }
 }
 
 void PhysicsPanel::renderPlaybackControls() {

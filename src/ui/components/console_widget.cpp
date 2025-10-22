@@ -52,10 +52,10 @@ void ConsoleWidget::render() {
 
         ImGui::PushID(i);
 
-        // Selectable without visible box
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.3f, 0.3f, 0.5f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.4f, 0.4f, 0.4f, 0.5f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.5f, 0.5f, 0.5f, 0.5f));
+        // Selectable with subtle highlight
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.20f, 0.35f, 0.55f, 0.60f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.28f, 0.48f, 0.75f, 0.70f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.35f, 0.60f, 0.90f, 0.80f));
 
         ImGui::Selectable("##line", &entry.selected, ImGuiSelectableFlags_SpanAllColumns);
 
@@ -66,14 +66,14 @@ void ConsoleWidget::render() {
         ImGui::SetCursorPosX(ImGui::GetStyle().ItemSpacing.x);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetTextLineHeight());
 
-        // Render the actual text
+        // Render the actual text with better readability
         if (showTimestamps) {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+            ImGui::TextColored(ImVec4(0.60f, 0.65f, 0.70f, 1.0f),  // Lighter gray for better readability
                 "[%s] ", entry.timeStr.c_str());
             ImGui::SameLine();
         }
         if (showCategories) {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+            ImGui::TextColored(ImVec4(0.60f, 0.65f, 0.70f, 1.0f),  // Lighter gray for better readability
                 "[%s] ", entry.category.c_str());
             ImGui::SameLine();
         }
@@ -90,19 +90,19 @@ void ConsoleWidget::render() {
 }
 
 void ConsoleWidget::log(const std::string& message) {
-    addEntry(message, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+    addEntry(message, ImVec4(0.90f, 0.90f, 0.92f, 1.0f));  // Slightly off-white for regular messages
 }
 
 void ConsoleWidget::logWarning(const std::string& message) {
-    addEntry(message, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+    addEntry(message, ImVec4(1.00f, 0.75f, 0.20f, 1.0f));  // Orange-yellow for warnings
 }
 
 void ConsoleWidget::logError(const std::string& message) {
-    addEntry(message, ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+    addEntry(message, ImVec4(1.00f, 0.35f, 0.35f, 1.0f));  // Softer red for errors (less jarring)
 }
 
 void ConsoleWidget::logDebug(const std::string& message) {
-    addEntry(message, ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Debug");
+    addEntry(message, ImVec4(0.60f, 0.85f, 0.60f, 1.0f), "Debug");  // Softer green for debug
 }
 
 void ConsoleWidget::clear() {
