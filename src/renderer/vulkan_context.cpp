@@ -350,9 +350,16 @@ void VulkanContext::initializeSceneRenderer() {
     }
 
     auto viewportSize = uiManager->getSceneViewportSize();
-    if (!sceneRenderer->initializeRenderTarget(
-            static_cast<uint32_t>(viewportSize.width),
-            static_cast<uint32_t>(viewportSize.height))) {
+    uint32_t targetWidth = static_cast<uint32_t>(viewportSize.width);
+    uint32_t targetHeight = static_cast<uint32_t>(viewportSize.height);
+    // Fallback to swapchain extent if UI hasn't reported a size yet
+    if (targetWidth == 0 || targetHeight == 0) {
+        VkExtent2D extent = swapchain->getExtent();
+        targetWidth = extent.width;
+        targetHeight = extent.height;
+    }
+
+    if (!sceneRenderer->initializeRenderTarget(targetWidth, targetHeight)) {
         throw std::runtime_error("Failed to initialize scene render target");
     }
 
@@ -364,7 +371,7 @@ void VulkanContext::initializeSceneRenderer() {
             device.get(),
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
-            VkExtent2D{viewportSize.width, viewportSize.height},
+            VkExtent2D{targetWidth, targetHeight},
             descriptorSetLayout,
             OhaoVkPipeline::RenderMode::SOLID)) {
         throw std::runtime_error("Failed to initialize scene pipeline!");
@@ -375,7 +382,7 @@ void VulkanContext::initializeSceneRenderer() {
             device.get(),
             sceneRenderer->getRenderTarget()->getRenderPass(),
             shaderModules.get(),
-            VkExtent2D{viewportSize.width, viewportSize.height},
+            VkExtent2D{targetWidth, targetHeight},
             descriptorSetLayout,
             OhaoVkPipeline::RenderMode::GIZMO)) {
         throw std::runtime_error("Failed to initialize scene gizmo pipeline!");
@@ -383,6 +390,11 @@ void VulkanContext::initializeSceneRenderer() {
 
     // Update the scene renderer to use both pipelines
     sceneRenderer->setPipelinesWithWireframe(scenePipeline.get(), wireframePipeline.get(), sceneGizmoPipeline.get());
+
+    // Ensure camera aspect matches initial viewport
+    if (targetWidth > 0 && targetHeight > 0) {
+        camera.setAspectRatio(static_cast<float>(targetWidth) / static_cast<float>(targetHeight));
+    }
 }
 
 void VulkanContext::updateScene(float deltaTime) {
@@ -420,6 +432,55 @@ void VulkanContext::updateScene(float deltaTime) {
 void VulkanContext::drawFrame() {
     if (!uiManager) {
         throw std::runtime_error("UI Manager not set!");
+    }
+    // Handle scene viewport resize requested by UI
+    if (needsResize && lastWidth > 0 && lastHeight > 0) {
+        device->waitIdle();
+
+        // Resize scene render target
+        if (sceneRenderer) {
+            sceneRenderer->resize(lastWidth, lastHeight);
+        }
+
+        // Recreate scene pipelines with new extent and render pass
+        VkDescriptorSetLayout descriptorSetLayout = descriptor->getLayout();
+        OhaoVkRenderPass* rp = sceneRenderer && sceneRenderer->getRenderTarget() ? sceneRenderer->getRenderTarget()->getRenderPass() : nullptr;
+        VkExtent2D newExtent{ lastWidth, lastHeight };
+
+        scenePipeline = std::make_unique<OhaoVkPipeline>();
+        if (!scenePipeline->initialize(device.get(), rp, shaderModules.get(), newExtent, descriptorSetLayout, OhaoVkPipeline::RenderMode::SOLID)) {
+            throw std::runtime_error("Failed to recreate scene pipeline on resize!");
+        }
+
+        sceneGizmoPipeline = std::make_unique<OhaoVkPipeline>();
+        if (!sceneGizmoPipeline->initialize(device.get(), rp, shaderModules.get(), newExtent, descriptorSetLayout, OhaoVkPipeline::RenderMode::GIZMO)) {
+            throw std::runtime_error("Failed to recreate scene gizmo pipeline on resize!");
+        }
+
+        // Rebind pipelines into renderer
+        sceneRenderer->setPipelinesWithWireframe(scenePipeline.get(), wireframePipeline.get(), sceneGizmoPipeline.get());
+
+        float newAspect = static_cast<float>(lastWidth) / static_cast<float>(lastHeight);
+        // Preserve perceived scale: if only height changed, keep horizontal FOV constant
+        static uint32_t prevW = 0, prevH = 0;
+        float prevAspect = (prevH > 0) ? static_cast<float>(prevW) / static_cast<float>(prevH) : newAspect;
+        float fovY = camera.getFov();
+        // Detect predominant dimension change
+        bool widthChanged = (prevW != lastWidth);
+        bool heightChanged = (prevH != lastHeight);
+        if (!widthChanged && heightChanged) {
+            // Keep horizontal FOV constant: hFOV0 = 2*atan(prevAspect*tan(fovY/2))
+            float fovYRad = glm::radians(fovY);
+            float hFOV0 = 2.0f * atanf(prevAspect * tanf(fovYRad * 0.5f));
+            float newFovY = 2.0f * atanf(tanf(hFOV0 * 0.5f) / newAspect);
+            camera.setFov(glm::degrees(newFovY));
+        }
+        camera.setAspectRatio(newAspect);
+        prevW = lastWidth; prevH = lastHeight;
+
+        needsResize = false;
+        // Avoid recording/submitting while resources just changed this tick
+        return;
     }
     if(window->wasResized()){
         recreateSwapChain();

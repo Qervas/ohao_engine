@@ -286,13 +286,21 @@ bool SceneRenderTarget::createDescriptor() {
         return false;
     }
 
-    for (int attempts = 0; attempts < 3; attempts++) {
-        // Create descriptor with correct layout
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = colorTarget->getImageView();
-        imageInfo.sampler = sampler;
+    // Free old image descriptor set if any
+    if (descriptorSet != VK_NULL_HANDLE) {
+        context->getDescriptor()->freeImageDescriptor(descriptorSet);
+        descriptorSet = VK_NULL_HANDLE;
+    }
 
+    // Prepare descriptor image info
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageInfo.imageView = colorTarget->getImageView();
+    imageInfo.sampler = sampler;
+
+    // Attempt to allocate descriptor set with retry logic
+    const int maxAttempts = 3;
+    for (int attempts = 0; attempts < maxAttempts; attempts++) {
         descriptorSet = context->getDescriptor()->allocateImageDescriptor(
             colorTarget->getImageView(),
             sampler
@@ -327,13 +335,14 @@ void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
     auto oldColorTarget = std::move(colorTarget);
     auto oldDepthTarget = std::move(depthTarget);
     auto oldSampler = sampler;
-    auto oldRenderPass = renderPass->getVkRenderPass();
+    // Keep ownership of the old render pass object so its destructor manages VkRenderPass correctly
+    std::unique_ptr<OhaoVkRenderPass> oldRenderPassObj = std::move(renderPass);
     auto oldFramebuffer = framebuffer;
     auto oldDescriptorSet = descriptorSet;
 
     // Reset handles to prevent accidental use
     sampler = VK_NULL_HANDLE;
-    renderPass = VK_NULL_HANDLE;
+    // renderPass is now null after move above
     framebuffer = VK_NULL_HANDLE;
     descriptorSet = VK_NULL_HANDLE;
 
@@ -369,8 +378,7 @@ void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
         depthTarget = std::move(oldDepthTarget);
         sampler = oldSampler;
         if (!renderPass) {
-            renderPass = std::make_unique<OhaoVkRenderPass>();
-            renderPass->initialize(context->getLogicalDevice(), context->getSwapChain());
+            renderPass = std::move(oldRenderPassObj);
         }
         framebuffer = oldFramebuffer;
         descriptorSet = oldDescriptorSet;
@@ -382,11 +390,13 @@ void SceneRenderTarget::resize(uint32_t width, uint32_t height) {
         if (oldSampler != VK_NULL_HANDLE) {
             vkDestroySampler(context->getVkDevice(), oldSampler, nullptr);
         }
-        if (oldRenderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(context->getVkDevice(), oldRenderPass, nullptr);
-        }
+        // oldRenderPassObj will be destroyed automatically here
         if (oldFramebuffer != VK_NULL_HANDLE) {
             vkDestroyFramebuffer(context->getVkDevice(), oldFramebuffer, nullptr);
+        }
+        // Free the old image descriptor set now that new one is ready
+        if (oldDescriptorSet != VK_NULL_HANDLE) {
+            context->getDescriptor()->freeImageDescriptor(oldDescriptorSet);
         }
     }
 

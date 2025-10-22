@@ -33,6 +33,7 @@ public:
 
     bool createCombinedImageSamplerLayout();
     VkDescriptorSet allocateImageDescriptor(VkImageView imageView, VkSampler sampler);
+    void freeImageDescriptor(VkDescriptorSet set);
 
     // Getters
     VkDescriptorSetLayout getLayout() const { return layout; }

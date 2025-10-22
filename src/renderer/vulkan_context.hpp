@@ -223,6 +223,8 @@ private:
     uint32_t lastWidth{0};
     uint32_t lastHeight{0};
     bool needsResize{false};
+    // Maintain a constant camera/reference aspect; render is letterboxed within panel
+    
     std::shared_ptr<UIManager> uiManager;
     std::unique_ptr<SceneRenderer> sceneRenderer;
 

@@ -91,6 +91,27 @@ Camera::rotate(float deltaPitch, float deltaYaw){
 }
 
 void
+Camera::focusOnPoint(const glm::vec3& targetPoint, float distance){
+    // Calculate direction from target to camera (opposite of front)
+    // This positions the camera behind the target based on current orientation
+    glm::vec3 offset = -front * distance;
+    glm::vec3 newPosition = targetPoint + offset;
+
+    // Calculate the actual direction from new position to target
+    glm::vec3 direction = glm::normalize(targetPoint - newPosition);
+
+    // Convert direction to pitch and yaw
+    float newPitch = glm::degrees(asin(direction.y));
+    float newYaw = glm::degrees(atan2(direction.z, direction.x));
+
+    // Update camera
+    position = newPosition;
+    pitch = glm::clamp(newPitch, -89.0f, 89.0f);
+    yaw = newYaw;
+    updateVectors();
+}
+
+void
 Camera::setProjectionType(ProjectionType type){
     projectionType = type;
     updateVectors();
