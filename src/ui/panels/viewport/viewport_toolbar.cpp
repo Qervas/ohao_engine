@@ -58,6 +58,13 @@ void ViewportToolbar::renderModernVisualAidControls() {
 
     const float toggleSize = 42.0f;  // Larger size for clear icon display
 
+    // Play/Focus button for viewport focus mode
+    renderModernToggleButton(ICON_PLAY, viewportFocused, toggleSize,
+        ImVec4(0.20f, 0.80f, 0.20f, 1.0f), // Active - green
+        "Toggle viewport focus (F5 to enter, ESC to exit)");
+
+    ImGui::SameLine(0.0f, 8.0f);  // More spacing between icons
+
     // Axis gizmo toggle with FontAwesome icon
     renderModernToggleButton(ICON_AXIS, showAxis, toggleSize,
         ImVec4(0.28f, 0.65f, 0.95f, 1.0f), // Active - vibrant blue

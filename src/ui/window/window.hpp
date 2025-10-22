@@ -19,6 +19,7 @@ public:
 
     //input handling
     bool isKeyPressed(int key) const;
+    bool isMouseButtonPressed(int button) const;
     glm::vec2 getMousePosition() const;
     glm::vec2 getMouseDelta();
     uint32_t getWidth() const { return width; }

@@ -4,6 +4,8 @@
 #include <chrono>
 #include "renderer/camera/camera_controller.hpp"
 #include "ui/system/ui_manager.hpp"
+#include "ui/selection/selection_manager.hpp"
+#include "engine/component/transform_component.hpp"
 #include <iostream>
 #include <memory>
 #include <vulkan/vulkan_core.h>
@@ -26,8 +28,14 @@ int main() {
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
         auto lastTime = std::chrono::high_resolution_clock::now();
-        bool tabPressed = false;
+        bool f5Pressed = false;
+        bool escPressed = false;
         bool demoPressed = false;
+
+        // Double-click detection for camera focus
+        auto lastClickTime = std::chrono::high_resolution_clock::now();
+        bool mouseButtonWasPressed = false;
+        const double DOUBLE_CLICK_TIME = 0.5; // 500ms
 
         while (!window.shouldClose()) {
             auto currentTime = std::chrono::high_resolution_clock::now();
@@ -35,16 +43,32 @@ int main() {
             lastTime = currentTime;
 
             window.pollEvents();
-            cameraController.update(deltaTime);
 
-            if(window.isKeyPressed(GLFW_KEY_TAB)){
-                if(!tabPressed){
-                    window.toggleCursorMode();
-                    tabPressed = true;
+            // UE5-style input routing: Set focus state FIRST, then apply to cursor
+            // F5 toggles viewport focus mode
+            if(window.isKeyPressed(GLFW_KEY_F5)){
+                if(!f5Pressed){
+                    bool currentlyFocused = uiManager->getViewportToolbar()->isViewportFocused();
+                    uiManager->getViewportToolbar()->setViewportFocused(!currentlyFocused);
+                    f5Pressed = true;
                 }
             }else {
-                tabPressed = false;
+                f5Pressed = false;
             }
+
+            // ESC to exit viewport focus mode
+            if(window.isKeyPressed(GLFW_KEY_ESCAPE)){
+                if(!escPressed){
+                    uiManager->getViewportToolbar()->setViewportFocused(false);
+                    escPressed = true;
+                }
+            }else {
+                escPressed = false;
+            }
+
+            // Apply viewport focus state to cursor mode IMMEDIATELY
+            bool viewportFocused = uiManager->getViewportToolbar()->isViewportFocused();
+            window.enableCursor(!viewportFocused); // Disable cursor when focused (for camera control)
 
             // Check for the M key to load multi-object demo
             if(window.isKeyPressed(GLFW_KEY_M)){
@@ -57,7 +81,36 @@ int main() {
                 demoPressed = false;
             }
 
-            if (!uiManager->wantsInputCapture()) {
+            // Double-click detection for camera focus on selected object
+            bool mouseButtonPressed = window.isMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT);
+            if (mouseButtonPressed && !mouseButtonWasPressed && uiManager->isSceneViewportHovered()) {
+                // Mouse button just pressed (rising edge)
+                auto timeSinceLastClick = std::chrono::duration<double>(currentTime - lastClickTime).count();
+
+                if (timeSinceLastClick < DOUBLE_CLICK_TIME) {
+                    // Double-click detected!
+                    auto& selectionManager = ohao::SelectionManager::get();
+                    ohao::Actor* selectedActor = selectionManager.getSelectedActor();
+
+                    if (selectedActor) {
+                        // Get the actor's world position
+                        auto* transform = selectedActor->getTransform();
+                        if (transform) {
+                            glm::vec3 targetPosition = transform->getWorldPosition();
+
+                            // Focus camera on the object
+                            vulkan.getCamera().focusOnPoint(targetPosition, 5.0f);
+                            std::cout << "Camera focused on: " << selectedActor->getName() << std::endl;
+                        }
+                    }
+                }
+
+                lastClickTime = currentTime;
+            }
+            mouseButtonWasPressed = mouseButtonPressed;
+
+            // UE5-style camera update: Update when viewport focused OR when UI doesn't want input
+            if (viewportFocused || !uiManager->wantsInputCapture()) {
                 cameraController.update(deltaTime);
             }
 
@@ -66,7 +119,11 @@ int main() {
 
             uiManager->render();
             vulkan.drawFrame();
-            if(window.isKeyPressed(GLFW_KEY_ESCAPE)){
+            // Exit on Ctrl+Q
+            bool ctrlPressed = window.isKeyPressed(GLFW_KEY_LEFT_CONTROL) ||
+                             window.isKeyPressed(GLFW_KEY_RIGHT_CONTROL);
+            bool qPressed = window.isKeyPressed(GLFW_KEY_Q);
+            if(ctrlPressed && qPressed){
                 break;
             }
         }

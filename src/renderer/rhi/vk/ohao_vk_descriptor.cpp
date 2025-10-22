@@ -265,4 +265,17 @@ bool OhaoVkDescriptor::recreatePool() {
     return true;
 }
 
+void OhaoVkDescriptor::freeImageDescriptor(VkDescriptorSet set) {
+    if (!device || pool == VK_NULL_HANDLE || set == VK_NULL_HANDLE) {
+        return;
+    }
+    vkFreeDescriptorSets(device->getDevice(), pool, 1, &set);
+    for (auto it = imageDescriptorSets.begin(); it != imageDescriptorSets.end(); ++it) {
+        if (*it == set) {
+            imageDescriptorSets.erase(it);
+            break;
+        }
+    }
+}
+
 } // namespace ohao

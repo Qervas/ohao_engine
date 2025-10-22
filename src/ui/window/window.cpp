@@ -80,6 +80,10 @@ bool Window::isKeyPressed(int key) const{
     return glfwGetKey(window, key) == GLFW_PRESS;
 }
 
+bool Window::isMouseButtonPressed(int button) const{
+    return glfwGetMouseButton(window, button) == GLFW_PRESS;
+}
+
 glm::vec2 Window::getMousePosition() const{
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
@@ -101,9 +105,13 @@ glm::vec2 Window::getMouseDelta(){
 
 void
 Window::enableCursor(bool enabled){
+    if (cursorEnabled == enabled) {
+        return;
+    }
     glfwSetInputMode(window, GLFW_CURSOR,
         enabled ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
     firstMouse = true;
+    cursorEnabled = enabled;
 }
 
 void Window::setMousePosition(const glm::vec2& pos){
