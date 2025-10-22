@@ -23,6 +23,8 @@ enum class PrimitiveType {
 std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type) {
     auto model = std::make_shared<Model>();
     
+    // TODO: PrimitiveMeshGenerator methods not implemented yet
+    /*
     switch (type) {
         case PrimitiveType::Cube:
             PrimitiveMeshGenerator::generateCube(*model);
@@ -40,6 +42,7 @@ std::shared_ptr<Model> generatePrimitiveMesh(PrimitiveType type) {
             PrimitiveMeshGenerator::generateCone(*model);
             break;
     }
+    */
     
     return model;
 }

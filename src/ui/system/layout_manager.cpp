@@ -38,22 +38,18 @@ void LayoutManager::setupDefaultLayout(ImGuiID dockspaceId) {
 }
 
 void LayoutManager::arrangeRightPanels(ImGuiID rightPanelId) {
-    // Split right panel vertically for Outliner
+    // Split right panel into Outliner (top) and Side Panel (bottom)
     auto remaining_right_id = rightPanelId;
     auto dock_outliner_id = ImGui::DockBuilderSplitNode(remaining_right_id, ImGuiDir_Up,
                                                        OUTLINER_HEIGHT_RATIO,
                                                        nullptr, &remaining_right_id);
 
-    // Split remaining space for Scene Settings
-    auto dock_properties_id = remaining_right_id;
-    auto dock_scene_settings_id = ImGui::DockBuilderSplitNode(dock_properties_id, ImGuiDir_Down,
-                                                             SCENE_SETTINGS_HEIGHT_RATIO,
-                                                             nullptr, &dock_properties_id);
+    // The remaining space is for the Side Panel (tabbed interface)
+    auto dock_side_panel_id = remaining_right_id;
 
-    // Dock the right panel windows
+    // Dock the windows
     ImGui::DockBuilderDockWindow("Outliner", dock_outliner_id);
-    ImGui::DockBuilderDockWindow("Properties", dock_properties_id);
-    ImGui::DockBuilderDockWindow("Scene Settings", dock_scene_settings_id);
+    ImGui::DockBuilderDockWindow("Side Panel", dock_side_panel_id);
 }
 
 } // namespace ohao

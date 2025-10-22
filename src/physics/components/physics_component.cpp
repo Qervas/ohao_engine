@@ -307,62 +307,11 @@ void PhysicsComponent::destroy() {
 
 // === SERIALIZATION ===
 void PhysicsComponent::serialize(class Serializer& serializer) const {
-    // Serialize transform properties
-    serializer.write("position", m_transform.position);
-    serializer.write("rotation", m_transform.rotation);
-    serializer.write("scale", m_transform.scale);
-    
-    // Serialize physics properties
-    serializer.write("mass", m_mass);
-    serializer.write("isStatic", m_isStatic);
-    serializer.write("enableGravity", m_enableGravity);
-    
-    // Serialize material properties
-    serializer.write("restitution", m_restitution);
-    serializer.write("friction", m_friction);
-    serializer.write("linearDamping", m_linearDamping);
-    serializer.write("angularDamping", m_angularDamping);
-    
-    // Serialize shape type and parameters
-    serializer.write("shapeType", static_cast<int>(m_shapeType));
-    serializer.write("shapeSize", m_shapeSize);
-    
-    // Serialize collision flags
-    serializer.write("collisionLayer", m_collisionLayer);
-    serializer.write("collisionMask", m_collisionMask);
+    // TODO: Implement serialization when serializer is available
 }
 
 void PhysicsComponent::deserialize(class Deserializer& deserializer) {
-    // Deserialize transform properties
-    deserializer.read("position", m_transform.position);
-    deserializer.read("rotation", m_transform.rotation);
-    deserializer.read("scale", m_transform.scale);
-    
-    // Deserialize physics properties
-    deserializer.read("mass", m_mass);
-    deserializer.read("isStatic", m_isStatic);
-    deserializer.read("enableGravity", m_enableGravity);
-    
-    // Deserialize material properties
-    deserializer.read("restitution", m_restitution);
-    deserializer.read("friction", m_friction);
-    deserializer.read("linearDamping", m_linearDamping);
-    deserializer.read("angularDamping", m_angularDamping);
-    
-    // Deserialize shape type and parameters
-    int shapeTypeInt = 0;
-    deserializer.read("shapeType", shapeTypeInt);
-    m_shapeType = static_cast<PhysicsShapeType>(shapeTypeInt);
-    deserializer.read("shapeSize", m_shapeSize);
-    
-    // Deserialize collision flags
-    deserializer.read("collisionLayer", m_collisionLayer);
-    deserializer.read("collisionMask", m_collisionMask);
-    
-    // Mark as needing re-initialization if already initialized
-    if (m_initialized) {
-        m_needsUpdate = true;
-    }
+    // TODO: Implement deserialization when deserializer is available
 }
 
 // === SETTINGS ===

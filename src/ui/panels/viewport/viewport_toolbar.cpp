@@ -23,9 +23,9 @@ void ViewportToolbar::render() {
     ImVec2 toolbarPos = ImVec2(viewport->Pos.x + 20, viewport->Pos.y + 60);
     ImGui::SetNextWindowPos(toolbarPos, ImGuiCond_Always);
     
-    // Modern professional styling
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 12));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+    // Modern professional styling with better padding for icon visibility
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18, 14));     // More padding to prevent clipping
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 8));        // More spacing between icons
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(6, 4));
@@ -48,32 +48,35 @@ void ViewportToolbar::render() {
 }
 
 void ViewportToolbar::renderModernVisualAidControls() {
-    // Visual aids section header
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
-    ImGui::Text(ICON_VIEW " View");
+    // Visual aids section header (small text label)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.65f, 0.67f, 1.0f));
+    ImGui::TextUnformatted(ICON_VIEW);
     ImGui::PopStyleColor();
-    
-    const float toggleSize = 32.0f;
-    
-    // Axis gizmo toggle with modern icon
-    renderModernToggleButton(ICON_AXIS, showAxis, toggleSize, 
-        ImVec4(0.25f, 0.65f, 0.95f, 1.0f), // Active - blue
-        "Toggle XYZ axis gizmo with ruler markings");
-    
-    ImGui::SameLine(0.0f, 4.0f);
-    
-    // Grid toggle
+
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    const float toggleSize = 42.0f;  // Larger size for clear icon display
+
+    // Axis gizmo toggle with FontAwesome icon
+    renderModernToggleButton(ICON_AXIS, showAxis, toggleSize,
+        ImVec4(0.28f, 0.65f, 0.95f, 1.0f), // Active - vibrant blue
+        "Toggle XYZ axis gizmo");
+
+    ImGui::SameLine(0.0f, 8.0f);  // More spacing between icons
+
+    // Grid toggle with FontAwesome icon
     renderModernToggleButton(ICON_GRID, showGrid, toggleSize,
-        ImVec4(0.65f, 0.35f, 0.95f, 1.0f), // Active - purple  
-        "Toggle XOY plane grid");
-    
-    ImGui::SameLine(0.0f, 4.0f);
-    
-    // Wireframe toggle
+        ImVec4(0.70f, 0.40f, 0.95f, 1.0f), // Active - purple
+        "Toggle ground grid");
+
+    ImGui::SameLine(0.0f, 8.0f);  // More spacing between icons
+
+    // Wireframe toggle with FontAwesome icon
     renderModernToggleButton(ICON_WIREFRAME, wireframeMode, toggleSize,
-        ImVec4(0.95f, 0.55f, 0.15f, 1.0f), // Active - orange
-        "Toggle wireframe rendering mode");
-    
+        ImVec4(0.95f, 0.60f, 0.20f, 1.0f), // Active - orange
+        "Toggle wireframe mode");
+
     // Apply changes to the systems
     applyVisualAidSettings();
 }

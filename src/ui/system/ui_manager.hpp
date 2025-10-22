@@ -6,8 +6,10 @@
 #include "ui/panels/outliner/outliner_panel.hpp"
 #include "ui/panels/properties/properties_panel.hpp"
 #include "ui/panels/scene_settings/scene_settings_panel.hpp"
+#include "ui/panels/render_settings/render_settings_panel.hpp"
 #include "ui/panels/viewport/viewport_toolbar.hpp"
 #include "ui/panels/physics/physics_panel.hpp"
+#include "ui/system/side_panel_manager.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
@@ -91,8 +93,12 @@ private:
     std::unique_ptr<OutlinerPanel> outlinerPanel;
     std::unique_ptr<PropertiesPanel> propertiesPanel;
     std::unique_ptr<SceneSettingsPanel> sceneSettingsPanel;
+    std::unique_ptr<RenderSettingsPanel> renderSettingsPanel;
     std::unique_ptr<ViewportToolbar> viewportToolbar;
     std::unique_ptr<PhysicsPanel> physicsPanel;
+
+    // Side panel manager for Blender-style tabbed interface
+    std::unique_ptr<SidePanelManager> sidePanelManager;
 
     std::string currentProjectPath;
     std::string newProjectName;

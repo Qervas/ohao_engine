@@ -24,22 +24,34 @@ PropertiesPanel::PropertiesPanel() : PanelBase("Properties") {
 void PropertiesPanel::render() {
     if (!visible) return;
 
-    ImGui::Begin(name.c_str(), &visible, windowFlags);
+    // Check if we're in a docked/child window context (used by SidePanelManager)
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    bool isInChildWindow = (window && window->ParentWindow != nullptr);
 
-    auto* selectedObject = SelectionManager::get().getSelectedObject();
-    if (selectedObject) {
-        // Check if the object is an Actor first (new system)
-        if (auto actor = asActor(selectedObject)) {
-            renderActorProperties(actor);
-        } else {
-            // Fall back to the old system
-        renderNodeProperties(selectedObject);
-        }
-    } else {
-        ImGui::TextDisabled("No object selected");
+    bool shouldRenderContent = true;
+
+    if (!isInChildWindow) {
+        shouldRenderContent = ImGui::Begin(name.c_str(), &visible, windowFlags);
     }
 
-    ImGui::End();
+    if (shouldRenderContent) {
+        auto* selectedObject = SelectionManager::get().getSelectedObject();
+        if (selectedObject) {
+            // Check if the object is an Actor first (new system)
+            if (auto actor = asActor(selectedObject)) {
+                renderActorProperties(actor);
+            } else {
+                // Fall back to the old system
+                renderNodeProperties(selectedObject);
+            }
+        } else {
+            ImGui::TextDisabled("No object selected");
+        }
+    }
+
+    if (!isInChildWindow) {
+        ImGui::End();
+    }
 }
 
 void PropertiesPanel::renderNodeProperties(SceneNode* node) {
@@ -1231,7 +1243,8 @@ void PropertiesPanel::renderMaterialComponentProperties(MaterialComponent* compo
     // Material name
     Material& material = component->getMaterial();
     char nameBuffer[256];
-    strcpy_s(nameBuffer, material.name.c_str());
+    std::strncpy(nameBuffer, material.name.c_str(), sizeof(nameBuffer) - 1);
+    nameBuffer[sizeof(nameBuffer) - 1] = '\0';
     if (ImGui::InputText("Material Name##material_name", nameBuffer, sizeof(nameBuffer))) {
         material.name = std::string(nameBuffer);
     }

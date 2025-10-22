@@ -15,6 +15,7 @@
 #include "imgui_vulkan_utils.hpp"
 #include "renderer/components/light_component.hpp"
 #include "ui/selection/selection_manager.hpp"
+#include "ui/icons/font_awesome_icons.hpp"
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -86,9 +87,103 @@ void UIManager::initialize() {
 }
 
 void UIManager::applyTheme(const std::string& theme) {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* colors = style.Colors;
+
     if (theme == "Dark") {
-        ImGui::StyleColorsDark();
-        OHAO_LOG_DEBUG("Applied Dark theme");
+        // Modern Unreal Engine-inspired dark theme with better readability and contrast
+
+        // Background colors - darker, more professional
+        colors[ImGuiCol_WindowBg]               = ImVec4(0.09f, 0.09f, 0.10f, 1.00f);  // Main window background
+        colors[ImGuiCol_ChildBg]                = ImVec4(0.10f, 0.10f, 0.11f, 1.00f);  // Child window background
+        colors[ImGuiCol_PopupBg]                = ImVec4(0.11f, 0.11f, 0.12f, 0.98f);  // Popup background
+        colors[ImGuiCol_MenuBarBg]              = ImVec4(0.07f, 0.07f, 0.08f, 1.00f);  // Menu bar background
+
+        // Borders and separators - subtle but visible
+        colors[ImGuiCol_Border]                 = ImVec4(0.20f, 0.20f, 0.22f, 0.65f);
+        colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.30f);
+        colors[ImGuiCol_Separator]              = ImVec4(0.25f, 0.25f, 0.27f, 0.70f);
+        colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.35f, 0.60f, 0.85f, 0.78f);
+        colors[ImGuiCol_SeparatorActive]        = ImVec4(0.40f, 0.65f, 0.90f, 1.00f);
+
+        // Title bars - slightly lighter than background with blue tint when active
+        colors[ImGuiCol_TitleBg]                = ImVec4(0.07f, 0.07f, 0.08f, 1.00f);
+        colors[ImGuiCol_TitleBgActive]          = ImVec4(0.10f, 0.12f, 0.15f, 1.00f);
+        colors[ImGuiCol_TitleBgCollapsed]       = ImVec4(0.07f, 0.07f, 0.08f, 0.75f);
+
+        // Text - high contrast white for better readability
+        colors[ImGuiCol_Text]                   = ImVec4(0.95f, 0.95f, 0.96f, 1.00f);
+        colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+        colors[ImGuiCol_TextSelectedBg]         = ImVec4(0.30f, 0.55f, 0.85f, 0.45f);
+
+        // Frames (inputs, combos, etc.) - darker with blue accent when active
+        colors[ImGuiCol_FrameBg]                = ImVec4(0.15f, 0.15f, 0.16f, 1.00f);
+        colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.20f, 0.22f, 0.25f, 1.00f);
+        colors[ImGuiCol_FrameBgActive]          = ImVec4(0.22f, 0.24f, 0.28f, 1.00f);
+
+        // Buttons - subtle blue tint with vibrant hover/active states
+        colors[ImGuiCol_Button]                 = ImVec4(0.18f, 0.20f, 0.24f, 1.00f);
+        colors[ImGuiCol_ButtonHovered]          = ImVec4(0.28f, 0.48f, 0.75f, 1.00f);
+        colors[ImGuiCol_ButtonActive]           = ImVec4(0.35f, 0.60f, 0.90f, 1.00f);
+
+        // Headers (collapsing headers, tree nodes) - blue accent
+        colors[ImGuiCol_Header]                 = ImVec4(0.20f, 0.35f, 0.55f, 0.80f);
+        colors[ImGuiCol_HeaderHovered]          = ImVec4(0.28f, 0.48f, 0.75f, 0.90f);
+        colors[ImGuiCol_HeaderActive]           = ImVec4(0.35f, 0.60f, 0.90f, 1.00f);
+
+        // Tabs - modern tab design with blue active state
+        colors[ImGuiCol_Tab]                    = ImVec4(0.12f, 0.13f, 0.15f, 1.00f);
+        colors[ImGuiCol_TabHovered]             = ImVec4(0.28f, 0.48f, 0.75f, 0.90f);
+        colors[ImGuiCol_TabActive]              = ImVec4(0.20f, 0.35f, 0.55f, 1.00f);
+        colors[ImGuiCol_TabUnfocused]           = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
+        colors[ImGuiCol_TabUnfocusedActive]     = ImVec4(0.15f, 0.20f, 0.30f, 1.00f);
+
+        // Scrollbar - subtle and modern
+        colors[ImGuiCol_ScrollbarBg]            = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.30f, 0.30f, 0.32f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.40f, 0.40f, 0.42f, 1.00f);
+        colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+
+        // Checkboxes and sliders - blue accent
+        colors[ImGuiCol_CheckMark]              = ImVec4(0.45f, 0.70f, 1.00f, 1.00f);
+        colors[ImGuiCol_SliderGrab]             = ImVec4(0.40f, 0.65f, 0.95f, 1.00f);
+        colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.50f, 0.75f, 1.00f, 1.00f);
+
+        // Resize grip
+        colors[ImGuiCol_ResizeGrip]             = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
+        colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.35f, 0.60f, 0.90f, 0.70f);
+        colors[ImGuiCol_ResizeGripActive]       = ImVec4(0.40f, 0.65f, 0.95f, 0.90f);
+
+        // Docking
+        colors[ImGuiCol_DockingPreview]         = ImVec4(0.35f, 0.60f, 0.90f, 0.40f);
+        colors[ImGuiCol_DockingEmptyBg]         = ImVec4(0.09f, 0.09f, 0.10f, 1.00f);
+
+        // Plot colors (for graphs, histograms)
+        colors[ImGuiCol_PlotLines]              = ImVec4(0.61f, 0.61f, 0.61f, 1.00f);
+        colors[ImGuiCol_PlotLinesHovered]       = ImVec4(1.00f, 0.43f, 0.35f, 1.00f);
+        colors[ImGuiCol_PlotHistogram]          = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
+        colors[ImGuiCol_PlotHistogramHovered]   = ImVec4(1.00f, 0.60f, 0.00f, 1.00f);
+
+        // Table colors
+        colors[ImGuiCol_TableHeaderBg]          = ImVec4(0.15f, 0.17f, 0.20f, 1.00f);
+        colors[ImGuiCol_TableBorderStrong]      = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
+        colors[ImGuiCol_TableBorderLight]       = ImVec4(0.18f, 0.18f, 0.20f, 1.00f);
+        colors[ImGuiCol_TableRowBg]             = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+        colors[ImGuiCol_TableRowBgAlt]          = ImVec4(1.00f, 1.00f, 1.00f, 0.03f);
+
+        // Drag and drop
+        colors[ImGuiCol_DragDropTarget]         = ImVec4(0.45f, 0.70f, 1.00f, 0.90f);
+
+        // Navigation highlight
+        colors[ImGuiCol_NavHighlight]           = ImVec4(0.45f, 0.70f, 1.00f, 1.00f);
+        colors[ImGuiCol_NavWindowingHighlight]  = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
+        colors[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
+
+        // Modal window dimming
+        colors[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
+
+        OHAO_LOG_DEBUG("Applied enhanced Dark theme (Unreal Engine-inspired)");
+
     } else if (theme == "Light") {
         ImGui::StyleColorsLight();
         OHAO_LOG_DEBUG("Applied Light theme");
@@ -96,48 +191,50 @@ void UIManager::applyTheme(const std::string& theme) {
         ImGui::StyleColorsClassic();
         OHAO_LOG_DEBUG("Applied Classic theme");
     }
-
-    // After applying the base theme, apply any custom style modifications
-    ImGuiStyle& style = ImGui::GetStyle();
-
-    // Ensure colors are properly set based on the theme
-    ImVec4* colors = style.Colors;
-    if (theme == "Dark") {
-        colors[ImGuiCol_WindowBg] = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
-        colors[ImGuiCol_PopupBg] = ImVec4(0.13f, 0.14f, 0.15f, 1.00f);
-        colors[ImGuiCol_Border] = ImVec4(0.43f, 0.43f, 0.50f, 0.50f);
-        colors[ImGuiCol_FrameBg] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-        colors[ImGuiCol_TitleBg] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
-        colors[ImGuiCol_TitleBgActive] = ImVec4(0.08f, 0.08f, 0.09f, 1.00f);
-    }
 }
 
 void UIManager::setupImGuiStyle() {
     ImGuiStyle& style = ImGui::GetStyle();
 
-    // Main styles
-    style.WindowPadding            = ImVec2(8.00f, 8.00f);
-    style.FramePadding            = ImVec2(5.00f, 2.00f);
-    style.CellPadding             = ImVec2(6.00f, 6.00f);
-    style.ItemSpacing             = ImVec2(6.00f, 6.00f);
-    style.ItemInnerSpacing        = ImVec2(6.00f, 6.00f);
-    style.TouchExtraPadding       = ImVec2(0.00f, 0.00f);
-    style.IndentSpacing           = 25;
-    style.ScrollbarSize           = 12;
-    style.GrabMinSize            = 10;
-    style.WindowBorderSize        = 1;
-    style.ChildBorderSize         = 1;
-    style.PopupBorderSize         = 1;
-    style.FrameBorderSize         = 1;
-    style.TabBorderSize           = 1;
-    style.WindowRounding          = 7;
-    style.ChildRounding          = 4;
-    style.FrameRounding          = 3;
-    style.PopupRounding          = 4;
-    style.ScrollbarRounding      = 9;
-    style.GrabRounding          = 3;
-    style.LogSliderDeadzone      = 4;
-    style.TabRounding            = 4;
+    // Spacing and padding - more generous for better readability
+    style.WindowPadding            = ImVec2(10.00f, 10.00f);   // More padding for better breathing room
+    style.FramePadding             = ImVec2(8.00f, 4.00f);     // Taller frames for better clickability
+    style.CellPadding              = ImVec2(8.00f, 4.00f);     // Better table cell spacing
+    style.ItemSpacing              = ImVec2(8.00f, 6.00f);     // More horizontal space between items
+    style.ItemInnerSpacing         = ImVec2(6.00f, 4.00f);     // Space inside items
+    style.TouchExtraPadding        = ImVec2(0.00f, 0.00f);
+    style.IndentSpacing            = 22.0f;                    // Tree indentation
+    style.ScrollbarSize            = 14.0f;                    // Slightly wider scrollbar
+    style.GrabMinSize              = 12.0f;                    // Larger grab handles
+
+    // Borders - clean and minimal
+    style.WindowBorderSize         = 1.0f;
+    style.ChildBorderSize          = 1.0f;
+    style.PopupBorderSize          = 1.0f;
+    style.FrameBorderSize          = 0.0f;                     // No frame borders for cleaner look
+    style.TabBorderSize            = 0.0f;                     // No tab borders
+
+    // Rounding - modern and smooth
+    style.WindowRounding           = 6.0f;                     // Slightly rounded windows
+    style.ChildRounding            = 4.0f;                     // Subtle child window rounding
+    style.FrameRounding            = 4.0f;                     // Rounded inputs/frames
+    style.PopupRounding            = 5.0f;                     // Rounded popups
+    style.ScrollbarRounding        = 8.0f;                     // Smooth scrollbar
+    style.GrabRounding             = 4.0f;                     // Rounded sliders
+    style.LogSliderDeadzone        = 4.0f;
+    style.TabRounding              = 4.0f;                     // Rounded tabs
+
+    // Additional polish
+    style.WindowTitleAlign         = ImVec2(0.00f, 0.50f);     // Left-aligned title
+    style.WindowMenuButtonPosition = ImGuiDir_None;            // No collapse button
+    style.ColorButtonPosition      = ImGuiDir_Right;           // Color picker on right
+    style.ButtonTextAlign          = ImVec2(0.50f, 0.50f);     // Center button text
+    style.SelectableTextAlign      = ImVec2(0.00f, 0.50f);     // Left-aligned selectable items
+    style.DisplaySafeAreaPadding   = ImVec2(4.00f, 4.00f);     // Safe area padding
+    style.AntiAliasedLines         = true;                     // Smooth lines
+    style.AntiAliasedLinesUseTex   = true;                     // Better line quality
+    style.AntiAliasedFill          = true;                     // Smooth shapes
+    style.CurveTessellationTol     = 1.25f;                    // Smoother curves
 }
 
 void UIManager::initializeVulkanBackend(){
@@ -194,9 +291,31 @@ void UIManager::initializeVulkanBackend(){
     }
 
 
-    // Upload fonts - modern ImGui handles this automatically
-    // The font atlas is automatically uploaded when needed
+    // Load fonts: Default font + FontAwesome icons
     ImGuiIO& io = ImGui::GetIO();
+
+    // Load default font at 16px for better readability
+    io.Fonts->AddFontDefault();
+
+    // Merge FontAwesome icons into the default font
+    static const ImWchar icons_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+    ImFontConfig icons_config;
+    icons_config.MergeMode = true;
+    icons_config.PixelSnapH = true;
+    icons_config.GlyphMinAdvanceX = 18.0f; // Make icons monospaced
+    icons_config.GlyphOffset = ImVec2(0.0f, 2.0f); // Adjust vertical alignment
+
+    const char* font_path = "assets/fonts/fa-solid-900.ttf";
+    ImFont* font = io.Fonts->AddFontFromFileTTF(font_path, 16.0f, &icons_config, icons_ranges);
+
+    if (!font) {
+        OHAO_LOG_WARNING("Failed to load FontAwesome font from: " + std::string(font_path));
+        OHAO_LOG_WARNING("Icon toolbar will use text placeholders. See assets/fonts/README.md");
+    } else {
+        OHAO_LOG_DEBUG("FontAwesome icons loaded successfully");
+    }
+
+    // Build the font atlas
     io.Fonts->Build();
 
     imguiInitialized = true;
@@ -498,40 +617,65 @@ void UIManager::setupPanels() {
     outlinerPanel = std::make_unique<OutlinerPanel>();
     propertiesPanel = std::make_unique<PropertiesPanel>();
     sceneSettingsPanel = std::make_unique<SceneSettingsPanel>();
+    renderSettingsPanel = std::make_unique<RenderSettingsPanel>();
     viewportToolbar = std::make_unique<ViewportToolbar>();
     physicsPanel = std::make_unique<PhysicsPanel>();
-    
+
+    // Create side panel manager for Blender-style tabbed interface
+    sidePanelManager = std::make_unique<SidePanelManager>();
+
+    // Register panels with side panel manager
+    sidePanelManager->registerTab(SidePanelTab::Properties, ICON_FA_WRENCH,
+                                  "Properties", propertiesPanel.get());
+    sidePanelManager->registerTab(SidePanelTab::SceneSettings, ICON_FA_TREE,
+                                  "Scene Settings", sceneSettingsPanel.get());
+    sidePanelManager->registerTab(SidePanelTab::RenderSettings, ICON_FA_IMAGE,
+                                  "Render Settings", renderSettingsPanel.get());
+    sidePanelManager->registerTab(SidePanelTab::Physics, ICON_FA_ATOM,
+                                  "Physics Simulation", physicsPanel.get());
+
+    // Set Properties as default active tab
+    sidePanelManager->setActiveTab(SidePanelTab::Properties);
+
     // Connect viewport toolbar to axis gizmo system
     if (vulkanContext && vulkanContext->getAxisGizmo()) {
         viewportToolbar->setAxisGizmo(vulkanContext->getAxisGizmo());
     }
-    
+
     // Initialize UI panels with the current scene if available
     if (vulkanContext && vulkanContext->getScene()) {
         auto scene = vulkanContext->getScene();
-        
+
         // Set the scene reference in the SelectionManager first
         SelectionManager::get().setScene(scene);
-        
+
         // Then initialize the panels
         outlinerPanel->setScene(scene);
         propertiesPanel->setScene(scene);
         sceneSettingsPanel->setScene(scene);
-        
+
         // Connect physics panel to physics world and scene
         physicsPanel->setPhysicsWorld(scene->getPhysicsWorld());
         physicsPanel->setScene(scene);
-        
-        OHAO_LOG_DEBUG("UI Panels initialized with scene");
+
+        OHAO_LOG_DEBUG("UI Panels initialized with scene and side panel manager");
     }
 }
 
 void UIManager::renderPanels() {
+    // Render outliner separately (stays at top of right panel)
     if (outlinerPanel) outlinerPanel->render();
-    if (propertiesPanel) propertiesPanel->render();
-    if (sceneSettingsPanel) sceneSettingsPanel->render();
+
+    // Render side panel manager (handles tabbed interface for other panels)
+    if (sidePanelManager) {
+        if (ImGui::Begin("Side Panel", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse)) {
+            sidePanelManager->render();
+        }
+        ImGui::End();
+    }
+
+    // Render viewport toolbar (overlays on viewport)
     if (viewportToolbar) viewportToolbar->render();
-    if (physicsPanel) physicsPanel->render();
 }
 
 void UIManager::initializeDockspace() {
