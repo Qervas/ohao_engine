@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <nlohmann/json_fwd.hpp>
+#include <unordered_map>
 
 namespace ohao {
 
@@ -18,7 +19,6 @@ public:
     bool save(const std::string& filePath);
     bool load(const std::string& filePath);
 
-    // Version helpers
     static const char* kMagic();
     static int kVersion();
 
@@ -27,7 +27,8 @@ private:
 
     // Actor helpers
     nlohmann::json serializeActor(const Actor* actor) const;
-    bool deserializeActor(const nlohmann::json& j);
+    bool deserializeActorPass1(const nlohmann::json& j, std::unordered_map<std::string, Actor*>& guidToActor);
+    bool deserializeActorPass2(const nlohmann::json& j, const std::unordered_map<std::string, Actor*>& guidToActor);
 
     // Component helpers
     static nlohmann::json serializeTransform(const TransformComponent* tc);
