@@ -1,9 +1,13 @@
 file(GLOB_RECURSE SERIALIZATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/map_io.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/component_registry.cpp"
+)
+file(GLOB_RECURSE SERIALIZATION_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/map_io.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/component_registry.hpp"
 )
 
-add_library(ohao_serialization STATIC ${SERIALIZATION_SOURCES})
+add_library(ohao_serialization STATIC ${SERIALIZATION_SOURCES} ${SERIALIZATION_HEADERS})
 
 target_include_directories(ohao_serialization PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}

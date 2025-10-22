@@ -68,6 +68,10 @@ public:
     // Unique ID is inherited from SceneObject
     ObjectID getID() const { return SceneObject::getID(); }
 
+    // Stable GUID for map serialization
+    const std::string& getGuid() const { return guid; }
+    void setGuid(const std::string& g) { guid = g; }
+
     // Component management - implemented inline for simplicity
     template<typename T, typename... Args>
     std::shared_ptr<T> addComponent(Args&&... args) {
@@ -140,6 +144,7 @@ protected:
     std::vector<Actor*> children;
     std::vector<std::shared_ptr<Component>> components;
     std::unordered_map<std::type_index, std::shared_ptr<Component>> componentsByType;
+    std::string guid;
 };
 
 } // namespace ohao 

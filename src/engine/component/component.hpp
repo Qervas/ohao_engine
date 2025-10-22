@@ -42,15 +42,19 @@ public:
     
     // Unique ID for component instance
     std::uint64_t getID() const { return componentID; }
+
+    // Stable GUID for map serialization
+    const std::string& getGuid() const { return guid; }
+    void setGuid(const std::string& g) { guid = g; }
     
 protected:
-    // Called when component is attached/detached from an actor
     virtual void onAttached() {}
     virtual void onDetached() {}
     
     Actor* owner;
     bool enabled;
     std::uint64_t componentID;
+    std::string guid;
 
 private:
     static std::uint64_t nextComponentID;
