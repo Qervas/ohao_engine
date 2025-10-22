@@ -29,8 +29,8 @@ public:
     
 private:
     // Core rendering methods
-    void renderNodeProperties(SceneNode* node);
-    void renderTransformProperties(SceneNode* node);
+    void renderNodeProperties(SceneObject* node);
+    void renderTransformProperties(SceneObject* node);
     
     // Actor-Component system methods
     void renderActorProperties(Actor* actor);
@@ -49,11 +49,11 @@ private:
                           float resetValue = 0.0f);
 
     // Helper methods for checking node types
-    SceneObject* asSceneObject(SceneNode* node) {
+    SceneObject* asSceneObject(SceneObject* node) {
         return dynamic_cast<SceneObject*>(node);
     }
     
-    Actor* asActor(SceneNode* node) {
+    Actor* asActor(SceneObject* node) {
         return dynamic_cast<Actor*>(node);
     }
 

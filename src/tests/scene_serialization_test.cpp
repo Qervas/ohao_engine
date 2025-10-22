@@ -3,7 +3,7 @@
 #include "renderer/components/mesh_component.hpp"
 #include "physics/components/physics_component.hpp"
 #include "renderer/components/light_component.hpp"
-#include "engine/serialization/scene_serializer.hpp"
+#include "engine/serialization/map_io.hpp"
 #include <iostream>
 #include <memory>
 
@@ -45,7 +45,7 @@ void testSceneSerialization() {
     scene->setDescriptor(desc);
     
     // Create a serializer
-    SceneSerializer serializer(scene.get());
+    MapIO serializer(scene.get());
     
     // Save the scene to a file
     std::string scenePath = "test_scenes/test_scene.ohscene";
@@ -58,7 +58,7 @@ void testSceneSerialization() {
     
     // Create a new scene to load into
     auto loadedScene = std::make_unique<Scene>();
-    SceneSerializer loadSerializer(loadedScene.get());
+    MapIO loadSerializer(loadedScene.get());
     
     // Load the scene from the file
     if (loadSerializer.deserialize(scenePath)) {
