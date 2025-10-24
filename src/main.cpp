@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <vulkan/vulkan_core.h>
+#include "imgui.h"
 
 // Forward declaration of demo functions
 namespace ohao {
@@ -32,10 +33,7 @@ int main() {
         bool escPressed = false;
         bool demoPressed = false;
 
-        // Double-click detection for camera focus
-        auto lastClickTime = std::chrono::high_resolution_clock::now();
-        bool mouseButtonWasPressed = false;
-        const double DOUBLE_CLICK_TIME = 0.5; // 500ms
+        // Camera focus via double-click handled by ImGui
 
         while (!window.shouldClose()) {
             auto currentTime = std::chrono::high_resolution_clock::now();
@@ -81,33 +79,18 @@ int main() {
                 demoPressed = false;
             }
 
-            // Double-click detection for camera focus on selected object
-            bool mouseButtonPressed = window.isMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT);
-            if (mouseButtonPressed && !mouseButtonWasPressed && uiManager->isSceneViewportHovered()) {
-                // Mouse button just pressed (rising edge)
-                auto timeSinceLastClick = std::chrono::duration<double>(currentTime - lastClickTime).count();
-
-                if (timeSinceLastClick < DOUBLE_CLICK_TIME) {
-                    // Double-click detected!
-                    auto& selectionManager = ohao::SelectionManager::get();
-                    ohao::Actor* selectedActor = selectionManager.getSelectedActor();
-
-                    if (selectedActor) {
-                        // Get the actor's world position
-                        auto* transform = selectedActor->getTransform();
-                        if (transform) {
-                            glm::vec3 targetPosition = transform->getWorldPosition();
-
-                            // Focus camera on the object
-                            vulkan.getCamera().focusOnPoint(targetPosition, 5.0f);
-                            std::cout << "Camera focused on: " << selectedActor->getName() << std::endl;
-                        }
+            // Camera focus on selected object via ImGui double click within viewport
+            if (viewportFocused && uiManager->isSceneViewportHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                auto& selectionManager = ohao::SelectionManager::get();
+                ohao::Actor* selectedActor = selectionManager.getSelectedActor();
+                if (selectedActor) {
+                    if (auto* transform = selectedActor->getTransform()) {
+                        glm::vec3 targetPosition = transform->getWorldPosition();
+                        vulkan.getCamera().focusOnPoint(targetPosition, 5.0f);
+                        std::cout << "Camera focused on: " << selectedActor->getName() << std::endl;
                     }
                 }
-
-                lastClickTime = currentTime;
             }
-            mouseButtonWasPressed = mouseButtonPressed;
 
             // UE5-style camera update: Update when viewport focused OR when UI doesn't want input
             if (viewportFocused || !uiManager->wantsInputCapture()) {
