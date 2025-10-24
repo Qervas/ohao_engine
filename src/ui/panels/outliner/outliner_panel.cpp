@@ -4,9 +4,11 @@
 #include "engine/scene/scene_object.hpp"
 #include "vulkan_context.hpp"
 #include "renderer/components/light_component.hpp"
+#include "renderer/components/mesh_component.hpp"
 #include "physics/components/physics_component.hpp"
 #include "engine/component/component_factory.hpp"
 #include "physics/dynamics/rigid_body.hpp"
+#include "ui/icons/font_awesome_icons.hpp"
 
 namespace ohao {
 
@@ -105,8 +107,19 @@ void OutlinerPanel::renderActorList() {
         if (actor.get() == root) continue; // hide root
         if (actor->getParent() != nullptr) continue; // only top-level here
 
+        // Determine icon based on components
+        const char* icon = ICON_FA_CIRCLE;  // Default: empty actor
+        if (actor->getComponent<LightComponent>()) {
+            icon = ICON_FA_LIGHTBULB;  // Light component
+        } else if (actor->getComponent<MeshComponent>()) {
+            icon = ICON_FA_CUBE;  // Mesh component
+        }
+
+        // Create label with icon and unique ID to avoid conflicts
+        std::string label = std::string(icon) + " " + actor->getName() + "##actor_" + std::to_string(actor->getID());
+
         bool selected = (selectedObject == actor.get());
-        if (ImGui::Selectable(actor->getName().c_str(), selected)) {
+        if (ImGui::Selectable(label.c_str(), selected)) {
             selectedObject = actor.get();
             SelectionManager::get().setSelectedActor(actor.get());
         }
