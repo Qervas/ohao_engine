@@ -1,12 +1,20 @@
 #include "side_panel_manager.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include "engine/actor/actor.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "renderer/components/material_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "renderer/components/light_component.hpp"
 
 namespace ohao {
 
 SidePanelManager::SidePanelManager()
-    : m_activeTab(SidePanelTab::Properties) {
+    : m_activeTab(SidePanelTab::Properties)
+    , m_activeComponentTab(ComponentTab::Mesh)
+    , m_componentTabActive(false) {
     m_tabs.reserve(static_cast<size_t>(SidePanelTab::COUNT));
+    m_componentTabs.reserve(static_cast<size_t>(ComponentTab::COUNT));
 }
 
 void SidePanelManager::registerTab(SidePanelTab tabType, const char* icon,
@@ -14,12 +22,32 @@ void SidePanelManager::registerTab(SidePanelTab tabType, const char* icon,
     m_tabs.emplace_back(tabType, icon, tooltip, panel);
 }
 
+void SidePanelManager::registerComponentTab(ComponentTab tabType, const char* icon,
+                                            const char* tooltip, PanelBase* panel) {
+    m_componentTabs.emplace_back(tabType, icon, tooltip, panel);
+}
+
 void SidePanelManager::setActiveTab(SidePanelTab tab) {
     m_activeTab = tab;
+    m_componentTabActive = false;
+}
+
+void SidePanelManager::setActiveComponentTab(ComponentTab tab) {
+    m_activeComponentTab = tab;
+    m_componentTabActive = true;
 }
 
 const SidePanelTabInfo* SidePanelManager::getTabInfo(SidePanelTab tab) const {
     for (const auto& tabInfo : m_tabs) {
+        if (tabInfo.tabType == tab) {
+            return &tabInfo;
+        }
+    }
+    return nullptr;
+}
+
+const ComponentTabInfo* SidePanelManager::getComponentTabInfo(ComponentTab tab) const {
+    for (const auto& tabInfo : m_componentTabs) {
         if (tabInfo.tabType == tab) {
             return &tabInfo;
         }
@@ -51,10 +79,32 @@ void SidePanelManager::renderIconBar() {
     if (ImGui::BeginChild("##SidePanelIconBar", iconBarSize, true,
                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
 
-        // Render each tab button
+        // Render each scene-level tab button
         for (const auto& tabInfo : m_tabs) {
-            bool isActive = (tabInfo.tabType == m_activeTab);
+            bool isActive = (!m_componentTabActive && tabInfo.tabType == m_activeTab);
             renderTabButton(tabInfo, isActive);
+        }
+
+        // Check if any component tabs are visible
+        bool hasVisibleComponentTabs = false;
+        for (const auto& tabInfo : m_componentTabs) {
+            if (tabInfo.visible) {
+                hasVisibleComponentTabs = true;
+                break;
+            }
+        }
+
+        // Render separator if there are visible component tabs
+        if (hasVisibleComponentTabs) {
+            renderSeparator();
+
+            // Render component tab buttons
+            for (const auto& tabInfo : m_componentTabs) {
+                if (tabInfo.visible) {
+                    bool isActive = (m_componentTabActive && tabInfo.tabType == m_activeComponentTab);
+                    renderComponentTabButton(tabInfo, isActive);
+                }
+            }
         }
     }
     ImGui::EndChild();
@@ -100,10 +150,24 @@ void SidePanelManager::renderTabButton(const SidePanelTabInfo& tabInfo, bool isA
 }
 
 void SidePanelManager::renderContentArea() {
-    // Find the active panel
-    const SidePanelTabInfo* activeTabInfo = getTabInfo(m_activeTab);
+    // Find the active panel (either scene tab or component tab)
+    PanelBase* activePanel = nullptr;
 
-    if (!activeTabInfo || !activeTabInfo->panel) {
+    if (m_componentTabActive) {
+        // Component tab is active
+        const ComponentTabInfo* activeTabInfo = getComponentTabInfo(m_activeComponentTab);
+        if (activeTabInfo && activeTabInfo->panel) {
+            activePanel = activeTabInfo->panel;
+        }
+    } else {
+        // Scene tab is active
+        const SidePanelTabInfo* activeTabInfo = getTabInfo(m_activeTab);
+        if (activeTabInfo && activeTabInfo->panel) {
+            activePanel = activeTabInfo->panel;
+        }
+    }
+
+    if (!activePanel) {
         ImGui::TextDisabled("No panel active");
         return;
     }
@@ -117,10 +181,6 @@ void SidePanelManager::renderContentArea() {
 
     if (ImGui::BeginChild("##SidePanelContent", contentSize, false, ImGuiWindowFlags_None)) {
         // Render the active panel's content directly (without its own window)
-        PanelBase* activePanel = activeTabInfo->panel;
-
-        // We need to render the panel content without calling Begin/End
-        // For now, we'll create a temporary window
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
         // Small header with panel name
@@ -145,6 +205,105 @@ void SidePanelManager::renderContentArea() {
 
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
+}
+
+void SidePanelManager::renderComponentTabButton(const ComponentTabInfo& tabInfo, bool isActive) {
+    // Button colors based on active state (amber/orange theme for components)
+    ImVec4 buttonColor, hoverColor, activeColor;
+
+    if (isActive) {
+        // Active component tab - amber highlight
+        buttonColor = ImVec4(0.85f, 0.55f, 0.20f, 1.00f);
+        hoverColor  = ImVec4(0.95f, 0.65f, 0.30f, 1.00f);
+        activeColor = ImVec4(0.75f, 0.50f, 0.15f, 1.00f);
+    } else {
+        // Inactive component tab - warm dark
+        buttonColor = ImVec4(0.15f, 0.12f, 0.08f, 1.00f);
+        hoverColor  = ImVec4(0.22f, 0.18f, 0.12f, 1.00f);
+        activeColor = ImVec4(0.13f, 0.10f, 0.06f, 1.00f);
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+
+    // Render the icon button
+    ImVec2 buttonSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE);
+    if (ImGui::Button(tabInfo.icon, buttonSize)) {
+        setActiveComponentTab(tabInfo.tabType);
+    }
+
+    // Tooltip on hover
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s", tabInfo.tooltip);
+    }
+
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+}
+
+void SidePanelManager::renderSeparator() {
+    // Render a horizontal line separator between scene and component tabs
+    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // Calculate separator position (centered in icon bar)
+    float separatorX = cursorPos.x + (ICON_BAR_WIDTH - SEPARATOR_WIDTH) * 0.5f;
+    float separatorY = cursorPos.y + 4.0f;  // Small vertical padding
+
+    // Draw the separator line
+    ImVec2 p1(separatorX, separatorY);
+    ImVec2 p2(separatorX + SEPARATOR_WIDTH, separatorY + SEPARATOR_HEIGHT);
+    ImU32 separatorColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.3f, 0.3f, 0.32f, 1.0f));
+    drawList->AddRectFilled(p1, p2, separatorColor);
+
+    // Advance cursor to account for separator height
+    ImGui::Dummy(ImVec2(ICON_BAR_WIDTH, SEPARATOR_HEIGHT + 8.0f));  // 8px total margin
+}
+
+void SidePanelManager::updateDynamicTabs(Actor* selectedActor) {
+    // Hide all component tabs by default
+    for (auto& tabInfo : m_componentTabs) {
+        tabInfo.visible = false;
+    }
+
+    if (!selectedActor) {
+        return;
+    }
+
+    // Show component tabs based on which components the actor has
+    for (auto& tabInfo : m_componentTabs) {
+        bool hasComponent = false;
+
+        switch (tabInfo.tabType) {
+            case ComponentTab::Mesh:
+                hasComponent = (selectedActor->getComponent<MeshComponent>() != nullptr);
+                break;
+            case ComponentTab::Material:
+                hasComponent = (selectedActor->getComponent<MaterialComponent>() != nullptr);
+                break;
+            case ComponentTab::Physics:
+                hasComponent = (selectedActor->getComponent<PhysicsComponent>() != nullptr);
+                break;
+            case ComponentTab::Light:
+                hasComponent = (selectedActor->getComponent<LightComponent>() != nullptr);
+                break;
+            default:
+                break;
+        }
+
+        tabInfo.visible = hasComponent;
+    }
+
+    // If the current active component tab is no longer visible, switch to a scene tab
+    if (m_componentTabActive) {
+        const ComponentTabInfo* activeTabInfo = getComponentTabInfo(m_activeComponentTab);
+        if (!activeTabInfo || !activeTabInfo->visible) {
+            // Switch back to Properties tab
+            setActiveTab(SidePanelTab::Properties);
+        }
+    }
 }
 
 } // namespace ohao

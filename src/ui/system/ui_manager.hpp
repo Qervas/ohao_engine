@@ -9,6 +9,10 @@
 #include "ui/panels/render_settings/render_settings_panel.hpp"
 #include "ui/panels/viewport/viewport_toolbar.hpp"
 #include "ui/panels/physics/physics_panel.hpp"
+#include "ui/panels/components/mesh_component_panel.hpp"
+#include "ui/panels/components/material_component_panel.hpp"
+#include "ui/panels/components/physics_component_panel.hpp"
+#include "ui/panels/components/light_component_panel.hpp"
 #include "ui/system/side_panel_manager.hpp"
 #include "ui/window/window.hpp"
 #include <memory>
@@ -96,6 +100,12 @@ private:
     std::unique_ptr<RenderSettingsPanel> renderSettingsPanel;
     std::unique_ptr<ViewportToolbar> viewportToolbar;
     std::unique_ptr<PhysicsPanel> physicsPanel;
+
+    // Component-specific panels
+    std::unique_ptr<MeshComponentPanel> meshComponentPanel;
+    std::unique_ptr<MaterialComponentPanel> materialComponentPanel;
+    std::unique_ptr<PhysicsComponentPanel> physicsComponentPanel;
+    std::unique_ptr<LightComponentPanel> lightComponentPanel;
 
     // Side panel manager for Blender-style tabbed interface
     std::unique_ptr<SidePanelManager> sidePanelManager;

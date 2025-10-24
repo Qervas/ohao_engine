@@ -633,10 +633,16 @@ void UIManager::setupPanels() {
     viewportToolbar = std::make_unique<ViewportToolbar>();
     physicsPanel = std::make_unique<PhysicsPanel>();
 
+    // Create component-specific panels
+    meshComponentPanel = std::make_unique<MeshComponentPanel>();
+    materialComponentPanel = std::make_unique<MaterialComponentPanel>();
+    physicsComponentPanel = std::make_unique<PhysicsComponentPanel>();
+    lightComponentPanel = std::make_unique<LightComponentPanel>();
+
     // Create side panel manager for Blender-style tabbed interface
     sidePanelManager = std::make_unique<SidePanelManager>();
 
-    // Register panels with side panel manager
+    // Register scene-level panels with side panel manager
     sidePanelManager->registerTab(SidePanelTab::Properties, ICON_FA_WRENCH,
                                   "Properties", propertiesPanel.get());
     sidePanelManager->registerTab(SidePanelTab::SceneSettings, ICON_FA_TREE,
@@ -646,8 +652,39 @@ void UIManager::setupPanels() {
     sidePanelManager->registerTab(SidePanelTab::Physics, ICON_FA_ATOM,
                                   "Physics Simulation", physicsPanel.get());
 
+    // Register component-specific panels (dynamic tabs)
+    sidePanelManager->registerComponentTab(ComponentTab::Mesh, ICON_FA_CUBE,
+                                          "Mesh Component", meshComponentPanel.get());
+    sidePanelManager->registerComponentTab(ComponentTab::Material, ICON_FA_PALETTE,
+                                          "Material Component", materialComponentPanel.get());
+    sidePanelManager->registerComponentTab(ComponentTab::Physics, ICON_FA_COGS,
+                                          "Physics Component", physicsComponentPanel.get());
+    sidePanelManager->registerComponentTab(ComponentTab::Light, ICON_FA_LIGHTBULB,
+                                          "Light Component", lightComponentPanel.get());
+
     // Set Properties as default active tab
     sidePanelManager->setActiveTab(SidePanelTab::Properties);
+
+    // Set up selection change callback to update dynamic tabs
+    SelectionManager::get().setSelectionChangedCallback([this](void* userData) {
+        // Get the selected actor from SelectionManager
+        Actor* selectedActor = SelectionManager::get().getSelectedActor();
+
+        if (sidePanelManager) {
+            sidePanelManager->updateDynamicTabs(selectedActor);
+        }
+
+        // Update component panels with selected actor
+        if (meshComponentPanel) meshComponentPanel->setSelectedActor(selectedActor);
+        if (materialComponentPanel) materialComponentPanel->setSelectedActor(selectedActor);
+        if (physicsComponentPanel) {
+            physicsComponentPanel->setSelectedActor(selectedActor);
+            if (vulkanContext && vulkanContext->getScene()) {
+                physicsComponentPanel->setScene(vulkanContext->getScene());
+            }
+        }
+        if (lightComponentPanel) lightComponentPanel->setSelectedActor(selectedActor);
+    });
 
     // Connect viewport toolbar to axis gizmo system
     if (vulkanContext && vulkanContext->getAxisGizmo()) {

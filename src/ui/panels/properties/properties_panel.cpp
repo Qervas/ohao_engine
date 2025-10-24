@@ -316,83 +316,50 @@ bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
 
 void PropertiesPanel::renderComponentProperties(Actor* actor) {
     if (!actor) return;
-    
+
     if (ImGui::CollapsingHeader("Components", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Text("Component Management");
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Use component tabs on the left to edit properties");
+        ImGui::Separator();
+
         // List all components with an option to remove them
         const auto& components = actor->getAllComponents();
         if (components.empty()) {
             ImGui::TextDisabled("No components attached");
         } else {
-            // Create a table for better layout
-            if (ImGui::BeginTable("ComponentsTable", 2, ImGuiTableFlags_Borders)) {
+            // Create a table for better layout (simplified - no tree nodes)
+            if (ImGui::BeginTable("ComponentsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                 ImGui::TableSetupColumn("Component", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                 ImGui::TableHeadersRow();
-                
+
                 // Track components to remove by index instead of pointer
                 std::vector<size_t> indicesToRemove;
-                
+
                 for (size_t i = 0; i < components.size(); i++) {
                     auto& component = components[i];
-                    
+
                     // Skip transform component as it's managed separately
                     if (component.get() == actor->getTransform()) {
                         continue;
-        }
-                    
+                    }
+
                     ImGui::TableNextRow();
-                    
-                    // Component name and type
+
+                    // Component name and type (no tree node, just text)
                     ImGui::TableSetColumnIndex(0);
-                    // Create a unique ID using string + int
-                    std::string nodeLabel = std::string(component->getTypeName()) + "##" + std::to_string(i);
-                    bool isOpen = ImGui::TreeNodeEx(nodeLabel.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
-                    
+                    ImGui::Text("  %s", component->getTypeName());
+
                     // Removal button
                     ImGui::TableSetColumnIndex(1);
                     ImGui::PushID(static_cast<int>(i));
-                    if (ImGui::Button("Remove")) {
+                    if (ImGui::Button("Remove", ImVec2(-FLT_MIN, 0))) {
                         // Queue the index for removal
                         indicesToRemove.push_back(i);
                     }
                     ImGui::PopID();
-                    
-                    // Component-specific properties
-                    if (isOpen) {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::Columns(1);
-                        
-                        // Render component-specific properties
-                        if (auto transformComponent = dynamic_cast<TransformComponent*>(component.get())) {
-                            // Transform is already displayed separately
-                            ImGui::TextDisabled("Transform properties are shown in the Transform section");
-                        } 
-                        else if (auto meshComponent = dynamic_cast<MeshComponent*>(component.get())) {
-                            // Mesh properties
-                            renderMeshComponentProperties(meshComponent);
-                        }
-                        else if (auto physicsComponent = dynamic_cast<PhysicsComponent*>(component.get())) {
-                            // Physics properties
-                            renderPhysicsComponentProperties(physicsComponent);
-                        }
-                        else if (auto lightComponent = dynamic_cast<LightComponent*>(component.get())) {
-                            // Light properties
-                            renderLightComponentProperties(lightComponent);
-                        }
-                        else if (auto materialComponent = dynamic_cast<MaterialComponent*>(component.get())) {
-                            // Material properties
-                            renderMaterialComponentProperties(materialComponent);
-                        }
-                        else {
-                            // Generic component properties
-                            ImGui::TextDisabled("No editable properties available for this component");
-                        }
-                        
-                        ImGui::TreePop();
-                    }
                 }
-                
+
                 ImGui::EndTable();
 
                 // Process removals (in reverse order to avoid invalidating indices)
@@ -400,14 +367,20 @@ void PropertiesPanel::renderComponentProperties(Actor* actor) {
                 for (auto index : indicesToRemove) {
                     // We can't directly call removeComponent with the component pointer
                     // Instead, we'll check the type and use the appropriate template method
-                    
+
                     auto& component = components[index];
-                    
+
                     if (dynamic_cast<MeshComponent*>(component.get())) {
                         actor->removeComponent<MeshComponent>();
                     }
+                    else if (dynamic_cast<MaterialComponent*>(component.get())) {
+                        actor->removeComponent<MaterialComponent>();
+                    }
                     else if (dynamic_cast<PhysicsComponent*>(component.get())) {
                         actor->removeComponent<PhysicsComponent>();
+                    }
+                    else if (dynamic_cast<LightComponent*>(component.get())) {
+                        actor->removeComponent<LightComponent>();
                     }
                     // Add more component types here as needed
                 }
@@ -422,20 +395,24 @@ void PropertiesPanel::renderComponentProperties(Actor* actor) {
         if (ImGui::BeginPopup("AddComponentPopup")) {
             ImGui::TextUnformatted("Component Types");
             ImGui::Separator();
-            
+
             if (ImGui::MenuItem("Transform Component")) {
                 if (actor->getComponent<TransformComponent>() == nullptr) {
                     actor->addComponent<TransformComponent>();
-        } else {
+                } else {
                     ImGui::CloseCurrentPopup();
                     ImGui::OpenPopup("TransformAlreadyExistsPopup");
                 }
             }
-            
+
             if (ImGui::MenuItem("Mesh Component")) {
                 actor->addComponent<MeshComponent>();
             }
-            
+
+            if (ImGui::MenuItem("Material Component")) {
+                actor->addComponent<MaterialComponent>();
+            }
+
             if (ImGui::MenuItem("Physics Component")) {
                 try {
                     actor->addComponent<PhysicsComponent>();
@@ -445,7 +422,11 @@ void PropertiesPanel::renderComponentProperties(Actor* actor) {
                     showErrorPopup = true;
                 }
             }
-            
+
+            if (ImGui::MenuItem("Light Component")) {
+                actor->addComponent<LightComponent>();
+            }
+
             ImGui::EndPopup();
         }
         
