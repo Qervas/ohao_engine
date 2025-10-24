@@ -28,8 +28,8 @@ Scene::Scene(const std::string& name)
     : name(name)
     , needsBufferUpdate(false)
 {
-    // Create a root node for backward compatibility
-    rootNode = std::make_shared<Actor>("Root");
+    // Create a root actor for internal hierarchy grouping
+    rootNode = std::make_shared<Actor>("World");
     registerActor(rootNode);
     
     // Initialize physics world

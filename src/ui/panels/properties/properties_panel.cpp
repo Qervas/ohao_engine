@@ -42,7 +42,7 @@ void PropertiesPanel::render() {
                 renderActorProperties(actor);
             } else {
                 // Fall back: show basic name/transform for SceneObject
-                renderNodeProperties(selectedObject);
+                renderObjectProperties(selectedObject);
             }
         } else {
             ImGui::TextDisabled("No object selected");
@@ -54,18 +54,18 @@ void PropertiesPanel::render() {
     }
 }
 
-void PropertiesPanel::renderNodeProperties(SceneObject* node) {
-    if (!node) return;
+void PropertiesPanel::renderObjectProperties(SceneObject* object) {
+    if (!object) return;
 
     // Node name and type header
     char nameBuf[256];
-    strcpy(nameBuf, node->getName().c_str());
+    strcpy(nameBuf, object->getName().c_str());
     if (ImGui::InputText("##Name", nameBuf, sizeof(nameBuf))) {
-        node->setName(nameBuf);
+        object->setName(nameBuf);
     }
 
     ImGui::SameLine();
-    if (auto actor = asActor(node)) {
+    if (auto actor = asActor(object)) {
         ImGui::TextDisabled("(Actor)");
     } else {
         ImGui::TextDisabled("(Object)");
@@ -75,11 +75,11 @@ void PropertiesPanel::renderNodeProperties(SceneObject* node) {
 
     // Transform component (available for all nodes)
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        renderTransformProperties(node);
+        renderTransformProperties(object);
     }
 
     // Modern Actor-Component system only
-    if (auto actor = asActor(node)) {
+    if (auto actor = asActor(object)) {
         renderActorProperties(actor);
     } else {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Basic scene object (no components)");
@@ -236,10 +236,10 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     }
 }
 
-void PropertiesPanel::renderTransformProperties(SceneObject* node) {
-    if (!node) return;
+void PropertiesPanel::renderTransformProperties(SceneObject* object) {
+    if (!object) return;
     
-    Transform& t = node->getTransform();
+    Transform& t = object->getTransform();
     glm::vec3 pos = t.getLocalPosition();
     if (renderVec3Control("Position", pos)) { t.setLocalPosition(pos); }
 

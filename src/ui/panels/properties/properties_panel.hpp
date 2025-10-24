@@ -29,8 +29,8 @@ public:
     
 private:
     // Core rendering methods
-    void renderNodeProperties(SceneObject* node);
-    void renderTransformProperties(SceneObject* node);
+    void renderObjectProperties(SceneObject* object);
+    void renderTransformProperties(SceneObject* object);
     
     // Actor-Component system methods
     void renderActorProperties(Actor* actor);
@@ -48,13 +48,13 @@ private:
     bool renderVec3Control(const std::string& label, glm::vec3& values,
                           float resetValue = 0.0f);
 
-    // Helper methods for checking node types
-    SceneObject* asSceneObject(SceneObject* node) {
-        return dynamic_cast<SceneObject*>(node);
+    // Helper methods for checking object types
+    SceneObject* asSceneObject(SceneObject* object) {
+        return dynamic_cast<SceneObject*>(object);
     }
     
-    Actor* asActor(SceneObject* node) {
-        return dynamic_cast<Actor*>(node);
+    Actor* asActor(SceneObject* object) {
+        return dynamic_cast<Actor*>(object);
     }
 
     // Cached values for undo/redo

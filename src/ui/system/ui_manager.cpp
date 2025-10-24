@@ -779,7 +779,7 @@ void UIManager::handleOpenProject() {
     std::string filename = FileDialog::openFile(
         "Open Project",
         "",
-        std::vector<const char*>{".ohao"},
+        std::vector<const char*>{"*.ohao", "*.OHAO"},
         "OHAO Project Files (*.ohao)"
     );
 
@@ -826,7 +826,7 @@ bool UIManager::handleSaveAsProject() {
     std::string filename = FileDialog::saveFile(
         "Save Project As",
         "",
-        std::vector<const char*>{".ohao"},
+        std::vector<const char*>{"*.ohao", "*.OHAO"},
         "OHAO Project Files (*.ohao)"
     );
 
