@@ -21,34 +21,35 @@ public:
 
 private:
     Scene* currentScene{nullptr};
-    SceneObject* selectedNode{nullptr};
+    SceneObject* selectedObject{nullptr};
 
     // Context menu state
     bool showContextMenu{false};
-    SceneObject* contextMenuTarget{nullptr};
+    SceneObject* contextMenuTargetObject{nullptr};
+    Actor* pendingDeleteActor{nullptr};
 
     // Removed list/graph view modes; outliner shows actor hierarchy only
 
 
     void renderActorList();
     void handleDragAndDrop();
-    void showObjectContextMenu(SceneObject* node);
-    void handleObjectDeletion(SceneObject* node);
+    void showObjectContextMenu(SceneObject* object);
+    void handleObjectDeletion(SceneObject* object);
     void handleDelete();
 
-    // Helper method to check if node is a SceneObject
-    SceneObject* asSceneObject(SceneObject* node) const{
-        return dynamic_cast<SceneObject*>(node);
+    // Helper method to check if object is a SceneObject
+    SceneObject* asSceneObject(SceneObject* object) const{
+        return dynamic_cast<SceneObject*>(object);
     }
 
     void createPrimitiveObject(ohao::PrimitiveType type);
     std::shared_ptr<Model> generatePrimitiveMesh(ohao::PrimitiveType type);
 
     // Graph/list view code removed
-    bool isRoot(SceneObject* node) const;
+    bool isRoot(SceneObject* object) const;
 
-    bool isSceneObject(SceneObject* node) const;
-    bool isSelected(SceneObject* node) const;
+    bool isSceneObject(SceneObject* object) const;
+    bool isSelected(SceneObject* object) const;
 
 
 };

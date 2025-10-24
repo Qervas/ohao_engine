@@ -22,8 +22,8 @@ void OutlinerPanel::render() {
     // Simplified outliner: actor-based only (no list/graph mode toggle)
 
     if (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-        if (selectedNode) {
-            handleObjectDeletion(selectedNode);
+        if (selectedObject) {
+            handleObjectDeletion(selectedObject);
         }
     }
 
@@ -33,34 +33,28 @@ void OutlinerPanel::render() {
     }
 
     if (ImGui::BeginPopup("AddObjectPopup")) {
-        if (ImGui::MenuItem("Empty")) {
-            createPrimitiveObject(ohao::PrimitiveType::Empty);
-        }
-        if (ImGui::MenuItem("Cube")) {
-            createPrimitiveObject(ohao::PrimitiveType::Cube);
-        }
-        if (ImGui::MenuItem("Sphere")) {
-            createPrimitiveObject(ohao::PrimitiveType::Sphere);
-        }
-        if (ImGui::MenuItem("Platform")) {
-            createPrimitiveObject(ohao::PrimitiveType::Platform);
-        }
+        auto addPrimitive = [&](const char* label, ohao::PrimitiveType type){
+            if (ImGui::MenuItem(label)) {
+                if (currentScene) {
+                    currentScene->createActorWithComponents(label, type);
+                    currentScene->updateSceneBuffers();
+                }
+            }
+        };
+        addPrimitive("Empty", ohao::PrimitiveType::Empty);
+        addPrimitive("Cube", ohao::PrimitiveType::Cube);
+        addPrimitive("Sphere", ohao::PrimitiveType::Sphere);
+        addPrimitive("Platform", ohao::PrimitiveType::Platform);
         ImGui::Separator();
-        if (ImGui::MenuItem("Point Light")) {
-            createPrimitiveObject(ohao::PrimitiveType::PointLight);
-        }
-        if (ImGui::MenuItem("Directional Light")) {
-            createPrimitiveObject(ohao::PrimitiveType::DirectionalLight);
-        }
-        if (ImGui::MenuItem("Spot Light")) {
-            createPrimitiveObject(ohao::PrimitiveType::SpotLight);
-        }
+        addPrimitive("Point Light", ohao::PrimitiveType::PointLight);
+        addPrimitive("Directional Light", ohao::PrimitiveType::DirectionalLight);
+        addPrimitive("Spot Light", ohao::PrimitiveType::SpotLight);
         ImGui::EndPopup();
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Delete") && selectedNode) {
-        handleObjectDeletion(selectedNode);
+    if (ImGui::Button("Delete") && selectedObject) {
+        handleObjectDeletion(selectedObject);
     }
 
     ImGui::Separator();
@@ -75,9 +69,22 @@ void OutlinerPanel::render() {
         showContextMenu = false;
     }
 
-    if (ImGui::BeginPopup("ObjectContextMenu") && contextMenuTarget) {
-        showObjectContextMenu(contextMenuTarget);
+    if (ImGui::BeginPopup("ObjectContextMenu") && contextMenuTargetObject) {
+        showObjectContextMenu(contextMenuTargetObject);
         ImGui::EndPopup();
+    }
+
+    // Apply deferred deletions safely outside of ImGui popup building
+    if (pendingDeleteActor && currentScene) {
+        auto toRemove = currentScene->findActor(pendingDeleteActor->getID());
+        if (toRemove) {
+            currentScene->removeActor(toRemove);
+            SelectionManager::get().clearSelection();
+            selectedObject = nullptr;
+            currentScene->updateSceneBuffers();
+            OHAO_LOG("Actor deleted: " + toRemove->getName());
+        }
+        pendingDeleteActor = nullptr;
     }
 
     ImGui::End();
@@ -85,13 +92,30 @@ void OutlinerPanel::render() {
 
 void OutlinerPanel::renderActorList() {
     if (!currentScene) return;
+    // Header root label (non-selectable)
+    ImGui::TextUnformatted("World");
+    ImGui::Separator();
+
     const auto& allActors = currentScene->getAllActors();
+    Actor* root = currentScene->getRootNode() ? currentScene->getRootNode().get() : nullptr;
+
+    // Show only top-level actors (no parent), and hide the artificial root
     for (const auto& [id, actor] : allActors) {
         if (!actor) continue;
-        bool selected = (selectedNode == actor.get());
+        if (actor.get() == root) continue; // hide root
+        if (actor->getParent() != nullptr) continue; // only top-level here
+
+        bool selected = (selectedObject == actor.get());
         if (ImGui::Selectable(actor->getName().c_str(), selected)) {
-            selectedNode = actor.get();
+            selectedObject = actor.get();
             SelectionManager::get().setSelectedActor(actor.get());
+        }
+
+        // Context menu on item
+        if (ImGui::BeginPopupContextItem()) {
+            contextMenuTargetObject = actor.get();
+            showObjectContextMenu(contextMenuTargetObject);
+            ImGui::EndPopup();
         }
     }
 }
@@ -106,12 +130,20 @@ void OutlinerPanel::handleDragAndDrop() {
     }
 }
 
-void OutlinerPanel::showObjectContextMenu(SceneObject* node) {
-    Actor* actorNode = dynamic_cast<Actor*>(node);
+void OutlinerPanel::showObjectContextMenu(SceneObject* object) {
+    Actor* actorNode = dynamic_cast<Actor*>(object);
 
-    if (ImGui::MenuItem("Delete")) {
-        handleObjectDeletion(node);
-        return;
+    // Prevent deleting root
+    Actor* root = currentScene && currentScene->getRootNode() ? currentScene->getRootNode().get() : nullptr;
+    bool isRoot = (actorNode && actorNode == root);
+
+    if (!isRoot) {
+        if (ImGui::MenuItem("Delete")) {
+            // Defer deletion until after popup ends to avoid invalidating iterators/UI
+            pendingDeleteActor = actorNode;
+        }
+    } else {
+        ImGui::MenuItem("Delete", nullptr, false, false);
     }
 
     ImGui::Separator();
@@ -128,19 +160,19 @@ void OutlinerPanel::showObjectContextMenu(SceneObject* node) {
     }
 }
 
-void OutlinerPanel::handleObjectDeletion(SceneObject* node) {
-    if (!node || !currentScene) return;
-    if (auto* actorNode = dynamic_cast<Actor*>(node)) {
-        auto* parent = actorNode->getParent();
-        if (parent) {
-            parent->removeChild(actorNode);
-        }
+void OutlinerPanel::handleObjectDeletion(SceneObject* object) {
+    if (!object || !currentScene) return;
+    if (auto* actorNode = dynamic_cast<Actor*>(object)) {
+        // Defer actual removal to main render loop (handled after popup)
+        pendingDeleteActor = actorNode;
     }
 }
 
 void OutlinerPanel::createPrimitiveObject(ohao::PrimitiveType type) {
     if (!currentScene) return;
-    // Implementation omitted here for brevity; existing logic retained
+    // Deprecated path: use Scene::createActorWithComponents instead
+    currentScene->createActorWithComponents("Actor", type);
+    currentScene->updateSceneBuffers();
 }
 
 std::shared_ptr<Model> OutlinerPanel::generatePrimitiveMesh(PrimitiveType type) {

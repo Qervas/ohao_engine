@@ -563,25 +563,26 @@ void VulkanContext::drawFrame() {
         //          + std::to_string(camera.getPosition().z));
     }
 
-    // Explicitly begin the scene rendering pass
+    // Explicitly begin the scene rendering pass (clear even when empty)
     if (sceneRenderer && sceneRenderer->hasValidRenderTarget()) {
         // Check if scene has any geometry to render
-        if (!vertexBuffer || !indexBuffer) {
-            // Empty scene is valid - skip rendering but don't recreate default objects
-            OHAO_LOG_DEBUG("Scene is empty - no geometry to render");
+        static bool s_loggedEmptyOnce = false;
+        bool hasGeometry = (vertexBuffer && indexBuffer);
+        if (!hasGeometry) {
+            if (!s_loggedEmptyOnce) {
+                OHAO_LOG_DEBUG("Scene is empty - no geometry to render");
+                s_loggedEmptyOnce = true;
+            }
         } else {
-            // Begin scene rendering pass
-            sceneRenderer->beginFrame();
-            
-            // Update wireframe mode
-            sceneRenderer->setWireframeMode(wireframeMode);
-            
-            // Render scene
-            sceneRenderer->render(uniformBuffer.get(), currentFrame);
-            
-            // End scene rendering pass
-            sceneRenderer->endFrame();
+            s_loggedEmptyOnce = false;
         }
+
+        // Always run a scene pass to clear the viewport
+        sceneRenderer->beginFrame();
+        sceneRenderer->setWireframeMode(wireframeMode);
+        // Always render; SceneRenderer handles empty scenes by drawing gizmo/grid
+        sceneRenderer->render(uniformBuffer.get(), currentFrame);
+        sceneRenderer->endFrame();
     } else {
         OHAO_LOG("Warning: Scene renderer not initialized or render target invalid");
         
