@@ -20,7 +20,7 @@
 #define ICON_FA_DRAW_POLYGON              "\xef\x97\xae"  // f5ee - wireframe/polygon
 
 // Alternative icons (commented out, but available if you want to try different icons)
-// #define ICON_FA_CUBE                   "\xef\x86\xb2"  // f1b2 - 3D cube
+#define ICON_FA_CUBE                   "\xef\x86\xb2"  // f1b2 - 3D cube
 // #define ICON_FA_VECTOR_SQUARE          "\xef\x97\x8b"  // f5cb - vector square for wireframe
 // #define ICON_FA_TH                     "\xef\x80\x8a"  // f00a - simple grid (3x3)
 // #define ICON_FA_GRID_2                 "\xe1\x95"      // e195 - modern grid icon (FA6)
@@ -57,3 +57,5 @@
 #define ICON_FA_PLAY                      "\xef\x81\x8b"  // f04b - play
 #define ICON_FA_PAUSE                     "\xef\x81\x8c"  // f04c - pause
 #define ICON_FA_STOP                      "\xef\x81\x8d"  // f04d - stop
+#define ICON_FA_CIRCLE                    "\xef\x84\x91"  // f111 - circle (empty actor)
+#define ICON_FA_PALETTE                   "\xef\x94\xbf"  // f53f - palette (material)
