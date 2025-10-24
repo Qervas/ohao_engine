@@ -111,6 +111,18 @@ void OutlinerPanel::renderActorList() {
             SelectionManager::get().setSelectedActor(actor.get());
         }
 
+        // Double-click in outliner to focus camera on this actor
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            if (auto* vc = VulkanContext::getContextInstance()) {
+                if (auto* transform = actor->getTransform()) {
+                    glm::vec3 targetPos = transform->getWorldPosition();
+                    // Move camera to a reasonable distance in front of the object
+                    vc->getCamera().focusOnPoint(targetPos, 5.0f);
+                    OHAO_LOG(std::string("Camera focused on: ") + actor->getName());
+                }
+            }
+        }
+
         // Context menu on item
         if (ImGui::BeginPopupContextItem()) {
             contextMenuTargetObject = actor.get();
