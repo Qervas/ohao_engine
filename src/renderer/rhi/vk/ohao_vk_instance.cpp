@@ -3,6 +3,11 @@
 #include <iostream>
 #include <cstring>
 
+// Portability enumeration extension for MoltenVK on macOS
+#ifndef VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+#define VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR 0x00000001
+#endif
+
 namespace ohao {
 
 OhaoVkInstance::~OhaoVkInstance() {
@@ -29,9 +34,10 @@ void OhaoVkInstance::cleanup() {
 }
 
 bool OhaoVkInstance::createInstance(const std::string& appName) {
+    // Graceful fallback if validation layers not available (common on macOS)
     if (validationEnabled && !checkValidationLayerSupport()) {
-        std::cerr << "Validation layers requested but not available\n";
-        return false;
+        std::cerr << "Warning: Validation layers requested but not available. Continuing without validation.\n";
+        validationEnabled = false;
     }
 
     VkApplicationInfo appInfo{};
@@ -40,15 +46,29 @@ bool OhaoVkInstance::createInstance(const std::string& appName) {
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "OHAO Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    // Use Vulkan 1.2 on macOS (MoltenVK), 1.3 on Linux
+#ifdef __APPLE__
+    appInfo.apiVersion = VK_API_VERSION_1_2;
+#else
     appInfo.apiVersion = VK_API_VERSION_1_3;
+#endif
 
     auto extensions = getRequiredExtensions();
+    if (extensions.empty()) {
+        std::cerr << "Failed to get required Vulkan extensions\n";
+        return false;
+    }
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
+
+#ifdef __APPLE__
+    // Required for MoltenVK
+    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
     if (validationEnabled) {
@@ -116,13 +136,31 @@ bool OhaoVkInstance::checkValidationLayerSupport() const {
 }
 
 std::vector<const char*> OhaoVkInstance::getRequiredExtensions() const {
+    // Check if GLFW supports Vulkan
+    if (!glfwVulkanSupported()) {
+        std::cerr << "Error: GLFW reports Vulkan is not supported on this system.\n";
+        std::cerr << "Make sure you have Vulkan drivers installed (or MoltenVK on macOS).\n";
+        return {};
+    }
+
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+    if (!glfwExtensions) {
+        std::cerr << "Error: Failed to get required Vulkan extensions from GLFW.\n";
+        return {};
+    }
+
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
     if (validationEnabled) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
+
+#ifdef __APPLE__
+    // Required for MoltenVK portability
+    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
 
     return extensions;
 }
