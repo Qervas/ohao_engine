@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/actor/actor.hpp"
+#include "engine/scene/scene.hpp"
 #include "engine/component/component.hpp"
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/material_component.hpp"

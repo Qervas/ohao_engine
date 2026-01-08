@@ -3,6 +3,11 @@
 #include <optional>
 #include <vector>
 
+// Fallback for portability subset extension (required for MoltenVK on macOS)
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
+#endif
+
 namespace ohao {
 
 class OhaoVkInstance;
