@@ -395,6 +395,10 @@ void VulkanContext::initializeSceneRenderer() {
     if (targetWidth > 0 && targetHeight > 0) {
         camera.setAspectRatio(static_cast<float>(targetWidth) / static_cast<float>(targetHeight));
     }
+
+    // Initialize picking system for viewport selection
+    pickingSystem = std::make_unique<PickingSystem>();
+    std::cout << "[VulkanContext] Picking system initialized" << std::endl;
 }
 
 void VulkanContext::updateScene(float deltaTime) {
