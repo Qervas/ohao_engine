@@ -17,6 +17,7 @@
 #include "ui/window/window.hpp"
 #include <memory>
 #include <string>
+#include <glm/glm.hpp>
 
 namespace ohao {
 
@@ -31,6 +32,8 @@ public:
     bool wantsInputCapture() const;
     bool isSceneViewportHovered() const;
     ViewportSize getSceneViewportSize() const;
+    glm::vec2 getSceneViewportMin() const { return sceneViewportMin; }
+    glm::vec2 getSceneViewportMax() const { return sceneViewportMax; }
     static UIManager* getInstance() { return instance; }
     OutlinerPanel* getOutlinerPanel() const;
     PropertiesPanel* getPropertiesPanel() const;
@@ -88,6 +91,8 @@ private:
     VkDescriptorPool imguiPool{VK_NULL_HANDLE};
 
     ImVec2 sceneViewportSize{1280, 720};
+    glm::vec2 sceneViewportMin{0.0f};  // Top-left corner in screen coords
+    glm::vec2 sceneViewportMax{0.0f};  // Bottom-right corner in screen coords
     bool isSceneWindowHovered{false};
     bool layoutInitialized{false};
     bool isDockspaceInitialized{false};
