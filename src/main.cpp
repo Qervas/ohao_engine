@@ -5,6 +5,7 @@
 #include "renderer/camera/camera_controller.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/selection/selection_manager.hpp"
+#include "ui/viewport/viewport_input_handler.hpp"
 #include "engine/component/transform_component.hpp"
 #include <iostream>
 #include <memory>
@@ -27,6 +28,11 @@ int main() {
         uiManager->initialize();
         vulkan.initializeSceneRenderer();
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
+
+        // Initialize viewport input handler for edit mode interaction
+        ohao::ViewportInputHandler viewportInputHandler;
+        viewportInputHandler.initialize(&vulkan, &window, vulkan.getPickingSystem());
+        std::cout << "[Main] Viewport input handler initialized" << std::endl;
 
         auto lastTime = std::chrono::high_resolution_clock::now();
         bool f5Pressed = false;
@@ -68,6 +74,16 @@ int main() {
             bool viewportFocused = uiManager->getViewportToolbar()->isViewportFocused();
             window.enableCursor(!viewportFocused); // Disable cursor when focused (for camera control)
 
+            // Update viewport input handler state
+            viewportInputHandler.setViewportHovered(uiManager->isSceneViewportHovered());
+            viewportInputHandler.setViewportBounds(uiManager->getSceneViewportMin(), uiManager->getSceneViewportMax());
+            viewportInputHandler.setPlayMode(viewportFocused);
+
+            // Process edit mode input (when NOT in F5 play mode)
+            if (!viewportFocused) {
+                viewportInputHandler.update(deltaTime);
+            }
+
             // Check for the M key to load multi-object demo
             if(window.isKeyPressed(GLFW_KEY_M)){
                 if(!demoPressed){
@@ -92,8 +108,9 @@ int main() {
                 }
             }
 
-            // UE5-style camera update: Update when viewport focused OR when UI doesn't want input
-            if (viewportFocused || !uiManager->wantsInputCapture()) {
+            // Camera controller only runs in F5 play mode (WASD + mouse look)
+            // In edit mode, ViewportInputHandler handles camera orbit via right-click
+            if (viewportFocused) {
                 cameraController.update(deltaTime);
             }
 

@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(ohao-engine VERSION 0.1.0)
 
+# Fix git detection for FetchContent
+find_package(Git QUIET)
+if(NOT GIT_FOUND)
+    set(GIT_EXECUTABLE "C:/Program Files/Git/cmd/git.exe")
+endif()
+
 # Add debug flags
 set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
@@ -25,6 +31,7 @@ FetchContent_Declare(
   stb
   GIT_REPOSITORY https://github.com/nothings/stb.git
   GIT_TAG master
+  GIT_SUBMODULES ""
 )
 FetchContent_MakeAvailable(stb)
 

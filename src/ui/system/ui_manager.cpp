@@ -601,6 +601,10 @@ void UIManager::renderSceneViewport() {
 
     ImVec2 pos = ImGui::GetCursorScreenPos();
 
+    // Track viewport bounds for picking system
+    sceneViewportMin = glm::vec2(pos.x, pos.y);
+    sceneViewportMax = glm::vec2(pos.x + sceneViewportSize.x, pos.y + sceneViewportSize.y);
+
     auto sceneTexture = vulkanContext->getSceneRenderer()->getViewportTexture();
     if (sceneTexture) {
         ImTextureID imguiTexID = imgui::convertVulkanTextureToImGui(sceneTexture);

@@ -30,6 +30,7 @@
 #include "subsystems/scene/scene_renderer.hpp"
 #include "renderer/shader/shader_uniforms.hpp"
 #include "renderer/gizmo/axis_gizmo.hpp"
+#include "renderer/picking/picking_system.hpp"
 
 
 #define GPU_VENDOR_NVIDIA 0
@@ -136,9 +137,11 @@ public:
     std::shared_ptr<UIManager> getUIManager() const {return uiManager;}
     SceneRenderer* getSceneRenderer() const {return sceneRenderer.get();}
     Scene* getScene() const {return scene.get();}
-    AxisGizmo* getAxisGizmo() const { 
-        return sceneRenderer ? sceneRenderer->getAxisGizmo() : nullptr; 
+    AxisGizmo* getAxisGizmo() const {
+        return sceneRenderer ? sceneRenderer->getAxisGizmo() : nullptr;
     }
+
+    PickingSystem* getPickingSystem() const { return pickingSystem.get(); }
 
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
@@ -235,6 +238,9 @@ private:
     std::unordered_map<SceneObject*, MeshBufferInfo> meshBufferMap;
 
     bool sceneModified{false};
+
+    // Picking system for viewport selection
+    std::unique_ptr<PickingSystem> pickingSystem;
 
 
 
