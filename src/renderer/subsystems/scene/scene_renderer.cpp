@@ -46,6 +46,13 @@ bool SceneRenderer::initialize(VulkanContext* contextPtr) {
         return false;
     }
 
+    // Initialize transform gizmo for object manipulation
+    transformGizmo = std::make_unique<TransformGizmo>();
+    if(!transformGizmo->initialize(context)){
+        std::cerr << "SceneRenderer: Failed to initialize transform gizmo" << std::endl;
+        return false;
+    }
+
     // Initialize selection pipeline last, after render target is ready
     if (!initializeSelectionPipeline()) {
         std::cerr << "SceneRenderer: Failed to initialize selection pipeline" << std::endl;
@@ -68,6 +75,7 @@ void SceneRenderer::cleanup() {
             pipeline = nullptr;
             gizmoPipeline = nullptr;
             axisGizmo.reset();
+            transformGizmo.reset();
             renderTarget.reset();
             selectionPipelineLayout = VK_NULL_HANDLE;
             isPipelineLayoutValid = false;
@@ -100,6 +108,7 @@ void SceneRenderer::cleanup() {
             pipeline = nullptr;
             gizmoPipeline = nullptr;
             axisGizmo.reset();
+            transformGizmo.reset();
             renderTarget.reset();
         } catch (const std::exception& e) {
             OHAO_LOG_ERROR("Failed to reset resources: " + std::string(e.what()));
@@ -115,6 +124,7 @@ void SceneRenderer::cleanup() {
         pipeline = nullptr;
         gizmoPipeline = nullptr;
         axisGizmo.reset();
+        transformGizmo.reset();
         renderTarget.reset();
         selectionPipelineLayout = VK_NULL_HANDLE;
         isPipelineLayoutValid = false;
@@ -220,11 +230,14 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
     auto* scene = context->getScene();
     if (scene) {
         for (const auto& [actorId, actor] : scene->getAllActors()) {
+            // Skip actors hidden in editor (eye icon toggle)
+            if (!actor->isEditorVisible()) continue;
+
             // Skip actors without mesh components
             auto meshComponent = actor->getComponent<MeshComponent>();
             if (!meshComponent || !meshComponent->getModel()) continue;
             
-            const auto* bufferInfo = context->getMeshBufferInfo(actor.get());
+            const auto* bufferInfo = context->getMeshBufferInfo(actor->getID());
             if (bufferInfo && bufferInfo->indexCount > 0) {
                 sortedActors.emplace_back(actor.get(), bufferInfo);
             }
@@ -385,6 +398,11 @@ void SceneRenderer::render(OhaoVkUniformBuffer* uniformBuffer, uint32_t currentF
     if (axisGizmo && gizmoPipeline) {
         renderAxisGizmo(cmd, uniformBuffer, currentFrame);
     }
+
+    // Transform gizmo disabled - needs rework
+    // if (transformGizmo && gizmoPipeline && SelectionManager::get().getSelectedActor() != nullptr) {
+    //     renderTransformGizmo(cmd, uniformBuffer, currentFrame);
+    // }
 }
 
 void SceneRenderer::endFrame() {
@@ -627,6 +645,95 @@ void SceneRenderer::renderAxisGizmo(VkCommandBuffer cmd, OhaoVkUniformBuffer* un
         
         // Render the gizmo
         axisGizmo->render(cmd, viewProj);
+    }
+}
+
+void SceneRenderer::renderTransformGizmo(VkCommandBuffer cmd, OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame) {
+    if (!transformGizmo || !gizmoPipeline) return;
+
+    // Get the selected actor's position
+    Actor* selectedActor = SelectionManager::get().getSelectedActor();
+    if (!selectedActor) return;
+
+    // Get object's world position from matrix
+    glm::mat4 worldMat = selectedActor->getTransform()->getWorldMatrix();
+    glm::vec3 objectPosition = glm::vec3(worldMat[3]);
+
+    // Offset gizmo to the side of the object to avoid ambiguity
+    // This makes it clear when clicking the gizmo vs the object
+    glm::vec3 gizmoOffset = glm::vec3(-2.0f, 0.0f, 0.0f); // Offset to the left
+    glm::vec3 gizmoPosition = objectPosition + gizmoOffset;
+
+    // Bind the gizmo pipeline
+    gizmoPipeline->bind(cmd);
+
+    // Get descriptor from context
+    auto descriptorSet = context->getDescriptor()->getSet(currentFrame);
+
+    // Bind descriptor sets with gizmo pipeline layout
+    vkCmdBindDescriptorSets(
+        cmd,
+        VK_PIPELINE_BIND_POINT_GRAPHICS,
+        gizmoPipeline->getPipelineLayout(),
+        0, 1,
+        &descriptorSet,
+        0, nullptr
+    );
+
+    // Get vertex and index buffers from the transform gizmo
+    VkBuffer gizmoVertexBuffer = transformGizmo->getVertexBuffer();
+    VkBuffer gizmoIndexBuffer = transformGizmo->getIndexBuffer();
+
+    if (gizmoVertexBuffer != VK_NULL_HANDLE && gizmoIndexBuffer != VK_NULL_HANDLE) {
+        // Bind the buffers
+        VkBuffer vertexBuffers[] = {gizmoVertexBuffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, gizmoIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+        // Create model matrix to position gizmo at selected object
+        glm::mat4 modelMatrix = glm::translate(glm::mat4(1.0f), gizmoPosition);
+
+        // Get the highlighted axis
+        GizmoAxis highlighted = transformGizmo->getHighlightedAxis();
+
+        // Define axis colors (normal and highlighted)
+        const glm::vec3 xColorNormal(0.8f, 0.2f, 0.2f);  // Red
+        const glm::vec3 yColorNormal(0.2f, 0.8f, 0.2f);  // Green
+        const glm::vec3 zColorNormal(0.2f, 0.2f, 0.8f);  // Blue
+        const glm::vec3 highlightColor(1.0f, 1.0f, 0.0f); // Yellow when highlighted
+
+        // Helper lambda to draw an axis
+        auto drawAxis = [&](const TransformGizmo::AxisIndexInfo& info, GizmoAxis axis, const glm::vec3& normalColor) {
+            OhaoVkPipeline::ModelPushConstants pushConstants{};
+            pushConstants.model = modelMatrix;
+
+            // Use highlight color if this axis is highlighted
+            if (highlighted == axis) {
+                pushConstants.baseColor = highlightColor;
+            } else {
+                pushConstants.baseColor = normalColor;
+            }
+            pushConstants.metallic = 0.0f;
+            pushConstants.roughness = 1.0f;
+            pushConstants.ao = 1.0f;
+
+            vkCmdPushConstants(
+                cmd,
+                gizmoPipeline->getPipelineLayout(),
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(OhaoVkPipeline::ModelPushConstants),
+                &pushConstants
+            );
+
+            vkCmdDrawIndexed(cmd, info.count, 1, info.offset, 0, 0);
+        };
+
+        // Draw each axis separately with appropriate color
+        drawAxis(transformGizmo->getXAxisInfo(), GizmoAxis::X, xColorNormal);
+        drawAxis(transformGizmo->getYAxisInfo(), GizmoAxis::Y, yColorNormal);
+        drawAxis(transformGizmo->getZAxisInfo(), GizmoAxis::Z, zColorNormal);
     }
 }
 

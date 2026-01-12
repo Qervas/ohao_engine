@@ -1,5 +1,6 @@
 #include "viewport_input_handler.hpp"
 #include "renderer/vulkan_context.hpp"
+#include "renderer/gizmo/transform_gizmo.hpp"
 #include "ui/window/window.hpp"
 #include "engine/component/transform_component.hpp"
 #include <GLFW/glfw3.h>
@@ -267,12 +268,8 @@ void ViewportInputHandler::handleMouseScroll(float scrollDelta) {
 }
 
 void ViewportInputHandler::updateGizmoHover() {
-    // TODO: Implement gizmo ray intersection test
-    // For now, just reset hover state
+    // Transform gizmo disabled - needs rework
     hoveredAxis = GizmoAxis::None;
-
-    // This will be implemented when TransformGizmo is created
-    // The gizmo will expose a testHover(ray) method
 }
 
 void ViewportInputHandler::beginGizmoDrag() {
@@ -280,14 +277,22 @@ void ViewportInputHandler::beginGizmoDrag() {
     if (!selected || !selected->getTransform()) return;
 
     auto* transform = selected->getTransform();
-    dragStartPosition = transform->getWorldPosition();
+    // Use world matrix position for consistency with rendering
+    dragStartPosition = glm::vec3(transform->getWorldMatrix()[3]);
     dragStartScale = transform->getScale();
     dragStartRotation = transform->getRotation();
 
     activeAxis = hoveredAxis;
     currentState = ViewportInputState::GizmoDrag;
 
-    std::cout << "[ViewportInput] Started gizmo drag" << std::endl;
+    // Start drag on the TransformGizmo if available
+    if (transformGizmo && activeAxis != GizmoAxis::None) {
+        Ray ray = getMouseRay();
+        glm::vec3 cameraPos = context->getCamera().getPosition();
+        transformGizmo->beginDrag(activeAxis, ray.origin, ray.direction, dragStartPosition, cameraPos);
+    }
+
+    std::cout << "[ViewportInput] Started gizmo drag on axis " << static_cast<int>(activeAxis) << std::endl;
 }
 
 void ViewportInputHandler::updateGizmoDrag() {
@@ -297,27 +302,34 @@ void ViewportInputHandler::updateGizmoDrag() {
         return;
     }
 
-    // TODO: Implement actual drag logic based on gizmo mode
-    // This requires the TransformGizmo to be implemented
+    if (!transformGizmo) return;
 
     auto* transform = selected->getTransform();
     Ray ray = getMouseRay();
 
-    // Placeholder - will be implemented with TransformGizmo
     switch (currentGizmoMode) {
-        case GizmoMode::Translate:
-            // Calculate translation delta along active axis
+        case GizmoMode::Translate: {
+            // Get new position from gizmo's drag calculation
+            glm::vec3 cameraPos = context->getCamera().getPosition();
+            glm::vec3 newPosition = transformGizmo->updateDrag(ray.origin, ray.direction, cameraPos);
+            transform->setPosition(newPosition);
             break;
+        }
         case GizmoMode::Rotate:
-            // Calculate rotation delta around active axis
+            // TODO: Implement rotation mode
             break;
         case GizmoMode::Scale:
-            // Calculate scale delta along active axis
+            // TODO: Implement scale mode
             break;
     }
 }
 
 void ViewportInputHandler::endGizmoDrag() {
+    // End drag on the TransformGizmo
+    if (transformGizmo) {
+        transformGizmo->endDrag();
+    }
+
     activeAxis = GizmoAxis::None;
     currentState = ViewportInputState::Idle;
     std::cout << "[ViewportInput] Ended gizmo drag" << std::endl;

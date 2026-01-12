@@ -43,11 +43,15 @@
 #include <iostream>
 #include "subsystems/scene/scene_renderer.hpp"
 #include "subsystems/scene/scene_render_target.hpp"
+#include "subsystems/shadow/shadow_renderer.hpp"
+#include "lighting/lighting_system.hpp"
+#include "lighting/shadow_map_pool.hpp"
 #include "ui/components/console_widget.hpp"
 #include "ui/system/ui_manager.hpp"
 #include "ui/window/window.hpp"
 #include <utils/common_types.hpp>
 #include <filesystem>
+#include <limits>
 
 
 #define OHAO_ENABLE_VALIDATION_LAYER true
@@ -224,6 +228,42 @@ VulkanContext::initializeVulkan(){
     sceneRenderer = std::make_unique<SceneRenderer>();
     if(!sceneRenderer->initialize(this)){
         throw std::runtime_error("engine scene renderer initializatin failed");
+    }
+
+    // Initialize unified lighting system
+    lightingSystem = std::make_unique<LightingSystem>();
+    if (!lightingSystem->initialize(device.get(), MAX_FRAMES_IN_FLIGHT)) {
+        std::cerr << "Warning: Failed to initialize lighting system" << std::endl;
+        lightingSystem.reset();
+    } else {
+        std::cout << "LightingSystem initialized successfully" << std::endl;
+    }
+
+    // Initialize shadow map pool (unified shadow system)
+    shadowMapPool = std::make_unique<ShadowMapPool>();
+    if (!shadowMapPool->initialize(this)) {
+        std::cerr << "Warning: Failed to initialize shadow map pool" << std::endl;
+        shadowMapPool.reset();
+    } else {
+        std::cout << "ShadowMapPool initialized successfully" << std::endl;
+
+        // Update shadow map array descriptor for all frames
+        if (descriptor) {
+            auto shadowMapViews = shadowMapPool->getAllImageViews();
+            for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+                descriptor->updateShadowMapArrayDescriptor(i,
+                    shadowMapViews,
+                    shadowMapPool->getSampler());
+            }
+            std::cout << "Shadow map array descriptors initialized for all frames" << std::endl;
+        }
+    }
+
+    // Initialize legacy shadow renderer (for backward compatibility during migration)
+    shadowRenderer = std::make_unique<ShadowRenderer>();
+    if(!shadowRenderer->initialize(this)){
+        std::cerr << "Warning: Failed to initialize shadow renderer, shadows will be disabled" << std::endl;
+        shadowRenderer.reset();
     }
 
     initializeDefaultScene();
@@ -533,38 +573,213 @@ void VulkanContext::drawFrame() {
 
     // Update uniform buffer with latest camera information
     if (uniformBuffer) {
-        // Collect lights from the scene first
-        std::vector<RenderLight> sceneLights;
+        // Collect lights from the scene using UnifiedLight
+        std::vector<UnifiedLight> sceneLights;
         if (scene) {
             for (const auto& [actorId, actor] : scene->getAllActors()) {
                 if (auto lightComponent = actor->getComponent<LightComponent>()) {
-                    RenderLight light{};
+                    UnifiedLight light{};
                     light.position = actor->getTransform()->getPosition();
                     light.type = static_cast<float>(lightComponent->getLightType());
                     light.color = lightComponent->getColor();
                     light.intensity = lightComponent->getIntensity();
                     light.range = lightComponent->getRange();
-                    light.direction = lightComponent->getDirection();
+                    // Always normalize direction to prevent shadow artifacts
+                    glm::vec3 dir = lightComponent->getDirection();
+                    light.direction = glm::length(dir) > 0.001f ? glm::normalize(dir) : glm::vec3(0.0f, -1.0f, 0.0f);
                     light.innerCone = lightComponent->getInnerConeAngle();
                     light.outerCone = lightComponent->getOuterConeAngle();
-                    light.padding = glm::vec2(0.0f);
-                    
+                    light.shadowMapIndex = -1;  // No shadow by default
+                    light.lightSpaceMatrix = glm::mat4(1.0f);
+
                     sceneLights.push_back(light);
                 }
             }
         }
-        
-        // Update lights in uniform buffer
-        uniformBuffer->setLights(sceneLights);
-        
+
+        // Update lights in uniform buffer (using new unified system)
+        auto& ubo = uniformBuffer->getCachedUBO();
+        ubo.numLights = static_cast<int>(std::min(sceneLights.size(), static_cast<size_t>(MAX_UNIFIED_LIGHTS)));
+        for (size_t i = 0; i < sceneLights.size() && i < MAX_UNIFIED_LIGHTS; ++i) {
+            ubo.lights[i] = sceneLights[i];
+        }
+
+        // Find the first shadow-casting light (prioritize: directional > spot > point)
+        const UnifiedLight* shadowLight = nullptr;
+        int shadowLightIndex = -1;
+
+        // First pass: look for directional light
+        for (size_t i = 0; i < sceneLights.size(); ++i) {
+            if (sceneLights[i].isDirectional()) {
+                shadowLight = &sceneLights[i];
+                shadowLightIndex = static_cast<int>(i);
+                break;
+            }
+        }
+
+        // Second pass: if no directional, look for spot light
+        if (!shadowLight) {
+            for (size_t i = 0; i < sceneLights.size(); ++i) {
+                if (sceneLights[i].isSpot()) {
+                    shadowLight = &sceneLights[i];
+                    shadowLightIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+
+        // Third pass: if no spot, look for point light
+        if (!shadowLight) {
+            for (size_t i = 0; i < sceneLights.size(); ++i) {
+                if (sceneLights[i].isPoint()) {
+                    shadowLight = &sceneLights[i];
+                    shadowLightIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+
+        // Update shadow parameters for any shadow-casting light
+        if (shadowRenderer && shadowRenderer->isEnabled() && shadowLight) {
+            // Calculate scene bounds for proper shadow frustum fitting
+            glm::vec3 sceneMin(std::numeric_limits<float>::max());
+            glm::vec3 sceneMax(std::numeric_limits<float>::lowest());
+            bool hasObjects = false;
+
+            if (scene) {
+                for (const auto& [actorId, actor] : scene->getAllActors()) {
+                    auto meshComp = actor->getComponent<MeshComponent>();
+                    if (meshComp && meshComp->isVisible()) {
+                        auto transform = actor->getTransform();
+                        if (transform) {
+                            glm::vec3 pos = transform->getPosition();
+                            glm::vec3 scale = transform->getScale();
+                            // Estimate object bounds (assume unit cube scaled)
+                            float maxScale = std::max({scale.x, scale.y, scale.z});
+                            sceneMin = glm::min(sceneMin, pos - glm::vec3(maxScale));
+                            sceneMax = glm::max(sceneMax, pos + glm::vec3(maxScale));
+                            hasObjects = true;
+                        }
+                    }
+                }
+            }
+
+            // Calculate scene center from bounds (fallback to origin if no objects)
+            glm::vec3 sceneCenter = hasObjects ? (sceneMin + sceneMax) * 0.5f : glm::vec3(0.0f);
+
+            // Adjust ortho size based on scene bounds (only for directional lights)
+            if (hasObjects && shadowLight->isDirectional()) {
+                float sceneDiagonal = glm::length(sceneMax - sceneMin);
+                float newOrthoSize = std::max(sceneDiagonal * 0.6f, 10.0f);
+                shadowRenderer->setOrthoSize(newOrthoSize);
+
+                // Debug: Log scene bounds for shadow frustum
+                static bool loggedBounds = false;
+                if (!loggedBounds) {
+                    std::cout << "[Shadow Debug] Scene bounds: min=("
+                              << sceneMin.x << "," << sceneMin.y << "," << sceneMin.z << ") max=("
+                              << sceneMax.x << "," << sceneMax.y << "," << sceneMax.z << ")"
+                              << " center=(" << sceneCenter.x << "," << sceneCenter.y << "," << sceneCenter.z << ")"
+                              << " orthoSize=" << newOrthoSize << std::endl;
+                    loggedBounds = true;
+                }
+            }
+
+            glm::mat4 lightSpaceMatrix = shadowRenderer->calculateLightSpaceMatrix(*shadowLight, sceneCenter);
+
+            // CRITICAL: Update shadow renderer's uniform buffer for shadow pass
+            shadowRenderer->updateShadowUniforms(currentFrame, lightSpaceMatrix);
+
+            // Store light space matrix in the shadow-casting light
+            if (shadowLightIndex >= 0 && shadowLightIndex < MAX_UNIFIED_LIGHTS) {
+                ubo.lights[shadowLightIndex].lightSpaceMatrix = lightSpaceMatrix;
+                ubo.lights[shadowLightIndex].shadowMapIndex = 0;  // Use first shadow map
+
+                // Debug logging (once per scene load)
+                static bool s_debugPrintedOnce = false;
+                if (!s_debugPrintedOnce) {
+                    const char* lightTypeName = shadowLight->isDirectional() ? "Directional" :
+                                               shadowLight->isSpot() ? "Spot" : "Point";
+                    std::cout << "[Shadow Debug] " << lightTypeName << " Light " << shadowLightIndex << " configured for shadows:" << std::endl;
+                    std::cout << "  Position: (" << shadowLight->position.x << ", "
+                              << shadowLight->position.y << ", " << shadowLight->position.z << ")" << std::endl;
+                    std::cout << "  Direction: (" << shadowLight->direction.x << ", "
+                              << shadowLight->direction.y << ", " << shadowLight->direction.z << ")" << std::endl;
+                    std::cout << "  ShadowMapIndex: " << ubo.lights[shadowLightIndex].shadowMapIndex << std::endl;
+                    std::cout << "  ShadowBias: " << shadowRenderer->getShadowBias() << std::endl;
+                    std::cout << "  ShadowStrength: " << shadowRenderer->getShadowStrength() << std::endl;
+
+                    // Print light space matrix
+                    std::cout << "  LightSpaceMatrix:" << std::endl;
+                    for (int row = 0; row < 4; row++) {
+                        std::cout << "    [";
+                        for (int col = 0; col < 4; col++) {
+                            std::cout << lightSpaceMatrix[col][row];
+                            if (col < 3) std::cout << ", ";
+                        }
+                        std::cout << "]" << std::endl;
+                    }
+
+                    // Test transform of origin vertex
+                    glm::vec4 testVertex(0.0f, 0.0f, 0.0f, 1.0f);
+                    glm::vec4 transformed = lightSpaceMatrix * testVertex;
+                    std::cout << "  Origin (0,0,0) transforms to: (" << transformed.x << ", "
+                              << transformed.y << ", " << transformed.z << ", " << transformed.w << ")" << std::endl;
+                    glm::vec3 ndc = glm::vec3(transformed) / transformed.w;
+                    std::cout << "  Origin NDC: (" << ndc.x << ", " << ndc.y << ", " << ndc.z << ")" << std::endl;
+
+                    s_debugPrintedOnce = true;
+                }
+            }
+
+            // Also store in legacy single light space matrix for backward compatibility
+            ubo.lightSpaceMatrix = lightSpaceMatrix;
+            ubo.shadowBias = shadowRenderer->getShadowBias();
+            ubo.shadowStrength = shadowRenderer->getShadowStrength();
+        } else {
+            // No shadows - set identity matrix and zero strength
+            auto& ubo = uniformBuffer->getCachedUBO();
+            ubo.lightSpaceMatrix = glm::mat4(1.0f);
+            ubo.shadowBias = 0.005f;
+            ubo.shadowStrength = 0.0f;
+        }
+
         // Then update camera and write everything to GPU
         uniformBuffer->updateFromCamera(currentFrame, camera);
-        
-        // Remove camera position debug output
-        // auto& ubo = uniformBuffer->getCachedUBO();
-        // OHAO_LOG("Camera pos: " + std::to_string(camera.getPosition().x) + ", " 
-        //          + std::to_string(camera.getPosition().y) + ", " 
-        //          + std::to_string(camera.getPosition().z));
+    }
+
+    // Shadow pass: Render scene from light's perspective
+    // Use old shadowRenderer (has working pipeline) but update to array descriptor
+    if (shadowRenderer && shadowRenderer->isEnabled() && vertexBuffer && indexBuffer) {
+        shadowRenderer->beginShadowPass(commandBuffer);
+        shadowRenderer->renderShadowMap(commandBuffer, currentFrame);
+        shadowRenderer->endShadowPass(commandBuffer);
+
+        // Update shadow map array descriptor - put the shadow map at index 0
+        if (descriptor && shadowRenderer->getShadowMapImageView() && shadowRenderer->getShadowMapSampler()) {
+            // Create array with shadow map at index 0, placeholders for rest
+            std::array<VkImageView, 4> shadowMapViews;
+
+            // Use shadow renderer's shadow map for index 0
+            shadowMapViews[0] = shadowRenderer->getShadowMapImageView();
+
+            // Use placeholder for indices 1-3 (or shadow map pool's placeholders if available)
+            if (shadowMapPool && shadowMapPool->isInitialized()) {
+                auto poolViews = shadowMapPool->getAllImageViews();
+                shadowMapViews[1] = poolViews[1];
+                shadowMapViews[2] = poolViews[2];
+                shadowMapViews[3] = poolViews[3];
+            } else {
+                // Fall back to using the same shadow map for all slots
+                shadowMapViews[1] = shadowRenderer->getShadowMapImageView();
+                shadowMapViews[2] = shadowRenderer->getShadowMapImageView();
+                shadowMapViews[3] = shadowRenderer->getShadowMapImageView();
+            }
+
+            descriptor->updateShadowMapArrayDescriptor(currentFrame,
+                shadowMapViews,
+                shadowRenderer->getShadowMapSampler());
+        }
     }
 
     // Explicitly begin the scene rendering pass (clear even when empty)
@@ -752,13 +967,13 @@ void VulkanContext::renderModel(VkCommandBuffer commandBuffer) {
         auto meshComponent = actor->getComponent<MeshComponent>();
         if (!meshComponent || !meshComponent->getModel()) continue;
         
-        // Find buffer info for this actor
-        auto it = meshBufferMap.find(const_cast<Actor*>(actor));
+        // Find buffer info for this actor using ID
+        auto it = meshBufferMap.find(actor->getID());
         if (it == meshBufferMap.end()) {
             OHAO_LOG("Actor not found in mesh buffer map: " + actor->getName());
             continue;
         }
-        
+
         const auto& bufferInfo = it->second;
         
         // Set up model push constants
@@ -1074,7 +1289,7 @@ bool VulkanContext::updateSceneBuffers() {
         bufferInfo.vertexOffset = vertexOffset;
         bufferInfo.indexOffset = indexOffset;
         bufferInfo.indexCount = indexCount;
-        meshBufferMap[actor] = bufferInfo;
+        meshBufferMap[actor->getID()] = bufferInfo;
         
         // Add vertices directly without modification
         combinedVertices.insert(combinedVertices.end(), model->vertices.begin(), model->vertices.end());
