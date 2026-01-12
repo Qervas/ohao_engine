@@ -32,9 +32,9 @@ public:
     void updateFromCamera(uint32_t frameIndex, const Camera& camera);
     void setLightProperties(const glm::vec3& pos, const glm::vec3& color, float intensity);
     void setMaterialProperties(const glm::vec3& color, float metallic, float roughness, float ao);
-    void setLights(const std::vector<RenderLight>& lights);
+    void setLights(const std::vector<UnifiedLight>& lights);
     void clearLights();
-    void addLight(const RenderLight& light);
+    void addLight(const UnifiedLight& light);
     bool needsUpdating() const { return needsUpdate; }
     void markForUpdate() { needsUpdate = true; }
     void markAsUpdated() { needsUpdate = false; }

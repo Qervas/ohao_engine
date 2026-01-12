@@ -14,6 +14,7 @@ layout(location = 4) out vec3 fragBaseColor;
 layout(location = 5) out float fragMetallic;
 layout(location = 6) out float fragRoughness;
 layout(location = 7) out float fragAo;
+layout(location = 8) out vec4 fragPosLightSpace;  // Position in light space for shadow mapping
 
 // Push constant for model matrix and material properties
 layout(push_constant) uniform PushConstantData {
@@ -42,6 +43,9 @@ void main() {
     fragMetallic = pc.metallic;
     fragRoughness = pc.roughness;
     fragAo = pc.ao;
+
+    // Calculate position in light space for shadow mapping
+    fragPosLightSpace = ubo.lightSpaceMatrix * worldPos;
 
     gl_Position = ubo.proj * ubo.view * worldPos;
 }

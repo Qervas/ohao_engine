@@ -9,6 +9,7 @@ layout(location = 4) in vec3 fragBaseColor;
 layout(location = 5) in float fragMetallic;
 layout(location = 6) in float fragRoughness;
 layout(location = 7) in float fragAo;
+layout(location = 8) in vec4 fragPosLightSpace;  // Legacy - kept for compatibility
 
 layout(location = 0) out vec4 outColor;
 
@@ -55,68 +56,78 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
     return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// PBR Lighting calculation for a single light
-vec3 calculatePBRLight(RenderLight light, vec3 fragPos, vec3 N, vec3 V, 
-                       vec3 albedo, float metallic, float roughness, float ao) {
+// PBR Lighting calculation - uses light index to avoid struct copy issues
+vec3 calculatePBRLightByIndex(int lightIndex, vec3 fragPos, vec3 N, vec3 V,
+                              vec3 albedo, float metallic, float roughness, float ao) {
     vec3 L, radiance;
     float attenuation = 1.0;
-    
-    if (light.type == 0.0) { // Directional light
-        L = normalize(-light.direction);
-        radiance = light.color * light.intensity;
-    } else if (light.type == 1.0) { // Point light
-        L = normalize(light.position - fragPos);
-        float distance = length(light.position - fragPos);
+
+    float lightType = ubo.lights[lightIndex].type;
+    vec3 lightPos = ubo.lights[lightIndex].position;
+    vec3 lightDir = ubo.lights[lightIndex].direction;
+    vec3 lightColor = ubo.lights[lightIndex].color;
+    float lightIntensity = ubo.lights[lightIndex].intensity;
+    float lightRange = ubo.lights[lightIndex].range;
+
+    if (lightType == LIGHT_TYPE_DIRECTIONAL) {
+        L = normalize(-lightDir);
+        radiance = lightColor * lightIntensity;
+    } else if (lightType == LIGHT_TYPE_POINT) {
+        L = normalize(lightPos - fragPos);
+        float distance = length(lightPos - fragPos);
         attenuation = 1.0 / (distance * distance);
-        if (distance > light.range) attenuation = 0.0;
-        radiance = light.color * light.intensity * attenuation;
-    } else if (light.type == 2.0) { // Spot light
-        L = normalize(light.position - fragPos);
-        float distance = length(light.position - fragPos);
+        if (distance > lightRange) attenuation = 0.0;
+        radiance = lightColor * lightIntensity * attenuation;
+    } else if (lightType == LIGHT_TYPE_SPOT) {
+        L = normalize(lightPos - fragPos);
+        float distance = length(lightPos - fragPos);
         attenuation = 1.0 / (distance * distance);
-        if (distance > light.range) attenuation = 0.0;
-        
+        if (distance > lightRange) attenuation = 0.0;
+
         // Spot light cone calculation
-        vec3 spotDir = normalize(light.direction);
+        vec3 spotDir = normalize(lightDir);
         float theta = dot(L, -spotDir);
-        float innerCutoff = cos(radians(light.innerCone));
-        float outerCutoff = cos(radians(light.outerCone));
+        float innerCutoff = cos(radians(ubo.lights[lightIndex].innerCone));
+        float outerCutoff = cos(radians(ubo.lights[lightIndex].outerCone));
         float epsilon = innerCutoff - outerCutoff;
         float intensity = clamp((theta - outerCutoff) / epsilon, 0.0, 1.0);
         attenuation *= intensity;
-        
-        radiance = light.color * light.intensity * attenuation;
+
+        radiance = lightColor * lightIntensity * attenuation;
     } else {
         return vec3(0.0); // Unknown light type
     }
-    
+
     vec3 H = normalize(V + L);
-    
+
     // Calculate F0 (reflectance at normal incidence)
     vec3 F0 = vec3(0.04); // Default for dielectrics
     F0 = mix(F0, albedo, metallic); // Metals use albedo as F0
-    
+
     // Cook-Torrance BRDF
-    float NDF = DistributionGGX(N, H, roughness);   
-    float G = GeometrySmith(N, V, L, roughness);      
+    float NDF = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-    
+
     vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001; // + 0.0001 to prevent divide by zero
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
     vec3 specular = numerator / denominator;
-    
+
     // Energy conservation
-    vec3 kS = F; // Fresnel represents the ratio of light that gets reflected
-    vec3 kD = vec3(1.0) - kS; // The remaining light gets refracted (diffuse)
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
     kD *= 1.0 - metallic; // Metals don't have diffuse lighting
-    
+
     float NdotL = max(dot(N, L), 0.0);
-    
+
     // Lambertian diffuse
     vec3 diffuse = kD * albedo / PI;
-    
+
     return (diffuse + specular) * radiance * NdotL;
 }
+
+// Debug: Set to 1 to visualize shadow map depth, 2 to show shadow coords
+#define SHADOW_DEBUG_MODE 0
 
 void main() {
     // Add small depth offset to prevent z-fighting
@@ -124,6 +135,25 @@ void main() {
 
     vec3 N = normalize(fragNormal);
     vec3 V = normalize(ubo.viewPos - fragPos);
+
+    // Debug: Visualize shadow map contents
+    #if SHADOW_DEBUG_MODE == 1
+    vec4 lsPos = ubo.lightSpaceMatrix * vec4(fragPos, 1.0);
+    vec3 projCoords = lsPos.xyz / lsPos.w;
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+    if (projCoords.x >= 0.0 && projCoords.x <= 1.0 &&
+        projCoords.y >= 0.0 && projCoords.y <= 1.0) {
+        float shadowDepth = texture(shadowMaps[0], projCoords.xy).r;
+        outColor = vec4(shadowDepth, shadowDepth, shadowDepth, 1.0);
+        return;
+    }
+    #elif SHADOW_DEBUG_MODE == 2
+    vec4 lsPos = ubo.lightSpaceMatrix * vec4(fragPos, 1.0);
+    vec3 projCoords = lsPos.xyz / lsPos.w;
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+    outColor = vec4(projCoords.x, projCoords.y, projCoords.z, 1.0);
+    return;
+    #endif
 
     // Double-sided lighting: flip normal if needed
     if (dot(N, V) < 0.0) {
@@ -145,32 +175,30 @@ void main() {
     vec3 kS = F;
     vec3 kD = 1.0 - kS;
     kD *= 1.0 - metallic;
-    
+
     vec3 irradiance = vec3(0.3) * albedo; // Simple ambient approximation
     vec3 diffuse = irradiance * albedo;
-    
+
     // Simple specular environment approximation
     vec3 specular = vec3(0.1) * F;
-    
+
     vec3 ambient = (kD * diffuse + specular) * ao;
     vec3 lighting = ambient;
 
-    // Process multiple lights with PBR
+    // Process all lights with unified shadow calculation
+    float totalShadow = 0.0;
     for (int i = 0; i < min(ubo.numLights, MAX_LIGHTS); ++i) {
-        RenderLight light = ubo.lights[i];
-        lighting += calculatePBRLight(light, fragPos, N, V, albedo, metallic, roughness, ao);
-    }
-    
-    // Fallback to legacy single light if no lights are defined
-    if (ubo.numLights == 0) {
-        RenderLight legacyLight;
-        legacyLight.type = 1.0; // Point light
-        legacyLight.position = ubo.lightPos;
-        legacyLight.color = ubo.lightColor;
-        legacyLight.intensity = ubo.lightIntensity;
-        legacyLight.range = 100.0; // Large range for legacy compatibility
-        
-        lighting += calculatePBRLight(legacyLight, fragPos, N, V, albedo, metallic, roughness, ao);
+        // Use index-based function to avoid struct copy issues
+        vec3 lightContribution = calculatePBRLightByIndex(i, fragPos, N, V, albedo, metallic, roughness, ao);
+
+        // Calculate shadow using the unified system
+        float shadow = calculateShadowForLight(i, fragPos, N);
+        totalShadow = max(totalShadow, shadow);
+
+        // Apply shadow
+        lightContribution *= (1.0 - shadow);
+
+        lighting += lightContribution;
     }
 
     // HDR tone mapping (ACES approximation)

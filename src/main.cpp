@@ -7,6 +7,7 @@
 #include "ui/selection/selection_manager.hpp"
 #include "ui/viewport/viewport_input_handler.hpp"
 #include "engine/component/transform_component.hpp"
+#include "engine/input/input_system.hpp"
 #include <iostream>
 #include <memory>
 #include <vulkan/vulkan_core.h>
@@ -29,9 +30,20 @@ int main() {
         vulkan.initializeSceneRenderer();
         ohao::CameraController cameraController(vulkan.getCamera(), window, *vulkan.getUniformBuffer());
 
+        // Initialize input system
+        // NOTE: Disabled for now - InputSystem overrides GLFW callbacks that ImGui needs.
+        // TODO: Implement callback chaining to forward events to ImGui
+        // ohao::InputSystem::get().initialize(window.getGLFWWindow());
+        // std::cout << "[Main] Input system initialized" << std::endl;
+
         // Initialize viewport input handler for edit mode interaction
         ohao::ViewportInputHandler viewportInputHandler;
         viewportInputHandler.initialize(&vulkan, &window, vulkan.getPickingSystem());
+
+        // Connect transform gizmo to viewport input handler for drag interaction
+        if (vulkan.getSceneRenderer()) {
+            viewportInputHandler.setTransformGizmo(vulkan.getSceneRenderer()->getTransformGizmo());
+        }
         std::cout << "[Main] Viewport input handler initialized" << std::endl;
 
         auto lastTime = std::chrono::high_resolution_clock::now();
@@ -47,6 +59,9 @@ int main() {
             lastTime = currentTime;
 
             window.pollEvents();
+
+            // Update input system - must be called before processing any input
+            // ohao::InputSystem::get().update();  // Disabled - see note above
 
             // UE5-style input routing: Set focus state FIRST, then apply to cursor
             // F5 toggles viewport focus mode
@@ -128,6 +143,9 @@ int main() {
             }
         }
         vkDeviceWaitIdle(vulkan.getVkDevice());
+
+        // Shutdown input system
+        // ohao::InputSystem::get().shutdown();  // Disabled - see note above
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;

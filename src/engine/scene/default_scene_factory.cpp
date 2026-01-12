@@ -13,19 +13,25 @@ std::unique_ptr<Scene> DefaultSceneFactory::createBlenderLikeScene() {
     if (lightActor) {
         auto transform = lightActor->getTransform();
         if (transform) {
-            transform->setPosition(glm::vec3(4.0f, 8.0f, 7.0f));
+            transform->setPosition(glm::vec3(0.0f, 10.0f, 0.0f));
+        }
+        // Set light direction straight down for clear shadows
+        auto lightComp = lightActor->getComponent<LightComponent>();
+        if (lightComp) {
+            lightComp->setDirection(glm::vec3(0.0f, -1.0f, 0.0f));  // Straight down
         }
     }
     
-    // 2. Default Sphere (like Blender's default cube, but we use sphere)
-    auto sphereActor = scene->createActorWithComponents("Sphere", PrimitiveType::Sphere);
-    if (sphereActor) {
-        auto transform = sphereActor->getTransform();
+    // 2. Default Cube (for shadow testing)
+    auto cubeActor = scene->createActorWithComponents("Cube", PrimitiveType::Cube);
+    if (cubeActor) {
+        auto transform = cubeActor->getTransform();
         if (transform) {
-            transform->setPosition(glm::vec3(0.0f, 2.0f, 0.0f)); // Start above ground
-            
+            transform->setPosition(glm::vec3(0.0f, 1.0f, 0.0f)); // On ground
+            transform->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
+
             // CRITICAL FIX: Sync physics body with updated transform position
-            auto physicsComponent = sphereActor->getComponent<PhysicsComponent>();
+            auto physicsComponent = cubeActor->getComponent<PhysicsComponent>();
             if (physicsComponent) {
                 physicsComponent->updateRigidBodyFromTransform();
             }

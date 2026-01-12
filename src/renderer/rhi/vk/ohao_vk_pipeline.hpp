@@ -91,7 +91,8 @@ public:
         SOLID,
         WIREFRAME,
         GIZMO,
-        PUSH_CONSTANT_MODEL
+        PUSH_CONSTANT_MODEL,
+        SHADOW
     };
     struct SelectionPushConstants {
         glm::vec4 highlightColor;
@@ -113,6 +114,17 @@ public:
     bool initialize(
         OhaoVkDevice* device,
         OhaoVkRenderPass* renderPass,
+        OhaoVkShaderModule* shaderModule,
+        VkExtent2D swapChainExtent,
+        VkDescriptorSetLayout descriptorSetLayout,
+        RenderMode mode,
+        const PipelineConfigInfo* configInfo = nullptr,
+        VkPipelineLayout layout = VK_NULL_HANDLE);
+
+    // Overload for raw VkRenderPass (used for shadow mapping)
+    bool initialize(
+        OhaoVkDevice* device,
+        VkRenderPass rawRenderPass,
         OhaoVkShaderModule* shaderModule,
         VkExtent2D swapChainExtent,
         VkDescriptorSetLayout descriptorSetLayout,
@@ -143,6 +155,7 @@ private:
 
     OhaoVkDevice* device{nullptr};
     OhaoVkRenderPass* renderPass{nullptr};
+    VkRenderPass rawRenderPass{VK_NULL_HANDLE};  // For shadow mapping (when not using wrapper)
     OhaoVkShaderModule* shaderModule{nullptr};
     VkExtent2D extent{};
 

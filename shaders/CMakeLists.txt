@@ -17,6 +17,11 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders/
 )
 
+# Find include files for dependency tracking
+file(GLOB SHADER_INCLUDES
+    "${CMAKE_CURRENT_SOURCE_DIR}/includes/*.glsl"
+)
+
 # Generate compilation commands for each shader
 set(SHADER_BINARY_FILES "")
 foreach(SHADER ${SHADER_SOURCES})
@@ -24,8 +29,8 @@ foreach(SHADER ${SHADER_SOURCES})
     set(SPIRV "${CMAKE_BINARY_DIR}/shaders/${SHADER_NAME}.spv")
     add_custom_command(
         OUTPUT ${SPIRV}
-        COMMAND ${GLSLC} ${SHADER} -o ${SPIRV}
-        DEPENDS ${SHADER} ${CMAKE_BINARY_DIR}/shaders
+        COMMAND ${GLSLC} -I${CMAKE_CURRENT_SOURCE_DIR} ${SHADER} -o ${SPIRV}
+        DEPENDS ${SHADER} ${SHADER_INCLUDES} ${CMAKE_BINARY_DIR}/shaders
         COMMENT "Compiling shader ${SHADER_NAME}"
     )
     list(APPEND SHADER_BINARY_FILES ${SPIRV})

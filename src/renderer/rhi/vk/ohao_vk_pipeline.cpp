@@ -38,6 +38,7 @@ bool OhaoVkPipeline::initialize(
 {
     this->device = device;
     this->renderPass = renderPass;
+    this->rawRenderPass = VK_NULL_HANDLE;  // Use wrapper
     this->shaderModule = shaderModule;
     this->extent = swapChainExtent;
     this->renderMode = mode;
@@ -49,10 +50,46 @@ bool OhaoVkPipeline::initialize(
     } else {
         // Choose appropriate pipeline layout creation based on mode
         bool success = false;
-        
+
         if (mode == RenderMode::WIREFRAME) {
             success = createPipelineLayoutWithPushConstants(descriptorSetLayout);
-        } else if (mode == RenderMode::PUSH_CONSTANT_MODEL) {
+        } else if (mode == RenderMode::PUSH_CONSTANT_MODEL || mode == RenderMode::SHADOW) {
+            success = createModelPushConstantPipelineLayout(descriptorSetLayout);
+        } else {
+            success = createDefaultPipelineLayout(descriptorSetLayout);
+        }
+
+        return success && createPipeline(mode, configInfo);
+    }
+}
+
+bool OhaoVkPipeline::initialize(
+    OhaoVkDevice* device,
+    VkRenderPass rawRenderPass,
+    OhaoVkShaderModule* shaderModule,
+    VkExtent2D swapChainExtent,
+    VkDescriptorSetLayout descriptorSetLayout,
+    RenderMode mode,
+    const PipelineConfigInfo* configInfo,
+    VkPipelineLayout layout)
+{
+    this->device = device;
+    this->renderPass = nullptr;  // Not using wrapper
+    this->rawRenderPass = rawRenderPass;
+    this->shaderModule = shaderModule;
+    this->extent = swapChainExtent;
+    this->renderMode = mode;
+
+    if (layout != VK_NULL_HANDLE) {
+        pipelineLayout = layout;
+        return createPipeline(mode, configInfo);
+    } else {
+        // Choose appropriate pipeline layout creation based on mode
+        bool success = false;
+
+        if (mode == RenderMode::WIREFRAME) {
+            success = createPipelineLayoutWithPushConstants(descriptorSetLayout);
+        } else if (mode == RenderMode::PUSH_CONSTANT_MODEL || mode == RenderMode::SHADOW) {
             success = createModelPushConstantPipelineLayout(descriptorSetLayout);
         } else {
             success = createDefaultPipelineLayout(descriptorSetLayout);
@@ -78,6 +115,10 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* c
         // Use regular shaders for wireframe rendering, not selection shaders
         vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
         fragShaderStageInfo = shaderModule->getShaderStageInfo("frag");
+    } else if (mode == RenderMode::SHADOW) {
+        // Use shadow depth shaders
+        vertShaderStageInfo = shaderModule->getShaderStageInfo("shadow_vert");
+        fragShaderStageInfo = shaderModule->getShaderStageInfo("shadow_frag");
     } else {
         // Both SOLID and PUSH_CONSTANT_MODEL use the same shaders
         vertShaderStageInfo = shaderModule->getShaderStageInfo("vert");
@@ -150,7 +191,8 @@ bool OhaoVkPipeline::createPipeline(RenderMode mode, const PipelineConfigInfo* c
     pipelineInfo.pDepthStencilState = &localConfig.depthStencilInfo;
     pipelineInfo.pDynamicState = &localConfig.dynamicStateInfo;
     pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass->getVkRenderPass();
+    // Use raw render pass if available, otherwise get from wrapper
+    pipelineInfo.renderPass = (rawRenderPass != VK_NULL_HANDLE) ? rawRenderPass : renderPass->getVkRenderPass();
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;

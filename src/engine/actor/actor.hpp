@@ -57,6 +57,10 @@ public:
     bool isActive() const { return active; }
     void setActive(bool isActive) { active = isActive; }
 
+    // Editor visibility (for viewport display, like Blender's eye icon)
+    bool isEditorVisible() const { return editorVisible; }
+    void setEditorVisible(bool visible) { editorVisible = visible; }
+
     // Transform helpers
     TransformComponent* getTransform() const;
     
@@ -141,6 +145,7 @@ protected:
     Scene* scene;
     Actor* parent;
     bool active;
+    bool editorVisible{true};  // Viewport visibility (eye icon in outliner)
     std::vector<Actor*> children;
     std::vector<std::shared_ptr<Component>> components;
     std::unordered_map<std::type_index, std::shared_ptr<Component>> componentsByType;

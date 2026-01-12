@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <renderer/rhi/vk/ohao_vk_uniform_buffer.hpp>
 #include <renderer/gizmo/axis_gizmo.hpp>
+#include <renderer/gizmo/transform_gizmo.hpp>
 #include "renderer/rhi/vk/ohao_vk_texture_handle.hpp"
 #include "renderer/rhi/vk/ohao_vk_pipeline.hpp"
 #include "engine/actor/actor.hpp"
@@ -55,7 +56,8 @@ public:
     }
     
     AxisGizmo* getAxisGizmo() const { return axisGizmo.get(); }
-    
+    TransformGizmo* getTransformGizmo() const { return transformGizmo.get(); }
+
     static void defaultSelectionPipelineConfig(PipelineConfigInfo& configInfo, VkExtent2D extent);
 
 private:
@@ -65,6 +67,7 @@ private:
     OhaoVkPipeline* solidPipeline{nullptr};
     OhaoVkPipeline* wireframePipeline{nullptr};
     std::unique_ptr<AxisGizmo> axisGizmo;
+    std::unique_ptr<TransformGizmo> transformGizmo;
     OhaoVkPipeline* gizmoPipeline{nullptr};
     std::unique_ptr<OhaoVkPipeline> selectionPipeline;
     VkPipelineLayout selectionPipelineLayout{VK_NULL_HANDLE};
@@ -81,6 +84,7 @@ private:
     bool initializeSelectionPipeline();
     void drawSelectionHighlight(VkCommandBuffer cmd, Actor* actor, const MeshBufferInfo& bufferInfo);
     void renderAxisGizmo(VkCommandBuffer cmd, OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame);
+    void renderTransformGizmo(VkCommandBuffer cmd, OhaoVkUniformBuffer* uniformBuffer, uint32_t currentFrame);
 };
 
 } // namespace ohao

@@ -1,8 +1,11 @@
 #include <memory>
 #include <iostream>
+#include <array>
 #include <rhi/vk/ohao_vk_descriptor.hpp>
+#include <rhi/vk/ohao_vk_descriptor_builder.hpp>
 #include <rhi/vk/ohao_vk_device.hpp>
 #include <rhi/vk/ohao_vk_buffer.hpp>
+#include "renderer/shader/shader_bindings.hpp"
 
 namespace ohao {
 
@@ -63,17 +66,27 @@ bool OhaoVkDescriptor::createSetLayout() {
         vkDestroyDescriptorSetLayout(device->getDevice(), layout, nullptr);
         layout = VK_NULL_HANDLE;
     }
-    VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    uboLayoutBinding.pImmutableSamplers = nullptr;
+
+    // Use type-safe bindings from descriptor builder (compile-time constants)
+    // Currently only using GlobalUBO and ShadowMapArray for backward compatibility
+    // Future: add ShadowAtlas and CSMCascades bindings
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
+        MainDescriptorSet::GlobalUBO::toVkBinding(),
+        MainDescriptorSet::ShadowMapArray::toVkBinding()
+    };
+
+    // Compile-time verification that we're using the right constants
+    static_assert(MainDescriptorSet::GlobalUBO::binding == ShaderBindings::Set0::kGlobalUBO,
+                  "GlobalUBO binding index mismatch");
+    static_assert(MainDescriptorSet::ShadowMapArray::binding == ShaderBindings::Set0::kShadowMapArray,
+                  "ShadowMapArray binding index mismatch");
+    static_assert(MainDescriptorSet::ShadowMapArray::descriptorCount == ShaderBindings::kMaxShadowMaps,
+                  "ShadowMapArray count must match kMaxShadowMaps");
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(device->getDevice(), &layoutInfo, nullptr, &layout) != VK_SUCCESS) {
         std::cerr << "Failed to create descriptor set layout!" << std::endl;
@@ -88,9 +101,12 @@ bool OhaoVkDescriptor::createPool() {
         vkDestroyDescriptorPool(device->getDevice(), pool, nullptr);
         pool = VK_NULL_HANDLE;
     }
+
+    // Use constants from ShaderBindings for pool sizes
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, maxSets * POOL_MULTIPLIER },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxSets * POOL_MULTIPLIER }
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          maxSets * POOL_MULTIPLIER * ShaderBindings::kMaxShadowMaps }
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -134,7 +150,7 @@ bool OhaoVkDescriptor::createDescriptorSets(
         VkWriteDescriptorSet descriptorWrite{};
         descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrite.dstSet = descriptorSets[i];
-        descriptorWrite.dstBinding = 0;
+        descriptorWrite.dstBinding = ShaderBindings::Set0::kGlobalUBO;  // Type-safe binding index
         descriptorWrite.dstArrayElement = 0;
         descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         descriptorWrite.descriptorCount = 1;
@@ -160,7 +176,7 @@ void OhaoVkDescriptor::updateDescriptorSet(
     VkWriteDescriptorSet descriptorWrite{};
     descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrite.dstSet = descriptorSets[index];
-    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstBinding = ShaderBindings::Set0::kGlobalUBO;  // Type-safe binding index
     descriptorWrite.dstArrayElement = 0;
     descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     descriptorWrite.descriptorCount = 1;
@@ -245,9 +261,11 @@ bool OhaoVkDescriptor::recreatePool() {
         pool = VK_NULL_HANDLE;
     }
 
+    // Use constants from ShaderBindings for pool sizes
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, maxSets * POOL_MULTIPLIER },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxSets * POOL_MULTIPLIER }
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+          maxSets * POOL_MULTIPLIER * ShaderBindings::kMaxShadowMaps }
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -276,6 +294,61 @@ void OhaoVkDescriptor::freeImageDescriptor(VkDescriptorSet set) {
             break;
         }
     }
+}
+
+void OhaoVkDescriptor::updateShadowMapDescriptor(uint32_t index, VkImageView shadowMapView, VkSampler shadowSampler) {
+    if (!device || index >= descriptorSets.size()) {
+        return;
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = shadowMapView;
+    imageInfo.sampler = shadowSampler;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSets[index];
+    descriptorWrite.dstBinding = ShaderBindings::Set0::kShadowMapArray;  // Type-safe binding index
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(device->getDevice(), 1, &descriptorWrite, 0, nullptr);
+}
+
+void OhaoVkDescriptor::updateShadowMapArrayDescriptor(
+    uint32_t frameIndex,
+    const std::array<VkImageView, 4>& shadowMapViews,
+    VkSampler shadowSampler
+) {
+    if (!device || frameIndex >= descriptorSets.size()) {
+        return;
+    }
+
+    // Compile-time verification of array size
+    static_assert(ShaderBindings::kMaxShadowMaps == 4,
+                  "Shadow map array size mismatch - update this function signature");
+
+    // Create image info for each shadow map in the array
+    std::array<VkDescriptorImageInfo, ShaderBindings::kMaxShadowMaps> imageInfos{};
+    for (size_t i = 0; i < ShaderBindings::kMaxShadowMaps; ++i) {
+        imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[i].imageView = shadowMapViews[i];
+        imageInfos[i].sampler = shadowSampler;
+    }
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSets[frameIndex];
+    descriptorWrite.dstBinding = ShaderBindings::Set0::kShadowMapArray;  // Type-safe binding index
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = ShaderBindings::kMaxShadowMaps;
+    descriptorWrite.pImageInfo = imageInfos.data();
+
+    vkUpdateDescriptorSets(device->getDevice(), 1, &descriptorWrite, 0, nullptr);
 }
 
 } // namespace ohao

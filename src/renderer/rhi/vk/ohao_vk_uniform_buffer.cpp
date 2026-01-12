@@ -121,31 +121,33 @@ void OhaoVkUniformBuffer::setMaterialProperties(
     needsUpdate = true;
 }
 
-void OhaoVkUniformBuffer::setLights(const std::vector<RenderLight>& lights) {
-    cachedUBO.numLights = std::min(static_cast<int>(lights.size()), MAX_LIGHTS);
-    
+void OhaoVkUniformBuffer::setLights(const std::vector<UnifiedLight>& lights) {
+    cachedUBO.numLights = std::min(static_cast<int>(lights.size()), MAX_UNIFIED_LIGHTS);
+
     for (int i = 0; i < cachedUBO.numLights; ++i) {
         cachedUBO.lights[i] = lights[i];
     }
-    
+
     // Clear unused slots
-    for (int i = cachedUBO.numLights; i < MAX_LIGHTS; ++i) {
-        cachedUBO.lights[i] = {};
+    for (int i = cachedUBO.numLights; i < MAX_UNIFIED_LIGHTS; ++i) {
+        cachedUBO.lights[i] = UnifiedLight{};
+        cachedUBO.lights[i].shadowMapIndex = -1;
     }
-    
+
     needsUpdate = true;
 }
 
 void OhaoVkUniformBuffer::clearLights() {
     cachedUBO.numLights = 0;
-    for (int i = 0; i < MAX_LIGHTS; ++i) {
-        cachedUBO.lights[i] = {};
+    for (int i = 0; i < MAX_UNIFIED_LIGHTS; ++i) {
+        cachedUBO.lights[i] = UnifiedLight{};
+        cachedUBO.lights[i].shadowMapIndex = -1;
     }
     needsUpdate = true;
 }
 
-void OhaoVkUniformBuffer::addLight(const RenderLight& light) {
-    if (cachedUBO.numLights < MAX_LIGHTS) {
+void OhaoVkUniformBuffer::addLight(const UnifiedLight& light) {
+    if (cachedUBO.numLights < MAX_UNIFIED_LIGHTS) {
         cachedUBO.lights[cachedUBO.numLights] = light;
         cachedUBO.numLights++;
         needsUpdate = true;

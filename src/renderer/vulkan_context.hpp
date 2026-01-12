@@ -32,6 +32,13 @@
 #include "renderer/gizmo/axis_gizmo.hpp"
 #include "renderer/picking/picking_system.hpp"
 
+// Forward declaration to avoid include dependency issues
+namespace ohao {
+    class ShadowRenderer;
+    class LightingSystem;
+    class ShadowMapPool;
+}
+
 
 #define GPU_VENDOR_NVIDIA 0
 #define GPU_VENDOR_AMD 1
@@ -142,6 +149,7 @@ public:
     }
 
     PickingSystem* getPickingSystem() const { return pickingSystem.get(); }
+    ShadowRenderer* getShadowRenderer() const { return shadowRenderer.get(); }
 
     void toggleWireframeMode() { wireframeMode = !wireframeMode; }
     bool isWireframeMode() const { return wireframeMode; }
@@ -152,23 +160,27 @@ public:
 
     bool updateModelBuffers(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
     bool updateSceneBuffers(); //update all scene objects buffers
-    const MeshBufferInfo* getMeshBufferInfo(SceneObject* object) const {
-        auto it = meshBufferMap.find(object);
+    // ID-based lookup (reliable across frames)
+    const MeshBufferInfo* getMeshBufferInfo(uint64_t actorId) const {
+        auto it = meshBufferMap.find(actorId);
         if (it != meshBufferMap.end()) {
             return &it->second;
         }
         return nullptr;
     }
-    
+
     // Overload that fills a reference with the data
-    bool getMeshBufferInfo(SceneObject* object, MeshBufferInfo& outInfo) const {
-        auto it = meshBufferMap.find(object);
+    bool getMeshBufferInfo(uint64_t actorId, MeshBufferInfo& outInfo) const {
+        auto it = meshBufferMap.find(actorId);
         if (it != meshBufferMap.end()) {
             outInfo = it->second;
             return true;
         }
         return false;
     }
+
+    // Get meshBufferMap size for diagnostics
+    size_t getMeshBufferMapSize() const { return meshBufferMap.size(); }
 
     bool hasUnsavedChanges() const { return sceneModified; }
     void markSceneModified() { sceneModified = true; }
@@ -235,17 +247,19 @@ private:
     uint32_t gizmoIndexCount{0};
     std::unique_ptr<AxisGizmo> axisGizmo;
 
-    std::unordered_map<SceneObject*, MeshBufferInfo> meshBufferMap;
+    std::unordered_map<uint64_t, MeshBufferInfo> meshBufferMap;  // Key = Actor ID
 
     bool sceneModified{false};
 
     // Picking system for viewport selection
     std::unique_ptr<PickingSystem> pickingSystem;
 
+    // Shadow renderer for shadow mapping (legacy)
+    std::unique_ptr<ShadowRenderer> shadowRenderer;
 
-
-
-
+    // Unified lighting system
+    std::unique_ptr<LightingSystem> lightingSystem;
+    std::unique_ptr<ShadowMapPool> shadowMapPool;
 };
 
 } // namespace ohao
