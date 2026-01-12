@@ -33,4 +33,17 @@ add_executable(serialization_minimal_test
 target_link_libraries(serialization_minimal_test
     nlohmann_json::nlohmann_json
     glm
-) 
+)
+
+# Shadow system compile-time and runtime tests
+add_executable(shadow_system_tests
+    shadow_system/shadow_system_tests.cpp
+)
+target_include_directories(shadow_system_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/renderer
+)
+target_link_libraries(shadow_system_tests
+    ohao_renderer
+    glm
+)

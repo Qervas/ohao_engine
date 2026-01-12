@@ -107,6 +107,24 @@ void OutlinerPanel::renderActorList() {
         if (actor.get() == root) continue; // hide root
         if (actor->getParent() != nullptr) continue; // only top-level here
 
+        // Visibility toggle (eye icon) - like Blender
+        ImGui::PushID(static_cast<int>(actor->getID()));
+        bool isVisible = actor->isEditorVisible();
+        const char* visIcon = isVisible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.3f, 0.3f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_Text, isVisible ? ImVec4(1, 1, 1, 1) : ImVec4(0.5f, 0.5f, 0.5f, 1));
+        if (ImGui::SmallButton(visIcon)) {
+            actor->setEditorVisible(!isVisible);
+        }
+        ImGui::PopStyleColor(4);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(isVisible ? "Hide in viewport" : "Show in viewport");
+        }
+        ImGui::SameLine();
+        ImGui::PopID();
+
         // Determine icon based on components
         const char* icon = ICON_FA_CIRCLE;  // Default: empty actor
         if (actor->getComponent<LightComponent>()) {
@@ -116,12 +134,19 @@ void OutlinerPanel::renderActorList() {
         }
 
         // Create label with icon and unique ID to avoid conflicts
+        // Gray out text if not visible
+        if (!isVisible) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1));
+        }
         std::string label = std::string(icon) + " " + actor->getName() + "##actor_" + std::to_string(actor->getID());
 
         bool selected = (selectedObject == actor.get());
         if (ImGui::Selectable(label.c_str(), selected)) {
             selectedObject = actor.get();
             SelectionManager::get().setSelectedActor(actor.get());
+        }
+        if (!isVisible) {
+            ImGui::PopStyleColor();
         }
 
         // Double-click in outliner to focus camera on this actor

@@ -2,6 +2,7 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 #include <vector>
+#include <array>
 #include "ohao_vk_buffer.hpp"
 
 namespace ohao {
@@ -28,6 +29,15 @@ public:
             const OhaoVkBuffer& buffer,
             VkDeviceSize size,
             VkDeviceSize offset = 0);
+
+    // Shadow map binding
+    void updateShadowMapDescriptor(uint32_t index, VkImageView shadowMapView, VkSampler shadowSampler);
+
+    // Unified lighting system - shadow map array binding
+    void updateShadowMapArrayDescriptor(uint32_t frameIndex,
+                                        const std::array<VkImageView, 4>& shadowMapViews,
+                                        VkSampler shadowSampler);
+
     bool recreatePool();
 
 
