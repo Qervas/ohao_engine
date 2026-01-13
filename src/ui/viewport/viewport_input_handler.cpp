@@ -49,6 +49,15 @@ void ViewportInputHandler::update(float deltaTime) {
         case ViewportInputState::GizmoDrag:
             processGizmoDragState(deltaTime);
             break;
+        case ViewportInputState::TranslateModal:
+            processTranslateModalState(deltaTime);
+            break;
+        case ViewportInputState::RotateModal:
+            processRotateModalState(deltaTime);
+            break;
+        case ViewportInputState::ScaleModal:
+            processScaleModalState(deltaTime);
+            break;
         default:
             break;
     }
@@ -223,23 +232,56 @@ void ViewportInputHandler::handleMiddleClickEnd() {
 }
 
 void ViewportInputHandler::handleKeyboardShortcuts() {
-    // Only handle shortcuts when viewport is focused or hovered
-    if (!isViewportHovered && !ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow)) {
+    // NOTE: We intentionally don't check WantCaptureKeyboard here
+    // G/R/S are global modal shortcuts that should work anywhere in the app
+    // (like Blender's design - they work even when panels are open)
+    // Only real text input should block them, and ImGui doesn't provide a clean way to detect that
+
+    // Check if in modal state
+    bool inModalState = (currentState == ViewportInputState::TranslateModal ||
+                         currentState == ViewportInputState::RotateModal ||
+                         currentState == ViewportInputState::ScaleModal);
+
+    if (inModalState) {
+        handleModalKeys();  // X/Y/Z/ESC keys
         return;
     }
 
-    // Don't process if ImGui wants keyboard input (e.g., text input)
-    if (ImGui::GetIO().WantCaptureKeyboard) return;
+    // Get selection for modal entry
+    Actor* selected = SelectionManager::get().getSelectedActor();
 
-    // Gizmo mode switching (W/E/R)
+    // G/R/S - Modal transform entry (only if object selected)
+    if (ImGui::IsKeyPressed(ImGuiKey_G, false)) {
+        std::cout << "[DEBUG] G key pressed. Selected: " << (selected ? selected->getName() : "NULL")
+                  << ", HasTransform: " << (selected && selected->getTransform() ? "YES" : "NO") << std::endl;
+        if (selected && selected->getTransform()) {
+            enterTranslateModal();
+            return;
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+        std::cout << "[DEBUG] R key pressed. Selected: " << (selected ? selected->getName() : "NULL")
+                  << ", HasTransform: " << (selected && selected->getTransform() ? "YES" : "NO") << std::endl;
+        if (selected && selected->getTransform()) {
+            enterRotateModal();
+            return;
+        }
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+        std::cout << "[DEBUG] S key pressed. Selected: " << (selected ? selected->getName() : "NULL")
+                  << ", HasTransform: " << (selected && selected->getTransform() ? "YES" : "NO") << std::endl;
+        if (selected && selected->getTransform()) {
+            enterScaleModal();
+            return;
+        }
+    }
+
+    // W/E - Gizmo mode switching (non-modal)
     if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
         setGizmoMode(GizmoMode::Translate);
     }
     if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
         setGizmoMode(GizmoMode::Rotate);
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
-        setGizmoMode(GizmoMode::Scale);
     }
 
     // Space to cycle modes
@@ -254,7 +296,6 @@ void ViewportInputHandler::handleKeyboardShortcuts() {
 
     // Delete selected object
     if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
-        Actor* selected = SelectionManager::get().getSelectedActor();
         if (selected && context && context->getScene()) {
             std::cout << "[ViewportInput] Deleting: " << selected->getName() << std::endl;
             context->getScene()->removeActor(selected->getID());
@@ -421,6 +462,326 @@ void ViewportInputHandler::focusOnSelection() {
     context->getCamera().focusOnPoint(targetPos, 5.0f);
 
     std::cout << "[ViewportInput] Focused on: " << selected->getName() << std::endl;
+}
+
+// ============================================================================
+// Modal Transform System
+// ============================================================================
+
+void ViewportInputHandler::enterTranslateModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (!selected || !selected->getTransform()) return;
+
+    auto* transform = selected->getTransform();
+    modalStartPosition = transform->getPosition();
+    modalStartMousePos = getMousePosInViewport();
+    currentConstraint = AxisConstraint::None;
+    currentState = ViewportInputState::TranslateModal;
+
+    std::cout << "[Modal] Translate - Move mouse, X/Y/Z to constrain, click to confirm, ESC to cancel" << std::endl;
+}
+
+void ViewportInputHandler::enterRotateModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (!selected || !selected->getTransform()) return;
+
+    auto* transform = selected->getTransform();
+    modalStartRotation = transform->getRotation();
+    modalStartMousePos = getMousePosInViewport();
+    currentConstraint = AxisConstraint::None;
+    currentState = ViewportInputState::RotateModal;
+
+    std::cout << "[Modal] Rotate - Move mouse, X/Y/Z to constrain, click to confirm, ESC to cancel" << std::endl;
+}
+
+void ViewportInputHandler::enterScaleModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (!selected || !selected->getTransform()) return;
+
+    auto* transform = selected->getTransform();
+    modalStartScale = transform->getScale();
+    modalStartMousePos = getMousePosInViewport();
+    currentConstraint = AxisConstraint::None;
+    currentState = ViewportInputState::ScaleModal;
+
+    std::cout << "[Modal] Scale - Move mouse, X/Y/Z to constrain, click to confirm, ESC to cancel" << std::endl;
+}
+
+void ViewportInputHandler::confirmModal() {
+    std::cout << "[Modal] Transform confirmed" << std::endl;
+    exitModal();
+}
+
+void ViewportInputHandler::cancelModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (selected && selected->getTransform()) {
+        auto* transform = selected->getTransform();
+
+        switch (currentState) {
+            case ViewportInputState::TranslateModal:
+                transform->setPosition(modalStartPosition);
+                std::cout << "[Modal] Translate canceled" << std::endl;
+                break;
+            case ViewportInputState::RotateModal:
+                transform->setRotation(modalStartRotation);
+                std::cout << "[Modal] Rotate canceled" << std::endl;
+                break;
+            case ViewportInputState::ScaleModal:
+                transform->setScale(modalStartScale);
+                std::cout << "[Modal] Scale canceled" << std::endl;
+                break;
+            default:
+                break;
+        }
+
+        if (context) {
+            context->updateSceneBuffers();
+        }
+    }
+
+    exitModal();
+}
+
+void ViewportInputHandler::exitModal() {
+    currentState = ViewportInputState::Idle;
+    currentConstraint = AxisConstraint::None;
+}
+
+void ViewportInputHandler::processTranslateModalState(float deltaTime) {
+    // Left click to confirm
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        confirmModal();
+        return;
+    }
+
+    // Right click to cancel
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        cancelModal();
+        return;
+    }
+
+    // Update transform based on mouse movement
+    updateTranslateModal();
+}
+
+void ViewportInputHandler::updateTranslateModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (!selected || !selected->getTransform() || !context) {
+        cancelModal();
+        return;
+    }
+
+    auto* transform = selected->getTransform();
+    glm::vec2 currentMousePos = getMousePosInViewport();
+
+    if (currentConstraint == AxisConstraint::None) {
+        // FREE MOVEMENT - screen-space delta to view-plane movement
+        glm::vec2 mouseDelta = currentMousePos - modalStartMousePos;
+
+        Camera& camera = context->getCamera();
+        glm::vec3 right = camera.getRight();
+        glm::vec3 up = camera.getUp();
+
+        float sensitivity = 0.01f;
+        glm::vec3 offset = right * (mouseDelta.x * sensitivity) +
+                          up * (-mouseDelta.y * sensitivity);
+
+        transform->setPosition(modalStartPosition + offset);
+    }
+    else {
+        // CONSTRAINED - Find closest point on constraint axis to mouse ray
+        // This is more stable than ray-plane intersection
+        Ray ray = getMouseRay();
+
+        // Line-line closest point algorithm
+        // Ray: P = ray.origin + t * ray.direction
+        // Axis: Q = modalStartPosition + s * modalConstraintAxis
+        // Find s that minimizes distance between P and Q
+
+        glm::vec3 w0 = ray.origin - modalStartPosition;
+        float a = glm::dot(ray.direction, ray.direction);
+        float b = glm::dot(ray.direction, modalConstraintAxis);
+        float c = glm::dot(modalConstraintAxis, modalConstraintAxis);
+        float d = glm::dot(ray.direction, w0);
+        float e = glm::dot(modalConstraintAxis, w0);
+
+        float denom = a * c - b * b;
+
+        if (std::abs(denom) > 0.0001f) {
+            // Lines are not parallel
+            float s = (b * d - a * e) / denom;
+
+            // Clamp to reasonable range to avoid extreme values
+            s = glm::clamp(s, -1000.0f, 1000.0f);
+
+            glm::vec3 newPosition = modalStartPosition + modalConstraintAxis * s;
+            transform->setPosition(newPosition);
+        } else {
+            // Lines are nearly parallel, use projection method as fallback
+            glm::vec3 toMouse = ray.origin - modalStartPosition;
+            float axisOffset = glm::dot(toMouse, modalConstraintAxis);
+            transform->setPosition(modalStartPosition + modalConstraintAxis * axisOffset);
+        }
+    }
+
+    context->updateSceneBuffers();
+}
+
+void ViewportInputHandler::processRotateModalState(float deltaTime) {
+    // Left click to confirm
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        confirmModal();
+        return;
+    }
+
+    // Right click to cancel
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        cancelModal();
+        return;
+    }
+
+    // Update transform based on mouse movement
+    updateRotateModal();
+}
+
+void ViewportInputHandler::updateRotateModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (!selected || !selected->getTransform() || !context) {
+        cancelModal();
+        return;
+    }
+
+    auto* transform = selected->getTransform();
+    glm::vec2 currentMousePos = getMousePosInViewport();
+    glm::vec2 mouseDelta = currentMousePos - modalStartMousePos;
+
+    float sensitivity = 0.5f;  // degrees per pixel
+    float angle = glm::radians(mouseDelta.x * sensitivity);
+
+    glm::vec3 rotationAxis;
+    if (currentConstraint == AxisConstraint::None) {
+        // Rotate around view axis
+        Camera& camera = context->getCamera();
+        rotationAxis = camera.getFront();
+    }
+    else {
+        // Rotate around constraint axis
+        rotationAxis = modalConstraintAxis;
+    }
+
+    glm::quat rotation = glm::angleAxis(angle, rotationAxis);
+    glm::quat newRotation = rotation * modalStartRotation;
+    transform->setRotation(newRotation);
+
+    context->updateSceneBuffers();
+}
+
+void ViewportInputHandler::processScaleModalState(float deltaTime) {
+    // Left click to confirm
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        confirmModal();
+        return;
+    }
+
+    // Right click to cancel
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        cancelModal();
+        return;
+    }
+
+    // Update transform based on mouse movement
+    updateScaleModal();
+}
+
+void ViewportInputHandler::updateScaleModal() {
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (!selected || !selected->getTransform() || !context) {
+        cancelModal();
+        return;
+    }
+
+    auto* transform = selected->getTransform();
+    glm::vec2 currentMousePos = getMousePosInViewport();
+    glm::vec2 mouseDelta = currentMousePos - modalStartMousePos;
+
+    float sensitivity = 0.01f;
+    float scaleFactor = 1.0f + mouseDelta.x * sensitivity;
+    scaleFactor = glm::max(scaleFactor, 0.01f);  // Prevent negative/zero
+
+    if (currentConstraint == AxisConstraint::None) {
+        // Uniform scale
+        transform->setScale(modalStartScale * scaleFactor);
+    }
+    else {
+        // Scale along specific axis
+        glm::vec3 newScale = modalStartScale;
+        int axisIndex = (currentConstraint == AxisConstraint::X) ? 0 :
+                       (currentConstraint == AxisConstraint::Y) ? 1 : 2;
+        newScale[axisIndex] = modalStartScale[axisIndex] * scaleFactor;
+        transform->setScale(newScale);
+    }
+
+    context->updateSceneBuffers();
+}
+
+void ViewportInputHandler::handleModalKeys() {
+    if (ImGui::IsKeyPressed(ImGuiKey_X, false)) {
+        setModalConstraint(AxisConstraint::X);
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
+        setModalConstraint(AxisConstraint::Y);
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        setModalConstraint(AxisConstraint::Z);
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        cancelModal();
+    }
+}
+
+void ViewportInputHandler::setModalConstraint(AxisConstraint constraint) {
+    currentConstraint = constraint;
+
+    switch (constraint) {
+        case AxisConstraint::X:
+            modalConstraintAxis = glm::vec3(1, 0, 0);
+            std::cout << "[Modal] Constrained to X axis" << std::endl;
+            break;
+        case AxisConstraint::Y:
+            // Vulkan uses Y-down in NDC, so we negate to match expected world-space Y-up behavior
+            modalConstraintAxis = glm::vec3(0, -1, 0);
+            std::cout << "[Modal] Constrained to Y axis" << std::endl;
+            break;
+        case AxisConstraint::Z:
+            modalConstraintAxis = glm::vec3(0, 0, 1);
+            std::cout << "[Modal] Constrained to Z axis" << std::endl;
+            break;
+        case AxisConstraint::None:
+            std::cout << "[Modal] Free movement" << std::endl;
+            break;
+    }
+
+    // Calculate constraint plane perpendicular to view
+    if (constraint != AxisConstraint::None && context) {
+        Camera& camera = context->getCamera();
+        glm::vec3 viewDir = glm::normalize(camera.getFront());
+
+        // Plane normal perpendicular to both axis and view
+        modalConstraintPlaneNormal = glm::cross(modalConstraintAxis, viewDir);
+        float len = glm::length(modalConstraintPlaneNormal);
+
+        if (len < 0.001f) {
+            // View aligned with axis, use fallback
+            modalConstraintPlaneNormal = glm::cross(modalConstraintAxis, glm::vec3(0, 1, 0));
+            len = glm::length(modalConstraintPlaneNormal);
+            if (len < 0.001f) {
+                // Axis is world up, use world right
+                modalConstraintPlaneNormal = glm::cross(modalConstraintAxis, glm::vec3(1, 0, 0));
+            }
+        }
+        modalConstraintPlaneNormal = glm::normalize(modalConstraintPlaneNormal);
+    }
 }
 
 } // namespace ohao

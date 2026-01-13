@@ -20,7 +20,18 @@ enum class ViewportInputState {
     CameraOrbit,    // Right-click dragging for camera orbit
     CameraPan,      // Middle-click dragging for camera pan
     GizmoDrag,      // Dragging a gizmo axis
-    BoxSelect       // Future: box selection
+    BoxSelect,      // Future: box selection
+    TranslateModal, // G key pressed, translating object
+    RotateModal,    // R key pressed, rotating object
+    ScaleModal      // S key pressed, scaling object
+};
+
+// Axis constraint for modal transforms
+enum class AxisConstraint {
+    None,   // Free movement (default)
+    X,      // Constrained to X axis
+    Y,      // Constrained to Y axis
+    Z       // Constrained to Z axis
 };
 
 class ViewportInputHandler {
@@ -101,6 +112,15 @@ private:
     glm::vec3 dragPlaneOrigin{0.0f};
     glm::vec3 dragPlaneNormal{0.0f, 1.0f, 0.0f};
 
+    // Modal transform state
+    AxisConstraint currentConstraint = AxisConstraint::None;
+    glm::vec3 modalStartPosition{0.0f};
+    glm::quat modalStartRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 modalStartScale{1.0f};
+    glm::vec2 modalStartMousePos{0.0f};
+    glm::vec3 modalConstraintPlaneNormal{0.0f, 1.0f, 0.0f};
+    glm::vec3 modalConstraintAxis{1.0f, 0.0f, 0.0f};
+
     // State processing
     void processIdleState(float deltaTime);
     void processCameraOrbitState(float deltaTime);
@@ -133,6 +153,22 @@ private:
     void updateCameraPan(const glm::vec2& mouseDelta);
     void updateCameraZoom(float scrollDelta);
     void focusOnSelection();
+
+    // Modal transform methods
+    void enterTranslateModal();
+    void enterRotateModal();
+    void enterScaleModal();
+    void handleModalKeys();
+    void setModalConstraint(AxisConstraint constraint);
+    void processTranslateModalState(float deltaTime);
+    void processRotateModalState(float deltaTime);
+    void processScaleModalState(float deltaTime);
+    void updateTranslateModal();
+    void updateRotateModal();
+    void updateScaleModal();
+    void confirmModal();
+    void cancelModal();
+    void exitModal();
 };
 
 } // namespace ohao
