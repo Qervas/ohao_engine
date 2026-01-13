@@ -1,7 +1,6 @@
 #pragma once
 
 #include "physics/dynamics/rigid_body.hpp"
-#include "physics/dynamics/physics_integrator.hpp"
 #include "physics/collision/collision_system.hpp"
 #include "physics/constraints/constraint_solver.hpp"
 #include "physics/forces/force_registry.hpp"
@@ -28,11 +27,9 @@ struct PhysicsWorldConfig {
     glm::vec3 gravity{0.0f, -9.81f, 0.0f};
     float timeStep{1.0f / 60.0f};
     int maxSubSteps{4};
-    
+
     // Solver configuration
-    constraints::ConstraintSolver::Config solverConfig;
-    collision::CollisionSystem::Config collisionConfig;
-    dynamics::PhysicsIntegrator::Config integratorConfig;
+    constraints::SolverConfig solverConfig;
     
     // Performance settings
     bool enableMultithreading{true};
@@ -97,10 +94,8 @@ public:
     template<typename T>
     bool initialize(const T& /*unused_settings*/) { initialize(); return true; }
     
-    // Constraint management
-    void addConstraint(std::unique_ptr<constraints::Constraint> constraint);
-    void removeConstraint(constraints::Constraint* constraint);
-    size_t getConstraintCount() const;
+    // Constraint management (for future joint system)
+    // TODO: Add joint constraints when needed
     
     // Configuration
     void setConfig(const PhysicsWorldConfig& config);
@@ -115,13 +110,10 @@ public:
     // Access to subsystems
     collision::CollisionSystem& getCollisionSystem() { return *m_collisionSystem; }
     const collision::CollisionSystem& getCollisionSystem() const { return *m_collisionSystem; }
-    
-    constraints::ConstraintManager& getConstraintManager() { return *m_constraintManager; }
-    const constraints::ConstraintManager& getConstraintManager() const { return *m_constraintManager; }
-    
-    dynamics::PhysicsIntegrator& getIntegrator() { return *m_integrator; }
-    const dynamics::PhysicsIntegrator& getIntegrator() const { return *m_integrator; }
-    
+
+    constraints::ConstraintSolver& getConstraintSolver() { return *m_constraintSolver; }
+    const constraints::ConstraintSolver& getConstraintSolver() const { return *m_constraintSolver; }
+
     // Force system access
     forces::ForceRegistry& getForceRegistry() { return m_forceRegistry; }
     const forces::ForceRegistry& getForceRegistry() const { return m_forceRegistry; }
@@ -138,10 +130,7 @@ public:
     void setupSpaceEnvironment();
     void setupUnderwaterEnvironment();
     void setupGamePhysics();
-    
-    // Queries
-    collision::CollisionQueries* getCollisionQueries() { return m_collisionQueries.get(); }
-    
+
     // Statistics and profiling
     struct PhysicsStats {
         // Timing
@@ -208,9 +197,7 @@ private:
     
     // Core subsystems
     std::unique_ptr<collision::CollisionSystem> m_collisionSystem;
-    std::unique_ptr<constraints::ConstraintManager> m_constraintManager;
-    std::unique_ptr<dynamics::PhysicsIntegrator> m_integrator;
-    std::unique_ptr<collision::CollisionQueries> m_collisionQueries;
+    std::unique_ptr<constraints::ConstraintSolver> m_constraintSolver;
     
     // Force system
     forces::ForceRegistry m_forceRegistry;

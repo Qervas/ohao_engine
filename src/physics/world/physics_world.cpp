@@ -29,11 +29,9 @@ PhysicsWorldConfig::PhysicsWorldConfig() {
     maxBodies = 10000;
     maxConstraints = 50000;
     initialBodyCapacity = 100;
-    
+
     // Use default configurations for subsystems
-    solverConfig = constraints::ConstraintSolver::Config{};
-    collisionConfig = collision::CollisionSystem::Config{};
-    integratorConfig = dynamics::PhysicsIntegrator::Config{};
+    solverConfig = constraints::SolverConfig{};
 }
 
 // Constructor
@@ -72,9 +70,7 @@ void PhysicsWorld::shutdown() {
     
     // Reset subsystems
     m_collisionSystem.reset();
-    m_constraintManager.reset();
-    m_integrator.reset();
-    m_collisionQueries.reset();
+    m_constraintSolver.reset();
     m_forceDebugger.reset();
     
     m_state = SimulationState::STOPPED;
@@ -190,60 +186,28 @@ void PhysicsWorld::removeRigidBody(dynamics::RigidBody* body) {
 
 void PhysicsWorld::setConfig(const PhysicsWorldConfig& config) {
     m_config = config;
-    
+
     // Update subsystem configurations
-    if (m_collisionSystem) {
-        m_collisionSystem->setConfig(config.collisionConfig);
-    }
-    if (m_constraintManager) {
-        m_constraintManager->setSolverConfig(config.solverConfig);
-    }
-    if (m_integrator) {
-        m_integrator->setConfig(config.integratorConfig);
+    if (m_constraintSolver) {
+        m_constraintSolver->setConfig(config.solverConfig);
     }
 }
 
 void PhysicsWorld::setGravity(const glm::vec3& gravity) {
     m_config.gravity = gravity;
-    m_config.integratorConfig.gravity = gravity;
-    if (m_integrator) {
-        m_integrator->setConfig(m_config.integratorConfig);
-    }
 }
 
 void PhysicsWorld::setTimeStep(float timeStep) {
     m_config.timeStep = timeStep;
-    m_config.integratorConfig.maxTimeStep = timeStep;
-    if (m_integrator) {
-        m_integrator->setConfig(m_config.integratorConfig);
-    }
 }
 
-// Private implementation methods (stubs for now)
+// Private implementation methods
 void PhysicsWorld::initializeSubsystems() {
-    // Initialize collision system
-    m_collisionSystem = std::make_unique<collision::CollisionSystem>(m_config.collisionConfig);
-    
-    // Initialize constraint manager
-    m_constraintManager = std::make_unique<constraints::ConstraintManager>();
-    // TODO: Add constraintConfig to PhysicsWorldConfig
-    // m_constraintManager->setConfig(m_config.constraintConfig);
-    
-    // Initialize physics integrator
-    // TODO: PhysicsIntegrator class not implemented yet
-    // m_integrator = std::make_unique<dynamics::PhysicsIntegrator>();
-    // m_integrator->setConfig(m_config.integratorConfig);
-    
-    // Initialize collision queries (for raycasting, etc.)
-    // TODO: CollisionQueries class not implemented yet
-    // m_collisionQueries = std::make_unique<collision::CollisionQueries>(m_collisionSystem.get());
-    
-    // Initialize force debugger if needed
-    // TODO: Add enableForceDebugging to PhysicsWorldConfig
-    // if (m_config.enableForceDebugging) {
-    //     m_forceDebugger = std::make_unique<debug::ForceDebugger>();
-    //     m_forceDebuggingEnabled = true;
-    // }
+    // Initialize collision system (GJK/EPA + Dynamic BVH)
+    m_collisionSystem = std::make_unique<collision::CollisionSystem>();
+
+    // Initialize constraint solver (PGS+XPBD)
+    m_constraintSolver = std::make_unique<constraints::ConstraintSolver>(m_config.solverConfig);
 }
 
 void PhysicsWorld::updateActiveBodyPointers() {
@@ -304,16 +268,16 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
     }
     
     // COLLISION DETECTION AND RESOLUTION
-    // TODO: Phase 1 - Implement new collision system here
-    // New system will use:
-    //   - Dynamic BVH for broad phase
-    //   - GJK/EPA for narrow phase
-    //   - PGS+XPBD for constraint solving
-    if (m_collisionSystem && !m_rigidBodies.empty()) {
-        // Old broken system removed - building modern replacement
-        // m_collisionSystem->updateBroadPhase(bodyPtrs);
-        // auto manifolds = m_collisionSystem->performNarrowPhase();
-        // m_constraintSolver->solve(manifolds, deltaTime);
+    // New modern system: Dynamic BVH + GJK/EPA + PGS+XPBD
+    if (m_collisionSystem && m_constraintSolver && !m_rigidBodies.empty()) {
+        // Broad phase: Update AABB tree with all bodies
+        m_collisionSystem->updateBroadPhase(bodyPtrs);
+
+        // Narrow phase: Detect collisions with GJK/EPA
+        auto manifolds = m_collisionSystem->performNarrowPhase();
+
+        // Constraint solving: Resolve contacts with PGS+XPBD
+        m_constraintSolver->solve(manifolds, deltaTime);
     }
     
     // Clear accumulated forces after integration

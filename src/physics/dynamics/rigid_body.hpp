@@ -1,6 +1,5 @@
 #pragma once
 
-#include "integrator.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/common/physics_constants.hpp"
