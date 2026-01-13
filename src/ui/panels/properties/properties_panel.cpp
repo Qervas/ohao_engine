@@ -35,6 +35,12 @@ void PropertiesPanel::render() {
     }
 
     if (shouldRenderContent) {
+        // Add scrollable region when in child window (side panel)
+        bool needsScrolling = isInChildWindow;
+        if (needsScrolling) {
+            ImGui::BeginChild("PropertiesScrollRegion", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        }
+
         auto* selectedObject = SelectionManager::get().getSelectedObject();
         if (selectedObject) {
             // Check if the object is an Actor first (new system)
@@ -46,6 +52,10 @@ void PropertiesPanel::render() {
             }
         } else {
             ImGui::TextDisabled("No object selected");
+        }
+
+        if (needsScrolling) {
+            ImGui::EndChild();
         }
     }
 
@@ -254,8 +264,12 @@ bool PropertiesPanel::renderVec3Control(const std::string& label, glm::vec3& val
     bool changed = false;
     ImGui::PushID(label.c_str());
 
+    // Calculate responsive column width (30% of available width, minimum 60px, maximum 100px)
+    float availableWidth = ImGui::GetContentRegionAvail().x;
+    float labelWidth = glm::clamp(availableWidth * 0.3f, 60.0f, 100.0f);
+
     ImGui::Columns(2);
-    ImGui::SetColumnWidth(0, 100.0f);
+    ImGui::SetColumnWidth(0, labelWidth);
     ImGui::Text("%s", label.c_str());
     ImGui::NextColumn();
 
