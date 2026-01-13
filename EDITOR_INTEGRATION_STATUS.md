@@ -1,5 +1,16 @@
 # Editor Framework Integration Status
 
+## Summary
+
+**Phases Complete:** 3/7
+- ✅ Phase 1: EditorViewportClient initialization
+- ✅ Phase 2: Input routing through EditorManager
+- ✅ Phase 3: GPU hit proxy rendering system
+- ⏳ Phase 4: Test GPU picking (READY TO TEST)
+- ⏳ Phase 5: Wire transaction system (undo/redo)
+- ⏳ Phase 6: Enable transform widget rendering
+- ⏳ Phase 7: Cleanup legacy code
+
 ## Phase 1: Initialize EditorViewportClient ✅ COMPLETE
 
 ### What Was Done
@@ -127,12 +138,35 @@ drawFrame()
 ✅ **Proxy Rendering** - Actors rendered to R32_UINT texture with IDs
 ✅ **Pipeline Created** - hit_proxy.vert/frag shaders compiled and loaded
 
-### What's NOT Working Yet
+### What's Working
 
-❌ **GPU Readback** - Can't read pixel values yet (Phase 3.4)
-❌ **Selection** - Needs actual readback + click handling
+✅ **GPU Readback** - `readPixel()` copies from GPU texture to staging buffer
+✅ **Selection** - `getProxyAt(x,y)` returns HitProxy* for clicked object
+✅ **Click Handling** - SelectMode routes clicks through GPU picking system
 
-## Phase 4: Test GPU Picking (NEXT)
+### Ready to Test
+
+The GPU picking system is **fully implemented** and ready to test:
+
+1. Click on an object → `SelectMode::handleMouseDown()` is called
+2. Calls `hitProxyManager->getProxyAt(x, y)`
+3. `readPixel()` does GPU readback to get proxy ID
+4. Returns `HActorProxy*` for the clicked actor
+5. `handleActorClick()` updates selection
+
+**Expected Console Output on Click:**
+```
+[SelectMode] Testing GPU picking at (X, Y)
+[SelectMode] Hit proxy found! Type: Actor ID: N
+[SelectMode] Selected actor: ActorName
+```
+
+**Or if clicking background:**
+```
+[SelectMode] No hit proxy at this location (background)
+```
+
+## Phase 4: Test GPU Picking ⏳ READY TO TEST
 
 ### Plan
 

@@ -5,6 +5,15 @@
 namespace ohao {
 namespace physics {
 
+// === RIGID BODY TYPE ===
+namespace dynamics {
+    enum class RigidBodyType {
+        STATIC,      // Zero mass, infinite inertia, never moves
+        DYNAMIC,     // Affected by forces and collisions
+        KINEMATIC    // Moved by script, affects others but not affected
+    };
+}
+
 // === PHYSICS CONSTANTS ===
 namespace constants {
     // Mathematical constants
