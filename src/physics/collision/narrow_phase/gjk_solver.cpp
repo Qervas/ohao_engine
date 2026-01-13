@@ -44,12 +44,25 @@ GJKSolver::Result GJKSolver::solve(const CollisionShape* shapeA, const glm::mat4
     for (int iter = 0; iter < m_maxIterations; ++iter) {
         m_lastIterations = iter + 1;
 
+        // Safety check: direction must not be zero
+        float dirLength = glm::length(direction);
+        if (dirLength < 0.0001f) {
+            // Direction collapsed - assume separation
+            result.intersecting = false;
+            result.normal = glm::vec3(1.0f, 0.0f, 0.0f);  // Arbitrary normal
+            result.simplex = simplex;
+            return result;
+        }
+
+        // Normalize direction for numerical stability
+        direction = direction / dirLength;
+
         support = supportMinkowski(shapeA, transformA, shapeB, transformB, direction);
 
         if (glm::dot(support, direction) < 0.0f) {
             // No intersection - support point didn't pass origin
             result.intersecting = false;
-            result.normal = glm::normalize(direction);
+            result.normal = direction;
             result.simplex = simplex;
             return result;
         }
@@ -75,7 +88,8 @@ GJKSolver::Result GJKSolver::solve(const CollisionShape* shapeA, const glm::mat4
 
     // Max iterations reached - assume separation
     result.intersecting = false;
-    result.normal = glm::normalize(direction);
+    float finalLength = glm::length(direction);
+    result.normal = finalLength > 0.0001f ? direction / finalLength : glm::vec3(1.0f, 0.0f, 0.0f);
     result.simplex = simplex;
     return result;
 }
