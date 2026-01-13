@@ -79,6 +79,8 @@ public:
     float orbitSensitivity = 0.3f;
     float panSensitivity = 0.01f;
     float zoomSensitivity = 1.0f;
+    float cameraMovementSpeed = 5.0f;
+    float cameraRotationSpeed = 50.0f;  // degrees per second
 
 private:
     VulkanContext* context = nullptr;
@@ -152,6 +154,7 @@ private:
     void updateCameraOrbit(const glm::vec2& mouseDelta);
     void updateCameraPan(const glm::vec2& mouseDelta);
     void updateCameraZoom(float scrollDelta);
+    void updateCameraMovement(float deltaTime);
     void focusOnSelection();
 
     // Modal transform methods
