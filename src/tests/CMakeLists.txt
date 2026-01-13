@@ -14,17 +14,17 @@ endforeach()
 
 # ========== Test Executables ==========
 
-# Physics test executable
-add_executable(physics_test
-    physics_test.cpp
-)
-target_link_libraries(physics_test
-    ohao_engine
-    ohao_physics
-    ohao_renderer
-    ohao_ui
-    glm
-)
+# Physics test executable (removed - building new test for modern collision system)
+# add_executable(physics_test
+#     physics_test.cpp
+# )
+# target_link_libraries(physics_test
+#     ohao_engine
+#     ohao_physics
+#     ohao_renderer
+#     ohao_ui
+#     glm
+# )
 
 # Serialization minimal test (existing)
 add_executable(serialization_minimal_test

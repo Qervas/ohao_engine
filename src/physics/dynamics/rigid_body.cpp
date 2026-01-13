@@ -238,9 +238,35 @@ math::AABB RigidBody::getAABB() const {
 // === INTEGRATION ===
 void RigidBody::integrate(float deltaTime) {
     if (isStatic() || !m_isAwake) return;
-    
+
     validateState();
-    Integrator::integratePhysics(this, deltaTime);
+
+    // Semi-implicit Euler integration
+    // Update velocity from force
+    glm::vec3 acceleration = m_accumulatedForce * m_invMass;
+    m_linearVelocity += acceleration * deltaTime;
+
+    // Apply damping
+    m_linearVelocity *= std::pow(1.0f - m_linearDamping, deltaTime);
+
+    // Update position from velocity
+    m_position += m_linearVelocity * deltaTime;
+
+    // Update angular velocity from torque
+    glm::mat3 worldInvInertia = getWorldInverseInertiaTensor();
+    glm::vec3 angularAcceleration = worldInvInertia * m_accumulatedTorque;
+    m_angularVelocity += angularAcceleration * deltaTime;
+
+    // Apply angular damping
+    m_angularVelocity *= std::pow(1.0f - m_angularDamping, deltaTime);
+
+    // Update rotation from angular velocity
+    if (glm::length(m_angularVelocity) > 0.001f) {
+        float angle = glm::length(m_angularVelocity) * deltaTime;
+        glm::vec3 axis = glm::normalize(m_angularVelocity);
+        glm::quat deltaRotation = glm::angleAxis(angle, axis);
+        m_rotation = glm::normalize(deltaRotation * m_rotation);
+    }
 }
 
 // === SLEEP/WAKE SYSTEM ===
