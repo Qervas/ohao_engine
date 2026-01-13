@@ -24,6 +24,11 @@ CollisionSystem::~CollisionSystem() {
 }
 
 void CollisionSystem::updateBroadPhase(const std::vector<RigidBody*>& bodies) {
+    // Early exit if no bodies
+    if (bodies.empty()) {
+        return;
+    }
+
     // Update or insert bodies into broad phase
     for (RigidBody* body : bodies) {
         if (!body) continue;
