@@ -304,8 +304,16 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
     }
     
     // COLLISION DETECTION AND RESOLUTION
+    // TODO: Phase 1 - Implement new collision system here
+    // New system will use:
+    //   - Dynamic BVH for broad phase
+    //   - GJK/EPA for narrow phase
+    //   - PGS+XPBD for constraint solving
     if (m_collisionSystem && !m_rigidBodies.empty()) {
-        m_collisionSystem->detectAndResolveCollisions(bodyPtrs, deltaTime);
+        // Old broken system removed - building modern replacement
+        // m_collisionSystem->updateBroadPhase(bodyPtrs);
+        // auto manifolds = m_collisionSystem->performNarrowPhase();
+        // m_constraintSolver->solve(manifolds, deltaTime);
     }
     
     // Clear accumulated forces after integration
