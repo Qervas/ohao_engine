@@ -61,6 +61,11 @@ void ViewportInputHandler::update(float deltaTime) {
         default:
             break;
     }
+
+    // WASD camera movement + Arrow key rotation (only in Idle state, not during modal transforms)
+    if (currentState == ViewportInputState::Idle) {
+        updateCameraMovement(deltaTime);
+    }
 }
 
 void ViewportInputHandler::processIdleState(float deltaTime) {
@@ -276,15 +281,7 @@ void ViewportInputHandler::handleKeyboardShortcuts() {
         }
     }
 
-    // W/E - Gizmo mode switching (non-modal)
-    if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-        setGizmoMode(GizmoMode::Translate);
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_E, false)) {
-        setGizmoMode(GizmoMode::Rotate);
-    }
-
-    // Space to cycle modes
+    // Space to cycle gizmo modes (W/E removed to avoid conflict with camera movement)
     if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
         cycleGizmoMode();
     }
@@ -462,6 +459,71 @@ void ViewportInputHandler::focusOnSelection() {
     context->getCamera().focusOnPoint(targetPos, 5.0f);
 
     std::cout << "[ViewportInput] Focused on: " << selected->getName() << std::endl;
+}
+
+void ViewportInputHandler::updateCameraMovement(float deltaTime) {
+    if (!context) return;
+
+    Camera& camera = context->getCamera();
+    glm::vec3 movement(0.0f);
+    bool moved = false;
+
+    // WASD movement
+    if (ImGui::IsKeyDown(ImGuiKey_W)) {
+        movement += camera.getFront();
+        moved = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_S)) {
+        movement -= camera.getFront();
+        moved = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_A)) {
+        movement -= camera.getRight();
+        moved = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_D)) {
+        movement += camera.getRight();
+        moved = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_Q)) {
+        movement -= glm::vec3(0, 1, 0);  // Down
+        moved = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_E)) {
+        movement += glm::vec3(0, 1, 0);  // Up
+        moved = true;
+    }
+
+    // Apply movement
+    if (moved) {
+        float speed = cameraMovementSpeed * deltaTime;
+        // Speed up with Shift
+        if (ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift)) {
+            speed *= 3.0f;
+        }
+        camera.move(glm::normalize(movement) * speed);
+    }
+
+    // Arrow key rotation (inverted up/down for Vulkan convention)
+    float rotationDelta = cameraRotationSpeed * deltaTime;
+    bool rotated = false;
+
+    if (ImGui::IsKeyDown(ImGuiKey_UpArrow)) {
+        camera.rotate(rotationDelta, 0.0f);  // Pitch down (inverted)
+        rotated = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_DownArrow)) {
+        camera.rotate(-rotationDelta, 0.0f);  // Pitch up (inverted)
+        rotated = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_LeftArrow)) {
+        camera.rotate(0.0f, -rotationDelta);  // Yaw left
+        rotated = true;
+    }
+    if (ImGui::IsKeyDown(ImGuiKey_RightArrow)) {
+        camera.rotate(0.0f, rotationDelta);  // Yaw right
+        rotated = true;
+    }
 }
 
 // ============================================================================
