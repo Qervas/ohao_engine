@@ -23,6 +23,10 @@ public:
     float getSimulationSpeed() const { return m_simulationSpeed; }
     bool isPhysicsEnabled() const { return m_physicsEnabled; }
 
+    // Frame tracking for stepping system
+    void incrementFrame() { m_currentFrame++; }
+    int getCurrentFrame() const { return m_currentFrame; }
+
 private:
     void renderPlaybackControls();
     void renderSimulationSettings();
@@ -49,7 +53,11 @@ private:
     bool m_showAABBs = false;
     bool m_showContacts = false;
     bool m_showForces = false;
-    
+
+    // Stepping system
+    int m_currentFrame = 0;
+    bool m_singleStepMode = false;
+
     // UI
     bool m_resetConfirmation = false;
 };

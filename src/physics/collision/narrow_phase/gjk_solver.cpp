@@ -12,7 +12,7 @@ namespace collision {
 
 GJKSolver::GJKSolver()
     : m_maxIterations(32)
-    , m_tolerance(0.001f)
+    , m_tolerance(0.0001f)  // Tightened from 0.001f (1mm) to 0.0001f (0.1mm)
     , m_lastIterations(0)
 {
 }

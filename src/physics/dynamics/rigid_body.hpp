@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <string>
+#include <atomic>
 
 namespace ohao {
 
@@ -87,6 +88,9 @@ public:
     
     glm::vec3 getAccumulatedForce() const { return m_accumulatedForce; }
     glm::vec3 getAccumulatedTorque() const { return m_accumulatedTorque; }
+
+    // === UNIQUE IDENTIFICATION ===
+    uint32_t getUniqueId() const { return m_uniqueId; }
     
     // Advanced force application
     void applyForceAtWorldPoint(const glm::vec3& force, const glm::vec3& worldPoint);
@@ -167,7 +171,11 @@ public:
 private:
     // Component reference
     PhysicsComponent* m_component;
-    
+
+    // Unique identifier (for profile snapshots)
+    uint32_t m_uniqueId;
+    static std::atomic<uint32_t> s_nextId;
+
     // Physics type
     RigidBodyType m_type{RigidBodyType::DYNAMIC};
     

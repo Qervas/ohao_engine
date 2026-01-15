@@ -33,12 +33,15 @@ void MeshComponent::setModel(std::shared_ptr<Model> newModel) {
     // UNIFIED MESH-TO-PHYSICS PIPELINE
     // Automatically sync with any PhysicsComponent on the same actor
     if (auto actor = getOwner()) {
-        auto physicsComponent = actor->getComponent<PhysicsComponent>();
-        if (physicsComponent && model) {
-            // Auto-create triangle mesh collision shape from the mesh
-            physicsComponent->createCollisionShapeFromModel(*model);
-        }
-        
+        // DISABLED: Auto-sync was overwriting primitive collision shapes (Box, Sphere, etc.)
+        // with triangle meshes, breaking GJK collision detection.
+        // Collision shapes should be set explicitly via ComponentFactory::setupPhysicsShape()
+        //
+        // auto physicsComponent = actor->getComponent<PhysicsComponent>();
+        // if (physicsComponent && model) {
+        //     physicsComponent->createCollisionShapeFromModel(*model);
+        // }
+
         // Register with scene if part of one
         if (auto scene = actor->getScene()) {
             scene->onMeshComponentChanged(this);

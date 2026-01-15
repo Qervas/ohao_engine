@@ -45,10 +45,18 @@ std::unique_ptr<Scene> DefaultSceneFactory::createBlenderLikeScene() {
         if (transform) {
             transform->setPosition(glm::vec3(0.0f, -0.1f, 0.0f));
             transform->setScale(glm::vec3(10.0f, 1.0f, 10.0f)); // Large ground
-            
-            // CRITICAL FIX: Sync physics body with updated transform position  
+
+            // CRITICAL FIX: Recreate collision box with scaled size
+            // Platform base: 2.0 x 0.2 x 2.0 half-extents (4x0.4x4 full size)
+            // Scaled: 20.0 x 0.2 x 20.0 half-extents (40x0.4x40 full size)
             auto physicsComponent = groundActor->getComponent<PhysicsComponent>();
             if (physicsComponent) {
+                glm::vec3 baseHalfExtents(2.0f, 0.2f, 2.0f);  // Platform default
+                glm::vec3 scale = transform->getScale();
+                glm::vec3 scaledHalfExtents = baseHalfExtents * scale;
+
+                physicsComponent->createBoxShape(scaledHalfExtents);
+                physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::STATIC);
                 physicsComponent->updateRigidBodyFromTransform();
             }
         }
@@ -88,10 +96,18 @@ std::unique_ptr<Scene> DefaultSceneFactory::createPhysicsTestScene() {
         if (transform) {
             transform->setPosition(glm::vec3(0.0f, -0.1f, 0.0f));
             transform->setScale(glm::vec3(15.0f, 1.0f, 15.0f));
-            
-            // CRITICAL FIX: Sync physics body with updated transform position
+
+            // CRITICAL FIX: Recreate collision box with scaled size
+            // Platform base: 2.0 x 0.2 x 2.0 half-extents (4x0.4x4 full size)
+            // Scaled: 30.0 x 0.2 x 30.0 half-extents (60x0.4x60 full size)
             auto physicsComponent = ground->getComponent<PhysicsComponent>();
             if (physicsComponent) {
+                glm::vec3 baseHalfExtents(2.0f, 0.2f, 2.0f);  // Platform default
+                glm::vec3 scale = transform->getScale();
+                glm::vec3 scaledHalfExtents = baseHalfExtents * scale;
+
+                physicsComponent->createBoxShape(scaledHalfExtents);
+                physicsComponent->setRigidBodyType(physics::dynamics::RigidBodyType::STATIC);
                 physicsComponent->updateRigidBodyFromTransform();
             }
         }

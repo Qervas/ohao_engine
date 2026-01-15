@@ -11,8 +11,12 @@ namespace ohao {
 namespace physics {
 namespace dynamics {
 
-RigidBody::RigidBody(PhysicsComponent* component) 
-    : m_component(component) {
+// Initialize static unique ID counter
+std::atomic<uint32_t> RigidBody::s_nextId{1};  // Start at 1 (0 = invalid)
+
+RigidBody::RigidBody(PhysicsComponent* component)
+    : m_component(component),
+      m_uniqueId(s_nextId.fetch_add(1)) {  // Atomic ID assignment
     // Initialize with default material
     m_material = MaterialLibrary::getInstance().getDefault();
     updateMassProperties();

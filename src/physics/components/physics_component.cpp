@@ -329,23 +329,39 @@ void PhysicsComponent::createRigidBody() {
         OHAO_LOG_WARNING("Cannot create rigid body: no physics world");
         return;
     }
-    
+
     if (m_rigidBody) {
         OHAO_LOG_WARNING("Rigid body already exists");
         return;
     }
-    
+
+    // Auto-connect transform component if not already set
+    // This fixes timing issue where createRigidBody is called before
+    // connectComponentDependencies has a chance to set the transform reference
+    if (!m_transformComponent) {
+        Actor* ownerActor = getOwner();
+        if (ownerActor) {
+            m_transformComponent = ownerActor->getTransform();
+            OHAO_LOG("Auto-connected transform component in createRigidBody");
+        } else {
+            OHAO_LOG_WARNING("createRigidBody: No owner actor for auto-connect!");
+        }
+    }
+
     m_rigidBody = m_physicsWorld->createRigidBody(this);
-    
+
     if (m_rigidBody) {
         if (m_collisionShape) {
             m_rigidBody->setCollisionShape(m_collisionShape);
         }
-        
+
         // Sync physics body position with current transform position
         updateRigidBodyFromTransform();
-        
-        OHAO_LOG("Created rigid body for PhysicsComponent");
+
+        // Debug: Log the synced position
+        glm::vec3 pos = m_rigidBody->getPosition();
+        OHAO_LOG("Created rigid body at position: (" +
+                 std::to_string(pos.x) + ", " + std::to_string(pos.y) + ", " + std::to_string(pos.z) + ")");
     } else {
         OHAO_LOG_ERROR("Failed to create rigid body");
     }
@@ -360,28 +376,66 @@ void PhysicsComponent::destroyRigidBody() {
 }
 
 void PhysicsComponent::updateTransformFromRigidBody() {
-    if (!m_rigidBody || !m_transformComponent) {
+    if (!m_rigidBody) {
         return;
     }
-    
+
+    // Auto-connect transform component if not already set
+    if (!m_transformComponent) {
+        Actor* ownerActor = getOwner();
+        if (ownerActor) {
+            m_transformComponent = ownerActor->getTransform();
+        }
+    }
+
+    if (!m_transformComponent) {
+        return;  // Still no transform, can't sync
+    }
+
     // Update visual transform from physics
     glm::vec3 position = m_rigidBody->getPosition();
     glm::quat rotation = m_rigidBody->getRotation();
-    
+
     m_transformComponent->setPosition(position);
     m_transformComponent->setRotation(rotation);
 }
 
 void PhysicsComponent::updateRigidBodyFromTransform() {
-    if (!m_rigidBody || !m_transformComponent) {
+    if (!m_rigidBody) {
+        OHAO_LOG_WARNING("updateRigidBodyFromTransform: No rigid body!");
         return;
     }
-    
+
+    // Auto-connect transform component if not already set
+    if (!m_transformComponent) {
+        Actor* ownerActor = getOwner();
+        if (ownerActor) {
+            m_transformComponent = ownerActor->getTransform();
+            OHAO_LOG("Auto-connected transform in updateRigidBodyFromTransform");
+        }
+    }
+
+    if (!m_transformComponent) {
+        OHAO_LOG_WARNING("updateRigidBodyFromTransform: No transform component!");
+        return;  // Still no transform, can't sync
+    }
+
     // Update physics body from visual transform
     glm::vec3 position = m_transformComponent->getPosition();
     glm::quat rotation = m_transformComponent->getRotation();
+
+    // Debug: show what we're syncing
+    glm::vec3 oldPos = m_rigidBody->getPosition();
+    OHAO_LOG("SYNC Transform->Physics: (" +
+             std::to_string(oldPos.x) + "," + std::to_string(oldPos.y) + "," + std::to_string(oldPos.z) +
+             ") -> (" +
+             std::to_string(position.x) + "," + std::to_string(position.y) + "," + std::to_string(position.z) + ")");
+
     m_rigidBody->setPosition(position);
     m_rigidBody->setRotation(rotation);
+
+    // NOTE: Scale is NOT synced here because collision shapes need to be created
+    // with the final size. Use createBoxShape() with scaled half-extents instead.
 }
 
 } // namespace ohao

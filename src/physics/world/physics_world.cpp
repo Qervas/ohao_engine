@@ -4,6 +4,7 @@
 #include "physics/collision/collision_system.hpp"
 #include "physics/forces/forces.hpp"
 #include "physics/debug/force_debugger.hpp"
+#include "ui/components/console_widget.hpp"
 #include <chrono>
 #include <algorithm>
 
@@ -52,10 +53,13 @@ void PhysicsWorld::initialize() {
     
     initializeSubsystems();
     m_state = SimulationState::STOPPED;
-    
+
     // Reserve capacity for performance
     m_rigidBodies.reserve(m_config.initialBodyCapacity);
-    
+
+    // Initialize profile manager
+    m_profileManager = std::make_unique<ProfileManager>();
+
     // Initialize force debugger
     m_forceDebugger = std::make_unique<debug::ForceDebugger>();
 }
@@ -77,36 +81,83 @@ void PhysicsWorld::shutdown() {
 }
 
 void PhysicsWorld::reset() {
-    shutdown();
-    initialize();
+    OHAO_LOG("Resetting physics world");
+
+    // Stop simulation
+    m_state = SimulationState::STOPPED;
+
+    // Reset timestep accumulator
+    m_timestepAccumulator = 0.0f;
+
+    // If we have an active profile, restore from it
+    if (m_profileManager && m_profileManager->hasActiveProfile()) {
+        m_profileManager->restoreFromActive(m_rigidBodies);
+        OHAO_LOG("Physics world reset to active profile");
+    } else {
+        // No profile - clear all velocities and forces
+        for (auto& body : m_rigidBodies) {
+            if (body) {
+                body->setLinearVelocity(glm::vec3(0.0f));
+                body->setAngularVelocity(glm::vec3(0.0f));
+                body->clearForces();
+                body->updateTransformComponent();
+            }
+        }
+        OHAO_LOG("Physics world reset (no profile, cleared velocities)");
+    }
+
+    // Clear collision system caches
+    if (m_collisionSystem) {
+        // TODO: Add clearCaches() method to CollisionSystem
+    }
 }
 
-void PhysicsWorld::step(float deltaTime) {
+void PhysicsWorld::step(float variableDeltaTime) {
     if (m_state != SimulationState::RUNNING) {
-        return;
+        return;  // No simulation when paused/stopped
     }
-    
-    m_stepStartTime = std::chrono::high_resolution_clock::now();
-    
-    // Use appropriate threading model based on configuration
-    if (m_config.enableMultithreading) {
-        stepMultithreaded(deltaTime);
-    } else {
-        stepSinglethreaded(deltaTime);
+
+    // Accumulate variable frame time
+    m_timestepAccumulator += variableDeltaTime;
+
+    // Step physics in fixed chunks
+    int stepsThisFrame = 0;
+    const int maxStepsPerFrame = 4;  // Prevent spiral of death
+
+    while (m_timestepAccumulator >= m_fixedTimestep && stepsThisFrame < maxStepsPerFrame) {
+        // Fixed timestep physics tick
+        stepFixed(m_fixedTimestep);
+
+        m_timestepAccumulator -= m_fixedTimestep;
+        stepsThisFrame++;
     }
-    
+
+    // If we hit max steps, discard remaining time to prevent catch-up spiral
+    if (stepsThisFrame >= maxStepsPerFrame) {
+        m_timestepAccumulator = 0.0f;
+    }
+
     updateStatistics();
-    
+
     if (m_config.enableDebugVisualization) {
         updateDebugVisualization();
     }
 }
 
 void PhysicsWorld::stepOnce() {
-    SimulationState oldState = m_state;
-    m_state = SimulationState::RUNNING;
-    step(m_config.timeStep);
-    m_state = oldState;
+    if (m_state == SimulationState::RUNNING) {
+        // Already running, don't interfere
+        return;
+    }
+
+    // Single fixed timestep
+    stepFixed(m_fixedTimestep);
+
+    updateStatistics();
+
+    if (m_config.enableDebugVisualization) {
+        updateDebugVisualization();
+    }
 }
 
 void PhysicsWorld::pause() {
@@ -184,6 +235,14 @@ void PhysicsWorld::removeRigidBody(dynamics::RigidBody* body) {
     }
 }
 
+void PhysicsWorld::addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> body) {
+    if (!body) return;
+
+    std::lock_guard<std::mutex> lock(m_bodiesMutex);
+    m_rigidBodies.push_back(body);
+    updateActiveBodyPointers();
+}
+
 void PhysicsWorld::setConfig(const PhysicsWorldConfig& config) {
     m_config = config;
 
@@ -219,10 +278,90 @@ void PhysicsWorld::updateActiveBodyPointers() {
     }
 }
 
+void PhysicsWorld::stepFixed(float fixedDt) {
+    // Fixed timestep physics tick - the actual physics simulation
+    updateActiveBodyPointers();
+
+    // Build body pointer list
+    std::vector<dynamics::RigidBody*> bodyPtrs;
+    bodyPtrs.reserve(m_rigidBodies.size());
+    for (auto& body : m_rigidBodies) {
+        if (body) {
+            bodyPtrs.push_back(body.get());
+        }
+    }
+
+    // Start force debugging frame if enabled
+    if (m_forceDebuggingEnabled && m_forceDebugger) {
+        m_forceDebugger->startFrame();
+    }
+
+    // Apply forces from force registry (includes gravity, drag, etc.)
+    m_forceRegistry.applyForces(bodyPtrs, fixedDt);
+
+    // Apply legacy gravity for backward compatibility if no gravity forces are registered
+    if (m_forceRegistry.getForceCount() == 0) {
+        for (auto* body : m_activeBodyPointers) {
+            if (body && !body->isStatic() && body->isGravityEnabled()) {
+                glm::vec3 gravityForce = m_config.gravity * body->getMass();
+                body->applyForce(gravityForce);
+
+                // Record legacy gravity in force debugger
+                if (m_forceDebuggingEnabled && m_forceDebugger) {
+                    m_forceDebugger->recordForceApplication(body, gravityForce, body->getPosition(), "legacy_gravity");
+                }
+            }
+        }
+    }
+
+    // Analyze forces if debugging is enabled
+    if (m_forceDebuggingEnabled && m_forceDebugger) {
+        m_forceDebugger->analyzeForceRegistry(m_forceRegistry, bodyPtrs);
+    }
+
+    // Integrate physics (apply forces to velocities, velocities to positions)
+    for (auto* body : m_activeBodyPointers) {
+        if (body && !body->isStatic()) {
+            body->integrate(fixedDt);
+        }
+    }
+
+    // COLLISION DETECTION AND RESOLUTION
+    if (m_collisionSystem && m_constraintSolver && !m_rigidBodies.empty()) {
+        // Broad phase: Update AABB tree with all bodies
+        m_collisionSystem->updateBroadPhase(bodyPtrs);
+
+        // Narrow phase: Detect collisions with GJK/EPA
+        auto manifolds = m_collisionSystem->performNarrowPhase();
+
+        // Constraint solving: Resolve contacts with PGS+XPBD
+        m_constraintSolver->solve(manifolds, fixedDt);
+    }
+
+    // Sync transforms to rendering components
+    for (auto* body : m_activeBodyPointers) {
+        if (body) {
+            body->updateTransformComponent();
+        }
+    }
+
+    // Clear accumulated forces after integration
+    for (auto* body : m_activeBodyPointers) {
+        if (body) {
+            body->clearForces();
+        }
+    }
+
+    // End force debugging frame if enabled
+    if (m_forceDebuggingEnabled && m_forceDebugger) {
+        m_forceDebugger->endFrame();
+    }
+}
+
 void PhysicsWorld::stepSinglethreaded(float deltaTime) {
     // Simplified single-threaded step
     updateActiveBodyPointers();
-    
+
     // Convert to raw pointers for force application
     std::vector<dynamics::RigidBody*> bodyPtrs;
     bodyPtrs.reserve(m_rigidBodies.size());
@@ -231,22 +370,22 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
             bodyPtrs.push_back(body.get());
         }
     }
-    
+
     // Start force debugging frame if enabled
     if (m_forceDebuggingEnabled && m_forceDebugger) {
         m_forceDebugger->startFrame();
     }
-    
+
     // Apply forces from force registry (includes gravity, drag, etc.)
     m_forceRegistry.applyForces(bodyPtrs, deltaTime);
-    
+
     // Apply legacy gravity for backward compatibility if no gravity forces are registered
     if (m_forceRegistry.getForceCount() == 0) {
         for (auto* body : m_activeBodyPointers) {
             if (body && !body->isStatic()) {
                 glm::vec3 gravityForce = m_config.gravity * body->getMass();
                 body->applyForce(gravityForce);
-                
+
                 // Record legacy gravity in force debugger
                 if (m_forceDebuggingEnabled && m_forceDebugger) {
                     m_forceDebugger->recordForceApplication(body, gravityForce, body->getPosition(), "legacy_gravity");
@@ -254,19 +393,19 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
             }
         }
     }
-    
+
     // Analyze forces if debugging is enabled
     if (m_forceDebuggingEnabled && m_forceDebugger) {
         m_forceDebugger->analyzeForceRegistry(m_forceRegistry, bodyPtrs);
     }
-    
+
     // Integrate physics
     for (auto* body : m_activeBodyPointers) {
         if (body && !body->isStatic()) {
             body->integrate(deltaTime);
         }
     }
-    
+
     // COLLISION DETECTION AND RESOLUTION
     // New modern system: Dynamic BVH + GJK/EPA + PGS+XPBD
     if (m_collisionSystem && m_constraintSolver && !m_rigidBodies.empty()) {
@@ -279,14 +418,14 @@ void PhysicsWorld::stepSinglethreaded(float deltaTime) {
         // Constraint solving: Resolve contacts with PGS+XPBD
         m_constraintSolver->solve(manifolds, deltaTime);
     }
-    
+
     // Clear accumulated forces after integration
     for (auto* body : m_activeBodyPointers) {
         if (body) {
             body->clearForces();
         }
     }
-    
+
     // End force debugging frame if enabled
     if (m_forceDebuggingEnabled && m_forceDebugger) {
         m_forceDebugger->endFrame();

@@ -66,6 +66,13 @@ add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(src)
 
+# Python bindings for testing (optional)
+option(BUILD_PYTHON_BINDINGS "Build Python bindings for physics testing" OFF)
+if(BUILD_PYTHON_BINDINGS)
+    message(STATUS "Building Python bindings for physics tests")
+    add_subdirectory(tests/python)
+endif()
+
 # Add your tests here
 file(GLOB TEST_FILES "src/tests/*.cpp")
 message(STATUS "Including test files: ${TEST_FILES}")

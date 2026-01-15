@@ -149,26 +149,21 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
     // Display ID in debug builds
     ImGui::Text("Transform Component (ID: %p)", (void*)transform);
     
-    // Check physics state - get the actor owner to check for physics component
+    // Check physics state - use component's owner reference (no scene iteration!)
     bool allowManualEdit = true;
-    if (currentScene && currentScene->getPhysicsWorld()) {
-        // Find the actor that owns this transform component
-        for (const auto& [actorId, actor] : currentScene->getAllActors()) {
-            if (actor->getTransform() == transform) {
-                auto physicsComponent = actor->getComponent<PhysicsComponent>();
-                if (physicsComponent) {
-                    auto physicsState = currentScene->getPhysicsWorld()->getSimulationState();
-                    allowManualEdit = (physicsState != physics::SimulationState::RUNNING);
-                    
-                    if (!allowManualEdit) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-                        ImGui::Text("🔒 Transform locked - Physics simulation is running");
-                        ImGui::Text("   Pause or stop physics to edit manually");
-                        ImGui::PopStyleColor();
-                        ImGui::Separator();
-                    }
-                }
-                break;
+    Actor* actor = transform->getOwner();
+    if (actor && currentScene && currentScene->getPhysicsWorld()) {
+        auto physicsComponent = actor->getComponent<PhysicsComponent>();
+        if (physicsComponent) {
+            auto physicsState = currentScene->getPhysicsWorld()->getSimulationState();
+            allowManualEdit = (physicsState != physics::SimulationState::RUNNING);
+
+            if (!allowManualEdit) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+                ImGui::Text("🔒 Transform locked - Physics simulation is running");
+                ImGui::Text("   Pause or stop physics to edit manually");
+                ImGui::PopStyleColor();
+                ImGui::Separator();
             }
         }
     }
@@ -177,17 +172,12 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
         if (renderVec3Control("Position", position)) {
             transform->setPosition(position);
             transformChanged = true;
-            
-            // Find and sync to physics component if it exists
-            if (currentScene) {
-                for (const auto& [actorId, actor] : currentScene->getAllActors()) {
-                    if (actor->getTransform() == transform) {
-                        auto physicsComponent = actor->getComponent<PhysicsComponent>();
-                        if (physicsComponent) {
-                            physicsComponent->updateRigidBodyFromTransform();
-                        }
-                        break;
-                    }
+
+            // Sync to physics component if it exists (component-level, no scene iteration!)
+            if (actor) {
+                auto physicsComponent = actor->getComponent<PhysicsComponent>();
+                if (physicsComponent) {
+                    physicsComponent->updateRigidBodyFromTransform();
                 }
             }
         }
@@ -195,17 +185,12 @@ void PropertiesPanel::renderTransformComponentProperties(TransformComponent* tra
         if (renderVec3Control("Rotation", rotation)) {
             transform->setRotationEuler(glm::radians(rotation));
             transformChanged = true;
-            
-            // Find and sync to physics component if it exists
-            if (currentScene) {
-                for (const auto& [actorId, actor] : currentScene->getAllActors()) {
-                    if (actor->getTransform() == transform) {
-                        auto physicsComponent = actor->getComponent<PhysicsComponent>();
-                        if (physicsComponent) {
-                            physicsComponent->updateRigidBodyFromTransform();
-                        }
-                        break;
-                    }
+
+            // Sync to physics component if it exists (component-level, no scene iteration!)
+            if (actor) {
+                auto physicsComponent = actor->getComponent<PhysicsComponent>();
+                if (physicsComponent) {
+                    physicsComponent->updateRigidBodyFromTransform();
                 }
             }
         }

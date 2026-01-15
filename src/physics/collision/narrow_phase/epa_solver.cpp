@@ -75,9 +75,14 @@ EPASolver::Result EPASolver::solve(const Simplex& simplex,
             result.penetrationDepth = closest.distance;
             result.normal = closest.normal;
 
-            // Approximate contact points (could be refined)
-            result.contactPointA = closest.vertices[0];
-            result.contactPointB = closest.vertices[0] - closest.normal * closest.distance;
+            // Compute actual world-space contact points using support functions
+            // The contact is where the shapes touch along the penetration normal
+            glm::vec3 contactA = this->support(shapeA, transformA, -closest.normal);
+            glm::vec3 contactB = this->support(shapeB, transformB, closest.normal);
+
+            // Contact point is midpoint between the two support points
+            result.contactPointA = contactA;
+            result.contactPointB = contactB;
 
             return result;
         }
@@ -102,8 +107,12 @@ EPASolver::Result EPASolver::solve(const Simplex& simplex,
         result.success = true;
         result.penetrationDepth = closest.distance;
         result.normal = closest.normal;
-        result.contactPointA = closest.vertices[0];
-        result.contactPointB = closest.vertices[0] - closest.normal * closest.distance;
+
+        // Compute actual world-space contact points
+        glm::vec3 contactA = this->support(shapeA, transformA, -closest.normal);
+        glm::vec3 contactB = this->support(shapeB, transformB, closest.normal);
+        result.contactPointA = contactA;
+        result.contactPointB = contactB;
     }
 
     return result;

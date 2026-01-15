@@ -79,9 +79,10 @@ void PhysicsPanel::renderPlaybackControls() {
             OHAO_LOG("Physics simulation paused");
         } else {
             m_simulationState = physics::SimulationState::RUNNING;
+            m_singleStepMode = false;  // Exit single-step mode when playing
             OHAO_LOG("Physics simulation started");
         }
-        
+
         // Sync with physics world
         if (m_physicsWorld) {
             m_physicsWorld->setSimulationState(m_simulationState);
@@ -114,10 +115,17 @@ void PhysicsPanel::renderPlaybackControls() {
     
     ImGui::SameLine();
     
-    // Step button
+    // Step button - advances exactly one physics frame
     if (ImGui::Button("⏭ Step", ImVec2(60, 25))) {
-        // TODO: Implement single step
-        OHAO_LOG("Single step physics");
+        if (m_physicsWorld) {
+            m_physicsWorld->stepOnce();  // Step one frame
+            m_currentFrame++;
+            m_singleStepMode = true;
+            OHAO_LOG("Physics stepped to frame " + std::to_string(m_currentFrame));
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Advance simulation by exactly one frame (1/60s)");
     }
     
     ImGui::SameLine();
@@ -139,12 +147,17 @@ void PhysicsPanel::renderPlaybackControls() {
         ImGui::Separator();
         
         if (ImGui::Button("Reset", ImVec2(80, 0))) {
-            // TODO: Implement reset
+            // Reset physics world to initial state
             OHAO_LOG("Physics simulation reset");
             m_simulationState = physics::SimulationState::STOPPED;
+            m_currentFrame = 0;
+            m_singleStepMode = false;
+
             if (m_physicsWorld) {
+                m_physicsWorld->reset();  // Reset all bodies to initial positions
                 m_physicsWorld->setSimulationState(m_simulationState);
             }
+
             ImGui::CloseCurrentPopup();
             m_resetConfirmation = false;
         }
@@ -156,7 +169,16 @@ void PhysicsPanel::renderPlaybackControls() {
         }
         ImGui::EndPopup();
     }
-    
+
+    // Frame counter display
+    ImGui::Separator();
+    ImGui::Text("Frame: %d  |  Time: %.3fs", m_currentFrame, m_currentFrame / 60.0f);
+    if (m_singleStepMode) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "[STEP MODE]");
+    }
+    ImGui::Separator();
+
     // Status and speed on second row
     ImGui::Text("Speed:");
     ImGui::SameLine();

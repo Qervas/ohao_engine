@@ -31,7 +31,14 @@ void CollisionSystem::updateBroadPhase(const std::vector<RigidBody*>& bodies) {
 
     // Update or insert bodies into broad phase
     for (RigidBody* body : bodies) {
-        if (!body) continue;
+        if (!body) {
+            continue;
+        }
+
+        // Skip bodies without collision shapes - they shouldn't participate in collision detection
+        if (!body->getCollisionShape()) {
+            continue;
+        }
 
         // Get body's AABB
         math::AABB mathAABB = body->getAABB();
@@ -115,7 +122,9 @@ bool CollisionSystem::detectCollision(RigidBody* bodyA, RigidBody* bodyB, Contac
 
     auto shapeA = bodyA->getCollisionShape();
     auto shapeB = bodyB->getCollisionShape();
-    if (!shapeA || !shapeB) return false;
+    if (!shapeA || !shapeB) {
+        return false;
+    }
 
     // Get transforms
     glm::mat4 transformA = bodyA->getTransformMatrix();
@@ -129,14 +138,22 @@ bool CollisionSystem::detectCollision(RigidBody* bodyA, RigidBody* bodyB, Contac
         EPASolver::Result epaResult = m_epaSolver->solve(gjkResult.simplex, shapeA.get(), transformA, shapeB.get(), transformB);
 
         if (epaResult.success) {
-            // Add contact point
-            manifold->setNormal(epaResult.normal);
-            manifold->addContact(epaResult.contactPointA, epaResult.normal, epaResult.penetrationDepth);
+            // CRITICAL FIX: EPA normal is inverted
+            // EPA should return normal from B→A (ground→cube = pointing UP)
+            // But it's actually returning it pointing DOWN (0,-1,0)
+            // Constraint solver expects normal that pushes bodyA away from bodyB
+            // So we flip it to get the correct direction
+            glm::vec3 separationNormal = -epaResult.normal;
 
-            // Set material properties
-            // TODO: Get from materials
-            manifold->setFriction(0.5f);
-            manifold->setRestitution(0.0f);
+            // Add contact point
+            manifold->setNormal(separationNormal);
+            manifold->addContact(epaResult.contactPointA, separationNormal, epaResult.penetrationDepth);
+
+            // Set material properties from bodies (average of both)
+            float restitution = (bodyA->getRestitution() + bodyB->getRestitution()) * 0.5f;
+            float friction = (bodyA->getStaticFriction() + bodyB->getStaticFriction()) * 0.5f;
+            manifold->setFriction(friction);
+            manifold->setRestitution(restitution);
 
             return true;
         }
