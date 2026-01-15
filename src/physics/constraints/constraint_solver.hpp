@@ -20,9 +20,9 @@ using dynamics::RigidBody;
 // Solver configuration
 struct SolverConfig {
     int velocityIterations = 8;        // PGS velocity iterations
-    int positionIterations = 3;        // XPBD position iterations
-    float baumgarte = 0.2f;            // Position correction strength
-    float slop = 0.005f;               // Allowed penetration (5mm)
+    int positionIterations = 1;        // XPBD position iterations (single pass to prevent cumulative over-correction)
+    float baumgarte = 0.8f;            // Position correction strength (high for single-iteration convergence)
+    float slop = 0.001f;               // Allowed penetration (1mm, reduced from 5mm to prevent jiggling)
     float maxLinearCorrection = 0.2f;  // Max position correction per iteration
     float warmStartFactor = 0.8f;      // Warm start multiplier
     bool splitImpulses = true;         // Separate position/velocity correction
