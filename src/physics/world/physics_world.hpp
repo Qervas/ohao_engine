@@ -6,6 +6,7 @@
 #include "physics/forces/force_registry.hpp"
 #include "physics/debug/force_debugger.hpp"
 #include "physics/utils/physics_math.hpp"
+#include "physics/world/profile_manager.hpp"
 
 #include <vector>
 #include <memory>
@@ -85,6 +86,12 @@ public:
     void removeRigidBody(std::shared_ptr<dynamics::RigidBody> body);
     void removeRigidBody(dynamics::RigidBody* body);
     size_t getBodyCount() const { return m_rigidBodies.size(); }
+
+    // Body access (for profile system)
+    const std::vector<std::shared_ptr<dynamics::RigidBody>>& getRigidBodies() const { return m_rigidBodies; }
+
+    // Test-only: Add raw rigid body without component (for Python tests)
+    void addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> body);
     
     // Backward compatibility methods
     size_t getRigidBodyCount() const { return getBodyCount(); }
@@ -117,6 +124,10 @@ public:
     // Force system access
     forces::ForceRegistry& getForceRegistry() { return m_forceRegistry; }
     const forces::ForceRegistry& getForceRegistry() const { return m_forceRegistry; }
+
+    // Profile system access
+    ProfileManager* getProfileManager() { return m_profileManager.get(); }
+    const ProfileManager* getProfileManager() const { return m_profileManager.get(); }
     
     // Convenience methods for force management
     size_t registerForce(std::unique_ptr<forces::ForceGenerator> generator, 
@@ -194,14 +205,21 @@ public:
 private:
     PhysicsWorldConfig m_config;
     SimulationState m_state{SimulationState::STOPPED};
-    
+
+    // Fixed timestep accumulator
+    float m_timestepAccumulator{0.0f};
+    float m_fixedTimestep{1.0f / 60.0f};  // 60 Hz physics
+
     // Core subsystems
     std::unique_ptr<collision::CollisionSystem> m_collisionSystem;
     std::unique_ptr<constraints::ConstraintSolver> m_constraintSolver;
     
     // Force system
     forces::ForceRegistry m_forceRegistry;
-    
+
+    // Profile system
+    std::unique_ptr<ProfileManager> m_profileManager;
+
     // Body management
     std::vector<std::shared_ptr<dynamics::RigidBody>> m_rigidBodies;
     std::vector<dynamics::RigidBody*> m_activeBodyPointers; // Cache for performance
@@ -227,7 +245,10 @@ private:
     void updateActiveBodyPointers();
     void updateDebugVisualization();
     void updateStatistics();
-    
+
+    // Fixed timestep physics tick
+    void stepFixed(float fixedDt);
+
     // Multithreaded simulation pipeline
     void stepMultithreaded(float deltaTime);
     void stepSinglethreaded(float deltaTime);

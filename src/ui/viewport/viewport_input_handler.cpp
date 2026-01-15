@@ -3,6 +3,8 @@
 #include "renderer/gizmo/transform_gizmo.hpp"
 #include "ui/window/window.hpp"
 #include "engine/component/transform_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "engine/actor/actor.hpp"
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <glm/gtc/quaternion.hpp>
@@ -571,6 +573,16 @@ void ViewportInputHandler::enterScaleModal() {
 
 void ViewportInputHandler::confirmModal() {
     std::cout << "[Modal] Transform confirmed" << std::endl;
+
+    // Sync transform to physics component (fixes teleport bug)
+    Actor* selected = SelectionManager::get().getSelectedActor();
+    if (selected) {
+        auto physicsComp = selected->getComponent<PhysicsComponent>();
+        if (physicsComp) {
+            physicsComp->updateRigidBodyFromTransform();
+        }
+    }
+
     exitModal();
 }
 
@@ -594,6 +606,12 @@ void ViewportInputHandler::cancelModal() {
                 break;
             default:
                 break;
+        }
+
+        // Sync restored transform to physics component
+        auto physicsComp = selected->getComponent<PhysicsComponent>();
+        if (physicsComp) {
+            physicsComp->updateRigidBodyFromTransform();
         }
 
         if (context) {

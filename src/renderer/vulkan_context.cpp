@@ -462,9 +462,12 @@ void VulkanContext::updateScene(float deltaTime) {
             if (physicsPanel->getPhysicsState() == physics::SimulationState::RUNNING && physicsPanel->isPhysicsEnabled()) {
                 // Apply simulation speed multiplier
                 float scaledDeltaTime = deltaTime * physicsPanel->getSimulationSpeed();
-                
+
                 // Update physics simulation
                 scene->updatePhysics(scaledDeltaTime);
+
+                // Increment frame counter for tracking
+                physicsPanel->incrementFrame();
             }
         }
         

@@ -118,7 +118,7 @@ void ConstraintSolver::solveContact(collision::ContactManifold* manifold, int co
     // Compute bias velocity (for restitution)
     float restitution = manifold->getRestitution();
     float biasVelocity = 0.0f;
-    if (normalVel < -1.0f) {  // Only bounce if closing velocity is significant
+    if (normalVel < -0.1f) {  // Lower threshold for better collision response
         biasVelocity = -restitution * normalVel;
     }
 
@@ -231,9 +231,12 @@ void ConstraintSolver::solvePositionContact(collision::ContactManifold* manifold
     glm::vec3 normal = manifold->getNormal();
 
     // XPBD position correction (Baumgarte stabilization)
-    float penetration = contact.penetration - m_config.slop;
-    if (penetration <= 0.0f) return;  // No correction needed
+    // Use iterative correction with damping to prevent overshooting
+    float penetration = contact.penetration;
+    if (penetration <= 0.001f) return;  // Skip if penetration < 1mm (converged)
 
+    // Apply Baumgarte-stabilized correction (fraction per iteration)
+    // This prevents over-correction across multiple iterations
     float correction = m_config.baumgarte * penetration;
     correction = std::min(correction, m_config.maxLinearCorrection);
 
@@ -269,7 +272,8 @@ void ConstraintSolver::applyImpulse(RigidBody* body, const glm::vec3& impulse, c
     body->setLinearVelocity(body->getLinearVelocity() + impulse * body->getInverseMass());
 
     // Angular impulse
-    glm::vec3 torque = glm::cross(contactPoint - body->getPosition(), impulse);
+    // CRITICAL FIX: contactPoint is already relative (rA/rB), don't subtract position again!
+    glm::vec3 torque = glm::cross(contactPoint, impulse);
     glm::mat3 invInertia = body->getWorldInverseInertiaTensor();
     body->setAngularVelocity(body->getAngularVelocity() + invInertia * torque);
 }
