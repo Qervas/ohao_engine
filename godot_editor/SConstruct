@@ -21,17 +21,18 @@ env.Append(CPPPATH=[
 # Add library paths
 env.Append(LIBPATH=[
     "../build/",  # OHAO engine libraries
+    "/opt/homebrew/lib/",  # Homebrew libraries (Vulkan, etc.)
 ])
 
-# Link OHAO libraries (order matters for static linking)
-env.Append(LIBS=[
-    "ohao_renderer",
-    "ohao_physics",
-    "ohao_scene",
-    "ohao_component",
-    "ohao_actor",
-    "ohao_asset",
-])
+# Link OHAO libraries (commented out until integration)
+# env.Append(LIBS=[
+#     "ohao_renderer",
+#     "ohao_physics",
+#     "ohao_scene",
+#     "ohao_component",
+#     "ohao_actor",
+#     "ohao_asset",
+# ])
 
 # Platform-specific settings
 if env["platform"] == "macos":
@@ -41,24 +42,26 @@ if env["platform"] == "macos":
         "-framework", "CoreVideo",
         "-framework", "QuartzCore",
     ])
-    # Vulkan/MoltenVK
-    env.Append(LIBS=["vulkan"])
+    # Vulkan not needed for scaffolding
+    # env.Append(LIBS=["vulkan"])
 
 elif env["platform"] == "linux":
-    env.Append(LIBS=["vulkan", "pthread", "dl"])
+    pass  # env.Append(LIBS=["vulkan", "pthread", "dl"])
 
 elif env["platform"] == "windows":
-    env.Append(LIBS=["vulkan-1"])
+    pass  # env.Append(LIBS=["vulkan-1"])
 
 # Gather sources
 sources = Glob("src/*.cpp")
 
 # Build the shared library
+suffix = ".dylib" if env["platform"] == "macos" else ".so" if env["platform"] == "linux" else ".dll"
 library = env.SharedLibrary(
-    target="project/bin/libohao.{}.{}.{}".format(
+    target="project/bin/libohao.{}.{}.{}{}".format(
         env["platform"],
         env["target"],
-        env["arch"]
+        env["arch"],
+        suffix
     ),
     source=sources,
 )
