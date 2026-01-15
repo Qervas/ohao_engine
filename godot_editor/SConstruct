@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+"""
+OHAO Engine GDExtension Build Script
+Builds the GDExtension that wraps OHAO's Vulkan renderer and physics engine
+"""
+
+import os
+import sys
+
+# Build godot-cpp first
+env = SConscript("godot-cpp/SConstruct")
+
+# Add our include paths
+env.Append(CPPPATH=[
+    "src/",
+    "../src/",  # OHAO engine headers
+    "../external/glm/",
+    "../external/",
+])
+
+# Add library paths
+env.Append(LIBPATH=[
+    "../build/",  # OHAO engine libraries
+])
+
+# Link OHAO libraries (order matters for static linking)
+env.Append(LIBS=[
+    "ohao_renderer",
+    "ohao_physics",
+    "ohao_scene",
+    "ohao_component",
+    "ohao_actor",
+    "ohao_asset",
+])
+
+# Platform-specific settings
+if env["platform"] == "macos":
+    env.Append(LINKFLAGS=[
+        "-framework", "Cocoa",
+        "-framework", "IOKit",
+        "-framework", "CoreVideo",
+        "-framework", "QuartzCore",
+    ])
+    # Vulkan/MoltenVK
+    env.Append(LIBS=["vulkan"])
+
+elif env["platform"] == "linux":
+    env.Append(LIBS=["vulkan", "pthread", "dl"])
+
+elif env["platform"] == "windows":
+    env.Append(LIBS=["vulkan-1"])
+
+# Gather sources
+sources = Glob("src/*.cpp")
+
+# Build the shared library
+library = env.SharedLibrary(
+    target="project/bin/libohao.{}.{}.{}".format(
+        env["platform"],
+        env["target"],
+        env["arch"]
+    ),
+    source=sources,
+)
+
+Default(library)
