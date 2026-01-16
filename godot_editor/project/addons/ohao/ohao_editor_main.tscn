@@ -1,0 +1,140 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://addons/ohao/ohao_editor_main.gd" id="1_main"]
+
+[node name="OhaoEditorMain" type="Control"]
+layout_mode = 1
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("1_main")
+
+[node name="HSplit" type="HSplitContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+split_offset = -250
+
+[node name="ViewportContainer" type="PanelContainer" parent="HSplit"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="OhaoViewport" type="OhaoViewport" parent="HSplit/ViewportContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="RightPanel" type="PanelContainer" parent="HSplit"]
+custom_minimum_size = Vector2(250, 0)
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="HSplit/RightPanel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "OHAO Engine"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="SimulationLabel" type="Label" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+text = "Simulation"
+
+[node name="PlaybackButtons" type="HBoxContainer" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="PlayPauseBtn" type="Button" parent="HSplit/RightPanel/VBox/PlaybackButtons"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Play"
+
+[node name="StepBtn" type="Button" parent="HSplit/RightPanel/VBox/PlaybackButtons"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Step"
+
+[node name="ResetBtn" type="Button" parent="HSplit/RightPanel/VBox/PlaybackButtons"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Reset"
+
+[node name="HSeparator2" type="HSeparator" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="SpeedLabel" type="Label" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+text = "Speed: 1.0x"
+
+[node name="SpeedSlider" type="HSlider" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+min_value = 0.1
+max_value = 3.0
+step = 0.1
+value = 1.0
+
+[node name="HSeparator3" type="HSeparator" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="StatusSection" type="VBoxContainer" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="HSplit/RightPanel/VBox/StatusSection"]
+layout_mode = 2
+text = "Status: Stopped"
+
+[node name="FrameLabel" type="Label" parent="HSplit/RightPanel/VBox/StatusSection"]
+layout_mode = 2
+text = "Frame: 0"
+
+[node name="FPSLabel" type="Label" parent="HSplit/RightPanel/VBox/StatusSection"]
+layout_mode = 2
+text = "FPS: 0"
+
+[node name="HSeparator4" type="HSeparator" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="SceneSection" type="VBoxContainer" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="SceneLabel" type="Label" parent="HSplit/RightPanel/VBox/SceneSection"]
+layout_mode = 2
+text = "Scene"
+
+[node name="LoadSceneBtn" type="Button" parent="HSplit/RightPanel/VBox/SceneSection"]
+layout_mode = 2
+text = "Load .tscn..."
+
+[node name="SyncSceneBtn" type="Button" parent="HSplit/RightPanel/VBox/SceneSection"]
+layout_mode = 2
+text = "Sync from Editor"
+
+[node name="ExamplesBtn" type="OptionButton" parent="HSplit/RightPanel/VBox/SceneSection"]
+layout_mode = 2
+
+[node name="HSeparator5" type="HSeparator" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="RenderSection" type="VBoxContainer" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="RenderLabel" type="Label" parent="HSplit/RightPanel/VBox/RenderSection"]
+layout_mode = 2
+text = "Rendering"
+
+[node name="WireframeCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/RenderSection"]
+layout_mode = 2
+text = "Wireframe Mode"
+
+[node name="GridCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/RenderSection"]
+layout_mode = 2
+button_pressed = true
+text = "Show Grid"
+
+[node name="GizmosCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/RenderSection"]
+layout_mode = 2
+button_pressed = true
+text = "Show Gizmos"

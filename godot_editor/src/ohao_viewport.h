@@ -7,6 +7,8 @@
 #include <godot_cpp/classes/input_event_mouse_motion.hpp>
 #include <godot_cpp/classes/input_event_mouse_button.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
+#include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/node3d.hpp>
 
 // Forward declare OHAO types
 namespace ohao {
@@ -92,6 +94,7 @@ public:
     void initialize_renderer();
     void shutdown_renderer();
     bool is_renderer_initialized() const { return m_initialized; }
+    bool has_scene_meshes() const;
 
     // Rendering
     void set_render_enabled(bool enabled);
@@ -101,6 +104,17 @@ public:
     void load_tscn(const String& path);
     void sync_scene();
     void clear_scene();
+
+    // Sync from Godot scene tree
+    void sync_from_godot(Node* root_node);
+    int get_synced_object_count() const { return m_synced_object_count; }
+
+private:
+    void traverse_and_sync(Node* node);
+    void count_syncable_objects(Node* node);
+    int m_synced_object_count = 0;
+
+public:
 
     // Scene building from GDScript
     void add_cube(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color);

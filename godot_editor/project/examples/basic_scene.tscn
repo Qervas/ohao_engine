@@ -1,0 +1,57 @@
+[gd_scene load_steps=6 format=3]
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+size = Vector3(20, 0.2, 20)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
+albedo_color = Color(0.3, 0.3, 0.35, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_cube"]
+size = Vector3(1, 1, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_red"]
+albedo_color = Color(0.9, 0.2, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_green"]
+albedo_color = Color(0.2, 0.9, 0.2, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_blue"]
+albedo_color = Color(0.2, 0.2, 0.9, 1)
+
+[sub_resource type="SphereMesh" id="SphereMesh_1"]
+radius = 0.5
+height = 1.0
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_yellow"]
+albedo_color = Color(1.0, 0.8, 0.0, 1)
+
+[node name="BasicScene" type="Node3D"]
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1, 0)
+mesh = SubResource("BoxMesh_ground")
+surface_material_override/0 = SubResource("StandardMaterial3D_ground")
+
+[node name="RedCube" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 0, 0)
+mesh = SubResource("BoxMesh_cube")
+surface_material_override/0 = SubResource("StandardMaterial3D_red")
+
+[node name="GreenCube" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+mesh = SubResource("BoxMesh_cube")
+surface_material_override/0 = SubResource("StandardMaterial3D_green")
+
+[node name="BlueCube" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0, 0)
+mesh = SubResource("BoxMesh_cube")
+surface_material_override/0 = SubResource("StandardMaterial3D_blue")
+
+[node name="YellowSphere" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
+mesh = SubResource("SphereMesh_1")
+surface_material_override/0 = SubResource("StandardMaterial3D_yellow")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 5, 10, 5)
+light_energy = 1.0
