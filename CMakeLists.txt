@@ -73,17 +73,4 @@ if(BUILD_PYTHON_BINDINGS)
     add_subdirectory(tests/python)
 endif()
 
-# Add your tests here
-file(GLOB TEST_FILES "src/tests/*.cpp")
-message(STATUS "Including test files: ${TEST_FILES}")
-# Don't include test files in the main engine executable
-# target_sources(ohao_engine PRIVATE ${TEST_FILES})
-
-# Optional standalone test executables
-# Removed serialization_simple_test due to dependency issues
-# add_executable(serialization_simple_test
-#   src/tests/serialization_simple_test.cpp
-# )
-# target_link_libraries(serialization_simple_test ohao_core)
-
-# Tests are now managed in src/tests/CMakeLists.txt
+# Tests removed - all testing done through Godot Editor integration

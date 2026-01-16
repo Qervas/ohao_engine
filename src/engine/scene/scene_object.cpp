@@ -1,5 +1,4 @@
 #include "engine/scene/scene_object.hpp"
-#include "renderer/vulkan_context.hpp"
 #include <atomic>
 
 namespace ohao {

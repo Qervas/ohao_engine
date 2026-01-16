@@ -46,4 +46,4 @@ curl -L -o fa-solid-900.ttf https://github.com/FortAwesome/Font-Awesome/raw/6.x/
 
 ## Other Fonts
 
-Regular UI fonts are loaded from ImGui's built-in font atlas.
+Standard fonts are bundled with Godot Editor.

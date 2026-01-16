@@ -113,27 +113,8 @@ void MaterialComponent::serialize(class Serializer& serializer) const {}
 void MaterialComponent::deserialize(class Deserializer& deserializer) {}
 
 void MaterialComponent::updateTextureUsage() {
-    // Ensure texture manager loads required textures
-    if (textureManager) {
-        if (!material.albedoTexture.empty() && material.useAlbedoTexture) {
-            textureManager->loadTexture(material.albedoTexture);
-        }
-        if (!material.normalTexture.empty() && material.useNormalTexture) {
-            textureManager->loadTexture(material.normalTexture);
-        }
-        if (!material.metallicTexture.empty() && material.useMetallicTexture) {
-            textureManager->loadTexture(material.metallicTexture);
-        }
-        if (!material.roughnessTexture.empty() && material.useRoughnessTexture) {
-            textureManager->loadTexture(material.roughnessTexture);
-        }
-        if (!material.aoTexture.empty() && material.useAoTexture) {
-            textureManager->loadTexture(material.aoTexture);
-        }
-        if (!material.emissiveTexture.empty() && material.useEmissiveTexture) {
-            textureManager->loadTexture(material.emissiveTexture);
-        }
-    }
+    // Texture loading is handled by OffscreenRenderer
+    // MaterialComponent just stores the texture paths for the renderer to use
 }
 
 } // namespace ohao

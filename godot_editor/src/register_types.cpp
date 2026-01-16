@@ -5,13 +5,36 @@
 #include <gdextension_interface.h>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
+#include <godot_cpp/variant/utility_functions.hpp>
+
+#include "ui/components/console_widget.hpp"
 
 using namespace godot;
+
+// Godot log callback for OHAO's ConsoleWidget
+static void godot_log_callback(ohao::LogLevel level, const std::string& message) {
+    godot::String godot_msg = godot::String(message.c_str());
+    switch (level) {
+        case ohao::LogLevel::Info:
+        case ohao::LogLevel::Debug:
+            UtilityFunctions::print("[OHAO] ", godot_msg);
+            break;
+        case ohao::LogLevel::Warning:
+            UtilityFunctions::push_warning("[OHAO] ", godot_msg);
+            break;
+        case ohao::LogLevel::Error:
+            UtilityFunctions::push_error("[OHAO] ", godot_msg);
+            break;
+    }
+}
 
 void initialize_ohao_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
+
+    // Set up OHAO logging to redirect to Godot's console
+    ohao::ConsoleWidget::get().setLogCallback(godot_log_callback);
 
     // Register our custom classes
     ClassDB::register_class<OhaoViewport>();
@@ -22,7 +45,8 @@ void uninitialize_ohao_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
-    // Cleanup if needed
+    // Clear the OHAO log callback
+    ohao::ConsoleWidget::get().clearLogCallback();
 }
 
 extern "C" {

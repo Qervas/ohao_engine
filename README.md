@@ -1,7 +1,6 @@
 # OHAO Engine
 
-OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
-
+OHAO Engine is a custom physics and rendering engine that integrates with Godot 4.x as a GDExtension. It features a Vulkan-based renderer and custom physics simulation.
 
 <div style="display: flex;">
   <div style="flex: 1;">
@@ -12,92 +11,147 @@ OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), fo
   </div>
 </div>
 
+## Architecture
 
+OHAO Engine runs as a GDExtension plugin inside Godot Editor, providing:
+- Custom Vulkan offscreen renderer (renders to texture displayed in Godot)
+- Custom physics simulation
+- Actor-component system for scene management
+
+```
+Godot Editor
+    │
+    ▼
+OhaoViewport (GDExtension)
+    │
+    ├─ OffscreenRenderer (Vulkan)
+    │     └─ Renders scene to pixel buffer
+    │
+    └─ Scene/Actor/Component system
+          └─ Custom physics simulation
+```
 
 ## Building
 
-### Required Dependencies
+### Prerequisites
 
+**macOS:**
+- Xcode Command Line Tools
 - CMake 3.20+
-- Vulkan SDK
-- GLFW3
-
-### Installation on Fedora Linux
+- Vulkan SDK (via MoltenVK from Homebrew)
+- SCons (for GDExtension)
+- Godot 4.x
 
 ```bash
-sudo dnf install cmake vulkan-devel glfw-devel git gcc-c++
+# Install dependencies on macOS
+xcode-select --install
+brew install cmake vulkan-loader molten-vk scons
+```
+
+**Linux:**
+- CMake 3.20+
+- Vulkan SDK
+- SCons
+- Godot 4.x
+
+```bash
+# Install dependencies on Ubuntu/Debian
+sudo apt install cmake libvulkan-dev scons
 ```
 
 ### Clone the Repository
 
 ```bash
-# Clone the repository with submodules
 git clone --recursive https://github.com/Qervas/ohao-engine.git
+cd ohao-engine
 
 # Or if you already cloned without --recursive:
-git clone https://github.com/Qervas/ohao-engine.git
-cd ohao-engine
 git submodule update --init --recursive
 ```
 
 ### Build Steps
 
+#### 1. Build Engine Libraries
+
 ```bash
-mkdir build
-cd build
+mkdir -p build && cd build
 cmake ..
-make -j$(nproc)  # Use multiple cores for faster building
+make -j$(nproc)  # Linux
+make -j8         # macOS
 ```
 
-### Running
+#### 2. Build GDExtension
 
 ```bash
-./ohao_engine
+cd godot_editor
+scons platform=macos arch=arm64    # macOS Apple Silicon
+scons platform=macos arch=x86_64   # macOS Intel
+scons platform=linux arch=x86_64   # Linux
 ```
 
-### Controls
+#### 3. Run in Godot Editor
 
-- **WASD**: Camera movement
-- **Mouse**: Look around
-- **Space/Ctrl**: Up/Down
-- **Shift**: Speed up movement
-- **Esc**: Exit
+```bash
+cd godot_editor/project
+godot -e
+```
 
-## Development Status
+The OHAO Viewport tab will appear in the Godot Editor, displaying the custom Vulkan renderer output.
 
-Currently in early development. Features being implemented:
+### Controls (in OHAO Viewport)
 
-- [X] Basic window creation
-- [X] Vulkan initialization, validation layer, pipeline, rasterization
-- [X] Load scene from obj file, including lighting and materials
-- [X] Friendly camera control
-- [X] User interface
-- [ ] BRDF and illumination model switch
-
-## Documentation
-
-- [Technical Specification](docs/TECHNICAL_SPEC.md)
-- More documentation will be added as the project develops
+- **Arrow Keys**: Orbit camera (pitch/yaw)
+- **W/S**: Zoom in/out
+- **A/D**: Pan left/right
+- **Q/E**: Pan up/down
 
 ## Project Structure
 
 ```
 ohao-engine/
-├── src/             # Source files
-├── shaders/         # GLSL shaders
-├── external/        # External dependencies
-│   └── imgui/      # Dear ImGui (docking branch)
-├── docs/           # Documentation
-└── assets/         # 3D models and textures
+├── src/
+│   ├── engine/          # Actor-component system, scene management
+│   │   ├── actor/       # Entity system
+│   │   ├── asset/       # Asset loading
+│   │   ├── component/   # Mesh, Transform, Light, Physics components
+│   │   └── scene/       # Scene management & loaders
+│   ├── physics/         # Custom physics engine
+│   │   ├── collision/   # Broad/narrow phase collision
+│   │   ├── dynamics/    # Rigid body dynamics
+│   │   ├── constraints/ # Physics constraints
+│   │   └── world/       # Physics world management
+│   ├── renderer/        # Vulkan rendering
+│   │   ├── offscreen/   # Headless Vulkan renderer
+│   │   ├── camera/      # Camera system
+│   │   └── material/    # Material system
+│   └── ui/              # Logging utilities
+├── godot_editor/        # GDExtension for Godot 4.x
+│   ├── src/             # GDExtension source (OhaoViewport, etc.)
+│   ├── godot-cpp/       # Godot C++ bindings (submodule)
+│   └── project/         # Godot project with OHAO plugin
+├── shaders/             # GLSL shaders (compiled to SPIR-V)
+└── external/            # External dependencies
 ```
+
+## Development Status
+
+- [x] Vulkan offscreen rendering
+- [x] GDExtension integration with Godot 4.x
+- [x] Actor-component system
+- [x] Custom physics simulation
+- [x] Camera controls in viewport
+- [ ] Full PBR material rendering in GDExtension
+- [ ] Scene synchronization from Godot
+- [ ] Shadow mapping in GDExtension
+
+## Documentation
+
+- [Technical Specification](docs/TECHNICAL_SPEC.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 
 [MIT License](LICENSE)
-
-## Contributing
-
-This project is currently in early development. Contribution guidelines will be added soon.
 
 ## Author
 
@@ -105,6 +159,6 @@ This project is currently in early development. Contribution guidelines will be 
 
 ## Acknowledgments
 
-- [Dear ImGui](https://github.com/ocornut/imgui) - Immediate mode GUI
+- [Godot Engine](https://godotengine.org/) - Game engine and editor
 - [Vulkan](https://www.vulkan.org/) - Graphics API
-- [GLFW](https://www.glfw.org/) - Window creation and input
+- [MoltenVK](https://github.com/KhronosGroup/MoltenVK) - Vulkan on macOS
