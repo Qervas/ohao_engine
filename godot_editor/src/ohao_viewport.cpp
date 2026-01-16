@@ -4,6 +4,21 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/input.hpp>
+#include <godot_cpp/classes/font.hpp>
+
+// Godot 3D node types for scene sync
+#include <godot_cpp/classes/mesh_instance3d.hpp>
+#include <godot_cpp/classes/box_mesh.hpp>
+#include <godot_cpp/classes/sphere_mesh.hpp>
+#include <godot_cpp/classes/cylinder_mesh.hpp>
+#include <godot_cpp/classes/plane_mesh.hpp>
+#include <godot_cpp/classes/capsule_mesh.hpp>
+#include <godot_cpp/classes/primitive_mesh.hpp>
+#include <godot_cpp/classes/directional_light3d.hpp>
+#include <godot_cpp/classes/omni_light3d.hpp>
+#include <godot_cpp/classes/spot_light3d.hpp>
+#include <godot_cpp/classes/camera3d.hpp>
+#include <godot_cpp/classes/standard_material3d.hpp>
 
 // Include OHAO headers
 #include "renderer/offscreen/offscreen_renderer.hpp"
@@ -29,6 +44,8 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_tscn", "path"), &OhaoViewport::load_tscn);
     ClassDB::bind_method(D_METHOD("sync_scene"), &OhaoViewport::sync_scene);
     ClassDB::bind_method(D_METHOD("clear_scene"), &OhaoViewport::clear_scene);
+    ClassDB::bind_method(D_METHOD("sync_from_godot", "root_node"), &OhaoViewport::sync_from_godot);
+    ClassDB::bind_method(D_METHOD("get_synced_object_count"), &OhaoViewport::get_synced_object_count);
     ClassDB::bind_method(D_METHOD("add_cube", "name", "position", "rotation", "scale", "color"), &OhaoViewport::add_cube);
     ClassDB::bind_method(D_METHOD("add_sphere", "name", "position", "rotation", "scale", "color"), &OhaoViewport::add_sphere);
     ClassDB::bind_method(D_METHOD("add_plane", "name", "position", "rotation", "scale", "color"), &OhaoViewport::add_plane);
@@ -140,6 +157,35 @@ void OhaoViewport::_draw() {
 
     // Draw the rendered texture
     draw_texture(m_texture, Vector2(0, 0));
+
+    // Draw "OHAO Engine" text overlay when scene is empty
+    if (!has_scene_meshes()) {
+        Ref<Font> font = get_theme_default_font();
+        if (font.is_valid()) {
+            String text = "OHAO Engine";
+            int font_size = 32;
+            Vector2 text_size = font->get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size);
+            Vector2 center = get_size() / 2.0;
+            Vector2 text_pos = center - text_size / 2.0;
+            text_pos.y += text_size.y / 2.0;  // Adjust for baseline
+
+            // Draw text with slight transparency
+            draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.6, 0.6, 0.7, 0.8));
+
+            // Draw subtitle
+            String subtitle = "Load a scene or sync from editor";
+            int sub_size = 14;
+            Vector2 sub_text_size = font->get_string_size(subtitle, HORIZONTAL_ALIGNMENT_CENTER, -1, sub_size);
+            Vector2 sub_pos = center - sub_text_size / 2.0;
+            sub_pos.y += text_size.y / 2.0 + 30;
+            draw_string(font, sub_pos, subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(0.5, 0.5, 0.55, 0.6));
+        }
+    }
+}
+
+bool OhaoViewport::has_scene_meshes() const {
+    if (!m_renderer) return false;
+    return m_renderer->hasSceneMeshes();
 }
 
 void OhaoViewport::initialize_renderer() {
@@ -407,6 +453,196 @@ void OhaoViewport::finish_sync() {
         UtilityFunctions::print("[OHAO] Scene buffers updated successfully");
     } else {
         UtilityFunctions::print("[OHAO] No meshes to render in scene");
+    }
+}
+
+// ===== Scene Sync from Godot =====
+
+void OhaoViewport::sync_from_godot(Node* root_node) {
+    if (!root_node) {
+        UtilityFunctions::printerr("[OHAO] sync_from_godot: root_node is null!");
+        return;
+    }
+
+    if (!m_scene || !m_renderer) {
+        UtilityFunctions::printerr("[OHAO] sync_from_godot: renderer not initialized!");
+        return;
+    }
+
+    UtilityFunctions::print("[OHAO] Syncing from Godot scene: ", root_node->get_name());
+
+    // First pass: count objects without modifying scene
+    m_synced_object_count = 0;
+    count_syncable_objects(root_node);
+
+    if (m_synced_object_count == 0) {
+        UtilityFunctions::print("[OHAO] No syncable objects found in Godot scene (need MeshInstance3D, lights, etc.)");
+        UtilityFunctions::print("[OHAO] Keeping existing OHAO scene. Add 3D objects in Godot's 3D editor first.");
+        return;
+    }
+
+    // Clear existing OHAO scene only if we have objects to sync
+    m_scene->removeAllActors();
+    m_synced_object_count = 0;
+
+    // Traverse the Godot scene tree and create OHAO actors
+    traverse_and_sync(root_node);
+
+    // Rebuild buffers
+    if (m_renderer->updateSceneBuffers()) {
+        UtilityFunctions::print("[OHAO] Sync complete: ", m_synced_object_count, " objects synced");
+    } else {
+        UtilityFunctions::print("[OHAO] Sync complete but no renderable meshes found");
+    }
+}
+
+void OhaoViewport::count_syncable_objects(Node* node) {
+    if (!node) return;
+
+    // Check for syncable node types
+    if (Object::cast_to<MeshInstance3D>(node)) {
+        MeshInstance3D* mesh_instance = Object::cast_to<MeshInstance3D>(node);
+        if (mesh_instance->get_mesh().is_valid()) {
+            m_synced_object_count++;
+        }
+    }
+    else if (Object::cast_to<DirectionalLight3D>(node) ||
+             Object::cast_to<OmniLight3D>(node) ||
+             Object::cast_to<SpotLight3D>(node)) {
+        m_synced_object_count++;
+    }
+
+    // Recurse into children
+    int child_count = node->get_child_count();
+    for (int i = 0; i < child_count; i++) {
+        count_syncable_objects(node->get_child(i));
+    }
+}
+
+void OhaoViewport::traverse_and_sync(Node* node) {
+    if (!node) return;
+
+    // Check if this is a Node3D (has transform)
+    Node3D* node3d = Object::cast_to<Node3D>(node);
+    if (node3d) {
+        // Get global transform
+        Transform3D transform = node3d->get_global_transform();
+        Vector3 position = transform.origin;
+        Vector3 rotation = transform.basis.get_euler();
+        Vector3 scale = transform.basis.get_scale();
+        String name = node->get_name();
+
+        // Check for MeshInstance3D
+        MeshInstance3D* mesh_instance = Object::cast_to<MeshInstance3D>(node);
+        if (mesh_instance) {
+            Ref<Mesh> mesh = mesh_instance->get_mesh();
+            if (mesh.is_valid()) {
+                // Get material color if available
+                Color color(0.8f, 0.8f, 0.8f, 1.0f);  // Default gray
+
+                // Try to get material from mesh instance
+                Ref<Material> mat = mesh_instance->get_surface_override_material(0);
+                if (!mat.is_valid() && mesh.is_valid()) {
+                    mat = mesh->surface_get_material(0);
+                }
+
+                if (mat.is_valid()) {
+                    StandardMaterial3D* std_mat = Object::cast_to<StandardMaterial3D>(mat.ptr());
+                    if (std_mat) {
+                        color = std_mat->get_albedo();
+                    }
+                }
+
+                // Determine mesh type and add to OHAO
+                // Note: Multiply node scale by mesh size to get actual dimensions
+                BoxMesh* box_mesh = Object::cast_to<BoxMesh>(mesh.ptr());
+                SphereMesh* sphere_mesh = Object::cast_to<SphereMesh>(mesh.ptr());
+                CylinderMesh* cylinder_mesh = Object::cast_to<CylinderMesh>(mesh.ptr());
+                PlaneMesh* plane_mesh = Object::cast_to<PlaneMesh>(mesh.ptr());
+
+                if (box_mesh) {
+                    Vector3 mesh_size = box_mesh->get_size();
+                    Vector3 final_scale = Vector3(scale.x * mesh_size.x, scale.y * mesh_size.y, scale.z * mesh_size.z);
+                    add_cube(name, position, rotation * (180.0f / Math_PI), final_scale, color);
+                    m_synced_object_count++;
+                }
+                else if (sphere_mesh) {
+                    float radius = sphere_mesh->get_radius();
+                    Vector3 final_scale = Vector3(scale.x * radius * 2.0f, scale.y * radius * 2.0f, scale.z * radius * 2.0f);
+                    add_sphere(name, position, rotation * (180.0f / Math_PI), final_scale, color);
+                    m_synced_object_count++;
+                }
+                else if (cylinder_mesh) {
+                    float radius = cylinder_mesh->get_top_radius();
+                    float height = cylinder_mesh->get_height();
+                    Vector3 final_scale = Vector3(scale.x * radius * 2.0f, scale.y * height, scale.z * radius * 2.0f);
+                    add_cylinder(name, position, rotation * (180.0f / Math_PI), final_scale, color);
+                    m_synced_object_count++;
+                }
+                else if (plane_mesh) {
+                    Vector2 mesh_size = plane_mesh->get_size();
+                    Vector3 final_scale = Vector3(scale.x * mesh_size.x, scale.y, scale.z * mesh_size.y);
+                    add_plane(name, position, rotation * (180.0f / Math_PI), final_scale, color);
+                    m_synced_object_count++;
+                }
+                else {
+                    // Unknown mesh type - try as cube for now
+                    UtilityFunctions::print("[OHAO] Unknown mesh type for '", name, "', treating as cube");
+                    add_cube(name, position, rotation * (180.0f / Math_PI), scale, color);
+                    m_synced_object_count++;
+                }
+            }
+        }
+
+        // Check for DirectionalLight3D
+        DirectionalLight3D* dir_light = Object::cast_to<DirectionalLight3D>(node);
+        if (dir_light) {
+            Color color = dir_light->get_color();
+            float intensity = dir_light->get_param(Light3D::PARAM_ENERGY);
+            // Direction is -Z in local space, transformed by rotation
+            Vector3 direction = -transform.basis.get_column(2);
+            add_directional_light(name, position, direction, color, intensity);
+            m_synced_object_count++;
+        }
+
+        // Check for OmniLight3D (point light)
+        OmniLight3D* omni_light = Object::cast_to<OmniLight3D>(node);
+        if (omni_light) {
+            Color color = omni_light->get_color();
+            float intensity = omni_light->get_param(Light3D::PARAM_ENERGY);
+            float range = omni_light->get_param(Light3D::PARAM_RANGE);
+            add_point_light(name, position, color, intensity, range);
+            m_synced_object_count++;
+        }
+
+        // Check for SpotLight3D
+        SpotLight3D* spot_light = Object::cast_to<SpotLight3D>(node);
+        if (spot_light) {
+            // TODO: Add spot light support
+            UtilityFunctions::print("[OHAO] SpotLight3D '", name, "' not fully supported yet, treating as point light");
+            Color color = spot_light->get_color();
+            float intensity = spot_light->get_param(Light3D::PARAM_ENERGY);
+            float range = spot_light->get_param(Light3D::PARAM_RANGE);
+            add_point_light(name, position, color, intensity, range);
+            m_synced_object_count++;
+        }
+
+        // Check for Camera3D
+        Camera3D* camera = Object::cast_to<Camera3D>(node);
+        if (camera) {
+            // Update OHAO camera to match Godot camera
+            ohao::Camera& ohao_cam = m_renderer->getCamera();
+            ohao_cam.setPosition(to_glm(position));
+            // Convert rotation - Godot uses radians, OHAO uses degrees for setRotation
+            ohao_cam.setRotation(glm::degrees(rotation.x), glm::degrees(rotation.y));
+            UtilityFunctions::print("[OHAO] Camera synced at position: (", position.x, ", ", position.y, ", ", position.z, ")");
+        }
+    }
+
+    // Recursively traverse children
+    int child_count = node->get_child_count();
+    for (int i = 0; i < child_count; i++) {
+        traverse_and_sync(node->get_child(i));
     }
 }
 
