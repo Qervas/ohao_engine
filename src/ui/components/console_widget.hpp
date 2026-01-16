@@ -1,24 +1,38 @@
 #pragma once
 #include <sstream>
-#include <vector>
 #include <string>
 #include <mutex>
-#include <imgui.h>
+#include <iostream>
+#include <functional>
 
 namespace ohao {
+
+// Log level for callback
+enum class LogLevel {
+    Info,
+    Warning,
+    Error,
+    Debug
+};
+
+// Log callback type: (level, message)
+using LogCallback = std::function<void(LogLevel, const std::string&)>;
+
 class ConsoleWidget {
 public:
-    ConsoleWidget();
+    ConsoleWidget() = default;
     ~ConsoleWidget() = default;
-
-    void render();
 
     // Thread-safe logging methods
     void log(const std::string& message);
     void logWarning(const std::string& message);
     void logError(const std::string& message);
     void logDebug(const std::string& message);
-    void clear();
+
+    // Set external log callback (e.g., for Godot integration)
+    // When set, logs are forwarded to the callback instead of stdout
+    void setLogCallback(LogCallback callback);
+    void clearLogCallback();
 
     // Stream-like logging
     template<typename T>
@@ -36,27 +50,8 @@ public:
     }
 
 private:
-    struct LogEntry {
-        std::string message;
-        ImVec4 color;
-        float relativeTime;
-        std::string category;
-        std::string timeStr;
-        mutable bool selected{false};
-    };
-
-    std::vector<LogEntry> entries;
-    bool autoScroll{true};
-    bool showTimestamps{true};
-    bool showCategories{true};
-    std::mutex mutex;  // For thread-safe logging
-
-    void addEntry(const std::string& message, const ImVec4& color, const std::string& category = "Info");
-    void copySelectedEntries();
-    void copyAllEntries();
-    std::string formatTimestamp(float timestamp);
-
-
+    std::mutex mutex;
+    LogCallback logCallback;
 };
 
 // Global logging functions

@@ -167,7 +167,7 @@ void DefaultSceneFactory::setupGroundPlane(Scene* scene) {
 
 void DefaultSceneFactory::setupDefaultCamera(Scene* scene) {
     // Future: When we move to entity-based camera system
-    // For now, camera is handled by VulkanContext
+    // For now, camera is handled by the renderer
 }
 
 } // namespace ohao

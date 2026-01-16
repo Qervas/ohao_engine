@@ -53,7 +53,7 @@ public:
     std::vector<Actor::Ptr> findActorsByTag(const std::string& tag) const;
     const std::unordered_map<uint64_t, Actor::Ptr>& getAllActors() const;
     
-    // Legacy compatibility (kept minimal)
+    // Convenience aliases
     void addObject(const std::string& name, Actor::Ptr actor) { actorsByName[name] = actor; actors[actor->getID()] = actor; }
     void removeObject(const std::string& name) { removeActor(name); }
     Actor::Ptr getObjectByID(uint64_t id) { return findActor(id); }
@@ -87,11 +87,7 @@ public:
     void destroy();
     
     bool importModel(const std::string& filename, Actor::Ptr targetActor = nullptr);
-    
-    // Serialization
-    bool saveToFile(const std::string& filename);
-    bool loadFromFile(const std::string& filename);
-    
+
     // Root accessor (root actor)
     Actor::Ptr getRootNode() const { return rootNode; }
     
@@ -103,9 +99,7 @@ public:
     
     const std::string& getProjectPath() const { return projectPath; }
     void setProjectPath(const std::string& path) { projectPath = path; }
-    
-    static const std::string FILE_EXTENSION;
-    
+
 private:
     std::string name;
     SceneDescriptor descriptor;

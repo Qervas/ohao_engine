@@ -8,8 +8,6 @@
 #include "engine/asset/model.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/world/physics_settings.hpp"
-#include "engine/serialization/map_io.hpp"
-#include "renderer/vulkan_context.hpp"
 #include "ui/components/console_widget.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -20,9 +18,6 @@
 #include <nlohmann/json.hpp>
 
 namespace ohao {
-
-// Define file extension
-const std::string Scene::FILE_EXTENSION = ".ohscene";
 
 Scene::Scene(const std::string& name)
     : name(name)
@@ -388,26 +383,12 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
     return true;
 }
 
-bool Scene::saveToFile(const std::string& filename) {
-    MapIO io(this);
-    return io.save(filename);
-}
-
-bool Scene::loadFromFile(const std::string& filename) {
-    MapIO io(this);
-    return io.load(filename);
-}
-
 bool Scene::updateSceneBuffers() {
     // Mark as up-to-date
     needsBufferUpdate = false;
-    
-    // Call VulkanContext to update actual buffers in GPU memory
-    if (auto* vulkanContext = VulkanContext::getContextInstance()) {
-        return vulkanContext->updateSceneBuffers();
-    }
-    
-    return false;
+
+    // GPU buffer updates are handled by OffscreenRenderer::updateSceneBuffers()
+    return true;
 }
 
 void Scene::registerActor(Actor::Ptr actor) {
