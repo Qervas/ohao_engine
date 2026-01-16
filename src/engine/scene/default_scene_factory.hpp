@@ -8,7 +8,6 @@ namespace ohao {
 
 /**
  * Factory for creating default scene setups
- * Replaces the hardcoded scene initialization in VulkanContext
  */
 class DefaultSceneFactory {
 public:

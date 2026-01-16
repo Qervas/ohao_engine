@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 OHAO Engine GDExtension Build Script
-Builds the GDExtension that wraps OHAO's Vulkan renderer and physics engine
+Builds the GDExtension that embeds OHAO's Vulkan renderer in Godot
 """
 
 import os
@@ -10,12 +10,14 @@ import sys
 # Build godot-cpp first
 env = SConscript("godot-cpp/SConstruct")
 
-# Add our include paths
+# Add OHAO include paths
 env.Append(CPPPATH=[
     "src/",
     "../src/",  # OHAO engine headers
     "../external/glm/",
     "../external/",
+    "../build/_deps/glm-src/",  # GLM from FetchContent
+    "/opt/homebrew/include/",  # Vulkan headers (MoltenVK)
 ])
 
 # Add library paths
@@ -24,15 +26,19 @@ env.Append(LIBPATH=[
     "/opt/homebrew/lib/",  # Homebrew libraries (Vulkan, etc.)
 ])
 
-# Link OHAO libraries (commented out until integration)
-# env.Append(LIBS=[
-#     "ohao_renderer",
-#     "ohao_physics",
-#     "ohao_scene",
-#     "ohao_component",
-#     "ohao_actor",
-#     "ohao_asset",
-# ])
+# Link OHAO libraries (order matters for static linking - dependents first)
+# ohao_ui is needed for ConsoleWidget logging
+# Libraries that USE symbols must come BEFORE libraries that DEFINE them
+env.Append(LIBS=[
+    "ohao_renderer",   # Uses ConsoleWidget
+    "ohao_scene",      # Uses ConsoleWidget
+    "ohao_physics",    # Uses ConsoleWidget
+    "ohao_component",  # Uses ConsoleWidget
+    "ohao_ui",         # Defines ConsoleWidget (must come after users)
+    "ohao_actor",
+    "ohao_asset",
+    "tinyfiledialogs", # File dialogs
+])
 
 # Platform-specific settings
 if env["platform"] == "macos":
@@ -41,15 +47,17 @@ if env["platform"] == "macos":
         "-framework", "IOKit",
         "-framework", "CoreVideo",
         "-framework", "QuartzCore",
+        "-framework", "Metal",
+        "-framework", "MetalKit",
     ])
-    # Vulkan not needed for scaffolding
-    # env.Append(LIBS=["vulkan"])
+    # Link Vulkan/MoltenVK
+    env.Append(LIBS=["vulkan"])
 
 elif env["platform"] == "linux":
-    pass  # env.Append(LIBS=["vulkan", "pthread", "dl"])
+    env.Append(LIBS=["vulkan", "pthread", "dl"])
 
 elif env["platform"] == "windows":
-    pass  # env.Append(LIBS=["vulkan-1"])
+    env.Append(LIBS=["vulkan-1"])
 
 # Gather sources
 sources = Glob("src/*.cpp")
