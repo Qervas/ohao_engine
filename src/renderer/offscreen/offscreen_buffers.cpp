@@ -104,6 +104,27 @@ void OffscreenRenderer::updateUniformBuffer() {
     memcpy(m_uniformBufferMapped, &ubo, sizeof(ubo));
 }
 
+void OffscreenRenderer::updateUniformBuffer(uint32_t frameIndex) {
+    if (!m_frameResources.isInitialized()) {
+        updateUniformBuffer();
+        return;
+    }
+
+    FrameResources& frame = m_frameResources.getFrame(frameIndex);
+    if (!frame.cameraBufferMapped) return;
+
+    CameraUniformBuffer ubo{};
+    ubo.view = m_camera->getViewMatrix();
+    ubo.proj = glm::perspective(glm::radians(45.0f),
+                                static_cast<float>(m_width) / static_cast<float>(m_height),
+                                0.1f, 100.0f);
+    // Flip Y for Vulkan
+    ubo.proj[1][1] *= -1;
+    ubo.viewPos = m_camera->getPosition();
+
+    memcpy(frame.cameraBufferMapped, &ubo, sizeof(ubo));
+}
+
 bool OffscreenRenderer::createLightBuffer() {
     VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
 
@@ -351,6 +372,85 @@ void OffscreenRenderer::updateLightBuffer() {
     }
 
     memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));
+}
+
+void OffscreenRenderer::updateLightBuffer(uint32_t frameIndex) {
+    if (!m_frameResources.isInitialized()) {
+        updateLightBuffer();
+        return;
+    }
+
+    FrameResources& frame = m_frameResources.getFrame(frameIndex);
+    if (!frame.lightBufferMapped) return;
+
+    LightUniformBuffer lightUbo{};
+    lightUbo.numLights = 0;
+    lightUbo.ambientIntensity = 0.15f;
+    lightUbo.shadowBias = 0.005f;
+    lightUbo.shadowStrength = 0.7f;
+
+    int shadowCasterIndex = -1;
+
+    // Collect lights from scene
+    if (m_scene) {
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto lightComp = actor->getComponent<LightComponent>();
+            if (!lightComp) continue;
+            if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
+
+            LightData& light = lightUbo.lights[lightUbo.numLights];
+
+            glm::vec3 worldPos = actor->getTransform()->getPosition();
+            glm::vec3 worldDir = lightComp->getDirection();
+
+            light.position = glm::vec4(worldPos, static_cast<float>(lightComp->getLightType()));
+            light.direction = glm::vec4(worldDir, lightComp->getRange());
+            light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
+
+            float shadowMapIndex = -1.0f;
+            if (m_shadowsEnabled && shadowCasterIndex < 0) {
+                int lightType = static_cast<int>(lightComp->getLightType());
+                if (lightType == 0 || lightType == 2) {
+                    shadowMapIndex = 0.0f;
+                    shadowCasterIndex = lightUbo.numLights;
+                }
+            }
+
+            light.params = glm::vec4(
+                glm::cos(glm::radians(lightComp->getInnerConeAngle())),
+                glm::cos(glm::radians(lightComp->getOuterConeAngle())),
+                shadowMapIndex,
+                0.0f
+            );
+
+            if (shadowMapIndex >= 0.0f) {
+                light.lightSpaceMatrix = calculateLightSpaceMatrix(light);
+            } else {
+                light.lightSpaceMatrix = glm::mat4(1.0f);
+            }
+
+            lightUbo.numLights++;
+        }
+    }
+
+    // If no lights in scene, add a default directional light
+    if (lightUbo.numLights == 0) {
+        LightData& defaultLight = lightUbo.lights[0];
+        defaultLight.position = glm::vec4(0.0f, 5.0f, 5.0f, 0.0f);
+        defaultLight.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
+        defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f, 0.0f);
+
+        if (m_shadowsEnabled) {
+            defaultLight.lightSpaceMatrix = calculateLightSpaceMatrix(defaultLight);
+        } else {
+            defaultLight.lightSpaceMatrix = glm::mat4(1.0f);
+        }
+
+        lightUbo.numLights = 1;
+    }
+
+    memcpy(frame.lightBufferMapped, &lightUbo, sizeof(lightUbo));
 }
 
 } // namespace ohao

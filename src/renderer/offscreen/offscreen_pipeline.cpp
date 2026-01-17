@@ -70,21 +70,27 @@ bool OffscreenRenderer::createDescriptorSetLayout() {
 }
 
 bool OffscreenRenderer::createDescriptorPool() {
+    // Calculate descriptor counts for multi-frame rendering
+    // Each frame needs: 1 camera UBO + 1 light UBO + 1 shadow sampler
+    // Plus 1 legacy set for compatibility during transition
+    const uint32_t framesInFlight = MAX_FRAMES_IN_FLIGHT;
+    const uint32_t totalSets = framesInFlight + 1; // +1 for legacy compatibility
+
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
 
-    // Uniform buffers (Camera + Light)
+    // Uniform buffers (Camera + Light per frame, plus legacy)
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = 2;
+    poolSizes[0].descriptorCount = 2 * totalSets;
 
-    // Combined image samplers (shadow map)
+    // Combined image samplers (shadow map per frame, plus legacy)
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 1;
+    poolSizes[1].descriptorCount = totalSets;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 1;
+    poolInfo.maxSets = totalSets;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         return false;
@@ -158,9 +164,9 @@ bool OffscreenRenderer::createDescriptorSets() {
 }
 
 bool OffscreenRenderer::createPipeline() {
-    // Load shaders
-    std::string vertPath = m_shaderBasePath + "offscreen_simple.vert.spv";
-    std::string fragPath = m_shaderBasePath + "offscreen_simple.frag.spv";
+    // Load shaders (new AAA directory structure: core/forward.vert/frag)
+    std::string vertPath = m_shaderBasePath + "core_forward.vert.spv";
+    std::string fragPath = m_shaderBasePath + "core_forward.frag.spv";
 
     m_vertShaderModule = loadShaderModule(vertPath);
     m_fragShaderModule = loadShaderModule(fragPath);
@@ -327,9 +333,9 @@ bool OffscreenRenderer::createPipeline() {
 }
 
 bool OffscreenRenderer::createShadowPipeline() {
-    // Load shadow shaders (offscreen_shadow.vert is standalone, no includes)
-    std::string vertPath = m_shaderBasePath + "offscreen_shadow.vert.spv";
-    std::string fragPath = m_shaderBasePath + "shadow_depth.frag.spv";
+    // Load shadow shaders (new AAA directory structure: shadow/shadow_depth.vert/frag)
+    std::string vertPath = m_shaderBasePath + "shadow_shadow_depth.vert.spv";
+    std::string fragPath = m_shaderBasePath + "shadow_shadow_depth.frag.spv";
 
     m_shadowVertShader = loadShaderModule(vertPath);
     m_shadowFragShader = loadShaderModule(fragPath);

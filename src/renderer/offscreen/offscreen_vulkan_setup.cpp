@@ -125,6 +125,7 @@ bool OffscreenRenderer::createCommandPool() {
 }
 
 bool OffscreenRenderer::createSyncObjects() {
+    // Legacy single fence (kept for compatibility during transition)
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
@@ -134,6 +135,34 @@ bool OffscreenRenderer::createSyncObjects() {
     }
 
     return true;
+}
+
+bool OffscreenRenderer::initializeFrameResources() {
+    // Calculate buffer sizes
+    size_t cameraBufferSize = sizeof(CameraUniformBuffer);
+    size_t lightBufferSize = sizeof(LightUniformBuffer);
+    size_t stagingBufferSize = m_width * m_height * 4; // RGBA
+
+    // Initialize frame resources with per-frame buffers and descriptor sets
+    bool success = m_frameResources.initialize(
+        m_device,
+        m_physicalDevice,
+        m_commandPool,
+        m_descriptorSetLayout,
+        m_descriptorPool,
+        m_shadowImageView,
+        m_shadowSampler,
+        cameraBufferSize,
+        lightBufferSize,
+        stagingBufferSize
+    );
+
+    if (success) {
+        std::cout << "Multi-frame rendering enabled with "
+                  << MAX_FRAMES_IN_FLIGHT << " frames in flight" << std::endl;
+    }
+
+    return success;
 }
 
 } // namespace ohao
