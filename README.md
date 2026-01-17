@@ -2,14 +2,7 @@
 
 OHAO Engine is a custom physics and rendering engine that integrates with Godot 4.x as a GDExtension. It features a Vulkan-based renderer and custom physics simulation.
 
-<div style="display: flex;">
-  <div style="flex: 1;">
-    <img src="image/README/1733708535551.png" alt="Image 1" style="width: 50%;">
-  </div>
-  <div style="flex: 1;">
-    <img src="image/README/1734118037401.png" alt="Image 2" style="width: 50%;">
-  </div>
-</div>
+![OHAO Viewport in Godot Editor](image/README/godot_ohao_viewport.png)
 
 ## Architecture
 
