@@ -1,0 +1,163 @@
+#version 450
+
+// Screen-Space Ambient Occlusion (GTAO - Ground Truth AO)
+// High-quality SSAO based on horizon-based ambient occlusion
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 1) uniform sampler2D normalBuffer;
+layout(set = 0, binding = 2, r16f) writeonly uniform image2D aoOutput;
+
+layout(push_constant) uniform SSAOParams {
+    mat4 projection;
+    mat4 invProjection;
+    vec4 noiseScale;        // xy = noise scale, zw = screen size
+    float radius;
+    float bias;
+    float intensity;
+    uint sampleCount;
+    vec2 texelSize;
+    float falloffStart;
+    float falloffEnd;
+} params;
+
+// Noise texture for randomization
+layout(set = 0, binding = 3) uniform sampler2D noiseTexture;
+
+const float PI = 3.14159265359;
+
+// Reconstruct view-space position from depth
+vec3 reconstructPosition(vec2 uv, float depth) {
+    // Convert UV to NDC [-1, 1]
+    vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
+
+    // Transform to view space
+    vec4 viewPos = params.invProjection * clipPos;
+    return viewPos.xyz / viewPos.w;
+}
+
+// Decode normal from G-Buffer (octahedron encoded)
+vec3 decodeNormal(vec2 encoded) {
+    vec2 f = encoded * 2.0 - 1.0;
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += (n.x >= 0.0) ? -t : t;
+    n.y += (n.y >= 0.0) ? -t : t;
+    return normalize(n);
+}
+
+// GTAO integration
+float integrateAO(float h1, float h2, float n) {
+    float a = (-cos(2.0 * h1 - n) + cos(n) + 2.0 * h1 * sin(n)) / 4.0;
+    float b = (-cos(2.0 * h2 - n) + cos(n) + 2.0 * h2 * sin(n)) / 4.0;
+    return a + b;
+}
+
+// Find horizon angle in a direction
+float findHorizon(vec3 viewPos, vec3 viewDir, vec2 uv, vec2 deltaUV, int numSteps) {
+    float horizon = -1.0;
+
+    for (int i = 0; i < numSteps; ++i) {
+        vec2 sampleUV = uv + deltaUV * float(i + 1);
+
+        if (sampleUV.x < 0.0 || sampleUV.x > 1.0 ||
+            sampleUV.y < 0.0 || sampleUV.y > 1.0) {
+            break;
+        }
+
+        float sampleDepth = texture(depthBuffer, sampleUV).r;
+        vec3 samplePos = reconstructPosition(sampleUV, sampleDepth);
+
+        vec3 diff = samplePos - viewPos;
+        float len = length(diff);
+
+        // Skip samples that are too close or too far
+        if (len < 0.0001 || len > params.radius) {
+            continue;
+        }
+
+        // Calculate horizon angle
+        float h = dot(normalize(diff), viewDir);
+
+        // Update horizon
+        horizon = max(horizon, h);
+    }
+
+    return horizon;
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 screenSize = ivec2(params.noiseScale.zw);
+
+    if (coord.x >= screenSize.x || coord.y >= screenSize.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(coord) + 0.5) * params.texelSize;
+
+    // Sample depth and normal
+    float depth = texture(depthBuffer, uv).r;
+
+    // Skip sky pixels
+    if (depth >= 1.0) {
+        imageStore(aoOutput, coord, vec4(1.0));
+        return;
+    }
+
+    vec3 viewPos = reconstructPosition(uv, depth);
+    vec3 normal = decodeNormal(texture(normalBuffer, uv).rg);
+
+    // Sample noise for randomization
+    vec2 noiseUV = vec2(coord) * params.noiseScale.xy;
+    vec3 noise = texture(noiseTexture, noiseUV).rgb * 2.0 - 1.0;
+
+    // Build tangent frame
+    vec3 tangent = normalize(noise - normal * dot(noise, normal));
+    vec3 bitangent = cross(normal, tangent);
+
+    float ao = 0.0;
+    int numDirections = int(params.sampleCount);
+    int stepsPerDirection = 4;
+
+    // Sample in multiple directions
+    for (int i = 0; i < numDirections; ++i) {
+        float angle = float(i) / float(numDirections) * PI;
+
+        // Direction in tangent space
+        vec2 dir2D = vec2(cos(angle), sin(angle));
+        vec3 dir = tangent * dir2D.x + bitangent * dir2D.y;
+
+        // Project direction to screen space
+        vec3 targetPos = viewPos + dir * params.radius;
+        vec4 targetClip = params.projection * vec4(targetPos, 1.0);
+        vec2 targetUV = (targetClip.xy / targetClip.w) * 0.5 + 0.5;
+
+        vec2 deltaUV = (targetUV - uv) / float(stepsPerDirection);
+
+        // Find horizon in both directions
+        float h1 = findHorizon(viewPos, dir, uv, deltaUV, stepsPerDirection);
+        float h2 = findHorizon(viewPos, dir, uv, -deltaUV, stepsPerDirection);
+
+        // Convert to angles
+        h1 = acos(clamp(h1, -1.0, 1.0));
+        h2 = acos(clamp(h2, -1.0, 1.0));
+
+        // Normal angle relative to view direction
+        float n = acos(clamp(dot(normal, normalize(-viewPos)), -1.0, 1.0));
+
+        // Integrate occlusion
+        ao += integrateAO(h1, h2, n) / PI;
+    }
+
+    ao = 1.0 - (ao / float(numDirections)) * params.intensity;
+    ao = clamp(ao, 0.0, 1.0);
+
+    // Distance-based falloff
+    float dist = length(viewPos);
+    float falloff = 1.0 - smoothstep(params.falloffStart, params.falloffEnd, dist);
+    ao = mix(1.0, ao, falloff);
+
+    imageStore(aoOutput, coord, vec4(ao, 0.0, 0.0, 0.0));
+}

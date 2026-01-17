@@ -1,0 +1,68 @@
+# Cornell Box with properly double-sided walls
+mtllib cornell_box.mtl
+
+# Vertices (scaled down)
+v -1.0 -1.0 -1.0  # 1
+v  1.0 -1.0 -1.0  # 2
+v  1.0  1.0 -1.0  # 3
+v -1.0  1.0 -1.0  # 4
+v -1.0 -1.0  1.0  # 5
+v  1.0 -1.0  1.0  # 6
+v  1.0  1.0  1.0  # 7
+v -1.0  1.0  1.0  # 8
+
+# Light vertices
+v -0.2  0.9  -0.2  # 9
+v  0.2  0.9  -0.2  # 10
+v  0.2  0.9   0.2  # 11
+v -0.2  0.9   0.2  # 12
+
+# Vertex Normals
+vn  0.0  0.0 -1.0  # Forward normal (1)
+vn  0.0  0.0  1.0  # Back normal (2)
+vn -1.0  0.0  0.0  # Left normal (3)
+vn  1.0  0.0  0.0  # Right normal (4)
+vn  0.0 -1.0  0.0  # Bottom normal (5)
+vn  0.0  1.0  0.0  # Top normal (6)
+
+# Back wall
+usemtl white_wall
+f 1//2 2//2 3//2
+f 1//2 3//2 4//2  # Inside face
+f 4//1 3//1 2//1
+f 4//1 2//1 1//1  # Outside face
+
+# Left wall (red)
+usemtl red_wall
+f 1//4 4//4 8//4
+f 1//4 8//4 5//4  # Inside face
+f 5//3 8//3 4//3
+f 5//3 4//3 1//3  # Outside face
+
+# Right wall (green)
+usemtl green_wall
+f 2//3 6//3 7//3
+f 2//3 7//3 3//3  # Inside face
+f 3//4 7//4 6//4
+f 3//4 6//4 2//4  # Outside face
+
+# Floor
+usemtl floor
+f 5//6 6//6 2//6
+f 5//6 2//6 1//6  # Inside face
+f 1//5 2//5 6//5
+f 1//5 6//5 5//5  # Outside face
+
+# Ceiling
+usemtl ceiling
+f 4//5 7//5 3//5
+f 4//5 8//5 7//5  # Inside face
+f 4//5 7//5 3//5
+f 4//5 8//5 7//5  # Outside face
+
+# Light - Flipped orientation
+usemtl light
+f 9//5 10//5 11//5
+f 9//5 11//5 12//5  # Inside face
+f 9//5 10//5 11//5
+f 9//5 11//5 12//5  # Outside face

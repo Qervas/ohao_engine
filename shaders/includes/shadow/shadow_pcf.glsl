@@ -1,15 +1,17 @@
-// offscreen_shadow.glsl - Shadow calculation functions for offscreen renderer
+// shadow_pcf.glsl - PCF shadow calculation functions
 // GLSL include file - use with glslangValidator -I flag
-// Requires: offscreen_types.glsl
-// IMPORTANT: This file accesses LightUBO directly to avoid struct copy corruption!
-
-#ifndef OFFSCREEN_SHADOW_GLSL
-#define OFFSCREEN_SHADOW_GLSL
-
-// NOTE: Caller must define LightUBO before including this file!
+//
+// Part of OHAO Engine shader system
+// Location: includes/shadow/shadow_pcf.glsl
+//
+// Requires: includes/common/types.glsl
+// IMPORTANT: Caller must define LightUBO named 'lighting' before including this file!
 // The UBO must have: lights[MAX_LIGHTS], shadowBias, shadowStrength
 
-// Calculate shadow factor for a fragment
+#ifndef OHAO_SHADOW_PCF_GLSL
+#define OHAO_SHADOW_PCF_GLSL
+
+// Calculate shadow factor for a fragment using PCF (Percentage Closer Filtering)
 // CRITICAL: Pass light INDEX, not Light struct, to avoid GLSL struct copy corruption!
 // Returns: 0.0 = fully lit, shadowStrength = fully shadowed
 float calculateShadowForLightIndex(int lightIndex, vec3 worldPos, vec3 normal,
@@ -85,4 +87,4 @@ float calculateShadowForLightIndex(int lightIndex, vec3 worldPos, vec3 normal,
     return shadow * lighting.shadowStrength;
 }
 
-#endif // OFFSCREEN_SHADOW_GLSL
+#endif // OHAO_SHADOW_PCF_GLSL

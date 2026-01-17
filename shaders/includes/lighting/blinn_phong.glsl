@@ -1,12 +1,17 @@
-// offscreen_lighting.glsl - Lighting calculation functions for offscreen renderer
+// blinn_phong.glsl - Blinn-Phong lighting calculation functions
 // GLSL include file - use with glslangValidator -I flag
-// Requires: offscreen_types.glsl
-// IMPORTANT: This file accesses LightUBO directly to avoid struct copy corruption!
+//
+// Part of OHAO Engine shader system
+// Location: includes/lighting/blinn_phong.glsl
+//
+// Requires: includes/common/types.glsl
+// IMPORTANT: Caller must define LightUBO named 'lighting' before including this file!
 
-#ifndef OFFSCREEN_LIGHTING_GLSL
-#define OFFSCREEN_LIGHTING_GLSL
+#ifndef OHAO_LIGHTING_BLINN_PHONG_GLSL
+#define OHAO_LIGHTING_BLINN_PHONG_GLSL
 
 // Calculate attenuation for point/spot lights
+// Uses smooth quadratic falloff with range-based cutoff
 float calculateAttenuation(float distance, float range) {
     // Quadratic falloff with range
     float attenuation = 1.0 / (1.0 + (distance * distance) / (range * range));
@@ -19,12 +24,13 @@ float calculateAttenuation(float distance, float range) {
 // CRITICAL: Pass light INDEX, not Light struct, to avoid GLSL struct copy corruption!
 // Parameters:
 //   lightIndex - Index into lighting.lights[] array
-//   fragPos - Fragment world position
-//   normal - Fragment surface normal
-//   viewDir - Direction from fragment to camera
-//   baseColor - Surface base color
-//   shadow - Shadow factor (0.0 = lit, 1.0 = shadowed)
-//   shininess - Specular shininess exponent
+//   fragPos    - Fragment world position
+//   normal     - Fragment surface normal (normalized)
+//   viewDir    - Direction from fragment to camera (normalized)
+//   baseColor  - Surface base color (albedo)
+//   shadow     - Shadow factor (0.0 = lit, 1.0 = shadowed)
+//   shininess  - Specular shininess exponent (typically 32-256)
+// Returns: Combined diffuse + specular contribution with shadow applied
 vec3 calculateBlinnPhongForLightIndex(int lightIndex, vec3 fragPos, vec3 normal, vec3 viewDir,
                                        vec3 baseColor, float shadow, float shininess) {
     // Access UBO members DIRECTLY - do NOT copy the Light struct!
@@ -72,4 +78,4 @@ vec3 calculateBlinnPhongForLightIndex(int lightIndex, vec3 fragPos, vec3 normal,
     return (diffuse + specular) * intensity * attenuation * (1.0 - shadow);
 }
 
-#endif // OFFSCREEN_LIGHTING_GLSL
+#endif // OHAO_LIGHTING_BLINN_PHONG_GLSL
