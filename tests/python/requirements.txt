@@ -1,0 +1,9 @@
+# Python dependencies for physics testing
+pytest>=7.0.0
+numpy>=1.20.0
+matplotlib>=3.5.0
+pybind11>=2.10.0
+
+# Optional: For ML integration
+# torch>=2.0.0
+# jax>=0.4.0
