@@ -140,13 +140,18 @@ ohao-engine/
 - [x] Actor-component system
 - [x] Custom physics simulation
 - [x] Camera controls in viewport
-- [ ] Full PBR material rendering in GDExtension
-- [ ] Scene synchronization from Godot
-- [ ] Shadow mapping in GDExtension
+- [x] Full PBR material rendering (Cook-Torrance GGX BRDF)
+- [x] Scene synchronization from Godot
+- [x] Shadow mapping (PCF soft shadows)
+- [x] Multi-frame rendering (3 frames in flight)
+- [ ] Cascaded Shadow Maps (CSM)
+- [ ] Deferred rendering pipeline
+- [ ] Image-Based Lighting (IBL)
 
 ## Documentation
 
-- [Technical Specification](docs/TECHNICAL_SPEC.md)
+- [Architecture Overview](docs/architecture/README.md) - System design, diagrams, rendering pipeline
+- [Bug Fixes History](docs/bugs_solved/README.md) - Solved issues and their solutions
 - [Changelog](CHANGELOG.md)
 
 ## License

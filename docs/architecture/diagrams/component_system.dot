@@ -1,0 +1,44 @@
+// OHAO Engine Component System
+// Render with: dot -Tpng component_system.dot -o component_system.png
+
+digraph Component_System {
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Helvetica"];
+
+    labelloc="t";
+    label="OHAO Engine - Entity Component System";
+    fontsize=18;
+
+    // Scene
+    Scene [label="Scene\n(manages actors)", fillcolor=lightblue, shape=folder];
+
+    // Actor
+    Actor [label="Actor\n(entity container)", fillcolor=lightskyblue];
+
+    subgraph cluster_components {
+        label="Components (attached to Actor)";
+        style=filled;
+        color=lightgray;
+
+        Transform [label="TransformComponent\n─────────────\nposition: vec3\nrotation: quat\nscale: vec3\n─────────────\ngetWorldMatrix()", fillcolor=lightgreen];
+
+        Mesh [label="MeshComponent\n─────────────\nvertices[]\nindices[]\nmodel: shared_ptr\n─────────────\nisVisible()", fillcolor=lightgreen];
+
+        Material [label="MaterialComponent\n─────────────\nbaseColor: vec3\nmetallic: float\nroughness: float\nao: float", fillcolor=lightgreen];
+
+        Light [label="LightComponent\n─────────────\ntype: Dir/Point/Spot\ncolor: vec3\nintensity: float\nrange: float", fillcolor=lightyellow];
+
+        Physics [label="PhysicsComponent\n─────────────\nrigidBody: RigidBody*\nmass: float\ncolliderType: enum\n─────────────\nsyncToTransform()\nsyncFromTransform()", fillcolor=lightcoral];
+    }
+
+    Scene -> Actor [label="contains many"];
+    Actor -> Transform;
+    Actor -> Mesh;
+    Actor -> Material;
+    Actor -> Light;
+    Actor -> Physics;
+
+    // Sync arrows
+    Transform -> Physics [label="position sync", style=dashed, color=blue];
+    Physics -> Transform [label="physics update", style=dashed, color=red];
+}

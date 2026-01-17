@@ -1,0 +1,34 @@
+// OHAO Engine Rendering Pipeline
+// Render with: dot -Tpng render_pipeline.dot -o render_pipeline.png
+
+digraph Rendering_Pipeline {
+    rankdir=LR;
+    node [shape=box, style=filled, fillcolor=lightblue, fontname="Helvetica"];
+
+    labelloc="t";
+    label="OHAO Engine - Rendering Pipeline (Per Frame)";
+    fontsize=18;
+
+    subgraph cluster_frame {
+        label="Ring Buffer Frame (×3 in flight)";
+        style=dashed;
+        color=gray;
+
+        Wait [label="Wait for\nFrame N-3", shape=ellipse, fillcolor=lightyellow];
+        ReadPixels [label="Read Pixels\n(from staging)", fillcolor=lightcyan];
+        Reset [label="Reset Fence", shape=ellipse, fillcolor=lightyellow];
+        UpdateUBO [label="Update UBOs\n(Camera, Lights)"];
+        Shadow [label="Shadow Pass\n(Depth Only)", fillcolor=gray90];
+        Main [label="Main Pass\n(PBR + Shadows)", fillcolor=lightgreen];
+        CopyStaging [label="Copy to\nStaging Buffer", fillcolor=lightcyan];
+        Submit [label="Queue Submit\n(Signal Fence)", shape=ellipse, fillcolor=lightyellow];
+        Advance [label="Advance\nFrame Index", shape=ellipse, fillcolor=lightyellow];
+    }
+
+    Wait -> ReadPixels -> Reset -> UpdateUBO -> Shadow -> Main -> CopyStaging -> Submit -> Advance;
+    Advance -> Wait [label="next frame", style=dashed, constraint=false];
+
+    // Notes
+    Note1 [label="No GPU stalls!\nCPU prepares N+1\nwhile GPU renders N", shape=note, fillcolor=white, style=filled];
+    UpdateUBO -> Note1 [style=invis];
+}
