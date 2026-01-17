@@ -1,0 +1,62 @@
+// OHAO Engine System Architecture
+// Render with: dot -Tpng system_overview.dot -o system_overview.png
+
+digraph OHAO_Architecture {
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Helvetica"];
+
+    // Title
+    labelloc="t";
+    label="OHAO Engine - System Architecture";
+    fontsize=20;
+
+    subgraph cluster_godot {
+        label="Godot Editor";
+        style=filled;
+        color=lightblue;
+
+        GodotUI [label="Godot UI\n(Scene Tree, Inspector)", fillcolor=lightskyblue];
+        OhaoViewport [label="OhaoViewport\n(GDExtension Control)", fillcolor=steelblue, fontcolor=white];
+        GodotScene [label="Godot 3D Scene\n(MeshInstance3D, Lights)", fillcolor=lightskyblue];
+    }
+
+    subgraph cluster_ohao {
+        label="OHAO Engine (C++)";
+        style=filled;
+        color=lightgreen;
+
+        OffscreenRenderer [label="OffscreenRenderer\n(Vulkan Pipeline)", fillcolor=seagreen, fontcolor=white];
+        Scene [label="Scene\n(Actor/Component ECS)", fillcolor=mediumseagreen];
+        PhysicsWorld [label="PhysicsWorld\n(Custom Physics)", fillcolor=mediumseagreen];
+        DeferredRenderer [label="DeferredRenderer\n(AAA Quality)", fillcolor=seagreen, fontcolor=white];
+    }
+
+    subgraph cluster_vulkan {
+        label="Vulkan Backend";
+        style=filled;
+        color=lightyellow;
+
+        Framebuffer [label="Offscreen\nFramebuffer", fillcolor=gold];
+        ShadowMap [label="Shadow Map\n2048x2048", fillcolor=gold];
+        GBuffer [label="G-Buffer\n(Deferred)", fillcolor=gold];
+        PixelBuffer [label="Pixel Buffer\n(CPU Readable)", fillcolor=orange];
+    }
+
+    // Connections
+    GodotUI -> OhaoViewport [label="embeds"];
+    GodotScene -> OhaoViewport [label="sync_from_godot()"];
+    OhaoViewport -> OffscreenRenderer [label="render()"];
+    OhaoViewport -> Scene [label="scene management"];
+
+    OffscreenRenderer -> Framebuffer [label="render to"];
+    OffscreenRenderer -> ShadowMap [label="shadow pass"];
+    OffscreenRenderer -> DeferredRenderer [label="deferred mode"];
+    DeferredRenderer -> GBuffer [label="G-Buffer pass"];
+
+    Scene -> OffscreenRenderer [label="mesh/light data"];
+    Scene -> PhysicsWorld [label="physics sync"];
+
+    Framebuffer -> PixelBuffer [label="copy"];
+    PixelBuffer -> OhaoViewport [label="getPixels()"];
+    OhaoViewport -> GodotUI [label="ImageTexture"];
+}

@@ -1,0 +1,43 @@
+// OHAO Engine Multi-Frame Resources
+// Render with: dot -Tpng multi_frame_resources.dot -o multi_frame_resources.png
+
+digraph Multi_Frame {
+    rankdir=TB;
+    node [shape=record, style=filled, fontname="Helvetica"];
+
+    labelloc="t";
+    label="OHAO Engine - Multi-Frame Ring Buffer (3 Frames in Flight)";
+    fontsize=18;
+
+    subgraph cluster_frames {
+        label="FrameResourceManager";
+        style=filled;
+        color=lightgray;
+
+        Frame0 [label="{Frame 0|commandBuffer|renderFence|cameraBuffer + mapped|lightBuffer + mapped|descriptorSet|stagingBuffer + mapped}", fillcolor=lightgreen];
+        Frame1 [label="{Frame 1|commandBuffer|renderFence|cameraBuffer + mapped|lightBuffer + mapped|descriptorSet|stagingBuffer + mapped}", fillcolor=lightyellow];
+        Frame2 [label="{Frame 2|commandBuffer|renderFence|cameraBuffer + mapped|lightBuffer + mapped|descriptorSet|stagingBuffer + mapped}", fillcolor=lightcoral];
+    }
+
+    // Ring buffer flow
+    Frame0 -> Frame1 [label="m_currentFrame++"];
+    Frame1 -> Frame2 [label="m_currentFrame++"];
+    Frame2 -> Frame0 [label="wrap around"];
+
+    // GPU/CPU states
+    subgraph cluster_states {
+        label="Typical State";
+        style=dashed;
+
+        GPU [label="GPU: Executing Frame 0", shape=ellipse, fillcolor=lightgreen];
+        Queue [label="Queue: Frame 1 waiting", shape=ellipse, fillcolor=lightyellow];
+        CPU [label="CPU: Recording Frame 2", shape=ellipse, fillcolor=lightcoral];
+    }
+
+    Frame0 -> GPU [style=dashed];
+    Frame1 -> Queue [style=dashed];
+    Frame2 -> CPU [style=dashed];
+
+    // Key insight
+    Note [label="CRITICAL: Shadow pass and main pass\nMUST use same frame's descriptorSet\nfor consistent lightSpaceMatrix!", shape=note, fillcolor=white];
+}
