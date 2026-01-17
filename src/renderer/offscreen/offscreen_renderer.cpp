@@ -78,6 +78,17 @@ bool OffscreenRenderer::initialize() {
             std::cerr << "Failed to create offscreen framebuffer" << std::endl;
             return false;
         }
+
+        // Shadow mapping setup (must be before descriptor sets)
+        if (!createShadowRenderPass()) {
+            std::cerr << "Failed to create shadow render pass" << std::endl;
+            return false;
+        }
+        if (!createShadowResources()) {
+            std::cerr << "Failed to create shadow resources" << std::endl;
+            return false;
+        }
+
         if (!createDescriptorSetLayout()) {
             std::cerr << "Failed to create descriptor set layout" << std::endl;
             return false;
@@ -86,6 +97,13 @@ bool OffscreenRenderer::initialize() {
             std::cerr << "Failed to create graphics pipeline" << std::endl;
             return false;
         }
+
+        // Shadow pipeline (after main pipeline)
+        if (!createShadowPipeline()) {
+            std::cerr << "Failed to create shadow pipeline" << std::endl;
+            return false;
+        }
+
         if (!createUniformBuffer()) {
             std::cerr << "Failed to create uniform buffer" << std::endl;
             return false;
@@ -113,6 +131,7 @@ bool OffscreenRenderer::initialize() {
 
         m_initialized = true;
         std::cout << "OffscreenRenderer initialized: " << m_width << "x" << m_height << std::endl;
+        std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
         return true;
 
     } catch (const std::exception& e) {
@@ -190,6 +209,9 @@ void OffscreenRenderer::shutdown() {
             vkDestroyShaderModule(m_device, m_fragShaderModule, nullptr);
         }
 
+        // Cleanup shadow resources
+        cleanupShadowResources();
+
         // Cleanup staging buffer
         if (m_stagingBuffer != VK_NULL_HANDLE) {
             vkDestroyBuffer(m_device, m_stagingBuffer, nullptr);
@@ -256,7 +278,10 @@ void OffscreenRenderer::render() {
 
     vkBeginCommandBuffer(m_commandBuffer, &beginInfo);
 
-    // Begin render pass
+    // Shadow pass: Render scene from light's perspective to shadow map
+    renderShadowPass();
+
+    // Main render pass
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = m_renderPass;

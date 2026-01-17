@@ -39,22 +39,28 @@ struct ObjectPushConstants {
 };
 
 // Light data for uniform buffer (matches shader layout)
+// 128 bytes per light to match UnifiedLight in shaders
 struct LightData {
     alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
     alignas(16) glm::vec4 direction;     // xyz = direction, w = range
     alignas(16) glm::vec4 color;         // xyz = color, w = intensity
-    alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = unused, w = unused
+    alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused
+    alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)
 };
 
 // Maximum lights supported
 constexpr uint32_t MAX_LIGHTS = 8;
+
+// Shadow map configuration
+constexpr uint32_t SHADOW_MAP_SIZE = 2048;
 
 // Light uniform buffer
 struct LightUniformBuffer {
     LightData lights[MAX_LIGHTS];
     alignas(4) int numLights;
     alignas(4) float ambientIntensity;
-    alignas(8) glm::vec2 padding;
+    alignas(4) float shadowBias;
+    alignas(4) float shadowStrength;
 };
 
 /**
@@ -116,6 +122,14 @@ private:
     bool createPipeline();
     bool createSyncObjects();
 
+    // Shadow mapping
+    bool createShadowResources();
+    bool createShadowRenderPass();
+    bool createShadowPipeline();
+    void renderShadowPass();
+    glm::mat4 calculateLightSpaceMatrix(const LightData& light);
+    void cleanupShadowResources();
+
     // Phase 1: Rendering pipeline setup
     bool createDescriptorSetLayout();
     bool createDescriptorPool();
@@ -159,6 +173,19 @@ private:
     VkImageView m_depthImageView{VK_NULL_HANDLE};
     VkFramebuffer m_framebuffer{VK_NULL_HANDLE};
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
+
+    // Shadow mapping resources
+    VkImage m_shadowImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_shadowImageMemory{VK_NULL_HANDLE};
+    VkImageView m_shadowImageView{VK_NULL_HANDLE};
+    VkSampler m_shadowSampler{VK_NULL_HANDLE};
+    VkFramebuffer m_shadowFramebuffer{VK_NULL_HANDLE};
+    VkRenderPass m_shadowRenderPass{VK_NULL_HANDLE};
+    VkPipeline m_shadowPipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_shadowPipelineLayout{VK_NULL_HANDLE};
+    VkShaderModule m_shadowVertShader{VK_NULL_HANDLE};
+    VkShaderModule m_shadowFragShader{VK_NULL_HANDLE};
+    bool m_shadowsEnabled{true};
 
     // Staging buffer for pixel readback
     VkBuffer m_stagingBuffer{VK_NULL_HANDLE};
