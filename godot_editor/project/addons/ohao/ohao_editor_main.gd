@@ -18,6 +18,38 @@ extends Control
 @onready var wireframe_check: CheckBox = $HSplit/RightPanel/VBox/RenderSection/WireframeCheck
 @onready var grid_check: CheckBox = $HSplit/RightPanel/VBox/RenderSection/GridCheck
 @onready var gizmos_check: CheckBox = $HSplit/RightPanel/VBox/RenderSection/GizmosCheck
+@onready var render_mode_option: OptionButton = $HSplit/RightPanel/VBox/RenderSection/RenderModeOption
+
+# Post-processing UI elements
+@onready var tonemap_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/TonemapCheck"
+@onready var tonemap_option: OptionButton = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/TonemapOption"
+@onready var exposure_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/ExposureLabel"
+@onready var exposure_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/ExposureSlider"
+@onready var gamma_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/GammaLabel"
+@onready var gamma_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/GammaSlider"
+@onready var bloom_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/BloomCheck"
+@onready var bloom_intensity_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/BloomIntensityLabel"
+@onready var bloom_intensity_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/BloomIntensitySlider"
+@onready var bloom_threshold_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/BloomThresholdLabel"
+@onready var bloom_threshold_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/BloomThresholdSlider"
+@onready var ssao_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/SSAOCheck"
+@onready var ssao_intensity_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/SSAOIntensityLabel"
+@onready var ssao_intensity_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/SSAOIntensitySlider"
+@onready var ssao_radius_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/SSAORadiusLabel"
+@onready var ssao_radius_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/SSAORadiusSlider"
+@onready var taa_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/TAACheck"
+@onready var ssr_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/SSRCheck"
+@onready var volumetrics_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/VolumetricsCheck"
+@onready var volumetric_density_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/VolumetricDensityLabel"
+@onready var volumetric_density_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/VolumetricDensitySlider"
+@onready var motion_blur_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/MotionBlurCheck"
+@onready var motion_blur_intensity_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/MotionBlurIntensityLabel"
+@onready var motion_blur_intensity_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/MotionBlurIntensitySlider"
+@onready var dof_check: CheckBox = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/DOFCheck"
+@onready var dof_focus_dist_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/DOFFocusDistLabel"
+@onready var dof_focus_dist_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/DOFFocusDistSlider"
+@onready var dof_aperture_label: Label = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/DOFApertureLabel"
+@onready var dof_aperture_slider: HSlider = $"HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox/DOFApertureSlider"
 
 var is_playing := false
 var simulation_speed := 1.0
@@ -47,11 +79,33 @@ func _ready() -> void:
 	wireframe_check.toggled.connect(_on_wireframe_toggled)
 	grid_check.toggled.connect(_on_grid_toggled)
 	gizmos_check.toggled.connect(_on_gizmos_toggled)
+	render_mode_option.item_selected.connect(_on_render_mode_changed)
+
+	# Connect post-processing signals
+	tonemap_check.toggled.connect(_on_tonemap_toggled)
+	tonemap_option.item_selected.connect(_on_tonemap_operator_changed)
+	exposure_slider.value_changed.connect(_on_exposure_changed)
+	gamma_slider.value_changed.connect(_on_gamma_changed)
+	bloom_check.toggled.connect(_on_bloom_toggled)
+	bloom_intensity_slider.value_changed.connect(_on_bloom_intensity_changed)
+	bloom_threshold_slider.value_changed.connect(_on_bloom_threshold_changed)
+	ssao_check.toggled.connect(_on_ssao_toggled)
+	ssao_intensity_slider.value_changed.connect(_on_ssao_intensity_changed)
+	ssao_radius_slider.value_changed.connect(_on_ssao_radius_changed)
+	taa_check.toggled.connect(_on_taa_toggled)
+	ssr_check.toggled.connect(_on_ssr_toggled)
+	volumetrics_check.toggled.connect(_on_volumetrics_toggled)
+	volumetric_density_slider.value_changed.connect(_on_volumetric_density_changed)
+	motion_blur_check.toggled.connect(_on_motion_blur_toggled)
+	motion_blur_intensity_slider.value_changed.connect(_on_motion_blur_intensity_changed)
+	dof_check.toggled.connect(_on_dof_toggled)
+	dof_focus_dist_slider.value_changed.connect(_on_dof_focus_distance_changed)
+	dof_aperture_slider.value_changed.connect(_on_dof_aperture_changed)
 
 	# Populate examples dropdown
 	_populate_examples()
 
-	print("[OHAO] Editor main screen ready")
+	print("[OHAO] Editor main screen ready (AAA Renderer)")
 
 	# Don't auto-load - start empty, user can select from Examples dropdown
 	# or open a scene in Godot 3D view and click "Sync from Editor"
@@ -195,3 +249,97 @@ func _on_grid_toggled(enabled: bool) -> void:
 func _on_gizmos_toggled(enabled: bool) -> void:
 	# TODO: ohao_viewport.set_gizmos_visible(enabled)
 	pass
+
+# === AAA Render Settings Callbacks ===
+
+func _on_render_mode_changed(index: int) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_render_mode(index)
+		print("[OHAO] Render mode: %s" % ["Forward", "Deferred"][index])
+
+func _on_tonemap_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_tonemapping_enabled(enabled)
+
+func _on_tonemap_operator_changed(index: int) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_tonemap_operator(index)
+		print("[OHAO] Tonemap: %s" % ["ACES", "Reinhard", "Uncharted2", "Neutral"][index])
+
+func _on_exposure_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_exposure(value)
+	exposure_label.text = "Exposure: %.1f" % value
+
+func _on_gamma_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_gamma(value)
+	gamma_label.text = "Gamma: %.1f" % value
+
+func _on_bloom_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_bloom_enabled(enabled)
+
+func _on_bloom_intensity_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_bloom_intensity(value)
+	bloom_intensity_label.text = "Intensity: %.2f" % value
+
+func _on_bloom_threshold_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_bloom_threshold(value)
+	bloom_threshold_label.text = "Threshold: %.1f" % value
+
+func _on_ssao_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_ssao_enabled(enabled)
+
+func _on_ssao_intensity_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_ssao_intensity(value)
+	ssao_intensity_label.text = "Intensity: %.1f" % value
+
+func _on_ssao_radius_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_ssao_radius(value)
+	ssao_radius_label.text = "Radius: %.2f" % value
+
+func _on_taa_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_taa_enabled(enabled)
+
+func _on_ssr_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_ssr_enabled(enabled)
+
+func _on_volumetrics_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_volumetrics_enabled(enabled)
+
+func _on_volumetric_density_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_volumetric_density(value)
+	volumetric_density_label.text = "Density: %.3f" % value
+
+func _on_motion_blur_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_motion_blur_enabled(enabled)
+
+func _on_motion_blur_intensity_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_motion_blur_intensity(value)
+	motion_blur_intensity_label.text = "Intensity: %.2f" % value
+
+func _on_dof_toggled(enabled: bool) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_dof_enabled(enabled)
+
+func _on_dof_focus_distance_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_dof_focus_distance(value)
+	dof_focus_dist_label.text = "Focus Distance: %.1f" % value
+
+func _on_dof_aperture_changed(value: float) -> void:
+	if ohao_viewport:
+		ohao_viewport.set_dof_aperture(value)
+	dof_aperture_label.text = "Aperture: %.1f" % value
