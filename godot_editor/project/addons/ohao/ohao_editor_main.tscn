@@ -3,16 +3,18 @@
 [ext_resource type="Script" path="res://addons/ohao/ohao_editor_main.gd" id="1_main"]
 
 [node name="OhaoEditorMain" type="Control"]
-layout_mode = 1
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("1_main")
 
 [node name="HSplit" type="HSplitContainer" parent="."]
-layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 0.0
+offset_bottom = 0.0
 split_offset = -250
 
 [node name="ViewportContainer" type="PanelContainer" parent="HSplit"]
@@ -125,6 +127,15 @@ layout_mode = 2
 layout_mode = 2
 text = "Rendering"
 
+[node name="RenderModeOption" type="OptionButton" parent="HSplit/RightPanel/VBox/RenderSection"]
+layout_mode = 2
+selected = 0
+item_count = 2
+popup/item_0/text = "Forward"
+popup/item_0/id = 0
+popup/item_1/text = "Deferred (AAA)"
+popup/item_1/id = 1
+
 [node name="WireframeCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/RenderSection"]
 layout_mode = 2
 text = "Wireframe Mode"
@@ -138,3 +149,226 @@ text = "Show Grid"
 layout_mode = 2
 button_pressed = true
 text = "Show Gizmos"
+
+[node name="HSeparator6" type="HSeparator" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+
+[node name="PostProcessLabel" type="Label" parent="HSplit/RightPanel/VBox"]
+layout_mode = 2
+text = "Post Processing"
+
+[node name="PostProcessScroll" type="ScrollContainer" parent="HSplit/RightPanel/VBox"]
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="PostProcessVBox" type="VBoxContainer" parent="HSplit/RightPanel/VBox/PostProcessScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="TonemapLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Tonemapping"
+
+[node name="TonemapCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Enable Tonemapping"
+
+[node name="TonemapOption" type="OptionButton" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+selected = 0
+item_count = 4
+popup/item_0/text = "ACES"
+popup/item_0/id = 0
+popup/item_1/text = "Reinhard"
+popup/item_1/id = 1
+popup/item_2/text = "Uncharted 2"
+popup/item_2/id = 2
+popup/item_3/text = "Neutral"
+popup/item_3/id = 3
+
+[node name="ExposureLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Exposure: 1.0"
+
+[node name="ExposureSlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+min_value = 0.1
+max_value = 5.0
+step = 0.1
+value = 1.0
+
+[node name="GammaLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Gamma: 2.2"
+
+[node name="GammaSlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+min_value = 1.0
+max_value = 3.0
+step = 0.1
+value = 2.2
+
+[node name="Sep1" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="BloomLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Bloom"
+
+[node name="BloomCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Enable Bloom"
+
+[node name="BloomIntensityLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Intensity: 0.5"
+
+[node name="BloomIntensitySlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+max_value = 2.0
+step = 0.05
+value = 0.5
+
+[node name="BloomThresholdLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Threshold: 1.0"
+
+[node name="BloomThresholdSlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+max_value = 3.0
+step = 0.1
+value = 1.0
+
+[node name="Sep2" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="SSAOLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Ambient Occlusion"
+
+[node name="SSAOCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Enable SSAO"
+
+[node name="SSAOIntensityLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Intensity: 1.0"
+
+[node name="SSAOIntensitySlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+max_value = 3.0
+step = 0.1
+value = 1.0
+
+[node name="SSAORadiusLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Radius: 0.5"
+
+[node name="SSAORadiusSlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+max_value = 2.0
+step = 0.05
+value = 0.5
+
+[node name="Sep3" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="TAALabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Anti-Aliasing"
+
+[node name="TAACheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+button_pressed = true
+text = "Enable TAA"
+
+[node name="Sep4" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="SSRLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Reflections"
+
+[node name="SSRCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Enable SSR"
+
+[node name="Sep5" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="VolumetricLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Volumetrics"
+
+[node name="VolumetricsCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Enable Volumetric Fog"
+
+[node name="VolumetricDensityLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Density: 0.02"
+
+[node name="VolumetricDensitySlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+max_value = 0.2
+step = 0.005
+value = 0.02
+
+[node name="Sep6" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="MotionBlurLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Motion Blur"
+
+[node name="MotionBlurCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Enable Motion Blur"
+
+[node name="MotionBlurIntensityLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Intensity: 0.5"
+
+[node name="MotionBlurIntensitySlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+max_value = 1.0
+step = 0.05
+value = 0.5
+
+[node name="Sep7" type="HSeparator" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+
+[node name="DOFLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Depth of Field"
+
+[node name="DOFCheck" type="CheckBox" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Enable DOF"
+
+[node name="DOFFocusDistLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Focus Distance: 10.0"
+
+[node name="DOFFocusDistSlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+min_value = 1.0
+max_value = 100.0
+step = 1.0
+value = 10.0
+
+[node name="DOFApertureLabel" type="Label" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+text = "Aperture: 2.8"
+
+[node name="DOFApertureSlider" type="HSlider" parent="HSplit/RightPanel/VBox/PostProcessScroll/PostProcessVBox"]
+layout_mode = 2
+min_value = 1.0
+max_value = 22.0
+step = 0.1
+value = 2.8

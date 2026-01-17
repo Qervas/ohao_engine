@@ -1,20 +1,83 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=2 format=3 uid="uid://cke4ftq5dww28"]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/main_scene.gd" id="1_main"]
 
-[node name="Main" type="Node3D"]
-script = ExtResource("1")
+[node name="Main" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_main")
 
-[node name="OhaoViewport" type="SubViewport" parent="."]
-size = Vector2i(1280, 720)
+[node name="OhaoViewport" type="OhaoViewport" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 
-[node name="Camera3D" type="Camera3D" parent="OhaoViewport"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 5)
+[node name="SimulationPanel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -220.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 200.0
+grow_horizontal = 0
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="OhaoViewport"]
-transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 10, 0)
+[node name="VBox" type="VBoxContainer" parent="SimulationPanel"]
+layout_mode = 2
 
-[node name="Ground" type="Node3D" parent="OhaoViewport"]
+[node name="Title" type="Label" parent="SimulationPanel/VBox"]
+layout_mode = 2
+text = "OHAO Simulation"
+horizontal_alignment = 1
 
-[node name="Cube" type="Node3D" parent="OhaoViewport"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 0)
+[node name="HSeparator" type="HSeparator" parent="SimulationPanel/VBox"]
+layout_mode = 2
+
+[node name="PlaybackButtons" type="HBoxContainer" parent="SimulationPanel/VBox"]
+layout_mode = 2
+alignment = 1
+
+[node name="PlayPauseBtn" type="Button" parent="SimulationPanel/VBox/PlaybackButtons"]
+layout_mode = 2
+text = "▶ Play"
+
+[node name="StepBtn" type="Button" parent="SimulationPanel/VBox/PlaybackButtons"]
+layout_mode = 2
+text = "⏭ Step"
+
+[node name="ResetBtn" type="Button" parent="SimulationPanel/VBox/PlaybackButtons"]
+layout_mode = 2
+text = "↺ Reset"
+
+[node name="HSeparator2" type="HSeparator" parent="SimulationPanel/VBox"]
+layout_mode = 2
+
+[node name="SpeedLabel" type="Label" parent="SimulationPanel/VBox"]
+layout_mode = 2
+text = "Simulation Speed: 1.0x"
+
+[node name="SpeedSlider" type="HSlider" parent="SimulationPanel/VBox"]
+layout_mode = 2
+min_value = 0.1
+max_value = 3.0
+step = 0.1
+value = 1.0
+
+[node name="HSeparator3" type="HSeparator" parent="SimulationPanel/VBox"]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="SimulationPanel/VBox"]
+layout_mode = 2
+text = "Status: Stopped"
+
+[node name="FrameLabel" type="Label" parent="SimulationPanel/VBox"]
+layout_mode = 2
+text = "Frame: 0"

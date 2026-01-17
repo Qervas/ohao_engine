@@ -23,6 +23,8 @@
 // Include OHAO headers
 #include "renderer/offscreen/offscreen_renderer.hpp"
 #include "renderer/camera/camera.hpp"
+#include "renderer/passes/deferred_renderer.hpp"
+#include "renderer/passes/post_processing_pipeline.hpp"
 #include "engine/scene/scene.hpp"
 #include "engine/scene/loader/tscn_loader.hpp"
 #include "engine/actor/actor.hpp"
@@ -37,7 +39,7 @@
 namespace godot {
 
 void OhaoViewport::_bind_methods() {
-    // Methods
+    // === Core Methods ===
     ClassDB::bind_method(D_METHOD("initialize_renderer"), &OhaoViewport::initialize_renderer);
     ClassDB::bind_method(D_METHOD("shutdown_renderer"), &OhaoViewport::shutdown_renderer);
     ClassDB::bind_method(D_METHOD("is_renderer_initialized"), &OhaoViewport::is_renderer_initialized);
@@ -55,8 +57,9 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("finish_sync"), &OhaoViewport::finish_sync);
     ClassDB::bind_method(D_METHOD("set_viewport_size", "width", "height"), &OhaoViewport::set_viewport_size);
     ClassDB::bind_method(D_METHOD("get_viewport_size"), &OhaoViewport::get_viewport_size);
+    ClassDB::bind_method(D_METHOD("get_render_stats"), &OhaoViewport::get_render_stats);
 
-    // Properties
+    // === Base Properties ===
     ClassDB::bind_method(D_METHOD("set_render_enabled", "enabled"), &OhaoViewport::set_render_enabled);
     ClassDB::bind_method(D_METHOD("get_render_enabled"), &OhaoViewport::get_render_enabled);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "render_enabled"), "set_render_enabled", "get_render_enabled");
@@ -69,10 +72,146 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_move_speed", "speed"), &OhaoViewport::set_move_speed);
     ClassDB::bind_method(D_METHOD("get_move_speed"), &OhaoViewport::get_move_speed);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "move_speed", PROPERTY_HINT_RANGE, "0.1,50.0,0.1"), "set_move_speed", "get_move_speed");
+
+    // === AAA Render Mode ===
+    ClassDB::bind_method(D_METHOD("set_render_mode", "mode"), &OhaoViewport::set_render_mode);
+    ClassDB::bind_method(D_METHOD("get_render_mode"), &OhaoViewport::get_render_mode);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "render_mode", PROPERTY_HINT_ENUM, "Forward,Deferred"), "set_render_mode", "get_render_mode");
+
+    // === Post-Processing Toggles ===
+    ADD_GROUP("Post Processing", "");
+
+    ClassDB::bind_method(D_METHOD("set_bloom_enabled", "enabled"), &OhaoViewport::set_bloom_enabled);
+    ClassDB::bind_method(D_METHOD("get_bloom_enabled"), &OhaoViewport::get_bloom_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "bloom_enabled"), "set_bloom_enabled", "get_bloom_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_taa_enabled", "enabled"), &OhaoViewport::set_taa_enabled);
+    ClassDB::bind_method(D_METHOD("get_taa_enabled"), &OhaoViewport::get_taa_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "taa_enabled"), "set_taa_enabled", "get_taa_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_ssao_enabled", "enabled"), &OhaoViewport::set_ssao_enabled);
+    ClassDB::bind_method(D_METHOD("get_ssao_enabled"), &OhaoViewport::get_ssao_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssao_enabled"), "set_ssao_enabled", "get_ssao_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_ssr_enabled", "enabled"), &OhaoViewport::set_ssr_enabled);
+    ClassDB::bind_method(D_METHOD("get_ssr_enabled"), &OhaoViewport::get_ssr_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssr_enabled"), "set_ssr_enabled", "get_ssr_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_volumetrics_enabled", "enabled"), &OhaoViewport::set_volumetrics_enabled);
+    ClassDB::bind_method(D_METHOD("get_volumetrics_enabled"), &OhaoViewport::get_volumetrics_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "volumetrics_enabled"), "set_volumetrics_enabled", "get_volumetrics_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_motion_blur_enabled", "enabled"), &OhaoViewport::set_motion_blur_enabled);
+    ClassDB::bind_method(D_METHOD("get_motion_blur_enabled"), &OhaoViewport::get_motion_blur_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "motion_blur_enabled"), "set_motion_blur_enabled", "get_motion_blur_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_dof_enabled", "enabled"), &OhaoViewport::set_dof_enabled);
+    ClassDB::bind_method(D_METHOD("get_dof_enabled"), &OhaoViewport::get_dof_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dof_enabled"), "set_dof_enabled", "get_dof_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_tonemapping_enabled", "enabled"), &OhaoViewport::set_tonemapping_enabled);
+    ClassDB::bind_method(D_METHOD("get_tonemapping_enabled"), &OhaoViewport::get_tonemapping_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "tonemapping_enabled"), "set_tonemapping_enabled", "get_tonemapping_enabled");
+
+    // === Tonemapping Settings ===
+    ADD_GROUP("Tonemapping", "tonemap_");
+
+    ClassDB::bind_method(D_METHOD("set_tonemap_operator", "op"), &OhaoViewport::set_tonemap_operator);
+    ClassDB::bind_method(D_METHOD("get_tonemap_operator"), &OhaoViewport::get_tonemap_operator);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "tonemap_operator", PROPERTY_HINT_ENUM, "ACES,Reinhard,Uncharted2,Neutral"), "set_tonemap_operator", "get_tonemap_operator");
+
+    ClassDB::bind_method(D_METHOD("set_exposure", "exposure"), &OhaoViewport::set_exposure);
+    ClassDB::bind_method(D_METHOD("get_exposure"), &OhaoViewport::get_exposure);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "tonemap_exposure", PROPERTY_HINT_RANGE, "0.1,10.0,0.1"), "set_exposure", "get_exposure");
+
+    ClassDB::bind_method(D_METHOD("set_gamma", "gamma"), &OhaoViewport::set_gamma);
+    ClassDB::bind_method(D_METHOD("get_gamma"), &OhaoViewport::get_gamma);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "tonemap_gamma", PROPERTY_HINT_RANGE, "1.0,3.0,0.1"), "set_gamma", "get_gamma");
+
+    // === Bloom Settings ===
+    ADD_GROUP("Bloom", "bloom_");
+
+    ClassDB::bind_method(D_METHOD("set_bloom_threshold", "threshold"), &OhaoViewport::set_bloom_threshold);
+    ClassDB::bind_method(D_METHOD("get_bloom_threshold"), &OhaoViewport::get_bloom_threshold);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bloom_threshold", PROPERTY_HINT_RANGE, "0.0,5.0,0.1"), "set_bloom_threshold", "get_bloom_threshold");
+
+    ClassDB::bind_method(D_METHOD("set_bloom_intensity", "intensity"), &OhaoViewport::set_bloom_intensity);
+    ClassDB::bind_method(D_METHOD("get_bloom_intensity"), &OhaoViewport::get_bloom_intensity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bloom_intensity", PROPERTY_HINT_RANGE, "0.0,2.0,0.1"), "set_bloom_intensity", "get_bloom_intensity");
+
+    // === SSAO Settings ===
+    ADD_GROUP("SSAO", "ssao_");
+
+    ClassDB::bind_method(D_METHOD("set_ssao_radius", "radius"), &OhaoViewport::set_ssao_radius);
+    ClassDB::bind_method(D_METHOD("get_ssao_radius"), &OhaoViewport::get_ssao_radius);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssao_radius", PROPERTY_HINT_RANGE, "0.1,2.0,0.05"), "set_ssao_radius", "get_ssao_radius");
+
+    ClassDB::bind_method(D_METHOD("set_ssao_intensity", "intensity"), &OhaoViewport::set_ssao_intensity);
+    ClassDB::bind_method(D_METHOD("get_ssao_intensity"), &OhaoViewport::get_ssao_intensity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssao_intensity", PROPERTY_HINT_RANGE, "0.0,3.0,0.1"), "set_ssao_intensity", "get_ssao_intensity");
+
+    // === SSR Settings ===
+    ADD_GROUP("SSR", "ssr_");
+
+    ClassDB::bind_method(D_METHOD("set_ssr_max_distance", "distance"), &OhaoViewport::set_ssr_max_distance);
+    ClassDB::bind_method(D_METHOD("get_ssr_max_distance"), &OhaoViewport::get_ssr_max_distance);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssr_max_distance", PROPERTY_HINT_RANGE, "10.0,500.0,10.0"), "set_ssr_max_distance", "get_ssr_max_distance");
+
+    ClassDB::bind_method(D_METHOD("set_ssr_thickness", "thickness"), &OhaoViewport::set_ssr_thickness);
+    ClassDB::bind_method(D_METHOD("get_ssr_thickness"), &OhaoViewport::get_ssr_thickness);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssr_thickness", PROPERTY_HINT_RANGE, "0.1,2.0,0.1"), "set_ssr_thickness", "get_ssr_thickness");
+
+    // === Volumetric Settings ===
+    ADD_GROUP("Volumetrics", "volumetric_");
+
+    ClassDB::bind_method(D_METHOD("set_volumetric_density", "density"), &OhaoViewport::set_volumetric_density);
+    ClassDB::bind_method(D_METHOD("get_volumetric_density"), &OhaoViewport::get_volumetric_density);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "volumetric_density", PROPERTY_HINT_RANGE, "0.0,0.2,0.005"), "set_volumetric_density", "get_volumetric_density");
+
+    ClassDB::bind_method(D_METHOD("set_volumetric_scattering", "g"), &OhaoViewport::set_volumetric_scattering);
+    ClassDB::bind_method(D_METHOD("get_volumetric_scattering"), &OhaoViewport::get_volumetric_scattering);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "volumetric_scattering", PROPERTY_HINT_RANGE, "0.0,1.0,0.05"), "set_volumetric_scattering", "get_volumetric_scattering");
+
+    ClassDB::bind_method(D_METHOD("set_fog_color", "color"), &OhaoViewport::set_fog_color);
+    ClassDB::bind_method(D_METHOD("get_fog_color"), &OhaoViewport::get_fog_color);
+    ADD_PROPERTY(PropertyInfo(Variant::COLOR, "volumetric_fog_color"), "set_fog_color", "get_fog_color");
+
+    // === Motion Blur Settings ===
+    ADD_GROUP("Motion Blur", "motion_blur_");
+
+    ClassDB::bind_method(D_METHOD("set_motion_blur_intensity", "intensity"), &OhaoViewport::set_motion_blur_intensity);
+    ClassDB::bind_method(D_METHOD("get_motion_blur_intensity"), &OhaoViewport::get_motion_blur_intensity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "motion_blur_intensity", PROPERTY_HINT_RANGE, "0.0,2.0,0.1"), "set_motion_blur_intensity", "get_motion_blur_intensity");
+
+    ClassDB::bind_method(D_METHOD("set_motion_blur_samples", "samples"), &OhaoViewport::set_motion_blur_samples);
+    ClassDB::bind_method(D_METHOD("get_motion_blur_samples"), &OhaoViewport::get_motion_blur_samples);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "motion_blur_samples", PROPERTY_HINT_RANGE, "4,32,1"), "set_motion_blur_samples", "get_motion_blur_samples");
+
+    // === DoF Settings ===
+    ADD_GROUP("Depth of Field", "dof_");
+
+    ClassDB::bind_method(D_METHOD("set_dof_focus_distance", "distance"), &OhaoViewport::set_dof_focus_distance);
+    ClassDB::bind_method(D_METHOD("get_dof_focus_distance"), &OhaoViewport::get_dof_focus_distance);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_focus_distance", PROPERTY_HINT_RANGE, "0.1,100.0,0.5"), "set_dof_focus_distance", "get_dof_focus_distance");
+
+    ClassDB::bind_method(D_METHOD("set_dof_aperture", "aperture"), &OhaoViewport::set_dof_aperture);
+    ClassDB::bind_method(D_METHOD("get_dof_aperture"), &OhaoViewport::get_dof_aperture);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_aperture", PROPERTY_HINT_RANGE, "1.0,22.0,0.5"), "set_dof_aperture", "get_dof_aperture");
+
+    ClassDB::bind_method(D_METHOD("set_dof_max_blur", "blur"), &OhaoViewport::set_dof_max_blur);
+    ClassDB::bind_method(D_METHOD("get_dof_max_blur"), &OhaoViewport::get_dof_max_blur);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "dof_max_blur", PROPERTY_HINT_RANGE, "1.0,20.0,1.0"), "set_dof_max_blur", "get_dof_max_blur");
+
+    // === TAA Settings ===
+    ADD_GROUP("TAA", "taa_");
+
+    ClassDB::bind_method(D_METHOD("set_taa_blend_factor", "factor"), &OhaoViewport::set_taa_blend_factor);
+    ClassDB::bind_method(D_METHOD("get_taa_blend_factor"), &OhaoViewport::get_taa_blend_factor);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "taa_blend_factor", PROPERTY_HINT_RANGE, "0.01,0.5,0.01"), "set_taa_blend_factor", "get_taa_blend_factor");
 }
 
 OhaoViewport::OhaoViewport() {
-    UtilityFunctions::print("[OHAO] Viewport created");
+    UtilityFunctions::print("[OHAO] AAA Viewport created");
 }
 
 OhaoViewport::~OhaoViewport() {
@@ -94,7 +233,7 @@ void OhaoViewport::_notification(int p_what) {
 }
 
 void OhaoViewport::_ready() {
-    UtilityFunctions::print("[OHAO] Viewport ready - initializing renderer");
+    UtilityFunctions::print("[OHAO] AAA Viewport ready - initializing deferred renderer");
 
     // Get initial size from control
     Vector2 size = get_size();
@@ -162,7 +301,7 @@ void OhaoViewport::_draw() {
     if (!has_scene_meshes()) {
         Ref<Font> font = get_theme_default_font();
         if (font.is_valid()) {
-            String text = "OHAO Engine";
+            String text = "OHAO AAA Engine";
             int font_size = 32;
             Vector2 text_size = font->get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size);
             Vector2 center = get_size() / 2.0;
@@ -173,12 +312,19 @@ void OhaoViewport::_draw() {
             draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.6, 0.6, 0.7, 0.8));
 
             // Draw subtitle
-            String subtitle = "Load a scene or sync from editor";
+            String subtitle = m_render_mode == 1 ? "Deferred Rendering Mode" : "Forward Rendering Mode";
             int sub_size = 14;
             Vector2 sub_text_size = font->get_string_size(subtitle, HORIZONTAL_ALIGNMENT_CENTER, -1, sub_size);
             Vector2 sub_pos = center - sub_text_size / 2.0;
             sub_pos.y += text_size.y / 2.0 + 30;
             draw_string(font, sub_pos, subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(0.5, 0.5, 0.55, 0.6));
+
+            // Draw hint
+            String hint = "Load a scene or sync from editor";
+            Vector2 hint_size = font->get_string_size(hint, HORIZONTAL_ALIGNMENT_CENTER, -1, sub_size);
+            Vector2 hint_pos = center - hint_size / 2.0;
+            hint_pos.y += text_size.y / 2.0 + 50;
+            draw_string(font, hint_pos, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(0.4, 0.4, 0.45, 0.5));
         }
     }
 }
@@ -193,7 +339,7 @@ void OhaoViewport::initialize_renderer() {
         return;
     }
 
-    UtilityFunctions::print("[OHAO] Initializing Vulkan renderer...");
+    UtilityFunctions::print("[OHAO] Initializing Vulkan AAA renderer...");
 
     // Create offscreen renderer
     m_renderer = new ohao::OffscreenRenderer(m_width, m_height);
@@ -204,6 +350,9 @@ void OhaoViewport::initialize_renderer() {
         return;
     }
 
+    // Set render mode (default to Deferred)
+    m_renderer->setRenderMode(m_render_mode == 1 ? ohao::RenderMode::Deferred : ohao::RenderMode::Forward);
+
     // Create scene
     m_scene = new ohao::Scene("GodotScene");
     m_renderer->setScene(m_scene);
@@ -213,7 +362,12 @@ void OhaoViewport::initialize_renderer() {
     m_texture = ImageTexture::create_from_image(m_image);
 
     m_initialized = true;
-    UtilityFunctions::print("[OHAO] Renderer initialized: ", m_width, "x", m_height);
+
+    // Apply initial render settings
+    apply_render_settings();
+
+    UtilityFunctions::print("[OHAO] AAA Renderer initialized: ", m_width, "x", m_height,
+                            " Mode: ", m_render_mode == 1 ? "Deferred" : "Forward");
 }
 
 void OhaoViewport::shutdown_renderer() {
@@ -267,6 +421,231 @@ void OhaoViewport::set_viewport_size(int width, int height) {
 
     UtilityFunctions::print("[OHAO] Viewport resized: ", width, "x", height);
 }
+
+// === AAA Render Settings Implementation ===
+
+void OhaoViewport::apply_render_settings() {
+    if (!m_renderer) return;
+
+    // Get the deferred renderer's post-processing pipeline
+    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+
+    ohao::PostProcessingPipeline* pp = deferred->getPostProcessing();
+    if (!pp) return;
+
+    // Apply all post-processing settings
+    pp->setBloomEnabled(m_bloom_enabled);
+    pp->setTAAEnabled(m_taa_enabled);
+    pp->setSSAOEnabled(m_ssao_enabled);
+    pp->setSSREnabled(m_ssr_enabled);
+    pp->setVolumetricsEnabled(m_volumetrics_enabled);
+    pp->setMotionBlurEnabled(m_motion_blur_enabled);
+    pp->setDoFEnabled(m_dof_enabled);
+    pp->setTonemappingEnabled(m_tonemapping_enabled);
+
+    // Tonemapping
+    pp->setTonemapOperator(static_cast<ohao::TonemapOperator>(m_tonemap_operator));
+    pp->setExposure(m_exposure);
+    pp->setGamma(m_gamma);
+
+    // Bloom
+    pp->setBloomThreshold(m_bloom_threshold);
+    pp->setBloomIntensity(m_bloom_intensity);
+
+    // SSAO
+    pp->setSSAORadius(m_ssao_radius);
+    pp->setSSAOIntensity(m_ssao_intensity);
+
+    // SSR
+    pp->setSSRMaxDistance(m_ssr_max_distance);
+    pp->setSSRThickness(m_ssr_thickness);
+
+    // Volumetrics
+    pp->setVolumetricDensity(m_volumetric_density);
+    pp->setVolumetricScattering(m_volumetric_scattering);
+    pp->setFogColor(glm::vec3(m_fog_color.r, m_fog_color.g, m_fog_color.b));
+
+    // Motion blur
+    pp->setMotionBlurIntensity(m_motion_blur_intensity);
+    pp->setMotionBlurSamples(static_cast<uint32_t>(m_motion_blur_samples));
+
+    // DoF
+    pp->setDoFFocusDistance(m_dof_focus_distance);
+    pp->setDoFAperture(m_dof_aperture);
+    pp->setDoFMaxBlurRadius(m_dof_max_blur);
+
+    // TAA
+    pp->setTAABlendFactor(m_taa_blend_factor);
+}
+
+void OhaoViewport::set_render_mode(int mode) {
+    m_render_mode = mode;
+    if (m_renderer) {
+        m_renderer->setRenderMode(mode == 1 ? ohao::RenderMode::Deferred : ohao::RenderMode::Forward);
+        UtilityFunctions::print("[OHAO] Render mode set to: ", mode == 1 ? "Deferred" : "Forward");
+    }
+}
+
+// Post-processing toggles
+void OhaoViewport::set_bloom_enabled(bool enabled) {
+    m_bloom_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_taa_enabled(bool enabled) {
+    m_taa_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_ssao_enabled(bool enabled) {
+    m_ssao_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_ssr_enabled(bool enabled) {
+    m_ssr_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_volumetrics_enabled(bool enabled) {
+    m_volumetrics_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_motion_blur_enabled(bool enabled) {
+    m_motion_blur_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_dof_enabled(bool enabled) {
+    m_dof_enabled = enabled;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_tonemapping_enabled(bool enabled) {
+    m_tonemapping_enabled = enabled;
+    apply_render_settings();
+}
+
+// Tonemapping settings
+void OhaoViewport::set_tonemap_operator(int op) {
+    m_tonemap_operator = op;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_exposure(float exposure) {
+    m_exposure = exposure;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_gamma(float gamma) {
+    m_gamma = gamma;
+    apply_render_settings();
+}
+
+// Bloom settings
+void OhaoViewport::set_bloom_threshold(float threshold) {
+    m_bloom_threshold = threshold;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_bloom_intensity(float intensity) {
+    m_bloom_intensity = intensity;
+    apply_render_settings();
+}
+
+// SSAO settings
+void OhaoViewport::set_ssao_radius(float radius) {
+    m_ssao_radius = radius;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_ssao_intensity(float intensity) {
+    m_ssao_intensity = intensity;
+    apply_render_settings();
+}
+
+// SSR settings
+void OhaoViewport::set_ssr_max_distance(float dist) {
+    m_ssr_max_distance = dist;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_ssr_thickness(float thickness) {
+    m_ssr_thickness = thickness;
+    apply_render_settings();
+}
+
+// Volumetric settings
+void OhaoViewport::set_volumetric_density(float density) {
+    m_volumetric_density = density;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_volumetric_scattering(float g) {
+    m_volumetric_scattering = g;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_fog_color(const Color& color) {
+    m_fog_color = color;
+    apply_render_settings();
+}
+
+// Motion blur settings
+void OhaoViewport::set_motion_blur_intensity(float intensity) {
+    m_motion_blur_intensity = intensity;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_motion_blur_samples(int samples) {
+    m_motion_blur_samples = samples;
+    apply_render_settings();
+}
+
+// DoF settings
+void OhaoViewport::set_dof_focus_distance(float distance) {
+    m_dof_focus_distance = distance;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_dof_aperture(float aperture) {
+    m_dof_aperture = aperture;
+    apply_render_settings();
+}
+
+void OhaoViewport::set_dof_max_blur(float blur) {
+    m_dof_max_blur = blur;
+    apply_render_settings();
+}
+
+// TAA settings
+void OhaoViewport::set_taa_blend_factor(float factor) {
+    m_taa_blend_factor = factor;
+    apply_render_settings();
+}
+
+// Utility
+Dictionary OhaoViewport::get_render_stats() const {
+    Dictionary stats;
+    stats["initialized"] = m_initialized;
+    stats["width"] = m_width;
+    stats["height"] = m_height;
+    stats["render_mode"] = m_render_mode == 1 ? "Deferred" : "Forward";
+    stats["bloom_enabled"] = m_bloom_enabled;
+    stats["taa_enabled"] = m_taa_enabled;
+    stats["ssao_enabled"] = m_ssao_enabled;
+    stats["ssr_enabled"] = m_ssr_enabled;
+    stats["volumetrics_enabled"] = m_volumetrics_enabled;
+    stats["motion_blur_enabled"] = m_motion_blur_enabled;
+    stats["dof_enabled"] = m_dof_enabled;
+    stats["tonemapping_enabled"] = m_tonemapping_enabled;
+    stats["synced_objects"] = m_synced_object_count;
+    return stats;
+}
+
+// === Scene Management ===
 
 void OhaoViewport::load_tscn(const String& path) {
     if (!m_scene) {
@@ -405,9 +784,15 @@ void OhaoViewport::add_cylinder(const String& name, const Vector3& position, con
 }
 
 void OhaoViewport::add_directional_light(const String& name, const Vector3& position, const Vector3& direction, const Color& color, float intensity) {
-    if (!m_scene) return;
+    if (!m_scene) {
+        UtilityFunctions::printerr("[OHAO] add_directional_light: scene is null!");
+        return;
+    }
 
     std::string actorName = name.utf8().get_data();
+    UtilityFunctions::print("[OHAO] Adding directional light '", name, "' pos=(", position.x, ",", position.y, ",", position.z,
+                            ") dir=(", direction.x, ",", direction.y, ",", direction.z, ") intensity=", intensity);
+
     auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::DirectionalLight);
     if (actor) {
         auto transform = actor->getTransform();
@@ -419,7 +804,15 @@ void OhaoViewport::add_directional_light(const String& name, const Vector3& posi
             light->setDirection(glm::normalize(to_glm(direction)));
             light->setColor(to_glm_color(color));
             light->setIntensity(intensity);
+            UtilityFunctions::print("[OHAO] Light component configured successfully");
+        } else {
+            UtilityFunctions::printerr("[OHAO] Failed to get LightComponent from actor!");
         }
+
+        // Verify actor was added to scene
+        UtilityFunctions::print("[OHAO] Scene now has ", static_cast<int>(m_scene->getAllActors().size()), " actors");
+    } else {
+        UtilityFunctions::printerr("[OHAO] Failed to create directional light actor!");
     }
 }
 
@@ -487,6 +880,23 @@ void OhaoViewport::sync_from_godot(Node* root_node) {
 
     // Traverse the Godot scene tree and create OHAO actors
     traverse_and_sync(root_node);
+
+    // Debug: List all actors in scene after sync
+    UtilityFunctions::print("[OHAO] === Actors in scene after sync (scene ptr=", reinterpret_cast<uint64_t>(m_scene), ") ===");
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto lightComp = actor->getComponent<ohao::LightComponent>();
+        if (lightComp) {
+            auto pos = actor->getTransform()->getPosition();
+            auto dir = lightComp->getDirection();
+            UtilityFunctions::print("[OHAO]   LIGHT: '", actor->getName().c_str(), "' type=",
+                                    static_cast<int>(lightComp->getLightType()),
+                                    " pos=(", pos.x, ",", pos.y, ",", pos.z, ")",
+                                    " dir=(", dir.x, ",", dir.y, ",", dir.z, ")");
+        } else {
+            UtilityFunctions::print("[OHAO]   Actor: '", actor->getName().c_str(), "'");
+        }
+    }
+    UtilityFunctions::print("[OHAO] === End actor list ===");
 
     // Rebuild buffers
     if (m_renderer->updateSceneBuffers()) {
