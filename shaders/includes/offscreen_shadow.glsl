@@ -58,19 +58,29 @@ float calculateShadowForLightIndex(int lightIndex, vec3 worldPos, vec3 normal,
 
     float currentDepth = projCoords.z;
 
-    // Simple shadow test first (no PCF) for debugging
-    float shadowDepth = texture(shadowMap, projCoords.xy).r;
-
-    // Debug: Check if we're getting valid depth comparison
-    // shadowDepth should be ~0.5 for rendered geometry
-    // currentDepth should be similar for the same surface, slightly more for occluded surfaces
-
-    // The shadow occurs when current fragment is BEHIND what was rendered to shadow map
-    // i.e., currentDepth > shadowDepth (current point is further from light than shadow caster)
+    // PCF (Percentage Closer Filtering) for soft shadow edges
+    // Sample a 5x5 grid around the shadow lookup position
     float shadow = 0.0;
-    if (currentDepth - bias > shadowDepth) {
-        shadow = 1.0;
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
+
+    // 5x5 PCF kernel for smoother shadows
+    const int pcfRadius = 2;
+    const float pcfSamples = float((pcfRadius * 2 + 1) * (pcfRadius * 2 + 1));
+
+    for (int x = -pcfRadius; x <= pcfRadius; ++x) {
+        for (int y = -pcfRadius; y <= pcfRadius; ++y) {
+            vec2 offset = vec2(float(x), float(y)) * texelSize;
+            float shadowDepth = texture(shadowMap, projCoords.xy + offset).r;
+
+            // Shadow test: current fragment is behind shadow caster
+            if (currentDepth - bias > shadowDepth) {
+                shadow += 1.0;
+            }
+        }
     }
+
+    // Average the shadow samples
+    shadow /= pcfSamples;
 
     return shadow * lighting.shadowStrength;
 }
