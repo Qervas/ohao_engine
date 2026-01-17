@@ -58,3 +58,4 @@ external/imgui
 *_FIX.md
 *_TRACE.md
 *_LOGS.md
+__pycache__/
