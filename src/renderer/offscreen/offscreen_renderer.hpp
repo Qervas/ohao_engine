@@ -8,12 +8,20 @@
 #include <unordered_map>
 #include <glm/glm.hpp>
 #include "utils/common_types.hpp"
+#include "renderer/frame/frame_resources.hpp"
 
 namespace ohao {
 
 class Scene;
 class Camera;
 class Actor;
+class DeferredRenderer;
+
+// Render mode selection
+enum class RenderMode {
+    Forward,    // Legacy forward rendering (8 light limit)
+    Deferred    // AAA deferred rendering (unlimited lights, CSM, post-processing)
+};
 
 // Simple vertex structure for basic rendering (Phase 1 triangle)
 struct SimpleVertex {
@@ -96,6 +104,13 @@ public:
     Camera& getCamera() { return *m_camera; }
     const Camera& getCamera() const { return *m_camera; }
 
+    // Render mode
+    void setRenderMode(RenderMode mode);
+    RenderMode getRenderMode() const { return m_renderMode; }
+
+    // Deferred renderer access (for configuration)
+    DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
+
     // Pixel access (RGBA format, 4 bytes per pixel)
     const uint8_t* getPixels() const { return m_pixelBuffer.data(); }
     uint32_t getWidth() const { return m_width; }
@@ -126,7 +141,7 @@ private:
     bool createShadowResources();
     bool createShadowRenderPass();
     bool createShadowPipeline();
-    void renderShadowPass();
+    void renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descriptorSet);
     glm::mat4 calculateLightSpaceMatrix(const LightData& light);
     void cleanupShadowResources();
 
@@ -137,16 +152,21 @@ private:
     bool createUniformBuffer();
     bool createLightBuffer();   // Phase 3: Light uniform buffer
     bool createVertexBuffer();  // Creates demo triangle
+    bool initializeFrameResources();  // Multi-frame resource initialization
     VkShaderModule loadShaderModule(const std::string& filepath);
     void updateUniformBuffer();
+    void updateUniformBuffer(uint32_t frameIndex);  // Per-frame version
     void updateLightBuffer();   // Phase 3: Collect and update lights
+    void updateLightBuffer(uint32_t frameIndex);    // Per-frame version
 
     // Phase 2: Scene mesh rendering
-    void renderSceneObjects();  // Draw all scene meshes with push constants
+    void renderSceneObjects(VkCommandBuffer cmd);  // Draw all scene meshes with push constants
 
     // Rendering internals
     void recordCommandBuffer();
     void copyFramebufferToPixelBuffer();
+    void renderMultiFrame();  // Multi-frame ring buffer rendering
+    void renderLegacy();      // Legacy single-frame rendering
 
     // Cleanup
     void cleanupFramebuffer();
@@ -162,6 +182,12 @@ private:
     VkDevice m_device{VK_NULL_HANDLE};
     VkQueue m_graphicsQueue{VK_NULL_HANDLE};
     VkCommandPool m_commandPool{VK_NULL_HANDLE};
+
+    // Multi-frame rendering (ring buffer)
+    FrameResourceManager m_frameResources;
+    uint32_t m_currentFrame{0};
+
+    // Legacy single command buffer (kept for compatibility during transition)
     VkCommandBuffer m_commandBuffer{VK_NULL_HANDLE};
 
     // Offscreen framebuffer
@@ -248,6 +274,18 @@ private:
 
     // Initialized flag
     bool m_initialized{false};
+
+    // Render mode
+    // Default to Forward until deferred output integration is complete
+    RenderMode m_renderMode{RenderMode::Forward};
+
+    // Deferred renderer (AAA quality)
+    std::unique_ptr<DeferredRenderer> m_deferredRenderer;
+
+    // Deferred rendering methods
+    bool initializeDeferredRenderer();
+    void renderDeferred();
+    void copyDeferredOutputToPixelBuffer();
 };
 
 } // namespace ohao

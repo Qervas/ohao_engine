@@ -170,41 +170,12 @@ bool OffscreenRenderer::updateSceneBuffers() {
     return true;
 }
 
-void OffscreenRenderer::renderSceneObjects() {
+void OffscreenRenderer::renderSceneObjects(VkCommandBuffer cmd) {
     if (!m_hasSceneMeshes || !m_scene || !m_pipeline) {
         return;
     }
 
-    // Bind pipeline
-    vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-
-    // Set viewport
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(m_width);
-    viewport.height = static_cast<float>(m_height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(m_commandBuffer, 0, 1, &viewport);
-
-    // Set scissor
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = {m_width, m_height};
-    vkCmdSetScissor(m_commandBuffer, 0, 1, &scissor);
-
-    // Bind descriptor sets
-    vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
-
-    // Bind vertex and index buffers
-    VkBuffer vertexBuffers[] = {m_vertexBuffer};
-    VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-    // Draw each actor
+    // Draw each actor (pipeline/viewport/scissor/buffers already bound by caller)
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto meshComponent = actor->getComponent<MeshComponent>();
         if (!meshComponent || !meshComponent->isVisible()) continue;
@@ -241,16 +212,16 @@ void OffscreenRenderer::renderSceneObjects() {
             }
         }
 
-        vkCmdPushConstants(m_commandBuffer, m_pipelineLayout,
+        vkCmdPushConstants(cmd, m_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(ObjectPushConstants), &pc);
 
         // Draw indexed
-        vkCmdDrawIndexed(m_commandBuffer, bufferInfo.indexCount, 1, bufferInfo.indexOffset, 0, 0);
+        vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1, bufferInfo.indexOffset, 0, 0);
     }
 }
 
-void OffscreenRenderer::renderShadowPass() {
+void OffscreenRenderer::renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descriptorSet) {
     static int shadowDebugCounter = 0;
     bool shouldPrintShadowDebug = (shadowDebugCounter++ % 120 == 0);
 
@@ -281,10 +252,10 @@ void OffscreenRenderer::renderShadowPass() {
     renderPassInfo.clearValueCount = 1;
     renderPassInfo.pClearValues = &clearValue;
 
-    vkCmdBeginRenderPass(m_commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     // Bind shadow pipeline
-    vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
 
     // Set viewport to shadow map size
     VkViewport viewport{};
@@ -294,23 +265,24 @@ void OffscreenRenderer::renderShadowPass() {
     viewport.height = static_cast<float>(SHADOW_MAP_SIZE);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(m_commandBuffer, 0, 1, &viewport);
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
 
     // Set scissor
     VkRect2D scissor{};
     scissor.offset = {0, 0};
     scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
-    vkCmdSetScissor(m_commandBuffer, 0, 1, &scissor);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     // Bind descriptor sets (for light buffer access in shadow vertex shader)
-    vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            m_shadowPipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+    // CRITICAL: Use the same descriptor set as the main pass for consistent light data!
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_shadowPipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
 
     // Bind vertex and index buffers
     VkBuffer vertexBuffers[] = {m_vertexBuffer};
     VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
     // Draw each actor (shadow casters only)
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
@@ -331,15 +303,15 @@ void OffscreenRenderer::renderShadowPass() {
         pc.roughness = 0.0f;
         pc.ao = 0.0f;
 
-        vkCmdPushConstants(m_commandBuffer, m_shadowPipelineLayout,
+        vkCmdPushConstants(cmd, m_shadowPipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(ObjectPushConstants), &pc);
 
         // Draw indexed
-        vkCmdDrawIndexed(m_commandBuffer, bufferInfo.indexCount, 1, bufferInfo.indexOffset, 0, 0);
+        vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1, bufferInfo.indexOffset, 0, 0);
     }
 
-    vkCmdEndRenderPass(m_commandBuffer);
+    vkCmdEndRenderPass(cmd);
     // Render pass finalLayout transitions shadow image to SHADER_READ_ONLY_OPTIMAL
 }
 

@@ -39,6 +39,7 @@ target_link_libraries(ohao_renderer PUBLIC
     ohao_engine
     ohao_utils
     glm
+    VulkanMemoryAllocator
 )
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})
