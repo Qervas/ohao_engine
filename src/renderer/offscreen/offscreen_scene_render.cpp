@@ -250,4 +250,97 @@ void OffscreenRenderer::renderSceneObjects() {
     }
 }
 
+void OffscreenRenderer::renderShadowPass() {
+    static int shadowDebugCounter = 0;
+    bool shouldPrintShadowDebug = (shadowDebugCounter++ % 120 == 0);
+
+    if (!m_shadowsEnabled || !m_hasSceneMeshes || !m_scene || !m_shadowPipeline) {
+        if (shouldPrintShadowDebug) {
+            std::cout << "[ShadowPass] SKIPPED: shadowsEnabled=" << m_shadowsEnabled
+                      << " hasSceneMeshes=" << m_hasSceneMeshes
+                      << " scene=" << (m_scene != nullptr)
+                      << " shadowPipeline=" << (m_shadowPipeline != VK_NULL_HANDLE) << std::endl;
+        }
+        return;
+    }
+
+    if (shouldPrintShadowDebug) {
+        std::cout << "[ShadowPass] EXECUTING with " << m_meshBufferMap.size() << " meshes" << std::endl;
+    }
+
+    // Begin shadow render pass (render pass handles layout transitions via subpass dependencies)
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = m_shadowRenderPass;
+    renderPassInfo.framebuffer = m_shadowFramebuffer;
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
+
+    VkClearValue clearValue{};
+    clearValue.depthStencil = {1.0f, 0};
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearValue;
+
+    vkCmdBeginRenderPass(m_commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Bind shadow pipeline
+    vkCmdBindPipeline(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadowPipeline);
+
+    // Set viewport to shadow map size
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(SHADOW_MAP_SIZE);
+    viewport.height = static_cast<float>(SHADOW_MAP_SIZE);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(m_commandBuffer, 0, 1, &viewport);
+
+    // Set scissor
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
+    vkCmdSetScissor(m_commandBuffer, 0, 1, &scissor);
+
+    // Bind descriptor sets (for light buffer access in shadow vertex shader)
+    vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            m_shadowPipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+
+    // Bind vertex and index buffers
+    VkBuffer vertexBuffers[] = {m_vertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(m_commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(m_commandBuffer, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Draw each actor (shadow casters only)
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto meshComponent = actor->getComponent<MeshComponent>();
+        if (!meshComponent || !meshComponent->isVisible()) continue;
+
+        auto it = m_meshBufferMap.find(actor->getID());
+        if (it == m_meshBufferMap.end()) continue;
+
+        const MeshBufferInfo& bufferInfo = it->second;
+        if (bufferInfo.indexCount == 0) continue;
+
+        // Setup push constants (only model matrix matters for shadow pass)
+        ObjectPushConstants pc{};
+        pc.model = actor->getTransform()->getWorldMatrix();
+        pc.baseColor = glm::vec3(0.0f);  // Not used in shadow pass
+        pc.metallic = 0.0f;
+        pc.roughness = 0.0f;
+        pc.ao = 0.0f;
+
+        vkCmdPushConstants(m_commandBuffer, m_shadowPipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(ObjectPushConstants), &pc);
+
+        // Draw indexed
+        vkCmdDrawIndexed(m_commandBuffer, bufferInfo.indexCount, 1, bufferInfo.indexOffset, 0, 0);
+    }
+
+    vkCmdEndRenderPass(m_commandBuffer);
+    // Render pass finalLayout transitions shadow image to SHADER_READ_ONLY_OPTIMAL
+}
+
 } // namespace ohao
