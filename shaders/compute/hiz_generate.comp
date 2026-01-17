@@ -1,0 +1,65 @@
+#version 450
+
+// Hi-Z (Hierarchical-Z) Buffer Generation
+// Generates depth pyramid for efficient ray marching
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// For mip 0: sample from depth buffer
+layout(set = 0, binding = 0) uniform sampler2D srcDepth;
+
+// Write to current mip level
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D dstMip;
+
+layout(push_constant) uniform HiZParams {
+    uvec2 srcSize;
+    uvec2 dstSize;
+    uint srcMip;
+    uint padding[3];
+} params;
+
+void main() {
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (dstCoord.x >= int(params.dstSize.x) || dstCoord.y >= int(params.dstSize.y)) {
+        return;
+    }
+
+    // Calculate source coordinates (2x2 block)
+    ivec2 srcCoord = dstCoord * 2;
+    vec2 srcTexelSize = 1.0 / vec2(params.srcSize);
+
+    // Sample 4 texels from source and take maximum depth (furthest)
+    // Using max because we want conservative depth for occlusion
+    float d0, d1, d2, d3;
+
+    if (params.srcMip == 0) {
+        // First mip - sample from full-res depth buffer
+        vec2 uv00 = (vec2(srcCoord) + vec2(0.5, 0.5)) * srcTexelSize;
+        vec2 uv10 = (vec2(srcCoord) + vec2(1.5, 0.5)) * srcTexelSize;
+        vec2 uv01 = (vec2(srcCoord) + vec2(0.5, 1.5)) * srcTexelSize;
+        vec2 uv11 = (vec2(srcCoord) + vec2(1.5, 1.5)) * srcTexelSize;
+
+        d0 = texture(srcDepth, uv00).r;
+        d1 = texture(srcDepth, uv10).r;
+        d2 = texture(srcDepth, uv01).r;
+        d3 = texture(srcDepth, uv11).r;
+    } else {
+        // Subsequent mips - sample from previous mip using LOD
+        vec2 uv00 = (vec2(srcCoord) + vec2(0.5, 0.5)) * srcTexelSize;
+        vec2 uv10 = (vec2(srcCoord) + vec2(1.5, 0.5)) * srcTexelSize;
+        vec2 uv01 = (vec2(srcCoord) + vec2(0.5, 1.5)) * srcTexelSize;
+        vec2 uv11 = (vec2(srcCoord) + vec2(1.5, 1.5)) * srcTexelSize;
+
+        float mip = float(params.srcMip);
+        d0 = textureLod(srcDepth, uv00, mip).r;
+        d1 = textureLod(srcDepth, uv10, mip).r;
+        d2 = textureLod(srcDepth, uv01, mip).r;
+        d3 = textureLod(srcDepth, uv11, mip).r;
+    }
+
+    // Take maximum (furthest depth for conservative test)
+    float maxDepth = max(max(d0, d1), max(d2, d3));
+
+    imageStore(dstMip, dstCoord, vec4(maxDepth, 0.0, 0.0, 0.0));
+}

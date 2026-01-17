@@ -1,0 +1,128 @@
+#version 450
+
+// Depth of Field - Circle of Confusion calculation
+// Computes per-pixel CoC based on camera parameters and depth
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Input textures
+layout(set = 0, binding = 0) uniform sampler2D colorBuffer;
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;
+
+// Circle of Confusion output
+layout(set = 0, binding = 2, r16f) uniform writeonly image2D cocOutput;
+
+// Final output (not used in this pass)
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D finalOutput;
+
+// Push constants
+layout(push_constant) uniform DoFParams {
+    vec4 screenSize;     // xy = size, zw = 1/size
+    vec4 focusParams;    // x = focal length, y = aperture, z = focus dist, w = sensor size
+    vec4 blurRegions;    // x = near start, y = near end, z = far start, w = far end
+    float maxBlurRadius;
+    float nearPlane;
+    float farPlane;
+    uint bokehBlades;
+} params;
+
+// Convert hyperbolic depth to linear depth
+float linearizeDepth(float depth) {
+    return params.nearPlane * params.farPlane /
+           (params.farPlane - depth * (params.farPlane - params.nearPlane));
+}
+
+// Calculate Circle of Confusion diameter in pixels
+// Based on thin lens equation: CoC = |S2 - S1| * A * f / (S1 * (S2 - f))
+// where S1 = focus distance, S2 = object distance, A = aperture diameter, f = focal length
+float calculateCoC(float linearDepth) {
+    float focalLength = params.focusParams.x * 0.001;  // Convert mm to meters
+    float aperture = params.focusParams.y;              // f-stop
+    float focusDistance = params.focusParams.z;         // meters
+    float sensorSize = params.focusParams.w * 0.001;   // Convert mm to meters
+
+    // Aperture diameter = focal length / f-stop
+    float apertureDiameter = focalLength / aperture;
+
+    // Object distance (clamped to avoid division by zero)
+    float objectDistance = max(linearDepth, 0.001);
+
+    // Signed CoC using thin lens formula
+    // Positive = far field blur, Negative = near field blur
+    float signedCoC = 0.0;
+
+    if (abs(objectDistance - focusDistance) > 0.001) {
+        // CoC = A * f * |S2 - S1| / (S2 * (S1 - f))
+        float focusFactor = focusDistance - focalLength;
+        if (abs(focusFactor) > 0.0001) {
+            signedCoC = apertureDiameter * focalLength * (objectDistance - focusDistance) /
+                       (objectDistance * focusFactor);
+        }
+    }
+
+    // Convert to screen pixels
+    // CoC in meters on sensor -> pixels
+    float cocPixels = signedCoC * params.screenSize.x / sensorSize;
+
+    return cocPixels;
+}
+
+// Simplified CoC based on blur regions (for artistic control)
+float calculateSimplifiedCoC(float linearDepth) {
+    float nearStart = params.blurRegions.x;
+    float nearEnd = params.blurRegions.y;
+    float farStart = params.blurRegions.z;
+    float farEnd = params.blurRegions.w;
+
+    float coc = 0.0;
+
+    // Near blur (negative CoC)
+    if (linearDepth < nearEnd) {
+        if (linearDepth < nearStart) {
+            coc = -1.0;  // Maximum near blur
+        } else {
+            coc = -smoothstep(nearEnd, nearStart, linearDepth);
+        }
+    }
+    // Far blur (positive CoC)
+    else if (linearDepth > farStart) {
+        if (linearDepth > farEnd) {
+            coc = 1.0;  // Maximum far blur
+        } else {
+            coc = smoothstep(farStart, farEnd, linearDepth);
+        }
+    }
+
+    return coc * params.maxBlurRadius;
+}
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixelCoord.x >= int(params.screenSize.x) || pixelCoord.y >= int(params.screenSize.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixelCoord) + 0.5) * params.screenSize.zw;
+
+    // Sample depth
+    float depth = texture(depthBuffer, uv).r;
+
+    // Skip sky pixels
+    if (depth >= 1.0) {
+        imageStore(cocOutput, pixelCoord, vec4(0.0));
+        return;
+    }
+
+    // Linearize depth
+    float linearDepth = linearizeDepth(depth);
+
+    // Calculate CoC using simplified artistic approach
+    // (Use calculateCoC for physically-based approach)
+    float coc = calculateSimplifiedCoC(linearDepth);
+
+    // Clamp to maximum blur radius
+    coc = clamp(coc, -params.maxBlurRadius, params.maxBlurRadius);
+
+    imageStore(cocOutput, pixelCoord, vec4(coc, 0.0, 0.0, 0.0));
+}

@@ -1,0 +1,142 @@
+#version 450
+
+// Depth of Field - Composite pass with bokeh blur
+// Applies variable-radius blur based on Circle of Confusion
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Input textures
+layout(set = 0, binding = 0) uniform sampler2D colorBuffer;
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;
+
+// Circle of Confusion
+layout(set = 0, binding = 2, r16f) uniform readonly image2D cocBuffer;
+
+// Final output
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D outputBuffer;
+
+// Push constants
+layout(push_constant) uniform DoFParams {
+    vec4 screenSize;     // xy = size, zw = 1/size
+    vec4 focusParams;    // x = focal length, y = aperture, z = focus dist, w = sensor size
+    vec4 blurRegions;    // x = near start, y = near end, z = far start, w = far end
+    float maxBlurRadius;
+    float nearPlane;
+    float farPlane;
+    uint bokehBlades;
+} params;
+
+// Bokeh shape weight based on aperture blade count
+float bokehWeight(vec2 offset, float blades) {
+    if (blades < 3.0) {
+        // Circular bokeh
+        return 1.0;
+    }
+
+    float angle = atan(offset.y, offset.x);
+    float radius = length(offset);
+
+    // Polygon approximation
+    float segmentAngle = 3.14159265 * 2.0 / blades;
+    float halfSegment = segmentAngle * 0.5;
+
+    // Distance to polygon edge
+    float localAngle = mod(angle + halfSegment, segmentAngle) - halfSegment;
+    float polygonRadius = cos(halfSegment) / cos(localAngle);
+
+    // Soft edge
+    return smoothstep(1.0, 0.9, radius / polygonRadius);
+}
+
+// Golden angle for sample distribution
+const float GOLDEN_ANGLE = 2.39996323;
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixelCoord.x >= int(params.screenSize.x) || pixelCoord.y >= int(params.screenSize.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixelCoord) + 0.5) * params.screenSize.zw;
+    vec2 texelSize = params.screenSize.zw;
+
+    // Get center CoC
+    float centerCoC = imageLoad(cocBuffer, pixelCoord).r;
+    float absCoC = abs(centerCoC);
+
+    // No blur needed for in-focus areas
+    if (absCoC < 0.5) {
+        vec3 color = texture(colorBuffer, uv).rgb;
+        imageStore(outputBuffer, pixelCoord, vec4(color, 1.0));
+        return;
+    }
+
+    // Calculate number of samples based on blur radius
+    int numSamples = int(min(absCoC * 2.0 + 4.0, 48.0));
+
+    // Accumulate color with bokeh weighting
+    vec3 accumColor = vec3(0.0);
+    float accumWeight = 0.0;
+
+    float blades = float(params.bokehBlades);
+
+    for (int i = 0; i < numSamples; ++i) {
+        // Fibonacci spiral distribution (better than random)
+        float t = float(i) / float(numSamples);
+        float radius = sqrt(t) * absCoC;
+        float angle = float(i) * GOLDEN_ANGLE;
+
+        vec2 offset = vec2(cos(angle), sin(angle)) * radius;
+        vec2 sampleUV = uv + offset * texelSize;
+
+        // Clamp to screen
+        sampleUV = clamp(sampleUV, vec2(0.001), vec2(0.999));
+
+        // Get sample CoC
+        ivec2 sampleCoord = ivec2(sampleUV * params.screenSize.xy);
+        float sampleCoC = imageLoad(cocBuffer, sampleCoord).r;
+
+        // Sample color
+        vec3 sampleColor = texture(colorBuffer, sampleUV).rgb;
+
+        // Calculate weight
+        float weight = 1.0;
+
+        // Bokeh shape
+        if (absCoC > 0.0) {
+            weight *= bokehWeight(offset / absCoC, blades);
+        }
+
+        // Depth-based bleeding prevention
+        // Near field (negative CoC) bleeds over far field
+        // Far field (positive CoC) does not bleed over near
+        if (centerCoC > 0.0 && sampleCoC < 0.0) {
+            // Far center, near sample - reduce sample weight
+            weight *= 0.1;
+        }
+
+        // Radius-based falloff for scattered CoC
+        float sampleAbsCoC = abs(sampleCoC);
+        if (sampleAbsCoC > 0.5) {
+            // Scattered contribution - sample contributes based on its own CoC
+            float scatterRadius = length(offset * params.screenSize.xy);
+            weight *= smoothstep(sampleAbsCoC + 1.0, sampleAbsCoC * 0.5, scatterRadius);
+        }
+
+        // Accumulate
+        accumColor += sampleColor * weight;
+        accumWeight += weight;
+    }
+
+    // Normalize
+    vec3 blurredColor = accumWeight > 0.0 ? accumColor / accumWeight : texture(colorBuffer, uv).rgb;
+
+    // Optional: boost highlights for "blooming" bokeh effect
+    float luminance = dot(blurredColor, vec3(0.2126, 0.7152, 0.0722));
+    if (luminance > 1.0 && absCoC > 4.0) {
+        blurredColor *= 1.0 + (luminance - 1.0) * 0.1 * (absCoC / params.maxBlurRadius);
+    }
+
+    imageStore(outputBuffer, pixelCoord, vec4(blurredColor, 1.0));
+}

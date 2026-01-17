@@ -1,0 +1,164 @@
+#version 450
+
+// Volumetric Lighting using froxel-based ray marching
+// Computes in-scattering from lights through participating media
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Input textures
+layout(set = 0, binding = 0) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 1) uniform sampler2DShadow shadowMap;
+
+// Light buffer
+layout(std140, set = 0, binding = 2) uniform LightBuffer {
+    vec4 viewPos;                  // Camera position
+    vec4 ambientColor;             // Ambient light
+    int numLights;
+    int padding[3];
+    // Array of lights follows (simplified for this shader)
+} lights;
+
+// 3D froxel volume for accumulating scattering
+layout(set = 0, binding = 3, rgba16f) uniform image3D scatterVolume;
+
+// Output 2D scattering texture
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D scatterOutput;
+
+// Push constants
+layout(push_constant) uniform VolumetricParams {
+    mat4 invView;
+    mat4 invProjection;
+    vec4 fogColorDensity;    // rgb = color, a = density
+    vec4 scatterParams;      // x = g (scattering), y = absorption, z = height, w = falloff
+    vec4 volumeParams;       // xyz = froxel dims, w = max distance
+    float nearPlane;
+    float farPlane;
+    uint sampleCount;
+    uint frameIndex;
+} params;
+
+// Henyey-Greenstein phase function
+float henyeyGreenstein(float cosTheta, float g) {
+    float g2 = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+    return (1.0 - g2) / (4.0 * 3.14159265 * pow(denom, 1.5));
+}
+
+// Height-based fog density
+float getHeightDensity(vec3 worldPos) {
+    float heightFog = exp(-max(0.0, worldPos.y - params.scatterParams.z) * params.scatterParams.w);
+    return params.fogColorDensity.a * heightFog;
+}
+
+// Reconstruct world position from UV and linear depth
+vec3 reconstructWorldPos(vec2 uv, float linearDepth) {
+    vec4 clipPos = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    vec4 viewPos = params.invProjection * clipPos;
+    viewPos /= viewPos.w;
+    vec3 viewDir = normalize(viewPos.xyz);
+    vec3 worldDir = mat3(params.invView) * viewDir;
+    vec3 camPos = params.invView[3].xyz;
+    return camPos + worldDir * linearDepth;
+}
+
+// Linear depth from hyperbolic depth buffer
+float linearizeDepth(float depth) {
+    return params.nearPlane * params.farPlane /
+           (params.farPlane - depth * (params.farPlane - params.nearPlane));
+}
+
+// Simple noise for temporal dithering
+float noise(vec2 co) {
+    return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    vec2 screenSize = params.volumeParams.xy * float(8); // Froxel tile size
+
+    if (pixelCoord.x >= int(screenSize.x) || pixelCoord.y >= int(screenSize.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixelCoord) + 0.5) / screenSize;
+
+    // Sample depth
+    float depth = texture(depthBuffer, uv).r;
+
+    // Skip sky pixels
+    if (depth >= 1.0) {
+        imageStore(scatterOutput, pixelCoord, vec4(0.0));
+        return;
+    }
+
+    float maxDepth = linearizeDepth(depth);
+
+    // Camera position
+    vec3 camPos = params.invView[3].xyz;
+
+    // View direction
+    vec4 clipPos = vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    vec4 viewPos = params.invProjection * clipPos;
+    viewPos /= viewPos.w;
+    vec3 viewDir = normalize(mat3(params.invView) * viewPos.xyz);
+
+    // Ray march settings
+    uint numSamples = min(params.sampleCount, 128u);
+    float stepSize = min(maxDepth, params.volumeParams.w) / float(numSamples);
+
+    // Temporal jitter
+    float jitter = noise(vec2(pixelCoord) + vec2(params.frameIndex * 0.618));
+    float rayStart = stepSize * jitter;
+
+    // Accumulated scattering and transmittance
+    vec3 scattering = vec3(0.0);
+    float transmittance = 1.0;
+
+    // Light direction (assuming single directional light for simplicity)
+    vec3 lightDir = normalize(vec3(-0.5, -1.0, -0.3)); // TODO: Get from light buffer
+    vec3 lightColor = vec3(1.0, 0.95, 0.8);
+
+    // March along the ray
+    for (uint i = 0; i < numSamples; ++i) {
+        float t = rayStart + float(i) * stepSize;
+
+        if (t > maxDepth) break;
+
+        vec3 samplePos = camPos + viewDir * t;
+
+        // Get density at this point
+        float density = getHeightDensity(samplePos);
+
+        if (density > 0.001) {
+            // Check shadow (simplified - would need proper shadow matrix)
+            float shadow = 1.0; // textureProjShadow(shadowMap, shadowCoord);
+
+            // Phase function
+            float cosTheta = dot(viewDir, -lightDir);
+            float phase = henyeyGreenstein(cosTheta, params.scatterParams.x);
+
+            // In-scattering from light
+            vec3 inScatter = lightColor * phase * shadow * density;
+
+            // Add ambient scattering
+            inScatter += lights.ambientColor.rgb * density * 0.1;
+
+            // Apply fog color
+            inScatter *= params.fogColorDensity.rgb;
+
+            // Beer-Lambert extinction
+            float extinction = density * params.scatterParams.y;
+            float sampleTransmittance = exp(-extinction * stepSize);
+
+            // Accumulate scattering
+            scattering += transmittance * inScatter * (1.0 - sampleTransmittance);
+            transmittance *= sampleTransmittance;
+
+            // Early out if fully opaque
+            if (transmittance < 0.01) break;
+        }
+    }
+
+    // Output scattering (rgb) and transmittance (a)
+    imageStore(scatterOutput, pixelCoord, vec4(scattering, transmittance));
+}

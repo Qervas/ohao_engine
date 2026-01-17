@@ -1,0 +1,55 @@
+#version 450
+
+// Equirectangular to Cubemap Conversion
+// Converts HDR equirectangular environment map to cubemap format
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D equirectangularMap;
+layout(set = 0, binding = 1, rgba16f) writeonly uniform imageCube cubemapOut;
+
+const float PI = 3.14159265359;
+
+// Convert cubemap face coordinates to direction vector
+vec3 getCubeDirection(ivec3 coord, int size) {
+    // Normalize to [-1, 1]
+    vec2 uv = (vec2(coord.xy) + 0.5) / float(size) * 2.0 - 1.0;
+
+    vec3 dir;
+    switch (coord.z) {
+        case 0: dir = vec3( 1.0, -uv.y, -uv.x); break; // +X
+        case 1: dir = vec3(-1.0, -uv.y,  uv.x); break; // -X
+        case 2: dir = vec3( uv.x,  1.0,  uv.y); break; // +Y
+        case 3: dir = vec3( uv.x, -1.0, -uv.y); break; // -Y
+        case 4: dir = vec3( uv.x, -uv.y,  1.0); break; // +Z
+        case 5: dir = vec3(-uv.x, -uv.y, -1.0); break; // -Z
+    }
+
+    return normalize(dir);
+}
+
+// Sample equirectangular map with direction
+vec4 sampleEquirectangular(vec3 dir) {
+    // Convert direction to spherical coordinates
+    float phi = atan(dir.z, dir.x);
+    float theta = asin(dir.y);
+
+    // Convert to UV [0, 1]
+    vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI + 0.5);
+
+    return texture(equirectangularMap, uv);
+}
+
+void main() {
+    ivec2 size = imageSize(cubemapOut).xy;
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= size.x || coord.y >= size.y || coord.z >= 6) {
+        return;
+    }
+
+    vec3 direction = getCubeDirection(coord, size.x);
+    vec4 color = sampleEquirectangular(direction);
+
+    imageStore(cubemapOut, coord, color);
+}

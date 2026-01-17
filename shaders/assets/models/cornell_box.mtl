@@ -1,0 +1,55 @@
+# Cornell Box Materials
+
+newmtl white_wall
+Ka 0.7 0.5 0.3  # Warm beige color
+Kd 0.7 0.5 0.3
+Ks 0.0 0.0 0.0
+Ns 1.0
+Ni 1.45
+d 1.0
+illum 2
+
+newmtl red_wall
+Ka 1.0 0.2 0.2  #  red
+Kd 1.0 0.2 0.2
+Ks 0.0 0.0 0.0
+Ns 1.0
+Ni 1.45
+d 1.0
+illum 2
+
+newmtl green_wall
+Ka 0.2 1.0 0.2  #  green
+Kd 0.2 1.0 0.2
+Ks 0.0 0.0 0.0
+Ns 1.0
+Ni 1.45
+d 1.0
+illum 2
+
+newmtl floor
+Ka 0.3 0.5 0.7  # Light blue
+Kd 0.3 0.5 0.7
+Ks 0.0 0.0 0.0
+Ns 1.0
+Ni 1.45
+d 1.0
+illum 2
+
+newmtl ceiling
+Ka 0.7 0.3 0.7  # Light purple
+Kd 0.7 0.3 0.7
+Ks 0.0 0.0 0.0
+Ns 1.0
+Ni 1.45
+d 1.0
+illum 2
+
+newmtl light
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.0 0.0 0.0
+Ke 3.0 3.0 3.0
+Ns 1.0
+d 1.0
+illum 7

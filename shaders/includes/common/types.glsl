@@ -1,8 +1,11 @@
-// offscreen_types.glsl - Common type definitions for offscreen renderer
+// types.glsl - Common type definitions for OHAO Engine shaders
 // GLSL include file - use with glslangValidator -I flag
+//
+// Part of OHAO Engine shader system
+// Location: includes/common/types.glsl
 
-#ifndef OFFSCREEN_TYPES_GLSL
-#define OFFSCREEN_TYPES_GLSL
+#ifndef OHAO_COMMON_TYPES_GLSL
+#define OHAO_COMMON_TYPES_GLSL
 
 // Light types
 #define LIGHT_DIRECTIONAL 0
@@ -12,7 +15,7 @@
 // Maximum lights (must match C++ MAX_LIGHTS)
 #define MAX_LIGHTS 8
 
-// Light data structure (matches C++ LightData - 128 bytes)
+// Light data structure (matches C++ LightData - 128 bytes, std140 layout)
 struct Light {
     vec4 position;          // xyz = position, w = type
     vec4 direction;         // xyz = direction, w = range
@@ -21,4 +24,4 @@ struct Light {
     mat4 lightSpaceMatrix;  // Transform to light space for shadow mapping (64 bytes)
 };
 
-#endif // OFFSCREEN_TYPES_GLSL
+#endif // OHAO_COMMON_TYPES_GLSL
