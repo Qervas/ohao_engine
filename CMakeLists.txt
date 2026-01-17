@@ -73,4 +73,9 @@ if(BUILD_PYTHON_BINDINGS)
     add_subdirectory(tests/python)
 endif()
 
-# Tests removed - all testing done through Godot Editor integration
+# Renderer pipeline tests
+option(BUILD_RENDERER_TESTS "Build renderer pipeline tests" ON)
+if(BUILD_RENDERER_TESTS)
+    message(STATUS "Building renderer pipeline tests")
+    add_subdirectory(tests/renderer)
+endif()
