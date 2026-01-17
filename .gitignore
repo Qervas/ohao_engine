@@ -1,7 +1,60 @@
+# Build directories
 build/
+*/build/
+**/CMakeCache.txt
+**/CMakeFiles/
+**/cmake_install.cmake
+**/Makefile
+**/_deps/
+**/compile_commands.json
+
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+
+# Object files and libraries
 *.o
+*.os
+*.a
 *.so
-.cache
-.ropeproject
+*.dylib
+
+# Cache
+.cache/
+.ropeproject/
+
+# Godot
+godot_editor/project/.godot/
+godot_editor/.sconsign.dblite
+godot_editor/bin/
+*.import
+
+# Static libraries (build output)
+godot_editor/*.a
+shaders/*.a
+
+# External build artifacts
+godot_editor/external/
+shaders/external/
+
+# Legacy
 external/imgui
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Temp files
+*.tmp
+*.temp
+
+# Claude context (local only)
+.claude/
+
+# Debug markdown files (temporary)
+*_FIXES.md
+*_FIX.md
+*_TRACE.md
+*_LOGS.md
