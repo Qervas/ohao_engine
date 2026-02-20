@@ -1,0 +1,56 @@
+# Material Library for test_cube.obj
+# Created for OHAO Engine testing
+
+# Red material for back face
+newmtl red_material
+Ka 0.2 0.0 0.0  # Ambient: dark red
+Kd 0.9 0.1 0.1  # Diffuse: bright red
+Ks 0.5 0.5 0.5  # Specular: white highlights
+Ns 32.0         # Shininess
+d 1.0           # Dissolve (opacity)
+illum 2         # Illumination model
+
+# Green material for front face
+newmtl green_material
+Ka 0.0 0.2 0.0
+Kd 0.1 0.9 0.1
+Ks 0.5 0.5 0.5
+Ns 32.0
+d 1.0
+illum 2
+
+# Blue material for left face
+newmtl blue_material
+Ka 0.0 0.0 0.2
+Kd 0.1 0.1 0.9
+Ks 0.5 0.5 0.5
+Ns 64.0
+d 1.0
+illum 2
+
+# Yellow material for right face
+newmtl yellow_material
+Ka 0.2 0.2 0.0
+Kd 0.9 0.9 0.1
+Ks 0.8 0.8 0.8
+Ns 16.0
+d 1.0
+illum 2
+
+# Purple material for bottom face
+newmtl purple_material
+Ka 0.2 0.0 0.2
+Kd 0.8 0.2 0.8
+Ks 0.6 0.6 0.6
+Ns 48.0
+d 1.0
+illum 2
+
+# Cyan material for top face
+newmtl cyan_material
+Ka 0.0 0.2 0.2
+Kd 0.2 0.9 0.9
+Ks 0.7 0.7 0.7
+Ns 24.0
+d 1.0
+illum 2

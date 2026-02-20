@@ -11,18 +11,26 @@ import sys
 env = SConscript("godot-cpp/SConstruct")
 
 # Add OHAO include paths
+vulkan_sdk = os.environ.get("VULKAN_SDK", "C:/VulkanSDK/1.4.321.1")
 env.Append(CPPPATH=[
     "src/",
     "../src/",  # OHAO engine headers
     "../external/glm/",
     "../external/",
     "../build/_deps/glm-src/",  # GLM from FetchContent
+    "../build/_deps/vma-src/include/",  # VulkanMemoryAllocator
+    "../build/_deps/json-src/single_include/",  # nlohmann/json
+    "../build/_deps/stb-src/",  # stb headers
+    vulkan_sdk + "/Include",  # Vulkan SDK headers (Windows)
     "/opt/homebrew/include/",  # Vulkan headers (MoltenVK)
 ])
 
 # Add library paths
 env.Append(LIBPATH=[
-    "../build/",  # OHAO engine libraries
+    "../build/",  # OHAO engine libraries (Ninja/GCC)
+    "../build/Debug/",  # OHAO engine libraries (MSVC Debug)
+    "../build/Release/",  # OHAO engine libraries (MSVC Release)
+    vulkan_sdk + "/Lib",  # Vulkan SDK libraries (Windows)
     "/opt/homebrew/lib/",  # Homebrew libraries (Vulkan, etc.)
 ])
 

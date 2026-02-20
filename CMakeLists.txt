@@ -12,6 +12,11 @@ set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Use static CRT (/MT) to match godot-cpp's SCons build
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # Include FetchContent module
 include(FetchContent)
 

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cmath>
 #include <iostream>
+#include <array>
 
 // stb_image for HDR loading
 #define STB_IMAGE_IMPLEMENTATION

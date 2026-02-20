@@ -1,4 +1,5 @@
 #include "indirect_draw_buffer.hpp"
+#include <array>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>

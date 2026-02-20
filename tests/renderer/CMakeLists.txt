@@ -11,13 +11,16 @@ target_include_directories(renderer_pipeline_tests PRIVATE
 )
 
 target_link_libraries(renderer_pipeline_tests PRIVATE
+    -Wl,--start-group
     ohao_renderer
     ohao_scene
-    ohao_engine
+    ohao_actor
+    ohao_asset
     ohao_component
     ohao_physics
     ohao_ui
     ohao_utils
+    -Wl,--end-group
     ${Vulkan_LIBRARIES}
     glm
 )

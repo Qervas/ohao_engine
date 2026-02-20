@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <memory>
+#include <cstdint>
 #include <unordered_map>
 
 namespace ohao {

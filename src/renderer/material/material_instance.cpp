@@ -1,6 +1,7 @@
 #include "material_instance.hpp"
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
 namespace ohao {
 

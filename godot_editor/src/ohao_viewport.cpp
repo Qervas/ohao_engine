@@ -348,51 +348,142 @@ void OhaoViewport::_draw() {
     if (m_selected_actor && m_renderer) {
         auto transform = m_selected_actor->getTransform();
         if (transform) {
-            glm::vec3 world_pos = transform->getPosition();
-
-            // Project world position to screen
             ohao::Camera& camera = m_renderer->getCamera();
             glm::mat4 viewProj = camera.getViewProjectionMatrix();
-            glm::vec4 clip = viewProj * glm::vec4(world_pos, 1.0f);
+            Vector2 ctrl_size = get_size();
 
-            if (clip.w > 0.001f) {
-                // NDC to screen
-                float ndc_x = clip.x / clip.w;
-                float ndc_y = clip.y / clip.w;
-                float screen_x = (ndc_x * 0.5f + 0.5f) * get_size().x;
-                float screen_y = (1.0f - (ndc_y * 0.5f + 0.5f)) * get_size().y;
+            // Compute the object's world-space transform matrix
+            glm::vec3 world_pos = transform->getPosition();
+            glm::vec3 scale = transform->getScale();
+            glm::quat rotation = transform->getRotation();
+            glm::mat4 world_matrix = glm::translate(glm::mat4(1.0f), world_pos)
+                                   * glm::mat4_cast(rotation)
+                                   * glm::scale(glm::mat4(1.0f), scale);
 
-                // Draw selection bracket
-                float bracket_size = 30.0f;
-                Color sel_color(0.2f, 0.7f, 1.0f, 0.9f);
-                float line_w = 2.0f;
-                float corner_len = 8.0f;
+            // Get actual mesh AABB from vertex data
+            glm::vec3 local_min(0.0f), local_max(0.0f);
+            bool has_mesh_bounds = false;
 
-                Vector2 tl(screen_x - bracket_size, screen_y - bracket_size);
-                Vector2 br(screen_x + bracket_size, screen_y + bracket_size);
+            auto model = m_selected_actor->getModel();
+            if (model && !model->vertices.empty()) {
+                local_min = glm::vec3(FLT_MAX);
+                local_max = glm::vec3(-FLT_MAX);
+                for (const auto& v : model->vertices) {
+                    local_min = glm::min(local_min, v.position);
+                    local_max = glm::max(local_max, v.position);
+                }
+                has_mesh_bounds = true;
+            }
 
-                // Top-left corner
-                draw_line(tl, Vector2(tl.x + corner_len, tl.y), sel_color, line_w);
-                draw_line(tl, Vector2(tl.x, tl.y + corner_len), sel_color, line_w);
-                // Top-right corner
-                draw_line(Vector2(br.x, tl.y), Vector2(br.x - corner_len, tl.y), sel_color, line_w);
-                draw_line(Vector2(br.x, tl.y), Vector2(br.x, tl.y + corner_len), sel_color, line_w);
-                // Bottom-left corner
-                draw_line(Vector2(tl.x, br.y), Vector2(tl.x + corner_len, br.y), sel_color, line_w);
-                draw_line(Vector2(tl.x, br.y), Vector2(tl.x, br.y - corner_len), sel_color, line_w);
-                // Bottom-right corner
-                draw_line(br, Vector2(br.x - corner_len, br.y), sel_color, line_w);
-                draw_line(br, Vector2(br.x, br.y - corner_len), sel_color, line_w);
+            if (!has_mesh_bounds) {
+                // Fallback: use per-axis scale as half-extents
+                local_min = glm::vec3(-0.5f);
+                local_max = glm::vec3(0.5f);
+            }
 
-                // Draw name label above bracket
+            // Project center to check visibility
+            glm::vec4 center_clip = viewProj * glm::vec4(world_pos, 1.0f);
+            if (center_clip.w < 0.001f) goto skip_selection;
+
+            {
+                float min_sx = 1e9f, min_sy = 1e9f, max_sx = -1e9f, max_sy = -1e9f;
+                int valid_count = 0;
+
+                // Project all 8 corners of the actual local-space AABB through the world transform
+                for (int i = 0; i < 8; i++) {
+                    glm::vec3 local_corner(
+                        (i & 1) ? local_max.x : local_min.x,
+                        (i & 2) ? local_max.y : local_min.y,
+                        (i & 4) ? local_max.z : local_min.z
+                    );
+                    // Transform to world space using the full model matrix
+                    glm::vec4 world_corner = world_matrix * glm::vec4(local_corner, 1.0f);
+                    glm::vec4 clip = viewProj * world_corner;
+                    if (clip.w < 0.001f) continue;
+                    float sx = (clip.x / clip.w * 0.5f + 0.5f) * ctrl_size.x;
+                    float sy = (1.0f - (clip.y / clip.w * 0.5f + 0.5f)) * ctrl_size.y;
+                    min_sx = std::min(min_sx, sx);
+                    min_sy = std::min(min_sy, sy);
+                    max_sx = std::max(max_sx, sx);
+                    max_sy = std::max(max_sy, sy);
+                    valid_count++;
+                }
+
+                if (valid_count < 2) goto skip_selection;
+
+                // Enforce minimum size and add padding
+                float pad = 12.0f;
+                float min_dim = 40.0f;
+                float w = max_sx - min_sx;
+                float h = max_sy - min_sy;
+                if (w < min_dim) { float d = (min_dim - w) * 0.5f; min_sx -= d; max_sx += d; }
+                if (h < min_dim) { float d = (min_dim - h) * 0.5f; min_sy -= d; max_sy += d; }
+                min_sx -= pad; min_sy -= pad;
+                max_sx += pad; max_sy += pad;
+
+                Vector2 tl(min_sx, min_sy);
+                Vector2 br(max_sx, max_sy);
+                float box_w = br.x - tl.x;
+                float box_h = br.y - tl.y;
+
+                // Colors - high contrast orange/yellow
+                Color glow_color(1.0f, 0.6f, 0.0f, 0.25f);
+                Color sel_color(1.0f, 0.7f, 0.1f, 1.0f);
+                Color fill_color(1.0f, 0.7f, 0.1f, 0.06f);
+
+                // Subtle filled background
+                draw_rect(Rect2(tl, br - tl), fill_color, true);
+
+                // Glow layer (thicker, semi-transparent)
+                float glow_w = 5.0f;
+                draw_rect(Rect2(tl, br - tl), glow_color, false, glow_w);
+
+                // Crisp bracket corners
+                float line_w = 2.5f;
+                float corner_frac = 0.3f; // 30% of each edge
+                float cx = box_w * corner_frac;
+                float cy = box_h * corner_frac;
+                float max_corner = 20.0f;
+                if (cx > max_corner) cx = max_corner;
+                if (cy > max_corner) cy = max_corner;
+
+                // Top-left
+                draw_line(tl, Vector2(tl.x + cx, tl.y), sel_color, line_w);
+                draw_line(tl, Vector2(tl.x, tl.y + cy), sel_color, line_w);
+                // Top-right
+                draw_line(Vector2(br.x, tl.y), Vector2(br.x - cx, tl.y), sel_color, line_w);
+                draw_line(Vector2(br.x, tl.y), Vector2(br.x, tl.y + cy), sel_color, line_w);
+                // Bottom-left
+                draw_line(Vector2(tl.x, br.y), Vector2(tl.x + cx, br.y), sel_color, line_w);
+                draw_line(Vector2(tl.x, br.y), Vector2(tl.x, br.y - cy), sel_color, line_w);
+                // Bottom-right
+                draw_line(br, Vector2(br.x - cx, br.y), sel_color, line_w);
+                draw_line(br, Vector2(br.x, br.y - cy), sel_color, line_w);
+
+                // Name label with dark background pill
                 Ref<Font> font = get_theme_default_font();
                 if (font.is_valid()) {
-                    draw_string(font, Vector2(screen_x - 40, tl.y - 5), m_selected_actor_name,
-                               HORIZONTAL_ALIGNMENT_LEFT, -1, 12, sel_color);
+                    int font_size = 14;
+                    String label = m_selected_actor_name;
+                    float text_w = font->get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x;
+                    float pill_h = font_size + 8.0f;
+                    float pill_w = text_w + 16.0f;
+                    float pill_x = (tl.x + br.x) * 0.5f - pill_w * 0.5f;
+                    float pill_y = tl.y - pill_h - 4.0f;
+
+                    // Dark rounded pill background
+                    Color pill_bg(0.0f, 0.0f, 0.0f, 0.75f);
+                    draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), pill_bg, true);
+                    // Pill border
+                    draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), sel_color, false, 1.5f);
+                    // Text
+                    draw_string(font, Vector2(pill_x + 8.0f, pill_y + font_size + 2.0f), label,
+                               HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, sel_color);
                 }
             }
         }
     }
+    skip_selection:;
 }
 
 bool OhaoViewport::has_scene_meshes() const {
@@ -428,6 +519,9 @@ void OhaoViewport::initialize_renderer() {
     m_texture = ImageTexture::create_from_image(m_image);
 
     m_initialized = true;
+
+    // Update camera aspect ratio to match viewport
+    m_renderer->getCamera().setAspectRatio(static_cast<float>(m_width) / static_cast<float>(m_height));
 
     // Apply initial render settings
     apply_render_settings();
@@ -477,6 +571,8 @@ void OhaoViewport::set_viewport_size(int width, int height) {
 
     if (m_renderer) {
         m_renderer->resize(width, height);
+        // Update camera aspect ratio to match new viewport dimensions
+        m_renderer->getCamera().setAspectRatio(static_cast<float>(width) / static_cast<float>(height));
     }
 
     // Recreate image and texture
@@ -1499,8 +1595,11 @@ void OhaoViewport::pick_object_at(const Vector2& screen_pos) {
     ohao::Camera& camera = m_renderer->getCamera();
     ohao::PickingSystem picking;
 
-    // Convert screen position to ray
-    glm::vec2 screenCoord(screen_pos.x, screen_pos.y);
+    // Scale screen position from control space to renderer resolution
+    Vector2 control_size = get_size();
+    float scale_x = (control_size.x > 0) ? static_cast<float>(m_width) / control_size.x : 1.0f;
+    float scale_y = (control_size.y > 0) ? static_cast<float>(m_height) / control_size.y : 1.0f;
+    glm::vec2 screenCoord(screen_pos.x * scale_x, screen_pos.y * scale_y);
     glm::vec2 viewportSize(static_cast<float>(m_width), static_cast<float>(m_height));
     ohao::Ray ray = picking.screenToWorldRay(screenCoord, viewportSize, camera);
 

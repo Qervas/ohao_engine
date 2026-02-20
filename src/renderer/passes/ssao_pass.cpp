@@ -1,4 +1,5 @@
 #include "ssao_pass.hpp"
+#include <array>
 #include <random>
 #include <cmath>
 

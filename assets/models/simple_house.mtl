@@ -1,0 +1,56 @@
+# Material Library for simple_house.obj
+# Created for OHAO Engine testing
+
+# Floor material (stone/concrete)
+newmtl floor_material
+Ka 0.3 0.3 0.3  # Dark gray ambient
+Kd 0.6 0.6 0.6  # Medium gray diffuse
+Ks 0.2 0.2 0.2  # Low specular (matte)
+Ns 8.0          # Low shininess
+d 1.0
+illum 2
+
+# Wall material (painted walls)
+newmtl wall_material
+Ka 0.8 0.8 0.7  # Warm white ambient
+Kd 0.9 0.9 0.8  # Off-white diffuse
+Ks 0.1 0.1 0.1  # Very low specular
+Ns 4.0          # Very low shininess
+d 1.0
+illum 2
+
+# Roof material (red tiles)
+newmtl roof_material
+Ka 0.4 0.1 0.1  # Dark red ambient
+Kd 0.8 0.2 0.2  # Brick red diffuse
+Ks 0.3 0.3 0.3  # Medium specular
+Ns 16.0         # Medium shininess
+d 1.0
+illum 2
+
+# Door material (wooden door)
+newmtl door_material
+Ka 0.3 0.2 0.1  # Dark brown ambient
+Kd 0.6 0.4 0.2  # Medium brown diffuse
+Ks 0.2 0.2 0.2  # Low specular
+Ns 12.0         # Low shininess
+d 1.0
+illum 2
+
+# Window material (glass)
+newmtl window_material
+Ka 0.1 0.2 0.3  # Blue-tinted ambient
+Kd 0.2 0.4 0.6  # Light blue diffuse
+Ks 0.8 0.8 0.8  # High specular (reflective)
+Ns 96.0         # High shininess (glossy)
+d 0.7           # Semi-transparent
+illum 4         # Glass illumination model
+
+# Ceiling material (painted ceiling)
+newmtl ceiling_material
+Ka 0.9 0.9 0.9  # Bright white ambient
+Kd 0.95 0.95 0.95  # Pure white diffuse
+Ks 0.1 0.1 0.1  # Low specular
+Ns 6.0          # Low shininess
+d 1.0
+illum 2
