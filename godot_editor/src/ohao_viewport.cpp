@@ -25,6 +25,8 @@
 #include "renderer/camera/camera.hpp"
 #include "renderer/passes/deferred_renderer.hpp"
 #include "renderer/passes/post_processing_pipeline.hpp"
+#include "renderer/picking/picking_system.hpp"
+#include "renderer/picking/ray.hpp"
 #include "engine/scene/scene.hpp"
 #include "engine/scene/loader/tscn_loader.hpp"
 #include "engine/actor/actor.hpp"
@@ -35,6 +37,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <cfloat>
 
 namespace godot {
 
@@ -208,6 +212,21 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_taa_blend_factor", "factor"), &OhaoViewport::set_taa_blend_factor);
     ClassDB::bind_method(D_METHOD("get_taa_blend_factor"), &OhaoViewport::get_taa_blend_factor);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "taa_blend_factor", PROPERTY_HINT_RANGE, "0.01,0.5,0.01"), "set_taa_blend_factor", "get_taa_blend_factor");
+
+    // === Camera Mode ===
+    ADD_GROUP("Camera", "camera_");
+
+    ClassDB::bind_method(D_METHOD("set_camera_mode", "mode"), &OhaoViewport::set_camera_mode);
+    ClassDB::bind_method(D_METHOD("get_camera_mode"), &OhaoViewport::get_camera_mode);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "camera_mode", PROPERTY_HINT_ENUM, "FPS,Orbit"), "set_camera_mode", "get_camera_mode");
+
+    ClassDB::bind_method(D_METHOD("focus_on_scene"), &OhaoViewport::focus_on_scene);
+    ClassDB::bind_method(D_METHOD("pick_object_at", "screen_pos"), &OhaoViewport::pick_object_at);
+    ClassDB::bind_method(D_METHOD("get_selected_actor_name"), &OhaoViewport::get_selected_actor_name);
+
+    // Signals
+    ADD_SIGNAL(MethodInfo("actor_selected", PropertyInfo(Variant::STRING, "name")));
+    ADD_SIGNAL(MethodInfo("right_click_menu", PropertyInfo(Variant::VECTOR2, "position")));
 }
 
 OhaoViewport::OhaoViewport() {
@@ -306,12 +325,10 @@ void OhaoViewport::_draw() {
             Vector2 text_size = font->get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size);
             Vector2 center = get_size() / 2.0;
             Vector2 text_pos = center - text_size / 2.0;
-            text_pos.y += text_size.y / 2.0;  // Adjust for baseline
+            text_pos.y += text_size.y / 2.0;
 
-            // Draw text with slight transparency
             draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.6, 0.6, 0.7, 0.8));
 
-            // Draw subtitle
             String subtitle = m_render_mode == 1 ? "Deferred Rendering Mode" : "Forward Rendering Mode";
             int sub_size = 14;
             Vector2 sub_text_size = font->get_string_size(subtitle, HORIZONTAL_ALIGNMENT_CENTER, -1, sub_size);
@@ -319,12 +336,61 @@ void OhaoViewport::_draw() {
             sub_pos.y += text_size.y / 2.0 + 30;
             draw_string(font, sub_pos, subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(0.5, 0.5, 0.55, 0.6));
 
-            // Draw hint
-            String hint = "Load a scene or sync from editor";
+            String hint = "Scenes auto-sync from Godot's 3D editor";
             Vector2 hint_size = font->get_string_size(hint, HORIZONTAL_ALIGNMENT_CENTER, -1, sub_size);
             Vector2 hint_pos = center - hint_size / 2.0;
             hint_pos.y += text_size.y / 2.0 + 50;
             draw_string(font, hint_pos, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(0.4, 0.4, 0.45, 0.5));
+        }
+    }
+
+    // Draw selection highlight
+    if (m_selected_actor && m_renderer) {
+        auto transform = m_selected_actor->getTransform();
+        if (transform) {
+            glm::vec3 world_pos = transform->getPosition();
+
+            // Project world position to screen
+            ohao::Camera& camera = m_renderer->getCamera();
+            glm::mat4 viewProj = camera.getViewProjectionMatrix();
+            glm::vec4 clip = viewProj * glm::vec4(world_pos, 1.0f);
+
+            if (clip.w > 0.001f) {
+                // NDC to screen
+                float ndc_x = clip.x / clip.w;
+                float ndc_y = clip.y / clip.w;
+                float screen_x = (ndc_x * 0.5f + 0.5f) * get_size().x;
+                float screen_y = (1.0f - (ndc_y * 0.5f + 0.5f)) * get_size().y;
+
+                // Draw selection bracket
+                float bracket_size = 30.0f;
+                Color sel_color(0.2f, 0.7f, 1.0f, 0.9f);
+                float line_w = 2.0f;
+                float corner_len = 8.0f;
+
+                Vector2 tl(screen_x - bracket_size, screen_y - bracket_size);
+                Vector2 br(screen_x + bracket_size, screen_y + bracket_size);
+
+                // Top-left corner
+                draw_line(tl, Vector2(tl.x + corner_len, tl.y), sel_color, line_w);
+                draw_line(tl, Vector2(tl.x, tl.y + corner_len), sel_color, line_w);
+                // Top-right corner
+                draw_line(Vector2(br.x, tl.y), Vector2(br.x - corner_len, tl.y), sel_color, line_w);
+                draw_line(Vector2(br.x, tl.y), Vector2(br.x, tl.y + corner_len), sel_color, line_w);
+                // Bottom-left corner
+                draw_line(Vector2(tl.x, br.y), Vector2(tl.x + corner_len, br.y), sel_color, line_w);
+                draw_line(Vector2(tl.x, br.y), Vector2(tl.x, br.y - corner_len), sel_color, line_w);
+                // Bottom-right corner
+                draw_line(br, Vector2(br.x - corner_len, br.y), sel_color, line_w);
+                draw_line(br, Vector2(br.x, br.y - corner_len), sel_color, line_w);
+
+                // Draw name label above bracket
+                Ref<Font> font = get_theme_default_font();
+                if (font.is_valid()) {
+                    draw_string(font, Vector2(screen_x - 40, tl.y - 5), m_selected_actor_name,
+                               HORIZONTAL_ALIGNMENT_LEFT, -1, 12, sel_color);
+                }
+            }
         }
     }
 }
@@ -694,6 +760,8 @@ void OhaoViewport::clear_scene() {
         return;
     }
 
+    m_selected_actor = nullptr;
+    m_selected_actor_name = "";
     m_scene->removeAllActors();
     UtilityFunctions::print("[OHAO] Scene cleared");
 }
@@ -873,6 +941,10 @@ void OhaoViewport::sync_from_godot(Node* root_node) {
         UtilityFunctions::print("[OHAO] Keeping existing OHAO scene. Add 3D objects in Godot's 3D editor first.");
         return;
     }
+
+    // Clear selection (actors are about to be destroyed)
+    m_selected_actor = nullptr;
+    m_selected_actor_name = "";
 
     // Clear existing OHAO scene only if we have objects to sync
     m_scene->removeAllActors();
@@ -1086,46 +1158,99 @@ void OhaoViewport::_gui_input(const Ref<InputEvent>& p_event) {
 }
 
 void OhaoViewport::handle_mouse_motion(const Ref<InputEventMouseMotion>& event) {
-    // Only rotate camera when right mouse button is held
+    Vector2 relative = event->get_relative();
+
+    // Middle mouse: pan in orbit mode
+    if (m_middle_mouse_captured && m_camera_mode == CAMERA_ORBIT) {
+        float pan_speed = m_orbit_distance * 0.002f;
+        ohao::Camera& camera = m_renderer->getCamera();
+        glm::vec3 right = camera.getRight();
+        glm::vec3 up = camera.getUp();
+        m_orbit_target_x -= right.x * relative.x * pan_speed + up.x * -relative.y * pan_speed;
+        m_orbit_target_y -= right.y * relative.x * pan_speed + up.y * -relative.y * pan_speed;
+        m_orbit_target_z -= right.z * relative.x * pan_speed + up.z * -relative.y * pan_speed;
+        update_orbit_camera();
+        return;
+    }
+
+    // Right mouse: rotate/orbit
     if (!m_mouse_captured) {
         return;
     }
 
-    Vector2 relative = event->get_relative();
+    // Mark as dragged if moved more than a few pixels
+    if (relative.length() > 2.0f) {
+        m_right_click_dragged = true;
+    }
 
-    // Apply mouse sensitivity and rotate camera
-    // Yaw (horizontal) and Pitch (vertical)
     float delta_yaw = -relative.x * m_mouse_sensitivity;
     float delta_pitch = -relative.y * m_mouse_sensitivity;
 
-    ohao::Camera& camera = m_renderer->getCamera();
-    camera.rotate(delta_pitch, delta_yaw);
+    if (m_camera_mode == CAMERA_ORBIT) {
+        m_orbit_yaw += delta_yaw;
+        m_orbit_pitch = Math::clamp(m_orbit_pitch + delta_pitch, -89.0f, 89.0f);
+        update_orbit_camera();
+    } else {
+        ohao::Camera& camera = m_renderer->getCamera();
+        camera.rotate(delta_pitch, delta_yaw);
+    }
 }
 
 void OhaoViewport::handle_mouse_button(const Ref<InputEventMouseButton>& event) {
     MouseButton button = event->get_button_index();
 
+    // Left-click: pick object
+    if (button == MOUSE_BUTTON_LEFT && event->is_pressed()) {
+        pick_object_at(event->get_position());
+        return;
+    }
+
     if (button == MOUSE_BUTTON_RIGHT) {
         if (event->is_pressed()) {
-            // Start capturing mouse for camera look
+            // Start capturing mouse for camera look/orbit
             m_mouse_captured = true;
-            grab_focus();  // Ensure we get keyboard events
+            m_right_click_start = event->get_position();
+            m_right_click_dragged = false;
+            grab_focus();
         } else {
-            // Stop capturing
             m_mouse_captured = false;
+            // If right-click was a quick tap (not drag), show context menu
+            if (!m_right_click_dragged) {
+                emit_signal("right_click_menu", event->get_global_position());
+            }
         }
     }
 
-    // Handle scroll wheel for zoom/move forward-back
+    // Middle mouse button: pan (orbit mode)
+    if (button == MOUSE_BUTTON_MIDDLE) {
+        if (event->is_pressed()) {
+            m_middle_mouse_captured = true;
+            grab_focus();
+        } else {
+            m_middle_mouse_captured = false;
+        }
+    }
+
+    // Scroll wheel: zoom
     if (button == MOUSE_BUTTON_WHEEL_UP && event->is_pressed()) {
-        ohao::Camera& camera = m_renderer->getCamera();
-        glm::vec3 forward = camera.getFront();
-        camera.move(forward * 0.5f);
+        if (m_camera_mode == CAMERA_ORBIT) {
+            m_orbit_distance = Math::max(0.5f, m_orbit_distance - m_orbit_distance * 0.1f);
+            update_orbit_camera();
+        } else {
+            ohao::Camera& camera = m_renderer->getCamera();
+            glm::vec3 forward = camera.getFront();
+            camera.move(forward * 0.5f);
+        }
     }
     if (button == MOUSE_BUTTON_WHEEL_DOWN && event->is_pressed()) {
-        ohao::Camera& camera = m_renderer->getCamera();
-        glm::vec3 forward = camera.getFront();
-        camera.move(-forward * 0.5f);
+        if (m_camera_mode == CAMERA_ORBIT) {
+            m_orbit_distance = Math::min(500.0f, m_orbit_distance + m_orbit_distance * 0.1f);
+            update_orbit_camera();
+        } else {
+            ohao::Camera& camera = m_renderer->getCamera();
+            glm::vec3 forward = camera.getFront();
+            camera.move(-forward * 0.5f);
+        }
     }
 }
 
@@ -1256,6 +1381,143 @@ void OhaoViewport::update_camera_movement(double delta) {
 
     // Apply movement
     camera.move(movement);
+}
+
+// === Camera Mode ===
+
+void OhaoViewport::set_camera_mode(int mode) {
+    CameraMode new_mode = static_cast<CameraMode>(mode);
+    if (new_mode == m_camera_mode) return;
+
+    m_camera_mode = new_mode;
+
+    if (m_camera_mode == CAMERA_ORBIT && m_renderer) {
+        // Initialize orbit from current camera position
+        ohao::Camera& camera = m_renderer->getCamera();
+        glm::vec3 pos = camera.getPosition();
+        glm::vec3 front = camera.getFront();
+
+        // Set orbit target ahead of camera
+        m_orbit_distance = 10.0f;
+        m_orbit_target_x = pos.x + front.x * m_orbit_distance;
+        m_orbit_target_y = pos.y + front.y * m_orbit_distance;
+        m_orbit_target_z = pos.z + front.z * m_orbit_distance;
+
+        // Compute yaw/pitch from camera direction to target
+        glm::vec3 dir = glm::normalize(glm::vec3(m_orbit_target_x, m_orbit_target_y, m_orbit_target_z) - pos);
+        m_orbit_yaw = glm::degrees(atan2(dir.x, dir.z));
+        m_orbit_pitch = glm::degrees(asin(glm::clamp(-dir.y, -1.0f, 1.0f)));
+
+        update_orbit_camera();
+    }
+
+    UtilityFunctions::print("[OHAO] Camera mode: ", mode == 0 ? "FPS" : "Orbit");
+}
+
+void OhaoViewport::update_orbit_camera() {
+    if (!m_renderer) return;
+
+    // Compute camera position on sphere around target
+    float pitch_rad = glm::radians(m_orbit_pitch);
+    float yaw_rad = glm::radians(m_orbit_yaw);
+
+    float cam_x = m_orbit_target_x + m_orbit_distance * cos(pitch_rad) * sin(yaw_rad);
+    float cam_y = m_orbit_target_y + m_orbit_distance * sin(pitch_rad);
+    float cam_z = m_orbit_target_z + m_orbit_distance * cos(pitch_rad) * cos(yaw_rad);
+
+    glm::vec3 cam_pos(cam_x, cam_y, cam_z);
+    glm::vec3 target(m_orbit_target_x, m_orbit_target_y, m_orbit_target_z);
+
+    ohao::Camera& camera = m_renderer->getCamera();
+    camera.setPosition(cam_pos);
+
+    // Compute direction from camera to target and set rotation
+    glm::vec3 dir = glm::normalize(target - cam_pos);
+    float cam_pitch = glm::degrees(asin(dir.y));
+    float cam_yaw = glm::degrees(atan2(dir.z, dir.x));
+    camera.setRotation(cam_pitch, cam_yaw);
+}
+
+void OhaoViewport::focus_on_scene() {
+    if (!m_scene || !m_renderer) return;
+
+    // Compute bounding box of all actors
+    glm::vec3 scene_min(FLT_MAX);
+    glm::vec3 scene_max(-FLT_MAX);
+    bool has_actors = false;
+
+    for (const auto& [id, actor] : m_scene->getAllActors()) {
+        auto transform = actor->getTransform();
+        if (!transform) continue;
+
+        glm::vec3 pos = transform->getPosition();
+        glm::vec3 scale = transform->getScale();
+
+        // Approximate bounding box using position +/- scale
+        scene_min = glm::min(scene_min, pos - glm::abs(scale));
+        scene_max = glm::max(scene_max, pos + glm::abs(scale));
+        has_actors = true;
+    }
+
+    if (!has_actors) {
+        UtilityFunctions::print("[OHAO] No actors to focus on");
+        return;
+    }
+
+    glm::vec3 center = (scene_min + scene_max) * 0.5f;
+    glm::vec3 extents = scene_max - scene_min;
+    float max_extent = glm::max(extents.x, glm::max(extents.y, extents.z));
+    float distance = max_extent * 1.5f;
+    if (distance < 2.0f) distance = 2.0f;
+
+    if (m_camera_mode == CAMERA_ORBIT) {
+        m_orbit_target_x = center.x;
+        m_orbit_target_y = center.y;
+        m_orbit_target_z = center.z;
+        m_orbit_distance = distance;
+        m_orbit_pitch = 30.0f;
+        m_orbit_yaw = 45.0f;
+        update_orbit_camera();
+    } else {
+        ohao::Camera& camera = m_renderer->getCamera();
+        // Position camera looking at center from above-front
+        glm::vec3 cam_pos = center + glm::vec3(distance * 0.5f, distance * 0.4f, distance * 0.5f);
+        camera.setPosition(cam_pos);
+        glm::vec3 dir = glm::normalize(center - cam_pos);
+        camera.setRotation(glm::degrees(asin(dir.y)), glm::degrees(atan2(dir.z, dir.x)));
+    }
+
+    UtilityFunctions::print("[OHAO] Focused on scene center: (", center.x, ", ", center.y, ", ", center.z,
+                            ") distance: ", distance);
+}
+
+// === Picking ===
+
+void OhaoViewport::pick_object_at(const Vector2& screen_pos) {
+    if (!m_renderer || !m_scene) return;
+
+    ohao::Camera& camera = m_renderer->getCamera();
+    ohao::PickingSystem picking;
+
+    // Convert screen position to ray
+    glm::vec2 screenCoord(screen_pos.x, screen_pos.y);
+    glm::vec2 viewportSize(static_cast<float>(m_width), static_cast<float>(m_height));
+    ohao::Ray ray = picking.screenToWorldRay(screenCoord, viewportSize, camera);
+
+    // Pick actor
+    ohao::PickResult result = picking.pickActor(ray, m_scene);
+
+    if (result.hit && result.actor) {
+        m_selected_actor = result.actor;
+        m_selected_actor_name = String(result.actor->getName().c_str());
+        emit_signal("actor_selected", m_selected_actor_name);
+        UtilityFunctions::print("[OHAO] Selected: ", m_selected_actor_name);
+    } else {
+        m_selected_actor = nullptr;
+        m_selected_actor_name = "";
+    }
+
+    queue_redraw();
 }
 
 } // namespace godot

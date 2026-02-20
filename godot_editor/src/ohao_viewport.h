@@ -16,6 +16,8 @@ namespace ohao {
     class Scene;
     class DeferredRenderer;
     class PostProcessingPipeline;
+    class PickingSystem;
+    class Actor;
 }
 
 namespace godot {
@@ -33,13 +35,18 @@ namespace godot {
  * - Bloom, TAA, Motion Blur, DoF
  * - HDR with tonemapping
  *
- * FPS-style camera controls:
- * - Right-click + drag to look around
- * - WASD to move
- * - Shift to move faster
+ * Camera controls:
+ * - FPS mode: Right-click + drag to look, WASD to move, Shift for fast
+ * - Orbit mode: Right-click + drag to orbit, scroll to zoom, middle-click to pan
  */
 class OhaoViewport : public Control {
     GDCLASS(OhaoViewport, Control)
+
+public:
+    enum CameraMode {
+        CAMERA_FPS = 0,
+        CAMERA_ORBIT = 1,
+    };
 
 private:
     bool m_initialized = false;
@@ -78,6 +85,26 @@ private:
     bool m_rotate_left = false;
     bool m_rotate_right = false;
     float m_rotation_speed = 90.0f;  // degrees per second
+
+    // === Camera Mode ===
+    CameraMode m_camera_mode = CAMERA_FPS;
+
+    // Orbit camera state
+    float m_orbit_distance = 10.0f;
+    float m_orbit_yaw = 0.0f;
+    float m_orbit_pitch = 30.0f;  // degrees
+    float m_orbit_target_x = 0.0f;
+    float m_orbit_target_y = 0.0f;
+    float m_orbit_target_z = 0.0f;
+    bool m_middle_mouse_captured = false;
+
+    // Right-click context menu detection
+    Vector2 m_right_click_start;
+    bool m_right_click_dragged = false;
+
+    // === Picking & Selection ===
+    ohao::Actor* m_selected_actor = nullptr;
+    String m_selected_actor_name;
 
     // === AAA Render Settings ===
     int m_render_mode = 0;  // Default to Forward until deferred output is integrated (0=Forward, 1=Deferred)
@@ -286,6 +313,18 @@ public:
     // === TAA Settings ===
     void set_taa_blend_factor(float factor);
     float get_taa_blend_factor() const { return m_taa_blend_factor; }
+
+    // === Camera Mode ===
+    void set_camera_mode(int mode);
+    int get_camera_mode() const { return static_cast<int>(m_camera_mode); }
+
+    // Orbit camera helpers
+    void update_orbit_camera();
+    void focus_on_scene();
+
+    // === Picking ===
+    void pick_object_at(const Vector2& screen_pos);
+    String get_selected_actor_name() const { return m_selected_actor_name; }
 
     // === Utility ===
     // Get current renderer stats (for debug display)
