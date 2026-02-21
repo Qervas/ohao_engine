@@ -14,6 +14,9 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inColor;      // unused but needed for vertex format
 layout(location = 2) in vec3 inNormal;     // unused in shadow pass
 layout(location = 3) in vec2 inTexCoord;   // unused in shadow pass
+layout(location = 4) in vec4 inTangent;    // unused in shadow pass
+layout(location = 5) in ivec4 inBoneIndices; // unused in shadow pass (static)
+layout(location = 6) in vec4 inBoneWeights;  // unused in shadow pass (static)
 
 // Push constants - model matrix from ObjectPushConstants
 layout(push_constant) uniform PushConstantData {

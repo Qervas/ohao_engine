@@ -23,7 +23,7 @@ Vertex::getBindingDescriptions(){
 
 std::vector<VkVertexInputAttributeDescription>
 Vertex::getAttributeDescriptions(){
-    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(4);
+    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(7);
 
     // position
     attributeDescriptions[0].binding = 0;
@@ -43,11 +43,29 @@ Vertex::getAttributeDescriptions(){
     attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributeDescriptions[2].offset = offsetof(Vertex, normal);
 
-    //TexCoord
+    // TexCoord
     attributeDescriptions[3].binding = 0;
     attributeDescriptions[3].location = 3;
     attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[3].offset = offsetof(Vertex, texCoord);
+
+    // Tangent (vec4: xyz = direction, w = handedness)
+    attributeDescriptions[4].binding = 0;
+    attributeDescriptions[4].location = 4;
+    attributeDescriptions[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attributeDescriptions[4].offset = offsetof(Vertex, tangent);
+
+    // Bone indices (ivec4)
+    attributeDescriptions[5].binding = 0;
+    attributeDescriptions[5].location = 5;
+    attributeDescriptions[5].format = VK_FORMAT_R32G32B32A32_SINT;
+    attributeDescriptions[5].offset = offsetof(Vertex, boneIndices);
+
+    // Bone weights (vec4)
+    attributeDescriptions[6].binding = 0;
+    attributeDescriptions[6].location = 6;
+    attributeDescriptions[6].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attributeDescriptions[6].offset = offsetof(Vertex, boneWeights);
 
     return attributeDescriptions;
 }

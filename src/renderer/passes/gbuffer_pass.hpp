@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
+#include "renderer/culling.hpp"
 #include "utils/common_types.hpp"
 #include <array>
 #include <unordered_map>
@@ -8,6 +9,13 @@
 namespace ohao {
 
 class Scene;
+
+static constexpr uint32_t MAX_BONES = 128;
+
+struct BoneMatrixUBO {
+    glm::mat4 boneMatrices[MAX_BONES];
+    int boneCount{0};
+};
 
 // G-Buffer generation pass
 // Outputs: Position, Normal, Albedo, Velocity, Depth
@@ -41,16 +49,25 @@ public:
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkFramebuffer getFramebuffer() const { return m_framebuffer; }
 
+    // Wireframe mode
+    void setWireframeEnabled(bool enabled) { m_wireframeEnabled = enabled; }
+    bool getWireframeEnabled() const { return m_wireframeEnabled; }
+
     // Descriptor set for deferred lighting
     VkDescriptorSetLayout getGBufferLayout() const { return m_gbufferLayout; }
     VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }
+
+    // Upload bone matrices for a specific animated actor
+    void uploadBoneMatrices(const std::vector<glm::mat4>& matrices);
 
 private:
     bool createRenderPass();
     bool createFramebuffer();
     bool createPipeline();
+    bool createSkinnedPipeline();
     bool createGBuffer();
     bool createDescriptors();
+    bool createBoneMatrixResources();
     void destroyGBuffer();
 
     // G-Buffer render targets
@@ -61,9 +78,20 @@ private:
     VkRenderPass m_renderPass{VK_NULL_HANDLE};
     VkFramebuffer m_framebuffer{VK_NULL_HANDLE};
 
-    // Pipeline
+    // Pipeline (static meshes)
     VkPipeline m_pipeline{VK_NULL_HANDLE};
+    VkPipeline m_wireframePipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
+
+    // Skinned pipeline (animated meshes)
+    VkPipeline m_skinnedPipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_skinnedPipelineLayout{VK_NULL_HANDLE};
+    VkDescriptorSetLayout m_boneDescriptorLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_boneDescriptorPool{VK_NULL_HANDLE};
+    VkDescriptorSet m_boneDescriptorSet{VK_NULL_HANDLE};
+    VkBuffer m_boneMatrixBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_boneMatrixMemory{VK_NULL_HANDLE};
+    void* m_boneMatrixMapped{nullptr};
 
     // Descriptors for G-Buffer access
     VkDescriptorSetLayout m_gbufferLayout{VK_NULL_HANDLE};
@@ -98,6 +126,9 @@ private:
     glm::mat4 m_view;
     glm::mat4 m_projection;
     glm::mat4 m_prevViewProj;
+
+    // Wireframe mode
+    bool m_wireframeEnabled{false};
 };
 
 } // namespace ohao

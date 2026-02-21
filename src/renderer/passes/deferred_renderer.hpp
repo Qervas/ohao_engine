@@ -4,9 +4,13 @@
 #include "deferred_lighting_pass.hpp"
 #include "csm_pass.hpp"
 #include "post_processing_pipeline.hpp"
+#include "overlay_pass.hpp"
+#include "gizmo_pass.hpp"
+#include "renderer/particles/particle_system.hpp"
 #include "utils/common_types.hpp"
 #include <memory>
 #include <unordered_map>
+#include <queue>
 
 namespace ohao {
 
@@ -50,6 +54,26 @@ public:
     // Post-processing configuration
     PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
 
+    // Wireframe mode
+    void setWireframeEnabled(bool enabled);
+    bool getWireframeEnabled() const { return m_wireframeEnabled; }
+
+    // Grid overlay
+    void setGridEnabled(bool enabled) { m_gridEnabled = enabled; }
+    bool getGridEnabled() const { return m_gridEnabled; }
+
+    // Gizmo controls
+    void setGizmoEnabled(bool enabled);
+    bool getGizmoEnabled() const { return m_gizmoEnabled; }
+    void setGizmoMode(GizmoMode mode);
+    void setGizmoTransform(const glm::mat4& model);
+    void setGizmoHighlightedAxis(GizmoAxis axis);
+
+    // Particle system
+    void spawnParticles(const glm::vec3& position, ParticleType type,
+                        const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
+    void setDeltaTime(float dt) { m_deltaTime = dt; }
+
     // Get final output for display/readback
     VkImageView getFinalOutput() const;
     VkImage getFinalOutputImage() const;
@@ -69,6 +93,8 @@ private:
     std::unique_ptr<CSMPass> m_csmPass;
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
+    std::unique_ptr<OverlayPass> m_overlayPass;
+    std::unique_ptr<GizmoPass> m_gizmoPass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -89,6 +115,22 @@ private:
     glm::vec3 m_lightDirection{0.0f, -1.0f, 0.0f};
     VkBuffer m_lightBuffer{VK_NULL_HANDLE};
     uint32_t m_lightCount{0};
+
+    // Debug modes
+    bool m_wireframeEnabled{false};
+    bool m_gridEnabled{true};
+    bool m_gizmoEnabled{false};
+
+    // Particle system
+    std::unique_ptr<ParticleSystem> m_particleSystem;
+    VkRenderPass m_particleRenderPass{VK_NULL_HANDLE};
+    VkFramebuffer m_particleFramebuffer{VK_NULL_HANDLE};
+    float m_deltaTime{0.016f};
+    float m_totalTime{0.0f};
+    std::queue<ParticleEmitterConfig> m_pendingEmits;
+
+    bool createParticleRenderPass();
+    bool createParticleFramebuffer();
 };
 
 } // namespace ohao

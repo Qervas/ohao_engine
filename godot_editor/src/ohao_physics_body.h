@@ -1,14 +1,32 @@
 #pragma once
 
 #include <godot_cpp/classes/node3d.hpp>
+#include <memory>
+
+// Forward declare OHAO types
+namespace ohao {
+    class Scene;
+    class Actor;
+    class PhysicsComponent;
+    namespace physics {
+        namespace dynamics { class RigidBody; }
+        class PhysicsWorld;
+    }
+}
 
 namespace godot {
+
+class OhaoViewport;
 
 /**
  * OhaoPhysicsBody - Physics body using OHAO's physics engine
  *
  * This replaces Godot's RigidBody3D with our custom physics simulation.
  * Attach to any Node3D to give it physics behavior.
+ *
+ * The body must be a descendant of an OhaoViewport node in the scene tree.
+ * On _ready(), it searches up the tree for an OhaoViewport and creates
+ * an OHAO actor with PhysicsComponent in that viewport's scene.
  */
 class OhaoPhysicsBody : public Node3D {
     GDCLASS(OhaoPhysicsBody, Node3D)
@@ -38,9 +56,19 @@ private:
     Vector3 m_angular_velocity;
     bool m_gravity_enabled = true;
 
-    // OHAO physics pointer
-    void* m_rigid_body = nullptr;
+    // Shape dimensions
+    Vector3 m_shape_extents = Vector3(0.5f, 0.5f, 0.5f);
+    float m_shape_radius = 0.5f;
+    float m_shape_height = 1.0f;
+
+    // OHAO engine references
+    ohao::Scene* m_ohao_scene = nullptr;
+    std::shared_ptr<ohao::Actor> m_ohao_actor;
+    std::shared_ptr<ohao::PhysicsComponent> m_physics_comp;
     bool m_in_physics_world = false;
+
+    // Helper to find OhaoViewport in parent tree
+    OhaoViewport* find_viewport() const;
 
 protected:
     static void _bind_methods();

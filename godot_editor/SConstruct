@@ -21,6 +21,7 @@ env.Append(CPPPATH=[
     "../build/_deps/vma-src/include/",  # VulkanMemoryAllocator
     "../build/_deps/json-src/single_include/",  # nlohmann/json
     "../build/_deps/stb-src/",  # stb headers
+    "../build/_deps/tinygltf-src/",  # tinygltf headers
     vulkan_sdk + "/Include",  # Vulkan SDK headers (Windows)
     "/opt/homebrew/include/",  # Vulkan headers (MoltenVK)
 ])
@@ -40,6 +41,7 @@ env.Append(LIBPATH=[
 env.Append(LIBS=[
     "ohao_renderer",   # Uses ConsoleWidget
     "ohao_scene",      # Uses ConsoleWidget
+    "ohao_animation",  # Skeleton, animation clips, ragdoll
     "ohao_physics",    # Uses ConsoleWidget
     "ohao_component",  # Uses ConsoleWidget
     "ohao_ui",         # Defines ConsoleWidget (must come after users)

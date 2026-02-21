@@ -9,6 +9,9 @@ signal pause_pressed
 signal step_pressed
 signal speed_changed(value: float)
 signal post_process_toggled
+signal wireframe_toggled(enabled: bool)
+signal grid_toggled(enabled: bool)
+signal import_model_requested
 
 var _viewport: OhaoViewport
 
@@ -97,6 +100,34 @@ func _build_toolbar() -> void:
 	camera_mode.custom_minimum_size.x = 80
 	camera_mode.item_selected.connect(func(idx): camera_mode_changed.emit(idx))
 	add_child(camera_mode)
+
+	_add_separator()
+
+	# Wireframe toggle
+	var wire_btn := Button.new()
+	wire_btn.name = "WireframeBtn"
+	wire_btn.text = "Wire"
+	wire_btn.toggle_mode = true
+	wire_btn.pressed.connect(func(): wireframe_toggled.emit(wire_btn.button_pressed))
+	add_child(wire_btn)
+
+	# Grid toggle
+	var grid_btn := Button.new()
+	grid_btn.name = "GridBtn"
+	grid_btn.text = "Grid"
+	grid_btn.toggle_mode = true
+	grid_btn.button_pressed = true
+	grid_btn.pressed.connect(func(): grid_toggled.emit(grid_btn.button_pressed))
+	add_child(grid_btn)
+
+	_add_separator()
+
+	# Import model button
+	var import_btn := Button.new()
+	import_btn.name = "ImportBtn"
+	import_btn.text = "Import"
+	import_btn.pressed.connect(func(): import_model_requested.emit())
+	add_child(import_btn)
 
 	# Spacer
 	var spacer := Control.new()

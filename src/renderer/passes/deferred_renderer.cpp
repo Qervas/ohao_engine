@@ -1,6 +1,7 @@
 #include "deferred_renderer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include <array>
 
 namespace ohao {
 
@@ -56,10 +57,46 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     }
     std::cout << "DeferredRenderer: PostProcessing OK" << std::endl;
 
+    // Initialize overlay pass (grid, debug visualizations)
+    m_overlayPass = std::make_unique<OverlayPass>();
+    if (!m_overlayPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: OverlayPass failed (non-fatal)" << std::endl;
+        m_overlayPass.reset();
+    } else {
+        std::cout << "DeferredRenderer: OverlayPass OK" << std::endl;
+    }
+
+    // Initialize gizmo pass (transform handles)
+    m_gizmoPass = std::make_unique<GizmoPass>();
+    if (!m_gizmoPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: GizmoPass failed (non-fatal)" << std::endl;
+        m_gizmoPass.reset();
+    } else {
+        std::cout << "DeferredRenderer: GizmoPass OK" << std::endl;
+    }
+
     // Connect depth/normal/velocity for post-processing
     m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
     m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
     m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
+
+    // Initialize particle system
+    m_particleSystem = std::make_unique<ParticleSystem>();
+    if (!m_particleSystem->initialize(device, physicalDevice, 65536)) {
+        std::cerr << "DeferredRenderer: ParticleSystem failed (non-fatal)" << std::endl;
+        m_particleSystem.reset();
+    } else {
+        // Create render pass, framebuffer, and render pipeline for particle rendering
+        if (createParticleRenderPass() && createParticleFramebuffer()) {
+            if (m_particleSystem->initRenderPipeline(m_particleRenderPass)) {
+                std::cout << "DeferredRenderer: ParticleSystem OK" << std::endl;
+            } else {
+                std::cerr << "DeferredRenderer: Particle render pipeline failed (non-fatal)" << std::endl;
+            }
+        } else {
+            std::cerr << "DeferredRenderer: Particle render pass/framebuffer failed (non-fatal)" << std::endl;
+        }
+    }
 
     std::cout << "DeferredRenderer: Fully initialized" << std::endl;
     return true;
@@ -70,6 +107,27 @@ void DeferredRenderer::cleanup() {
 
     vkDeviceWaitIdle(m_device);
 
+    if (m_particleSystem) {
+        m_particleSystem->cleanup();
+        m_particleSystem.reset();
+    }
+    if (m_particleFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(m_device, m_particleFramebuffer, nullptr);
+        m_particleFramebuffer = VK_NULL_HANDLE;
+    }
+    if (m_particleRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(m_device, m_particleRenderPass, nullptr);
+        m_particleRenderPass = VK_NULL_HANDLE;
+    }
+
+    if (m_gizmoPass) {
+        m_gizmoPass->cleanup();
+        m_gizmoPass.reset();
+    }
+    if (m_overlayPass) {
+        m_overlayPass->cleanup();
+        m_overlayPass.reset();
+    }
     if (m_postProcessing) {
         m_postProcessing->cleanup();
         m_postProcessing.reset();
@@ -115,11 +173,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_lightingPass->setLightBuffer(m_lightBuffer);
         m_lightingPass->setLightCount(m_lightCount);
 
-        // Set SSAO if available
-        if (m_postProcessing) {
-            m_lightingPass->setSSAOTexture(m_postProcessing->getSSAOOutput(),
-                                           nullptr); // Sampler from SSAO pass
-        }
+        // SSAO texture is set after executeSSAO() call below
     }
 
     // Update post-processing
@@ -141,17 +195,95 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 3. SSAO pass (before lighting, after G-Buffer)
-    // This is handled internally by PostProcessingPipeline
+    if (m_postProcessing) {
+        m_postProcessing->executeSSAO(cmd, frameIndex);
+        m_lightingPass->setSSAOTexture(m_postProcessing->getSSAOOutput(),
+                                       nullptr);
+    }
 
     // 4. Deferred lighting pass
     if (m_lightingPass) {
         m_lightingPass->execute(cmd, frameIndex);
     }
 
+    // 4.5. Particle system (forward pass over HDR, before post-processing)
+    if (m_particleSystem && m_lightingPass) {
+        m_totalTime += m_deltaTime;
+
+        // Process pending emits
+        while (!m_pendingEmits.empty()) {
+            m_particleSystem->emit(cmd, m_pendingEmits.front(), m_totalTime);
+            m_pendingEmits.pop();
+        }
+
+        // Update particles (compute shader)
+        m_particleSystem->update(cmd, m_deltaTime);
+
+        // Begin particle render pass (renders over HDR output with depth test)
+        if (m_particleRenderPass != VK_NULL_HANDLE && m_particleFramebuffer != VK_NULL_HANDLE) {
+            VkRenderPassBeginInfo rpInfo{};
+            rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rpInfo.renderPass = m_particleRenderPass;
+            rpInfo.framebuffer = m_particleFramebuffer;
+            rpInfo.renderArea.extent = {m_width > 0 ? m_width : 1920u, m_height > 0 ? m_height : 1080u};
+
+            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+            // Set dynamic viewport and scissor
+            VkViewport viewport{};
+            viewport.width = static_cast<float>(rpInfo.renderArea.extent.width);
+            viewport.height = static_cast<float>(rpInfo.renderArea.extent.height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+            VkRect2D scissor{};
+            scissor.extent = rpInfo.renderArea.extent;
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            // Render particles as billboards
+            glm::mat4 viewProj = m_proj * m_view;
+            glm::mat4 invView = glm::inverse(m_view);
+            glm::vec3 cameraRight = glm::vec3(invView[0]);
+            glm::vec3 cameraUp = glm::vec3(invView[1]);
+            m_particleSystem->render(cmd, viewProj, cameraRight, cameraUp);
+
+            vkCmdEndRenderPass(cmd);
+        }
+    }
+
     // 5. Post-processing (bloom, TAA, tonemapping)
     if (m_postProcessing && m_lightingPass) {
         m_postProcessing->setHDRInput(m_lightingPass->getOutputView());
         m_postProcessing->execute(cmd, frameIndex);
+    }
+
+    // 6. Overlay pass (grid, debug visualizations)
+    if (m_overlayPass && m_gridEnabled) {
+        VkImageView postOutput = m_postProcessing ? m_postProcessing->getOutputView() : VK_NULL_HANDLE;
+        VkImageView depthView = m_gbufferPass ? m_gbufferPass->getDepthView() : VK_NULL_HANDLE;
+
+        if (postOutput != VK_NULL_HANDLE && depthView != VK_NULL_HANDLE) {
+            glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
+            m_overlayPass->setInputImage(postOutput);
+            m_overlayPass->setDepthBuffer(depthView);
+            m_overlayPass->setCameraData(m_view, m_proj, invViewProj, m_cameraPos);
+            m_overlayPass->setGridEnabled(m_gridEnabled);
+            m_overlayPass->execute(cmd, frameIndex);
+        }
+    }
+
+    // 7. Gizmo pass (transform handles, rendered on top of everything)
+    if (m_gizmoPass && m_gizmoEnabled) {
+        // Determine the final output image to composite gizmos onto
+        VkImage finalImage = getFinalOutputImage();
+        VkImageView finalView = getFinalOutput();
+
+        if (finalImage != VK_NULL_HANDLE && finalView != VK_NULL_HANDLE) {
+            m_gizmoPass->setTargetImage(finalImage, finalView);
+            m_gizmoPass->setViewProjection(m_proj * m_view);
+            m_gizmoPass->execute(cmd, frameIndex);
+        }
     }
 
     // Store current view-proj for next frame's motion vectors
@@ -167,6 +299,17 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
+    if (m_overlayPass) m_overlayPass->onResize(width, height);
+    if (m_gizmoPass) m_gizmoPass->onResize(width, height);
+
+    // Recreate particle framebuffer (it references lighting output which was resized)
+    if (m_particleSystem && m_particleRenderPass != VK_NULL_HANDLE) {
+        if (m_particleFramebuffer != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(m_device, m_particleFramebuffer, nullptr);
+            m_particleFramebuffer = VK_NULL_HANDLE;
+        }
+        createParticleFramebuffer();
+    }
 
     // Reconnect after resize
     if (m_lightingPass && m_gbufferPass) {
@@ -226,6 +369,9 @@ void DeferredRenderer::setIBLTextures(VkImageView irradiance, VkImageView prefil
 }
 
 VkImageView DeferredRenderer::getFinalOutput() const {
+    if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputView() != VK_NULL_HANDLE) {
+        return m_overlayPass->getOutputView();
+    }
     if (m_postProcessing) {
         return m_postProcessing->getOutputView();
     }
@@ -236,6 +382,9 @@ VkImageView DeferredRenderer::getFinalOutput() const {
 }
 
 VkImage DeferredRenderer::getFinalOutputImage() const {
+    if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputImage() != VK_NULL_HANDLE) {
+        return m_overlayPass->getOutputImage();
+    }
     if (m_postProcessing) {
         return m_postProcessing->getOutputImage();
     }
@@ -257,6 +406,152 @@ glm::vec2 DeferredRenderer::getJitterOffset(uint32_t frameIndex) const {
         return m_postProcessing->getJitterOffset(frameIndex);
     }
     return glm::vec2(0.0f);
+}
+
+void DeferredRenderer::setWireframeEnabled(bool enabled) {
+    m_wireframeEnabled = enabled;
+    if (m_gbufferPass) {
+        m_gbufferPass->setWireframeEnabled(enabled);
+    }
+}
+
+void DeferredRenderer::setGizmoEnabled(bool enabled) {
+    m_gizmoEnabled = enabled;
+    if (m_gizmoPass) {
+        m_gizmoPass->setEnabled(enabled);
+    }
+}
+
+void DeferredRenderer::setGizmoMode(GizmoMode mode) {
+    if (m_gizmoPass) {
+        m_gizmoPass->setGizmoMode(mode);
+    }
+}
+
+void DeferredRenderer::setGizmoTransform(const glm::mat4& model) {
+    if (m_gizmoPass) {
+        m_gizmoPass->setGizmoTransform(model);
+    }
+}
+
+void DeferredRenderer::setGizmoHighlightedAxis(GizmoAxis axis) {
+    if (m_gizmoPass) {
+        m_gizmoPass->setHighlightedAxis(axis);
+    }
+}
+
+void DeferredRenderer::spawnParticles(const glm::vec3& position, ParticleType type,
+                                       const glm::vec3& direction) {
+    if (!m_particleSystem) return;
+
+    ParticleEmitterConfig config;
+    switch (type) {
+        case ParticleType::MUZZLE_FLASH:
+            config = ParticleSystem::presetMuzzleFlash(position, direction);
+            break;
+        case ParticleType::IMPACT_SPARK:
+            config = ParticleSystem::presetImpactSpark(position, direction);
+            break;
+        case ParticleType::EXPLOSION:
+            config = ParticleSystem::presetExplosion(position);
+            break;
+        case ParticleType::SMOKE:
+            config = ParticleSystem::presetSmoke(position);
+            break;
+        default:
+            config = ParticleSystem::presetImpactSpark(position, direction);
+            break;
+    }
+
+    m_pendingEmits.push(config);
+}
+
+bool DeferredRenderer::createParticleRenderPass() {
+    if (!m_lightingPass || !m_gbufferPass) return false;
+
+    // Color attachment: HDR output from lighting (load existing content)
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT; // HDR format
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    // Depth attachment: from GBuffer (read-only for depth testing)
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = VK_FORMAT_D32_SFLOAT;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &m_particleRenderPass) != VK_SUCCESS) {
+        std::cerr << "DeferredRenderer: Failed to create particle render pass" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool DeferredRenderer::createParticleFramebuffer() {
+    if (m_particleRenderPass == VK_NULL_HANDLE || !m_lightingPass || !m_gbufferPass) return false;
+
+    VkImageView hdrView = m_lightingPass->getOutputView();
+    VkImageView depthView = m_gbufferPass->getDepthView();
+
+    if (hdrView == VK_NULL_HANDLE || depthView == VK_NULL_HANDLE) return false;
+
+    std::array<VkImageView, 2> attachments = {hdrView, depthView};
+
+    VkFramebufferCreateInfo fbInfo{};
+    fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fbInfo.renderPass = m_particleRenderPass;
+    fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    fbInfo.pAttachments = attachments.data();
+    fbInfo.width = m_width > 0 ? m_width : 1920;
+    fbInfo.height = m_height > 0 ? m_height : 1080;
+    fbInfo.layers = 1;
+
+    if (vkCreateFramebuffer(m_device, &fbInfo, nullptr, &m_particleFramebuffer) != VK_SUCCESS) {
+        std::cerr << "DeferredRenderer: Failed to create particle framebuffer" << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace ohao

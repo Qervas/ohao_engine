@@ -1,4 +1,5 @@
 #include "ohao_viewport.h"
+#include "ohao_physics_body.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -34,6 +35,9 @@
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/light_component.hpp"
 #include "renderer/components/material_component.hpp"
+#include "physics/world/physics_world.hpp"
+#include "engine/asset/model.hpp"
+#include "renderer/gizmo/gizmo_meshes.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -224,6 +228,48 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("pick_object_at", "screen_pos"), &OhaoViewport::pick_object_at);
     ClassDB::bind_method(D_METHOD("get_selected_actor_name"), &OhaoViewport::get_selected_actor_name);
 
+    // === Physics Controls ===
+    ADD_GROUP("Physics", "physics_");
+
+    ClassDB::bind_method(D_METHOD("play_physics"), &OhaoViewport::play_physics);
+    ClassDB::bind_method(D_METHOD("pause_physics"), &OhaoViewport::pause_physics);
+    ClassDB::bind_method(D_METHOD("step_physics"), &OhaoViewport::step_physics);
+    ClassDB::bind_method(D_METHOD("stop_physics"), &OhaoViewport::stop_physics);
+    ClassDB::bind_method(D_METHOD("set_physics_speed", "speed"), &OhaoViewport::set_physics_speed);
+    ClassDB::bind_method(D_METHOD("get_physics_speed"), &OhaoViewport::get_physics_speed);
+    ClassDB::bind_method(D_METHOD("is_physics_playing"), &OhaoViewport::is_physics_playing);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_speed", PROPERTY_HINT_RANGE, "0.1,10.0,0.1"), "set_physics_speed", "get_physics_speed");
+
+    // === Wireframe ===
+    ADD_GROUP("Debug", "");
+
+    ClassDB::bind_method(D_METHOD("set_wireframe_enabled", "enabled"), &OhaoViewport::set_wireframe_enabled);
+    ClassDB::bind_method(D_METHOD("get_wireframe_enabled"), &OhaoViewport::get_wireframe_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "wireframe_enabled"), "set_wireframe_enabled", "get_wireframe_enabled");
+
+    // === Grid ===
+    ClassDB::bind_method(D_METHOD("set_grid_enabled", "enabled"), &OhaoViewport::set_grid_enabled);
+    ClassDB::bind_method(D_METHOD("get_grid_enabled"), &OhaoViewport::get_grid_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "grid_enabled"), "set_grid_enabled", "get_grid_enabled");
+
+    // === Model Import ===
+    ClassDB::bind_method(D_METHOD("import_model", "path"), &OhaoViewport::import_model);
+
+    // === Particles ===
+    ClassDB::bind_method(D_METHOD("spawn_particles", "position", "type"), &OhaoViewport::spawn_particles);
+    ClassDB::bind_method(D_METHOD("spawn_particles_directed", "position", "type", "direction"), &OhaoViewport::spawn_particles_directed);
+
+    // === Gizmo Controls ===
+    ADD_GROUP("Gizmo", "gizmo_");
+
+    ClassDB::bind_method(D_METHOD("set_gizmo_mode", "mode"), &OhaoViewport::set_gizmo_mode);
+    ClassDB::bind_method(D_METHOD("get_gizmo_mode"), &OhaoViewport::get_gizmo_mode);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "gizmo_mode", PROPERTY_HINT_ENUM, "Translate,Rotate,Scale"), "set_gizmo_mode", "get_gizmo_mode");
+
+    ClassDB::bind_method(D_METHOD("set_gizmo_enabled", "enabled"), &OhaoViewport::set_gizmo_enabled);
+    ClassDB::bind_method(D_METHOD("get_gizmo_enabled"), &OhaoViewport::get_gizmo_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gizmo_enabled"), "set_gizmo_enabled", "get_gizmo_enabled");
+
     // Signals
     ADD_SIGNAL(MethodInfo("actor_selected", PropertyInfo(Variant::STRING, "name")));
     ADD_SIGNAL(MethodInfo("right_click_menu", PropertyInfo(Variant::VECTOR2, "position")));
@@ -275,9 +321,36 @@ void OhaoViewport::_process(double delta) {
     // Update camera movement based on key state
     update_camera_movement(delta);
 
-    // Update physics
+    // Update physics (only when playing)
+    if (m_physics_playing && m_renderer) {
+        m_renderer->updatePhysics(static_cast<float>(delta) * m_physics_speed);
+    }
+
+    // Update gizmo transform for selected object
+    if (m_renderer && m_gizmo_enabled && m_selected_actor) {
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            auto transform = m_selected_actor->getTransform();
+            if (transform) {
+                glm::vec3 pos = transform->getPosition();
+                glm::mat4 gizmoModel = glm::translate(glm::mat4(1.0f), pos);
+                deferred->setGizmoTransform(gizmoModel);
+                deferred->setGizmoEnabled(true);
+            }
+        }
+    } else if (m_renderer) {
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            deferred->setGizmoEnabled(false);
+        }
+    }
+
+    // Set delta time for particle system
     if (m_renderer) {
-        m_renderer->updatePhysics(static_cast<float>(delta));
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            deferred->setDeltaTime(static_cast<float>(delta));
+        }
     }
 
     // Render frame
@@ -788,6 +861,154 @@ void OhaoViewport::set_taa_blend_factor(float factor) {
     apply_render_settings();
 }
 
+// === Physics Controls ===
+void OhaoViewport::play_physics() {
+    m_physics_playing = true;
+    if (m_scene && m_scene->getPhysicsWorld()) {
+        m_scene->getPhysicsWorld()->resume();
+    }
+}
+
+void OhaoViewport::pause_physics() {
+    m_physics_playing = false;
+    if (m_scene && m_scene->getPhysicsWorld()) {
+        m_scene->getPhysicsWorld()->pause();
+    }
+}
+
+void OhaoViewport::step_physics() {
+    if (m_scene && m_scene->getPhysicsWorld()) {
+        m_scene->getPhysicsWorld()->stepOnce();
+    }
+}
+
+void OhaoViewport::stop_physics() {
+    m_physics_playing = false;
+    if (m_scene && m_scene->getPhysicsWorld()) {
+        m_scene->getPhysicsWorld()->stop();
+    }
+}
+
+void OhaoViewport::set_physics_speed(float speed) {
+    m_physics_speed = speed;
+}
+
+// === Wireframe Mode ===
+void OhaoViewport::set_wireframe_enabled(bool enabled) {
+    m_wireframe_enabled = enabled;
+    if (m_renderer) {
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            deferred->setWireframeEnabled(enabled);
+        }
+    }
+}
+
+// === Grid Overlay ===
+void OhaoViewport::set_grid_enabled(bool enabled) {
+    m_grid_enabled = enabled;
+    if (m_renderer) {
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            deferred->setGridEnabled(enabled);
+        }
+    }
+}
+
+// === Model Import ===
+void OhaoViewport::import_model(const String& path) {
+    if (!m_scene || !m_renderer) {
+        UtilityFunctions::printerr("[OHAO] Cannot import: scene or renderer not initialized!");
+        return;
+    }
+
+    std::string filepath = path.utf8().get_data();
+    UtilityFunctions::print("[OHAO] Importing model: ", path);
+
+    // Create a new model and load based on extension
+    auto model = std::make_shared<ohao::Model>();
+    bool loaded = false;
+
+    if (filepath.size() >= 4) {
+        std::string ext = filepath.substr(filepath.find_last_of('.'));
+        if (ext == ".obj" || ext == ".OBJ") {
+            loaded = model->loadFromOBJ(filepath);
+        } else if (ext == ".gltf" || ext == ".glb" || ext == ".GLTF" || ext == ".GLB") {
+            loaded = model->loadFromGLTF(filepath);
+        } else {
+            UtilityFunctions::printerr("[OHAO] Unsupported format: ", path);
+            return;
+        }
+    }
+
+    if (!loaded) {
+        UtilityFunctions::printerr("[OHAO] Failed to load model: ", path);
+        return;
+    }
+
+    // Extract filename for actor name
+    std::string name = filepath.substr(filepath.find_last_of("/\\") + 1);
+    name = name.substr(0, name.find_last_of('.'));
+
+    // Create actor with loaded model
+    auto actor = m_scene->createActor(name);
+    if (actor) {
+        actor->setModel(model);
+        auto transform = actor->getTransform();
+        if (transform) {
+            transform->setPosition(glm::vec3(0.0f));
+        }
+    }
+
+    // Rebuild GPU buffers
+    finish_sync();
+    UtilityFunctions::print("[OHAO] Model imported: ", name.c_str());
+}
+
+// === Gizmo Controls ===
+void OhaoViewport::set_gizmo_mode(int mode) {
+    m_gizmo_mode = mode;
+    if (m_renderer) {
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            deferred->setGizmoMode(static_cast<ohao::GizmoMode>(mode));
+        }
+    }
+}
+
+void OhaoViewport::set_gizmo_enabled(bool enabled) {
+    m_gizmo_enabled = enabled;
+    if (m_renderer) {
+        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+        if (deferred) {
+            // Only show gizmo if enabled AND an object is selected
+            deferred->setGizmoEnabled(enabled && m_selected_actor != nullptr);
+        }
+    }
+}
+
+// === Particles ===
+void OhaoViewport::spawn_particles(const Vector3& position, int type) {
+    if (!m_renderer) return;
+    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) {
+        deferred->spawnParticles(
+            glm::vec3(position.x, position.y, position.z),
+            static_cast<ohao::ParticleType>(type));
+    }
+}
+
+void OhaoViewport::spawn_particles_directed(const Vector3& position, int type, const Vector3& direction) {
+    if (!m_renderer) return;
+    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) {
+        deferred->spawnParticles(
+            glm::vec3(position.x, position.y, position.z),
+            static_cast<ohao::ParticleType>(type),
+            glm::vec3(direction.x, direction.y, direction.z));
+    }
+}
+
 // Utility
 Dictionary OhaoViewport::get_render_stats() const {
     Dictionary stats;
@@ -1202,6 +1423,15 @@ void OhaoViewport::traverse_and_sync(Node* node) {
             float intensity = spot_light->get_param(Light3D::PARAM_ENERGY);
             float range = spot_light->get_param(Light3D::PARAM_RANGE);
             add_point_light(name, position, color, intensity, range);
+            m_synced_object_count++;
+        }
+
+        // Check for OhaoPhysicsBody (it creates its own OHAO actor)
+        OhaoPhysicsBody* physics_body = Object::cast_to<OhaoPhysicsBody>(node);
+        if (physics_body) {
+            if (!physics_body->is_in_physics_world()) {
+                physics_body->add_to_physics_world();
+            }
             m_synced_object_count++;
         }
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include "renderer/culling.hpp"
 
 namespace ohao {
 
@@ -31,31 +32,6 @@ struct PickResult {
     }
 };
 
-// Axis-aligned bounding box for fast rejection
-struct AABB {
-    glm::vec3 min{std::numeric_limits<float>::max()};
-    glm::vec3 max{std::numeric_limits<float>::lowest()};
-
-    AABB() = default;
-    AABB(const glm::vec3& minPt, const glm::vec3& maxPt) : min(minPt), max(maxPt) {}
-
-    void expand(const glm::vec3& point) {
-        min = glm::min(min, point);
-        max = glm::max(max, point);
-    }
-
-    void expand(const AABB& other) {
-        min = glm::min(min, other.min);
-        max = glm::max(max, other.max);
-    }
-
-    glm::vec3 center() const { return (min + max) * 0.5f; }
-    glm::vec3 size() const { return max - min; }
-    glm::vec3 halfExtents() const { return size() * 0.5f; }
-
-    bool isValid() const {
-        return min.x <= max.x && min.y <= max.y && min.z <= max.z;
-    }
-};
+// AABB is now defined in renderer/culling.hpp
 
 } // namespace ohao

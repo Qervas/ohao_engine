@@ -95,6 +95,9 @@ public:
     void setDoFNearRange(float start, float end);
     void setDoFFarRange(float start, float end);
 
+    // Execute SSAO separately (called before lighting pass by DeferredRenderer)
+    void executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex);
+
     // Get final output
     VkImageView getOutputView() const { return m_finalOutputView; }
     VkImage getOutputImage() const { return m_finalOutput; }

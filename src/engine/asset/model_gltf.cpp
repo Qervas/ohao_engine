@@ -1,0 +1,508 @@
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "tiny_gltf.h"
+
+#include "engine/asset/model.hpp"
+#include "animation/skeleton.hpp"
+#include "animation/animation_clip.hpp"
+#include <iostream>
+#include <filesystem>
+
+namespace ohao {
+
+bool Model::loadFromGLTF(const std::string& filename) {
+    tinygltf::Model gltfModel;
+    tinygltf::TinyGLTF loader;
+    std::string err, warn;
+
+    bool loaded = false;
+    std::string ext = filename.substr(filename.find_last_of('.'));
+    if (ext == ".glb" || ext == ".GLB") {
+        loaded = loader.LoadBinaryFromFile(&gltfModel, &err, &warn, filename);
+    } else {
+        loaded = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filename);
+    }
+
+    if (!warn.empty()) {
+        std::cerr << "GLTF Warning: " << warn << std::endl;
+    }
+    if (!err.empty()) {
+        std::cerr << "GLTF Error: " << err << std::endl;
+    }
+    if (!loaded) {
+        std::cerr << "Failed to load GLTF: " << filename << std::endl;
+        return false;
+    }
+
+    sourcePath = filename;
+    vertices.clear();
+    indices.clear();
+    materials.clear();
+
+    // Load materials
+    std::string basePath = std::filesystem::path(filename).parent_path().string();
+    for (const auto& gltfMat : gltfModel.materials) {
+        MaterialData mat{};
+        mat.name = gltfMat.name.empty() ? "gltf_material" : gltfMat.name;
+
+        // PBR metallic-roughness
+        const auto& pbr = gltfMat.pbrMetallicRoughness;
+        mat.baseColorFactor = glm::vec4(
+            static_cast<float>(pbr.baseColorFactor[0]),
+            static_cast<float>(pbr.baseColorFactor[1]),
+            static_cast<float>(pbr.baseColorFactor[2]),
+            static_cast<float>(pbr.baseColorFactor[3])
+        );
+        mat.metallicFactor = static_cast<float>(pbr.metallicFactor);
+        mat.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
+
+        // Also set the OBJ-style diffuse from baseColor for compatibility
+        mat.diffuse = glm::vec3(mat.baseColorFactor);
+        mat.ambient = mat.diffuse * 0.1f;
+        mat.specular = glm::vec3(0.5f);
+        mat.shininess = (1.0f - mat.roughnessFactor) * 128.0f;
+        mat.opacity = mat.baseColorFactor.a;
+
+        // Texture references (store texture paths for later loading)
+        if (pbr.baseColorTexture.index >= 0) {
+            int texIdx = gltfModel.textures[pbr.baseColorTexture.index].source;
+            if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                mat.baseColorTexture = gltfModel.images[texIdx].uri;
+                mat.diffuseTexture = mat.baseColorTexture;
+            }
+        }
+        if (pbr.metallicRoughnessTexture.index >= 0) {
+            int texIdx = gltfModel.textures[pbr.metallicRoughnessTexture.index].source;
+            if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                mat.metallicRoughnessTexture = gltfModel.images[texIdx].uri;
+            }
+        }
+
+        // Normal map
+        if (gltfMat.normalTexture.index >= 0) {
+            int texIdx = gltfModel.textures[gltfMat.normalTexture.index].source;
+            if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                mat.normalTexture = gltfModel.images[texIdx].uri;
+            }
+        }
+
+        // Occlusion
+        if (gltfMat.occlusionTexture.index >= 0) {
+            int texIdx = gltfModel.textures[gltfMat.occlusionTexture.index].source;
+            if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                mat.occlusionTexture = gltfModel.images[texIdx].uri;
+            }
+        }
+
+        // Emissive
+        if (gltfMat.emissiveTexture.index >= 0) {
+            int texIdx = gltfModel.textures[gltfMat.emissiveTexture.index].source;
+            if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                mat.emissiveTexture = gltfModel.images[texIdx].uri;
+            }
+        }
+        mat.emission = glm::vec3(
+            static_cast<float>(gltfMat.emissiveFactor[0]),
+            static_cast<float>(gltfMat.emissiveFactor[1]),
+            static_cast<float>(gltfMat.emissiveFactor[2])
+        );
+
+        // Alpha mode
+        if (gltfMat.alphaMode == "MASK") {
+            mat.alphaMode = MaterialData::AlphaMode::MASK;
+        } else if (gltfMat.alphaMode == "BLEND") {
+            mat.alphaMode = MaterialData::AlphaMode::BLEND;
+        } else {
+            mat.alphaMode = MaterialData::AlphaMode::OPAQUE;
+        }
+        mat.alphaCutoff = static_cast<float>(gltfMat.alphaCutoff);
+        mat.doubleSided = gltfMat.doubleSided;
+
+        materials[mat.name] = mat;
+    }
+
+    // If no materials, create a default
+    if (materials.empty()) {
+        setupDefaultMaterial();
+    }
+
+    // Helper to get accessor data pointer
+    auto getBufferData = [&](int accessorIndex) -> const unsigned char* {
+        if (accessorIndex < 0) return nullptr;
+        const auto& accessor = gltfModel.accessors[accessorIndex];
+        const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
+        const auto& buffer = gltfModel.buffers[bufferView.buffer];
+        return buffer.data.data() + bufferView.byteOffset + accessor.byteOffset;
+    };
+
+    auto getAccessorCount = [&](int accessorIndex) -> size_t {
+        if (accessorIndex < 0) return 0;
+        return gltfModel.accessors[accessorIndex].count;
+    };
+
+    auto getAccessorStride = [&](int accessorIndex) -> int {
+        if (accessorIndex < 0) return 0;
+        const auto& accessor = gltfModel.accessors[accessorIndex];
+        const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
+        int stride = bufferView.byteStride;
+        if (stride == 0) {
+            // Tightly packed
+            int componentSize = tinygltf::GetComponentSizeInBytes(accessor.componentType);
+            int numComponents = tinygltf::GetNumComponentsInType(accessor.type);
+            stride = componentSize * numComponents;
+        }
+        return stride;
+    };
+
+    // Process all meshes
+    uint32_t vertexOffset = 0;
+
+    for (const auto& mesh : gltfModel.meshes) {
+        for (const auto& primitive : mesh.primitives) {
+            // Get attribute accessors
+            int posAccessor = -1, normAccessor = -1, uvAccessor = -1, colorAccessor = -1;
+            int tangentAccessor = -1, jointsAccessor = -1, weightsAccessor = -1;
+
+            for (const auto& [attrName, accessorIdx] : primitive.attributes) {
+                if (attrName == "POSITION") posAccessor = accessorIdx;
+                else if (attrName == "NORMAL") normAccessor = accessorIdx;
+                else if (attrName == "TEXCOORD_0") uvAccessor = accessorIdx;
+                else if (attrName == "COLOR_0") colorAccessor = accessorIdx;
+                else if (attrName == "TANGENT") tangentAccessor = accessorIdx;
+                else if (attrName == "JOINTS_0") jointsAccessor = accessorIdx;
+                else if (attrName == "WEIGHTS_0") weightsAccessor = accessorIdx;
+            }
+
+            if (posAccessor < 0) continue; // No positions = skip
+
+            size_t vertexCount = getAccessorCount(posAccessor);
+            const unsigned char* posData = getBufferData(posAccessor);
+            const unsigned char* normData = normAccessor >= 0 ? getBufferData(normAccessor) : nullptr;
+            const unsigned char* uvData = uvAccessor >= 0 ? getBufferData(uvAccessor) : nullptr;
+            const unsigned char* colorData = colorAccessor >= 0 ? getBufferData(colorAccessor) : nullptr;
+            const unsigned char* tangentData = tangentAccessor >= 0 ? getBufferData(tangentAccessor) : nullptr;
+            const unsigned char* jointsData = jointsAccessor >= 0 ? getBufferData(jointsAccessor) : nullptr;
+            const unsigned char* weightsData = weightsAccessor >= 0 ? getBufferData(weightsAccessor) : nullptr;
+
+            int posStride = getAccessorStride(posAccessor);
+            int normStride = normAccessor >= 0 ? getAccessorStride(normAccessor) : 0;
+            int uvStride = uvAccessor >= 0 ? getAccessorStride(uvAccessor) : 0;
+            int colorStride = colorAccessor >= 0 ? getAccessorStride(colorAccessor) : 0;
+            int tangentStride = tangentAccessor >= 0 ? getAccessorStride(tangentAccessor) : 0;
+            int jointsStride = jointsAccessor >= 0 ? getAccessorStride(jointsAccessor) : 0;
+            int weightsStride = weightsAccessor >= 0 ? getAccessorStride(weightsAccessor) : 0;
+
+            // Get material color
+            glm::vec3 matColor(0.8f);
+            if (primitive.material >= 0 && primitive.material < static_cast<int>(gltfModel.materials.size())) {
+                const auto& pbr = gltfModel.materials[primitive.material].pbrMetallicRoughness;
+                matColor = glm::vec3(
+                    static_cast<float>(pbr.baseColorFactor[0]),
+                    static_cast<float>(pbr.baseColorFactor[1]),
+                    static_cast<float>(pbr.baseColorFactor[2])
+                );
+            }
+
+            // Build vertices
+            for (size_t i = 0; i < vertexCount; ++i) {
+                Vertex v{};
+
+                // Position
+                const float* pos = reinterpret_cast<const float*>(posData + i * posStride);
+                v.position = glm::vec3(pos[0], pos[1], pos[2]);
+
+                // Normal
+                if (normData) {
+                    const float* norm = reinterpret_cast<const float*>(normData + i * normStride);
+                    v.normal = glm::vec3(norm[0], norm[1], norm[2]);
+                } else {
+                    v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                }
+
+                // UV
+                if (uvData) {
+                    const float* uv = reinterpret_cast<const float*>(uvData + i * uvStride);
+                    v.texCoord = glm::vec2(uv[0], uv[1]);
+                } else {
+                    v.texCoord = glm::vec2(0.0f);
+                }
+
+                // Color (from vertex attribute or material)
+                if (colorData) {
+                    const auto& accessor = gltfModel.accessors[colorAccessor];
+                    if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
+                        const float* col = reinterpret_cast<const float*>(colorData + i * colorStride);
+                        v.color = glm::vec3(col[0], col[1], col[2]);
+                    } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                        const uint16_t* col = reinterpret_cast<const uint16_t*>(colorData + i * colorStride);
+                        v.color = glm::vec3(col[0] / 65535.0f, col[1] / 65535.0f, col[2] / 65535.0f);
+                    } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                        const uint8_t* col = colorData + i * colorStride;
+                        v.color = glm::vec3(col[0] / 255.0f, col[1] / 255.0f, col[2] / 255.0f);
+                    } else {
+                        v.color = matColor;
+                    }
+                } else {
+                    v.color = matColor;
+                }
+
+                // Tangent
+                if (tangentData) {
+                    const float* tan = reinterpret_cast<const float*>(tangentData + i * tangentStride);
+                    v.tangent = glm::vec4(tan[0], tan[1], tan[2], tan[3]);
+                } else {
+                    v.tangent = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                }
+
+                // Joint indices (bone indices)
+                if (jointsData) {
+                    const auto& accessor = gltfModel.accessors[jointsAccessor];
+                    if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                        const uint8_t* j = jointsData + i * jointsStride;
+                        v.boneIndices = glm::ivec4(j[0], j[1], j[2], j[3]);
+                    } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                        const uint16_t* j = reinterpret_cast<const uint16_t*>(jointsData + i * jointsStride);
+                        v.boneIndices = glm::ivec4(j[0], j[1], j[2], j[3]);
+                    }
+                } else {
+                    v.boneIndices = glm::ivec4(0, 0, 0, 0);
+                }
+
+                // Bone weights
+                if (weightsData) {
+                    const float* w = reinterpret_cast<const float*>(weightsData + i * weightsStride);
+                    v.boneWeights = glm::vec4(w[0], w[1], w[2], w[3]);
+                } else {
+                    v.boneWeights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                }
+
+                vertices.push_back(v);
+            }
+
+            // Build indices
+            if (primitive.indices >= 0) {
+                const auto& accessor = gltfModel.accessors[primitive.indices];
+                const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
+                const auto& buffer = gltfModel.buffers[bufferView.buffer];
+                const unsigned char* indexData = buffer.data.data() + bufferView.byteOffset + accessor.byteOffset;
+
+                for (size_t i = 0; i < accessor.count; ++i) {
+                    uint32_t index = 0;
+                    if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
+                        index = reinterpret_cast<const uint16_t*>(indexData)[i];
+                    } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
+                        index = reinterpret_cast<const uint32_t*>(indexData)[i];
+                    } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
+                        index = indexData[i];
+                    }
+                    indices.push_back(vertexOffset + index);
+                }
+            } else {
+                // No index buffer - generate sequential indices
+                for (size_t i = 0; i < vertexCount; ++i) {
+                    indices.push_back(vertexOffset + static_cast<uint32_t>(i));
+                }
+            }
+
+            vertexOffset += static_cast<uint32_t>(vertexCount);
+        }
+    }
+
+    // Load skins (skeleton data)
+    if (!gltfModel.skins.empty()) {
+        const auto& gltfSkin = gltfModel.skins[0]; // Use first skin
+        skeleton = std::make_shared<Skeleton>();
+
+        skeleton->joints.resize(gltfSkin.joints.size());
+
+        // Parse inverse bind matrices
+        std::vector<glm::mat4> inverseBindMatrices(gltfSkin.joints.size(), glm::mat4(1.0f));
+        if (gltfSkin.inverseBindMatrices >= 0) {
+            const auto& accessor = gltfModel.accessors[gltfSkin.inverseBindMatrices];
+            const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
+            const auto& buffer = gltfModel.buffers[bufferView.buffer];
+            const float* matData = reinterpret_cast<const float*>(
+                buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
+
+            for (size_t i = 0; i < accessor.count && i < gltfSkin.joints.size(); ++i) {
+                // GLTF stores matrices in column-major order (same as GLM)
+                memcpy(&inverseBindMatrices[i], matData + i * 16, sizeof(glm::mat4));
+            }
+        }
+
+        // Build joint hierarchy
+        // First, create a map from node index to joint index
+        std::unordered_map<int, int> nodeToJoint;
+        for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
+            nodeToJoint[gltfSkin.joints[i]] = static_cast<int>(i);
+        }
+
+        for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
+            int nodeIndex = gltfSkin.joints[i];
+            const auto& node = gltfModel.nodes[nodeIndex];
+
+            Joint& joint = skeleton->joints[i];
+            joint.name = node.name.empty() ? "joint_" + std::to_string(i) : node.name;
+            joint.inverseBindMatrix = inverseBindMatrices[i];
+
+            // Find parent: walk the node hierarchy
+            joint.parentIndex = -1; // Default: root
+            for (size_t j = 0; j < gltfSkin.joints.size(); ++j) {
+                if (j == i) continue;
+                int parentNodeIndex = gltfSkin.joints[j];
+                const auto& parentNode = gltfModel.nodes[parentNodeIndex];
+                for (int child : parentNode.children) {
+                    if (child == nodeIndex) {
+                        joint.parentIndex = static_cast<int>(j);
+                        break;
+                    }
+                }
+                if (joint.parentIndex >= 0) break;
+            }
+
+            // Set local transform from node
+            if (node.matrix.size() == 16) {
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        joint.localTransform[c][r] = static_cast<float>(node.matrix[c * 4 + r]);
+            } else {
+                glm::vec3 translation(0.0f);
+                glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+                glm::vec3 scale(1.0f);
+
+                if (node.translation.size() == 3) {
+                    translation = glm::vec3(
+                        static_cast<float>(node.translation[0]),
+                        static_cast<float>(node.translation[1]),
+                        static_cast<float>(node.translation[2]));
+                }
+                if (node.rotation.size() == 4) {
+                    rotation = glm::quat(
+                        static_cast<float>(node.rotation[3]),  // w
+                        static_cast<float>(node.rotation[0]),  // x
+                        static_cast<float>(node.rotation[1]),  // y
+                        static_cast<float>(node.rotation[2])); // z
+                }
+                if (node.scale.size() == 3) {
+                    scale = glm::vec3(
+                        static_cast<float>(node.scale[0]),
+                        static_cast<float>(node.scale[1]),
+                        static_cast<float>(node.scale[2]));
+                }
+
+                joint.localTransform = glm::translate(glm::mat4(1.0f), translation) *
+                                       glm::mat4_cast(rotation) *
+                                       glm::scale(glm::mat4(1.0f), scale);
+            }
+        }
+
+        // Compute initial joint matrices
+        skeleton->computeJointMatrices();
+
+        std::cout << "GLTF skin loaded: " << gltfSkin.joints.size() << " joints" << std::endl;
+    }
+
+    // Load animations
+    for (const auto& gltfAnim : gltfModel.animations) {
+        auto clip = std::make_shared<AnimationClip>();
+        clip->name = gltfAnim.name.empty() ? "animation_" + std::to_string(animations.size()) : gltfAnim.name;
+        clip->duration = 0.0f;
+
+        // Build node-to-joint map from skin (needed to map animation targets to joints)
+        std::unordered_map<int, int> nodeToJoint;
+        if (!gltfModel.skins.empty()) {
+            const auto& gltfSkin = gltfModel.skins[0];
+            for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
+                nodeToJoint[gltfSkin.joints[i]] = static_cast<int>(i);
+            }
+        }
+
+        for (const auto& gltfChannel : gltfAnim.channels) {
+            AnimationChannel channel;
+
+            // Map node index to joint index
+            auto jointIt = nodeToJoint.find(gltfChannel.target_node);
+            if (jointIt == nodeToJoint.end()) continue; // Not a joint we care about
+            channel.targetJoint = jointIt->second;
+
+            // Property
+            if (gltfChannel.target_path == "translation") {
+                channel.property = AnimationProperty::TRANSLATION;
+            } else if (gltfChannel.target_path == "rotation") {
+                channel.property = AnimationProperty::ROTATION;
+            } else if (gltfChannel.target_path == "scale") {
+                channel.property = AnimationProperty::SCALE;
+            } else {
+                continue; // Unsupported property (e.g., weights for morph targets)
+            }
+
+            // Sampler data
+            const auto& sampler = gltfAnim.samplers[gltfChannel.sampler];
+
+            // Interpolation type
+            if (sampler.interpolation == "STEP") {
+                channel.interpolation = InterpolationType::STEP;
+            } else if (sampler.interpolation == "CUBICSPLINE") {
+                channel.interpolation = InterpolationType::CUBIC_SPLINE;
+            } else {
+                channel.interpolation = InterpolationType::LINEAR;
+            }
+
+            // Timestamps (input)
+            {
+                const auto& accessor = gltfModel.accessors[sampler.input];
+                const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
+                const auto& buffer = gltfModel.buffers[bufferView.buffer];
+                const float* timeData = reinterpret_cast<const float*>(
+                    buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
+
+                channel.timestamps.resize(accessor.count);
+                for (size_t i = 0; i < accessor.count; ++i) {
+                    channel.timestamps[i] = timeData[i];
+                    clip->duration = std::max(clip->duration, timeData[i]);
+                }
+            }
+
+            // Values (output)
+            {
+                const auto& accessor = gltfModel.accessors[sampler.output];
+                const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
+                const auto& buffer = gltfModel.buffers[bufferView.buffer];
+                const float* valData = reinterpret_cast<const float*>(
+                    buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
+
+                channel.values.resize(accessor.count);
+                int components = (channel.property == AnimationProperty::ROTATION) ? 4 : 3;
+                for (size_t i = 0; i < accessor.count; ++i) {
+                    if (components == 4) {
+                        channel.values[i] = glm::vec4(
+                            valData[i * 4 + 0], valData[i * 4 + 1],
+                            valData[i * 4 + 2], valData[i * 4 + 3]);
+                    } else {
+                        channel.values[i] = glm::vec4(
+                            valData[i * 3 + 0], valData[i * 3 + 1],
+                            valData[i * 3 + 2], 0.0f);
+                    }
+                }
+            }
+
+            clip->channels.push_back(std::move(channel));
+        }
+
+        if (!clip->channels.empty()) {
+            animations.push_back(std::move(clip));
+        }
+    }
+
+    if (!animations.empty()) {
+        std::cout << "GLTF animations loaded: " << animations.size() << " clips" << std::endl;
+    }
+
+    std::cout << "GLTF loaded: " << filename << " (" << vertices.size() << " vertices, "
+              << indices.size() << " indices, " << materials.size() << " materials)" << std::endl;
+
+    return !vertices.empty();
+}
+
+} // namespace ohao

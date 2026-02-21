@@ -153,6 +153,20 @@ private:
     // TAA settings
     float m_taa_blend_factor = 0.1f;
 
+    // === Physics State ===
+    bool m_physics_playing = false;
+    float m_physics_speed = 1.0f;
+
+    // === Wireframe Mode ===
+    bool m_wireframe_enabled = false;
+
+    // === Grid Overlay ===
+    bool m_grid_enabled = true;
+
+    // === Gizmo State ===
+    int m_gizmo_mode = 0;  // 0=Translate, 1=Rotate, 2=Scale
+    bool m_gizmo_enabled = true;  // Show gizmos when an object is selected
+
 protected:
     static void _bind_methods();
 
@@ -178,6 +192,10 @@ public:
     void shutdown_renderer();
     bool is_renderer_initialized() const { return m_initialized; }
     bool has_scene_meshes() const;
+
+    // Access OHAO scene (for physics body integration)
+    ohao::Scene* get_ohao_scene() const { return m_scene; }
+    ohao::OffscreenRenderer* get_ohao_renderer() const { return m_renderer; }
 
     // Rendering
     void set_render_enabled(bool enabled);
@@ -325,6 +343,36 @@ public:
     // === Picking ===
     void pick_object_at(const Vector2& screen_pos);
     String get_selected_actor_name() const { return m_selected_actor_name; }
+
+    // === Physics Controls ===
+    void play_physics();
+    void pause_physics();
+    void step_physics();
+    void stop_physics();
+    void set_physics_speed(float speed);
+    float get_physics_speed() const { return m_physics_speed; }
+    bool is_physics_playing() const { return m_physics_playing; }
+
+    // === Wireframe Mode ===
+    void set_wireframe_enabled(bool enabled);
+    bool get_wireframe_enabled() const { return m_wireframe_enabled; }
+
+    // === Grid Overlay ===
+    void set_grid_enabled(bool enabled);
+    bool get_grid_enabled() const { return m_grid_enabled; }
+
+    // === Model Import ===
+    void import_model(const String& path);
+
+    // === Gizmo Controls ===
+    void set_gizmo_mode(int mode);
+    int get_gizmo_mode() const { return m_gizmo_mode; }
+    void set_gizmo_enabled(bool enabled);
+    bool get_gizmo_enabled() const { return m_gizmo_enabled; }
+
+    // === Particles ===
+    void spawn_particles(const Vector3& position, int type);
+    void spawn_particles_directed(const Vector3& position, int type, const Vector3& direction);
 
     // === Utility ===
     // Get current renderer stats (for debug display)

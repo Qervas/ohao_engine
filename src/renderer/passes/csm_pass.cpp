@@ -3,6 +3,7 @@
 #include "../../engine/actor/actor.hpp"
 #include "../../engine/component/transform_component.hpp"
 #include "../../renderer/components/mesh_component.hpp"
+#include "../../engine/asset/model.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <algorithm>
@@ -375,24 +376,16 @@ bool CSMPass::createPipeline() {
     shaderStages[1].module = geomShader;
     shaderStages[1].pName = "main";
 
-    // Vertex input (position only for shadow pass)
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = sizeof(float) * 3; // Position only
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    VkVertexInputAttributeDescription attributeDesc{};
-    attributeDesc.binding = 0;
-    attributeDesc.location = 0;
-    attributeDesc.format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDesc.offset = 0;
+    // Vertex input - must use full vertex stride since we share vertex buffers
+    auto csmBindingDescs = Vertex::getBindingDescriptions();
+    auto csmAttributeDescs = Vertex::getAttributeDescriptions();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
-    vertexInputInfo.vertexAttributeDescriptionCount = 1;
-    vertexInputInfo.pVertexAttributeDescriptions = &attributeDesc;
+    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(csmBindingDescs.size());
+    vertexInputInfo.pVertexBindingDescriptions = csmBindingDescs.data();
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(csmAttributeDescs.size());
+    vertexInputInfo.pVertexAttributeDescriptions = csmAttributeDescs.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;

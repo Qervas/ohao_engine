@@ -111,17 +111,32 @@ func _connect_signals() -> void:
 	toolbar.play_pressed.connect(func() -> void:
 		_is_playing = true
 		toolbar.set_play_state(true)
+		if ohao_viewport and ohao_viewport.has_method("play_physics"):
+			ohao_viewport.play_physics()
 	)
 	toolbar.pause_pressed.connect(func() -> void:
 		_is_playing = false
 		toolbar.set_play_state(false)
+		if ohao_viewport and ohao_viewport.has_method("pause_physics"):
+			ohao_viewport.pause_physics()
 	)
 	toolbar.step_pressed.connect(func() -> void:
-		pass  # TODO: ohao_viewport.step_physics()
+		if ohao_viewport and ohao_viewport.has_method("step_physics"):
+			ohao_viewport.step_physics()
 	)
-	toolbar.speed_changed.connect(func(_val: float) -> void:
-		pass  # TODO: ohao_viewport.set_simulation_speed(val)
+	toolbar.speed_changed.connect(func(val: float) -> void:
+		if ohao_viewport and ohao_viewport.has_method("set_physics_speed"):
+			ohao_viewport.set_physics_speed(val)
 	)
+	toolbar.wireframe_toggled.connect(func(enabled: bool) -> void:
+		if ohao_viewport and ohao_viewport.has_method("set_wireframe_enabled"):
+			ohao_viewport.set_wireframe_enabled(enabled)
+	)
+	toolbar.grid_toggled.connect(func(enabled: bool) -> void:
+		if ohao_viewport and ohao_viewport.has_method("set_grid_enabled"):
+			ohao_viewport.set_grid_enabled(enabled)
+	)
+	toolbar.import_model_requested.connect(_on_import_model_requested)
 	toolbar.post_process_toggled.connect(_toggle_post_process)
 
 func _process(delta: float) -> void:
@@ -254,6 +269,23 @@ func _on_example_selected(index: int) -> void:
 	root.queue_free()
 	if status_bar:
 		status_bar.set_sync_state(2, count)
+
+func _on_import_model_requested() -> void:
+	var dialog := FileDialog.new()
+	dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	dialog.access = FileDialog.ACCESS_FILESYSTEM
+	dialog.filters = PackedStringArray(["*.obj ; OBJ Models", "*.gltf ; GLTF Models", "*.glb ; GLB Models"])
+	dialog.title = "Import 3D Model"
+	dialog.file_selected.connect(func(path: String) -> void:
+		if ohao_viewport and ohao_viewport.has_method("import_model"):
+			ohao_viewport.import_model(path)
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func() -> void:
+		dialog.queue_free()
+	)
+	add_child(dialog)
+	dialog.popup_centered(Vector2i(800, 600))
 
 func _toggle_post_process() -> void:
 	post_process_panel.visible = not post_process_panel.visible

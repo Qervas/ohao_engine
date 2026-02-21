@@ -112,18 +112,32 @@ void PostProcessingPipeline::cleanup() {
     m_sampler = VK_NULL_HANDLE;
 }
 
+void PostProcessingPipeline::executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex) {
+    // SSAO runs before lighting so its output can modulate ambient occlusion
+    if (m_ssaoEnabled && m_ssaoPass) {
+        m_ssaoPass->execute(cmd, frameIndex);
+    }
+}
+
 void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     VkImageView currentInput = m_hdrInputView;
 
-    // TEMPORARILY DISABLED: SSAO, Bloom, TAA for stability testing
-    // TODO: Re-enable after fixing MoltenVK compatibility issues
+    // 1. Bloom (threshold + downsample + upsample chain)
+    // Bloom output is composited in tonemapping via the bloom texture binding,
+    // so we don't update currentInput here.
+    if (m_bloomEnabled && m_bloomPass) {
+        m_bloomPass->setInputImage(currentInput);
+        m_bloomPass->execute(cmd, frameIndex);
+    }
 
-    // Skip all advanced effects, just do tonemapping
-    // SSAO pass disabled
-    // Bloom pass disabled
-    // TAA pass disabled
+    // 2. TAA resolve (uses velocity buffer + history)
+    if (m_taaEnabled && m_taaPass) {
+        m_taaPass->setCurrentFrame(currentInput);
+        m_taaPass->execute(cmd, frameIndex);
+        currentInput = m_taaPass->getOutputView();
+    }
 
-    // Tonemapping (final pass)
+    // 3. Tonemapping (final pass - reads bloom output via descriptor binding)
     if (m_tonemappingEnabled && currentInput != VK_NULL_HANDLE) {
         VkClearValue clearValue{};
         clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};

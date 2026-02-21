@@ -4,8 +4,12 @@
 #include "../../engine/component/transform_component.hpp"
 #include "../../renderer/components/mesh_component.hpp"
 #include "../../renderer/components/material_component.hpp"
+#include "../../engine/asset/model.hpp"
 #include <stdexcept>
 #include <array>
+#include <iostream>
+#include <cstring>
+#include <cfloat>
 
 namespace ohao {
 
@@ -26,6 +30,11 @@ bool GBufferPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createFramebuffer()) return false;
     if (!createDescriptors()) return false;
     if (!createPipeline()) return false;
+    if (!createBoneMatrixResources()) return false;
+    if (!createSkinnedPipeline()) {
+        std::cerr << "GBufferPass: Skinned pipeline failed (non-fatal)" << std::endl;
+        // Non-fatal - skinned rendering just won't work
+    }
 
     return true;
 }
@@ -35,6 +44,36 @@ void GBufferPass::cleanup() {
 
     vkDeviceWaitIdle(m_device);
 
+    // Skinned pipeline resources
+    if (m_skinnedPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_skinnedPipeline, nullptr);
+        m_skinnedPipeline = VK_NULL_HANDLE;
+    }
+    if (m_skinnedPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(m_device, m_skinnedPipelineLayout, nullptr);
+        m_skinnedPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (m_boneMatrixBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(m_device, m_boneMatrixBuffer, nullptr);
+        m_boneMatrixBuffer = VK_NULL_HANDLE;
+    }
+    if (m_boneMatrixMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_boneMatrixMemory, nullptr);
+        m_boneMatrixMemory = VK_NULL_HANDLE;
+    }
+    if (m_boneDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device, m_boneDescriptorPool, nullptr);
+        m_boneDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (m_boneDescriptorLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(m_device, m_boneDescriptorLayout, nullptr);
+        m_boneDescriptorLayout = VK_NULL_HANDLE;
+    }
+
+    if (m_wireframePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_wireframePipeline, nullptr);
+        m_wireframePipeline = VK_NULL_HANDLE;
+    }
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
@@ -104,8 +143,10 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     scissor.extent = {m_width, m_height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Bind pipeline
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+    // Bind pipeline (wireframe or fill)
+    VkPipeline activePipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
+                                    ? m_wireframePipeline : m_pipeline;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
 
     // Bind vertex and index buffers if available
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
@@ -114,6 +155,10 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
         vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
     }
+
+    // Build view frustum for culling
+    Frustum frustum;
+    frustum.extractFromViewProj(m_projection * m_view);
 
     // Iterate through scene actors and render meshes
     if (m_meshBufferMap) {
@@ -128,6 +173,24 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             // Get transform
             auto transformComp = actor->getComponent<TransformComponent>();
             glm::mat4 modelMatrix = transformComp ? transformComp->getWorldMatrix() : glm::mat4(1.0f);
+
+            // Frustum culling: compute world-space AABB and test against frustum
+            auto model = actor->getModel();
+            if (model && !model->vertices.empty()) {
+                // Compute local AABB from mesh vertices
+                AABB localAABB;
+                localAABB.min = glm::vec3(FLT_MAX);
+                localAABB.max = glm::vec3(-FLT_MAX);
+                for (const auto& v : model->vertices) {
+                    localAABB.min = glm::min(localAABB.min, v.position);
+                    localAABB.max = glm::max(localAABB.max, v.position);
+                }
+                // Transform to world space and test
+                AABB worldAABB = localAABB.transformed(modelMatrix);
+                if (!frustum.isAABBVisible(worldAABB)) {
+                    continue; // Culled - skip this actor
+                }
+            }
 
             // Get material (optional) - extract properties from Material struct
             auto materialComp = actor->getComponent<MaterialComponent>();
@@ -524,39 +587,14 @@ bool GBufferPass::createPipeline() {
     shaderStages[1].module = fragShader;
     shaderStages[1].pName = "main";
 
-    // Vertex input - matching model.hpp Vertex struct
-    // Layout: position(vec3), color(vec3), normal(vec3), texCoord(vec2)
-    VkVertexInputBindingDescription bindingDesc{};
-    bindingDesc.binding = 0;
-    bindingDesc.stride = sizeof(float) * 11; // pos(3) + color(3) + normal(3) + uv(2)
-    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::array<VkVertexInputAttributeDescription, 4> attributeDescs{};
-    // Position
-    attributeDescs[0].binding = 0;
-    attributeDescs[0].location = 0;
-    attributeDescs[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescs[0].offset = 0;
-    // Color
-    attributeDescs[1].binding = 0;
-    attributeDescs[1].location = 1;
-    attributeDescs[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescs[1].offset = sizeof(float) * 3;
-    // Normal
-    attributeDescs[2].binding = 0;
-    attributeDescs[2].location = 2;
-    attributeDescs[2].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescs[2].offset = sizeof(float) * 6;
-    // TexCoord
-    attributeDescs[3].binding = 0;
-    attributeDescs[3].location = 3;
-    attributeDescs[3].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescs[3].offset = sizeof(float) * 9;
+    // Vertex input - matching model.hpp Vertex struct (uses Vertex::getAttributeDescriptions())
+    auto bindingDescs = Vertex::getBindingDescriptions();
+    auto attributeDescs = Vertex::getAttributeDescriptions();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDesc;
+    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());
+    vertexInputInfo.pVertexBindingDescriptions = bindingDescs.data();
     vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescs.size());
     vertexInputInfo.pVertexAttributeDescriptions = attributeDescs.data();
 
@@ -663,10 +701,261 @@ bool GBufferPass::createPipeline() {
     VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
                                                 nullptr, &m_pipeline);
 
+    if (result != VK_SUCCESS) {
+        vkDestroyShaderModule(m_device, vertShader, nullptr);
+        vkDestroyShaderModule(m_device, fragShader, nullptr);
+        return false;
+    }
+
+    // Create wireframe pipeline variant
+    rasterizer.polygonMode = VK_POLYGON_MODE_LINE;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+
+    result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                       nullptr, &m_wireframePipeline);
+
+    vkDestroyShaderModule(m_device, vertShader, nullptr);
+    vkDestroyShaderModule(m_device, fragShader, nullptr);
+
+    // Wireframe pipeline is optional - don't fail if it doesn't create
+    // (e.g., if wideLines feature isn't supported)
+    return true;
+}
+
+bool GBufferPass::createBoneMatrixResources() {
+    // Create bone matrix UBO buffer (host-visible for fast updates)
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = sizeof(BoneMatrixUBO);
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_boneMatrixBuffer) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(m_device, m_boneMatrixBuffer, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_boneMatrixMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindBufferMemory(m_device, m_boneMatrixBuffer, m_boneMatrixMemory, 0);
+    vkMapMemory(m_device, m_boneMatrixMemory, 0, sizeof(BoneMatrixUBO), 0, &m_boneMatrixMapped);
+
+    // Initialize with identity matrices
+    BoneMatrixUBO initialData{};
+    for (uint32_t i = 0; i < MAX_BONES; ++i) {
+        initialData.boneMatrices[i] = glm::mat4(1.0f);
+    }
+    initialData.boneCount = 0;
+    memcpy(m_boneMatrixMapped, &initialData, sizeof(BoneMatrixUBO));
+
+    // Create descriptor set layout for bone matrices
+    VkDescriptorSetLayoutBinding boneBinding{};
+    boneBinding.binding = 0;
+    boneBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    boneBinding.descriptorCount = 1;
+    boneBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    boneBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &boneBinding;
+
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_boneDescriptorLayout) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Create descriptor pool for bone matrix set
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 1;
+
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_boneDescriptorPool) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Allocate bone descriptor set
+    VkDescriptorSetAllocateInfo dsAllocInfo{};
+    dsAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsAllocInfo.descriptorPool = m_boneDescriptorPool;
+    dsAllocInfo.descriptorSetCount = 1;
+    dsAllocInfo.pSetLayouts = &m_boneDescriptorLayout;
+
+    if (vkAllocateDescriptorSets(m_device, &dsAllocInfo, &m_boneDescriptorSet) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Write descriptor
+    VkDescriptorBufferInfo boneBufferInfo{};
+    boneBufferInfo.buffer = m_boneMatrixBuffer;
+    boneBufferInfo.offset = 0;
+    boneBufferInfo.range = sizeof(BoneMatrixUBO);
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_boneDescriptorSet;
+    write.dstBinding = 0;
+    write.dstArrayElement = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    write.descriptorCount = 1;
+    write.pBufferInfo = &boneBufferInfo;
+
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+
+    return true;
+}
+
+bool GBufferPass::createSkinnedPipeline() {
+    // Load skinned vertex shader + same fragment shader
+    VkShaderModule vertShader = loadShaderModule("core_gbuffer_skinned.vert.spv");
+    VkShaderModule fragShader = loadShaderModule("core_gbuffer.frag.spv");
+
+    if (vertShader == VK_NULL_HANDLE || fragShader == VK_NULL_HANDLE) {
+        if (vertShader != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, vertShader, nullptr);
+        if (fragShader != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, fragShader, nullptr);
+        return false;
+    }
+
+    std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].module = vertShader;
+    shaderStages[0].pName = "main";
+
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shaderStages[1].module = fragShader;
+    shaderStages[1].pName = "main";
+
+    auto bindingDescs = Vertex::getBindingDescriptions();
+    auto attributeDescs = Vertex::getAttributeDescriptions();
+
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());
+    vertexInputInfo.pVertexBindingDescriptions = bindingDescs.data();
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescs.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescs.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+
+    std::array<VkPipelineColorBlendAttachmentState, 4> colorBlendAttachments{};
+    for (auto& att : colorBlendAttachments) {
+        att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        att.blendEnable = VK_FALSE;
+    }
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
+    colorBlending.pAttachments = colorBlendAttachments.data();
+
+    std::array<VkDynamicState, 2> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+    dynamicState.pDynamicStates = dynamicStates.data();
+
+    // Push constants (same as static pipeline)
+    VkPushConstantRange pushConstant{};
+    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(GBufferUBO);
+
+    // Skinned pipeline layout includes the bone descriptor set (set 0)
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_boneDescriptorLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
+
+    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_skinnedPipelineLayout) != VK_SUCCESS) {
+        vkDestroyShaderModule(m_device, vertShader, nullptr);
+        vkDestroyShaderModule(m_device, fragShader, nullptr);
+        return false;
+    }
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+    pipelineInfo.pStages = shaderStages.data();
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = m_skinnedPipelineLayout;
+    pipelineInfo.renderPass = m_renderPass;
+    pipelineInfo.subpass = 0;
+
+    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                                nullptr, &m_skinnedPipeline);
+
     vkDestroyShaderModule(m_device, vertShader, nullptr);
     vkDestroyShaderModule(m_device, fragShader, nullptr);
 
     return result == VK_SUCCESS;
+}
+
+void GBufferPass::uploadBoneMatrices(const std::vector<glm::mat4>& matrices) {
+    if (!m_boneMatrixMapped || matrices.empty()) return;
+
+    BoneMatrixUBO ubo{};
+    ubo.boneCount = std::min(static_cast<int>(matrices.size()), static_cast<int>(MAX_BONES));
+    for (int i = 0; i < ubo.boneCount; ++i) {
+        ubo.boneMatrices[i] = matrices[i];
+    }
+    // Fill remaining with identity
+    for (int i = ubo.boneCount; i < static_cast<int>(MAX_BONES); ++i) {
+        ubo.boneMatrices[i] = glm::mat4(1.0f);
+    }
+    memcpy(m_boneMatrixMapped, &ubo, sizeof(BoneMatrixUBO));
 }
 
 } // namespace ohao
