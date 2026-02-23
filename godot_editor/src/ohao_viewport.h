@@ -10,6 +10,12 @@
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/node3d.hpp>
 
+#include "audio_manager.h"
+#include "camera_controller.h"
+#include "render_settings.h"
+#include "scene_sync.h"
+#include "selection_controller.h"
+
 // Forward declare OHAO types
 namespace ohao {
     class OffscreenRenderer;
@@ -23,36 +29,25 @@ namespace ohao {
 namespace godot {
 
 /**
- * OhaoViewport - Control that renders using OHAO's Vulkan AAA renderer
+ * OhaoViewport - Thin orchestrator for OHAO's Vulkan renderer in Godot
  *
- * This node renders the scene using OHAO's custom Vulkan pipeline
- * and displays the result as a texture in Godot's UI.
+ * Delegates to focused sub-objects:
+ *   CameraController    - FPS/Orbit camera, input handling
+ *   RenderSettings      - Post-processing configuration
+ *   SceneSync           - Godot <-> OHAO scene bridge
+ *   SelectionController - Object picking and selection
  *
- * Now with full AAA renderer support:
- * - Deferred rendering with G-Buffer
- * - Cascaded Shadow Maps (CSM)
- * - SSAO, SSR, Volumetrics
- * - Bloom, TAA, Motion Blur, DoF
- * - HDR with tonemapping
- *
- * Camera controls:
- * - FPS mode: Right-click + drag to look, WASD to move, Shift for fast
- * - Orbit mode: Right-click + drag to orbit, scroll to zoom, middle-click to pan
+ * GDScript bindings remain here for Godot's ClassDB registration,
+ * but each method delegates to the appropriate sub-object.
  */
 class OhaoViewport : public Control {
     GDCLASS(OhaoViewport, Control)
-
-public:
-    enum CameraMode {
-        CAMERA_FPS = 0,
-        CAMERA_ORBIT = 1,
-    };
 
 private:
     bool m_initialized = false;
     bool m_render_enabled = true;
 
-    // OHAO offscreen renderer
+    // OHAO renderer & scene (owned)
     ohao::OffscreenRenderer* m_renderer = nullptr;
     ohao::Scene* m_scene = nullptr;
 
@@ -64,98 +59,20 @@ private:
     int m_width = 800;
     int m_height = 600;
 
-    // Camera controls state
-    bool m_mouse_captured = false;
-    float m_mouse_sensitivity = 0.3f;
-    float m_move_speed = 5.0f;
-    float m_fast_move_multiplier = 2.5f;
+    // === Sub-objects (composition) ===
+    AudioManager m_audio;
+    CameraController m_camera;
+    RenderSettings m_render_settings;
+    SceneSync m_scene_sync;
+    SelectionController m_selection;
 
-    // Movement state
-    bool m_move_forward = false;
-    bool m_move_backward = false;
-    bool m_move_left = false;
-    bool m_move_right = false;
-    bool m_move_up = false;
-    bool m_move_down = false;
-    bool m_move_fast = false;
-
-    // Rotation state (arrow keys)
-    bool m_rotate_up = false;
-    bool m_rotate_down = false;
-    bool m_rotate_left = false;
-    bool m_rotate_right = false;
-    float m_rotation_speed = 90.0f;  // degrees per second
-
-    // === Camera Mode ===
-    CameraMode m_camera_mode = CAMERA_FPS;
-
-    // Orbit camera state
-    float m_orbit_distance = 10.0f;
-    float m_orbit_yaw = 0.0f;
-    float m_orbit_pitch = 30.0f;  // degrees
-    float m_orbit_target_x = 0.0f;
-    float m_orbit_target_y = 0.0f;
-    float m_orbit_target_z = 0.0f;
-    bool m_middle_mouse_captured = false;
-
-    // Right-click context menu detection
-    Vector2 m_right_click_start;
-    bool m_right_click_dragged = false;
-
-    // === Picking & Selection ===
-    ohao::Actor* m_selected_actor = nullptr;
-    String m_selected_actor_name;
-
-    // === AAA Render Settings ===
-    int m_render_mode = 0;  // Default to Forward until deferred output is integrated (0=Forward, 1=Deferred)
-
-    // Post-processing toggles
-    bool m_bloom_enabled = true;
-    bool m_taa_enabled = true;
-    bool m_ssao_enabled = true;
-    bool m_ssr_enabled = false;  // More expensive, off by default
-    bool m_volumetrics_enabled = false;  // Off by default
-    bool m_motion_blur_enabled = false;  // Off by default
-    bool m_dof_enabled = false;  // Off by default
-    bool m_tonemapping_enabled = true;
-
-    // Tonemapping settings
-    int m_tonemap_operator = 0;  // ACES
-    float m_exposure = 1.0f;
-    float m_gamma = 2.2f;
-
-    // Bloom settings
-    float m_bloom_threshold = 1.0f;
-    float m_bloom_intensity = 0.5f;
-
-    // SSAO settings
-    float m_ssao_radius = 0.5f;
-    float m_ssao_intensity = 1.0f;
-
-    // SSR settings
-    float m_ssr_max_distance = 100.0f;
-    float m_ssr_thickness = 0.5f;
-
-    // Volumetric settings
-    float m_volumetric_density = 0.02f;
-    float m_volumetric_scattering = 0.8f;
-    Color m_fog_color = Color(0.7f, 0.8f, 1.0f);
-
-    // Motion blur settings
-    float m_motion_blur_intensity = 1.0f;
-    int m_motion_blur_samples = 16;
-
-    // DoF settings
-    float m_dof_focus_distance = 5.0f;
-    float m_dof_aperture = 2.8f;
-    float m_dof_max_blur = 8.0f;
-
-    // TAA settings
-    float m_taa_blend_factor = 0.1f;
-
-    // === Physics State ===
+    // === Physics State (small, stays here) ===
     bool m_physics_playing = false;
     float m_physics_speed = 1.0f;
+
+    // === Input Mode (EDITOR vs GAME) ===
+    bool m_game_mode = false;
+    bool m_picking_enabled = true;
 
     // === Wireframe Mode ===
     bool m_wireframe_enabled = false;
@@ -164,8 +81,8 @@ private:
     bool m_grid_enabled = true;
 
     // === Gizmo State ===
-    int m_gizmo_mode = 0;  // 0=Translate, 1=Rotate, 2=Scale
-    bool m_gizmo_enabled = true;  // Show gizmos when an object is selected
+    int m_gizmo_mode = 0;
+    bool m_gizmo_enabled = true;
 
 protected:
     static void _bind_methods();
@@ -181,12 +98,6 @@ public:
     void _notification(int p_what);
     void _gui_input(const Ref<InputEvent>& p_event) override;
 
-    // Camera control helpers
-    void handle_mouse_motion(const Ref<InputEventMouseMotion>& event);
-    void handle_mouse_button(const Ref<InputEventMouseButton>& event);
-    void handle_key(const Ref<InputEventKey>& event);
-    void update_camera_movement(double delta);
-
     // OHAO Engine control
     void initialize_renderer();
     void shutdown_renderer();
@@ -201,148 +112,124 @@ public:
     void set_render_enabled(bool enabled);
     bool get_render_enabled() const { return m_render_enabled; }
 
-    // Scene management
+    // Scene management (delegates to SceneSync)
     void load_tscn(const String& path);
     void sync_scene();
     void clear_scene();
-
-    // Sync from Godot scene tree
     void sync_from_godot(Node* root_node);
-    int get_synced_object_count() const { return m_synced_object_count; }
+    int get_synced_object_count() const { return m_scene_sync.getSyncedObjectCount(); }
 
-private:
-    void traverse_and_sync(Node* node);
-    void count_syncable_objects(Node* node);
-    int m_synced_object_count = 0;
-
-    // Apply current render settings to the deferred renderer
-    void apply_render_settings();
-
-public:
-
-    // Scene building from GDScript
+    // Scene building from GDScript (delegates to SceneSync)
     void add_cube(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color);
     void add_sphere(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color);
     void add_plane(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color);
     void add_cylinder(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color);
     void add_directional_light(const String& name, const Vector3& position, const Vector3& direction, const Color& color, float intensity);
     void add_point_light(const String& name, const Vector3& position, const Color& color, float intensity, float range);
-
-    // Call after adding objects to rebuild buffers
     void finish_sync();
 
     // Size
     void set_viewport_size(int width, int height);
     Vector2i get_viewport_size() const { return Vector2i(m_width, m_height); }
 
-    // Camera controls
-    void set_mouse_sensitivity(float sensitivity) { m_mouse_sensitivity = sensitivity; }
-    float get_mouse_sensitivity() const { return m_mouse_sensitivity; }
-    void set_move_speed(float speed) { m_move_speed = speed; }
-    float get_move_speed() const { return m_move_speed; }
-
-    // === AAA Render Mode ===
-    void set_render_mode(int mode);
-    int get_render_mode() const { return m_render_mode; }
-
-    // === Post-Processing Toggles ===
-    void set_bloom_enabled(bool enabled);
-    bool get_bloom_enabled() const { return m_bloom_enabled; }
-
-    void set_taa_enabled(bool enabled);
-    bool get_taa_enabled() const { return m_taa_enabled; }
-
-    void set_ssao_enabled(bool enabled);
-    bool get_ssao_enabled() const { return m_ssao_enabled; }
-
-    void set_ssr_enabled(bool enabled);
-    bool get_ssr_enabled() const { return m_ssr_enabled; }
-
-    void set_volumetrics_enabled(bool enabled);
-    bool get_volumetrics_enabled() const { return m_volumetrics_enabled; }
-
-    void set_motion_blur_enabled(bool enabled);
-    bool get_motion_blur_enabled() const { return m_motion_blur_enabled; }
-
-    void set_dof_enabled(bool enabled);
-    bool get_dof_enabled() const { return m_dof_enabled; }
-
-    void set_tonemapping_enabled(bool enabled);
-    bool get_tonemapping_enabled() const { return m_tonemapping_enabled; }
-
-    // === Tonemapping Settings ===
-    void set_tonemap_operator(int op);
-    int get_tonemap_operator() const { return m_tonemap_operator; }
-
-    void set_exposure(float exposure);
-    float get_exposure() const { return m_exposure; }
-
-    void set_gamma(float gamma);
-    float get_gamma() const { return m_gamma; }
-
-    // === Bloom Settings ===
-    void set_bloom_threshold(float threshold);
-    float get_bloom_threshold() const { return m_bloom_threshold; }
-
-    void set_bloom_intensity(float intensity);
-    float get_bloom_intensity() const { return m_bloom_intensity; }
-
-    // === SSAO Settings ===
-    void set_ssao_radius(float radius);
-    float get_ssao_radius() const { return m_ssao_radius; }
-
-    void set_ssao_intensity(float intensity);
-    float get_ssao_intensity() const { return m_ssao_intensity; }
-
-    // === SSR Settings ===
-    void set_ssr_max_distance(float dist);
-    float get_ssr_max_distance() const { return m_ssr_max_distance; }
-
-    void set_ssr_thickness(float thickness);
-    float get_ssr_thickness() const { return m_ssr_thickness; }
-
-    // === Volumetric Settings ===
-    void set_volumetric_density(float density);
-    float get_volumetric_density() const { return m_volumetric_density; }
-
-    void set_volumetric_scattering(float g);
-    float get_volumetric_scattering() const { return m_volumetric_scattering; }
-
-    void set_fog_color(const Color& color);
-    Color get_fog_color() const { return m_fog_color; }
-
-    // === Motion Blur Settings ===
-    void set_motion_blur_intensity(float intensity);
-    float get_motion_blur_intensity() const { return m_motion_blur_intensity; }
-
-    void set_motion_blur_samples(int samples);
-    int get_motion_blur_samples() const { return m_motion_blur_samples; }
-
-    // === DoF Settings ===
-    void set_dof_focus_distance(float distance);
-    float get_dof_focus_distance() const { return m_dof_focus_distance; }
-
-    void set_dof_aperture(float aperture);
-    float get_dof_aperture() const { return m_dof_aperture; }
-
-    void set_dof_max_blur(float blur);
-    float get_dof_max_blur() const { return m_dof_max_blur; }
-
-    // === TAA Settings ===
-    void set_taa_blend_factor(float factor);
-    float get_taa_blend_factor() const { return m_taa_blend_factor; }
-
-    // === Camera Mode ===
+    // Camera controls (delegates to CameraController)
+    void set_mouse_sensitivity(float sensitivity) { m_camera.setMouseSensitivity(sensitivity); }
+    float get_mouse_sensitivity() const { return m_camera.getMouseSensitivity(); }
+    void set_move_speed(float speed) { m_camera.setMoveSpeed(speed); }
+    float get_move_speed() const { return m_camera.getMoveSpeed(); }
     void set_camera_mode(int mode);
-    int get_camera_mode() const { return static_cast<int>(m_camera_mode); }
-
-    // Orbit camera helpers
-    void update_orbit_camera();
+    int get_camera_mode() const { return m_camera.getMode(); }
     void focus_on_scene();
 
-    // === Picking ===
+    // Camera position/rotation for game mode (GDScript drives camera)
+    void set_camera_position(const Vector3& pos);
+    Vector3 get_camera_position() const;
+    void set_camera_rotation_deg(float pitch, float yaw);
+    Vector3 get_camera_forward() const;
+
+    // Input mode (EDITOR=0, GAME=1)
+    void set_input_mode(int mode);
+    int get_input_mode() const { return m_game_mode ? 1 : 0; }
+
+    // Picking (delegates to SelectionController)
     void pick_object_at(const Vector2& screen_pos);
-    String get_selected_actor_name() const { return m_selected_actor_name; }
+    String get_selected_actor_name() const { return m_selection.getSelectedActorName(); }
+    void set_picking_enabled(bool enabled) { m_picking_enabled = enabled; }
+    bool get_picking_enabled() const { return m_picking_enabled; }
+
+    // === AAA Render Settings (delegates to RenderSettings) ===
+    void set_render_mode(int mode);
+    int get_render_mode() const { return m_render_settings.getRenderMode(); }
+
+    // Post-processing toggles
+    void set_bloom_enabled(bool enabled);
+    bool get_bloom_enabled() const { return m_render_settings.getBloomEnabled(); }
+    void set_taa_enabled(bool enabled);
+    bool get_taa_enabled() const { return m_render_settings.getTAAEnabled(); }
+    void set_ssao_enabled(bool enabled);
+    bool get_ssao_enabled() const { return m_render_settings.getSSAOEnabled(); }
+    void set_ssr_enabled(bool enabled);
+    bool get_ssr_enabled() const { return m_render_settings.getSSREnabled(); }
+    void set_volumetrics_enabled(bool enabled);
+    bool get_volumetrics_enabled() const { return m_render_settings.getVolumetricsEnabled(); }
+    void set_motion_blur_enabled(bool enabled);
+    bool get_motion_blur_enabled() const { return m_render_settings.getMotionBlurEnabled(); }
+    void set_dof_enabled(bool enabled);
+    bool get_dof_enabled() const { return m_render_settings.getDoFEnabled(); }
+    void set_tonemapping_enabled(bool enabled);
+    bool get_tonemapping_enabled() const { return m_render_settings.getTonemappingEnabled(); }
+
+    // Tonemapping settings
+    void set_tonemap_operator(int op);
+    int get_tonemap_operator() const { return m_render_settings.getTonemapOperator(); }
+    void set_exposure(float exposure);
+    float get_exposure() const { return m_render_settings.getExposure(); }
+    void set_gamma(float gamma);
+    float get_gamma() const { return m_render_settings.getGamma(); }
+
+    // Bloom settings
+    void set_bloom_threshold(float threshold);
+    float get_bloom_threshold() const { return m_render_settings.getBloomThreshold(); }
+    void set_bloom_intensity(float intensity);
+    float get_bloom_intensity() const { return m_render_settings.getBloomIntensity(); }
+
+    // SSAO settings
+    void set_ssao_radius(float radius);
+    float get_ssao_radius() const { return m_render_settings.getSSAORadius(); }
+    void set_ssao_intensity(float intensity);
+    float get_ssao_intensity() const { return m_render_settings.getSSAOIntensity(); }
+
+    // SSR settings
+    void set_ssr_max_distance(float dist);
+    float get_ssr_max_distance() const { return m_render_settings.getSSRMaxDistance(); }
+    void set_ssr_thickness(float thickness);
+    float get_ssr_thickness() const { return m_render_settings.getSSRThickness(); }
+
+    // Volumetric settings
+    void set_volumetric_density(float density);
+    float get_volumetric_density() const { return m_render_settings.getVolumetricDensity(); }
+    void set_volumetric_scattering(float g);
+    float get_volumetric_scattering() const { return m_render_settings.getVolumetricScattering(); }
+    void set_fog_color(const Color& color);
+    Color get_fog_color() const;
+
+    // Motion blur settings
+    void set_motion_blur_intensity(float intensity);
+    float get_motion_blur_intensity() const { return m_render_settings.getMotionBlurIntensity(); }
+    void set_motion_blur_samples(int samples);
+    int get_motion_blur_samples() const { return m_render_settings.getMotionBlurSamples(); }
+
+    // DoF settings
+    void set_dof_focus_distance(float distance);
+    float get_dof_focus_distance() const { return m_render_settings.getDoFFocusDistance(); }
+    void set_dof_aperture(float aperture);
+    float get_dof_aperture() const { return m_render_settings.getDoFAperture(); }
+    void set_dof_max_blur(float blur);
+    float get_dof_max_blur() const { return m_render_settings.getDoFMaxBlur(); }
+
+    // TAA settings
+    void set_taa_blend_factor(float factor);
+    float get_taa_blend_factor() const { return m_render_settings.getTAABlendFactor(); }
 
     // === Physics Controls ===
     void play_physics();
@@ -374,8 +261,30 @@ public:
     void spawn_particles(const Vector3& position, int type);
     void spawn_particles_directed(const Vector3& position, int type, const Vector3& direction);
 
+    // === Texture / Material API ===
+    void set_actor_texture(const String& actor_name, const String& texture_path);
+    void set_actor_normal_map(const String& actor_name, const String& normal_path);
+    void set_actor_pbr(const String& actor_name, float metallic, float roughness);
+    void set_actor_material_preset(const String& actor_name, const String& preset_name);
+
+    // === Audio ===
+    int play_sound(const String& path, int category, bool loop, float volume);
+    int play_sound_at(const String& path, const Vector3& position, int category, bool loop, float volume);
+    void stop_sound(int handle);
+    void pause_sound(int handle);
+    void resume_sound(int handle);
+    void set_sound_volume(int handle, float volume);
+    void set_sound_position(int handle, const Vector3& position);
+    void set_category_volume(int category, float volume);
+    float get_category_volume(int category) const;
+    void stop_category(int category);
+    void pause_category(int category);
+    void resume_category(int category);
+    void set_master_volume(float volume);
+    float get_master_volume() const;
+    void stop_all_sounds();
+
     // === Utility ===
-    // Get current renderer stats (for debug display)
     Dictionary get_render_stats() const;
 };
 

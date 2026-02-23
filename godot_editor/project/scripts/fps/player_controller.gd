@@ -57,11 +57,6 @@ func _ready() -> void:
 		push_warning("PlayerController: No OhaoViewport found in parent tree")
 		return
 
-	# Configure viewport for FPS mode
-	ohao_viewport.set_camera_mode(0)  # CAMERA_FPS
-	ohao_viewport.set_mouse_sensitivity(mouse_sensitivity)
-	ohao_viewport.set_move_speed(move_speed)
-
 	# Find physics body child
 	for child in get_children():
 		if child is OhaoPhysicsBody:
@@ -148,13 +143,11 @@ func _physics_process(delta: float) -> void:
 		velocity.y = jump_impulse
 		is_on_ground = false
 
-	# Apply velocity to physics body
+	# Direct position integration (OHAO kinematic bodies don't auto-sync back)
+	global_position += velocity * delta
+	# Inform physics body of velocity for collision queries
 	if physics_body:
 		physics_body.set_linear_velocity(velocity)
-
-	# Update position from physics
-	if physics_body:
-		global_position = physics_body.global_position
 
 	# Ground check (simple - assume on ground if Y velocity is near zero at low height)
 	# A proper implementation would use a raycast or collision callback
@@ -170,10 +163,6 @@ func _physics_process(delta: float) -> void:
 		# Would apply to camera offset if we had direct camera node access
 	else:
 		headbob_time = 0.0
-
-	# Update viewport move speed for OHAO's internal camera
-	if ohao_viewport:
-		ohao_viewport.set_move_speed(current_speed)
 
 func take_damage(amount: float, from_direction: Vector3 = Vector3.ZERO) -> void:
 	if not is_alive:

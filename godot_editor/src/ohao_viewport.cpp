@@ -7,21 +7,8 @@
 #include <godot_cpp/classes/input.hpp>
 #include <godot_cpp/classes/font.hpp>
 
-// Godot 3D node types for scene sync
-#include <godot_cpp/classes/mesh_instance3d.hpp>
-#include <godot_cpp/classes/box_mesh.hpp>
-#include <godot_cpp/classes/sphere_mesh.hpp>
-#include <godot_cpp/classes/cylinder_mesh.hpp>
-#include <godot_cpp/classes/plane_mesh.hpp>
-#include <godot_cpp/classes/capsule_mesh.hpp>
-#include <godot_cpp/classes/primitive_mesh.hpp>
-#include <godot_cpp/classes/directional_light3d.hpp>
-#include <godot_cpp/classes/omni_light3d.hpp>
-#include <godot_cpp/classes/spot_light3d.hpp>
-#include <godot_cpp/classes/camera3d.hpp>
-#include <godot_cpp/classes/standard_material3d.hpp>
-
 // Include OHAO headers
+#include "physics/world/physics_world.hpp"
 #include "renderer/offscreen/offscreen_renderer.hpp"
 #include "renderer/camera/camera.hpp"
 #include "renderer/passes/deferred_renderer.hpp"
@@ -29,15 +16,11 @@
 #include "renderer/picking/picking_system.hpp"
 #include "renderer/picking/ray.hpp"
 #include "engine/scene/scene.hpp"
-#include "engine/scene/loader/tscn_loader.hpp"
 #include "engine/actor/actor.hpp"
-#include "engine/component/component_factory.hpp"
-#include "renderer/components/mesh_component.hpp"
-#include "renderer/components/light_component.hpp"
-#include "renderer/components/material_component.hpp"
-#include "physics/world/physics_world.hpp"
 #include "engine/asset/model.hpp"
 #include "renderer/gizmo/gizmo_meshes.hpp"
+#include "renderer/material/bindless_texture_manager.hpp"
+#include "renderer/components/material_component.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -45,6 +28,8 @@
 #include <cfloat>
 
 namespace godot {
+
+// ===== GDScript Bindings =====
 
 void OhaoViewport::_bind_methods() {
     // === Core Methods ===
@@ -225,8 +210,24 @@ void OhaoViewport::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "camera_mode", PROPERTY_HINT_ENUM, "FPS,Orbit"), "set_camera_mode", "get_camera_mode");
 
     ClassDB::bind_method(D_METHOD("focus_on_scene"), &OhaoViewport::focus_on_scene);
+
+    // Camera position/rotation (game mode - GDScript drives camera)
+    ClassDB::bind_method(D_METHOD("set_camera_position", "position"), &OhaoViewport::set_camera_position);
+    ClassDB::bind_method(D_METHOD("get_camera_position"), &OhaoViewport::get_camera_position);
+    ClassDB::bind_method(D_METHOD("set_camera_rotation_deg", "pitch", "yaw"), &OhaoViewport::set_camera_rotation_deg);
+    ClassDB::bind_method(D_METHOD("get_camera_forward"), &OhaoViewport::get_camera_forward);
+
+    // === Input Mode ===
+    ClassDB::bind_method(D_METHOD("set_input_mode", "mode"), &OhaoViewport::set_input_mode);
+    ClassDB::bind_method(D_METHOD("get_input_mode"), &OhaoViewport::get_input_mode);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "input_mode", PROPERTY_HINT_ENUM, "Editor,Game"),
+        "set_input_mode", "get_input_mode");
+
     ClassDB::bind_method(D_METHOD("pick_object_at", "screen_pos"), &OhaoViewport::pick_object_at);
     ClassDB::bind_method(D_METHOD("get_selected_actor_name"), &OhaoViewport::get_selected_actor_name);
+    ClassDB::bind_method(D_METHOD("set_picking_enabled", "enabled"), &OhaoViewport::set_picking_enabled);
+    ClassDB::bind_method(D_METHOD("get_picking_enabled"), &OhaoViewport::get_picking_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "picking_enabled"), "set_picking_enabled", "get_picking_enabled");
 
     // === Physics Controls ===
     ADD_GROUP("Physics", "physics_");
@@ -255,6 +256,13 @@ void OhaoViewport::_bind_methods() {
     // === Model Import ===
     ClassDB::bind_method(D_METHOD("import_model", "path"), &OhaoViewport::import_model);
 
+    // === Texture / Material API ===
+    ADD_GROUP("Materials", "");
+    ClassDB::bind_method(D_METHOD("set_actor_texture", "actor_name", "texture_path"), &OhaoViewport::set_actor_texture);
+    ClassDB::bind_method(D_METHOD("set_actor_normal_map", "actor_name", "normal_path"), &OhaoViewport::set_actor_normal_map);
+    ClassDB::bind_method(D_METHOD("set_actor_pbr", "actor_name", "metallic", "roughness"), &OhaoViewport::set_actor_pbr);
+    ClassDB::bind_method(D_METHOD("set_actor_material_preset", "actor_name", "preset_name"), &OhaoViewport::set_actor_material_preset);
+
     // === Particles ===
     ClassDB::bind_method(D_METHOD("spawn_particles", "position", "type"), &OhaoViewport::spawn_particles);
     ClassDB::bind_method(D_METHOD("spawn_particles_directed", "position", "type", "direction"), &OhaoViewport::spawn_particles_directed);
@@ -270,10 +278,32 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_gizmo_enabled"), &OhaoViewport::get_gizmo_enabled);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gizmo_enabled"), "set_gizmo_enabled", "get_gizmo_enabled");
 
+    // === Audio ===
+    ADD_GROUP("Audio", "audio_");
+
+    ClassDB::bind_method(D_METHOD("play_sound", "path", "category", "loop", "volume"), &OhaoViewport::play_sound, DEFVAL(0), DEFVAL(false), DEFVAL(1.0f));
+    ClassDB::bind_method(D_METHOD("play_sound_at", "path", "position", "category", "loop", "volume"), &OhaoViewport::play_sound_at, DEFVAL(0), DEFVAL(false), DEFVAL(1.0f));
+    ClassDB::bind_method(D_METHOD("stop_sound", "handle"), &OhaoViewport::stop_sound);
+    ClassDB::bind_method(D_METHOD("pause_sound", "handle"), &OhaoViewport::pause_sound);
+    ClassDB::bind_method(D_METHOD("resume_sound", "handle"), &OhaoViewport::resume_sound);
+    ClassDB::bind_method(D_METHOD("set_sound_volume", "handle", "volume"), &OhaoViewport::set_sound_volume);
+    ClassDB::bind_method(D_METHOD("set_sound_position", "handle", "position"), &OhaoViewport::set_sound_position);
+    ClassDB::bind_method(D_METHOD("set_category_volume", "category", "volume"), &OhaoViewport::set_category_volume);
+    ClassDB::bind_method(D_METHOD("get_category_volume", "category"), &OhaoViewport::get_category_volume);
+    ClassDB::bind_method(D_METHOD("stop_category", "category"), &OhaoViewport::stop_category);
+    ClassDB::bind_method(D_METHOD("pause_category", "category"), &OhaoViewport::pause_category);
+    ClassDB::bind_method(D_METHOD("resume_category", "category"), &OhaoViewport::resume_category);
+    ClassDB::bind_method(D_METHOD("set_master_volume", "volume"), &OhaoViewport::set_master_volume);
+    ClassDB::bind_method(D_METHOD("get_master_volume"), &OhaoViewport::get_master_volume);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "audio_master_volume", PROPERTY_HINT_RANGE, "0.0,1.0,0.05"), "set_master_volume", "get_master_volume");
+    ClassDB::bind_method(D_METHOD("stop_all_sounds"), &OhaoViewport::stop_all_sounds);
+
     // Signals
     ADD_SIGNAL(MethodInfo("actor_selected", PropertyInfo(Variant::STRING, "name")));
     ADD_SIGNAL(MethodInfo("right_click_menu", PropertyInfo(Variant::VECTOR2, "position")));
 }
+
+// ===== Lifecycle =====
 
 OhaoViewport::OhaoViewport() {
     UtilityFunctions::print("[OHAO] AAA Viewport created");
@@ -286,7 +316,6 @@ OhaoViewport::~OhaoViewport() {
 void OhaoViewport::_notification(int p_what) {
     switch (p_what) {
         case NOTIFICATION_RESIZED:
-            // Update renderer size when control is resized
             if (m_initialized) {
                 Vector2 size = get_size();
                 if (size.x > 0 && size.y > 0) {
@@ -300,16 +329,13 @@ void OhaoViewport::_notification(int p_what) {
 void OhaoViewport::_ready() {
     UtilityFunctions::print("[OHAO] AAA Viewport ready - initializing deferred renderer");
 
-    // Get initial size from control
     Vector2 size = get_size();
     if (size.x > 0 && size.y > 0) {
         m_width = static_cast<int>(size.x);
         m_height = static_cast<int>(size.y);
     }
 
-    // Enable focus for keyboard input
     set_focus_mode(FOCUS_ALL);
-
     initialize_renderer();
 }
 
@@ -318,24 +344,37 @@ void OhaoViewport::_process(double delta) {
         return;
     }
 
-    // Update camera movement based on key state
-    update_camera_movement(delta);
+    // Delegate camera movement (skip in GAME mode — GDScript drives camera)
+    if (!m_game_mode) {
+        m_camera.update(delta, m_renderer->getCamera());
+    }
 
-    // Update physics (only when playing)
+    // Sync audio listener to camera (always, even in GAME mode)
+    m_audio.updateListener(m_renderer->getCamera());
+
+    // Physics
     if (m_physics_playing && m_renderer) {
         m_renderer->updatePhysics(static_cast<float>(delta) * m_physics_speed);
     }
 
-    // Update gizmo transform for selected object
-    if (m_renderer && m_gizmo_enabled && m_selected_actor) {
-        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) {
-            auto transform = m_selected_actor->getTransform();
-            if (transform) {
-                glm::vec3 pos = transform->getPosition();
-                glm::mat4 gizmoModel = glm::translate(glm::mat4(1.0f), pos);
-                deferred->setGizmoTransform(gizmoModel);
-                deferred->setGizmoEnabled(true);
+    // Gizmo transform for selected object (skip in GAME mode)
+    if (!m_game_mode) {
+        ohao::Actor* selected = m_selection.getSelectedActor();
+        if (m_renderer && m_gizmo_enabled && selected) {
+            ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+            if (deferred) {
+                auto transform = selected->getTransform();
+                if (transform) {
+                    glm::vec3 pos = transform->getPosition();
+                    glm::mat4 gizmoModel = glm::translate(glm::mat4(1.0f), pos);
+                    deferred->setGizmoTransform(gizmoModel);
+                    deferred->setGizmoEnabled(true);
+                }
+            }
+        } else if (m_renderer) {
+            ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+            if (deferred) {
+                deferred->setGizmoEnabled(false);
             }
         }
     } else if (m_renderer) {
@@ -345,7 +384,7 @@ void OhaoViewport::_process(double delta) {
         }
     }
 
-    // Set delta time for particle system
+    // Delta time for particle system
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
         if (deferred) {
@@ -357,39 +396,32 @@ void OhaoViewport::_process(double delta) {
     if (m_renderer) {
         m_renderer->render();
 
-        // Update Godot texture with rendered pixels
         const uint8_t* pixels = m_renderer->getPixels();
         if (pixels && m_image.is_valid()) {
-            // Create PackedByteArray from pixels
             PackedByteArray data;
             data.resize(m_width * m_height * 4);
             memcpy(data.ptrw(), pixels, m_width * m_height * 4);
-
-            // Update image
             m_image->set_data(m_width, m_height, false, Image::FORMAT_RGBA8, data);
-
-            // Update texture
             if (m_texture.is_valid()) {
                 m_texture->update(m_image);
             }
         }
-
-        // Request redraw
         queue_redraw();
     }
 }
 
 void OhaoViewport::_draw() {
     if (!m_initialized || !m_texture.is_valid()) {
-        // Draw placeholder
         draw_rect(Rect2(0, 0, get_size().x, get_size().y), Color(0.1, 0.1, 0.12, 1.0));
         return;
     }
 
-    // Draw the rendered texture
     draw_texture(m_texture, Vector2(0, 0));
 
-    // Draw "OHAO Engine" text overlay when scene is empty
+    // Game mode: no editor overlays
+    if (m_game_mode) return;
+
+    // "OHAO Engine" text overlay when scene is empty
     if (!has_scene_meshes()) {
         Ref<Font> font = get_theme_default_font();
         if (font.is_valid()) {
@@ -399,10 +431,10 @@ void OhaoViewport::_draw() {
             Vector2 center = get_size() / 2.0;
             Vector2 text_pos = center - text_size / 2.0;
             text_pos.y += text_size.y / 2.0;
-
             draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(0.6, 0.6, 0.7, 0.8));
 
-            String subtitle = m_render_mode == 1 ? "Deferred Rendering Mode" : "Forward Rendering Mode";
+            int rm = m_render_settings.getRenderMode();
+            String subtitle = rm == 1 ? "Deferred Rendering Mode" : "Forward Rendering Mode";
             int sub_size = 14;
             Vector2 sub_text_size = font->get_string_size(subtitle, HORIZONTAL_ALIGNMENT_CENTER, -1, sub_size);
             Vector2 sub_pos = center - sub_text_size / 2.0;
@@ -417,15 +449,15 @@ void OhaoViewport::_draw() {
         }
     }
 
-    // Draw selection highlight
-    if (m_selected_actor && m_renderer) {
-        auto transform = m_selected_actor->getTransform();
+    // Selection highlight overlay
+    ohao::Actor* selected = m_selection.getSelectedActor();
+    if (selected && m_renderer) {
+        auto transform = selected->getTransform();
         if (transform) {
             ohao::Camera& camera = m_renderer->getCamera();
             glm::mat4 viewProj = camera.getViewProjectionMatrix();
             Vector2 ctrl_size = get_size();
 
-            // Compute the object's world-space transform matrix
             glm::vec3 world_pos = transform->getPosition();
             glm::vec3 scale = transform->getScale();
             glm::quat rotation = transform->getRotation();
@@ -433,11 +465,10 @@ void OhaoViewport::_draw() {
                                    * glm::mat4_cast(rotation)
                                    * glm::scale(glm::mat4(1.0f), scale);
 
-            // Get actual mesh AABB from vertex data
             glm::vec3 local_min(0.0f), local_max(0.0f);
             bool has_mesh_bounds = false;
 
-            auto model = m_selected_actor->getModel();
+            auto model = selected->getModel();
             if (model && !model->vertices.empty()) {
                 local_min = glm::vec3(FLT_MAX);
                 local_max = glm::vec3(-FLT_MAX);
@@ -449,12 +480,10 @@ void OhaoViewport::_draw() {
             }
 
             if (!has_mesh_bounds) {
-                // Fallback: use per-axis scale as half-extents
                 local_min = glm::vec3(-0.5f);
                 local_max = glm::vec3(0.5f);
             }
 
-            // Project center to check visibility
             glm::vec4 center_clip = viewProj * glm::vec4(world_pos, 1.0f);
             if (center_clip.w < 0.001f) goto skip_selection;
 
@@ -462,14 +491,12 @@ void OhaoViewport::_draw() {
                 float min_sx = 1e9f, min_sy = 1e9f, max_sx = -1e9f, max_sy = -1e9f;
                 int valid_count = 0;
 
-                // Project all 8 corners of the actual local-space AABB through the world transform
                 for (int i = 0; i < 8; i++) {
                     glm::vec3 local_corner(
                         (i & 1) ? local_max.x : local_min.x,
                         (i & 2) ? local_max.y : local_min.y,
                         (i & 4) ? local_max.z : local_min.z
                     );
-                    // Transform to world space using the full model matrix
                     glm::vec4 world_corner = world_matrix * glm::vec4(local_corner, 1.0f);
                     glm::vec4 clip = viewProj * world_corner;
                     if (clip.w < 0.001f) continue;
@@ -484,7 +511,6 @@ void OhaoViewport::_draw() {
 
                 if (valid_count < 2) goto skip_selection;
 
-                // Enforce minimum size and add padding
                 float pad = 12.0f;
                 float min_dim = 40.0f;
                 float w = max_sx - min_sx;
@@ -499,57 +525,42 @@ void OhaoViewport::_draw() {
                 float box_w = br.x - tl.x;
                 float box_h = br.y - tl.y;
 
-                // Colors - high contrast orange/yellow
                 Color glow_color(1.0f, 0.6f, 0.0f, 0.25f);
                 Color sel_color(1.0f, 0.7f, 0.1f, 1.0f);
                 Color fill_color(1.0f, 0.7f, 0.1f, 0.06f);
 
-                // Subtle filled background
                 draw_rect(Rect2(tl, br - tl), fill_color, true);
+                draw_rect(Rect2(tl, br - tl), glow_color, false, 5.0f);
 
-                // Glow layer (thicker, semi-transparent)
-                float glow_w = 5.0f;
-                draw_rect(Rect2(tl, br - tl), glow_color, false, glow_w);
-
-                // Crisp bracket corners
                 float line_w = 2.5f;
-                float corner_frac = 0.3f; // 30% of each edge
+                float corner_frac = 0.3f;
                 float cx = box_w * corner_frac;
                 float cy = box_h * corner_frac;
                 float max_corner = 20.0f;
                 if (cx > max_corner) cx = max_corner;
                 if (cy > max_corner) cy = max_corner;
 
-                // Top-left
                 draw_line(tl, Vector2(tl.x + cx, tl.y), sel_color, line_w);
                 draw_line(tl, Vector2(tl.x, tl.y + cy), sel_color, line_w);
-                // Top-right
                 draw_line(Vector2(br.x, tl.y), Vector2(br.x - cx, tl.y), sel_color, line_w);
                 draw_line(Vector2(br.x, tl.y), Vector2(br.x, tl.y + cy), sel_color, line_w);
-                // Bottom-left
                 draw_line(Vector2(tl.x, br.y), Vector2(tl.x + cx, br.y), sel_color, line_w);
                 draw_line(Vector2(tl.x, br.y), Vector2(tl.x, br.y - cy), sel_color, line_w);
-                // Bottom-right
                 draw_line(br, Vector2(br.x - cx, br.y), sel_color, line_w);
                 draw_line(br, Vector2(br.x, br.y - cy), sel_color, line_w);
 
-                // Name label with dark background pill
                 Ref<Font> font = get_theme_default_font();
                 if (font.is_valid()) {
                     int font_size = 14;
-                    String label = m_selected_actor_name;
+                    String label = m_selection.getSelectedActorName();
                     float text_w = font->get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x;
                     float pill_h = font_size + 8.0f;
                     float pill_w = text_w + 16.0f;
                     float pill_x = (tl.x + br.x) * 0.5f - pill_w * 0.5f;
                     float pill_y = tl.y - pill_h - 4.0f;
 
-                    // Dark rounded pill background
-                    Color pill_bg(0.0f, 0.0f, 0.0f, 0.75f);
-                    draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), pill_bg, true);
-                    // Pill border
+                    draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), Color(0.0f, 0.0f, 0.0f, 0.75f), true);
                     draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), sel_color, false, 1.5f);
-                    // Text
                     draw_string(font, Vector2(pill_x + 8.0f, pill_y + font_size + 2.0f), label,
                                HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, sel_color);
                 }
@@ -564,14 +575,79 @@ bool OhaoViewport::has_scene_meshes() const {
     return m_renderer->hasSceneMeshes();
 }
 
-void OhaoViewport::initialize_renderer() {
-    if (m_initialized) {
+// ===== Input =====
+
+void OhaoViewport::_gui_input(const Ref<InputEvent>& p_event) {
+    if (!m_initialized || !m_renderer) {
         return;
     }
 
+    // GAME mode: GDScript handles all input
+    if (m_game_mode) return;
+
+    // Auto-enable always-look in FPS mode when Godot mouse is captured
+    bool godot_captured = Input::get_singleton()->get_mouse_mode() == Input::MOUSE_MODE_CAPTURED;
+    m_camera.setAlwaysLook(m_camera.getMode() == CameraController::FPS && godot_captured);
+
+    // Mouse motion -> camera
+    Ref<InputEventMouseMotion> motion_event = p_event;
+    if (motion_event.is_valid()) {
+        Vector2 relative = motion_event->get_relative();
+        m_camera.handleMouseMotion(relative.x, relative.y, m_renderer->getCamera());
+        return;
+    }
+
+    // Mouse button
+    Ref<InputEventMouseButton> button_event = p_event;
+    if (button_event.is_valid()) {
+        MouseButton button = button_event->get_button_index();
+
+        // Left-click: picking (only when picking is enabled)
+        if (button == MOUSE_BUTTON_LEFT && button_event->is_pressed() && m_picking_enabled) {
+            pick_object_at(button_event->get_position());
+            return;
+        }
+
+        // Everything else: camera
+        bool consumed = m_camera.handleMouseButton(
+            static_cast<int>(button), button_event->is_pressed(),
+            button_event->get_position().x, button_event->get_position().y,
+            m_renderer->getCamera());
+
+        if (consumed) {
+            // Right-click or middle-click needs focus
+            if (button == MOUSE_BUTTON_RIGHT || button == MOUSE_BUTTON_MIDDLE) {
+                if (button_event->is_pressed()) {
+                    grab_focus();
+                }
+            }
+            // Right-click release: check for context menu
+            if (button == MOUSE_BUTTON_RIGHT && !button_event->is_pressed()) {
+                if (!m_camera.wasRightClickDrag()) {
+                    emit_signal("right_click_menu", button_event->get_global_position());
+                }
+            }
+        }
+        return;
+    }
+
+    // Keyboard -> camera
+    Ref<InputEventKey> key_event = p_event;
+    if (key_event.is_valid()) {
+        if (m_camera.handleKey(static_cast<int>(key_event->get_keycode()), key_event->is_pressed())) {
+            accept_event();
+        }
+        return;
+    }
+}
+
+// ===== Renderer Management =====
+
+void OhaoViewport::initialize_renderer() {
+    if (m_initialized) return;
+
     UtilityFunctions::print("[OHAO] Initializing Vulkan AAA renderer...");
 
-    // Create offscreen renderer
     m_renderer = new ohao::OffscreenRenderer(m_width, m_height);
     if (!m_renderer->initialize()) {
         UtilityFunctions::printerr("[OHAO] Failed to initialize renderer!");
@@ -580,35 +656,37 @@ void OhaoViewport::initialize_renderer() {
         return;
     }
 
-    // Set render mode (default to Deferred)
-    m_renderer->setRenderMode(m_render_mode == 1 ? ohao::RenderMode::Deferred : ohao::RenderMode::Forward);
+    int rm = m_render_settings.getRenderMode();
+    m_renderer->setRenderMode(rm == 1 ? ohao::RenderMode::Deferred : ohao::RenderMode::Forward);
 
-    // Create scene
     m_scene = new ohao::Scene("GodotScene");
     m_renderer->setScene(m_scene);
 
-    // Create Godot image and texture
     m_image = Image::create(m_width, m_height, false, Image::FORMAT_RGBA8);
     m_texture = ImageTexture::create_from_image(m_image);
 
     m_initialized = true;
 
-    // Update camera aspect ratio to match viewport
     m_renderer->getCamera().setAspectRatio(static_cast<float>(m_width) / static_cast<float>(m_height));
 
     // Apply initial render settings
-    apply_render_settings();
+    m_render_settings.apply(m_renderer);
+
+    // Initialize audio system
+    std::string soundsPath = SceneSync::resolveResPath(String("res://sounds"));
+    m_audio.initialize(soundsPath);
 
     UtilityFunctions::print("[OHAO] AAA Renderer initialized: ", m_width, "x", m_height,
-                            " Mode: ", m_render_mode == 1 ? "Deferred" : "Forward");
+                            " Mode: ", rm == 1 ? "Deferred" : "Forward");
 }
 
 void OhaoViewport::shutdown_renderer() {
-    if (!m_initialized) {
-        return;
-    }
+    if (!m_initialized) return;
 
     UtilityFunctions::print("[OHAO] Shutting down renderer...");
+
+    // Shutdown audio before renderer
+    m_audio.shutdown();
 
     if (m_renderer) {
         m_renderer->shutdown();
@@ -623,32 +701,25 @@ void OhaoViewport::shutdown_renderer() {
 
     m_image.unref();
     m_texture.unref();
-
     m_initialized = false;
 }
 
 void OhaoViewport::set_render_enabled(bool enabled) {
     m_render_enabled = enabled;
-    if (enabled) {
-        queue_redraw();
-    }
+    if (enabled) queue_redraw();
 }
 
 void OhaoViewport::set_viewport_size(int width, int height) {
-    if (width == m_width && height == m_height) {
-        return;
-    }
+    if (width == m_width && height == m_height) return;
 
     m_width = width;
     m_height = height;
 
     if (m_renderer) {
         m_renderer->resize(width, height);
-        // Update camera aspect ratio to match new viewport dimensions
         m_renderer->getCamera().setAspectRatio(static_cast<float>(width) / static_cast<float>(height));
     }
 
-    // Recreate image and texture
     if (m_initialized) {
         m_image = Image::create(m_width, m_height, false, Image::FORMAT_RGBA8);
         m_texture = ImageTexture::create_from_image(m_image);
@@ -657,211 +728,185 @@ void OhaoViewport::set_viewport_size(int width, int height) {
     UtilityFunctions::print("[OHAO] Viewport resized: ", width, "x", height);
 }
 
-// === AAA Render Settings Implementation ===
-
-void OhaoViewport::apply_render_settings() {
-    if (!m_renderer) return;
-
-    // Get the deferred renderer's post-processing pipeline
-    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-    if (!deferred) return;
-
-    ohao::PostProcessingPipeline* pp = deferred->getPostProcessing();
-    if (!pp) return;
-
-    // Apply all post-processing settings
-    pp->setBloomEnabled(m_bloom_enabled);
-    pp->setTAAEnabled(m_taa_enabled);
-    pp->setSSAOEnabled(m_ssao_enabled);
-    pp->setSSREnabled(m_ssr_enabled);
-    pp->setVolumetricsEnabled(m_volumetrics_enabled);
-    pp->setMotionBlurEnabled(m_motion_blur_enabled);
-    pp->setDoFEnabled(m_dof_enabled);
-    pp->setTonemappingEnabled(m_tonemapping_enabled);
-
-    // Tonemapping
-    pp->setTonemapOperator(static_cast<ohao::TonemapOperator>(m_tonemap_operator));
-    pp->setExposure(m_exposure);
-    pp->setGamma(m_gamma);
-
-    // Bloom
-    pp->setBloomThreshold(m_bloom_threshold);
-    pp->setBloomIntensity(m_bloom_intensity);
-
-    // SSAO
-    pp->setSSAORadius(m_ssao_radius);
-    pp->setSSAOIntensity(m_ssao_intensity);
-
-    // SSR
-    pp->setSSRMaxDistance(m_ssr_max_distance);
-    pp->setSSRThickness(m_ssr_thickness);
-
-    // Volumetrics
-    pp->setVolumetricDensity(m_volumetric_density);
-    pp->setVolumetricScattering(m_volumetric_scattering);
-    pp->setFogColor(glm::vec3(m_fog_color.r, m_fog_color.g, m_fog_color.b));
-
-    // Motion blur
-    pp->setMotionBlurIntensity(m_motion_blur_intensity);
-    pp->setMotionBlurSamples(static_cast<uint32_t>(m_motion_blur_samples));
-
-    // DoF
-    pp->setDoFFocusDistance(m_dof_focus_distance);
-    pp->setDoFAperture(m_dof_aperture);
-    pp->setDoFMaxBlurRadius(m_dof_max_blur);
-
-    // TAA
-    pp->setTAABlendFactor(m_taa_blend_factor);
-}
+// ===== Render Settings (delegates to RenderSettings) =====
 
 void OhaoViewport::set_render_mode(int mode) {
-    m_render_mode = mode;
+    m_render_settings.setRenderMode(mode);
     if (m_renderer) {
         m_renderer->setRenderMode(mode == 1 ? ohao::RenderMode::Deferred : ohao::RenderMode::Forward);
         UtilityFunctions::print("[OHAO] Render mode set to: ", mode == 1 ? "Deferred" : "Forward");
     }
 }
 
-// Post-processing toggles
-void OhaoViewport::set_bloom_enabled(bool enabled) {
-    m_bloom_enabled = enabled;
-    apply_render_settings();
-}
+void OhaoViewport::set_bloom_enabled(bool enabled)        { m_render_settings.setBloomEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_taa_enabled(bool enabled)          { m_render_settings.setTAAEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssao_enabled(bool enabled)         { m_render_settings.setSSAOEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssr_enabled(bool enabled)          { m_render_settings.setSSREnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_volumetrics_enabled(bool enabled)  { m_render_settings.setVolumetricsEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_motion_blur_enabled(bool enabled)  { m_render_settings.setMotionBlurEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_dof_enabled(bool enabled)          { m_render_settings.setDoFEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_tonemapping_enabled(bool enabled)  { m_render_settings.setTonemappingEnabled(enabled); m_render_settings.apply(m_renderer); }
 
-void OhaoViewport::set_taa_enabled(bool enabled) {
-    m_taa_enabled = enabled;
-    apply_render_settings();
-}
+void OhaoViewport::set_tonemap_operator(int op)           { m_render_settings.setTonemapOperator(op); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_exposure(float exposure)            { m_render_settings.setExposure(exposure); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_gamma(float gamma)                  { m_render_settings.setGamma(gamma); m_render_settings.apply(m_renderer); }
 
-void OhaoViewport::set_ssao_enabled(bool enabled) {
-    m_ssao_enabled = enabled;
-    apply_render_settings();
-}
+void OhaoViewport::set_bloom_threshold(float threshold)    { m_render_settings.setBloomThreshold(threshold); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_bloom_intensity(float intensity)    { m_render_settings.setBloomIntensity(intensity); m_render_settings.apply(m_renderer); }
 
-void OhaoViewport::set_ssr_enabled(bool enabled) {
-    m_ssr_enabled = enabled;
-    apply_render_settings();
-}
+void OhaoViewport::set_ssao_radius(float radius)           { m_render_settings.setSSAORadius(radius); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssao_intensity(float intensity)     { m_render_settings.setSSAOIntensity(intensity); m_render_settings.apply(m_renderer); }
 
-void OhaoViewport::set_volumetrics_enabled(bool enabled) {
-    m_volumetrics_enabled = enabled;
-    apply_render_settings();
-}
+void OhaoViewport::set_ssr_max_distance(float dist)        { m_render_settings.setSSRMaxDistance(dist); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssr_thickness(float thickness)      { m_render_settings.setSSRThickness(thickness); m_render_settings.apply(m_renderer); }
 
-void OhaoViewport::set_motion_blur_enabled(bool enabled) {
-    m_motion_blur_enabled = enabled;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_dof_enabled(bool enabled) {
-    m_dof_enabled = enabled;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_tonemapping_enabled(bool enabled) {
-    m_tonemapping_enabled = enabled;
-    apply_render_settings();
-}
-
-// Tonemapping settings
-void OhaoViewport::set_tonemap_operator(int op) {
-    m_tonemap_operator = op;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_exposure(float exposure) {
-    m_exposure = exposure;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_gamma(float gamma) {
-    m_gamma = gamma;
-    apply_render_settings();
-}
-
-// Bloom settings
-void OhaoViewport::set_bloom_threshold(float threshold) {
-    m_bloom_threshold = threshold;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_bloom_intensity(float intensity) {
-    m_bloom_intensity = intensity;
-    apply_render_settings();
-}
-
-// SSAO settings
-void OhaoViewport::set_ssao_radius(float radius) {
-    m_ssao_radius = radius;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_ssao_intensity(float intensity) {
-    m_ssao_intensity = intensity;
-    apply_render_settings();
-}
-
-// SSR settings
-void OhaoViewport::set_ssr_max_distance(float dist) {
-    m_ssr_max_distance = dist;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_ssr_thickness(float thickness) {
-    m_ssr_thickness = thickness;
-    apply_render_settings();
-}
-
-// Volumetric settings
-void OhaoViewport::set_volumetric_density(float density) {
-    m_volumetric_density = density;
-    apply_render_settings();
-}
-
-void OhaoViewport::set_volumetric_scattering(float g) {
-    m_volumetric_scattering = g;
-    apply_render_settings();
-}
-
+void OhaoViewport::set_volumetric_density(float density)   { m_render_settings.setVolumetricDensity(density); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_volumetric_scattering(float g)      { m_render_settings.setVolumetricScattering(g); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_fog_color(const Color& color) {
-    m_fog_color = color;
-    apply_render_settings();
+    m_render_settings.setFogColor(glm::vec3(color.r, color.g, color.b));
+    m_render_settings.apply(m_renderer);
+}
+Color OhaoViewport::get_fog_color() const {
+    glm::vec3 c = m_render_settings.getFogColor();
+    return Color(c.r, c.g, c.b);
 }
 
-// Motion blur settings
-void OhaoViewport::set_motion_blur_intensity(float intensity) {
-    m_motion_blur_intensity = intensity;
-    apply_render_settings();
+void OhaoViewport::set_motion_blur_intensity(float intensity) { m_render_settings.setMotionBlurIntensity(intensity); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_motion_blur_samples(int samples)       { m_render_settings.setMotionBlurSamples(samples); m_render_settings.apply(m_renderer); }
+
+void OhaoViewport::set_dof_focus_distance(float distance)  { m_render_settings.setDoFFocusDistance(distance); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_dof_aperture(float aperture)        { m_render_settings.setDoFAperture(aperture); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_dof_max_blur(float blur)            { m_render_settings.setDoFMaxBlur(blur); m_render_settings.apply(m_renderer); }
+
+void OhaoViewport::set_taa_blend_factor(float factor)      { m_render_settings.setTAABlendFactor(factor); m_render_settings.apply(m_renderer); }
+
+// ===== Scene Management (delegates to SceneSync) =====
+
+void OhaoViewport::load_tscn(const String& path) { m_scene_sync.loadTscn(path, m_scene, m_renderer); }
+
+void OhaoViewport::sync_scene() {
+    UtilityFunctions::print("[OHAO] sync_scene() called - use clear_scene(), add_* methods, and finish_sync() instead");
 }
 
-void OhaoViewport::set_motion_blur_samples(int samples) {
-    m_motion_blur_samples = samples;
-    apply_render_settings();
+void OhaoViewport::clear_scene() {
+    m_selection.clearSelection();
+    m_scene_sync.clearScene(m_scene);
 }
 
-// DoF settings
-void OhaoViewport::set_dof_focus_distance(float distance) {
-    m_dof_focus_distance = distance;
-    apply_render_settings();
+void OhaoViewport::sync_from_godot(Node* root_node) {
+    m_selection.clearSelection();
+    m_scene_sync.syncFromGodot(root_node, m_scene, m_renderer);
 }
 
-void OhaoViewport::set_dof_aperture(float aperture) {
-    m_dof_aperture = aperture;
-    apply_render_settings();
+void OhaoViewport::add_cube(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
+    m_scene_sync.addCube(m_scene, name, position, rotation, scale, color);
+}
+void OhaoViewport::add_sphere(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
+    m_scene_sync.addSphere(m_scene, name, position, rotation, scale, color);
+}
+void OhaoViewport::add_plane(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
+    m_scene_sync.addPlane(m_scene, name, position, rotation, scale, color);
+}
+void OhaoViewport::add_cylinder(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
+    m_scene_sync.addCylinder(m_scene, name, position, rotation, scale, color);
+}
+void OhaoViewport::add_directional_light(const String& name, const Vector3& position, const Vector3& direction, const Color& color, float intensity) {
+    m_scene_sync.addDirectionalLight(m_scene, name, position, direction, color, intensity);
+}
+void OhaoViewport::add_point_light(const String& name, const Vector3& position, const Color& color, float intensity, float range) {
+    m_scene_sync.addPointLight(m_scene, name, position, color, intensity, range);
+}
+void OhaoViewport::finish_sync() { m_scene_sync.finishSync(m_renderer); }
+
+// ===== Camera (delegates to CameraController) =====
+
+void OhaoViewport::set_camera_mode(int mode) {
+    if (m_renderer) {
+        m_camera.setMode(mode, m_renderer->getCamera());
+        UtilityFunctions::print("[OHAO] Camera mode: ", mode == 0 ? "FPS" : "Orbit");
+    }
 }
 
-void OhaoViewport::set_dof_max_blur(float blur) {
-    m_dof_max_blur = blur;
-    apply_render_settings();
+void OhaoViewport::focus_on_scene() {
+    if (m_renderer) {
+        m_camera.focusOnScene(m_scene, m_renderer->getCamera());
+    }
 }
 
-// TAA settings
-void OhaoViewport::set_taa_blend_factor(float factor) {
-    m_taa_blend_factor = factor;
-    apply_render_settings();
+// ===== Camera Position/Rotation (for game mode) =====
+
+void OhaoViewport::set_camera_position(const Vector3& pos) {
+    if (!m_renderer) return;
+    m_renderer->getCamera().setPosition(glm::vec3(pos.x, pos.y, pos.z));
 }
 
-// === Physics Controls ===
+Vector3 OhaoViewport::get_camera_position() const {
+    if (!m_renderer) return Vector3();
+    glm::vec3 p = m_renderer->getCamera().getPosition();
+    return Vector3(p.x, p.y, p.z);
+}
+
+void OhaoViewport::set_camera_rotation_deg(float pitch, float yaw) {
+    if (!m_renderer) return;
+    m_renderer->getCamera().setRotation(pitch, yaw);
+}
+
+Vector3 OhaoViewport::get_camera_forward() const {
+    if (!m_renderer) return Vector3(0, 0, -1);
+    glm::vec3 f = m_renderer->getCamera().getFront();
+    return Vector3(f.x, f.y, f.z);
+}
+
+// ===== Input Mode =====
+
+void OhaoViewport::set_input_mode(int mode) {
+    bool entering_game = (mode == 1);
+    if (entering_game == m_game_mode) return;
+    m_game_mode = entering_game;
+
+    if (m_game_mode) {
+        // Entering GAME mode
+        m_selection.clearSelection();
+        m_camera.clearMovementState();
+        m_picking_enabled = false;
+        set_mouse_filter(MOUSE_FILTER_IGNORE);  // Transparent to mouse — events flow to _unhandled_input
+        if (m_renderer) {
+            ohao::DeferredRenderer* def = m_renderer->getDeferredRenderer();
+            if (def) {
+                def->setGridEnabled(false);
+                def->setGizmoEnabled(false);
+            }
+        }
+    } else {
+        // Entering EDITOR mode
+        m_picking_enabled = true;
+        m_camera.clearMovementState();
+        set_mouse_filter(MOUSE_FILTER_STOP);  // Capture mouse events for editor controls
+        if (m_renderer) {
+            ohao::DeferredRenderer* def = m_renderer->getDeferredRenderer();
+            if (def) {
+                def->setGridEnabled(m_grid_enabled);
+            }
+        }
+    }
+    queue_redraw();
+}
+
+// ===== Picking (delegates to SelectionController) =====
+
+void OhaoViewport::pick_object_at(const Vector2& screen_pos) {
+    m_selection.pickObjectAt(screen_pos, get_size(), m_width, m_height, m_renderer, m_scene);
+
+    if (m_selection.hasSelection()) {
+        emit_signal("actor_selected", m_selection.getSelectedActorName());
+        UtilityFunctions::print("[OHAO] Selected: ", m_selection.getSelectedActorName());
+    }
+
+    queue_redraw();
+}
+
+// ===== Physics Controls =====
+
 void OhaoViewport::play_physics() {
     m_physics_playing = true;
     if (m_scene && m_scene->getPhysicsWorld()) {
@@ -893,29 +938,24 @@ void OhaoViewport::set_physics_speed(float speed) {
     m_physics_speed = speed;
 }
 
-// === Wireframe Mode ===
+// ===== Wireframe / Grid / Gizmo / Particles / Import =====
+
 void OhaoViewport::set_wireframe_enabled(bool enabled) {
     m_wireframe_enabled = enabled;
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) {
-            deferred->setWireframeEnabled(enabled);
-        }
+        if (deferred) deferred->setWireframeEnabled(enabled);
     }
 }
 
-// === Grid Overlay ===
 void OhaoViewport::set_grid_enabled(bool enabled) {
     m_grid_enabled = enabled;
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) {
-            deferred->setGridEnabled(enabled);
-        }
+        if (deferred) deferred->setGridEnabled(enabled);
     }
 }
 
-// === Model Import ===
 void OhaoViewport::import_model(const String& path) {
     if (!m_scene || !m_renderer) {
         UtilityFunctions::printerr("[OHAO] Cannot import: scene or renderer not initialized!");
@@ -925,7 +965,6 @@ void OhaoViewport::import_model(const String& path) {
     std::string filepath = path.utf8().get_data();
     UtilityFunctions::print("[OHAO] Importing model: ", path);
 
-    // Create a new model and load based on extension
     auto model = std::make_shared<ohao::Model>();
     bool loaded = false;
 
@@ -946,11 +985,9 @@ void OhaoViewport::import_model(const String& path) {
         return;
     }
 
-    // Extract filename for actor name
     std::string name = filepath.substr(filepath.find_last_of("/\\") + 1);
     name = name.substr(0, name.find_last_of('.'));
 
-    // Create actor with loaded model
     auto actor = m_scene->createActor(name);
     if (actor) {
         actor->setModel(model);
@@ -960,19 +997,15 @@ void OhaoViewport::import_model(const String& path) {
         }
     }
 
-    // Rebuild GPU buffers
     finish_sync();
     UtilityFunctions::print("[OHAO] Model imported: ", name.c_str());
 }
 
-// === Gizmo Controls ===
 void OhaoViewport::set_gizmo_mode(int mode) {
     m_gizmo_mode = mode;
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) {
-            deferred->setGizmoMode(static_cast<ohao::GizmoMode>(mode));
-        }
+        if (deferred) deferred->setGizmoMode(static_cast<ohao::GizmoMode>(mode));
     }
 }
 
@@ -980,14 +1013,10 @@ void OhaoViewport::set_gizmo_enabled(bool enabled) {
     m_gizmo_enabled = enabled;
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) {
-            // Only show gizmo if enabled AND an object is selected
-            deferred->setGizmoEnabled(enabled && m_selected_actor != nullptr);
-        }
+        if (deferred) deferred->setGizmoEnabled(enabled && m_selection.hasSelection());
     }
 }
 
-// === Particles ===
 void OhaoViewport::spawn_particles(const Vector3& position, int type) {
     if (!m_renderer) return;
     ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
@@ -1009,844 +1038,143 @@ void OhaoViewport::spawn_particles_directed(const Vector3& position, int type, c
     }
 }
 
-// Utility
+// ===== Texture / Material API =====
+
+void OhaoViewport::set_actor_texture(const String& actor_name, const String& texture_path) {
+    if (!m_scene || !m_renderer) return;
+
+    auto* texMgr = m_renderer->getTextureManager();
+    if (!texMgr) {
+        UtilityFunctions::printerr("[OHAO] Texture manager not available");
+        return;
+    }
+
+    // Find actor by name
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (!actor) {
+        UtilityFunctions::printerr("[OHAO] Actor not found: ", actor_name);
+        return;
+    }
+
+    // Resolve res:// path
+    std::string absPath = SceneSync::resolveResPath(texture_path);
+
+    // Load texture into bindless manager
+    auto handle = texMgr->loadTexture(absPath, ohao::BindlessTextureType::Albedo);
+    if (!handle.valid()) {
+        UtilityFunctions::printerr("[OHAO] Failed to load texture: ", texture_path);
+        return;
+    }
+    texMgr->updateDescriptorSet();
+
+    // Set on material component
+    auto materialComp = actor->getComponent<ohao::MaterialComponent>();
+    if (materialComp) {
+        materialComp->setAlbedoTexture(absPath);
+    }
+
+    UtilityFunctions::print("[OHAO] Texture set on '", actor_name, "': ", texture_path);
+}
+
+void OhaoViewport::set_actor_normal_map(const String& actor_name, const String& normal_path) {
+    if (!m_scene || !m_renderer) return;
+
+    auto* texMgr = m_renderer->getTextureManager();
+    if (!texMgr) return;
+
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (!actor) {
+        UtilityFunctions::printerr("[OHAO] Actor not found: ", actor_name);
+        return;
+    }
+
+    std::string absPath = SceneSync::resolveResPath(normal_path);
+
+    auto handle = texMgr->loadTexture(absPath, ohao::BindlessTextureType::Normal);
+    if (!handle.valid()) {
+        UtilityFunctions::printerr("[OHAO] Failed to load normal map: ", normal_path);
+        return;
+    }
+    texMgr->updateDescriptorSet();
+
+    auto materialComp = actor->getComponent<ohao::MaterialComponent>();
+    if (materialComp) {
+        materialComp->setNormalTexture(absPath);
+    }
+
+    UtilityFunctions::print("[OHAO] Normal map set on '", actor_name, "': ", normal_path);
+}
+
+void OhaoViewport::set_actor_pbr(const String& actor_name, float metallic, float roughness) {
+    if (!m_scene) return;
+
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (!actor) {
+        UtilityFunctions::printerr("[OHAO] Actor not found: ", actor_name);
+        return;
+    }
+
+    auto materialComp = actor->getComponent<ohao::MaterialComponent>();
+    if (materialComp) {
+        materialComp->getMaterial().metallic = metallic;
+        materialComp->getMaterial().roughness = roughness;
+    }
+}
+
+void OhaoViewport::set_actor_material_preset(const String& actor_name, const String& preset_name) {
+    // Material presets are handled in GDScript (OhaoPresets.MATERIALS)
+    // This C++ method applies the texture + PBR params directly
+    // For now, delegate to GDScript via helper — but provide a C++ fallback
+    UtilityFunctions::print("[OHAO] set_actor_material_preset: use OhaoPresets.apply_material() from GDScript");
+}
+
+// ===== Audio =====
+
+int OhaoViewport::play_sound(const String& path, int category, bool loop, float volume) {
+    return static_cast<int>(m_audio.playSound(path, category, loop, volume));
+}
+
+int OhaoViewport::play_sound_at(const String& path, const Vector3& position, int category, bool loop, float volume) {
+    return static_cast<int>(m_audio.playSoundAt(path, position, category, loop, volume));
+}
+
+void OhaoViewport::stop_sound(int handle) { m_audio.stopSound(static_cast<uint32_t>(handle)); }
+void OhaoViewport::pause_sound(int handle) { m_audio.pauseSound(static_cast<uint32_t>(handle)); }
+void OhaoViewport::resume_sound(int handle) { m_audio.resumeSound(static_cast<uint32_t>(handle)); }
+void OhaoViewport::set_sound_volume(int handle, float volume) { m_audio.setSoundVolume(static_cast<uint32_t>(handle), volume); }
+void OhaoViewport::set_sound_position(int handle, const Vector3& position) { m_audio.setSoundPosition(static_cast<uint32_t>(handle), position); }
+
+void OhaoViewport::set_category_volume(int category, float volume) { m_audio.setCategoryVolume(category, volume); }
+float OhaoViewport::get_category_volume(int category) const { return m_audio.getCategoryVolume(category); }
+void OhaoViewport::stop_category(int category) { m_audio.stopCategory(category); }
+void OhaoViewport::pause_category(int category) { m_audio.pauseCategory(category); }
+void OhaoViewport::resume_category(int category) { m_audio.resumeCategory(category); }
+
+void OhaoViewport::set_master_volume(float volume) { m_audio.setMasterVolume(volume); }
+float OhaoViewport::get_master_volume() const { return m_audio.getMasterVolume(); }
+void OhaoViewport::stop_all_sounds() { m_audio.stopAll(); }
+
+// ===== Utility =====
+
 Dictionary OhaoViewport::get_render_stats() const {
     Dictionary stats;
     stats["initialized"] = m_initialized;
     stats["width"] = m_width;
     stats["height"] = m_height;
-    stats["render_mode"] = m_render_mode == 1 ? "Deferred" : "Forward";
-    stats["bloom_enabled"] = m_bloom_enabled;
-    stats["taa_enabled"] = m_taa_enabled;
-    stats["ssao_enabled"] = m_ssao_enabled;
-    stats["ssr_enabled"] = m_ssr_enabled;
-    stats["volumetrics_enabled"] = m_volumetrics_enabled;
-    stats["motion_blur_enabled"] = m_motion_blur_enabled;
-    stats["dof_enabled"] = m_dof_enabled;
-    stats["tonemapping_enabled"] = m_tonemapping_enabled;
-    stats["synced_objects"] = m_synced_object_count;
+    stats["render_mode"] = m_render_settings.getRenderMode() == 1 ? "Deferred" : "Forward";
+    stats["bloom_enabled"] = m_render_settings.getBloomEnabled();
+    stats["taa_enabled"] = m_render_settings.getTAAEnabled();
+    stats["ssao_enabled"] = m_render_settings.getSSAOEnabled();
+    stats["ssr_enabled"] = m_render_settings.getSSREnabled();
+    stats["volumetrics_enabled"] = m_render_settings.getVolumetricsEnabled();
+    stats["motion_blur_enabled"] = m_render_settings.getMotionBlurEnabled();
+    stats["dof_enabled"] = m_render_settings.getDoFEnabled();
+    stats["tonemapping_enabled"] = m_render_settings.getTonemappingEnabled();
+    stats["synced_objects"] = m_scene_sync.getSyncedObjectCount();
     return stats;
-}
-
-// === Scene Management ===
-
-void OhaoViewport::load_tscn(const String& path) {
-    if (!m_scene) {
-        UtilityFunctions::printerr("[OHAO] Scene not initialized!");
-        return;
-    }
-
-    // Convert Godot String to std::string
-    std::string filepath = path.utf8().get_data();
-
-    UtilityFunctions::print("[OHAO] Loading scene: ", path);
-
-    ohao::loader::TscnLoader loader;
-    if (loader.load(filepath)) {
-        // Clear existing scene
-        m_scene->removeAllActors();
-
-        // Create scene from .tscn
-        if (loader.createScene(m_scene)) {
-            UtilityFunctions::print("[OHAO] Scene loaded successfully");
-
-            // Apply camera if found
-            const auto& parsed = loader.getParsedScene();
-            if (parsed.camera.valid) {
-                auto& camera = m_renderer->getCamera();
-                camera.setPosition(parsed.camera.position);
-                glm::vec3 euler = glm::eulerAngles(parsed.camera.rotation);
-                camera.setRotation(glm::degrees(euler.x), glm::degrees(euler.y));
-            }
-        } else {
-            UtilityFunctions::printerr("[OHAO] Failed to create scene: ", loader.getError().c_str());
-        }
-    } else {
-        UtilityFunctions::printerr("[OHAO] Failed to load .tscn: ", loader.getError().c_str());
-    }
-}
-
-void OhaoViewport::sync_scene() {
-    // This is now handled by GDScript calling clear_scene(), add_* methods, then finish_sync()
-    UtilityFunctions::print("[OHAO] sync_scene() called - use clear_scene(), add_* methods, and finish_sync() instead");
-}
-
-void OhaoViewport::clear_scene() {
-    if (!m_scene) {
-        UtilityFunctions::printerr("[OHAO] Scene not initialized!");
-        return;
-    }
-
-    m_selected_actor = nullptr;
-    m_selected_actor_name = "";
-    m_scene->removeAllActors();
-    UtilityFunctions::print("[OHAO] Scene cleared");
-}
-
-// Helper to convert Godot vectors to GLM
-static glm::vec3 to_glm(const Vector3& v) {
-    return glm::vec3(v.x, v.y, v.z);
-}
-
-static glm::vec3 to_glm_color(const Color& c) {
-    return glm::vec3(c.r, c.g, c.b);
-}
-
-void OhaoViewport::add_cube(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!m_scene) return;
-
-    std::string actorName = name.utf8().get_data();
-    auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::Cube);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
-}
-
-void OhaoViewport::add_sphere(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!m_scene) return;
-
-    std::string actorName = name.utf8().get_data();
-    auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::Sphere);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
-}
-
-void OhaoViewport::add_plane(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!m_scene) return;
-
-    std::string actorName = name.utf8().get_data();
-    auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::Platform);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
-}
-
-void OhaoViewport::add_cylinder(const String& name, const Vector3& position, const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!m_scene) return;
-
-    std::string actorName = name.utf8().get_data();
-    auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::Cylinder);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
-}
-
-void OhaoViewport::add_directional_light(const String& name, const Vector3& position, const Vector3& direction, const Color& color, float intensity) {
-    if (!m_scene) {
-        UtilityFunctions::printerr("[OHAO] add_directional_light: scene is null!");
-        return;
-    }
-
-    std::string actorName = name.utf8().get_data();
-    UtilityFunctions::print("[OHAO] Adding directional light '", name, "' pos=(", position.x, ",", position.y, ",", position.z,
-                            ") dir=(", direction.x, ",", direction.y, ",", direction.z, ") intensity=", intensity);
-
-    auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::DirectionalLight);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-        }
-        auto light = actor->getComponent<ohao::LightComponent>();
-        if (light) {
-            light->setDirection(glm::normalize(to_glm(direction)));
-            light->setColor(to_glm_color(color));
-            light->setIntensity(intensity);
-            UtilityFunctions::print("[OHAO] Light component configured successfully");
-        } else {
-            UtilityFunctions::printerr("[OHAO] Failed to get LightComponent from actor!");
-        }
-
-        // Verify actor was added to scene
-        UtilityFunctions::print("[OHAO] Scene now has ", static_cast<int>(m_scene->getAllActors().size()), " actors");
-    } else {
-        UtilityFunctions::printerr("[OHAO] Failed to create directional light actor!");
-    }
-}
-
-void OhaoViewport::add_point_light(const String& name, const Vector3& position, const Color& color, float intensity, float range) {
-    if (!m_scene) return;
-
-    std::string actorName = name.utf8().get_data();
-    auto actor = m_scene->createActorWithComponents(actorName, ohao::PrimitiveType::PointLight);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-        }
-        auto light = actor->getComponent<ohao::LightComponent>();
-        if (light) {
-            light->setColor(to_glm_color(color));
-            light->setIntensity(intensity);
-            light->setRange(range);
-        }
-    }
-}
-
-void OhaoViewport::finish_sync() {
-    if (!m_renderer) {
-        UtilityFunctions::printerr("[OHAO] Renderer not initialized!");
-        return;
-    }
-
-    // Rebuild vertex/index buffers from scene
-    if (m_renderer->updateSceneBuffers()) {
-        UtilityFunctions::print("[OHAO] Scene buffers updated successfully");
-    } else {
-        UtilityFunctions::print("[OHAO] No meshes to render in scene");
-    }
-}
-
-// ===== Scene Sync from Godot =====
-
-void OhaoViewport::sync_from_godot(Node* root_node) {
-    if (!root_node) {
-        UtilityFunctions::printerr("[OHAO] sync_from_godot: root_node is null!");
-        return;
-    }
-
-    if (!m_scene || !m_renderer) {
-        UtilityFunctions::printerr("[OHAO] sync_from_godot: renderer not initialized!");
-        return;
-    }
-
-    UtilityFunctions::print("[OHAO] Syncing from Godot scene: ", root_node->get_name());
-
-    // First pass: count objects without modifying scene
-    m_synced_object_count = 0;
-    count_syncable_objects(root_node);
-
-    if (m_synced_object_count == 0) {
-        UtilityFunctions::print("[OHAO] No syncable objects found in Godot scene (need MeshInstance3D, lights, etc.)");
-        UtilityFunctions::print("[OHAO] Keeping existing OHAO scene. Add 3D objects in Godot's 3D editor first.");
-        return;
-    }
-
-    // Clear selection (actors are about to be destroyed)
-    m_selected_actor = nullptr;
-    m_selected_actor_name = "";
-
-    // Clear existing OHAO scene only if we have objects to sync
-    m_scene->removeAllActors();
-    m_synced_object_count = 0;
-
-    // Traverse the Godot scene tree and create OHAO actors
-    traverse_and_sync(root_node);
-
-    // Debug: List all actors in scene after sync
-    UtilityFunctions::print("[OHAO] === Actors in scene after sync (scene ptr=", reinterpret_cast<uint64_t>(m_scene), ") ===");
-    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-        auto lightComp = actor->getComponent<ohao::LightComponent>();
-        if (lightComp) {
-            auto pos = actor->getTransform()->getPosition();
-            auto dir = lightComp->getDirection();
-            UtilityFunctions::print("[OHAO]   LIGHT: '", actor->getName().c_str(), "' type=",
-                                    static_cast<int>(lightComp->getLightType()),
-                                    " pos=(", pos.x, ",", pos.y, ",", pos.z, ")",
-                                    " dir=(", dir.x, ",", dir.y, ",", dir.z, ")");
-        } else {
-            UtilityFunctions::print("[OHAO]   Actor: '", actor->getName().c_str(), "'");
-        }
-    }
-    UtilityFunctions::print("[OHAO] === End actor list ===");
-
-    // Rebuild buffers
-    if (m_renderer->updateSceneBuffers()) {
-        UtilityFunctions::print("[OHAO] Sync complete: ", m_synced_object_count, " objects synced");
-    } else {
-        UtilityFunctions::print("[OHAO] Sync complete but no renderable meshes found");
-    }
-}
-
-void OhaoViewport::count_syncable_objects(Node* node) {
-    if (!node) return;
-
-    // Check for syncable node types
-    if (Object::cast_to<MeshInstance3D>(node)) {
-        MeshInstance3D* mesh_instance = Object::cast_to<MeshInstance3D>(node);
-        if (mesh_instance->get_mesh().is_valid()) {
-            m_synced_object_count++;
-        }
-    }
-    else if (Object::cast_to<DirectionalLight3D>(node) ||
-             Object::cast_to<OmniLight3D>(node) ||
-             Object::cast_to<SpotLight3D>(node)) {
-        m_synced_object_count++;
-    }
-
-    // Recurse into children
-    int child_count = node->get_child_count();
-    for (int i = 0; i < child_count; i++) {
-        count_syncable_objects(node->get_child(i));
-    }
-}
-
-void OhaoViewport::traverse_and_sync(Node* node) {
-    if (!node) return;
-
-    // Check if this is a Node3D (has transform)
-    Node3D* node3d = Object::cast_to<Node3D>(node);
-    if (node3d) {
-        // Get global transform
-        Transform3D transform = node3d->get_global_transform();
-        Vector3 position = transform.origin;
-        Vector3 rotation = transform.basis.get_euler();
-        Vector3 scale = transform.basis.get_scale();
-        String name = node->get_name();
-
-        // Check for MeshInstance3D
-        MeshInstance3D* mesh_instance = Object::cast_to<MeshInstance3D>(node);
-        if (mesh_instance) {
-            Ref<Mesh> mesh = mesh_instance->get_mesh();
-            if (mesh.is_valid()) {
-                // Get material color if available
-                Color color(0.8f, 0.8f, 0.8f, 1.0f);  // Default gray
-
-                // Try to get material from mesh instance
-                Ref<Material> mat = mesh_instance->get_surface_override_material(0);
-                if (!mat.is_valid() && mesh.is_valid()) {
-                    mat = mesh->surface_get_material(0);
-                }
-
-                if (mat.is_valid()) {
-                    StandardMaterial3D* std_mat = Object::cast_to<StandardMaterial3D>(mat.ptr());
-                    if (std_mat) {
-                        color = std_mat->get_albedo();
-                    }
-                }
-
-                // Determine mesh type and add to OHAO
-                // Note: Multiply node scale by mesh size to get actual dimensions
-                BoxMesh* box_mesh = Object::cast_to<BoxMesh>(mesh.ptr());
-                SphereMesh* sphere_mesh = Object::cast_to<SphereMesh>(mesh.ptr());
-                CylinderMesh* cylinder_mesh = Object::cast_to<CylinderMesh>(mesh.ptr());
-                PlaneMesh* plane_mesh = Object::cast_to<PlaneMesh>(mesh.ptr());
-
-                if (box_mesh) {
-                    Vector3 mesh_size = box_mesh->get_size();
-                    Vector3 final_scale = Vector3(scale.x * mesh_size.x, scale.y * mesh_size.y, scale.z * mesh_size.z);
-                    add_cube(name, position, rotation * (180.0f / Math_PI), final_scale, color);
-                    m_synced_object_count++;
-                }
-                else if (sphere_mesh) {
-                    float radius = sphere_mesh->get_radius();
-                    Vector3 final_scale = Vector3(scale.x * radius * 2.0f, scale.y * radius * 2.0f, scale.z * radius * 2.0f);
-                    add_sphere(name, position, rotation * (180.0f / Math_PI), final_scale, color);
-                    m_synced_object_count++;
-                }
-                else if (cylinder_mesh) {
-                    float radius = cylinder_mesh->get_top_radius();
-                    float height = cylinder_mesh->get_height();
-                    Vector3 final_scale = Vector3(scale.x * radius * 2.0f, scale.y * height, scale.z * radius * 2.0f);
-                    add_cylinder(name, position, rotation * (180.0f / Math_PI), final_scale, color);
-                    m_synced_object_count++;
-                }
-                else if (plane_mesh) {
-                    Vector2 mesh_size = plane_mesh->get_size();
-                    Vector3 final_scale = Vector3(scale.x * mesh_size.x, scale.y, scale.z * mesh_size.y);
-                    add_plane(name, position, rotation * (180.0f / Math_PI), final_scale, color);
-                    m_synced_object_count++;
-                }
-                else {
-                    // Unknown mesh type - try as cube for now
-                    UtilityFunctions::print("[OHAO] Unknown mesh type for '", name, "', treating as cube");
-                    add_cube(name, position, rotation * (180.0f / Math_PI), scale, color);
-                    m_synced_object_count++;
-                }
-            }
-        }
-
-        // Check for DirectionalLight3D
-        DirectionalLight3D* dir_light = Object::cast_to<DirectionalLight3D>(node);
-        if (dir_light) {
-            Color color = dir_light->get_color();
-            float intensity = dir_light->get_param(Light3D::PARAM_ENERGY);
-            // Direction is -Z in local space, transformed by rotation
-            Vector3 direction = -transform.basis.get_column(2);
-            add_directional_light(name, position, direction, color, intensity);
-            m_synced_object_count++;
-        }
-
-        // Check for OmniLight3D (point light)
-        OmniLight3D* omni_light = Object::cast_to<OmniLight3D>(node);
-        if (omni_light) {
-            Color color = omni_light->get_color();
-            float intensity = omni_light->get_param(Light3D::PARAM_ENERGY);
-            float range = omni_light->get_param(Light3D::PARAM_RANGE);
-            add_point_light(name, position, color, intensity, range);
-            m_synced_object_count++;
-        }
-
-        // Check for SpotLight3D
-        SpotLight3D* spot_light = Object::cast_to<SpotLight3D>(node);
-        if (spot_light) {
-            // TODO: Add spot light support
-            UtilityFunctions::print("[OHAO] SpotLight3D '", name, "' not fully supported yet, treating as point light");
-            Color color = spot_light->get_color();
-            float intensity = spot_light->get_param(Light3D::PARAM_ENERGY);
-            float range = spot_light->get_param(Light3D::PARAM_RANGE);
-            add_point_light(name, position, color, intensity, range);
-            m_synced_object_count++;
-        }
-
-        // Check for OhaoPhysicsBody (it creates its own OHAO actor)
-        OhaoPhysicsBody* physics_body = Object::cast_to<OhaoPhysicsBody>(node);
-        if (physics_body) {
-            if (!physics_body->is_in_physics_world()) {
-                physics_body->add_to_physics_world();
-            }
-            m_synced_object_count++;
-        }
-
-        // Check for Camera3D
-        Camera3D* camera = Object::cast_to<Camera3D>(node);
-        if (camera) {
-            // Update OHAO camera to match Godot camera
-            ohao::Camera& ohao_cam = m_renderer->getCamera();
-            ohao_cam.setPosition(to_glm(position));
-            // Convert rotation - Godot uses radians, OHAO uses degrees for setRotation
-            ohao_cam.setRotation(glm::degrees(rotation.x), glm::degrees(rotation.y));
-            UtilityFunctions::print("[OHAO] Camera synced at position: (", position.x, ", ", position.y, ", ", position.z, ")");
-        }
-    }
-
-    // Recursively traverse children
-    int child_count = node->get_child_count();
-    for (int i = 0; i < child_count; i++) {
-        traverse_and_sync(node->get_child(i));
-    }
-}
-
-// ===== FPS Camera Controls =====
-
-void OhaoViewport::_gui_input(const Ref<InputEvent>& p_event) {
-    if (!m_initialized || !m_renderer) {
-        return;
-    }
-
-    // Handle mouse motion
-    Ref<InputEventMouseMotion> motion_event = p_event;
-    if (motion_event.is_valid()) {
-        handle_mouse_motion(motion_event);
-        return;
-    }
-
-    // Handle mouse button
-    Ref<InputEventMouseButton> button_event = p_event;
-    if (button_event.is_valid()) {
-        handle_mouse_button(button_event);
-        return;
-    }
-
-    // Handle keyboard
-    Ref<InputEventKey> key_event = p_event;
-    if (key_event.is_valid()) {
-        handle_key(key_event);
-        return;
-    }
-}
-
-void OhaoViewport::handle_mouse_motion(const Ref<InputEventMouseMotion>& event) {
-    Vector2 relative = event->get_relative();
-
-    // Middle mouse: pan in orbit mode
-    if (m_middle_mouse_captured && m_camera_mode == CAMERA_ORBIT) {
-        float pan_speed = m_orbit_distance * 0.002f;
-        ohao::Camera& camera = m_renderer->getCamera();
-        glm::vec3 right = camera.getRight();
-        glm::vec3 up = camera.getUp();
-        m_orbit_target_x -= right.x * relative.x * pan_speed + up.x * -relative.y * pan_speed;
-        m_orbit_target_y -= right.y * relative.x * pan_speed + up.y * -relative.y * pan_speed;
-        m_orbit_target_z -= right.z * relative.x * pan_speed + up.z * -relative.y * pan_speed;
-        update_orbit_camera();
-        return;
-    }
-
-    // Right mouse: rotate/orbit
-    if (!m_mouse_captured) {
-        return;
-    }
-
-    // Mark as dragged if moved more than a few pixels
-    if (relative.length() > 2.0f) {
-        m_right_click_dragged = true;
-    }
-
-    float delta_yaw = -relative.x * m_mouse_sensitivity;
-    float delta_pitch = -relative.y * m_mouse_sensitivity;
-
-    if (m_camera_mode == CAMERA_ORBIT) {
-        m_orbit_yaw += delta_yaw;
-        m_orbit_pitch = Math::clamp(m_orbit_pitch + delta_pitch, -89.0f, 89.0f);
-        update_orbit_camera();
-    } else {
-        ohao::Camera& camera = m_renderer->getCamera();
-        camera.rotate(delta_pitch, delta_yaw);
-    }
-}
-
-void OhaoViewport::handle_mouse_button(const Ref<InputEventMouseButton>& event) {
-    MouseButton button = event->get_button_index();
-
-    // Left-click: pick object
-    if (button == MOUSE_BUTTON_LEFT && event->is_pressed()) {
-        pick_object_at(event->get_position());
-        return;
-    }
-
-    if (button == MOUSE_BUTTON_RIGHT) {
-        if (event->is_pressed()) {
-            // Start capturing mouse for camera look/orbit
-            m_mouse_captured = true;
-            m_right_click_start = event->get_position();
-            m_right_click_dragged = false;
-            grab_focus();
-        } else {
-            m_mouse_captured = false;
-            // If right-click was a quick tap (not drag), show context menu
-            if (!m_right_click_dragged) {
-                emit_signal("right_click_menu", event->get_global_position());
-            }
-        }
-    }
-
-    // Middle mouse button: pan (orbit mode)
-    if (button == MOUSE_BUTTON_MIDDLE) {
-        if (event->is_pressed()) {
-            m_middle_mouse_captured = true;
-            grab_focus();
-        } else {
-            m_middle_mouse_captured = false;
-        }
-    }
-
-    // Scroll wheel: zoom
-    if (button == MOUSE_BUTTON_WHEEL_UP && event->is_pressed()) {
-        if (m_camera_mode == CAMERA_ORBIT) {
-            m_orbit_distance = Math::max(0.5f, m_orbit_distance - m_orbit_distance * 0.1f);
-            update_orbit_camera();
-        } else {
-            ohao::Camera& camera = m_renderer->getCamera();
-            glm::vec3 forward = camera.getFront();
-            camera.move(forward * 0.5f);
-        }
-    }
-    if (button == MOUSE_BUTTON_WHEEL_DOWN && event->is_pressed()) {
-        if (m_camera_mode == CAMERA_ORBIT) {
-            m_orbit_distance = Math::min(500.0f, m_orbit_distance + m_orbit_distance * 0.1f);
-            update_orbit_camera();
-        } else {
-            ohao::Camera& camera = m_renderer->getCamera();
-            glm::vec3 forward = camera.getFront();
-            camera.move(-forward * 0.5f);
-        }
-    }
-}
-
-void OhaoViewport::handle_key(const Ref<InputEventKey>& event) {
-    Key keycode = event->get_keycode();
-    bool pressed = event->is_pressed();
-
-    switch (keycode) {
-        case KEY_W:
-            m_move_forward = pressed;
-            break;
-        case KEY_S:
-            m_move_backward = pressed;
-            break;
-        case KEY_A:
-            m_move_left = pressed;
-            break;
-        case KEY_D:
-            m_move_right = pressed;
-            break;
-        case KEY_E:
-        case KEY_SPACE:
-            m_move_up = pressed;
-            break;
-        case KEY_Q:
-        case KEY_CTRL:
-            m_move_down = pressed;
-            break;
-        case KEY_SHIFT:
-            m_move_fast = pressed;
-            break;
-        // Arrow keys for camera rotation
-        case KEY_UP:
-            m_rotate_up = pressed;
-            break;
-        case KEY_DOWN:
-            m_rotate_down = pressed;
-            break;
-        case KEY_LEFT:
-            m_rotate_left = pressed;
-            break;
-        case KEY_RIGHT:
-            m_rotate_right = pressed;
-            break;
-        default:
-            break;
-    }
-
-    // Accept the input event to prevent propagation
-    if (m_move_forward || m_move_backward || m_move_left || m_move_right ||
-        m_move_up || m_move_down || m_rotate_up || m_rotate_down ||
-        m_rotate_left || m_rotate_right) {
-        accept_event();
-    }
-}
-
-void OhaoViewport::update_camera_movement(double delta) {
-    if (!m_renderer) {
-        return;
-    }
-
-    ohao::Camera& camera = m_renderer->getCamera();
-
-    // Handle arrow key rotation
-    if (m_rotate_up || m_rotate_down || m_rotate_left || m_rotate_right) {
-        float rotSpeed = m_rotation_speed * static_cast<float>(delta);
-        if (m_move_fast) {
-            rotSpeed *= m_fast_move_multiplier;
-        }
-
-        float deltaYaw = 0.0f;
-        float deltaPitch = 0.0f;
-
-        if (m_rotate_left) {
-            deltaYaw -= rotSpeed;
-        }
-        if (m_rotate_right) {
-            deltaYaw += rotSpeed;
-        }
-        if (m_rotate_up) {
-            deltaPitch += rotSpeed;
-        }
-        if (m_rotate_down) {
-            deltaPitch -= rotSpeed;
-        }
-
-        camera.rotate(deltaPitch, deltaYaw);
-    }
-
-    // Check if any movement keys are pressed
-    if (!m_move_forward && !m_move_backward && !m_move_left && !m_move_right &&
-        !m_move_up && !m_move_down) {
-        return;
-    }
-
-    // Calculate speed
-    float speed = m_move_speed * static_cast<float>(delta);
-    if (m_move_fast) {
-        speed *= m_fast_move_multiplier;
-    }
-
-    // Get camera directions
-    glm::vec3 front = camera.getFront();
-    glm::vec3 right = camera.getRight();
-    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);  // World up for vertical movement
-
-    // Calculate movement
-    glm::vec3 movement(0.0f);
-
-    if (m_move_forward) {
-        movement += front * speed;
-    }
-    if (m_move_backward) {
-        movement -= front * speed;
-    }
-    if (m_move_right) {
-        movement += right * speed;
-    }
-    if (m_move_left) {
-        movement -= right * speed;
-    }
-    if (m_move_up) {
-        movement += up * speed;
-    }
-    if (m_move_down) {
-        movement -= up * speed;
-    }
-
-    // Apply movement
-    camera.move(movement);
-}
-
-// === Camera Mode ===
-
-void OhaoViewport::set_camera_mode(int mode) {
-    CameraMode new_mode = static_cast<CameraMode>(mode);
-    if (new_mode == m_camera_mode) return;
-
-    m_camera_mode = new_mode;
-
-    if (m_camera_mode == CAMERA_ORBIT && m_renderer) {
-        // Initialize orbit from current camera position
-        ohao::Camera& camera = m_renderer->getCamera();
-        glm::vec3 pos = camera.getPosition();
-        glm::vec3 front = camera.getFront();
-
-        // Set orbit target ahead of camera
-        m_orbit_distance = 10.0f;
-        m_orbit_target_x = pos.x + front.x * m_orbit_distance;
-        m_orbit_target_y = pos.y + front.y * m_orbit_distance;
-        m_orbit_target_z = pos.z + front.z * m_orbit_distance;
-
-        // Compute yaw/pitch from camera direction to target
-        glm::vec3 dir = glm::normalize(glm::vec3(m_orbit_target_x, m_orbit_target_y, m_orbit_target_z) - pos);
-        m_orbit_yaw = glm::degrees(atan2(dir.x, dir.z));
-        m_orbit_pitch = glm::degrees(asin(glm::clamp(-dir.y, -1.0f, 1.0f)));
-
-        update_orbit_camera();
-    }
-
-    UtilityFunctions::print("[OHAO] Camera mode: ", mode == 0 ? "FPS" : "Orbit");
-}
-
-void OhaoViewport::update_orbit_camera() {
-    if (!m_renderer) return;
-
-    // Compute camera position on sphere around target
-    float pitch_rad = glm::radians(m_orbit_pitch);
-    float yaw_rad = glm::radians(m_orbit_yaw);
-
-    float cam_x = m_orbit_target_x + m_orbit_distance * cos(pitch_rad) * sin(yaw_rad);
-    float cam_y = m_orbit_target_y + m_orbit_distance * sin(pitch_rad);
-    float cam_z = m_orbit_target_z + m_orbit_distance * cos(pitch_rad) * cos(yaw_rad);
-
-    glm::vec3 cam_pos(cam_x, cam_y, cam_z);
-    glm::vec3 target(m_orbit_target_x, m_orbit_target_y, m_orbit_target_z);
-
-    ohao::Camera& camera = m_renderer->getCamera();
-    camera.setPosition(cam_pos);
-
-    // Compute direction from camera to target and set rotation
-    glm::vec3 dir = glm::normalize(target - cam_pos);
-    float cam_pitch = glm::degrees(asin(dir.y));
-    float cam_yaw = glm::degrees(atan2(dir.z, dir.x));
-    camera.setRotation(cam_pitch, cam_yaw);
-}
-
-void OhaoViewport::focus_on_scene() {
-    if (!m_scene || !m_renderer) return;
-
-    // Compute bounding box of all actors
-    glm::vec3 scene_min(FLT_MAX);
-    glm::vec3 scene_max(-FLT_MAX);
-    bool has_actors = false;
-
-    for (const auto& [id, actor] : m_scene->getAllActors()) {
-        auto transform = actor->getTransform();
-        if (!transform) continue;
-
-        glm::vec3 pos = transform->getPosition();
-        glm::vec3 scale = transform->getScale();
-
-        // Approximate bounding box using position +/- scale
-        scene_min = glm::min(scene_min, pos - glm::abs(scale));
-        scene_max = glm::max(scene_max, pos + glm::abs(scale));
-        has_actors = true;
-    }
-
-    if (!has_actors) {
-        UtilityFunctions::print("[OHAO] No actors to focus on");
-        return;
-    }
-
-    glm::vec3 center = (scene_min + scene_max) * 0.5f;
-    glm::vec3 extents = scene_max - scene_min;
-    float max_extent = glm::max(extents.x, glm::max(extents.y, extents.z));
-    float distance = max_extent * 1.5f;
-    if (distance < 2.0f) distance = 2.0f;
-
-    if (m_camera_mode == CAMERA_ORBIT) {
-        m_orbit_target_x = center.x;
-        m_orbit_target_y = center.y;
-        m_orbit_target_z = center.z;
-        m_orbit_distance = distance;
-        m_orbit_pitch = 30.0f;
-        m_orbit_yaw = 45.0f;
-        update_orbit_camera();
-    } else {
-        ohao::Camera& camera = m_renderer->getCamera();
-        // Position camera looking at center from above-front
-        glm::vec3 cam_pos = center + glm::vec3(distance * 0.5f, distance * 0.4f, distance * 0.5f);
-        camera.setPosition(cam_pos);
-        glm::vec3 dir = glm::normalize(center - cam_pos);
-        camera.setRotation(glm::degrees(asin(dir.y)), glm::degrees(atan2(dir.z, dir.x)));
-    }
-
-    UtilityFunctions::print("[OHAO] Focused on scene center: (", center.x, ", ", center.y, ", ", center.z,
-                            ") distance: ", distance);
-}
-
-// === Picking ===
-
-void OhaoViewport::pick_object_at(const Vector2& screen_pos) {
-    if (!m_renderer || !m_scene) return;
-
-    ohao::Camera& camera = m_renderer->getCamera();
-    ohao::PickingSystem picking;
-
-    // Scale screen position from control space to renderer resolution
-    Vector2 control_size = get_size();
-    float scale_x = (control_size.x > 0) ? static_cast<float>(m_width) / control_size.x : 1.0f;
-    float scale_y = (control_size.y > 0) ? static_cast<float>(m_height) / control_size.y : 1.0f;
-    glm::vec2 screenCoord(screen_pos.x * scale_x, screen_pos.y * scale_y);
-    glm::vec2 viewportSize(static_cast<float>(m_width), static_cast<float>(m_height));
-    ohao::Ray ray = picking.screenToWorldRay(screenCoord, viewportSize, camera);
-
-    // Pick actor
-    ohao::PickResult result = picking.pickActor(ray, m_scene);
-
-    if (result.hit && result.actor) {
-        m_selected_actor = result.actor;
-        m_selected_actor_name = String(result.actor->getName().c_str());
-        emit_signal("actor_selected", m_selected_actor_name);
-        UtilityFunctions::print("[OHAO] Selected: ", m_selected_actor_name);
-    } else {
-        m_selected_actor = nullptr;
-        m_selected_actor_name = "";
-    }
-
-    queue_redraw();
 }
 
 } // namespace godot
