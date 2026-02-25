@@ -34,13 +34,18 @@ func _setup_game() -> void:
 
 
 func _process(_delta: float) -> void:
+	if not ohao_viewport:
+		return
+
 	# Sync C++ rendering camera from GDScript player state every frame
-	if player and player.is_alive and ohao_viewport:
+	if player and player.is_alive:
 		var eye_pos := player.position + Vector3(0, 1.6, 0)
 		ohao_viewport.set_camera_position(eye_pos)
 		var pitch_deg := rad_to_deg(player.camera_pitch)
 		var yaw_deg := -rad_to_deg(player.camera_yaw) - 90.0
 		ohao_viewport.set_camera_rotation_deg(pitch_deg, yaw_deg)
+
+	# Enemy visual sync handled automatically by OhaoMeshInstance
 
 
 # ── Level ──────────────────────────────────────────────────────────────
@@ -226,13 +231,24 @@ func _customize_hud() -> void:
 # ── Rendering ──────────────────────────────────────────────────────────
 
 func _configure_rendering() -> void:
-	OhaoPresets.apply_rendering(ohao_viewport, "cyberpunk")
+	# Start minimal, then enable only stable effects
+	OhaoPresets.apply_rendering(ohao_viewport, "minimal")
 
-	# Boost bloom for neon glow
+	# Bloom — essential for neon glow
+	ohao_viewport.set_bloom_enabled(true)
+	ohao_viewport.set_bloom_threshold(0.4)
 	ohao_viewport.set_bloom_intensity(1.5)
-	ohao_viewport.set_taa_enabled(true)
-	ohao_viewport.set_ssr_enabled(true)
-	ohao_viewport.set_ssr_max_distance(20.0)
+
+	# SSAO — depth in indoor arena
+	ohao_viewport.set_ssao_enabled(true)
+	ohao_viewport.set_ssao_radius(0.5)
+	ohao_viewport.set_ssao_intensity(1.0)
+
+	# Tonemapping — HDR color mapping
+	ohao_viewport.set_tonemapping_enabled(true)
+	ohao_viewport.set_tonemap_operator(OhaoConst.TONEMAP_ACES)
+	ohao_viewport.set_exposure(1.4)
+	ohao_viewport.set_gamma(2.2)
 
 
 # ── Audio ──────────────────────────────────────────────────────────────

@@ -12,6 +12,12 @@ const SHAPE_SPHERE := 1
 const SHAPE_CAPSULE := 2
 const SHAPE_MESH := 3
 
+# Mesh types (OhaoMeshInstance)
+const MESH_CUBE := 0
+const MESH_SPHERE := 1
+const MESH_CYLINDER := 2
+const MESH_PLANE := 3
+
 # Camera modes (OhaoViewport)
 const CAMERA_FPS := 0
 const CAMERA_ORBIT := 1
@@ -40,6 +46,10 @@ const GIZMO_SCALE := 2
 # Input modes (OhaoViewport)
 const INPUT_EDITOR := 0
 const INPUT_GAME := 1
+
+# Effect stability (OhaoSettings)
+const EFFECT_STABLE := 0
+const EFFECT_EXPERIMENTAL := 1
 
 # Audio categories (OhaoViewport)
 const AUDIO_SFX := 0

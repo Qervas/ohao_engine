@@ -88,6 +88,20 @@ func presets() -> GDScript:
 	return OhaoPresets
 
 
+## Get the settings/effect catalog (static class).
+func settings() -> GDScript:
+	return load("res://addons/ohao_helpers/ohao_settings.gd")
+
+
+## Create an in-game settings panel and optionally add it to a parent node.
+func create_settings_panel(parent: Node = null) -> CanvasLayer:
+	var PanelClass = load("res://addons/ohao_helpers/ohao_settings_panel.gd")
+	var panel = PanelClass.new()
+	if parent:
+		parent.add_child(panel)
+	return panel
+
+
 ## Quick factory for physics bodies.
 func make_physics_body(body_type: int = OhaoConst.BODY_DYNAMIC,
 		shape_type: int = OhaoConst.SHAPE_BOX,
@@ -100,6 +114,20 @@ func make_physics_body(body_type: int = OhaoConst.BODY_DYNAMIC,
 	body.set_friction(friction)
 	body.set_restitution(restitution)
 	return body
+
+
+## Quick factory for visual mesh instances.
+func make_mesh(mesh_type: int = OhaoConst.MESH_CUBE,
+		color: Color = Color(0.7, 0.7, 0.8),
+		scale: Vector3 = Vector3.ONE,
+		metallic: float = 0.0, roughness: float = 0.5) -> OhaoMeshInstance:
+	var mesh := OhaoMeshInstance.new()
+	mesh.set_mesh_type(mesh_type)
+	mesh.set_mesh_color(color)
+	mesh.set_mesh_scale(scale)
+	mesh.set_metallic(metallic)
+	mesh.set_roughness(roughness)
+	return mesh
 
 
 ## Get the AI texture generator (OhaoAI autoload).
