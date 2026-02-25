@@ -119,6 +119,23 @@ void TAAPass::onResize(uint32_t width, uint32_t height) {
 
     destroyHistoryBuffers();
     createHistoryBuffers();
+
+    // Recreate framebuffers (destroyed by destroyHistoryBuffers, need new history views)
+    for (uint32_t i = 0; i < HISTORY_COUNT; ++i) {
+        if (m_historyViews[i] == VK_NULL_HANDLE || m_renderPass == VK_NULL_HANDLE) continue;
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = m_renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = &m_historyViews[i];
+        framebufferInfo.width = m_width;
+        framebufferInfo.height = m_height;
+        framebufferInfo.layers = 1;
+
+        vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &m_framebuffers[i]);
+    }
+
     createDescriptors();
 }
 
@@ -153,79 +170,62 @@ void TAAPass::updateDescriptorSets() {
     for (uint32_t i = 0; i < HISTORY_COUNT; ++i) {
         if (m_descriptorSets[i] == VK_NULL_HANDLE) continue;
 
-        std::vector<VkWriteDescriptorSet> writes;
-        std::vector<VkDescriptorImageInfo> imageInfos;
-        imageInfos.reserve(4);
+        uint32_t historyIdx = 1 - i;
+
+        // Determine fallback view: current frame > history > skip entirely
+        VkImageView fallbackView = m_currentFrameView;
+        if (fallbackView == VK_NULL_HANDLE) fallbackView = m_historyViews[historyIdx];
+        if (fallbackView == VK_NULL_HANDLE) continue;  // No valid view at all
+
+        // ALWAYS write all 4 bindings — uninitialized descriptors cause SEGV on NVIDIA
+        std::array<VkDescriptorImageInfo, 4> imageInfos{};
+        std::array<VkWriteDescriptorSet, 4> writes{};
 
         // Binding 0: Current frame
-        if (m_currentFrameView != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo& info = imageInfos.emplace_back();
-            info.sampler = m_sampler;
-            info.imageView = m_currentFrameView;
-            info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-            VkWriteDescriptorSet& write = writes.emplace_back();
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = m_descriptorSets[i];
-            write.dstBinding = 0;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &imageInfos.back();
-        }
+        imageInfos[0].sampler = m_sampler;
+        imageInfos[0].imageView = m_currentFrameView != VK_NULL_HANDLE ? m_currentFrameView : fallbackView;
+        imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = m_descriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo = &imageInfos[0];
 
         // Binding 1: History frame (opposite buffer)
-        uint32_t historyIdx = 1 - i;
-        if (m_historyViews[historyIdx] != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo& info = imageInfos.emplace_back();
-            info.sampler = m_sampler;
-            info.imageView = m_historyViews[historyIdx];
-            info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[1].sampler = m_sampler;
+        imageInfos[1].imageView = m_historyViews[historyIdx] != VK_NULL_HANDLE ? m_historyViews[historyIdx] : fallbackView;
+        imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = m_descriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &imageInfos[1];
 
-            VkWriteDescriptorSet& write = writes.emplace_back();
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = m_descriptorSets[i];
-            write.dstBinding = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &imageInfos.back();
-        }
+        // Binding 2: Velocity (fallback to current frame — shader uses flags to skip)
+        imageInfos[2].sampler = m_sampler;
+        imageInfos[2].imageView = m_velocityView != VK_NULL_HANDLE ? m_velocityView : fallbackView;
+        imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = m_descriptorSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &imageInfos[2];
 
-        // Binding 2: Velocity
-        if (m_velocityView != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo& info = imageInfos.emplace_back();
-            info.sampler = m_sampler;
-            info.imageView = m_velocityView;
-            info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        // Binding 3: Depth (fallback to current frame)
+        imageInfos[3].sampler = m_sampler;
+        imageInfos[3].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
+        imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = m_descriptorSets[i];
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].descriptorCount = 1;
+        writes[3].pImageInfo = &imageInfos[3];
 
-            VkWriteDescriptorSet& write = writes.emplace_back();
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = m_descriptorSets[i];
-            write.dstBinding = 2;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &imageInfos.back();
-        }
-
-        // Binding 3: Depth
-        if (m_depthView != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo& info = imageInfos.emplace_back();
-            info.sampler = m_sampler;
-            info.imageView = m_depthView;
-            info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-            VkWriteDescriptorSet& write = writes.emplace_back();
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = m_descriptorSets[i];
-            write.dstBinding = 3;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &imageInfos.back();
-        }
-
-        if (!writes.empty()) {
-            vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()),
-                                   writes.data(), 0, nullptr);
-        }
+        vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
     }
 }
 

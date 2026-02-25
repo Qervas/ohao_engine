@@ -50,6 +50,10 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
+    // Create intermediate HDR + composite pass
+    if (!createIntermediateHDR()) return false;
+    if (!createCompositePass()) return false;
+
     // Create tonemapping pass
     if (!createFinalOutput()) return false;
     if (!createTonemappingPass()) return false;
@@ -92,6 +96,20 @@ void PostProcessingPipeline::cleanup() {
         m_dofPass.reset();
     }
 
+    // Cleanup composite pass
+    if (m_compositePipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_compositePipeline, nullptr);
+    if (m_compositeLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_compositeLayout, nullptr);
+    if (m_compositeDescPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, m_compositeDescPool, nullptr);
+    if (m_compositeDescLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, m_compositeDescLayout, nullptr);
+
+    m_compositePipeline = VK_NULL_HANDLE;
+    m_compositeLayout = VK_NULL_HANDLE;
+    m_compositeDescPool = VK_NULL_HANDLE;
+    m_compositeDescLayout = VK_NULL_HANDLE;
+    m_compositeDescSet = VK_NULL_HANDLE;
+
+    destroyIntermediateHDR();
+
     // Cleanup tonemapping
     if (m_tonemapPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_tonemapPipeline, nullptr);
     if (m_tonemapLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_tonemapLayout, nullptr);
@@ -120,25 +138,109 @@ void PostProcessingPipeline::executeSSAO(VkCommandBuffer cmd, uint32_t frameInde
 }
 
 void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    m_didExecute = false;
+
+    // Skip if no HDR input available
+    if (m_hdrInputView == VK_NULL_HANDLE) return;
+
     VkImageView currentInput = m_hdrInputView;
 
-    // 1. Bloom (threshold + downsample + upsample chain)
-    // Bloom output is composited in tonemapping via the bloom texture binding,
-    // so we don't update currentInput here.
+    // ── 1. SSR (compute) ────────────────────────────────────────────────
+    if (m_ssrEnabled && m_ssrPass) {
+        m_ssrPass->updateDescriptorSet();
+        m_ssrPass->execute(cmd, frameIndex);
+    }
+
+    // ── 2. Volumetric Fog (compute) ─────────────────────────────────────
+    if (m_volumetricsEnabled && m_volumetricPass) {
+        m_volumetricPass->updateDescriptorSet();
+        m_volumetricPass->execute(cmd, frameIndex);
+    }
+
+    // ── 3. Composite (compute) ──────────────────────────────────────────
+    VkImageView ssrOutput = (m_ssrEnabled && m_ssrPass)
+        ? m_ssrPass->getReflectionView() : VK_NULL_HANDLE;
+    VkImageView volOutput = (m_volumetricsEnabled && m_volumetricPass)
+        ? m_volumetricPass->getScatteringView() : VK_NULL_HANDLE;
+
+    if ((ssrOutput != VK_NULL_HANDLE || volOutput != VK_NULL_HANDLE) &&
+        m_compositePipeline != VK_NULL_HANDLE && m_intermediateHDRView != VK_NULL_HANDLE) {
+        uint32_t flags = 0;
+        if (ssrOutput != VK_NULL_HANDLE) flags |= 1;
+        if (volOutput != VK_NULL_HANDLE) flags |= 2;
+        executeComposite(cmd, currentInput, ssrOutput, volOutput, flags);
+        currentInput = m_intermediateHDRView;
+    }
+
+    // ── 4. Bloom ────────────────────────────────────────────────────────
+    float bloomStrength = 0.0f;
     if (m_bloomEnabled && m_bloomPass) {
         m_bloomPass->setInputImage(currentInput);
         m_bloomPass->execute(cmd, frameIndex);
+        bloomStrength = 1.0f;
     }
 
-    // 2. TAA resolve (uses velocity buffer + history)
+    // ── 5. Motion Blur (compute) ────────────────────────────────────────
+    if (m_motionBlurEnabled && m_motionBlurPass) {
+        m_motionBlurPass->setColorBuffer(currentInput);
+        m_motionBlurPass->updateDescriptorSet();
+        m_motionBlurPass->execute(cmd, frameIndex);
+        VkImageView mbOutput = m_motionBlurPass->getOutputView();
+        if (mbOutput != VK_NULL_HANDLE) {
+            currentInput = mbOutput;
+        }
+    }
+
+    // ── 6. TAA ──────────────────────────────────────────────────────────
     if (m_taaEnabled && m_taaPass) {
         m_taaPass->setCurrentFrame(currentInput);
+        m_taaPass->updateDescriptorSets();
         m_taaPass->execute(cmd, frameIndex);
-        currentInput = m_taaPass->getOutputView();
+        VkImageView taaOutput = m_taaPass->getOutputView();
+        if (taaOutput != VK_NULL_HANDLE) {
+            currentInput = taaOutput;
+        }
     }
 
-    // 3. Tonemapping (final pass - reads bloom output via descriptor binding)
-    if (m_tonemappingEnabled && currentInput != VK_NULL_HANDLE) {
+    // ── 7. DoF (compute) ────────────────────────────────────────────────
+    if (m_dofEnabled && m_dofPass) {
+        m_dofPass->setColorBuffer(currentInput);
+        m_dofPass->updateDescriptorSet();
+        m_dofPass->execute(cmd, frameIndex);
+        VkImageView dofOutput = m_dofPass->getOutputView();
+        if (dofOutput != VK_NULL_HANDLE) {
+            currentInput = dofOutput;
+        }
+    }
+
+    // ── 8. Tonemapping: HDR → LDR ──────────────────────────────────────
+    if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
+        m_tonemapFramebuffer != VK_NULL_HANDLE && m_tonemapDescSet != VK_NULL_HANDLE) {
+
+        // Rebind tonemapping input to final chain output
+        updateTonemapInput(currentInput);
+
+        // Update bloom binding if bloom produced output
+        if (bloomStrength > 0.0f && m_bloomPass) {
+            VkImageView bloomView = m_bloomPass->getBloomOutput();
+            if (bloomView != VK_NULL_HANDLE) {
+                VkDescriptorImageInfo bloomInfo{};
+                bloomInfo.sampler = m_sampler;
+                bloomInfo.imageView = bloomView;
+                bloomInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                VkWriteDescriptorSet write{};
+                write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                write.dstSet = m_tonemapDescSet;
+                write.dstBinding = 1;
+                write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                write.descriptorCount = 1;
+                write.pImageInfo = &bloomInfo;
+
+                vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+            }
+        }
+
         VkClearValue clearValue{};
         clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
 
@@ -146,31 +248,41 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         renderPassInfo.renderPass = m_tonemapRenderPass;
         renderPassInfo.framebuffer = m_tonemapFramebuffer;
+        renderPassInfo.renderArea.offset = {0, 0};
         renderPassInfo.renderArea.extent = {m_width, m_height};
         renderPassInfo.clearValueCount = 1;
         renderPassInfo.pClearValues = &clearValue;
 
         vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-        VkViewport viewport{0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height), 0.0f, 1.0f};
-        VkRect2D scissor{{0, 0}, {m_width, m_height}};
+        VkViewport viewport{};
+        viewport.width = static_cast<float>(m_width);
+        viewport.height = static_cast<float>(m_height);
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
         vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.extent = {m_width, m_height};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_tonemapLayout,
-                                0, 1, &m_tonemapDescSet, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                m_tonemapLayout, 0, 1, &m_tonemapDescSet, 0, nullptr);
 
         TonemapParams params{};
         params.exposure = m_exposure;
         params.gamma = m_gamma;
+        params.bloomStrength = bloomStrength;
         params.tonemapOp = static_cast<uint32_t>(m_tonemapOp);
-        params.flags = m_bloomEnabled ? 1 : 0;
 
-        vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
+        vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(params), &params);
 
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRenderPass(cmd);
+
+        m_didExecute = true;
     }
 }
 
@@ -190,6 +302,10 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     if (m_volumetricPass) m_volumetricPass->onResize(width, height);
     if (m_motionBlurPass) m_motionBlurPass->onResize(width, height);
     if (m_dofPass) m_dofPass->onResize(width, height);
+
+    // Recreate intermediate HDR (for composite pass)
+    destroyIntermediateHDR();
+    createIntermediateHDR();
 
     // Recreate final output
     if (m_tonemapFramebuffer != VK_NULL_HANDLE) {
@@ -215,8 +331,10 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
 void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
     if (m_ssaoPass) m_ssaoPass->setDepthBuffer(depth);
     if (m_ssrPass) m_ssrPass->setDepthBuffer(depth);
+    if (m_volumetricPass) m_volumetricPass->setDepthBuffer(depth);
     if (m_motionBlurPass) m_motionBlurPass->setDepthBuffer(depth);
     if (m_dofPass) m_dofPass->setDepthBuffer(depth);
+    if (m_taaPass) m_taaPass->setDepthBuffer(depth);
 }
 
 void PostProcessingPipeline::setNormalBuffer(VkImageView normal) {
@@ -262,6 +380,11 @@ void PostProcessingPipeline::setProjectionMatrix(const glm::mat4& proj, const gl
 
 VkImageView PostProcessingPipeline::getSSAOOutput() const {
     if (m_ssaoPass) return m_ssaoPass->getOutputView();
+    return VK_NULL_HANDLE;
+}
+
+VkSampler PostProcessingPipeline::getSSAOSampler() const {
+    if (m_ssaoPass) return m_ssaoPass->getSampler();
     return VK_NULL_HANDLE;
 }
 
@@ -382,7 +505,9 @@ void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {
 
 void PostProcessingPipeline::updateTonemapDescriptors() {
     if (m_tonemapDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
+    if (m_hdrInputView == VK_NULL_HANDLE) return;
 
+    // Always write BOTH bindings (Vulkan requires all declared bindings to be written)
     std::array<VkDescriptorImageInfo, 2> imageInfos{};
     std::array<VkWriteDescriptorSet, 2> writes{};
 
@@ -398,33 +523,20 @@ void PostProcessingPipeline::updateTonemapDescriptors() {
     writes[0].descriptorCount = 1;
     writes[0].pImageInfo = &imageInfos[0];
 
-    // Binding 1: Bloom texture
+    // Binding 1: Bloom texture — use HDR input as fallback when bloom is unavailable
     VkImageView bloomView = m_bloomPass ? m_bloomPass->getBloomOutput() : VK_NULL_HANDLE;
-    if (bloomView != VK_NULL_HANDLE) {
-        imageInfos[1].sampler = m_sampler;
-        imageInfos[1].imageView = bloomView;
-        imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[1].sampler = m_sampler;
+    imageInfos[1].imageView = bloomView != VK_NULL_HANDLE ? bloomView : m_hdrInputView;
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = m_tonemapDescSet;
-        writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &imageInfos[1];
-    }
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m_tonemapDescSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &imageInfos[1];
 
-    uint32_t writeCount = (m_hdrInputView != VK_NULL_HANDLE ? 1 : 0) +
-                          (bloomView != VK_NULL_HANDLE ? 1 : 0);
-
-    if (writeCount > 0) {
-        if (m_hdrInputView != VK_NULL_HANDLE && bloomView != VK_NULL_HANDLE) {
-            vkUpdateDescriptorSets(m_device, 2, writes.data(), 0, nullptr);
-        } else if (m_hdrInputView != VK_NULL_HANDLE) {
-            vkUpdateDescriptorSets(m_device, 1, &writes[0], 0, nullptr);
-        } else if (bloomView != VK_NULL_HANDLE) {
-            vkUpdateDescriptorSets(m_device, 1, &writes[1], 0, nullptr);
-        }
-    }
+    vkUpdateDescriptorSets(m_device, 2, writes.data(), 0, nullptr);
 }
 
 bool PostProcessingPipeline::createFinalOutput() {
@@ -687,6 +799,328 @@ bool PostProcessingPipeline::createTonemappingPass() {
     vkDestroyShaderModule(m_device, fragShader, nullptr);
 
     return result == VK_SUCCESS;
+}
+
+// ===================================================================
+// Intermediate HDR image (for composite pass output)
+// ===================================================================
+
+bool PostProcessingPipeline::createIntermediateHDR() {
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    imageInfo.extent = {m_width, m_height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_intermediateHDR) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(m_device, m_intermediateHDR, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_intermediateHDRMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindImageMemory(m_device, m_intermediateHDR, m_intermediateHDRMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_intermediateHDR;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    return vkCreateImageView(m_device, &viewInfo, nullptr, &m_intermediateHDRView) == VK_SUCCESS;
+}
+
+void PostProcessingPipeline::destroyIntermediateHDR() {
+    if (m_intermediateHDRView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_intermediateHDRView, nullptr);
+        m_intermediateHDRView = VK_NULL_HANDLE;
+    }
+    if (m_intermediateHDR != VK_NULL_HANDLE) {
+        vkDestroyImage(m_device, m_intermediateHDR, nullptr);
+        m_intermediateHDR = VK_NULL_HANDLE;
+    }
+    if (m_intermediateHDRMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(m_device, m_intermediateHDRMemory, nullptr);
+        m_intermediateHDRMemory = VK_NULL_HANDLE;
+    }
+}
+
+// ===================================================================
+// Composite pass (merges SSR + volumetric into HDR scene)
+// ===================================================================
+
+bool PostProcessingPipeline::createCompositePass() {
+    // Descriptor layout: 3 samplers (scene, SSR, volumetric) + 1 storage image (output)
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+
+    // Binding 0: HDR scene (sampler)
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 1: SSR reflection (sampler)
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 2: Volumetric scatter (sampler)
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    // Binding 3: Output image (storage)
+    bindings[3].binding = 3;
+    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[3].descriptorCount = 1;
+    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_compositeDescLayout) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Descriptor pool
+    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[0].descriptorCount = 3;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    poolSizes[1].descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = 1;
+
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_compositeDescPool) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkDescriptorSetAllocateInfo descAllocInfo{};
+    descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    descAllocInfo.descriptorPool = m_compositeDescPool;
+    descAllocInfo.descriptorSetCount = 1;
+    descAllocInfo.pSetLayouts = &m_compositeDescLayout;
+
+    if (vkAllocateDescriptorSets(m_device, &descAllocInfo, &m_compositeDescSet) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Push constant range
+    VkPushConstantRange pushConstant{};
+    pushConstant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstant.offset = 0;
+    pushConstant.size = sizeof(CompositeParams);
+
+    // Pipeline layout
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_compositeDescLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
+
+    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_compositeLayout) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Load compute shader
+    VkShaderModule compShader = loadShaderModule("compute_composite.comp.spv");
+    if (compShader == VK_NULL_HANDLE) {
+        // Shader not yet compiled — composite pass will be skipped at runtime
+        return true;
+    }
+
+    VkPipelineShaderStageCreateInfo stageInfo{};
+    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stageInfo.module = compShader;
+    stageInfo.pName = "main";
+
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage = stageInfo;
+    pipelineInfo.layout = m_compositeLayout;
+
+    VkResult result = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
+                                                nullptr, &m_compositePipeline);
+
+    vkDestroyShaderModule(m_device, compShader, nullptr);
+
+    return result == VK_SUCCESS;
+}
+
+void PostProcessingPipeline::updateCompositeDescriptors(VkImageView scene,
+                                                         VkImageView ssr,
+                                                         VkImageView vol) {
+    if (m_compositeDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
+    if (scene == VK_NULL_HANDLE || m_intermediateHDRView == VK_NULL_HANDLE) return;
+
+    // ALWAYS write all 4 bindings (Vulkan requires all declared bindings to be valid)
+    // Use scene view as fallback for SSR/volumetric when not available
+    std::array<VkDescriptorImageInfo, 4> imageInfos{};
+    std::array<VkWriteDescriptorSet, 4> writes{};
+
+    // Binding 0: HDR scene
+    imageInfos[0].sampler = m_sampler;
+    imageInfos[0].imageView = scene;
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m_compositeDescSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imageInfos[0];
+
+    // Binding 1: SSR reflection (fallback to scene if null)
+    imageInfos[1].sampler = m_sampler;
+    imageInfos[1].imageView = ssr != VK_NULL_HANDLE ? ssr : scene;
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m_compositeDescSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &imageInfos[1];
+
+    // Binding 2: Volumetric scatter (fallback to scene if null)
+    imageInfos[2].sampler = m_sampler;
+    imageInfos[2].imageView = vol != VK_NULL_HANDLE ? vol : scene;
+    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_compositeDescSet;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &imageInfos[2];
+
+    // Binding 3: Output (storage image)
+    imageInfos[3].imageView = m_intermediateHDRView;
+    imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = m_compositeDescSet;
+    writes[3].dstBinding = 3;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[3].descriptorCount = 1;
+    writes[3].pImageInfo = &imageInfos[3];
+
+    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
+}
+
+void PostProcessingPipeline::executeComposite(VkCommandBuffer cmd,
+                                               VkImageView sceneInput,
+                                               VkImageView ssrInput,
+                                               VkImageView volInput,
+                                               uint32_t flags) {
+    if (m_compositePipeline == VK_NULL_HANDLE || m_intermediateHDRView == VK_NULL_HANDLE) {
+        return;
+    }
+
+    // Transition intermediate HDR to GENERAL for storage write
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_intermediateHDR;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    // Update descriptors with current inputs
+    updateCompositeDescriptors(sceneInput, ssrInput, volInput);
+
+    // Bind and dispatch
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compositeLayout,
+                            0, 1, &m_compositeDescSet, 0, nullptr);
+
+    CompositeParams params{};
+    params.screenWidth = static_cast<float>(m_width);
+    params.screenHeight = static_cast<float>(m_height);
+    params.flags = flags;
+    params.padding = 0;
+
+    vkCmdPushConstants(cmd, m_compositeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(params), &params);
+
+    uint32_t groupsX = (m_width + 15) / 16;
+    uint32_t groupsY = (m_height + 15) / 16;
+    vkCmdDispatch(cmd, groupsX, groupsY, 1);
+
+    // Transition intermediate HDR to SHADER_READ_ONLY for subsequent passes
+    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          0, 0, nullptr, 0, nullptr, 1, &barrier);
+}
+
+// ===================================================================
+// Dynamic tonemapping input rebind
+// ===================================================================
+
+void PostProcessingPipeline::updateTonemapInput(VkImageView input) {
+    if (m_tonemapDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
+    if (input == VK_NULL_HANDLE) return;
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = m_sampler;
+    imageInfo.imageView = input;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_tonemapDescSet;
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
 } // namespace ohao

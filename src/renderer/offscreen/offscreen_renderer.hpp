@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include "utils/common_types.hpp"
 #include "renderer/frame/frame_resources.hpp"
+#include "renderer/material/bindless_texture_manager.hpp"
 
 namespace ohao {
 
@@ -43,7 +44,8 @@ struct ObjectPushConstants {
     alignas(4) float metallic;
     alignas(4) float roughness;
     alignas(4) float ao;
-    alignas(8) glm::vec2 padding;
+    alignas(4) float albedoTexIdx;  // uint32 packed as float (UINT32_MAX = no texture)
+    alignas(4) float normalTexIdx;  // uint32 packed as float (UINT32_MAX = no texture)
 };
 
 // Light data for uniform buffer (matches shader layout)
@@ -110,6 +112,9 @@ public:
 
     // Deferred renderer access (for configuration)
     DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
+
+    // Texture manager access
+    BindlessTextureManager* getTextureManager() { return m_textureManager.get(); }
 
     // Pixel access (RGBA format, 4 bytes per pixel)
     const uint8_t* getPixels() const { return m_pixelBuffer.data(); }
@@ -282,10 +287,13 @@ private:
     // Deferred renderer (AAA quality)
     std::unique_ptr<DeferredRenderer> m_deferredRenderer;
 
+    // Bindless texture manager
+    std::unique_ptr<BindlessTextureManager> m_textureManager;
+
     // Deferred rendering methods
     bool initializeDeferredRenderer();
     void renderDeferred();
-    void copyDeferredOutputToPixelBuffer();
+    void copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd);
 };
 
 } // namespace ohao

@@ -19,13 +19,13 @@ layout(location = 4) out vec4 fragCurrentPos;  // Current frame clip position
 layout(location = 5) out vec4 fragPrevPos;     // Previous frame clip position (for velocity)
 
 // Per-object push constants (matches GBufferUBO in C++)
+// Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    mat4 view;
-    mat4 projection;
+    mat4 viewProj;        // precomputed projection * view
     mat4 prevMVP;
-    vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=unused
-    vec4 albedoColor;     // rgb=albedo, a=unused
+    vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=albedoTexIdx (uint bits)
+    vec4 albedoColor;     // rgb=albedo, a=normalTexIdx (uint bits)
 } pc;
 
 void main() {
@@ -42,7 +42,7 @@ void main() {
     fragTexCoord = inTexCoord;
 
     // Current frame clip position
-    fragCurrentPos = pc.projection * pc.view * worldPos;
+    fragCurrentPos = pc.viewProj * worldPos;
 
     // Previous frame clip position for velocity calculation
     fragPrevPos = pc.prevMVP * vec4(inPosition, 1.0);

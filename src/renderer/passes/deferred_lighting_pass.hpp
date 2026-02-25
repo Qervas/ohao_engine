@@ -78,6 +78,16 @@ private:
     VkImageView m_ssaoView{VK_NULL_HANDLE};
     VkSampler m_ssaoSampler{VK_NULL_HANDLE};
 
+    // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
+    VkImage m_dummyImage{VK_NULL_HANDLE};
+    VkDeviceMemory m_dummyMemory{VK_NULL_HANDLE};
+    VkImageView m_dummyView{VK_NULL_HANDLE};
+    VkBuffer m_dummyBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_dummyBufferMemory{VK_NULL_HANDLE};
+    bool m_dummyImageTransitioned{false};
+    bool createDummyResources();
+    void destroyDummyResources();
+
     // Dimensions
     uint32_t m_width{0};
     uint32_t m_height{0};

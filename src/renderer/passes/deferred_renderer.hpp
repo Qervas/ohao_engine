@@ -51,6 +51,9 @@ public:
     void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
                         VkImageView brdfLUT, VkSampler iblSampler);
 
+    // Texture manager (forwarded to GBufferPass)
+    void setTextureManager(BindlessTextureManager* texManager);
+
     // Post-processing configuration
     PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
 
@@ -98,6 +101,9 @@ private:
 
     // Scene reference
     Scene* m_scene{nullptr};
+
+    // Texture manager (set before initialize)
+    BindlessTextureManager* m_textureManager{nullptr};
 
     // Dimensions
     uint32_t m_width{0};

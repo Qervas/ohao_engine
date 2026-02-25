@@ -52,6 +52,12 @@ private:
     VkDeviceMemory m_noiseMemory{VK_NULL_HANDLE};
     VkImageView m_noiseView{VK_NULL_HANDLE};
 
+    // Staging buffer for deferred noise upload
+    VkBuffer m_noiseStagingBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_noiseStagingMemory{VK_NULL_HANDLE};
+    bool m_noiseUploaded{false};
+    void uploadNoiseTexture(VkCommandBuffer cmd);
+
     // Compute pipeline
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};

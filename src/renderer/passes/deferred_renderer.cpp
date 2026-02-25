@@ -20,6 +20,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // Initialize G-Buffer pass
     m_gbufferPass = std::make_unique<GBufferPass>();
+    if (m_textureManager) {
+        m_gbufferPass->setTextureManager(m_textureManager);
+    }
     if (!m_gbufferPass->initialize(device, physicalDevice)) {
         std::cerr << "DeferredRenderer: GBufferPass failed" << std::endl;
         return false;
@@ -179,7 +182,19 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Update post-processing
     if (m_postProcessing) {
         glm::mat4 invProj = glm::inverse(m_proj);
+        glm::mat4 invView = glm::inverse(m_view);
         m_postProcessing->setProjectionMatrix(m_proj, invProj);
+
+        // SSR needs view/proj matrices for screen-space ray marching
+        m_postProcessing->setSSRMatrices(m_view, m_proj, invView, invProj);
+
+        // Volumetric fog needs view/proj matrices + light/shadow data
+        m_postProcessing->setVolumetricMatrices(m_view, m_proj, invView, invProj);
+        m_postProcessing->setLightBuffer(m_lightBuffer);
+        if (m_csmPass) {
+            m_postProcessing->setShadowMap(m_csmPass->getShadowMapArrayView(),
+                                            m_csmPass->getShadowSampler());
+        }
     }
 
     // Execute render passes in order
@@ -194,15 +209,22 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_gbufferPass->execute(cmd, frameIndex);
     }
 
-    // 3. SSAO pass (before lighting, after G-Buffer)
-    if (m_postProcessing) {
+    // 3. SSAO (pre-lighting, computed as part of post-processing pipeline)
+    if (m_postProcessing && m_gbufferPass) {
         m_postProcessing->executeSSAO(cmd, frameIndex);
-        m_lightingPass->setSSAOTexture(m_postProcessing->getSSAOOutput(),
-                                       nullptr);
+
+        // Pass SSAO result to lighting
+        if (m_lightingPass) {
+            VkImageView ssaoView = m_postProcessing->getSSAOOutput();
+            VkSampler ssaoSampler = m_postProcessing->getSSAOSampler();
+            if (ssaoView != VK_NULL_HANDLE && ssaoSampler != VK_NULL_HANDLE) {
+                m_lightingPass->setSSAOTexture(ssaoView, ssaoSampler);
+            }
+        }
     }
 
     // 4. Deferred lighting pass
-    if (m_lightingPass) {
+    if (m_lightingPass && m_gbufferPass) {
         m_lightingPass->execute(cmd, frameIndex);
     }
 
@@ -252,20 +274,28 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // 5. Post-processing (bloom, TAA, tonemapping)
+    // 5. Post-processing (SSR, volumetric, bloom, motion blur, TAA, DoF, tonemapping)
     if (m_postProcessing && m_lightingPass) {
+        m_postProcessing->setColorBuffer(m_lightingPass->getOutputView());
         m_postProcessing->setHDRInput(m_lightingPass->getOutputView());
         m_postProcessing->execute(cmd, frameIndex);
     }
 
     // 6. Overlay pass (grid, debug visualizations)
     if (m_overlayPass && m_gridEnabled) {
-        VkImageView postOutput = m_postProcessing ? m_postProcessing->getOutputView() : VK_NULL_HANDLE;
+        // Use post-processing output if it actually ran, otherwise fall back to lighting output
+        VkImageView inputView = VK_NULL_HANDLE;
+        if (m_postProcessing && m_postProcessing->didExecute()) {
+            inputView = m_postProcessing->getOutputView();
+        }
+        if (inputView == VK_NULL_HANDLE && m_lightingPass) {
+            inputView = m_lightingPass->getOutputView();
+        }
         VkImageView depthView = m_gbufferPass ? m_gbufferPass->getDepthView() : VK_NULL_HANDLE;
 
-        if (postOutput != VK_NULL_HANDLE && depthView != VK_NULL_HANDLE) {
+        if (inputView != VK_NULL_HANDLE && depthView != VK_NULL_HANDLE) {
             glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
-            m_overlayPass->setInputImage(postOutput);
+            m_overlayPass->setInputImage(inputView);
             m_overlayPass->setDepthBuffer(depthView);
             m_overlayPass->setCameraData(m_view, m_proj, invViewProj, m_cameraPos);
             m_overlayPass->setGridEnabled(m_gridEnabled);
@@ -273,11 +303,22 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // 7. Gizmo pass (transform handles, rendered on top of everything)
+    // 7. Gizmo pass (transform handles for selected objects)
     if (m_gizmoPass && m_gizmoEnabled) {
-        // Determine the final output image to composite gizmos onto
-        VkImage finalImage = getFinalOutputImage();
-        VkImageView finalView = getFinalOutput();
+        // Determine the final output image — must be from a pass that actually ran
+        VkImage finalImage = VK_NULL_HANDLE;
+        VkImageView finalView = VK_NULL_HANDLE;
+
+        if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputView() != VK_NULL_HANDLE) {
+            finalImage = m_overlayPass->getOutputImage();
+            finalView = m_overlayPass->getOutputView();
+        } else if (m_postProcessing && m_postProcessing->didExecute()) {
+            finalImage = m_postProcessing->getOutputImage();
+            finalView = m_postProcessing->getOutputView();
+        } else if (m_lightingPass) {
+            finalImage = m_lightingPass->getOutputImage();
+            finalView = m_lightingPass->getOutputView();
+        }
 
         if (finalImage != VK_NULL_HANDLE && finalView != VK_NULL_HANDLE) {
             m_gizmoPass->setTargetImage(finalImage, finalView);
@@ -319,6 +360,13 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
         m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
         m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
+    }
+}
+
+void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
+    m_textureManager = texManager;
+    if (m_gbufferPass) {
+        m_gbufferPass->setTextureManager(texManager);
     }
 }
 
@@ -372,7 +420,7 @@ VkImageView DeferredRenderer::getFinalOutput() const {
     if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputView() != VK_NULL_HANDLE) {
         return m_overlayPass->getOutputView();
     }
-    if (m_postProcessing) {
+    if (m_postProcessing && m_postProcessing->didExecute()) {
         return m_postProcessing->getOutputView();
     }
     if (m_lightingPass) {
@@ -385,7 +433,7 @@ VkImage DeferredRenderer::getFinalOutputImage() const {
     if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputImage() != VK_NULL_HANDLE) {
         return m_overlayPass->getOutputImage();
     }
-    if (m_postProcessing) {
+    if (m_postProcessing && m_postProcessing->didExecute()) {
         return m_postProcessing->getOutputImage();
     }
     if (m_lightingPass) {
@@ -470,6 +518,7 @@ bool DeferredRenderer::createParticleRenderPass() {
     if (!m_lightingPass || !m_gbufferPass) return false;
 
     // Color attachment: HDR output from lighting (load existing content)
+    // Lighting render pass finalLayout = SHADER_READ_ONLY_OPTIMAL, so we must match that
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT; // HDR format
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -477,8 +526,8 @@ bool DeferredRenderer::createParticleRenderPass() {
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // Depth attachment: from GBuffer (read-only for depth testing)
     VkAttachmentDescription depthAttachment{};

@@ -148,6 +148,15 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                                     ? m_wireframePipeline : m_pipeline;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
 
+    // Bind bindless texture descriptor set (set 0) if available
+    if (m_textureManager) {
+        VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
+        if (texSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
+        }
+    }
+
     // Bind vertex and index buffers if available
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         VkBuffer vertexBuffers[] = {m_vertexBuffer};
@@ -207,14 +216,33 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             // Get AO from material if available
             float ao = materialComp ? materialComp->getMaterial().ao : 1.0f;
 
+            // Look up texture indices for bindless rendering
+            uint32_t albedoTexIdx = UINT32_MAX;
+            uint32_t normalTexIdx = UINT32_MAX;
+            if (m_textureManager && materialComp) {
+                const auto& mat = materialComp->getMaterial();
+                if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
+                    auto handle = m_textureManager->getTextureByPath(mat.albedoTexture);
+                    if (handle.valid()) albedoTexIdx = handle.index;
+                }
+                if (mat.useNormalTexture && !mat.normalTexture.empty()) {
+                    auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
+                    if (handle.valid()) normalTexIdx = handle.index;
+                }
+            }
+
+            // Pack texture indices into unused push constant fields via bit reinterpret
+            float packedAlbedoIdx, packedNormalIdx;
+            memcpy(&packedAlbedoIdx, &albedoTexIdx, sizeof(float));
+            memcpy(&packedNormalIdx, &normalTexIdx, sizeof(float));
+
             // Set push constants with transform and material data
             GBufferUBO ubo{};
             ubo.model = modelMatrix;
-            ubo.view = m_view;
-            ubo.projection = m_projection;
+            ubo.viewProj = m_projection * m_view;
             ubo.prevMVP = m_prevViewProj * modelMatrix;
-            ubo.materialParams = glm::vec4(metallic, roughness, ao, 0.0f);
-            ubo.albedoColor = glm::vec4(albedo, 1.0f);
+            ubo.materialParams = glm::vec4(metallic, roughness, ao, packedAlbedoIdx);
+            ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
 
             vkCmdPushConstants(cmd, m_pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -667,11 +695,21 @@ bool GBufferPass::createPipeline() {
     pushConstant.offset = 0;
     pushConstant.size = sizeof(GBufferUBO);
 
-    // Pipeline layout
+    // Pipeline layout — include bindless texture descriptor set if available
+    VkDescriptorSetLayout texLayout = VK_NULL_HANDLE;
+    if (m_textureManager) {
+        texLayout = m_textureManager->getDescriptorSetLayout();
+    }
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 0; // Per-object textures would go here
-    pipelineLayoutInfo.pSetLayouts = nullptr;
+    if (texLayout != VK_NULL_HANDLE) {
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &texLayout;
+    } else {
+        pipelineLayoutInfo.setLayoutCount = 0;
+        pipelineLayoutInfo.pSetLayouts = nullptr;
+    }
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
@@ -904,11 +942,17 @@ bool GBufferPass::createSkinnedPipeline() {
     pushConstant.offset = 0;
     pushConstant.size = sizeof(GBufferUBO);
 
-    // Skinned pipeline layout includes the bone descriptor set (set 0)
+    // Skinned pipeline layout includes bone descriptor (set 0) + bindless textures (set 1)
+    std::vector<VkDescriptorSetLayout> skinnedLayouts;
+    skinnedLayouts.push_back(m_boneDescriptorLayout);
+    if (m_textureManager && m_textureManager->getDescriptorSetLayout() != VK_NULL_HANDLE) {
+        skinnedLayouts.push_back(m_textureManager->getDescriptorSetLayout());
+    }
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &m_boneDescriptorLayout;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(skinnedLayouts.size());
+    pipelineLayoutInfo.pSetLayouts = skinnedLayouts.data();
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 

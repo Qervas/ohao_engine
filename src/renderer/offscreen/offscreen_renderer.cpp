@@ -94,6 +94,18 @@ bool OffscreenRenderer::initialize() {
             std::cerr << "Failed to create descriptor set layout" << std::endl;
             return false;
         }
+
+        // Initialize bindless texture manager BEFORE pipeline creation
+        // so the forward pipeline layout can include the bindless descriptor set
+        m_textureManager = std::make_unique<BindlessTextureManager>();
+        if (!m_textureManager->initialize(m_device, m_physicalDevice, nullptr, 4096,
+                                           m_graphicsQueueFamily, m_graphicsQueue)) {
+            std::cerr << "Failed to initialize BindlessTextureManager (textures unavailable)" << std::endl;
+            m_textureManager.reset();
+        } else {
+            std::cout << "BindlessTextureManager initialized" << std::endl;
+        }
+
         if (!createPipeline()) {
             std::cerr << "Failed to create graphics pipeline" << std::endl;
             return false;
@@ -140,6 +152,14 @@ bool OffscreenRenderer::initialize() {
         RenderPassBase::setShaderBasePath(m_shaderBasePath);
 
         // Initialize deferred renderer (AAA quality rendering)
+        // Set texture manager BEFORE init so GBufferPass pipeline includes bindless layout
+        if (m_textureManager) {
+            // Will be stored and passed to GBufferPass during initialize()
+            if (!m_deferredRenderer) {
+                m_deferredRenderer = std::make_unique<DeferredRenderer>();
+            }
+            m_deferredRenderer->setTextureManager(m_textureManager.get());
+        }
         if (!initializeDeferredRenderer()) {
             std::cerr << "Failed to initialize deferred renderer (deferred mode unavailable)" << std::endl;
             // Not fatal - forward rendering still works
@@ -168,6 +188,12 @@ void OffscreenRenderer::shutdown() {
         if (m_deferredRenderer) {
             m_deferredRenderer->cleanup();
             m_deferredRenderer.reset();
+        }
+
+        // Cleanup texture manager
+        if (m_textureManager) {
+            m_textureManager->cleanup();
+            m_textureManager.reset();
         }
 
         // Cleanup multi-frame resources
@@ -315,7 +341,9 @@ void OffscreenRenderer::setRenderMode(RenderMode mode) {
 
 bool OffscreenRenderer::initializeDeferredRenderer() {
     std::cout << "OffscreenRenderer: Creating DeferredRenderer..." << std::endl;
-    m_deferredRenderer = std::make_unique<DeferredRenderer>();
+    if (!m_deferredRenderer) {
+        m_deferredRenderer = std::make_unique<DeferredRenderer>();
+    }
     std::cout << "OffscreenRenderer: Calling DeferredRenderer::initialize()..." << std::endl;
     if (!m_deferredRenderer->initialize(m_device, m_physicalDevice)) {
         std::cerr << "OffscreenRenderer: DeferredRenderer::initialize() failed!" << std::endl;
@@ -378,8 +406,8 @@ void OffscreenRenderer::renderDeferred() {
     // Execute deferred rendering pipeline
     m_deferredRenderer->render(cmd, m_currentFrame);
 
-    // Copy deferred output to staging buffer for pixel readback
-    copyDeferredOutputToPixelBuffer();
+    // Copy final output to staging buffer for CPU readback
+    copyDeferredOutputToPixelBuffer(cmd);
 
     vkEndCommandBuffer(cmd);
 
@@ -394,15 +422,37 @@ void OffscreenRenderer::renderDeferred() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void OffscreenRenderer::copyDeferredOutputToPixelBuffer() {
-    // For now, fall back to using forward renderer's output (m_colorImage)
-    // The deferred pipeline writes to its own buffers which need proper integration
-    // TODO: Properly integrate deferred output once the pipeline is fully tested
+void OffscreenRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
+    if (!m_deferredRenderer) return;
+
+    VkImage finalImage = m_deferredRenderer->getFinalOutputImage();
+    if (finalImage == VK_NULL_HANDLE) return;
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
-    VkCommandBuffer cmd = frame.commandBuffer;
+    if (frame.stagingBuffer == VK_NULL_HANDLE) return;
 
-    // Copy from the forward renderer's color image (which is in a known good state)
+    // Transition final output: SHADER_READ_ONLY_OPTIMAL -> TRANSFER_SRC_OPTIMAL
+    VkImageMemoryBarrier toTransferSrc{};
+    toTransferSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toTransferSrc.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toTransferSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toTransferSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toTransferSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toTransferSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransferSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toTransferSrc.image = finalImage;
+    toTransferSrc.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toTransferSrc.subresourceRange.baseMipLevel = 0;
+    toTransferSrc.subresourceRange.levelCount = 1;
+    toTransferSrc.subresourceRange.baseArrayLayer = 0;
+    toTransferSrc.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toTransferSrc);
+
+    // Copy image to staging buffer
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
     region.bufferRowLength = 0;
@@ -414,7 +464,7 @@ void OffscreenRenderer::copyDeferredOutputToPixelBuffer() {
     region.imageOffset = {0, 0, 0};
     region.imageExtent = {m_width, m_height, 1};
 
-    vkCmdCopyImageToBuffer(cmd, m_colorImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    vkCmdCopyImageToBuffer(cmd, finalImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            frame.stagingBuffer, 1, &region);
 }
 
@@ -473,9 +523,18 @@ void OffscreenRenderer::renderMultiFrame() {
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Bind this frame's descriptor set
+    // Bind this frame's descriptor set (set 0: camera/light/shadow)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             m_pipelineLayout, 0, 1, &frame.descriptorSet, 0, nullptr);
+
+    // Bind bindless texture descriptor set (set 1) if available
+    if (m_textureManager) {
+        VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
+        if (texSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    m_pipelineLayout, 1, 1, &texSet, 0, nullptr);
+        }
+    }
 
     if (m_hasSceneMeshes) {
         // Bind pipeline and vertex/index buffers
@@ -595,9 +654,18 @@ void OffscreenRenderer::renderLegacy() {
         scissor.extent = {m_width, m_height};
         vkCmdSetScissor(m_commandBuffer, 0, 1, &scissor);
 
-        // Bind descriptor sets
+        // Bind descriptor sets (set 0: camera/light/shadow)
         vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+
+        // Bind bindless texture descriptor set (set 1)
+        if (m_textureManager) {
+            VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
+            if (texSet != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(m_commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        m_pipelineLayout, 1, 1, &texSet, 0, nullptr);
+            }
+        }
 
         // Bind vertex and index buffers
         VkDeviceSize offsets[] = {0};

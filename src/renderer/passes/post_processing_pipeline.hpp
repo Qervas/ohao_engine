@@ -101,7 +101,9 @@ public:
     // Get final output
     VkImageView getOutputView() const { return m_finalOutputView; }
     VkImage getOutputImage() const { return m_finalOutput; }
+    bool didExecute() const { return m_didExecute; }
     VkImageView getSSAOOutput() const;
+    VkSampler getSSAOSampler() const;
     VkImageView getSSROutput() const;
     VkImageView getVolumetricOutput() const;
     VkImageView getMotionBlurOutput() const;
@@ -112,6 +114,15 @@ private:
     bool createFinalOutput();
     void destroyFinalOutput();
     void updateTonemapDescriptors();
+    void updateTonemapInput(VkImageView input);
+
+    // Composite pass (merges SSR + volumetric into HDR)
+    bool createCompositePass();
+    bool createIntermediateHDR();
+    void destroyIntermediateHDR();
+    void executeComposite(VkCommandBuffer cmd, VkImageView sceneInput,
+                          VkImageView ssrInput, VkImageView volInput, uint32_t flags);
+    void updateCompositeDescriptors(VkImageView scene, VkImageView ssr, VkImageView vol);
 
     // Sub-passes
     std::unique_ptr<BloomPass> m_bloomPass;
@@ -131,6 +142,18 @@ private:
     VkDescriptorSet m_tonemapDescSet{VK_NULL_HANDLE};
     VkFramebuffer m_tonemapFramebuffer{VK_NULL_HANDLE};
     VkSampler m_sampler{VK_NULL_HANDLE};
+
+    // Composite pass (SSR + volumetric merge)
+    VkPipeline m_compositePipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_compositeLayout{VK_NULL_HANDLE};
+    VkDescriptorSetLayout m_compositeDescLayout{VK_NULL_HANDLE};
+    VkDescriptorPool m_compositeDescPool{VK_NULL_HANDLE};
+    VkDescriptorSet m_compositeDescSet{VK_NULL_HANDLE};
+
+    // Intermediate HDR image (output of composite pass, input to bloom/motion blur/etc.)
+    VkImage m_intermediateHDR{VK_NULL_HANDLE};
+    VkDeviceMemory m_intermediateHDRMemory{VK_NULL_HANDLE};
+    VkImageView m_intermediateHDRView{VK_NULL_HANDLE};
 
     // Final output (LDR)
     VkImage m_finalOutput{VK_NULL_HANDLE};
@@ -153,6 +176,7 @@ private:
     bool m_motionBlurEnabled{false};
     bool m_dofEnabled{false};
     bool m_tonemappingEnabled{true};
+    bool m_didExecute{false};
 
     // Color buffer for SSR
     VkImageView m_colorBufferView{VK_NULL_HANDLE};
@@ -162,12 +186,20 @@ private:
     float m_exposure{1.0f};
     float m_gamma{2.2f};
 
-    // Push constants for tonemapping
+    // Push constants for tonemapping (must match GLSL layout in tonemapping.frag)
     struct TonemapParams {
         float exposure;
         float gamma;
-        uint32_t tonemapOp;
-        uint32_t flags; // Bit 0: use bloom
+        float bloomStrength;   // 0.0 = no bloom composite, 1.0+ = bloom intensity
+        uint32_t tonemapOp;    // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
+    };
+
+    // Push constants for composite pass (must match composite.comp)
+    struct CompositeParams {
+        float screenWidth;
+        float screenHeight;
+        uint32_t flags;     // bit 0 = SSR, bit 1 = volumetric
+        uint32_t padding;
     };
 };
 

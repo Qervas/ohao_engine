@@ -269,11 +269,16 @@ bool OffscreenRenderer::createPipeline() {
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(ObjectPushConstants);
 
-    // Pipeline layout
+    // Pipeline layout — set 0: camera/light/shadow UBOs, set 1: bindless textures
+    std::vector<VkDescriptorSetLayout> layouts = { m_descriptorSetLayout };
+    if (m_textureManager && m_textureManager->getDescriptorSetLayout() != VK_NULL_HANDLE) {
+        layouts.push_back(m_textureManager->getDescriptorSetLayout());
+    }
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(layouts.size());
+    pipelineLayoutInfo.pSetLayouts = layouts.data();
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 

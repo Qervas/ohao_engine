@@ -38,6 +38,11 @@ bool DeferredLightingPass::initialize(VkDevice device, VkPhysicalDevice physical
         return false;
     }
 
+    // Create dummy resources for fallback descriptor bindings
+    if (!createDummyResources()) {
+        return false;
+    }
+
     return true;
 }
 
@@ -76,10 +81,37 @@ void DeferredLightingPass::cleanup() {
     }
 
     m_hdrOutput.destroy(m_device);
+    destroyDummyResources();
 }
 
 void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     if (!m_gbufferPass) return;
+    if (m_pipeline == VK_NULL_HANDLE || m_pipelineLayout == VK_NULL_HANDLE ||
+        m_descriptorSet == VK_NULL_HANDLE) return;
+
+    // Transition dummy image on first use (needed for fallback descriptor bindings)
+    if (!m_dummyImageTransitioned && m_dummyImage != VK_NULL_HANDLE) {
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_dummyImage;
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &barrier);
+        m_dummyImageTransitioned = true;
+    }
 
     // Begin render pass
     VkClearValue clearValue{};
@@ -181,15 +213,18 @@ void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
 }
 
 void DeferredLightingPass::updateDescriptorSets() {
-    if (!m_gbufferPass || m_descriptorSet == VK_NULL_HANDLE) return;
+    if (!m_gbufferPass || m_descriptorSet == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    std::vector<VkWriteDescriptorSet> writes;
-    std::vector<VkDescriptorImageInfo> imageInfos;
+    // Always write ALL 11 bindings. Use dummy resources as fallback for unbound bindings.
+    // Vulkan requires all declared bindings to be written before the descriptor set is used.
+    VkImageView fallbackView = m_dummyView;
+    VkSampler fallbackSampler = m_gbufferSampler;
+
+    std::array<VkDescriptorImageInfo, 11> imageInfos{};
+    std::array<VkWriteDescriptorSet, 11> writes{};
     VkDescriptorBufferInfo bufferInfo{};
 
-    imageInfos.reserve(11);  // Reserve space for all possible image infos
-
-    // G-Buffer textures (bindings 0-4)
+    // G-Buffer textures (bindings 0-4) — always available after GBuffer init
     std::array<VkImageView, 5> gbufferViews = {
         m_gbufferPass->getPositionView(),
         m_gbufferPass->getNormalView(),
@@ -199,135 +234,96 @@ void DeferredLightingPass::updateDescriptorSets() {
     };
 
     for (uint32_t i = 0; i < 5; ++i) {
-        if (gbufferViews[i] == VK_NULL_HANDLE) continue;
+        VkImageView view = gbufferViews[i] != VK_NULL_HANDLE ? gbufferViews[i] : fallbackView;
 
-        VkDescriptorImageInfo imgInfo{};
-        imgInfo.sampler = m_gbufferSampler;
-        imgInfo.imageView = gbufferViews[i];
-        imgInfo.imageLayout = (i == 4) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfos.push_back(imgInfo);
+        imageInfos[i].sampler = m_gbufferSampler;
+        imageInfos[i].imageView = view;
+        // Use depth layout only for actual depth views, not fallback color views
+        imageInfos[i].imageLayout = (i == 4 && gbufferViews[i] != VK_NULL_HANDLE)
+                                    ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = i;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_descriptorSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].descriptorCount = 1;
+        writes[i].pImageInfo = &imageInfos[i];
     }
 
-    // Light buffer (binding 5)
-    if (m_lightBuffer != VK_NULL_HANDLE) {
-        bufferInfo.buffer = m_lightBuffer;
-        bufferInfo.offset = 0;
-        bufferInfo.range = VK_WHOLE_SIZE;
+    // Light buffer (binding 5) — use dummy buffer as fallback
+    bufferInfo.buffer = m_lightBuffer != VK_NULL_HANDLE ? m_lightBuffer : m_dummyBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = VK_WHOLE_SIZE;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 5;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.descriptorCount = 1;
-        write.pBufferInfo = &bufferInfo;
-        writes.push_back(write);
-    }
+    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[5].dstSet = m_descriptorSet;
+    writes[5].dstBinding = 5;
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[5].descriptorCount = 1;
+    writes[5].pBufferInfo = &bufferInfo;
 
-    // Shadow map (binding 6)
-    if (m_shadowMapView != VK_NULL_HANDLE && m_shadowSampler != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo imgInfo{};
-        imgInfo.sampler = m_shadowSampler;
-        imgInfo.imageView = m_shadowMapView;
-        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfos.push_back(imgInfo);
+    // Shadow map (binding 6) — use fallback if not set
+    imageInfos[5].sampler = m_shadowSampler != VK_NULL_HANDLE ? m_shadowSampler : fallbackSampler;
+    imageInfos[5].imageView = m_shadowMapView != VK_NULL_HANDLE ? m_shadowMapView : fallbackView;
+    imageInfos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 6;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
-    }
+    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[6].dstSet = m_descriptorSet;
+    writes[6].dstBinding = 6;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[6].descriptorCount = 1;
+    writes[6].pImageInfo = &imageInfos[5];
 
-    // IBL textures (bindings 7-9)
-    if (m_irradianceView != VK_NULL_HANDLE && m_iblSampler != VK_NULL_HANDLE) {
-        // Irradiance (7)
-        VkDescriptorImageInfo irradInfo{};
-        irradInfo.sampler = m_iblSampler;
-        irradInfo.imageView = m_irradianceView;
-        irradInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfos.push_back(irradInfo);
+    // IBL textures (bindings 7-9) — use fallback if not set
+    VkSampler iblSampler = m_iblSampler != VK_NULL_HANDLE ? m_iblSampler : fallbackSampler;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 7;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
-    }
+    imageInfos[6].sampler = iblSampler;
+    imageInfos[6].imageView = m_irradianceView != VK_NULL_HANDLE ? m_irradianceView : fallbackView;
+    imageInfos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    if (m_prefilteredView != VK_NULL_HANDLE && m_iblSampler != VK_NULL_HANDLE) {
-        // Prefiltered (8)
-        VkDescriptorImageInfo prefiltInfo{};
-        prefiltInfo.sampler = m_iblSampler;
-        prefiltInfo.imageView = m_prefilteredView;
-        prefiltInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfos.push_back(prefiltInfo);
+    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[7].dstSet = m_descriptorSet;
+    writes[7].dstBinding = 7;
+    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[7].descriptorCount = 1;
+    writes[7].pImageInfo = &imageInfos[6];
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 8;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
-    }
+    imageInfos[7].sampler = iblSampler;
+    imageInfos[7].imageView = m_prefilteredView != VK_NULL_HANDLE ? m_prefilteredView : fallbackView;
+    imageInfos[7].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    if (m_brdfLUTView != VK_NULL_HANDLE && m_iblSampler != VK_NULL_HANDLE) {
-        // BRDF LUT (9)
-        VkDescriptorImageInfo brdfInfo{};
-        brdfInfo.sampler = m_iblSampler;
-        brdfInfo.imageView = m_brdfLUTView;
-        brdfInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfos.push_back(brdfInfo);
+    writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[8].dstSet = m_descriptorSet;
+    writes[8].dstBinding = 8;
+    writes[8].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[8].descriptorCount = 1;
+    writes[8].pImageInfo = &imageInfos[7];
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 9;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
-    }
+    imageInfos[8].sampler = iblSampler;
+    imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;
+    imageInfos[8].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    // SSAO (binding 10)
-    if (m_ssaoView != VK_NULL_HANDLE && m_ssaoSampler != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo ssaoInfo{};
-        ssaoInfo.sampler = m_ssaoSampler;
-        ssaoInfo.imageView = m_ssaoView;
-        ssaoInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfos.push_back(ssaoInfo);
+    writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[9].dstSet = m_descriptorSet;
+    writes[9].dstBinding = 9;
+    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[9].descriptorCount = 1;
+    writes[9].pImageInfo = &imageInfos[8];
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 10;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
-    }
+    // SSAO (binding 10) — use fallback if not set or sampler is null
+    imageInfos[9].sampler = m_ssaoSampler != VK_NULL_HANDLE ? m_ssaoSampler : fallbackSampler;
+    imageInfos[9].imageView = m_ssaoView != VK_NULL_HANDLE ? m_ssaoView : fallbackView;
+    imageInfos[9].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    if (!writes.empty()) {
-        vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    }
+    writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[10].dstSet = m_descriptorSet;
+    writes[10].dstBinding = 10;
+    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[10].descriptorCount = 1;
+    writes[10].pImageInfo = &imageInfos[9];
+
+    vkUpdateDescriptorSets(m_device, 11, writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -618,6 +614,101 @@ bool DeferredLightingPass::createPipeline() {
     vkDestroyShaderModule(m_device, fragShader, nullptr);
 
     return result == VK_SUCCESS;
+}
+
+bool DeferredLightingPass::createDummyResources() {
+    // 1x1 RGBA8 image for fallback texture bindings
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = {1, 1, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_dummyImage) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(m_device, m_dummyImage, &memReqs);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_dummyMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindImageMemory(m_device, m_dummyImage, m_dummyMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_dummyImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_dummyView) != VK_SUCCESS) {
+        return false;
+    }
+
+    // 256-byte buffer for fallback SSBO binding (binding 5)
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = 256;
+    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufInfo, nullptr, &m_dummyBuffer) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkGetBufferMemoryRequirements(m_device, m_dummyBuffer, &memReqs);
+
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_dummyBufferMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindBufferMemory(m_device, m_dummyBuffer, m_dummyBufferMemory, 0);
+
+    // Zero out the buffer
+    void* data;
+    vkMapMemory(m_device, m_dummyBufferMemory, 0, 256, 0, &data);
+    memset(data, 0, 256);
+    vkUnmapMemory(m_device, m_dummyBufferMemory);
+
+    return true;
+}
+
+void DeferredLightingPass::destroyDummyResources() {
+    if (m_dummyView != VK_NULL_HANDLE) vkDestroyImageView(m_device, m_dummyView, nullptr);
+    if (m_dummyImage != VK_NULL_HANDLE) vkDestroyImage(m_device, m_dummyImage, nullptr);
+    if (m_dummyMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_dummyMemory, nullptr);
+    if (m_dummyBuffer != VK_NULL_HANDLE) vkDestroyBuffer(m_device, m_dummyBuffer, nullptr);
+    if (m_dummyBufferMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_dummyBufferMemory, nullptr);
+    m_dummyView = VK_NULL_HANDLE;
+    m_dummyImage = VK_NULL_HANDLE;
+    m_dummyMemory = VK_NULL_HANDLE;
+    m_dummyBuffer = VK_NULL_HANDLE;
+    m_dummyBufferMemory = VK_NULL_HANDLE;
+    m_dummyImageTransitioned = false;
 }
 
 } // namespace ohao

@@ -4,6 +4,7 @@
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/material_component.hpp"
 #include "engine/asset/model.hpp"
+#include <cstring>
 
 namespace ohao {
 
@@ -194,6 +195,10 @@ void OffscreenRenderer::renderSceneObjects(VkCommandBuffer cmd) {
         pc.roughness = 0.5f;
         pc.ao = 1.0f;
 
+        // Default: no texture
+        uint32_t albedoTexIdx = UINT32_MAX;
+        uint32_t normalTexIdx = UINT32_MAX;
+
         // Get material properties from MaterialComponent
         auto materialComp = actor->getComponent<MaterialComponent>();
         if (materialComp) {
@@ -202,6 +207,16 @@ void OffscreenRenderer::renderSceneObjects(VkCommandBuffer cmd) {
             pc.metallic = mat.metallic;
             pc.roughness = mat.roughness;
             pc.ao = mat.ao;
+
+            // Look up texture indices for bindless rendering
+            if (m_textureManager && mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
+                auto handle = m_textureManager->getTextureByPath(mat.albedoTexture);
+                if (handle.valid()) albedoTexIdx = handle.index;
+            }
+            if (m_textureManager && mat.useNormalTexture && !mat.normalTexture.empty()) {
+                auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
+                if (handle.valid()) normalTexIdx = handle.index;
+            }
         }
         // Fallback: get from model materials
         else {
@@ -211,6 +226,10 @@ void OffscreenRenderer::renderSceneObjects(VkCommandBuffer cmd) {
                 pc.baseColor = mat.diffuse;
             }
         }
+
+        // Pack texture indices as float bits
+        memcpy(&pc.albedoTexIdx, &albedoTexIdx, sizeof(float));
+        memcpy(&pc.normalTexIdx, &normalTexIdx, sizeof(float));
 
         vkCmdPushConstants(cmd, m_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

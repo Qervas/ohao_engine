@@ -2,6 +2,7 @@
 
 #include "render_pass_base.hpp"
 #include "renderer/culling.hpp"
+#include "renderer/material/bindless_texture_manager.hpp"
 #include "utils/common_types.hpp"
 #include <array>
 #include <unordered_map>
@@ -48,6 +49,9 @@ public:
 
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkFramebuffer getFramebuffer() const { return m_framebuffer; }
+
+    // Texture manager for bindless textures
+    void setTextureManager(BindlessTextureManager* texManager) { m_textureManager = texManager; }
 
     // Wireframe mode
     void setWireframeEnabled(bool enabled) { m_wireframeEnabled = enabled; }
@@ -114,13 +118,13 @@ private:
     uint32_t m_height{0};
 
     // Push constant data for G-Buffer rendering
+    // Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
     struct GBufferUBO {
         glm::mat4 model;
-        glm::mat4 view;
-        glm::mat4 projection;
+        glm::mat4 viewProj;       // precomputed projection * view
         glm::mat4 prevMVP;
-        glm::vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=unused
-        glm::vec4 albedoColor;     // rgb=albedo, a=unused
+        glm::vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=albedoTexIdx (uint bits)
+        glm::vec4 albedoColor;     // rgb=albedo, a=normalTexIdx (uint bits)
     };
 
     glm::mat4 m_view;
@@ -129,6 +133,9 @@ private:
 
     // Wireframe mode
     bool m_wireframeEnabled{false};
+
+    // Bindless texture manager
+    BindlessTextureManager* m_textureManager{nullptr};
 };
 
 } // namespace ohao

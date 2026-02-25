@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_nonuniform_qualifier : require
 
 // G-Buffer Fragment Shader
 // Outputs to multiple render targets for deferred shading
@@ -23,14 +24,17 @@ layout(location = 2) out vec4 outGBuffer2;
 // Velocity buffer for TAA - R16G16_SFLOAT
 layout(location = 3) out vec2 outVelocity;
 
+// Bindless texture array (set 0, binding 0)
+layout(set = 0, binding = 0) uniform sampler2D textures[];
+
 // Per-object push constants (matches GBufferUBO in C++)
+// Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    mat4 view;
-    mat4 projection;
+    mat4 viewProj;        // precomputed projection * view
     mat4 prevMVP;
-    vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=unused
-    vec4 albedoColor;     // rgb=albedo, a=unused
+    vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=albedoTexIdx (uint bits)
+    vec4 albedoColor;     // rgb=albedo, a=normalTexIdx (uint bits)
 } pc;
 
 // Normal encoding using octahedron mapping for better precision
@@ -49,8 +53,36 @@ void main() {
     // Normalize interpolated normal
     vec3 N = normalize(fragNormal);
 
-    // Combine vertex color with material base color
-    vec3 albedo = fragColor * pc.albedoColor.rgb;
+    // Check for bindless albedo texture
+    uint albedoTexIdx = floatBitsToUint(pc.materialParams.w);
+    vec3 albedo;
+    if (albedoTexIdx != 0xFFFFFFFFu) {
+        vec4 texColor = texture(textures[nonuniformEXT(albedoTexIdx)], fragTexCoord);
+        albedo = texColor.rgb * fragColor;
+    } else {
+        // Combine vertex color with material base color
+        albedo = fragColor * pc.albedoColor.rgb;
+    }
+
+    // Check for bindless normal map
+    uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
+    if (normalTexIdx != 0xFFFFFFFFu) {
+        // Sample normal map and perturb geometric normal
+        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], fragTexCoord).rgb;
+        tangentNormal = tangentNormal * 2.0 - 1.0;
+
+        // Compute TBN from derivatives (no explicit tangent attribute needed)
+        vec3 dPdx = dFdx(fragWorldPos);
+        vec3 dPdy = dFdy(fragWorldPos);
+        vec2 dUVdx = dFdx(fragTexCoord);
+        vec2 dUVdy = dFdy(fragTexCoord);
+
+        vec3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
+        vec3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+        mat3 TBN = mat3(T, B, N);
+
+        N = normalize(TBN * tangentNormal);
+    }
 
     // GBuffer0: World Position + Metallic
     outGBuffer0 = vec4(fragWorldPos, pc.materialParams.x);

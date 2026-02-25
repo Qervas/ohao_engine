@@ -41,6 +41,10 @@ void SSAOPass::cleanup() {
     if (m_noiseImage != VK_NULL_HANDLE) vkDestroyImage(m_device, m_noiseImage, nullptr);
     if (m_noiseMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_noiseMemory, nullptr);
 
+    // Staging buffer (may still exist if never executed)
+    if (m_noiseStagingBuffer != VK_NULL_HANDLE) vkDestroyBuffer(m_device, m_noiseStagingBuffer, nullptr);
+    if (m_noiseStagingMemory != VK_NULL_HANDLE) vkFreeMemory(m_device, m_noiseStagingMemory, nullptr);
+
     destroyOutputImage();
 
     m_pipeline = VK_NULL_HANDLE;
@@ -52,10 +56,77 @@ void SSAOPass::cleanup() {
     m_noiseView = VK_NULL_HANDLE;
     m_noiseImage = VK_NULL_HANDLE;
     m_noiseMemory = VK_NULL_HANDLE;
+    m_noiseStagingBuffer = VK_NULL_HANDLE;
+    m_noiseStagingMemory = VK_NULL_HANDLE;
+    m_noiseUploaded = false;
+}
+
+void SSAOPass::uploadNoiseTexture(VkCommandBuffer cmd) {
+    if (m_noiseStagingBuffer == VK_NULL_HANDLE || m_noiseImage == VK_NULL_HANDLE) {
+        m_noiseUploaded = true;
+        return;
+    }
+
+    // Transition noise image from UNDEFINED to TRANSFER_DST
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_noiseImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    // Copy staging buffer to image
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = {4, 4, 1};
+
+    vkCmdCopyBufferToImage(cmd, m_noiseStagingBuffer, m_noiseImage,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    // Transition noise image to SHADER_READ_ONLY
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    m_noiseUploaded = true;
+    // Staging buffer destroyed in cleanup() (can't destroy while command buffer is recording)
 }
 
 void SSAOPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     if (m_depthView == VK_NULL_HANDLE || m_normalView == VK_NULL_HANDLE) return;
+    if (m_pipeline == VK_NULL_HANDLE || m_pipelineLayout == VK_NULL_HANDLE ||
+        m_descriptorSet == VK_NULL_HANDLE) return;
+
+    // Upload noise texture on first use
+    if (!m_noiseUploaded) {
+        uploadNoiseTexture(cmd);
+    }
 
     // Transition AO output to general for compute write
     VkImageMemoryBarrier barrier{};
@@ -151,78 +222,63 @@ void SSAOPass::setNormalBuffer(VkImageView normal) {
 void SSAOPass::updateDescriptorSet() {
     if (m_descriptorSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
 
-    std::vector<VkWriteDescriptorSet> writes;
-    std::vector<VkDescriptorImageInfo> imageInfos;
-    imageInfos.reserve(4);
+    // Use noise view as fallback for unset sampler bindings (valid RGBA32F image)
+    VkImageView fallbackView = m_noiseView != VK_NULL_HANDLE ? m_noiseView : m_aoOutputView;
+    VkSampler fallbackSampler = m_noiseSampler != VK_NULL_HANDLE ? m_noiseSampler : m_sampler;
+    if (fallbackView == VK_NULL_HANDLE) return; // Nothing to bind
 
-    // Binding 0: Depth buffer
-    if (m_depthView != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo& info = imageInfos.emplace_back();
-        info.sampler = m_sampler;
-        info.imageView = m_depthView;
-        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    std::array<VkDescriptorImageInfo, 4> imageInfos{};
+    std::array<VkWriteDescriptorSet, 4> writes{};
 
-        VkWriteDescriptorSet& write = writes.emplace_back();
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-    }
+    // Binding 0: Depth buffer (use fallback if not yet set)
+    imageInfos[0].sampler = m_sampler;
+    imageInfos[0].imageView = m_depthView != VK_NULL_HANDLE ? m_depthView : fallbackView;
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    // Binding 1: Normal buffer
-    if (m_normalView != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo& info = imageInfos.emplace_back();
-        info.sampler = m_sampler;
-        info.imageView = m_normalView;
-        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m_descriptorSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].descriptorCount = 1;
+    writes[0].pImageInfo = &imageInfos[0];
 
-        VkWriteDescriptorSet& write = writes.emplace_back();
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-    }
+    // Binding 1: Normal buffer (use fallback if not yet set)
+    imageInfos[1].sampler = m_sampler;
+    imageInfos[1].imageView = m_normalView != VK_NULL_HANDLE ? m_normalView : fallbackView;
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    // Binding 2: AO output (storage image)
-    if (m_aoOutputView != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo& info = imageInfos.emplace_back();
-        info.sampler = VK_NULL_HANDLE;
-        info.imageView = m_aoOutputView;
-        info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = m_descriptorSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &imageInfos[1];
 
-        VkWriteDescriptorSet& write = writes.emplace_back();
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 2;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-    }
+    // Binding 2: AO output (storage image) — always available after init
+    imageInfos[2].sampler = VK_NULL_HANDLE;
+    imageInfos[2].imageView = m_aoOutputView;
+    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    // Binding 3: Noise texture
-    if (m_noiseView != VK_NULL_HANDLE && m_noiseSampler != VK_NULL_HANDLE) {
-        VkDescriptorImageInfo& info = imageInfos.emplace_back();
-        info.sampler = m_noiseSampler;
-        info.imageView = m_noiseView;
-        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_descriptorSet;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &imageInfos[2];
 
-        VkWriteDescriptorSet& write = writes.emplace_back();
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = 3;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-    }
+    // Binding 3: Noise texture — always available after init
+    imageInfos[3].sampler = fallbackSampler;
+    imageInfos[3].imageView = m_noiseView != VK_NULL_HANDLE ? m_noiseView : fallbackView;
+    imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    if (!writes.empty()) {
-        vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()),
-                               writes.data(), 0, nullptr);
-    }
+    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[3].dstSet = m_descriptorSet;
+    writes[3].dstBinding = 3;
+    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[3].descriptorCount = 1;
+    writes[3].pImageInfo = &imageInfos[3];
+
+    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
 }
 
 bool SSAOPass::createOutputImage() {
@@ -404,12 +460,10 @@ bool SSAOPass::createNoiseTexture() {
 
     vkCreateSampler(m_device, &samplerInfo, nullptr, &m_noiseSampler);
 
-    // Note: In production, you would need to copy from staging buffer to image
-    // using a command buffer with vkCmdCopyBufferToImage
-    // For brevity, this is omitted - the noise texture will be initialized at first use
-
-    vkDestroyBuffer(m_device, stagingBuffer, nullptr);
-    vkFreeMemory(m_device, stagingMemory, nullptr);
+    // Keep staging buffer alive for deferred upload in first execute() call
+    m_noiseStagingBuffer = stagingBuffer;
+    m_noiseStagingMemory = stagingMemory;
+    m_noiseUploaded = false;
 
     return true;
 }
