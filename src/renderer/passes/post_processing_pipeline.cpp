@@ -30,6 +30,11 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
+    m_ssgiPass = std::make_unique<SSGIPass>();
+    if (!m_ssgiPass->initialize(device, physicalDevice)) {
+        return false;
+    }
+
     m_ssrPass = std::make_unique<SSRPass>();
     if (!m_ssrPass->initialize(device, physicalDevice)) {
         return false;
@@ -74,6 +79,10 @@ void PostProcessingPipeline::cleanup() {
     if (m_taaPass) {
         m_taaPass->cleanup();
         m_taaPass.reset();
+    }
+    if (m_ssgiPass) {
+        m_ssgiPass->cleanup();
+        m_ssgiPass.reset();
     }
     if (m_ssaoPass) {
         m_ssaoPass->cleanup();
@@ -145,34 +154,23 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     VkImageView currentInput = m_hdrInputView;
 
-    // ── 1. SSR (compute) ────────────────────────────────────────────────
-    if (m_ssrEnabled && m_ssrPass) {
-        m_ssrPass->updateDescriptorSet();
-        m_ssrPass->execute(cmd, frameIndex);
-    }
-
-    // ── 2. Volumetric Fog (compute) ─────────────────────────────────────
+    // ── 1. Volumetric Fog (compute) ────────────────────────────────────
     if (m_volumetricsEnabled && m_volumetricPass) {
-        m_volumetricPass->updateDescriptorSet();
         m_volumetricPass->execute(cmd, frameIndex);
+        // Output in SHADER_READ_ONLY_OPTIMAL via getScatteringView()
     }
 
-    // ── 3. Composite (compute) ──────────────────────────────────────────
-    VkImageView ssrOutput = (m_ssrEnabled && m_ssrPass)
-        ? m_ssrPass->getReflectionView() : VK_NULL_HANDLE;
-    VkImageView volOutput = (m_volumetricsEnabled && m_volumetricPass)
-        ? m_volumetricPass->getScatteringView() : VK_NULL_HANDLE;
-
-    if ((ssrOutput != VK_NULL_HANDLE || volOutput != VK_NULL_HANDLE) &&
+    // ── 2. Composite (merge volumetric fog into HDR) ───────────────────
+    if (m_volumetricsEnabled && m_volumetricPass &&
         m_compositePipeline != VK_NULL_HANDLE && m_intermediateHDRView != VK_NULL_HANDLE) {
+        VkImageView volView = m_volumetricPass->getScatteringView();
         uint32_t flags = 0;
-        if (ssrOutput != VK_NULL_HANDLE) flags |= 1;
-        if (volOutput != VK_NULL_HANDLE) flags |= 2;
-        executeComposite(cmd, currentInput, ssrOutput, volOutput, flags);
+        if (volView != VK_NULL_HANDLE) flags |= 2;  // bit 1 = volumetric
+        executeComposite(cmd, currentInput, VK_NULL_HANDLE, volView, flags);
         currentInput = m_intermediateHDRView;
     }
 
-    // ── 4. Bloom ────────────────────────────────────────────────────────
+    // ── 3. Bloom ───────────────────────────────────────────────────────
     float bloomStrength = 0.0f;
     if (m_bloomEnabled && m_bloomPass) {
         m_bloomPass->setInputImage(currentInput);
@@ -180,21 +178,9 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         bloomStrength = 1.0f;
     }
 
-    // ── 5. Motion Blur (compute) ────────────────────────────────────────
-    if (m_motionBlurEnabled && m_motionBlurPass) {
-        m_motionBlurPass->setColorBuffer(currentInput);
-        m_motionBlurPass->updateDescriptorSet();
-        m_motionBlurPass->execute(cmd, frameIndex);
-        VkImageView mbOutput = m_motionBlurPass->getOutputView();
-        if (mbOutput != VK_NULL_HANDLE) {
-            currentInput = mbOutput;
-        }
-    }
-
-    // ── 6. TAA ──────────────────────────────────────────────────────────
+    // ── 4. TAA (temporal anti-aliasing) ────────────────────────────────
     if (m_taaEnabled && m_taaPass) {
         m_taaPass->setCurrentFrame(currentInput);
-        m_taaPass->updateDescriptorSets();
         m_taaPass->execute(cmd, frameIndex);
         VkImageView taaOutput = m_taaPass->getOutputView();
         if (taaOutput != VK_NULL_HANDLE) {
@@ -202,18 +188,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // ── 7. DoF (compute) ────────────────────────────────────────────────
-    if (m_dofEnabled && m_dofPass) {
-        m_dofPass->setColorBuffer(currentInput);
-        m_dofPass->updateDescriptorSet();
-        m_dofPass->execute(cmd, frameIndex);
-        VkImageView dofOutput = m_dofPass->getOutputView();
-        if (dofOutput != VK_NULL_HANDLE) {
-            currentInput = dofOutput;
-        }
-    }
-
-    // ── 8. Tonemapping: HDR → LDR ──────────────────────────────────────
+    // ── 5. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
         m_tonemapFramebuffer != VK_NULL_HANDLE && m_tonemapDescSet != VK_NULL_HANDLE) {
 
@@ -298,6 +273,7 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     if (m_bloomPass) m_bloomPass->onResize(width, height);
     if (m_taaPass) m_taaPass->onResize(width, height);
     if (m_ssaoPass) m_ssaoPass->onResize(width, height);
+    if (m_ssgiPass) m_ssgiPass->onResize(width, height);
     if (m_ssrPass) m_ssrPass->onResize(width, height);
     if (m_volumetricPass) m_volumetricPass->onResize(width, height);
     if (m_motionBlurPass) m_motionBlurPass->onResize(width, height);
@@ -330,6 +306,7 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
 
 void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
     if (m_ssaoPass) m_ssaoPass->setDepthBuffer(depth);
+    if (m_ssgiPass) m_ssgiPass->setDepthBuffer(depth);
     if (m_ssrPass) m_ssrPass->setDepthBuffer(depth);
     if (m_volumetricPass) m_volumetricPass->setDepthBuffer(depth);
     if (m_motionBlurPass) m_motionBlurPass->setDepthBuffer(depth);
@@ -339,6 +316,7 @@ void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
 
 void PostProcessingPipeline::setNormalBuffer(VkImageView normal) {
     if (m_ssaoPass) m_ssaoPass->setNormalBuffer(normal);
+    if (m_ssgiPass) m_ssgiPass->setNormalBuffer(normal);
     if (m_ssrPass) m_ssrPass->setNormalBuffer(normal);
 }
 
@@ -385,6 +363,48 @@ VkImageView PostProcessingPipeline::getSSAOOutput() const {
 
 VkSampler PostProcessingPipeline::getSSAOSampler() const {
     if (m_ssaoPass) return m_ssaoPass->getSampler();
+    return VK_NULL_HANDLE;
+}
+
+// SSGI configuration
+void PostProcessingPipeline::setSSGIRadius(float radius) {
+    if (m_ssgiPass) m_ssgiPass->setRadius(radius);
+}
+
+void PostProcessingPipeline::setSSGIIntensity(float intensity) {
+    if (m_ssgiPass) m_ssgiPass->setIntensity(intensity);
+}
+
+void PostProcessingPipeline::setSSGISampleCount(uint32_t count) {
+    if (m_ssgiPass) m_ssgiPass->setSampleCount(count);
+}
+
+void PostProcessingPipeline::setSSGIMatrices(const glm::mat4& view, const glm::mat4& proj,
+                                              const glm::mat4& invProj) {
+    if (m_ssgiPass) m_ssgiPass->setMatrices(view, proj, invProj);
+}
+
+void PostProcessingPipeline::setAlbedoBuffer(VkImageView albedo) {
+    if (m_ssgiPass) m_ssgiPass->setAlbedoBuffer(albedo);
+}
+
+void PostProcessingPipeline::setPositionBuffer(VkImageView position) {
+    if (m_ssgiPass) m_ssgiPass->setPositionBuffer(position);
+}
+
+void PostProcessingPipeline::executeSSGI(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (m_ssgiEnabled && m_ssgiPass) {
+        m_ssgiPass->execute(cmd, frameIndex);
+    }
+}
+
+VkImageView PostProcessingPipeline::getSSGIOutput() const {
+    if (m_ssgiPass) return m_ssgiPass->getOutputView();
+    return VK_NULL_HANDLE;
+}
+
+VkSampler PostProcessingPipeline::getSSGISampler() const {
+    if (m_ssgiPass) return m_ssgiPass->getSampler();
     return VK_NULL_HANDLE;
 }
 

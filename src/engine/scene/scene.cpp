@@ -2,6 +2,7 @@
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/material_component.hpp"
 #include "physics/components/physics_component.hpp"
+#include "physics/world/physics_world.hpp"
 #include "engine/component/component_factory.hpp"
 #include "engine/component/component_pack.hpp"
 #include "engine/actor/actor.hpp"

@@ -199,12 +199,11 @@ func _process_attack(delta: float) -> void:
 		attack_cooldown = 1.0 / attack_rate
 
 func _move(direction: Vector3, speed: float, delta: float) -> void:
-	if physics_body:
-		var vel := direction * speed
-		vel.y = physics_body.get_linear_velocity().y  # Preserve gravity
-		physics_body.set_linear_velocity(vel)
-	else:
-		global_position += direction * speed * delta
+	# Always use direct position integration so global_position stays current.
+	# OHAO kinematic bodies don't sync velocity back to the Godot Node3D,
+	# so set_linear_velocity would move the physics child but leave
+	# this node's global_position stale (breaking the visual sync loop).
+	global_position += direction * speed * delta
 
 func _look_at_target(target_pos: Vector3, delta: float) -> void:
 	var look_dir := (target_pos - global_position)

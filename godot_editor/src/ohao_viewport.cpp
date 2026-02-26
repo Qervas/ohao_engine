@@ -26,6 +26,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cfloat>
+#include <unordered_map>
 
 namespace godot {
 
@@ -86,6 +87,10 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_ssao_enabled"), &OhaoViewport::get_ssao_enabled);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssao_enabled"), "set_ssao_enabled", "get_ssao_enabled");
 
+    ClassDB::bind_method(D_METHOD("set_ssgi_enabled", "enabled"), &OhaoViewport::set_ssgi_enabled);
+    ClassDB::bind_method(D_METHOD("get_ssgi_enabled"), &OhaoViewport::get_ssgi_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssgi_enabled"), "set_ssgi_enabled", "get_ssgi_enabled");
+
     ClassDB::bind_method(D_METHOD("set_ssr_enabled", "enabled"), &OhaoViewport::set_ssr_enabled);
     ClassDB::bind_method(D_METHOD("get_ssr_enabled"), &OhaoViewport::get_ssr_enabled);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ssr_enabled"), "set_ssr_enabled", "get_ssr_enabled");
@@ -142,6 +147,21 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_ssao_intensity", "intensity"), &OhaoViewport::set_ssao_intensity);
     ClassDB::bind_method(D_METHOD("get_ssao_intensity"), &OhaoViewport::get_ssao_intensity);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssao_intensity", PROPERTY_HINT_RANGE, "0.0,3.0,0.1"), "set_ssao_intensity", "get_ssao_intensity");
+
+    // === SSGI Settings ===
+    ADD_GROUP("SSGI", "ssgi_");
+
+    ClassDB::bind_method(D_METHOD("set_ssgi_radius", "radius"), &OhaoViewport::set_ssgi_radius);
+    ClassDB::bind_method(D_METHOD("get_ssgi_radius"), &OhaoViewport::get_ssgi_radius);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssgi_radius", PROPERTY_HINT_RANGE, "0.5,10.0,0.5"), "set_ssgi_radius", "get_ssgi_radius");
+
+    ClassDB::bind_method(D_METHOD("set_ssgi_intensity", "intensity"), &OhaoViewport::set_ssgi_intensity);
+    ClassDB::bind_method(D_METHOD("get_ssgi_intensity"), &OhaoViewport::get_ssgi_intensity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ssgi_intensity", PROPERTY_HINT_RANGE, "0.0,3.0,0.1"), "set_ssgi_intensity", "get_ssgi_intensity");
+
+    ClassDB::bind_method(D_METHOD("set_ssgi_sample_count", "count"), &OhaoViewport::set_ssgi_sample_count);
+    ClassDB::bind_method(D_METHOD("get_ssgi_sample_count"), &OhaoViewport::get_ssgi_sample_count);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "ssgi_sample_count", PROPERTY_HINT_RANGE, "1,16,1"), "set_ssgi_sample_count", "get_ssgi_sample_count");
 
     // === SSR Settings ===
     ADD_GROUP("SSR", "ssr_");
@@ -241,6 +261,36 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("is_physics_playing"), &OhaoViewport::is_physics_playing);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_speed", PROPERTY_HINT_RANGE, "0.1,10.0,0.1"), "set_physics_speed", "get_physics_speed");
 
+    // === Raycasting ===
+    ClassDB::bind_method(D_METHOD("cast_ray", "origin", "direction", "max_distance", "layer_mask"), &OhaoViewport::cast_ray, DEFVAL(0xFFFF));
+    ClassDB::bind_method(D_METHOD("cast_ray_all", "origin", "direction", "max_distance", "layer_mask"), &OhaoViewport::cast_ray_all, DEFVAL(0xFFFF));
+    ClassDB::bind_method(D_METHOD("overlap_sphere", "center", "radius", "layer_mask"), &OhaoViewport::overlap_sphere, DEFVAL(0xFFFF));
+    ClassDB::bind_method(D_METHOD("overlap_box", "center", "half_extents", "rotation_deg", "layer_mask"), &OhaoViewport::overlap_box, DEFVAL(0xFFFF));
+
+    // === Collision Layers ===
+    ClassDB::bind_method(D_METHOD("set_layer_collision", "layer1", "layer2", "should_collide"), &OhaoViewport::set_layer_collision);
+
+    // === Constraints ===
+    ClassDB::bind_method(D_METHOD("create_constraint_fixed", "body1", "body2", "anchor"), &OhaoViewport::create_constraint_fixed);
+    ClassDB::bind_method(D_METHOD("create_constraint_hinge", "body1", "body2", "anchor", "axis", "limit_min", "limit_max"), &OhaoViewport::create_constraint_hinge, DEFVAL(0.0f), DEFVAL(0.0f));
+    ClassDB::bind_method(D_METHOD("create_constraint_slider", "body1", "body2", "axis", "limit_min", "limit_max"), &OhaoViewport::create_constraint_slider, DEFVAL(0.0f), DEFVAL(0.0f));
+    ClassDB::bind_method(D_METHOD("create_constraint_point", "body1", "body2", "anchor1", "anchor2"), &OhaoViewport::create_constraint_point);
+    ClassDB::bind_method(D_METHOD("create_constraint_distance", "body1", "body2", "anchor1", "anchor2", "min_dist", "max_dist"), &OhaoViewport::create_constraint_distance, DEFVAL(-1.0f), DEFVAL(-1.0f));
+    ClassDB::bind_method(D_METHOD("create_constraint_cone", "body1", "body2", "anchor", "twist_axis", "half_cone_angle"), &OhaoViewport::create_constraint_cone, DEFVAL(0.5f));
+    ClassDB::bind_method(D_METHOD("destroy_constraint", "handle"), &OhaoViewport::destroy_constraint);
+    ClassDB::bind_method(D_METHOD("set_constraint_enabled", "handle", "enabled"), &OhaoViewport::set_constraint_enabled);
+    ClassDB::bind_method(D_METHOD("set_constraint_motor", "handle", "enabled", "speed", "max_force"), &OhaoViewport::set_constraint_motor);
+    ClassDB::bind_method(D_METHOD("set_constraint_limits", "handle", "min", "max"), &OhaoViewport::set_constraint_limits);
+
+    // === Character Controller ===
+    ClassDB::bind_method(D_METHOD("create_character", "position", "capsule_radius", "capsule_height", "max_slope_deg", "mass"), &OhaoViewport::create_character, DEFVAL(50.0f), DEFVAL(80.0f));
+    ClassDB::bind_method(D_METHOD("destroy_character", "handle"), &OhaoViewport::destroy_character);
+    ClassDB::bind_method(D_METHOD("get_character_state", "handle"), &OhaoViewport::get_character_state);
+    ClassDB::bind_method(D_METHOD("set_character_position", "handle", "position"), &OhaoViewport::set_character_position);
+    ClassDB::bind_method(D_METHOD("set_character_rotation", "handle", "rotation_deg"), &OhaoViewport::set_character_rotation);
+    ClassDB::bind_method(D_METHOD("set_character_velocity", "handle", "velocity"), &OhaoViewport::set_character_velocity);
+    ClassDB::bind_method(D_METHOD("update_character", "handle", "delta", "gravity", "movement_input"), &OhaoViewport::update_character);
+
     // === Wireframe ===
     ADD_GROUP("Debug", "");
 
@@ -255,6 +305,13 @@ void OhaoViewport::_bind_methods() {
 
     // === Model Import ===
     ClassDB::bind_method(D_METHOD("import_model", "path"), &OhaoViewport::import_model);
+
+    // === Actor Transform API ===
+    ClassDB::bind_method(D_METHOD("set_actor_position", "actor_name", "position"), &OhaoViewport::set_actor_position);
+    ClassDB::bind_method(D_METHOD("set_actor_rotation", "actor_name", "rotation_deg"), &OhaoViewport::set_actor_rotation);
+    ClassDB::bind_method(D_METHOD("set_actor_scale", "actor_name", "scale"), &OhaoViewport::set_actor_scale);
+    ClassDB::bind_method(D_METHOD("remove_actor", "actor_name"), &OhaoViewport::remove_actor);
+    ClassDB::bind_method(D_METHOD("has_actor", "actor_name"), &OhaoViewport::has_actor);
 
     // === Texture / Material API ===
     ADD_GROUP("Materials", "");
@@ -741,6 +798,7 @@ void OhaoViewport::set_render_mode(int mode) {
 void OhaoViewport::set_bloom_enabled(bool enabled)        { m_render_settings.setBloomEnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_taa_enabled(bool enabled)          { m_render_settings.setTAAEnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_ssao_enabled(bool enabled)         { m_render_settings.setSSAOEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssgi_enabled(bool enabled)         { m_render_settings.setSSGIEnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_ssr_enabled(bool enabled)          { m_render_settings.setSSREnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_volumetrics_enabled(bool enabled)  { m_render_settings.setVolumetricsEnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_motion_blur_enabled(bool enabled)  { m_render_settings.setMotionBlurEnabled(enabled); m_render_settings.apply(m_renderer); }
@@ -756,6 +814,10 @@ void OhaoViewport::set_bloom_intensity(float intensity)    { m_render_settings.s
 
 void OhaoViewport::set_ssao_radius(float radius)           { m_render_settings.setSSAORadius(radius); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_ssao_intensity(float intensity)     { m_render_settings.setSSAOIntensity(intensity); m_render_settings.apply(m_renderer); }
+
+void OhaoViewport::set_ssgi_radius(float radius)           { m_render_settings.setSSGIRadius(radius); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssgi_intensity(float intensity)     { m_render_settings.setSSGIIntensity(intensity); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_ssgi_sample_count(int count)        { m_render_settings.setSSGISampleCount(count); m_render_settings.apply(m_renderer); }
 
 void OhaoViewport::set_ssr_max_distance(float dist)        { m_render_settings.setSSRMaxDistance(dist); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_ssr_thickness(float thickness)      { m_render_settings.setSSRThickness(thickness); m_render_settings.apply(m_renderer); }
@@ -938,6 +1000,304 @@ void OhaoViewport::set_physics_speed(float speed) {
     m_physics_speed = speed;
 }
 
+// ===== Raycasting =====
+
+Dictionary OhaoViewport::cast_ray(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask) {
+    Dictionary result;
+    if (!m_scene) return result;
+
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return result;
+
+    ohao::physics::backend::RaycastHit hit;
+    glm::vec3 o(origin.x, origin.y, origin.z);
+    glm::vec3 d(direction.x, direction.y, direction.z);
+
+    if (physWorld->castRay(o, d, max_distance, hit, static_cast<uint16_t>(layer_mask))) {
+        result["hit"] = true;
+        result["position"] = Vector3(hit.position.x, hit.position.y, hit.position.z);
+        result["normal"] = Vector3(hit.normal.x, hit.normal.y, hit.normal.z);
+        result["fraction"] = hit.fraction;
+        result["body_handle"] = static_cast<int>(hit.bodyHandle);
+        result["layer"] = static_cast<int>(hit.layer);
+    } else {
+        result["hit"] = false;
+    }
+    return result;
+}
+
+Array OhaoViewport::cast_ray_all(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask) {
+    Array results;
+    if (!m_scene) return results;
+
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return results;
+
+    glm::vec3 o(origin.x, origin.y, origin.z);
+    glm::vec3 d(direction.x, direction.y, direction.z);
+
+    auto hits = physWorld->castRayAll(o, d, max_distance, static_cast<uint16_t>(layer_mask));
+    for (const auto& hit : hits) {
+        Dictionary entry;
+        entry["position"] = Vector3(hit.position.x, hit.position.y, hit.position.z);
+        entry["normal"] = Vector3(hit.normal.x, hit.normal.y, hit.normal.z);
+        entry["fraction"] = hit.fraction;
+        entry["body_handle"] = static_cast<int>(hit.bodyHandle);
+        entry["layer"] = static_cast<int>(hit.layer);
+        results.push_back(entry);
+    }
+    return results;
+}
+
+Array OhaoViewport::overlap_sphere(const Vector3& center, float radius, int layer_mask) {
+    Array results;
+    if (!m_scene) return results;
+
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return results;
+
+    glm::vec3 c(center.x, center.y, center.z);
+    auto handles = physWorld->overlapSphere(c, radius, static_cast<uint16_t>(layer_mask));
+    for (auto h : handles) {
+        results.push_back(static_cast<int>(h));
+    }
+    return results;
+}
+
+Array OhaoViewport::overlap_box(const Vector3& center, const Vector3& half_extents, const Vector3& rotation_deg, int layer_mask) {
+    Array results;
+    if (!m_scene) return results;
+
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return results;
+
+    glm::vec3 c(center.x, center.y, center.z);
+    glm::vec3 he(half_extents.x, half_extents.y, half_extents.z);
+    // Convert euler degrees to quaternion
+    glm::vec3 radians = glm::radians(glm::vec3(rotation_deg.x, rotation_deg.y, rotation_deg.z));
+    glm::quat rot(radians);
+
+    auto handles = physWorld->overlapBox(c, he, rot, static_cast<uint16_t>(layer_mask));
+    for (auto h : handles) {
+        results.push_back(static_cast<int>(h));
+    }
+    return results;
+}
+
+// ===== Collision Layers =====
+
+void OhaoViewport::set_layer_collision(int layer1, int layer2, bool should_collide) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->setLayerCollision(static_cast<uint16_t>(layer1), static_cast<uint16_t>(layer2), should_collide);
+}
+
+// ===== Constraints =====
+
+int OhaoViewport::create_constraint_fixed(int body_handle1, int body_handle2, const Vector3& anchor) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type = ohao::physics::backend::ConstraintType::FIXED;
+    cs.body1 = static_cast<uint32_t>(body_handle1);
+    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
+    cs.anchor1 = glm::vec3(anchor.x, anchor.y, anchor.z);
+    cs.anchor2 = cs.anchor1;
+    return static_cast<int>(physWorld->createConstraint(cs));
+}
+
+int OhaoViewport::create_constraint_hinge(int body_handle1, int body_handle2, const Vector3& anchor, const Vector3& axis,
+                                            float limit_min, float limit_max) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type = ohao::physics::backend::ConstraintType::HINGE;
+    cs.body1 = static_cast<uint32_t>(body_handle1);
+    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
+    cs.anchor1 = glm::vec3(anchor.x, anchor.y, anchor.z);
+    cs.anchor2 = cs.anchor1;
+    cs.axis1 = glm::vec3(axis.x, axis.y, axis.z);
+    cs.axis2 = cs.axis1;
+    if (limit_min != 0.0f || limit_max != 0.0f) {
+        cs.enableLimits = true;
+        cs.limitMin = limit_min;
+        cs.limitMax = limit_max;
+    }
+    return static_cast<int>(physWorld->createConstraint(cs));
+}
+
+int OhaoViewport::create_constraint_slider(int body_handle1, int body_handle2, const Vector3& axis,
+                                             float limit_min, float limit_max) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type = ohao::physics::backend::ConstraintType::SLIDER;
+    cs.body1 = static_cast<uint32_t>(body_handle1);
+    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
+    cs.axis1 = glm::vec3(axis.x, axis.y, axis.z);
+    cs.axis2 = cs.axis1;
+    if (limit_min != 0.0f || limit_max != 0.0f) {
+        cs.enableLimits = true;
+        cs.limitMin = limit_min;
+        cs.limitMax = limit_max;
+    }
+    return static_cast<int>(physWorld->createConstraint(cs));
+}
+
+int OhaoViewport::create_constraint_point(int body_handle1, int body_handle2, const Vector3& anchor1, const Vector3& anchor2) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type = ohao::physics::backend::ConstraintType::POINT;
+    cs.body1 = static_cast<uint32_t>(body_handle1);
+    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
+    cs.anchor1 = glm::vec3(anchor1.x, anchor1.y, anchor1.z);
+    cs.anchor2 = glm::vec3(anchor2.x, anchor2.y, anchor2.z);
+    return static_cast<int>(physWorld->createConstraint(cs));
+}
+
+int OhaoViewport::create_constraint_distance(int body_handle1, int body_handle2, const Vector3& anchor1, const Vector3& anchor2,
+                                               float min_dist, float max_dist) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type = ohao::physics::backend::ConstraintType::DISTANCE;
+    cs.body1 = static_cast<uint32_t>(body_handle1);
+    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
+    cs.anchor1 = glm::vec3(anchor1.x, anchor1.y, anchor1.z);
+    cs.anchor2 = glm::vec3(anchor2.x, anchor2.y, anchor2.z);
+    cs.minDistance = min_dist;
+    cs.maxDistance = max_dist;
+    return static_cast<int>(physWorld->createConstraint(cs));
+}
+
+int OhaoViewport::create_constraint_cone(int body_handle1, int body_handle2, const Vector3& anchor, const Vector3& twist_axis,
+                                           float half_cone_angle) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type = ohao::physics::backend::ConstraintType::CONE_TWIST;
+    cs.body1 = static_cast<uint32_t>(body_handle1);
+    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
+    cs.anchor1 = glm::vec3(anchor.x, anchor.y, anchor.z);
+    cs.anchor2 = cs.anchor1;
+    cs.axis1 = glm::vec3(twist_axis.x, twist_axis.y, twist_axis.z);
+    cs.axis2 = cs.axis1;
+    cs.enableLimits = true;
+    cs.limitMax = half_cone_angle;
+    return static_cast<int>(physWorld->createConstraint(cs));
+}
+
+void OhaoViewport::destroy_constraint(int constraint_handle) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->destroyConstraint(static_cast<uint32_t>(constraint_handle));
+}
+
+void OhaoViewport::set_constraint_enabled(int constraint_handle, bool enabled) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->setConstraintEnabled(static_cast<uint32_t>(constraint_handle), enabled);
+}
+
+void OhaoViewport::set_constraint_motor(int constraint_handle, bool enabled, float speed, float max_force) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->setConstraintMotorState(static_cast<uint32_t>(constraint_handle), enabled, speed, max_force);
+}
+
+void OhaoViewport::set_constraint_limits(int constraint_handle, float min_val, float max_val) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->setConstraintLimits(static_cast<uint32_t>(constraint_handle), min_val, max_val);
+}
+
+// ===== Character Controller =====
+
+int OhaoViewport::create_character(const Vector3& position, float capsule_radius, float capsule_height,
+                                    float max_slope_deg, float mass) {
+    if (!m_scene) return -1;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return -1;
+
+    ohao::physics::backend::CharacterCreationInfo info;
+    info.position = glm::vec3(position.x, position.y, position.z);
+    info.capsuleRadius = capsule_radius;
+    info.capsuleHeight = capsule_height;
+    info.maxSlopeAngleDeg = max_slope_deg;
+    info.mass = mass;
+    return static_cast<int>(physWorld->createCharacter(info));
+}
+
+void OhaoViewport::destroy_character(int char_handle) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->destroyCharacter(static_cast<uint32_t>(char_handle));
+}
+
+Dictionary OhaoViewport::get_character_state(int char_handle) {
+    Dictionary result;
+    if (!m_scene) return result;
+
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return result;
+
+    auto state = physWorld->getCharacterState(static_cast<uint32_t>(char_handle));
+    result["position"] = Vector3(state.position.x, state.position.y, state.position.z);
+    result["velocity"] = Vector3(state.linearVelocity.x, state.linearVelocity.y, state.linearVelocity.z);
+    result["ground_normal"] = Vector3(state.groundNormal.x, state.groundNormal.y, state.groundNormal.z);
+    result["is_grounded"] = (state.groundState == ohao::physics::backend::GroundState::ON_GROUND);
+    result["is_on_steep_ground"] = (state.groundState == ohao::physics::backend::GroundState::ON_STEEP_GROUND);
+    result["is_in_air"] = (state.groundState == ohao::physics::backend::GroundState::IN_AIR);
+    result["ground_state"] = static_cast<int>(state.groundState);
+    result["ground_body"] = static_cast<int>(state.groundBody);
+    return result;
+}
+
+void OhaoViewport::set_character_position(int char_handle, const Vector3& position) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->setCharacterPosition(static_cast<uint32_t>(char_handle),
+        glm::vec3(position.x, position.y, position.z));
+}
+
+void OhaoViewport::set_character_rotation(int char_handle, const Vector3& rotation_deg) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return;
+
+    glm::vec3 radians = glm::radians(glm::vec3(rotation_deg.x, rotation_deg.y, rotation_deg.z));
+    glm::quat rot(radians);
+    physWorld->setCharacterRotation(static_cast<uint32_t>(char_handle), rot);
+}
+
+void OhaoViewport::set_character_velocity(int char_handle, const Vector3& velocity) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->setCharacterLinearVelocity(static_cast<uint32_t>(char_handle),
+        glm::vec3(velocity.x, velocity.y, velocity.z));
+}
+
+void OhaoViewport::update_character(int char_handle, float delta, const Vector3& gravity, const Vector3& movement_input) {
+    if (!m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (physWorld) physWorld->updateCharacter(static_cast<uint32_t>(char_handle), delta,
+        glm::vec3(gravity.x, gravity.y, gravity.z),
+        glm::vec3(movement_input.x, movement_input.y, movement_input.z));
+}
+
 // ===== Wireframe / Grid / Gizmo / Particles / Import =====
 
 void OhaoViewport::set_wireframe_enabled(bool enabled) {
@@ -1036,6 +1396,68 @@ void OhaoViewport::spawn_particles_directed(const Vector3& position, int type, c
             static_cast<ohao::ParticleType>(type),
             glm::vec3(direction.x, direction.y, direction.z));
     }
+}
+
+// ===== Actor Transform API =====
+
+void OhaoViewport::set_actor_position(const String& actor_name, const Vector3& position) {
+    if (!m_scene) return;
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (!actor) {
+        // Rate-limit: only log first miss per name
+        static std::unordered_map<std::string, int> missCount;
+        if (missCount[name]++ < 3) {
+            UtilityFunctions::printerr("[OHAO] set_actor_position: actor '", actor_name, "' NOT FOUND in scene");
+        }
+        return;
+    }
+    auto transform = actor->getTransform();
+    if (transform) {
+        transform->setPosition(glm::vec3(position.x, position.y, position.z));
+    }
+}
+
+void OhaoViewport::set_actor_rotation(const String& actor_name, const Vector3& rotation_deg) {
+    if (!m_scene) return;
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (!actor) return;
+    auto transform = actor->getTransform();
+    if (transform) {
+        glm::vec3 rad(glm::radians(rotation_deg.x), glm::radians(rotation_deg.y), glm::radians(rotation_deg.z));
+        transform->setRotation(glm::quat(rad));
+    }
+}
+
+void OhaoViewport::set_actor_scale(const String& actor_name, const Vector3& scale) {
+    if (!m_scene) return;
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (!actor) return;
+    auto transform = actor->getTransform();
+    if (transform) {
+        transform->setScale(glm::vec3(scale.x, scale.y, scale.z));
+    }
+}
+
+// ===== Actor Lifecycle =====
+
+void OhaoViewport::remove_actor(const String& actor_name) {
+    if (!m_scene) return;
+    std::string name = actor_name.utf8().get_data();
+    auto actor = m_scene->findActor(name);
+    if (actor) {
+        m_scene->removeActor(actor);
+        // Rebuild GPU buffers so removed mesh disappears
+        if (m_renderer) m_renderer->updateSceneBuffers();
+    }
+}
+
+bool OhaoViewport::has_actor(const String& actor_name) const {
+    if (!m_scene) return false;
+    std::string name = actor_name.utf8().get_data();
+    return m_scene->findActor(name) != nullptr;
 }
 
 // ===== Texture / Material API =====

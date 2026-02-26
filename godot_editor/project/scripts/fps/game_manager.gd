@@ -120,39 +120,32 @@ func _spawn_enemy() -> void:
 	# Choose spawn position
 	var spawn_pos := _get_spawn_position()
 
-	# Create enemy node
-	var enemy_root := Node3D.new()
-	enemy_root.name = "Enemy_%d" % enemies_total_spawned
-	enemy_root.global_position = spawn_pos
+	# Create enemy — EnemyAI is root so it owns position and finds its children
+	var enemy := EnemyAI.new()
+	enemy.name = "Enemy_%d" % enemies_total_spawned
+	enemy.max_health = 100.0 + wave_number * 10.0  # Scale difficulty
+	enemy.attack_damage = 10.0 + wave_number * 2.0
+	enemy.move_speed = 3.0 + wave_number * 0.2
+	enemy.chase_speed = 5.0 + wave_number * 0.3
+	enemy.enemy_died.connect(_on_enemy_died)
 
-	# Add physics body
+	# Visual mesh as child (auto-creates OHAO actor, syncs transform, cleans up)
+	var visual := OhaoMeshInstance.new()
+	visual.mesh_type = OhaoConst.MESH_CUBE
+	visual.mesh_color = Color(0.8, 0.2, 0.2)
+	visual.mesh_scale = Vector3(0.5, 1.8, 0.5)
+	enemy.add_child(visual)
+
+	# Physics body as child of EnemyAI (so _ready() finds it)
 	var phys_body := OhaoPhysicsBody.new()
-	phys_body.set_body_type(0)   # DYNAMIC
-	phys_body.set_shape_type(2)  # CAPSULE
+	phys_body.set_body_type(OhaoConst.BODY_KINEMATIC)
+	phys_body.set_shape_type(OhaoConst.SHAPE_CAPSULE)
 	phys_body.set_mass(70.0)
-	enemy_root.add_child(phys_body)
+	enemy.add_child(phys_body)
 
-	# Add AI controller
-	var ai := EnemyAI.new()
-	ai.max_health = 100.0 + wave_number * 10.0  # Scale difficulty
-	ai.attack_damage = 10.0 + wave_number * 2.0
-	ai.move_speed = 3.0 + wave_number * 0.2
-	ai.chase_speed = 5.0 + wave_number * 0.3
-	ai.enemy_died.connect(_on_enemy_died)
-	enemy_root.add_child(ai)
-
-	# Add to scene
-	get_parent().add_child(enemy_root)
-
-	# Add a visual mesh for the enemy in OHAO
-	ohao_viewport.add_cube(
-		enemy_root.name,
-		spawn_pos,
-		Vector3.ZERO,
-		Vector3(0.5, 1.8, 0.5),  # Roughly human-shaped box
-		Color(0.8, 0.2, 0.2)
-	)
-	ohao_viewport.finish_sync()
+	# Add to scene FIRST, then set position (global_position requires tree)
+	get_parent().add_child(enemy)
+	enemy.global_position = spawn_pos
 
 	enemies_alive += 1
 	enemies_total_spawned += 1
@@ -178,14 +171,12 @@ func add_spawn_point(pos: Vector3) -> void:
 func on_enemy_hit(actor_name: String, damage: float) -> void:
 	# Find enemy by actor name and deal damage
 	for enemy_node in get_tree().get_nodes_in_group("enemies"):
-		if enemy_node is EnemyAI:
-			var parent := enemy_node.get_parent()
-			if parent and parent.name == actor_name:
-				var hit_dir := Vector3.ZERO
-				if player:
-					hit_dir = (parent.global_position - player.global_position).normalized()
-				enemy_node.take_damage(damage, hit_dir)
-				return
+		if enemy_node is EnemyAI and enemy_node.name == actor_name:
+			var hit_dir := Vector3.ZERO
+			if player:
+				hit_dir = (enemy_node.global_position - player.global_position).normalized()
+			enemy_node.take_damage(damage, hit_dir)
+			return
 
 func _on_enemy_died(enemy: EnemyAI) -> void:
 	enemies_alive -= 1
@@ -193,10 +184,10 @@ func _on_enemy_died(enemy: EnemyAI) -> void:
 	score_changed.emit(score)
 	enemy_count_changed.emit(enemies_alive, enemies_total_spawned)
 
-	# Spawn death particles
-	if ohao_viewport and enemy.get_parent():
+	# Spawn death particles (OhaoMeshInstance auto-cleans up on queue_free)
+	if ohao_viewport:
 		ohao_viewport.spawn_particles(
-			enemy.get_parent().global_position + Vector3(0, 1, 0),
+			enemy.global_position + Vector3(0, 1, 0),
 			2  # EXPLOSION
 		)
 

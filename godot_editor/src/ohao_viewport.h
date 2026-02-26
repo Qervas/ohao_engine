@@ -168,6 +168,8 @@ public:
     bool get_taa_enabled() const { return m_render_settings.getTAAEnabled(); }
     void set_ssao_enabled(bool enabled);
     bool get_ssao_enabled() const { return m_render_settings.getSSAOEnabled(); }
+    void set_ssgi_enabled(bool enabled);
+    bool get_ssgi_enabled() const { return m_render_settings.getSSGIEnabled(); }
     void set_ssr_enabled(bool enabled);
     bool get_ssr_enabled() const { return m_render_settings.getSSREnabled(); }
     void set_volumetrics_enabled(bool enabled);
@@ -198,6 +200,14 @@ public:
     float get_ssao_radius() const { return m_render_settings.getSSAORadius(); }
     void set_ssao_intensity(float intensity);
     float get_ssao_intensity() const { return m_render_settings.getSSAOIntensity(); }
+
+    // SSGI settings
+    void set_ssgi_radius(float radius);
+    float get_ssgi_radius() const { return m_render_settings.getSSGIRadius(); }
+    void set_ssgi_intensity(float intensity);
+    float get_ssgi_intensity() const { return m_render_settings.getSSGIIntensity(); }
+    void set_ssgi_sample_count(int count);
+    int get_ssgi_sample_count() const { return m_render_settings.getSSGISampleCount(); }
 
     // SSR settings
     void set_ssr_max_distance(float dist);
@@ -240,6 +250,41 @@ public:
     float get_physics_speed() const { return m_physics_speed; }
     bool is_physics_playing() const { return m_physics_playing; }
 
+    // === Raycasting ===
+    Dictionary cast_ray(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask = 0xFFFF);
+    Array cast_ray_all(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask = 0xFFFF);
+    Array overlap_sphere(const Vector3& center, float radius, int layer_mask = 0xFFFF);
+    Array overlap_box(const Vector3& center, const Vector3& half_extents, const Vector3& rotation_deg, int layer_mask = 0xFFFF);
+
+    // === Collision Layers ===
+    void set_layer_collision(int layer1, int layer2, bool should_collide);
+
+    // === Constraints ===
+    int create_constraint_fixed(int body_handle1, int body_handle2, const Vector3& anchor);
+    int create_constraint_hinge(int body_handle1, int body_handle2, const Vector3& anchor, const Vector3& axis,
+                                 float limit_min = 0.0f, float limit_max = 0.0f);
+    int create_constraint_slider(int body_handle1, int body_handle2, const Vector3& axis,
+                                  float limit_min = 0.0f, float limit_max = 0.0f);
+    int create_constraint_point(int body_handle1, int body_handle2, const Vector3& anchor1, const Vector3& anchor2);
+    int create_constraint_distance(int body_handle1, int body_handle2, const Vector3& anchor1, const Vector3& anchor2,
+                                    float min_dist = -1.0f, float max_dist = -1.0f);
+    int create_constraint_cone(int body_handle1, int body_handle2, const Vector3& anchor, const Vector3& twist_axis,
+                                float half_cone_angle = 0.5f);
+    void destroy_constraint(int constraint_handle);
+    void set_constraint_enabled(int constraint_handle, bool enabled);
+    void set_constraint_motor(int constraint_handle, bool enabled, float speed, float max_force);
+    void set_constraint_limits(int constraint_handle, float min_val, float max_val);
+
+    // === Character Controller ===
+    int create_character(const Vector3& position, float capsule_radius, float capsule_height,
+                          float max_slope_deg = 50.0f, float mass = 80.0f);
+    void destroy_character(int char_handle);
+    Dictionary get_character_state(int char_handle);
+    void set_character_position(int char_handle, const Vector3& position);
+    void set_character_rotation(int char_handle, const Vector3& rotation_deg);
+    void set_character_velocity(int char_handle, const Vector3& velocity);
+    void update_character(int char_handle, float delta, const Vector3& gravity, const Vector3& movement_input);
+
     // === Wireframe Mode ===
     void set_wireframe_enabled(bool enabled);
     bool get_wireframe_enabled() const { return m_wireframe_enabled; }
@@ -260,6 +305,15 @@ public:
     // === Particles ===
     void spawn_particles(const Vector3& position, int type);
     void spawn_particles_directed(const Vector3& position, int type, const Vector3& direction);
+
+    // === Actor Transform API ===
+    void set_actor_position(const String& actor_name, const Vector3& position);
+    void set_actor_rotation(const String& actor_name, const Vector3& rotation_deg);
+    void set_actor_scale(const String& actor_name, const Vector3& scale);
+
+    // === Actor Lifecycle ===
+    void remove_actor(const String& actor_name);
+    bool has_actor(const String& actor_name) const;
 
     // === Texture / Material API ===
     void set_actor_texture(const String& actor_name, const String& texture_path);

@@ -6,11 +6,13 @@
 #include <vector>
 #include <functional>
 #include "engine/actor/actor.hpp"
-#include "physics/world/physics_world.hpp"
 #include "engine/component/component_factory.hpp"
 #include <glm/glm.hpp>
 
 namespace ohao {
+namespace physics {
+    class PhysicsWorld;
+}
 
 class MeshComponent;
 class TransformComponent;

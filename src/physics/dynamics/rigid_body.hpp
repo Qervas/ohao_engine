@@ -4,6 +4,7 @@
 #include "physics/material/physics_material.hpp"
 #include "physics/common/physics_constants.hpp"
 #include "physics/utils/physics_math.hpp"
+#include "physics/backend/physics_backend.hpp"
 #include <memory>
 #include <unordered_set>
 #include <unordered_map>
@@ -167,7 +168,12 @@ public:
     }
     bool hasUserData(const std::string& key) const { return m_userData.find(key) != m_userData.end(); }
     void clearUserData() { m_userData.clear(); }
-    
+
+    // === BACKEND INTEGRATION ===
+    void setBackendHandle(backend::BodyHandle handle) { m_backendHandle = handle; }
+    backend::BodyHandle getBackendHandle() const { return m_backendHandle; }
+    bool hasBackendBody() const { return m_backendHandle != backend::INVALID_BODY; }
+
 private:
     // Component reference
     PhysicsComponent* m_component;
@@ -223,7 +229,10 @@ private:
     std::unordered_set<std::string> m_activeForces;     // IDs of forces affecting this body
     ForceStats m_forceStats;                            // Force application statistics
     std::unordered_map<std::string, float> m_userData;  // Generic data storage for force generators
-    
+
+    // Backend handle (Jolt BodyID, or INVALID_BODY if no backend)
+    backend::BodyHandle m_backendHandle{backend::INVALID_BODY};
+
     // Helper methods
     void updateMassProperties();
     void validateState();

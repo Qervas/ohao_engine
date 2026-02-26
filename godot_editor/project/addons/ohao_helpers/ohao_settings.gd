@@ -62,9 +62,29 @@ const EFFECTS := {
 		},
 		"recommended_for": ["all"],
 	},
+	"ssgi": {
+		"description": "Single-bounce indirect lighting (color bleeding). Major visual upgrade.",
+		"stable": false,
+		"toggle": "ssgi_enabled",
+		"params": {
+			"ssgi_radius": {
+				"type": "float", "min": 0.5, "max": 10.0, "default": 3.0,
+				"description": "Ray march radius for indirect light sampling.",
+			},
+			"ssgi_intensity": {
+				"type": "float", "min": 0.0, "max": 3.0, "default": 1.0,
+				"description": "Indirect lighting strength.",
+			},
+			"ssgi_sample_count": {
+				"type": "int", "min": 1, "max": 16, "default": 4,
+				"description": "Rays per pixel. Higher = better quality, more cost.",
+			},
+		},
+		"recommended_for": ["realistic", "cinematic", "indoor", "architectural"],
+	},
 	"taa": {
 		"description": "Temporal anti-aliasing. Smooths jagged edges across frames.",
-		"stable": false,
+		"stable": true,
 		"toggle": "taa_enabled",
 		"params": {
 			"taa_blend_factor": {
@@ -92,7 +112,7 @@ const EFFECTS := {
 	},
 	"volumetrics": {
 		"description": "Volumetric fog and light shafts. Atmospheric depth.",
-		"stable": false,
+		"stable": true,
 		"toggle": "volumetrics_enabled",
 		"params": {
 			"volumetric_density": {

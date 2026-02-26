@@ -7,6 +7,7 @@
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/collision/shapes/shape_factory.hpp"
 #include "physics/material/physics_material.hpp"
+#include "physics/backend/physics_backend.hpp"
 #include "engine/asset/model.hpp"
 #include "ui/components/console_widget.hpp"
 
@@ -24,6 +25,16 @@ PhysicsComponent::~PhysicsComponent() {
 void PhysicsComponent::setRigidBodyType(physics::dynamics::RigidBodyType type) {
     if (m_rigidBody) {
         m_rigidBody->setType(type);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            physics::backend::MotionType mt;
+            switch (type) {
+                case physics::dynamics::RigidBodyType::STATIC:    mt = physics::backend::MotionType::STATIC; break;
+                case physics::dynamics::RigidBodyType::KINEMATIC: mt = physics::backend::MotionType::KINEMATIC; break;
+                default:                                          mt = physics::backend::MotionType::DYNAMIC; break;
+            }
+            m_physicsWorld->getBackend()->setMotionType(m_rigidBody->getBackendHandle(), mt);
+        }
     }
 }
 
@@ -38,6 +49,10 @@ physics::dynamics::RigidBodyType PhysicsComponent::getRigidBodyType() const {
 void PhysicsComponent::setMass(float mass) {
     if (m_rigidBody) {
         m_rigidBody->setMass(mass);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setMass(m_rigidBody->getBackendHandle(), mass);
+        }
     }
 }
 
@@ -357,6 +372,11 @@ void PhysicsComponent::createRigidBody() {
 
         // Sync physics body position with current transform position
         updateRigidBodyFromTransform();
+
+        // Register with physics backend (Jolt) now that we have shape + position
+        if (m_collisionShape) {
+            m_physicsWorld->registerBodyWithBackend(m_rigidBody.get());
+        }
 
         // Debug: Log the synced position
         glm::vec3 pos = m_rigidBody->getPosition();

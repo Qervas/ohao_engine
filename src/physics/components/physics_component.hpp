@@ -3,10 +3,12 @@
 #include "engine/component/component.hpp"
 #include "physics/dynamics/rigid_body.hpp"
 #include "physics/collision/shapes/shape_factory.hpp"
-#include "physics/world/physics_world.hpp"
 #include <memory>
 
 namespace ohao {
+namespace physics {
+    class PhysicsWorld;
+}
 
 // Forward declarations
 class Actor;

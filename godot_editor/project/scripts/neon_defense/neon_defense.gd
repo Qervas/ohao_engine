@@ -113,18 +113,20 @@ func _build_level() -> void:
 	OhaoPresets.apply_material(ohao_viewport, "Platform", "metal")
 
 	# === Lighting ===
-	# Dim moonlight
+	# Cool ambient fill — just enough to see geometry
 	ohao_viewport.add_directional_light("Moon", Vector3(0, 20, 0),
-		Vector3(-0.3, -1, -0.5), Color(0.25, 0.3, 0.45), 0.3)
+		Vector3(-0.3, -1, -0.5), Color(0.15, 0.18, 0.35), 0.8)
 
-	# Neon point lights (match pillar colors)
-	ohao_viewport.add_point_light("NeonCyan1",    Vector3(8, 3, 8),    Color(0.0, 1.0, 0.9), 3.0, 12.0)
-	ohao_viewport.add_point_light("NeonMagenta1", Vector3(-8, 3, 8),   Color(1.0, 0.0, 0.8), 3.0, 12.0)
-	ohao_viewport.add_point_light("NeonCyan2",    Vector3(8, 3, -8),   Color(0.0, 0.8, 1.0), 2.5, 10.0)
-	ohao_viewport.add_point_light("NeonPurple",   Vector3(-8, 3, -8),  Color(0.8, 0.0, 1.0), 2.5, 10.0)
-	ohao_viewport.add_point_light("NeonCenter",   Vector3(0, 4, 0),    Color(0.0, 1.0, 0.8), 2.0, 15.0)
-	ohao_viewport.add_point_light("NeonYellow1",  Vector3(15, 2, 0),   Color(1.0, 0.9, 0.0), 1.5, 8.0)
-	ohao_viewport.add_point_light("NeonYellow2",  Vector3(-15, 2, 0),  Color(1.0, 0.9, 0.0), 1.5, 8.0)
+	# Neon point lights — cranked intensity + range for bloom to catch
+	ohao_viewport.add_point_light("NeonCyan1",    Vector3(8, 3, 8),    Color(0.0, 1.0, 0.9), 8.0, 18.0)
+	ohao_viewport.add_point_light("NeonMagenta1", Vector3(-8, 3, 8),   Color(1.0, 0.0, 0.8), 8.0, 18.0)
+	ohao_viewport.add_point_light("NeonCyan2",    Vector3(8, 3, -8),   Color(0.0, 0.8, 1.0), 6.0, 16.0)
+	ohao_viewport.add_point_light("NeonPurple",   Vector3(-8, 3, -8),  Color(0.8, 0.0, 1.0), 6.0, 16.0)
+	ohao_viewport.add_point_light("NeonCenter",   Vector3(0, 4, 0),    Color(0.0, 1.0, 0.8), 5.0, 20.0)
+	ohao_viewport.add_point_light("NeonGreen1",   Vector3(15, 2, 0),   Color(0.0, 1.0, 0.6), 5.0, 14.0)
+	ohao_viewport.add_point_light("NeonPink1",    Vector3(-15, 2, 0),  Color(1.0, 0.2, 0.6), 5.0, 14.0)
+	ohao_viewport.add_point_light("NeonBlue1",    Vector3(0, 2, 15),   Color(0.2, 0.6, 1.0), 4.0, 12.0)
+	ohao_viewport.add_point_light("NeonViolet1",  Vector3(0, 2, -15),  Color(0.6, 0.0, 1.0), 4.0, 12.0)
 
 	ohao_viewport.finish_sync()
 
@@ -234,20 +236,29 @@ func _configure_rendering() -> void:
 	# Start minimal, then enable only stable effects
 	OhaoPresets.apply_rendering(ohao_viewport, "minimal")
 
-	# Bloom — essential for neon glow
+	# Bloom — aggressive for neon glow (low threshold catches bright neon colors)
 	ohao_viewport.set_bloom_enabled(true)
-	ohao_viewport.set_bloom_threshold(0.4)
-	ohao_viewport.set_bloom_intensity(1.5)
+	ohao_viewport.set_bloom_threshold(0.15)
+	ohao_viewport.set_bloom_intensity(2.5)
 
-	# SSAO — depth in indoor arena
+	# SSAO — strong depth in dark arena
 	ohao_viewport.set_ssao_enabled(true)
-	ohao_viewport.set_ssao_radius(0.5)
-	ohao_viewport.set_ssao_intensity(1.0)
+	ohao_viewport.set_ssao_radius(0.7)
+	ohao_viewport.set_ssao_intensity(1.5)
 
-	# Tonemapping — HDR color mapping
+	# Volumetric fog — atmospheric neon haze
+	ohao_viewport.set_volumetrics_enabled(true)
+	ohao_viewport.set_volumetric_density(0.03)
+	ohao_viewport.set_volumetric_scattering(0.7)
+	ohao_viewport.set_fog_color(Color(0.1, 0.3, 0.5))
+
+	# TAA — smooth edges
+	ohao_viewport.set_taa_enabled(true)
+
+	# Tonemapping — bright enough to see geometry, ACES for cinematic contrast
 	ohao_viewport.set_tonemapping_enabled(true)
 	ohao_viewport.set_tonemap_operator(OhaoConst.TONEMAP_ACES)
-	ohao_viewport.set_exposure(1.4)
+	ohao_viewport.set_exposure(1.8)
 	ohao_viewport.set_gamma(2.2)
 
 

@@ -1,12 +1,11 @@
 #pragma once
 
 #include "physics/dynamics/rigid_body.hpp"
-#include "physics/collision/collision_system.hpp"
-#include "physics/constraints/constraint_solver.hpp"
 #include "physics/forces/force_registry.hpp"
 #include "physics/debug/force_debugger.hpp"
 #include "physics/utils/physics_math.hpp"
 #include "physics/world/profile_manager.hpp"
+#include "physics/backend/physics_backend.hpp"
 
 #include <vector>
 #include <memory>
@@ -29,9 +28,6 @@ struct PhysicsWorldConfig {
     float timeStep{1.0f / 60.0f};
     int maxSubSteps{4};
 
-    // Solver configuration
-    constraints::SolverConfig solverConfig;
-    
     // Performance settings
     bool enableMultithreading{true};
     int workerThreads{0}; // 0 = auto-detect
@@ -101,9 +97,47 @@ public:
     template<typename T>
     bool initialize(const T& /*unused_settings*/) { initialize(); return true; }
     
-    // Constraint management (for future joint system)
-    // TODO: Add joint constraints when needed
-    
+    // === RAYCASTING & QUERIES ===
+    bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+                 backend::RaycastHit& outHit, uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
+    std::vector<backend::RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
+                                                 float maxDistance, uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
+    bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
+                    float maxDistance, backend::ShapeCastResult& outHit,
+                    uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
+    bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
+                 const glm::quat& rotation, float maxDistance, backend::ShapeCastResult& outHit,
+                 uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
+    std::vector<backend::BodyHandle> overlapSphere(const glm::vec3& center, float radius,
+                                                    uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
+    std::vector<backend::BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
+                                                 const glm::quat& rotation,
+                                                 uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
+
+    // === CONTACT CALLBACKS ===
+    void setContactListener(backend::IContactListener* listener);
+    std::vector<backend::ContactEvent> getContactEvents();
+
+    // === COLLISION LAYERS ===
+    void setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide);
+
+    // === CONSTRAINTS ===
+    backend::ConstraintHandle createConstraint(const backend::ConstraintSettings& settings);
+    void destroyConstraint(backend::ConstraintHandle handle);
+    void setConstraintEnabled(backend::ConstraintHandle handle, bool enabled);
+    void setConstraintMotorState(backend::ConstraintHandle handle, bool enabled, float speed, float maxForce);
+    void setConstraintLimits(backend::ConstraintHandle handle, float min, float max);
+
+    // === CHARACTER CONTROLLER ===
+    backend::CharacterHandle createCharacter(const backend::CharacterCreationInfo& info);
+    void destroyCharacter(backend::CharacterHandle handle);
+    backend::CharacterState getCharacterState(backend::CharacterHandle handle) const;
+    void setCharacterPosition(backend::CharacterHandle handle, const glm::vec3& pos);
+    void setCharacterRotation(backend::CharacterHandle handle, const glm::quat& rot);
+    void setCharacterLinearVelocity(backend::CharacterHandle handle, const glm::vec3& vel);
+    void updateCharacter(backend::CharacterHandle handle, float deltaTime,
+                          const glm::vec3& gravity, const glm::vec3& movementInput);
+
     // Configuration
     void setConfig(const PhysicsWorldConfig& config);
     const PhysicsWorldConfig& getConfig() const { return m_config; }
@@ -114,13 +148,6 @@ public:
     void setTimeStep(float timeStep);
     float getTimeStep() const { return m_config.timeStep; }
     
-    // Access to subsystems
-    collision::CollisionSystem& getCollisionSystem() { return *m_collisionSystem; }
-    const collision::CollisionSystem& getCollisionSystem() const { return *m_collisionSystem; }
-
-    constraints::ConstraintSolver& getConstraintSolver() { return *m_constraintSolver; }
-    const constraints::ConstraintSolver& getConstraintSolver() const { return *m_constraintSolver; }
-
     // Force system access
     forces::ForceRegistry& getForceRegistry() { return m_forceRegistry; }
     const forces::ForceRegistry& getForceRegistry() const { return m_forceRegistry; }
@@ -197,10 +224,19 @@ public:
     // Thread safety
     void lockBodies() { m_bodiesMutex.lock(); }
     void unlockBodies() { m_bodiesMutex.unlock(); }
-    
+
     // Memory management
     void compactMemory(); // Defragment and optimize memory layout
     size_t getMemoryUsage() const; // Returns usage in bytes
+
+    // === BACKEND (Plugin System) ===
+    backend::IPhysicsBackend* getBackend() { return m_backend.get(); }
+    const backend::IPhysicsBackend* getBackend() const { return m_backend.get(); }
+    bool hasBackend() const { return m_backend && m_backend->isInitialized(); }
+    const char* getBackendName() const { return m_backend ? m_backend->getName() : "none"; }
+
+    // Register a body with the backend (called after shape is set)
+    void registerBodyWithBackend(dynamics::RigidBody* body);
 
 private:
     PhysicsWorldConfig m_config;
@@ -210,10 +246,6 @@ private:
     float m_timestepAccumulator{0.0f};
     float m_fixedTimestep{1.0f / 60.0f};  // 60 Hz physics
 
-    // Core subsystems
-    std::unique_ptr<collision::CollisionSystem> m_collisionSystem;
-    std::unique_ptr<constraints::ConstraintSolver> m_constraintSolver;
-    
     // Force system
     forces::ForceRegistry m_forceRegistry;
 
@@ -226,10 +258,7 @@ private:
     std::unordered_map<PhysicsComponent*, std::shared_ptr<dynamics::RigidBody>> m_componentToBody;
     
     // Threading
-    std::vector<std::thread> m_workerThreads;
     std::mutex m_bodiesMutex;
-    std::mutex m_constraintsMutex;
-    bool m_shutdownRequested{false};
     
     // Statistics and profiling
     PhysicsStats m_stats;
@@ -239,33 +268,22 @@ private:
     // Force debugging
     std::unique_ptr<debug::ForceDebugger> m_forceDebugger;
     bool m_forceDebuggingEnabled{false};
-    
+
+    // Physics backend (Jolt, null, etc.)
+    std::unique_ptr<backend::IPhysicsBackend> m_backend;
+
     // Internal methods
-    void initializeSubsystems();
     void updateActiveBodyPointers();
     void updateDebugVisualization();
     void updateStatistics();
 
-    // Fixed timestep physics tick
+    // Fixed timestep physics tick (delegates to backend)
     void stepFixed(float fixedDt);
 
-    // Multithreaded simulation pipeline
-    void stepMultithreaded(float deltaTime);
-    void stepSinglethreaded(float deltaTime);
-    
-    // Worker thread functions
-    void collisionWorker(const std::vector<dynamics::RigidBody*>& bodies, float deltaTime);
-    void integrationWorker(const std::vector<dynamics::RigidBody*>& bodies, float deltaTime);
-    
-    // Performance optimization
-    void optimizeMemoryLayout();
-    void cullInactiveBodies();
-    void updateSpatialAcceleration();
-    
-    // Validation and debugging
-    void validatePhysicsState();
-    void checkForNanValues();
-    void detectInfiniteLoops();
+    // Backend sync helpers
+    void syncPendingBodiesToBackend();
+    void syncBodiesFromBackend();
+    backend::BodyCreationInfo buildCreationInfo(const dynamics::RigidBody* body) const;
 };
 
 // Physics world factory with preset configurations

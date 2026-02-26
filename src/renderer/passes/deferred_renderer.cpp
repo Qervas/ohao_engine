@@ -78,10 +78,12 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         std::cout << "DeferredRenderer: GizmoPass OK" << std::endl;
     }
 
-    // Connect depth/normal/velocity for post-processing
+    // Connect depth/normal/velocity/albedo/position for post-processing
     m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
     m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
     m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
+    m_postProcessing->setAlbedoBuffer(m_gbufferPass->getAlbedoView());
+    m_postProcessing->setPositionBuffer(m_gbufferPass->getPositionView());
 
     // Initialize particle system
     m_particleSystem = std::make_unique<ParticleSystem>();
@@ -188,6 +190,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         // SSR needs view/proj matrices for screen-space ray marching
         m_postProcessing->setSSRMatrices(m_view, m_proj, invView, invProj);
 
+        // SSGI needs view/proj/invProj for screen-space ray marching
+        m_postProcessing->setSSGIMatrices(m_view, m_proj, invProj);
+
         // Volumetric fog needs view/proj matrices + light/shadow data
         m_postProcessing->setVolumetricMatrices(m_view, m_proj, invView, invProj);
         m_postProcessing->setLightBuffer(m_lightBuffer);
@@ -219,6 +224,20 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             VkSampler ssaoSampler = m_postProcessing->getSSAOSampler();
             if (ssaoView != VK_NULL_HANDLE && ssaoSampler != VK_NULL_HANDLE) {
                 m_lightingPass->setSSAOTexture(ssaoView, ssaoSampler);
+            }
+        }
+    }
+
+    // 3.5. SSGI (pre-lighting, half-res indirect lighting)
+    if (m_postProcessing && m_gbufferPass) {
+        m_postProcessing->executeSSGI(cmd, frameIndex);
+
+        // Pass SSGI result to lighting
+        if (m_lightingPass) {
+            VkImageView ssgiView = m_postProcessing->getSSGIOutput();
+            VkSampler ssgiSampler = m_postProcessing->getSSGISampler();
+            if (ssgiView != VK_NULL_HANDLE && ssgiSampler != VK_NULL_HANDLE) {
+                m_lightingPass->setSSGITexture(ssgiView, ssgiSampler);
             }
         }
     }
@@ -360,6 +379,8 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
         m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
         m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
+        m_postProcessing->setAlbedoBuffer(m_gbufferPass->getAlbedoView());
+        m_postProcessing->setPositionBuffer(m_gbufferPass->getPositionView());
     }
 }
 
@@ -391,6 +412,8 @@ void DeferredRenderer::setCameraData(const glm::mat4& view, const glm::mat4& pro
                                       const glm::vec3& position, float nearPlane, float farPlane) {
     m_view = view;
     m_proj = proj;
+    // Flip Y for Vulkan NDC (Y-down) — GLM perspective assumes OpenGL (Y-up)
+    m_proj[1][1] *= -1;
     m_cameraPos = position;
     m_nearPlane = nearPlane;
     m_farPlane = farPlane;

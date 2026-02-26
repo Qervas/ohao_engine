@@ -89,6 +89,12 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
     if (m_pipeline == VK_NULL_HANDLE || m_pipelineLayout == VK_NULL_HANDLE ||
         m_descriptorSet == VK_NULL_HANDLE) return;
 
+    // Update descriptors every frame — light buffer, SSAO, and SSGI views are set
+    // per-frame by the deferred renderer but the descriptor set is only written at
+    // init. Without this, bindings 5/10/11 always point to dummy zero resources.
+    // vkUpdateDescriptorSets is a cheap host-side call (~12 writes, microseconds).
+    updateDescriptorSets();
+
     // Transition dummy image on first use (needed for fallback descriptor bindings)
     if (!m_dummyImageTransitioned && m_dummyImage != VK_NULL_HANDLE) {
         VkImageMemoryBarrier barrier{};
@@ -157,6 +163,7 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
     if (m_irradianceView != VK_NULL_HANDLE) m_params.flags |= 1; // IBL
     if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO
     if (m_shadowMapView != VK_NULL_HANDLE) m_params.flags |= 4;  // Shadows
+    if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // SSGI
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LightingParams), &m_params);
@@ -202,6 +209,11 @@ void DeferredLightingPass::setSSAOTexture(VkImageView ssao, VkSampler ssaoSample
     m_ssaoSampler = ssaoSampler;
 }
 
+void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler) {
+    m_ssgiView = ssgi;
+    m_ssgiSampler = ssgiSampler;
+}
+
 void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& invViewProj) {
     m_params.cameraPos = position;
     m_params.invViewProj = invViewProj;
@@ -215,13 +227,13 @@ void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
 void DeferredLightingPass::updateDescriptorSets() {
     if (!m_gbufferPass || m_descriptorSet == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write ALL 11 bindings. Use dummy resources as fallback for unbound bindings.
+    // Always write ALL 12 bindings. Use dummy resources as fallback for unbound bindings.
     // Vulkan requires all declared bindings to be written before the descriptor set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 11> imageInfos{};
-    std::array<VkWriteDescriptorSet, 11> writes{};
+    std::array<VkDescriptorImageInfo, 12> imageInfos{};
+    std::array<VkWriteDescriptorSet, 12> writes{};
     VkDescriptorBufferInfo bufferInfo{};
 
     // G-Buffer textures (bindings 0-4) — always available after GBuffer init
@@ -323,7 +335,19 @@ void DeferredLightingPass::updateDescriptorSets() {
     writes[10].descriptorCount = 1;
     writes[10].pImageInfo = &imageInfos[9];
 
-    vkUpdateDescriptorSets(m_device, 11, writes.data(), 0, nullptr);
+    // SSGI (binding 11) — use fallback if not set
+    imageInfos[10].sampler = m_ssgiSampler != VK_NULL_HANDLE ? m_ssgiSampler : fallbackSampler;
+    imageInfos[10].imageView = m_ssgiView != VK_NULL_HANDLE ? m_ssgiView : fallbackView;
+    imageInfos[10].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[11].dstSet = m_descriptorSet;
+    writes[11].dstBinding = 11;
+    writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[11].descriptorCount = 1;
+    writes[11].pImageInfo = &imageInfos[10];
+
+    vkUpdateDescriptorSets(m_device, 12, writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -439,8 +463,9 @@ bool DeferredLightingPass::createDescriptors() {
     // 8: Prefiltered cubemap
     // 9: BRDF LUT
     // 10: SSAO texture
+    // 11: SSGI texture
 
-    std::array<VkDescriptorSetLayoutBinding, 11> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -476,6 +501,12 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[10].descriptorCount = 1;
     bindings[10].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // SSGI (11)
+    bindings[11].binding = 11;
+    bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[11].descriptorCount = 1;
+    bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -488,7 +519,7 @@ bool DeferredLightingPass::createDescriptors() {
     // Descriptor pool
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 10;
+    poolSizes[0].descriptorCount = 11;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = 1;
 

@@ -15,3 +15,13 @@ target_link_libraries(ohao_physics PUBLIC
     glm
     nlohmann_json::nlohmann_json
 )
+
+# Link Jolt Physics backend (modular - builds even if Jolt unavailable)
+if(TARGET Jolt)
+    target_link_libraries(ohao_physics PUBLIC Jolt)
+    target_compile_definitions(ohao_physics PUBLIC OHAO_HAS_JOLT=1)
+    message(STATUS "ohao_physics: Jolt Physics backend enabled")
+else()
+    target_compile_definitions(ohao_physics PUBLIC OHAO_HAS_JOLT=0)
+    message(STATUS "ohao_physics: Jolt Physics NOT available, using null backend")
+endif()

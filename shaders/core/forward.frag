@@ -1,5 +1,6 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : require
 
 // forward.frag - Forward rendering fragment shader with PBR
 // Part of OHAO Engine shader system
@@ -25,16 +26,16 @@ layout(location = 3) in vec2 fragTexCoord;
 // Fragment output
 layout(location = 0) out vec4 outColor;
 
-// Camera uniform (binding 0)
-layout(binding = 0) uniform CameraUBO {
+// Camera uniform (set 0, binding 0)
+layout(set = 0, binding = 0) uniform CameraUBO {
     mat4 view;
     mat4 proj;
     vec3 viewPos;
 } camera;
 
-// Light uniform (binding 1)
+// Light uniform (set 0, binding 1)
 // CRITICAL: Include files access this UBO directly by name "lighting"
-layout(binding = 1) uniform LightUBO {
+layout(set = 0, binding = 1) uniform LightUBO {
     Light lights[MAX_LIGHTS];
     int numLights;
     float ambientIntensity;
@@ -49,11 +50,15 @@ layout(push_constant) uniform PushConstants {
     float metallic;
     float roughness;
     float ao;
-    vec2 padding;
+    float albedoTexIdx;   // uint32 packed as float (0xFFFFFFFF = no texture)
+    float normalTexIdx;   // uint32 packed as float (0xFFFFFFFF = no texture)
 } material;
 
-// Shadow map sampler (binding 2)
-layout(binding = 2) uniform sampler2D shadowMap;
+// Shadow map sampler (binding 2, set 0)
+layout(set = 0, binding = 2) uniform sampler2D shadowMap;
+
+// Bindless texture array (set 1, binding 0)
+layout(set = 1, binding = 0) uniform sampler2D textures[];
 
 // Include shadow calculation AFTER defining the lighting UBO
 #include "includes/shadow/shadow_pcf.glsl"
@@ -139,13 +144,40 @@ void main() {
     vec3 normal = normalize(fragNormal);
     vec3 viewDir = normalize(camera.viewPos - fragPos);
 
+    // Check for bindless albedo texture
+    vec3 albedo = fragColor;
+    uint albedoIdx = floatBitsToUint(material.albedoTexIdx);
+    if (albedoIdx != 0xFFFFFFFFu) {
+        vec4 texColor = texture(textures[nonuniformEXT(albedoIdx)], fragTexCoord);
+        albedo = texColor.rgb * fragColor;
+    }
+
+    // Check for bindless normal map
+    uint normalIdx = floatBitsToUint(material.normalTexIdx);
+    if (normalIdx != 0xFFFFFFFFu) {
+        vec3 tangentNormal = texture(textures[nonuniformEXT(normalIdx)], fragTexCoord).rgb;
+        tangentNormal = tangentNormal * 2.0 - 1.0;
+
+        // Compute TBN from screen-space derivatives
+        vec3 dPdx = dFdx(fragPos);
+        vec3 dPdy = dFdy(fragPos);
+        vec2 dUVdx = dFdx(fragTexCoord);
+        vec2 dUVdy = dFdy(fragTexCoord);
+
+        vec3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
+        vec3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+        mat3 TBN = mat3(T, B, normal);
+
+        normal = normalize(TBN * tangentNormal);
+    }
+
 #if USE_PBR
     // Initialize PBR surface data
     BRDFSurface surface = initBRDFSurface(
         fragPos,
         normal,
         viewDir,
-        fragColor,              // albedo from vertex/material
+        albedo,                 // albedo from texture or vertex/material
         material.metallic,
         max(material.roughness, 0.04), // Prevent 0 roughness artifacts
         material.ao
@@ -175,7 +207,7 @@ void main() {
 
 #else
     // Legacy Blinn-Phong path
-    vec3 ambient = lighting.ambientIntensity * fragColor;
+    vec3 ambient = lighting.ambientIntensity * albedo;
 
     vec3 lightingResult = vec3(0.0);
     for (int i = 0; i < lighting.numLights && i < MAX_LIGHTS; i++) {

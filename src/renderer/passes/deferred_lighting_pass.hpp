@@ -23,6 +23,7 @@ public:
     void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
                         VkImageView brdfLUT, VkSampler iblSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
+    void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
 
     // Update descriptors when resources change
     void updateDescriptorSets();
@@ -77,6 +78,8 @@ private:
     VkSampler m_iblSampler{VK_NULL_HANDLE};
     VkImageView m_ssaoView{VK_NULL_HANDLE};
     VkSampler m_ssaoSampler{VK_NULL_HANDLE};
+    VkImageView m_ssgiView{VK_NULL_HANDLE};
+    VkSampler m_ssgiSampler{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};
@@ -99,7 +102,7 @@ private:
         float padding1;
         glm::vec2 screenSize;
         uint32_t lightCount;
-        uint32_t flags; // Bit 0: use IBL, Bit 1: use SSAO, Bit 2: use shadows
+        uint32_t flags; // Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
     };
 
     LightingParams m_params{};

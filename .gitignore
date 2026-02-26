@@ -17,9 +17,12 @@ build/
 # Object files and libraries
 *.o
 *.os
+*.obj
 *.a
 *.so
 *.dylib
+*.exp
+*.lib
 
 # Cache
 .cache/
@@ -59,3 +62,7 @@ external/imgui
 *_TRACE.md
 *_LOGS.md
 __pycache__/
+
+# Misc
+imgui.ini
+Downloads/

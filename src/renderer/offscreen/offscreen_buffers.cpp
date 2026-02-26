@@ -131,7 +131,7 @@ bool OffscreenRenderer::createLightBuffer() {
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = bufferSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_lightBuffer) != VK_SUCCESS) {

@@ -51,6 +51,40 @@ const INPUT_GAME := 1
 const EFFECT_STABLE := 0
 const EFFECT_EXPERIMENTAL := 1
 
+# Collision layers (OhaoViewport)
+const LAYER_DEFAULT := 0
+const LAYER_STATIC := 1
+const LAYER_DYNAMIC := 2
+const LAYER_KINEMATIC := 3
+const LAYER_CHARACTER := 4
+const LAYER_TRIGGER := 5
+const LAYER_DEBRIS := 6
+const LAYER_PROJECTILE := 7
+const LAYER_VEHICLE := 8
+const LAYER_RAGDOLL := 9
+const LAYER_TERRAIN := 10
+const LAYER_WATER := 11
+const LAYER_USER_0 := 12
+const LAYER_USER_1 := 13
+const LAYER_USER_2 := 14
+const LAYER_USER_3 := 15
+const LAYER_ALL := 0xFFFF
+
+# Constraint types
+const CONSTRAINT_FIXED := 0
+const CONSTRAINT_POINT := 1
+const CONSTRAINT_HINGE := 2
+const CONSTRAINT_SLIDER := 3
+const CONSTRAINT_CONE := 4
+const CONSTRAINT_DISTANCE := 5
+const CONSTRAINT_SIX_DOF := 6
+
+# Character ground state
+const GROUND_ON_GROUND := 0
+const GROUND_ON_STEEP := 1
+const GROUND_NOT_SUPPORTED := 2
+const GROUND_IN_AIR := 3
+
 # Audio categories (OhaoViewport)
 const AUDIO_SFX := 0
 const AUDIO_MUSIC := 1

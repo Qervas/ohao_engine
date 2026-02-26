@@ -22,9 +22,23 @@ env.Append(CPPPATH=[
     "../build/_deps/json-src/single_include/",  # nlohmann/json
     "../build/_deps/stb-src/",  # stb headers
     "../build/_deps/tinygltf-src/",  # tinygltf headers
+    "../build/_deps/miniaudio-src/",  # miniaudio header
+    "../build/_deps/joltphysics-src/",  # Jolt Physics headers
     vulkan_sdk + "/Include",  # Vulkan SDK headers (Windows)
     "/opt/homebrew/include/",  # Vulkan headers (MoltenVK)
 ])
+
+# Jolt Physics: check if built and add compile define
+jolt_lib_found = False
+for search_dir in ["../build/", "../build/Debug/", "../build/Release/"]:
+    if os.path.exists(os.path.join(search_dir, "Jolt.lib")) or \
+       os.path.exists(os.path.join(search_dir, "libJolt.a")):
+        jolt_lib_found = True
+        break
+if jolt_lib_found:
+    env.Append(CPPDEFINES=["OHAO_HAS_JOLT=1"])
+else:
+    env.Append(CPPDEFINES=["OHAO_HAS_JOLT=0"])
 
 # Add library paths
 env.Append(LIBPATH=[
@@ -38,17 +52,24 @@ env.Append(LIBPATH=[
 # Link OHAO libraries (order matters for static linking - dependents first)
 # ohao_ui is needed for ConsoleWidget logging
 # Libraries that USE symbols must come BEFORE libraries that DEFINE them
-env.Append(LIBS=[
+ohao_libs = [
     "ohao_renderer",   # Uses ConsoleWidget
     "ohao_scene",      # Uses ConsoleWidget
     "ohao_animation",  # Skeleton, animation clips, ragdoll
-    "ohao_physics",    # Uses ConsoleWidget
+    "ohao_physics",    # Uses ConsoleWidget + Jolt backend
     "ohao_component",  # Uses ConsoleWidget
     "ohao_ui",         # Defines ConsoleWidget (must come after users)
     "ohao_actor",
     "ohao_asset",
+    "ohao_commands",   # Undo/redo command system
+    "ohao_audio",      # 3D positional audio via miniaudio
+    "ohao_events",     # EventBus for decoupled communication
     "tinyfiledialogs", # File dialogs
-])
+]
+# Add Jolt Physics if available (ohao_physics depends on it)
+if jolt_lib_found:
+    ohao_libs.insert(ohao_libs.index("ohao_physics") + 1, "Jolt")
+env.Append(LIBS=ohao_libs)
 
 # Platform-specific settings
 if env["platform"] == "macos":
@@ -68,6 +89,10 @@ elif env["platform"] == "linux":
 
 elif env["platform"] == "windows":
     env.Append(LIBS=["vulkan-1"])
+    # Allow duplicate stbi symbols across ohao_renderer and ohao_asset static libs
+    # Remove /WX from linker flags if present (godot-cpp adds it), then add /FORCE:MULTIPLE
+    env["LINKFLAGS"] = [f for f in env.get("LINKFLAGS", []) if f != "/WX"]
+    env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
 
 # Gather sources
 sources = Glob("src/*.cpp")

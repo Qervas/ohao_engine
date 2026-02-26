@@ -21,6 +21,7 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     pp->setBloomEnabled(m_bloom_enabled);
     pp->setTAAEnabled(m_taa_enabled);
     pp->setSSAOEnabled(m_ssao_enabled);
+    pp->setSSGIEnabled(m_ssgi_enabled);
     pp->setSSREnabled(m_ssr_enabled);
     pp->setVolumetricsEnabled(m_volumetrics_enabled);
     pp->setMotionBlurEnabled(m_motion_blur_enabled);
@@ -39,6 +40,11 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     // SSAO
     pp->setSSAORadius(m_ssao_radius);
     pp->setSSAOIntensity(m_ssao_intensity);
+
+    // SSGI
+    pp->setSSGIRadius(m_ssgi_radius);
+    pp->setSSGIIntensity(m_ssgi_intensity);
+    pp->setSSGISampleCount(static_cast<uint32_t>(m_ssgi_sample_count));
 
     // SSR
     pp->setSSRMaxDistance(m_ssr_max_distance);

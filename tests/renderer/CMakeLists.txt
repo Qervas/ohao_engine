@@ -25,6 +25,11 @@ target_link_libraries(renderer_pipeline_tests PRIVATE
     glm
 )
 
+# Link Jolt if available (ohao_physics depends on it)
+if(TARGET Jolt)
+    target_link_libraries(renderer_pipeline_tests PRIVATE Jolt)
+endif()
+
 # Add test to CTest
 add_test(NAME RendererPipelineTests COMMAND renderer_pipeline_tests)
 

@@ -4,6 +4,7 @@
 #include "bloom_pass.hpp"
 #include "taa_pass.hpp"
 #include "ssao_pass.hpp"
+#include "ssgi_pass.hpp"
 #include "ssr_pass.hpp"
 #include "volumetric_pass.hpp"
 #include "motion_blur_pass.hpp"
@@ -42,6 +43,7 @@ public:
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
     void setSSAOEnabled(bool enabled) { m_ssaoEnabled = enabled; }
+    void setSSGIEnabled(bool enabled) { m_ssgiEnabled = enabled; }
     void setSSREnabled(bool enabled) { m_ssrEnabled = enabled; }
     void setVolumetricsEnabled(bool enabled) { m_volumetricsEnabled = enabled; }
     void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }
@@ -65,6 +67,19 @@ public:
     void setSSAORadius(float radius);
     void setSSAOIntensity(float intensity);
     void setProjectionMatrix(const glm::mat4& proj, const glm::mat4& invProj);
+
+    // SSGI configuration
+    void setSSGIRadius(float radius);
+    void setSSGIIntensity(float intensity);
+    void setSSGISampleCount(uint32_t count);
+    void setSSGIMatrices(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& invProj);
+    void setAlbedoBuffer(VkImageView albedo);
+    void setPositionBuffer(VkImageView position);
+
+    // Execute SSGI separately (called before lighting pass by DeferredRenderer)
+    void executeSSGI(VkCommandBuffer cmd, uint32_t frameIndex);
+    VkImageView getSSGIOutput() const;
+    VkSampler getSSGISampler() const;
 
     // SSR configuration
     void setSSRMaxDistance(float dist);
@@ -128,6 +143,7 @@ private:
     std::unique_ptr<BloomPass> m_bloomPass;
     std::unique_ptr<TAAPass> m_taaPass;
     std::unique_ptr<SSAOPass> m_ssaoPass;
+    std::unique_ptr<SSGIPass> m_ssgiPass;
     std::unique_ptr<SSRPass> m_ssrPass;
     std::unique_ptr<VolumetricPass> m_volumetricPass;
     std::unique_ptr<MotionBlurPass> m_motionBlurPass;
@@ -171,6 +187,7 @@ private:
     bool m_bloomEnabled{false};
     bool m_taaEnabled{false};
     bool m_ssaoEnabled{false};
+    bool m_ssgiEnabled{false};
     bool m_ssrEnabled{false};
     bool m_volumetricsEnabled{false};
     bool m_motionBlurEnabled{false};

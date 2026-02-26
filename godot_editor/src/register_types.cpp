@@ -1,6 +1,7 @@
 #include "register_types.h"
 #include "ohao_viewport.h"
 #include "ohao_physics_body.h"
+#include "ohao_mesh_instance.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/defs.hpp>
@@ -39,6 +40,7 @@ void initialize_ohao_module(ModuleInitializationLevel p_level) {
     // Register our custom classes
     ClassDB::register_class<OhaoViewport>();
     ClassDB::register_class<OhaoPhysicsBody>();
+    ClassDB::register_class<OhaoMeshInstance>();
 }
 
 void uninitialize_ohao_module(ModuleInitializationLevel p_level) {

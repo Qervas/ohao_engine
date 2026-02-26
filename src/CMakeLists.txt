@@ -1,5 +1,6 @@
 add_subdirectory(engine)
 add_subdirectory(animation)
+add_subdirectory(audio)
 add_subdirectory(physics)
 add_subdirectory(renderer)
 add_subdirectory(utils)

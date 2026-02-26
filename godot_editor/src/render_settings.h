@@ -35,6 +35,8 @@ public:
     bool getTAAEnabled() const          { return m_taa_enabled; }
     void setSSAOEnabled(bool v)         { m_ssao_enabled = v; }
     bool getSSAOEnabled() const         { return m_ssao_enabled; }
+    void setSSGIEnabled(bool v)         { m_ssgi_enabled = v; }
+    bool getSSGIEnabled() const         { return m_ssgi_enabled; }
     void setSSREnabled(bool v)          { m_ssr_enabled = v; }
     bool getSSREnabled() const          { return m_ssr_enabled; }
     void setVolumetricsEnabled(bool v)  { m_volumetrics_enabled = v; }
@@ -65,6 +67,14 @@ public:
     float getSSAORadius() const        { return m_ssao_radius; }
     void setSSAOIntensity(float v)     { m_ssao_intensity = v; }
     float getSSAOIntensity() const     { return m_ssao_intensity; }
+
+    // === SSGI Settings ===
+    void setSSGIRadius(float v)        { m_ssgi_radius = v; }
+    float getSSGIRadius() const        { return m_ssgi_radius; }
+    void setSSGIIntensity(float v)     { m_ssgi_intensity = v; }
+    float getSSGIIntensity() const     { return m_ssgi_intensity; }
+    void setSSGISampleCount(int v)     { m_ssgi_sample_count = v; }
+    int getSSGISampleCount() const     { return m_ssgi_sample_count; }
 
     // === SSR Settings ===
     void setSSRMaxDistance(float v)     { m_ssr_max_distance = v; }
@@ -105,6 +115,7 @@ private:
     bool m_bloom_enabled = false;
     bool m_taa_enabled = false;
     bool m_ssao_enabled = false;
+    bool m_ssgi_enabled = false;
     bool m_ssr_enabled = false;
     bool m_volumetrics_enabled = false;
     bool m_motion_blur_enabled = false;
@@ -123,6 +134,11 @@ private:
     // SSAO
     float m_ssao_radius = 0.5f;
     float m_ssao_intensity = 1.0f;
+
+    // SSGI
+    float m_ssgi_radius = 3.0f;
+    float m_ssgi_intensity = 1.0f;
+    int m_ssgi_sample_count = 4;
 
     // SSR
     float m_ssr_max_distance = 100.0f;

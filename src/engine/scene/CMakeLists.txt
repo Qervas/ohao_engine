@@ -1,6 +1,7 @@
 file(GLOB_RECURSE SCENE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/scene.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_object.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_serializer.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/transform.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/default_scene_factory.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/loader/tscn_loader.cpp"
@@ -8,6 +9,7 @@ file(GLOB_RECURSE SCENE_SOURCES
 file(GLOB_RECURSE SCENE_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/scene.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_object.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scene_serializer.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/transform.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/default_scene_factory.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/loader/tscn_loader.hpp"

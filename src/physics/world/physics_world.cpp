@@ -1,12 +1,16 @@
 #include "physics_world.hpp"
 #include "physics/components/physics_component.hpp"
 #include "physics/material/physics_material.hpp"
-#include "physics/collision/collision_system.hpp"
 #include "physics/forces/forces.hpp"
 #include "physics/debug/force_debugger.hpp"
+#include "physics/collision/shapes/box_shape.hpp"
+#include "physics/collision/shapes/sphere_shape.hpp"
+#include "physics/collision/shapes/capsule_shape.hpp"
+#include "physics/collision/shapes/cylinder_shape.hpp"
 #include "ui/components/console_widget.hpp"
 #include <chrono>
 #include <algorithm>
+#include <iostream>
 
 namespace ohao {
 namespace physics {
@@ -30,9 +34,6 @@ PhysicsWorldConfig::PhysicsWorldConfig() {
     maxBodies = 10000;
     maxConstraints = 50000;
     initialBodyCapacity = 100;
-
-    // Use default configurations for subsystems
-    solverConfig = constraints::SolverConfig{};
 }
 
 // Constructor
@@ -50,8 +51,20 @@ void PhysicsWorld::initialize() {
     if (m_state != SimulationState::STOPPED) {
         return; // Already initialized
     }
-    
-    initializeSubsystems();
+
+    // Try to create the physics backend (Jolt preferred)
+    m_backend = backend::createPhysicsBackend("jolt");
+    if (m_backend) {
+        if (m_backend->initialize(m_config)) {
+            std::cout << "[PhysicsWorld] Using backend: " << m_backend->getName() << std::endl;
+        } else {
+            std::cerr << "[PhysicsWorld] Backend '" << m_backend->getName()
+                      << "' failed to initialize, falling back to null" << std::endl;
+            m_backend = std::make_unique<backend::NullPhysicsBackend>();
+            m_backend->initialize(m_config);
+        }
+    }
+
     m_state = SimulationState::STOPPED;
 
     // Reserve capacity for performance
@@ -66,17 +79,20 @@ void PhysicsWorld::initialize() {
 
 void PhysicsWorld::shutdown() {
     stop();
-    
+
     // Clear all bodies and constraints
     m_rigidBodies.clear();
     m_activeBodyPointers.clear();
     m_componentToBody.clear();
-    
-    // Reset subsystems
-    m_collisionSystem.reset();
-    m_constraintSolver.reset();
+
+    // Shutdown backend
+    if (m_backend) {
+        m_backend->shutdown();
+        m_backend.reset();
+    }
+
     m_forceDebugger.reset();
-    
+
     m_state = SimulationState::STOPPED;
 }
 
@@ -106,10 +122,6 @@ void PhysicsWorld::reset() {
         OHAO_LOG("Physics world reset (no profile, cleared velocities)");
     }
 
-    // Clear collision system caches
-    if (m_collisionSystem) {
-        // TODO: Add clearCaches() method to CollisionSystem
-    }
 }
 
 void PhysicsWorld::step(float variableDeltaTime) {
@@ -193,9 +205,15 @@ std::shared_ptr<dynamics::RigidBody> PhysicsWorld::createRigidBody(PhysicsCompon
 
 void PhysicsWorld::removeRigidBody(std::shared_ptr<dynamics::RigidBody> body) {
     if (!body) return;
-    
+
+    // Remove from backend first
+    if (hasBackend() && body->hasBackendBody()) {
+        m_backend->destroyBody(body->getBackendHandle());
+        body->setBackendHandle(backend::INVALID_BODY);
+    }
+
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
-    
+
     // Remove from component mapping
     for (auto it = m_componentToBody.begin(); it != m_componentToBody.end(); ++it) {
         if (it->second == body) {
@@ -203,19 +221,25 @@ void PhysicsWorld::removeRigidBody(std::shared_ptr<dynamics::RigidBody> body) {
             break;
         }
     }
-    
+
     // Remove from bodies list
     m_rigidBodies.erase(
         std::remove(m_rigidBodies.begin(), m_rigidBodies.end(), body),
         m_rigidBodies.end()
     );
-    
+
     updateActiveBodyPointers();
 }
 
 void PhysicsWorld::removeRigidBody(dynamics::RigidBody* body) {
     if (!body) return;
-    
+
+    // Remove from backend first
+    if (hasBackend() && body->hasBackendBody()) {
+        m_backend->destroyBody(body->getBackendHandle());
+        body->setBackendHandle(backend::INVALID_BODY);
+    }
+
     // Find the shared_ptr and remove it
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
     for (auto it = m_rigidBodies.begin(); it != m_rigidBodies.end(); ++it) {
@@ -227,7 +251,7 @@ void PhysicsWorld::removeRigidBody(dynamics::RigidBody* body) {
                     break;
                 }
             }
-            
+
             m_rigidBodies.erase(it);
             updateActiveBodyPointers();
             break;
@@ -245,28 +269,17 @@ void PhysicsWorld::addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> b
 
 void PhysicsWorld::setConfig(const PhysicsWorldConfig& config) {
     m_config = config;
-
-    // Update subsystem configurations
-    if (m_constraintSolver) {
-        m_constraintSolver->setConfig(config.solverConfig);
-    }
 }
 
 void PhysicsWorld::setGravity(const glm::vec3& gravity) {
     m_config.gravity = gravity;
+    if (hasBackend()) {
+        m_backend->setGravity(gravity);
+    }
 }
 
 void PhysicsWorld::setTimeStep(float timeStep) {
     m_config.timeStep = timeStep;
-}
-
-// Private implementation methods
-void PhysicsWorld::initializeSubsystems() {
-    // Initialize collision system (GJK/EPA + Dynamic BVH)
-    m_collisionSystem = std::make_unique<collision::CollisionSystem>();
-
-    // Initialize constraint solver (PGS+XPBD)
-    m_constraintSolver = std::make_unique<constraints::ConstraintSolver>(m_config.solverConfig);
 }
 
 void PhysicsWorld::updateActiveBodyPointers() {
@@ -279,162 +292,48 @@ void PhysicsWorld::updateActiveBodyPointers() {
 }
 
 void PhysicsWorld::stepFixed(float fixedDt) {
-    // Fixed timestep physics tick - the actual physics simulation
-    updateActiveBodyPointers();
+    if (!hasBackend()) return;
 
-    // Build body pointer list
-    std::vector<dynamics::RigidBody*> bodyPtrs;
-    bodyPtrs.reserve(m_rigidBodies.size());
+    // 1. Ensure all bodies have backend representations
+    syncPendingBodiesToBackend();
+
+    // 2. Apply custom forces from force registry (gameplay forces, wind, etc.)
+    if (m_forceRegistry.getForceCount() > 0) {
+        std::vector<dynamics::RigidBody*> bodyPtrs;
+        bodyPtrs.reserve(m_rigidBodies.size());
+        for (auto& body : m_rigidBodies) {
+            if (body) bodyPtrs.push_back(body.get());
+        }
+        m_forceRegistry.applyForces(bodyPtrs, fixedDt);
+    }
+
+    // 3. Push kinematic positions and accumulated forces to backend
     for (auto& body : m_rigidBodies) {
-        if (body) {
-            bodyPtrs.push_back(body.get());
+        if (!body || !body->hasBackendBody()) continue;
+        auto h = body->getBackendHandle();
+
+        // For kinematic bodies, application controls position
+        if (body->isKinematic()) {
+            m_backend->setPosition(h, body->getPosition());
+            m_backend->setRotation(h, body->getRotation());
+        }
+
+        // Push accumulated forces to backend
+        auto force = body->getAccumulatedForce();
+        if (glm::length2(force) > 0.0001f) {
+            m_backend->applyForce(h, force, glm::vec3(0.0f));
+        }
+        auto torque = body->getAccumulatedTorque();
+        if (glm::length2(torque) > 0.0001f) {
+            m_backend->applyTorque(h, torque);
         }
     }
 
-    // Start force debugging frame if enabled
-    if (m_forceDebuggingEnabled && m_forceDebugger) {
-        m_forceDebugger->startFrame();
-    }
+    // 4. Step the backend (Jolt handles broadphase + narrowphase + solving)
+    m_backend->step(fixedDt);
 
-    // Apply forces from force registry (includes gravity, drag, etc.)
-    m_forceRegistry.applyForces(bodyPtrs, fixedDt);
-
-    // Apply legacy gravity for backward compatibility if no gravity forces are registered
-    if (m_forceRegistry.getForceCount() == 0) {
-        for (auto* body : m_activeBodyPointers) {
-            if (body && !body->isStatic() && body->isGravityEnabled()) {
-                glm::vec3 gravityForce = m_config.gravity * body->getMass();
-                body->applyForce(gravityForce);
-
-                // Record legacy gravity in force debugger
-                if (m_forceDebuggingEnabled && m_forceDebugger) {
-                    m_forceDebugger->recordForceApplication(body, gravityForce, body->getPosition(), "legacy_gravity");
-                }
-            }
-        }
-    }
-
-    // Analyze forces if debugging is enabled
-    if (m_forceDebuggingEnabled && m_forceDebugger) {
-        m_forceDebugger->analyzeForceRegistry(m_forceRegistry, bodyPtrs);
-    }
-
-    // Integrate physics (apply forces to velocities, velocities to positions)
-    for (auto* body : m_activeBodyPointers) {
-        if (body && !body->isStatic()) {
-            body->integrate(fixedDt);
-        }
-    }
-
-    // COLLISION DETECTION AND RESOLUTION
-    if (m_collisionSystem && m_constraintSolver && !m_rigidBodies.empty()) {
-        // Broad phase: Update AABB tree with all bodies
-        m_collisionSystem->updateBroadPhase(bodyPtrs);
-
-        // Narrow phase: Detect collisions with GJK/EPA
-        auto manifolds = m_collisionSystem->performNarrowPhase();
-
-        // Constraint solving: Resolve contacts with PGS+XPBD
-        m_constraintSolver->solve(manifolds, fixedDt);
-    }
-
-    // Sync transforms to rendering components
-    for (auto* body : m_activeBodyPointers) {
-        if (body) {
-            body->updateTransformComponent();
-        }
-    }
-
-    // Clear accumulated forces after integration
-    for (auto* body : m_activeBodyPointers) {
-        if (body) {
-            body->clearForces();
-        }
-    }
-
-    // End force debugging frame if enabled
-    if (m_forceDebuggingEnabled && m_forceDebugger) {
-        m_forceDebugger->endFrame();
-    }
-}
-
-void PhysicsWorld::stepSinglethreaded(float deltaTime) {
-    // Simplified single-threaded step
-    updateActiveBodyPointers();
-
-    // Convert to raw pointers for force application
-    std::vector<dynamics::RigidBody*> bodyPtrs;
-    bodyPtrs.reserve(m_rigidBodies.size());
-    for (auto& body : m_rigidBodies) {
-        if (body) {
-            bodyPtrs.push_back(body.get());
-        }
-    }
-
-    // Start force debugging frame if enabled
-    if (m_forceDebuggingEnabled && m_forceDebugger) {
-        m_forceDebugger->startFrame();
-    }
-
-    // Apply forces from force registry (includes gravity, drag, etc.)
-    m_forceRegistry.applyForces(bodyPtrs, deltaTime);
-
-    // Apply legacy gravity for backward compatibility if no gravity forces are registered
-    if (m_forceRegistry.getForceCount() == 0) {
-        for (auto* body : m_activeBodyPointers) {
-            if (body && !body->isStatic()) {
-                glm::vec3 gravityForce = m_config.gravity * body->getMass();
-                body->applyForce(gravityForce);
-
-                // Record legacy gravity in force debugger
-                if (m_forceDebuggingEnabled && m_forceDebugger) {
-                    m_forceDebugger->recordForceApplication(body, gravityForce, body->getPosition(), "legacy_gravity");
-                }
-            }
-        }
-    }
-
-    // Analyze forces if debugging is enabled
-    if (m_forceDebuggingEnabled && m_forceDebugger) {
-        m_forceDebugger->analyzeForceRegistry(m_forceRegistry, bodyPtrs);
-    }
-
-    // Integrate physics
-    for (auto* body : m_activeBodyPointers) {
-        if (body && !body->isStatic()) {
-            body->integrate(deltaTime);
-        }
-    }
-
-    // COLLISION DETECTION AND RESOLUTION
-    // New modern system: Dynamic BVH + GJK/EPA + PGS+XPBD
-    if (m_collisionSystem && m_constraintSolver && !m_rigidBodies.empty()) {
-        // Broad phase: Update AABB tree with all bodies
-        m_collisionSystem->updateBroadPhase(bodyPtrs);
-
-        // Narrow phase: Detect collisions with GJK/EPA
-        auto manifolds = m_collisionSystem->performNarrowPhase();
-
-        // Constraint solving: Resolve contacts with PGS+XPBD
-        m_constraintSolver->solve(manifolds, deltaTime);
-    }
-
-    // Clear accumulated forces after integration
-    for (auto* body : m_activeBodyPointers) {
-        if (body) {
-            body->clearForces();
-        }
-    }
-
-    // End force debugging frame if enabled
-    if (m_forceDebuggingEnabled && m_forceDebugger) {
-        m_forceDebugger->endFrame();
-    }
-}
-
-void PhysicsWorld::stepMultithreaded(float deltaTime) {
-    // For now, fall back to single-threaded
-    stepSinglethreaded(deltaTime);
+    // 5. Pull results back from backend
+    syncBodiesFromBackend();
 }
 
 void PhysicsWorld::updateDebugVisualization() {
@@ -555,7 +454,7 @@ void PhysicsWorld::setupUnderwaterEnvironment() {
 void PhysicsWorld::setupGamePhysics() {
     // Clear existing forces
     clearAllForces();
-    
+
     // Convert to raw pointers
     std::vector<dynamics::RigidBody*> bodyPtrs;
     bodyPtrs.reserve(m_rigidBodies.size());
@@ -564,8 +463,269 @@ void PhysicsWorld::setupGamePhysics() {
             bodyPtrs.push_back(body.get());
         }
     }
-    
+
     forces::ForcePresets::setupGamePhysics(m_forceRegistry, bodyPtrs);
+}
+
+// ============================================================================
+// Backend integration
+// ============================================================================
+
+void PhysicsWorld::registerBodyWithBackend(dynamics::RigidBody* body) {
+    if (!body || !hasBackend()) return;
+    if (body->hasBackendBody()) return; // Already registered
+
+    auto info = buildCreationInfo(body);
+    auto handle = m_backend->createBody(info);
+
+    if (handle != backend::INVALID_BODY) {
+        body->setBackendHandle(handle);
+    }
+}
+
+void PhysicsWorld::syncPendingBodiesToBackend() {
+    if (!hasBackend()) return;
+
+    for (auto& body : m_rigidBodies) {
+        if (!body) continue;
+        if (body->hasBackendBody()) continue;
+
+        // Only create backend body if we have a collision shape
+        if (!body->getCollisionShape()) continue;
+
+        auto info = buildCreationInfo(body.get());
+        auto handle = m_backend->createBody(info);
+        if (handle != backend::INVALID_BODY) {
+            body->setBackendHandle(handle);
+        }
+    }
+}
+
+void PhysicsWorld::syncBodiesFromBackend() {
+    if (!hasBackend()) return;
+
+    for (auto& body : m_rigidBodies) {
+        if (!body || !body->hasBackendBody()) continue;
+        auto h = body->getBackendHandle();
+
+        // For dynamic bodies, backend is the authority
+        if (body->isDynamic()) {
+            body->setPosition(m_backend->getPosition(h));
+            body->setRotation(m_backend->getRotation(h));
+            body->setLinearVelocity(m_backend->getLinearVelocity(h));
+            body->setAngularVelocity(m_backend->getAngularVelocity(h));
+        }
+
+        // Sync to transform component (visual representation)
+        body->updateTransformComponent();
+
+        // Clear local force accumulators
+        body->clearForces();
+    }
+
+    updateActiveBodyPointers();
+}
+
+backend::BodyCreationInfo PhysicsWorld::buildCreationInfo(const dynamics::RigidBody* body) const {
+    backend::BodyCreationInfo info;
+    info.position = body->getPosition();
+    info.rotation = body->getRotation();
+    info.mass = body->getMass();
+    info.friction = body->getStaticFriction();
+    info.restitution = body->getRestitution();
+    info.linearDamping = body->getLinearDamping();
+    info.angularDamping = body->getAngularDamping();
+    info.gravityEnabled = body->isGravityEnabled();
+
+    // Map body type
+    switch (body->getType()) {
+        case dynamics::RigidBodyType::STATIC:
+            info.motionType = backend::MotionType::STATIC;
+            break;
+        case dynamics::RigidBodyType::KINEMATIC:
+            info.motionType = backend::MotionType::KINEMATIC;
+            break;
+        case dynamics::RigidBodyType::DYNAMIC:
+        default:
+            info.motionType = backend::MotionType::DYNAMIC;
+            break;
+    }
+
+    // Convert collision shape to ShapeInfo
+    auto shape = body->getCollisionShape();
+    if (shape) {
+        switch (shape->getType()) {
+            case collision::ShapeType::BOX: {
+                auto* box = static_cast<const collision::BoxShape*>(shape.get());
+                info.shape.type = backend::ShapeInfo::BOX;
+                info.shape.halfExtents = box->getHalfExtents();
+                break;
+            }
+            case collision::ShapeType::SPHERE: {
+                auto* sphere = static_cast<const collision::SphereShape*>(shape.get());
+                info.shape.type = backend::ShapeInfo::SPHERE;
+                info.shape.radius = sphere->getRadius();
+                break;
+            }
+            case collision::ShapeType::CAPSULE: {
+                auto* capsule = static_cast<const collision::CapsuleShape*>(shape.get());
+                info.shape.type = backend::ShapeInfo::CAPSULE;
+                info.shape.radius = capsule->getRadius();
+                info.shape.height = capsule->getHeight();
+                break;
+            }
+            case collision::ShapeType::CYLINDER: {
+                auto* cylinder = static_cast<const collision::CylinderShape*>(shape.get());
+                info.shape.type = backend::ShapeInfo::CYLINDER;
+                info.shape.radius = cylinder->getRadius();
+                info.shape.height = cylinder->getHeight();
+                break;
+            }
+            case collision::ShapeType::PLANE: {
+                info.shape.type = backend::ShapeInfo::PLANE;
+                info.shape.planeNormal = glm::vec3(0, 1, 0);
+                break;
+            }
+            case collision::ShapeType::TRIANGLE_MESH: {
+                info.shape.type = backend::ShapeInfo::MESH;
+                // Mesh data is transient - backend must copy during createBody
+                // For now, fall back to box
+                info.shape.type = backend::ShapeInfo::BOX;
+                info.shape.halfExtents = shape->getSize() * 0.5f;
+                break;
+            }
+            default: {
+                // Default to box with the shape's size
+                info.shape.type = backend::ShapeInfo::BOX;
+                info.shape.halfExtents = shape->getSize() * 0.5f;
+                break;
+            }
+        }
+    }
+
+    return info;
+}
+
+// ============================================================================
+// Raycasting & Queries (delegate to backend)
+// ============================================================================
+
+bool PhysicsWorld::castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+                            backend::RaycastHit& outHit, uint16_t layerMask) const {
+    if (!hasBackend()) return false;
+    return m_backend->castRay(origin, direction, maxDistance, outHit, layerMask);
+}
+
+std::vector<backend::RaycastHit> PhysicsWorld::castRayAll(const glm::vec3& origin, const glm::vec3& direction,
+                                                           float maxDistance, uint16_t layerMask) const {
+    if (!hasBackend()) return {};
+    return m_backend->castRayAll(origin, direction, maxDistance, layerMask);
+}
+
+bool PhysicsWorld::castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
+                               float maxDistance, backend::ShapeCastResult& outHit, uint16_t layerMask) const {
+    if (!hasBackend()) return false;
+    return m_backend->castSphere(origin, direction, radius, maxDistance, outHit, layerMask);
+}
+
+bool PhysicsWorld::castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
+                            const glm::quat& rotation, float maxDistance, backend::ShapeCastResult& outHit,
+                            uint16_t layerMask) const {
+    if (!hasBackend()) return false;
+    return m_backend->castBox(origin, direction, halfExtents, rotation, maxDistance, outHit, layerMask);
+}
+
+std::vector<backend::BodyHandle> PhysicsWorld::overlapSphere(const glm::vec3& center, float radius,
+                                                              uint16_t layerMask) const {
+    if (!hasBackend()) return {};
+    return m_backend->overlapSphere(center, radius, layerMask);
+}
+
+std::vector<backend::BodyHandle> PhysicsWorld::overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
+                                                           const glm::quat& rotation, uint16_t layerMask) const {
+    if (!hasBackend()) return {};
+    return m_backend->overlapBox(center, halfExtents, rotation, layerMask);
+}
+
+// ============================================================================
+// Contact Callbacks
+// ============================================================================
+
+void PhysicsWorld::setContactListener(backend::IContactListener* listener) {
+    if (hasBackend()) m_backend->setContactListener(listener);
+}
+
+std::vector<backend::ContactEvent> PhysicsWorld::getContactEvents() {
+    if (!hasBackend()) return {};
+    return m_backend->getContactEvents();
+}
+
+// ============================================================================
+// Collision Layers
+// ============================================================================
+
+void PhysicsWorld::setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide) {
+    if (hasBackend()) m_backend->setLayerCollision(layer1, layer2, shouldCollide);
+}
+
+// ============================================================================
+// Constraints
+// ============================================================================
+
+backend::ConstraintHandle PhysicsWorld::createConstraint(const backend::ConstraintSettings& settings) {
+    if (!hasBackend()) return backend::INVALID_CONSTRAINT;
+    return m_backend->createConstraint(settings);
+}
+
+void PhysicsWorld::destroyConstraint(backend::ConstraintHandle handle) {
+    if (hasBackend()) m_backend->destroyConstraint(handle);
+}
+
+void PhysicsWorld::setConstraintEnabled(backend::ConstraintHandle handle, bool enabled) {
+    if (hasBackend()) m_backend->setConstraintEnabled(handle, enabled);
+}
+
+void PhysicsWorld::setConstraintMotorState(backend::ConstraintHandle handle, bool enabled, float speed, float maxForce) {
+    if (hasBackend()) m_backend->setConstraintMotorState(handle, enabled, speed, maxForce);
+}
+
+void PhysicsWorld::setConstraintLimits(backend::ConstraintHandle handle, float min, float max) {
+    if (hasBackend()) m_backend->setConstraintLimits(handle, min, max);
+}
+
+// ============================================================================
+// Character Controller
+// ============================================================================
+
+backend::CharacterHandle PhysicsWorld::createCharacter(const backend::CharacterCreationInfo& info) {
+    if (!hasBackend()) return backend::INVALID_CHARACTER;
+    return m_backend->createCharacter(info);
+}
+
+void PhysicsWorld::destroyCharacter(backend::CharacterHandle handle) {
+    if (hasBackend()) m_backend->destroyCharacter(handle);
+}
+
+backend::CharacterState PhysicsWorld::getCharacterState(backend::CharacterHandle handle) const {
+    if (!hasBackend()) return {};
+    return m_backend->getCharacterState(handle);
+}
+
+void PhysicsWorld::setCharacterPosition(backend::CharacterHandle handle, const glm::vec3& pos) {
+    if (hasBackend()) m_backend->setCharacterPosition(handle, pos);
+}
+
+void PhysicsWorld::setCharacterRotation(backend::CharacterHandle handle, const glm::quat& rot) {
+    if (hasBackend()) m_backend->setCharacterRotation(handle, rot);
+}
+
+void PhysicsWorld::setCharacterLinearVelocity(backend::CharacterHandle handle, const glm::vec3& vel) {
+    if (hasBackend()) m_backend->setCharacterLinearVelocity(handle, vel);
+}
+
+void PhysicsWorld::updateCharacter(backend::CharacterHandle handle, float deltaTime,
+                                    const glm::vec3& gravity, const glm::vec3& movementInput) {
+    if (hasBackend()) m_backend->updateCharacter(handle, deltaTime, gravity, movementInput);
 }
 
 } // namespace physics
