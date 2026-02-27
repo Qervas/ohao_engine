@@ -101,6 +101,7 @@ func _make_visual(aname: String, mesh_type: int, pos: Vector3,
 	vp.set_actor_body_type(aname, OhaoConst.BODY_STATIC)
 	vp.set_actor_mass(aname, 0.0)
 	vp.set_actor_gravity_enabled(aname, false)
+	vp.sync_actor_physics_shape(aname)
 	visual_actors.append(aname)
 
 # =============================================================================

@@ -111,10 +111,22 @@ void OhaoMeshInstance::_process(double delta) {
     auto transform = m_actor->getTransform();
     if (!transform) return;
 
-    // Sync Godot global transform -> OHAO actor
-    Vector3 pos = get_global_position();
-    Quaternion rot = get_global_transform().basis.get_quaternion();
-    Vector3 node_scale = get_global_transform().basis.get_scale();
+    // Sync Godot transform -> OHAO actor
+    // Walk up to accumulate the 3D transform chain manually,
+    // since get_global_position() fails when any ancestor is a Control.
+    Transform3D gt = get_transform();
+    Node* p = get_parent();
+    while (p) {
+        Node3D* p3d = Object::cast_to<Node3D>(p);
+        if (p3d) {
+            gt = p3d->get_transform() * gt;
+        }
+        p = p->get_parent();
+    }
+
+    Vector3 pos = gt.origin;
+    Quaternion rot = gt.basis.get_quaternion();
+    Vector3 node_scale = gt.basis.get_scale();
 
     transform->setPosition(glm::vec3(pos.x, pos.y, pos.z));
     transform->setRotation(glm::quat(rot.w, rot.x, rot.y, rot.z));
@@ -171,15 +183,23 @@ void OhaoMeshInstance::create_ohao_actor() {
         return;
     }
 
-    // Set initial transform
-    Vector3 pos = get_global_position();
-    Quaternion rot = get_global_transform().basis.get_quaternion();
-    Vector3 node_scale = get_global_transform().basis.get_scale();
+    // Set initial transform — accumulate 3D chain manually
+    Transform3D gt = get_transform();
+    Node* par = get_parent();
+    while (par) {
+        Node3D* par3d = Object::cast_to<Node3D>(par);
+        if (par3d) {
+            gt = par3d->get_transform() * gt;
+        }
+        par = par->get_parent();
+    }
 
     auto transform = m_actor->getTransform();
     if (transform) {
-        transform->setPosition(glm::vec3(pos.x, pos.y, pos.z));
+        transform->setPosition(glm::vec3(gt.origin.x, gt.origin.y, gt.origin.z));
+        Quaternion rot = gt.basis.get_quaternion();
         transform->setRotation(glm::quat(rot.w, rot.x, rot.y, rot.z));
+        Vector3 node_scale = gt.basis.get_scale();
         transform->setScale(glm::vec3(
             node_scale.x * m_mesh_scale.x,
             node_scale.y * m_mesh_scale.y,

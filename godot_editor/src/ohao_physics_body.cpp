@@ -108,10 +108,12 @@ void OhaoPhysicsBody::_physics_process(double delta) {
     if (!rigidBody) return;
 
     // Sync OHAO physics transform -> Godot Node3D transform
+    // Use set_position() not set_global_position() — the Node3D may be
+    // parented to a Control (OhaoViewport) with no 3D ancestor chain.
     glm::vec3 pos = rigidBody->getPosition();
     glm::quat rot = rigidBody->getRotation();
 
-    set_global_position(Vector3(pos.x, pos.y, pos.z));
+    set_position(Vector3(pos.x, pos.y, pos.z));
     set_quaternion(Quaternion(rot.x, rot.y, rot.z, rot.w));
 
     // Update cached velocity values
@@ -253,7 +255,10 @@ void OhaoPhysicsBody::add_to_physics_world() {
     }
 
     // Set initial transform from Godot
-    Vector3 pos = get_global_position();
+    // Use get_position() not get_global_position() — when Node3D is parented
+    // to a Control (OhaoViewport), get_global_position() returns (0,0,0)
+    // because there's no 3D ancestor chain.
+    Vector3 pos = get_position();
     Quaternion rot = get_quaternion();
     Vector3 scale = get_scale();
 

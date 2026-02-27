@@ -1391,7 +1391,8 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
 
     switch (info.type) {
         case ShapeInfo::BOX: {
-            JPH::BoxShapeSettings settings(toJolt(info.halfExtents));
+            // Use minimal convex radius so collision box matches visual box exactly
+            JPH::BoxShapeSettings settings(toJolt(info.halfExtents), 0.001f);
             result = settings.Create();
             break;
         }
@@ -1409,7 +1410,7 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
         }
         case ShapeInfo::CYLINDER: {
             float halfHeight = info.height * 0.5f;
-            JPH::CylinderShapeSettings settings(halfHeight, info.radius);
+            JPH::CylinderShapeSettings settings(halfHeight, info.radius, 0.001f);
             result = settings.Create();
             break;
         }
