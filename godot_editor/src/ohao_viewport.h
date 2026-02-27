@@ -315,6 +315,15 @@ public:
     void remove_actor(const String& actor_name);
     bool has_actor(const String& actor_name) const;
 
+    // === Actor Physics API ===
+    void set_actor_body_type(const String& actor_name, int type);
+    void set_actor_mass(const String& actor_name, float mass);
+    void set_actor_restitution(const String& actor_name, float restitution);
+    void set_actor_friction(const String& actor_name, float friction);
+    void set_actor_gravity_enabled(const String& actor_name, bool enabled);
+    void set_actor_linear_velocity(const String& actor_name, const Vector3& velocity);
+    void sync_actor_physics_shape(const String& actor_name);
+
     // === Texture / Material API ===
     void set_actor_texture(const String& actor_name, const String& texture_path);
     void set_actor_normal_map(const String& actor_name, const String& normal_path);

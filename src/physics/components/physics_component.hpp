@@ -100,7 +100,7 @@ public:
     void deserialize(class Deserializer& deserializer) override;
     
     // === SETTINGS ===
-    void setGravityEnabled(bool enabled) { m_gravityEnabled = enabled; }
+    void setGravityEnabled(bool enabled);
     bool isGravityEnabled() const { return m_gravityEnabled; }
     
     void setAwake(bool awake);

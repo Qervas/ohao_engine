@@ -21,6 +21,9 @@
 #include "renderer/gizmo/gizmo_meshes.hpp"
 #include "renderer/material/bindless_texture_manager.hpp"
 #include "renderer/components/material_component.hpp"
+#include "renderer/components/mesh_component.hpp"
+#include "physics/components/physics_component.hpp"
+#include "physics/dynamics/rigid_body.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -312,6 +315,15 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_actor_scale", "actor_name", "scale"), &OhaoViewport::set_actor_scale);
     ClassDB::bind_method(D_METHOD("remove_actor", "actor_name"), &OhaoViewport::remove_actor);
     ClassDB::bind_method(D_METHOD("has_actor", "actor_name"), &OhaoViewport::has_actor);
+
+    // === Actor Physics API ===
+    ClassDB::bind_method(D_METHOD("set_actor_body_type", "actor_name", "type"), &OhaoViewport::set_actor_body_type);
+    ClassDB::bind_method(D_METHOD("set_actor_mass", "actor_name", "mass"), &OhaoViewport::set_actor_mass);
+    ClassDB::bind_method(D_METHOD("set_actor_restitution", "actor_name", "restitution"), &OhaoViewport::set_actor_restitution);
+    ClassDB::bind_method(D_METHOD("set_actor_friction", "actor_name", "friction"), &OhaoViewport::set_actor_friction);
+    ClassDB::bind_method(D_METHOD("set_actor_gravity_enabled", "actor_name", "enabled"), &OhaoViewport::set_actor_gravity_enabled);
+    ClassDB::bind_method(D_METHOD("set_actor_linear_velocity", "actor_name", "velocity"), &OhaoViewport::set_actor_linear_velocity);
+    ClassDB::bind_method(D_METHOD("sync_actor_physics_shape", "actor_name"), &OhaoViewport::sync_actor_physics_shape);
 
     // === Texture / Material API ===
     ADD_GROUP("Materials", "");
@@ -972,7 +984,10 @@ void OhaoViewport::pick_object_at(const Vector2& screen_pos) {
 void OhaoViewport::play_physics() {
     m_physics_playing = true;
     if (m_scene && m_scene->getPhysicsWorld()) {
-        m_scene->getPhysicsWorld()->resume();
+        // Use setSimulationState directly — resume() only works from PAUSED,
+        // but the initial state is STOPPED, so we need to force RUNNING.
+        m_scene->getPhysicsWorld()->setSimulationState(
+            ohao::physics::SimulationState::RUNNING);
     }
 }
 
@@ -1551,6 +1566,104 @@ void OhaoViewport::set_actor_material_preset(const String& actor_name, const Str
     // This C++ method applies the texture + PBR params directly
     // For now, delegate to GDScript via helper — but provide a C++ fallback
     UtilityFunctions::print("[OHAO] set_actor_material_preset: use OhaoPresets.apply_material() from GDScript");
+}
+
+// ===== Actor Physics API =====
+
+void OhaoViewport::set_actor_body_type(const String& actor_name, int type) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (!phys) return;
+    ohao::physics::dynamics::RigidBodyType rt;
+    switch (type) {
+        case 1: rt = ohao::physics::dynamics::RigidBodyType::STATIC; break;
+        case 2: rt = ohao::physics::dynamics::RigidBodyType::KINEMATIC; break;
+        default: rt = ohao::physics::dynamics::RigidBodyType::DYNAMIC; break;
+    }
+    phys->setRigidBodyType(rt);
+}
+
+void OhaoViewport::set_actor_mass(const String& actor_name, float mass) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setMass(mass);
+}
+
+void OhaoViewport::set_actor_restitution(const String& actor_name, float restitution) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setRestitution(restitution);
+}
+
+void OhaoViewport::set_actor_friction(const String& actor_name, float friction) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setFriction(friction);
+}
+
+void OhaoViewport::set_actor_gravity_enabled(const String& actor_name, bool enabled) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setGravityEnabled(enabled);
+}
+
+void OhaoViewport::set_actor_linear_velocity(const String& actor_name, const Vector3& velocity) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setLinearVelocity(glm::vec3(velocity.x, velocity.y, velocity.z));
+}
+
+void OhaoViewport::sync_actor_physics_shape(const String& actor_name) {
+    if (!m_scene) return;
+    auto actor = m_scene->findActor(actor_name.utf8().get_data());
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    auto transform = actor->getTransform();
+    if (!phys || !transform) return;
+
+    glm::vec3 scale = transform->getScale();
+
+    // Detect existing shape type and recreate with correct dimensions
+    auto existingShape = phys->getCollisionShape();
+    if (existingShape) {
+        using ST = ohao::physics::collision::ShapeType;
+        switch (existingShape->getType()) {
+            case ST::SPHERE: {
+                // For spheres, use the average axis as radius (scale is diameter)
+                float radius = (scale.x + scale.y + scale.z) / 6.0f;
+                phys->createSphereShape(radius);
+                return;
+            }
+            case ST::CAPSULE: {
+                float radius = scale.x * 0.5f;
+                float height = scale.y;
+                phys->createCapsuleShape(radius, height);
+                return;
+            }
+            case ST::CYLINDER: {
+                float radius = scale.x * 0.5f;
+                float height = scale.y;
+                phys->createCylinderShape(radius, height);
+                return;
+            }
+            default:
+                break;
+        }
+    }
+    // Default: box with half-extents from scale
+    phys->createBoxShape(glm::vec3(scale.x * 0.5f, scale.y * 0.5f, scale.z * 0.5f));
 }
 
 // ===== Audio =====

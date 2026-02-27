@@ -6,6 +6,11 @@
 #include "physics/dynamics/rigid_body.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/collision/shapes/shape_factory.hpp"
+#include "physics/collision/shapes/box_shape.hpp"
+#include "physics/collision/shapes/sphere_shape.hpp"
+#include "physics/collision/shapes/capsule_shape.hpp"
+#include "physics/collision/shapes/cylinder_shape.hpp"
+#include "physics/collision/shapes/plane_shape.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/backend/physics_backend.hpp"
 #include "engine/asset/model.hpp"
@@ -74,6 +79,10 @@ void PhysicsComponent::setRestitution(float restitution) {
         auto newMaterial = std::make_shared<physics::PhysicsMaterial>(*material);
         newMaterial->setRestitution(restitution);
         m_rigidBody->setPhysicsMaterial(newMaterial);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setRestitution(m_rigidBody->getBackendHandle(), restitution);
+        }
     }
 }
 
@@ -96,6 +105,10 @@ void PhysicsComponent::setFriction(float friction) {
         newMaterial->setStaticFriction(friction);
         newMaterial->setDynamicFriction(friction);
         m_rigidBody->setPhysicsMaterial(newMaterial);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setFriction(m_rigidBody->getBackendHandle(), friction);
+        }
     }
 }
 
@@ -109,6 +122,10 @@ float PhysicsComponent::getFriction() const {
 void PhysicsComponent::setLinearDamping(float damping) {
     if (m_rigidBody) {
         m_rigidBody->setLinearDamping(damping);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setLinearDamping(m_rigidBody->getBackendHandle(), damping);
+        }
     }
 }
 
@@ -122,6 +139,10 @@ float PhysicsComponent::getLinearDamping() const {
 void PhysicsComponent::setAngularDamping(float damping) {
     if (m_rigidBody) {
         m_rigidBody->setAngularDamping(damping);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setAngularDamping(m_rigidBody->getBackendHandle(), damping);
+        }
     }
 }
 
@@ -136,6 +157,10 @@ float PhysicsComponent::getAngularDamping() const {
 void PhysicsComponent::setLinearVelocity(const glm::vec3& velocity) {
     if (m_rigidBody) {
         m_rigidBody->setLinearVelocity(velocity);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setLinearVelocity(m_rigidBody->getBackendHandle(), velocity);
+        }
     }
 }
 
@@ -149,6 +174,10 @@ glm::vec3 PhysicsComponent::getLinearVelocity() const {
 void PhysicsComponent::setAngularVelocity(const glm::vec3& velocity) {
     if (m_rigidBody) {
         m_rigidBody->setAngularVelocity(velocity);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+            m_physicsWorld->getBackend()->setAngularVelocity(m_rigidBody->getBackendHandle(), velocity);
+        }
     }
 }
 
@@ -185,10 +214,67 @@ void PhysicsComponent::clearForces() {
 }
 
 // === COLLISION SHAPES ===
+
+// Convert internal CollisionShape to backend-agnostic ShapeInfo
+static physics::backend::ShapeInfo collisionShapeToShapeInfo(
+    const physics::collision::CollisionShape* shape)
+{
+    physics::backend::ShapeInfo info;
+    if (!shape) return info;
+
+    switch (shape->getType()) {
+        case physics::collision::ShapeType::BOX: {
+            auto box = static_cast<const physics::collision::BoxShape*>(shape);
+            info.type = physics::backend::ShapeInfo::BOX;
+            info.halfExtents = box->getHalfExtents();
+            break;
+        }
+        case physics::collision::ShapeType::SPHERE: {
+            auto sphere = static_cast<const physics::collision::SphereShape*>(shape);
+            info.type = physics::backend::ShapeInfo::SPHERE;
+            info.radius = sphere->getRadius();
+            break;
+        }
+        case physics::collision::ShapeType::CAPSULE: {
+            auto capsule = static_cast<const physics::collision::CapsuleShape*>(shape);
+            info.type = physics::backend::ShapeInfo::CAPSULE;
+            info.radius = capsule->getRadius();
+            info.height = capsule->getHeight();
+            break;
+        }
+        case physics::collision::ShapeType::CYLINDER: {
+            auto cyl = static_cast<const physics::collision::CylinderShape*>(shape);
+            info.type = physics::backend::ShapeInfo::CYLINDER;
+            info.radius = cyl->getRadius();
+            info.height = cyl->getHeight();
+            break;
+        }
+        case physics::collision::ShapeType::PLANE: {
+            auto plane = static_cast<const physics::collision::PlaneShape*>(shape);
+            info.type = physics::backend::ShapeInfo::PLANE;
+            info.planeNormal = plane->getNormal();
+            info.planeDistance = plane->getDistance();
+            break;
+        }
+        default:
+            // Default to box for unsupported types
+            info.type = physics::backend::ShapeInfo::BOX;
+            info.halfExtents = glm::vec3(0.5f);
+            break;
+    }
+    return info;
+}
+
 void PhysicsComponent::setCollisionShape(std::shared_ptr<physics::collision::CollisionShape> shape) {
     m_collisionShape = shape;
     if (m_rigidBody) {
         m_rigidBody->setCollisionShape(shape);
+        // Propagate to backend
+        if (m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody() && shape) {
+            auto shapeInfo = collisionShapeToShapeInfo(shape.get());
+            m_physicsWorld->getBackend()->setShape(m_rigidBody->getBackendHandle(), shapeInfo);
+            OHAO_LOG("Propagated shape change to backend: type=" + std::to_string(static_cast<int>(shapeInfo.type)));
+        }
     }
 }
 
@@ -325,6 +411,18 @@ void PhysicsComponent::serialize(class Serializer& serializer) const {}
 void PhysicsComponent::deserialize(class Deserializer& deserializer) {}
 
 // === SETTINGS ===
+void PhysicsComponent::setGravityEnabled(bool enabled) {
+    m_gravityEnabled = enabled;
+    // Propagate to RigidBody (so buildCreationInfo picks it up for lazy body creation)
+    if (m_rigidBody) {
+        m_rigidBody->setGravityEnabled(enabled);
+    }
+    // Propagate to backend (for runtime changes after body exists in Jolt)
+    if (m_rigidBody && m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+        m_physicsWorld->getBackend()->setGravityEnabled(m_rigidBody->getBackendHandle(), enabled);
+    }
+}
+
 void PhysicsComponent::setAwake(bool awake) {
     if (m_rigidBody) {
         m_rigidBody->setAwake(awake);

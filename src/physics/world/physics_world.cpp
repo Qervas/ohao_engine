@@ -493,10 +493,29 @@ void PhysicsWorld::syncPendingBodiesToBackend() {
         // Only create backend body if we have a collision shape
         if (!body->getCollisionShape()) continue;
 
+        // Sync position/rotation from TransformComponent → RigidBody before creating
+        // the backend body. This fixes the timing issue where createRigidBody() runs
+        // before the caller sets the transform (e.g. addCube sets position AFTER
+        // createActorWithComponents returns).
+        auto* comp = body->getComponent();
+        if (comp) {
+            comp->updateRigidBodyFromTransform();
+        }
+
         auto info = buildCreationInfo(body.get());
         auto handle = m_backend->createBody(info);
         if (handle != backend::INVALID_BODY) {
             body->setBackendHandle(handle);
+
+            // Push any pending velocity set before the backend body existed
+            auto linVel = body->getLinearVelocity();
+            if (glm::length2(linVel) > 0.0001f) {
+                m_backend->setLinearVelocity(handle, linVel);
+            }
+            auto angVel = body->getAngularVelocity();
+            if (glm::length2(angVel) > 0.0001f) {
+                m_backend->setAngularVelocity(handle, angVel);
+            }
         }
     }
 }
