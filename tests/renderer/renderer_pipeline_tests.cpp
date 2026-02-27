@@ -29,6 +29,7 @@
 #include "renderer/passes/motion_blur_pass.hpp"
 #include "renderer/passes/dof_pass.hpp"
 #include "renderer/passes/post_processing_pipeline.hpp"
+#include "renderer/passes/ssgi_pass.hpp"
 #include "renderer/passes/indirect_draw_buffer.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "renderer/memory/gpu_allocator.hpp"
@@ -510,6 +511,32 @@ bool testTAAPassCreation() {
     return result;
 }
 
+bool testSSGIPassCreation() {
+    TEST_BEGIN("SSGI Pass Creation");
+
+    if (!g_context->initialized) {
+        TEST_SKIP("Vulkan not initialized");
+        return true;
+    }
+
+    SSGIPass ssgi;
+    bool result = ssgi.initialize(g_context->device, g_context->physicalDevice);
+
+    if (result) {
+        ssgi.onResize(1920, 1080);
+        EXPECT_EQ(std::string(ssgi.getName()), std::string("SSGIPass"));
+        ssgi.setRadius(3.0f);
+        ssgi.setIntensity(1.0f);
+        ssgi.setSampleCount(4);
+        ssgi.cleanup();
+        TEST_PASS();
+    } else {
+        TEST_FAIL("SSGIPass initialization failed");
+    }
+
+    return result;
+}
+
 bool testPostProcessingPipeline() {
     TEST_BEGIN("Post-Processing Pipeline Creation");
 
@@ -866,6 +893,7 @@ void runAllTests() {
     testDoFPassCreation();
     testBloomPassCreation();
     testTAAPassCreation();
+    testSSGIPassCreation();
     testPostProcessingPipeline();
 
     // Phase 4: Performance & Architecture

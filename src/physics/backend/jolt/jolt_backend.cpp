@@ -362,8 +362,8 @@ void JoltPhysicsBackend::shutdown() {
 
     // Destroy constraints
     if (m_physicsSystem) {
-        for (auto& [handle, constraint] : m_constraints) {
-            m_physicsSystem->RemoveConstraint(constraint);
+        for (auto& [handle, data] : m_constraints) {
+            m_physicsSystem->RemoveConstraint(data.constraint);
         }
     }
     m_constraints.clear();
@@ -1145,7 +1145,7 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
     m_physicsSystem->AddConstraint(constraint);
 
     ConstraintHandle handle = m_nextConstraintHandle++;
-    m_constraints[handle] = constraint;
+    m_constraints[handle] = { constraint, settings.type };
     return handle;
 }
 
@@ -1154,7 +1154,7 @@ void JoltPhysicsBackend::destroyConstraint(ConstraintHandle handle) {
     if (it == m_constraints.end()) return;
 
     if (m_physicsSystem) {
-        m_physicsSystem->RemoveConstraint(it->second);
+        m_physicsSystem->RemoveConstraint(it->second.constraint);
     }
     m_constraints.erase(it);
 }
@@ -1167,17 +1167,18 @@ void JoltPhysicsBackend::setConstraintEnabled(ConstraintHandle handle, bool enab
     auto it = m_constraints.find(handle);
     if (it == m_constraints.end()) return;
 
-    it->second->SetEnabled(enabled);
+    it->second.constraint->SetEnabled(enabled);
 }
 
 void JoltPhysicsBackend::setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) {
     auto it = m_constraints.find(handle);
     if (it == m_constraints.end()) return;
 
-    JPH::Constraint* c = it->second.GetPtr();
+    // Use stored type to static_cast (Jolt disables RTTI, so dynamic_cast crashes)
+    JPH::Constraint* c = it->second.constraint.GetPtr();
 
-    // Try to set motor on hinge constraint
-    if (auto* hinge = dynamic_cast<JPH::HingeConstraint*>(c)) {
+    if (it->second.type == ConstraintType::HINGE) {
+        auto* hinge = static_cast<JPH::HingeConstraint*>(c);
         if (enabled) {
             hinge->SetMotorState(JPH::EMotorState::Velocity);
             hinge->SetTargetAngularVelocity(speed);
@@ -1185,8 +1186,8 @@ void JoltPhysicsBackend::setConstraintMotorState(ConstraintHandle handle, bool e
             hinge->SetMotorState(JPH::EMotorState::Off);
         }
     }
-    // Try slider
-    else if (auto* slider = dynamic_cast<JPH::SliderConstraint*>(c)) {
+    else if (it->second.type == ConstraintType::SLIDER) {
+        auto* slider = static_cast<JPH::SliderConstraint*>(c);
         if (enabled) {
             slider->SetMotorState(JPH::EMotorState::Velocity);
             slider->SetTargetVelocity(speed);
@@ -1200,13 +1201,13 @@ void JoltPhysicsBackend::setConstraintLimits(ConstraintHandle handle, float min,
     auto it = m_constraints.find(handle);
     if (it == m_constraints.end()) return;
 
-    JPH::Constraint* c = it->second.GetPtr();
+    JPH::Constraint* c = it->second.constraint.GetPtr();
 
-    if (auto* hinge = dynamic_cast<JPH::HingeConstraint*>(c)) {
-        hinge->SetLimits(min, max);
+    if (it->second.type == ConstraintType::HINGE) {
+        static_cast<JPH::HingeConstraint*>(c)->SetLimits(min, max);
     }
-    else if (auto* slider = dynamic_cast<JPH::SliderConstraint*>(c)) {
-        slider->SetLimits(min, max);
+    else if (it->second.type == ConstraintType::SLIDER) {
+        static_cast<JPH::SliderConstraint*>(c)->SetLimits(min, max);
     }
 }
 

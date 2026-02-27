@@ -178,8 +178,12 @@ private:
     // Per-body layer tracking
     std::unordered_map<BodyHandle, uint16_t> m_bodyLayers;
 
-    // Constraint management
-    std::unordered_map<ConstraintHandle, JPH::Ref<JPH::Constraint>> m_constraints;
+    // Constraint management (store type to avoid dynamic_cast — Jolt may disable RTTI)
+    struct ConstraintData {
+        JPH::Ref<JPH::Constraint> constraint;
+        ConstraintType type;
+    };
+    std::unordered_map<ConstraintHandle, ConstraintData> m_constraints;
     ConstraintHandle m_nextConstraintHandle = 0;
 
     // Character controller management

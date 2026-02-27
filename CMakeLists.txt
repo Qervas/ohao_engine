@@ -84,3 +84,17 @@ if(BUILD_RENDERER_TESTS)
     message(STATUS "Building renderer pipeline tests")
     add_subdirectory(tests/renderer)
 endif()
+
+# Physics backend tests
+option(BUILD_PHYSICS_TESTS "Build physics backend tests" ON)
+if(BUILD_PHYSICS_TESTS)
+    message(STATUS "Building physics backend tests")
+    add_subdirectory(tests/physics)
+endif()
+
+# Audio system tests
+option(BUILD_AUDIO_TESTS "Build audio system tests" ON)
+if(BUILD_AUDIO_TESTS)
+    message(STATUS "Building audio system tests")
+    add_subdirectory(tests/audio)
+endif()
