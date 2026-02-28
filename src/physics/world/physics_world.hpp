@@ -238,6 +238,11 @@ public:
     // Register a body with the backend (called after shape is set)
     void registerBodyWithBackend(dynamics::RigidBody* body);
 
+    // Eagerly push all pending (no-backend-body-yet) rigid bodies into the backend.
+    // Call this after finish_sync() so get_actor_body_handle() returns valid handles
+    // before physics stepping starts (needed for constraint creation).
+    void flushPendingBodies() { syncPendingBodiesToBackend(); }
+
 private:
     PhysicsWorldConfig m_config;
     SimulationState m_state{SimulationState::STOPPED};

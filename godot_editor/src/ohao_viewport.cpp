@@ -781,7 +781,18 @@ void OhaoViewport::add_directional_light(const String& name, const Vector3& posi
 void OhaoViewport::add_point_light(const String& name, const Vector3& position, const Color& color, float intensity, float range) {
     m_scene_sync.addPointLight(m_scene, name, position, color, intensity, range);
 }
-void OhaoViewport::finish_sync() { m_scene_sync.finishSync(m_renderer); }
+void OhaoViewport::finish_sync() {
+    m_scene_sync.finishSync(m_renderer);
+    // Eagerly create backend physics bodies so get_actor_body_handle() returns
+    // valid handles immediately after finish_sync() — required for constraints.
+    if (m_scene) {
+        auto* physWorld = m_scene->getPhysicsWorld();
+        if (physWorld && physWorld->hasBackend()) {
+            physWorld->flushPendingBodies();
+            UtilityFunctions::print("[OHAO] finish_sync: physics bodies synced to backend");
+        }
+    }
+}
 
 // ===== Camera (delegates to CameraController) =====
 
