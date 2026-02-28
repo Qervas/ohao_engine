@@ -51,6 +51,9 @@ public:
     void addPointLight(ohao::Scene* scene, const String& name, const Vector3& position,
                        const Color& color, float intensity, float range);
 
+    // Import a model file (OBJ/GLTF/GLB) into the scene
+    bool importModel(ohao::Scene* scene, ohao::OffscreenRenderer* renderer, const std::string& filepath);
+
     // Rebuild GPU buffers after adding objects
     void finishSync(ohao::OffscreenRenderer* renderer);
 
@@ -63,6 +66,11 @@ public:
 private:
     void traverseAndSync(Node* node, ohao::Scene* scene, ohao::OffscreenRenderer* renderer);
     void countSyncableObjects(Node* node);
+
+    // Shared implementation for addCube/addSphere/addPlane/addCylinder
+    void addPrimitive(ohao::Scene* scene, int primitiveType, const String& name,
+                      const Vector3& position, const Vector3& rotation,
+                      const Vector3& scale, const Color& color);
 
     int m_synced_object_count = 0;
 };

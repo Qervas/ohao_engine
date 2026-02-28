@@ -10,8 +10,10 @@
 #include <godot_cpp/classes/node.hpp>
 #include <godot_cpp/classes/node3d.hpp>
 
+#include "actor_controller.h"
 #include "audio_manager.h"
 #include "camera_controller.h"
+#include "physics_controller.h"
 #include "render_settings.h"
 #include "scene_sync.h"
 #include "selection_controller.h"
@@ -32,7 +34,9 @@ namespace godot {
  * OhaoViewport - Thin orchestrator for OHAO's Vulkan renderer in Godot
  *
  * Delegates to focused sub-objects:
+ *   ActorController     - Actor transforms, lifecycle, physics props, materials
  *   CameraController    - FPS/Orbit camera, input handling
+ *   PhysicsController   - Physics sim, raycasting, constraints, characters
  *   RenderSettings      - Post-processing configuration
  *   SceneSync           - Godot <-> OHAO scene bridge
  *   SelectionController - Object picking and selection
@@ -60,15 +64,13 @@ private:
     int m_height = 600;
 
     // === Sub-objects (composition) ===
+    ActorController m_actors;
     AudioManager m_audio;
     CameraController m_camera;
+    PhysicsController m_physics;
     RenderSettings m_render_settings;
     SceneSync m_scene_sync;
     SelectionController m_selection;
-
-    // === Physics State (small, stays here) ===
-    bool m_physics_playing = false;
-    float m_physics_speed = 1.0f;
 
     // === Input Mode (EDITOR vs GAME) ===
     bool m_game_mode = false;
@@ -247,8 +249,8 @@ public:
     void step_physics();
     void stop_physics();
     void set_physics_speed(float speed);
-    float get_physics_speed() const { return m_physics_speed; }
-    bool is_physics_playing() const { return m_physics_playing; }
+    float get_physics_speed() const { return m_physics.getSpeed(); }
+    bool is_physics_playing() const { return m_physics.isPlaying(); }
 
     // === Raycasting ===
     Dictionary cast_ray(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask = 0xFFFF);
@@ -316,6 +318,7 @@ public:
     bool has_actor(const String& actor_name) const;
 
     // === Actor Physics API ===
+    int get_actor_body_handle(const String& actor_name);
     void set_actor_body_type(const String& actor_name, int type);
     void set_actor_mass(const String& actor_name, float mass);
     void set_actor_restitution(const String& actor_name, float restitution);

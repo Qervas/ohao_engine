@@ -12,24 +12,11 @@
 #include "renderer/offscreen/offscreen_renderer.hpp"
 #include "renderer/camera/camera.hpp"
 #include "renderer/passes/deferred_renderer.hpp"
-#include "renderer/passes/post_processing_pipeline.hpp"
-#include "renderer/picking/picking_system.hpp"
-#include "renderer/picking/ray.hpp"
 #include "engine/scene/scene.hpp"
-#include "engine/actor/actor.hpp"
-#include "engine/asset/model.hpp"
 #include "renderer/gizmo/gizmo_meshes.hpp"
-#include "renderer/material/bindless_texture_manager.hpp"
-#include "renderer/components/material_component.hpp"
-#include "renderer/components/mesh_component.hpp"
-#include "physics/components/physics_component.hpp"
-#include "physics/dynamics/rigid_body.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <cfloat>
-#include <unordered_map>
 
 namespace godot {
 
@@ -317,6 +304,7 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("has_actor", "actor_name"), &OhaoViewport::has_actor);
 
     // === Actor Physics API ===
+    ClassDB::bind_method(D_METHOD("get_actor_body_handle", "actor_name"), &OhaoViewport::get_actor_body_handle);
     ClassDB::bind_method(D_METHOD("set_actor_body_type", "actor_name", "type"), &OhaoViewport::set_actor_body_type);
     ClassDB::bind_method(D_METHOD("set_actor_mass", "actor_name", "mass"), &OhaoViewport::set_actor_mass);
     ClassDB::bind_method(D_METHOD("set_actor_restitution", "actor_name", "restitution"), &OhaoViewport::set_actor_restitution);
@@ -422,36 +410,12 @@ void OhaoViewport::_process(double delta) {
     m_audio.updateListener(m_renderer->getCamera());
 
     // Physics
-    if (m_physics_playing && m_renderer) {
-        m_renderer->updatePhysics(static_cast<float>(delta) * m_physics_speed);
+    if (m_physics.isPlaying() && m_renderer) {
+        m_renderer->updatePhysics(static_cast<float>(delta) * m_physics.getSpeed());
     }
 
     // Gizmo transform for selected object (skip in GAME mode)
-    if (!m_game_mode) {
-        ohao::Actor* selected = m_selection.getSelectedActor();
-        if (m_renderer && m_gizmo_enabled && selected) {
-            ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-            if (deferred) {
-                auto transform = selected->getTransform();
-                if (transform) {
-                    glm::vec3 pos = transform->getPosition();
-                    glm::mat4 gizmoModel = glm::translate(glm::mat4(1.0f), pos);
-                    deferred->setGizmoTransform(gizmoModel);
-                    deferred->setGizmoEnabled(true);
-                }
-            }
-        } else if (m_renderer) {
-            ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-            if (deferred) {
-                deferred->setGizmoEnabled(false);
-            }
-        }
-    } else if (m_renderer) {
-        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) {
-            deferred->setGizmoEnabled(false);
-        }
-    }
+    m_selection.updateGizmo(m_renderer, !m_game_mode && m_gizmo_enabled);
 
     // Delta time for particle system
     if (m_renderer) {
@@ -518,125 +482,52 @@ void OhaoViewport::_draw() {
         }
     }
 
-    // Selection highlight overlay
-    ohao::Actor* selected = m_selection.getSelectedActor();
-    if (selected && m_renderer) {
-        auto transform = selected->getTransform();
-        if (transform) {
-            ohao::Camera& camera = m_renderer->getCamera();
-            glm::mat4 viewProj = camera.getViewProjectionMatrix();
-            Vector2 ctrl_size = get_size();
+    // Selection highlight overlay (math in SelectionController, draw calls here)
+    if (m_selection.hasSelection() && m_renderer) {
+        ohao::Camera& camera = m_renderer->getCamera();
+        Vector2 ctrl_size = get_size();
+        SelectionOverlay sel = m_selection.computeSelectionBounds(
+            camera.getViewProjectionMatrix(), ctrl_size.x, ctrl_size.y);
 
-            glm::vec3 world_pos = transform->getPosition();
-            glm::vec3 scale = transform->getScale();
-            glm::quat rotation = transform->getRotation();
-            glm::mat4 world_matrix = glm::translate(glm::mat4(1.0f), world_pos)
-                                   * glm::mat4_cast(rotation)
-                                   * glm::scale(glm::mat4(1.0f), scale);
+        if (sel.visible) {
+            Vector2 tl(sel.minX, sel.minY);
+            Vector2 br(sel.maxX, sel.maxY);
+            float cx = sel.cornerX, cy = sel.cornerY;
 
-            glm::vec3 local_min(0.0f), local_max(0.0f);
-            bool has_mesh_bounds = false;
+            Color glow_color(1.0f, 0.6f, 0.0f, 0.25f);
+            Color sel_color(1.0f, 0.7f, 0.1f, 1.0f);
+            Color fill_color(1.0f, 0.7f, 0.1f, 0.06f);
 
-            auto model = selected->getModel();
-            if (model && !model->vertices.empty()) {
-                local_min = glm::vec3(FLT_MAX);
-                local_max = glm::vec3(-FLT_MAX);
-                for (const auto& v : model->vertices) {
-                    local_min = glm::min(local_min, v.position);
-                    local_max = glm::max(local_max, v.position);
-                }
-                has_mesh_bounds = true;
-            }
+            draw_rect(Rect2(tl, br - tl), fill_color, true);
+            draw_rect(Rect2(tl, br - tl), glow_color, false, 5.0f);
 
-            if (!has_mesh_bounds) {
-                local_min = glm::vec3(-0.5f);
-                local_max = glm::vec3(0.5f);
-            }
+            float line_w = 2.5f;
+            draw_line(tl, Vector2(tl.x + cx, tl.y), sel_color, line_w);
+            draw_line(tl, Vector2(tl.x, tl.y + cy), sel_color, line_w);
+            draw_line(Vector2(br.x, tl.y), Vector2(br.x - cx, tl.y), sel_color, line_w);
+            draw_line(Vector2(br.x, tl.y), Vector2(br.x, tl.y + cy), sel_color, line_w);
+            draw_line(Vector2(tl.x, br.y), Vector2(tl.x + cx, br.y), sel_color, line_w);
+            draw_line(Vector2(tl.x, br.y), Vector2(tl.x, br.y - cy), sel_color, line_w);
+            draw_line(br, Vector2(br.x - cx, br.y), sel_color, line_w);
+            draw_line(br, Vector2(br.x, br.y - cy), sel_color, line_w);
 
-            glm::vec4 center_clip = viewProj * glm::vec4(world_pos, 1.0f);
-            if (center_clip.w < 0.001f) goto skip_selection;
+            Ref<Font> font = get_theme_default_font();
+            if (font.is_valid()) {
+                int font_size = 14;
+                String label = m_selection.getSelectedActorName();
+                float text_w = font->get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x;
+                float pill_h = font_size + 8.0f;
+                float pill_w = text_w + 16.0f;
+                float pill_x = (tl.x + br.x) * 0.5f - pill_w * 0.5f;
+                float pill_y = tl.y - pill_h - 4.0f;
 
-            {
-                float min_sx = 1e9f, min_sy = 1e9f, max_sx = -1e9f, max_sy = -1e9f;
-                int valid_count = 0;
-
-                for (int i = 0; i < 8; i++) {
-                    glm::vec3 local_corner(
-                        (i & 1) ? local_max.x : local_min.x,
-                        (i & 2) ? local_max.y : local_min.y,
-                        (i & 4) ? local_max.z : local_min.z
-                    );
-                    glm::vec4 world_corner = world_matrix * glm::vec4(local_corner, 1.0f);
-                    glm::vec4 clip = viewProj * world_corner;
-                    if (clip.w < 0.001f) continue;
-                    float sx = (clip.x / clip.w * 0.5f + 0.5f) * ctrl_size.x;
-                    float sy = (1.0f - (clip.y / clip.w * 0.5f + 0.5f)) * ctrl_size.y;
-                    min_sx = std::min(min_sx, sx);
-                    min_sy = std::min(min_sy, sy);
-                    max_sx = std::max(max_sx, sx);
-                    max_sy = std::max(max_sy, sy);
-                    valid_count++;
-                }
-
-                if (valid_count < 2) goto skip_selection;
-
-                float pad = 12.0f;
-                float min_dim = 40.0f;
-                float w = max_sx - min_sx;
-                float h = max_sy - min_sy;
-                if (w < min_dim) { float d = (min_dim - w) * 0.5f; min_sx -= d; max_sx += d; }
-                if (h < min_dim) { float d = (min_dim - h) * 0.5f; min_sy -= d; max_sy += d; }
-                min_sx -= pad; min_sy -= pad;
-                max_sx += pad; max_sy += pad;
-
-                Vector2 tl(min_sx, min_sy);
-                Vector2 br(max_sx, max_sy);
-                float box_w = br.x - tl.x;
-                float box_h = br.y - tl.y;
-
-                Color glow_color(1.0f, 0.6f, 0.0f, 0.25f);
-                Color sel_color(1.0f, 0.7f, 0.1f, 1.0f);
-                Color fill_color(1.0f, 0.7f, 0.1f, 0.06f);
-
-                draw_rect(Rect2(tl, br - tl), fill_color, true);
-                draw_rect(Rect2(tl, br - tl), glow_color, false, 5.0f);
-
-                float line_w = 2.5f;
-                float corner_frac = 0.3f;
-                float cx = box_w * corner_frac;
-                float cy = box_h * corner_frac;
-                float max_corner = 20.0f;
-                if (cx > max_corner) cx = max_corner;
-                if (cy > max_corner) cy = max_corner;
-
-                draw_line(tl, Vector2(tl.x + cx, tl.y), sel_color, line_w);
-                draw_line(tl, Vector2(tl.x, tl.y + cy), sel_color, line_w);
-                draw_line(Vector2(br.x, tl.y), Vector2(br.x - cx, tl.y), sel_color, line_w);
-                draw_line(Vector2(br.x, tl.y), Vector2(br.x, tl.y + cy), sel_color, line_w);
-                draw_line(Vector2(tl.x, br.y), Vector2(tl.x + cx, br.y), sel_color, line_w);
-                draw_line(Vector2(tl.x, br.y), Vector2(tl.x, br.y - cy), sel_color, line_w);
-                draw_line(br, Vector2(br.x - cx, br.y), sel_color, line_w);
-                draw_line(br, Vector2(br.x, br.y - cy), sel_color, line_w);
-
-                Ref<Font> font = get_theme_default_font();
-                if (font.is_valid()) {
-                    int font_size = 14;
-                    String label = m_selection.getSelectedActorName();
-                    float text_w = font->get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x;
-                    float pill_h = font_size + 8.0f;
-                    float pill_w = text_w + 16.0f;
-                    float pill_x = (tl.x + br.x) * 0.5f - pill_w * 0.5f;
-                    float pill_y = tl.y - pill_h - 4.0f;
-
-                    draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), Color(0.0f, 0.0f, 0.0f, 0.75f), true);
-                    draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), sel_color, false, 1.5f);
-                    draw_string(font, Vector2(pill_x + 8.0f, pill_y + font_size + 2.0f), label,
-                               HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, sel_color);
-                }
+                draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), Color(0.0f, 0.0f, 0.0f, 0.75f), true);
+                draw_rect(Rect2(pill_x, pill_y, pill_w, pill_h), sel_color, false, 1.5f);
+                draw_string(font, Vector2(pill_x + 8.0f, pill_y + font_size + 2.0f), label,
+                           HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, sel_color);
             }
         }
     }
-    skip_selection:;
 }
 
 bool OhaoViewport::has_scene_meshes() const {
@@ -979,56 +870,22 @@ void OhaoViewport::pick_object_at(const Vector2& screen_pos) {
     queue_redraw();
 }
 
-// ===== Physics Controls =====
+// ===== Physics Controls (delegates to PhysicsController) =====
 
-void OhaoViewport::play_physics() {
-    m_physics_playing = true;
-    if (m_scene && m_scene->getPhysicsWorld()) {
-        // Use setSimulationState directly — resume() only works from PAUSED,
-        // but the initial state is STOPPED, so we need to force RUNNING.
-        m_scene->getPhysicsWorld()->setSimulationState(
-            ohao::physics::SimulationState::RUNNING);
-    }
-}
+void OhaoViewport::play_physics()              { m_physics.play(m_scene); }
+void OhaoViewport::pause_physics()             { m_physics.pause(m_scene); }
+void OhaoViewport::step_physics()              { m_physics.step(m_scene); }
+void OhaoViewport::stop_physics()              { m_physics.stop(m_scene); }
+void OhaoViewport::set_physics_speed(float s)  { m_physics.setSpeed(s); }
 
-void OhaoViewport::pause_physics() {
-    m_physics_playing = false;
-    if (m_scene && m_scene->getPhysicsWorld()) {
-        m_scene->getPhysicsWorld()->pause();
-    }
-}
-
-void OhaoViewport::step_physics() {
-    if (m_scene && m_scene->getPhysicsWorld()) {
-        m_scene->getPhysicsWorld()->stepOnce();
-    }
-}
-
-void OhaoViewport::stop_physics() {
-    m_physics_playing = false;
-    if (m_scene && m_scene->getPhysicsWorld()) {
-        m_scene->getPhysicsWorld()->stop();
-    }
-}
-
-void OhaoViewport::set_physics_speed(float speed) {
-    m_physics_speed = speed;
-}
-
-// ===== Raycasting =====
+// ===== Raycasting (delegates to PhysicsController) =====
 
 Dictionary OhaoViewport::cast_ray(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask) {
+    auto hit = m_physics.castRay(m_scene, glm::vec3(origin.x, origin.y, origin.z),
+                                  glm::vec3(direction.x, direction.y, direction.z),
+                                  max_distance, static_cast<uint16_t>(layer_mask));
     Dictionary result;
-    if (!m_scene) return result;
-
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return result;
-
-    ohao::physics::backend::RaycastHit hit;
-    glm::vec3 o(origin.x, origin.y, origin.z);
-    glm::vec3 d(direction.x, direction.y, direction.z);
-
-    if (physWorld->castRay(o, d, max_distance, hit, static_cast<uint16_t>(layer_mask))) {
+    if (hit.hit) {
         result["hit"] = true;
         result["position"] = Vector3(hit.position.x, hit.position.y, hit.position.z);
         result["normal"] = Vector3(hit.normal.x, hit.normal.y, hit.normal.z);
@@ -1042,275 +899,128 @@ Dictionary OhaoViewport::cast_ray(const Vector3& origin, const Vector3& directio
 }
 
 Array OhaoViewport::cast_ray_all(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask) {
+    auto hits = m_physics.castRayAll(m_scene, glm::vec3(origin.x, origin.y, origin.z),
+                                      glm::vec3(direction.x, direction.y, direction.z),
+                                      max_distance, static_cast<uint16_t>(layer_mask));
     Array results;
-    if (!m_scene) return results;
-
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return results;
-
-    glm::vec3 o(origin.x, origin.y, origin.z);
-    glm::vec3 d(direction.x, direction.y, direction.z);
-
-    auto hits = physWorld->castRayAll(o, d, max_distance, static_cast<uint16_t>(layer_mask));
-    for (const auto& hit : hits) {
+    for (const auto& h : hits) {
         Dictionary entry;
-        entry["position"] = Vector3(hit.position.x, hit.position.y, hit.position.z);
-        entry["normal"] = Vector3(hit.normal.x, hit.normal.y, hit.normal.z);
-        entry["fraction"] = hit.fraction;
-        entry["body_handle"] = static_cast<int>(hit.bodyHandle);
-        entry["layer"] = static_cast<int>(hit.layer);
+        entry["position"] = Vector3(h.position.x, h.position.y, h.position.z);
+        entry["normal"] = Vector3(h.normal.x, h.normal.y, h.normal.z);
+        entry["fraction"] = h.fraction;
+        entry["body_handle"] = static_cast<int>(h.bodyHandle);
+        entry["layer"] = static_cast<int>(h.layer);
         results.push_back(entry);
     }
     return results;
 }
 
 Array OhaoViewport::overlap_sphere(const Vector3& center, float radius, int layer_mask) {
+    auto handles = m_physics.overlapSphere(m_scene, glm::vec3(center.x, center.y, center.z),
+                                            radius, static_cast<uint16_t>(layer_mask));
     Array results;
-    if (!m_scene) return results;
-
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return results;
-
-    glm::vec3 c(center.x, center.y, center.z);
-    auto handles = physWorld->overlapSphere(c, radius, static_cast<uint16_t>(layer_mask));
-    for (auto h : handles) {
-        results.push_back(static_cast<int>(h));
-    }
+    for (auto h : handles) results.push_back(static_cast<int>(h));
     return results;
 }
 
 Array OhaoViewport::overlap_box(const Vector3& center, const Vector3& half_extents, const Vector3& rotation_deg, int layer_mask) {
-    Array results;
-    if (!m_scene) return results;
-
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return results;
-
-    glm::vec3 c(center.x, center.y, center.z);
-    glm::vec3 he(half_extents.x, half_extents.y, half_extents.z);
-    // Convert euler degrees to quaternion
     glm::vec3 radians = glm::radians(glm::vec3(rotation_deg.x, rotation_deg.y, rotation_deg.z));
-    glm::quat rot(radians);
-
-    auto handles = physWorld->overlapBox(c, he, rot, static_cast<uint16_t>(layer_mask));
-    for (auto h : handles) {
-        results.push_back(static_cast<int>(h));
-    }
+    auto handles = m_physics.overlapBox(m_scene, glm::vec3(center.x, center.y, center.z),
+                                         glm::vec3(half_extents.x, half_extents.y, half_extents.z),
+                                         glm::quat(radians), static_cast<uint16_t>(layer_mask));
+    Array results;
+    for (auto h : handles) results.push_back(static_cast<int>(h));
     return results;
 }
 
-// ===== Collision Layers =====
+// ===== Collision Layers (delegates to PhysicsController) =====
 
 void OhaoViewport::set_layer_collision(int layer1, int layer2, bool should_collide) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->setLayerCollision(static_cast<uint16_t>(layer1), static_cast<uint16_t>(layer2), should_collide);
+    m_physics.setLayerCollision(m_scene, static_cast<uint16_t>(layer1), static_cast<uint16_t>(layer2), should_collide);
 }
 
-// ===== Constraints =====
+// ===== Constraints (delegates to PhysicsController) =====
 
-int OhaoViewport::create_constraint_fixed(int body_handle1, int body_handle2, const Vector3& anchor) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::ConstraintSettings cs;
-    cs.type = ohao::physics::backend::ConstraintType::FIXED;
-    cs.body1 = static_cast<uint32_t>(body_handle1);
-    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
-    cs.anchor1 = glm::vec3(anchor.x, anchor.y, anchor.z);
-    cs.anchor2 = cs.anchor1;
-    return static_cast<int>(physWorld->createConstraint(cs));
+int OhaoViewport::create_constraint_fixed(int b1, int b2, const Vector3& anchor) {
+    uint32_t h2 = b2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(b2);
+    return m_physics.createConstraintFixed(m_scene, static_cast<uint32_t>(b1), h2, glm::vec3(anchor.x, anchor.y, anchor.z));
 }
 
-int OhaoViewport::create_constraint_hinge(int body_handle1, int body_handle2, const Vector3& anchor, const Vector3& axis,
-                                            float limit_min, float limit_max) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::ConstraintSettings cs;
-    cs.type = ohao::physics::backend::ConstraintType::HINGE;
-    cs.body1 = static_cast<uint32_t>(body_handle1);
-    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
-    cs.anchor1 = glm::vec3(anchor.x, anchor.y, anchor.z);
-    cs.anchor2 = cs.anchor1;
-    cs.axis1 = glm::vec3(axis.x, axis.y, axis.z);
-    cs.axis2 = cs.axis1;
-    if (limit_min != 0.0f || limit_max != 0.0f) {
-        cs.enableLimits = true;
-        cs.limitMin = limit_min;
-        cs.limitMax = limit_max;
-    }
-    return static_cast<int>(physWorld->createConstraint(cs));
+int OhaoViewport::create_constraint_hinge(int b1, int b2, const Vector3& anchor, const Vector3& axis, float lmin, float lmax) {
+    uint32_t h2 = b2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(b2);
+    return m_physics.createConstraintHinge(m_scene, static_cast<uint32_t>(b1), h2,
+        glm::vec3(anchor.x, anchor.y, anchor.z), glm::vec3(axis.x, axis.y, axis.z), lmin, lmax);
 }
 
-int OhaoViewport::create_constraint_slider(int body_handle1, int body_handle2, const Vector3& axis,
-                                             float limit_min, float limit_max) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::ConstraintSettings cs;
-    cs.type = ohao::physics::backend::ConstraintType::SLIDER;
-    cs.body1 = static_cast<uint32_t>(body_handle1);
-    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
-    cs.axis1 = glm::vec3(axis.x, axis.y, axis.z);
-    cs.axis2 = cs.axis1;
-    if (limit_min != 0.0f || limit_max != 0.0f) {
-        cs.enableLimits = true;
-        cs.limitMin = limit_min;
-        cs.limitMax = limit_max;
-    }
-    return static_cast<int>(physWorld->createConstraint(cs));
+int OhaoViewport::create_constraint_slider(int b1, int b2, const Vector3& axis, float lmin, float lmax) {
+    uint32_t h2 = b2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(b2);
+    return m_physics.createConstraintSlider(m_scene, static_cast<uint32_t>(b1), h2,
+        glm::vec3(axis.x, axis.y, axis.z), lmin, lmax);
 }
 
-int OhaoViewport::create_constraint_point(int body_handle1, int body_handle2, const Vector3& anchor1, const Vector3& anchor2) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::ConstraintSettings cs;
-    cs.type = ohao::physics::backend::ConstraintType::POINT;
-    cs.body1 = static_cast<uint32_t>(body_handle1);
-    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
-    cs.anchor1 = glm::vec3(anchor1.x, anchor1.y, anchor1.z);
-    cs.anchor2 = glm::vec3(anchor2.x, anchor2.y, anchor2.z);
-    return static_cast<int>(physWorld->createConstraint(cs));
+int OhaoViewport::create_constraint_point(int b1, int b2, const Vector3& anchor1, const Vector3& anchor2) {
+    uint32_t h2 = b2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(b2);
+    return m_physics.createConstraintPoint(m_scene, static_cast<uint32_t>(b1), h2,
+        glm::vec3(anchor1.x, anchor1.y, anchor1.z), glm::vec3(anchor2.x, anchor2.y, anchor2.z));
 }
 
-int OhaoViewport::create_constraint_distance(int body_handle1, int body_handle2, const Vector3& anchor1, const Vector3& anchor2,
-                                               float min_dist, float max_dist) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::ConstraintSettings cs;
-    cs.type = ohao::physics::backend::ConstraintType::DISTANCE;
-    cs.body1 = static_cast<uint32_t>(body_handle1);
-    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
-    cs.anchor1 = glm::vec3(anchor1.x, anchor1.y, anchor1.z);
-    cs.anchor2 = glm::vec3(anchor2.x, anchor2.y, anchor2.z);
-    cs.minDistance = min_dist;
-    cs.maxDistance = max_dist;
-    return static_cast<int>(physWorld->createConstraint(cs));
+int OhaoViewport::create_constraint_distance(int b1, int b2, const Vector3& anchor1, const Vector3& anchor2, float mind, float maxd) {
+    uint32_t h2 = b2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(b2);
+    return m_physics.createConstraintDistance(m_scene, static_cast<uint32_t>(b1), h2,
+        glm::vec3(anchor1.x, anchor1.y, anchor1.z), glm::vec3(anchor2.x, anchor2.y, anchor2.z), mind, maxd);
 }
 
-int OhaoViewport::create_constraint_cone(int body_handle1, int body_handle2, const Vector3& anchor, const Vector3& twist_axis,
-                                           float half_cone_angle) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::ConstraintSettings cs;
-    cs.type = ohao::physics::backend::ConstraintType::CONE_TWIST;
-    cs.body1 = static_cast<uint32_t>(body_handle1);
-    cs.body2 = body_handle2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(body_handle2);
-    cs.anchor1 = glm::vec3(anchor.x, anchor.y, anchor.z);
-    cs.anchor2 = cs.anchor1;
-    cs.axis1 = glm::vec3(twist_axis.x, twist_axis.y, twist_axis.z);
-    cs.axis2 = cs.axis1;
-    cs.enableLimits = true;
-    cs.limitMax = half_cone_angle;
-    return static_cast<int>(physWorld->createConstraint(cs));
+int OhaoViewport::create_constraint_cone(int b1, int b2, const Vector3& anchor, const Vector3& twist_axis, float half_cone_angle) {
+    uint32_t h2 = b2 < 0 ? ohao::physics::backend::INVALID_BODY : static_cast<uint32_t>(b2);
+    return m_physics.createConstraintCone(m_scene, static_cast<uint32_t>(b1), h2,
+        glm::vec3(anchor.x, anchor.y, anchor.z), glm::vec3(twist_axis.x, twist_axis.y, twist_axis.z), half_cone_angle);
 }
 
-void OhaoViewport::destroy_constraint(int constraint_handle) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->destroyConstraint(static_cast<uint32_t>(constraint_handle));
-}
+void OhaoViewport::destroy_constraint(int h)                               { m_physics.destroyConstraint(m_scene, static_cast<uint32_t>(h)); }
+void OhaoViewport::set_constraint_enabled(int h, bool e)                   { m_physics.setConstraintEnabled(m_scene, static_cast<uint32_t>(h), e); }
+void OhaoViewport::set_constraint_motor(int h, bool e, float s, float f)   { m_physics.setConstraintMotor(m_scene, static_cast<uint32_t>(h), e, s, f); }
+void OhaoViewport::set_constraint_limits(int h, float mn, float mx)        { m_physics.setConstraintLimits(m_scene, static_cast<uint32_t>(h), mn, mx); }
 
-void OhaoViewport::set_constraint_enabled(int constraint_handle, bool enabled) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->setConstraintEnabled(static_cast<uint32_t>(constraint_handle), enabled);
-}
-
-void OhaoViewport::set_constraint_motor(int constraint_handle, bool enabled, float speed, float max_force) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->setConstraintMotorState(static_cast<uint32_t>(constraint_handle), enabled, speed, max_force);
-}
-
-void OhaoViewport::set_constraint_limits(int constraint_handle, float min_val, float max_val) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->setConstraintLimits(static_cast<uint32_t>(constraint_handle), min_val, max_val);
-}
-
-// ===== Character Controller =====
+// ===== Character Controller (delegates to PhysicsController) =====
 
 int OhaoViewport::create_character(const Vector3& position, float capsule_radius, float capsule_height,
                                     float max_slope_deg, float mass) {
-    if (!m_scene) return -1;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return -1;
-
-    ohao::physics::backend::CharacterCreationInfo info;
-    info.position = glm::vec3(position.x, position.y, position.z);
-    info.capsuleRadius = capsule_radius;
-    info.capsuleHeight = capsule_height;
-    info.maxSlopeAngleDeg = max_slope_deg;
-    info.mass = mass;
-    return static_cast<int>(physWorld->createCharacter(info));
+    return m_physics.createCharacter(m_scene, glm::vec3(position.x, position.y, position.z),
+                                      capsule_radius, capsule_height, max_slope_deg, mass);
 }
 
-void OhaoViewport::destroy_character(int char_handle) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->destroyCharacter(static_cast<uint32_t>(char_handle));
-}
+void OhaoViewport::destroy_character(int h) { m_physics.destroyCharacter(m_scene, static_cast<uint32_t>(h)); }
 
 Dictionary OhaoViewport::get_character_state(int char_handle) {
+    auto state = m_physics.getCharacterState(m_scene, static_cast<uint32_t>(char_handle));
     Dictionary result;
-    if (!m_scene) return result;
-
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return result;
-
-    auto state = physWorld->getCharacterState(static_cast<uint32_t>(char_handle));
     result["position"] = Vector3(state.position.x, state.position.y, state.position.z);
-    result["velocity"] = Vector3(state.linearVelocity.x, state.linearVelocity.y, state.linearVelocity.z);
+    result["velocity"] = Vector3(state.velocity.x, state.velocity.y, state.velocity.z);
     result["ground_normal"] = Vector3(state.groundNormal.x, state.groundNormal.y, state.groundNormal.z);
-    result["is_grounded"] = (state.groundState == ohao::physics::backend::GroundState::ON_GROUND);
-    result["is_on_steep_ground"] = (state.groundState == ohao::physics::backend::GroundState::ON_STEEP_GROUND);
-    result["is_in_air"] = (state.groundState == ohao::physics::backend::GroundState::IN_AIR);
-    result["ground_state"] = static_cast<int>(state.groundState);
-    result["ground_body"] = static_cast<int>(state.groundBody);
+    result["is_grounded"] = (state.groundState == 0);
+    result["is_on_steep_ground"] = (state.groundState == 1);
+    result["is_in_air"] = (state.groundState == 3);
+    result["ground_state"] = state.groundState;
+    result["ground_body"] = state.groundBody;
     return result;
 }
 
-void OhaoViewport::set_character_position(int char_handle, const Vector3& position) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->setCharacterPosition(static_cast<uint32_t>(char_handle),
-        glm::vec3(position.x, position.y, position.z));
+void OhaoViewport::set_character_position(int h, const Vector3& p) {
+    m_physics.setCharacterPosition(m_scene, static_cast<uint32_t>(h), glm::vec3(p.x, p.y, p.z));
 }
 
-void OhaoViewport::set_character_rotation(int char_handle, const Vector3& rotation_deg) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (!physWorld) return;
-
-    glm::vec3 radians = glm::radians(glm::vec3(rotation_deg.x, rotation_deg.y, rotation_deg.z));
-    glm::quat rot(radians);
-    physWorld->setCharacterRotation(static_cast<uint32_t>(char_handle), rot);
+void OhaoViewport::set_character_rotation(int h, const Vector3& r) {
+    glm::vec3 rad = glm::radians(glm::vec3(r.x, r.y, r.z));
+    m_physics.setCharacterRotation(m_scene, static_cast<uint32_t>(h), glm::quat(rad));
 }
 
-void OhaoViewport::set_character_velocity(int char_handle, const Vector3& velocity) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->setCharacterLinearVelocity(static_cast<uint32_t>(char_handle),
-        glm::vec3(velocity.x, velocity.y, velocity.z));
+void OhaoViewport::set_character_velocity(int h, const Vector3& v) {
+    m_physics.setCharacterVelocity(m_scene, static_cast<uint32_t>(h), glm::vec3(v.x, v.y, v.z));
 }
 
-void OhaoViewport::update_character(int char_handle, float delta, const Vector3& gravity, const Vector3& movement_input) {
-    if (!m_scene) return;
-    auto* physWorld = m_scene->getPhysicsWorld();
-    if (physWorld) physWorld->updateCharacter(static_cast<uint32_t>(char_handle), delta,
-        glm::vec3(gravity.x, gravity.y, gravity.z),
-        glm::vec3(movement_input.x, movement_input.y, movement_input.z));
+void OhaoViewport::update_character(int h, float delta, const Vector3& gravity, const Vector3& movement_input) {
+    m_physics.updateCharacter(m_scene, static_cast<uint32_t>(h), delta,
+        glm::vec3(gravity.x, gravity.y, gravity.z), glm::vec3(movement_input.x, movement_input.y, movement_input.z));
 }
 
 // ===== Wireframe / Grid / Gizmo / Particles / Import =====
@@ -1332,48 +1042,7 @@ void OhaoViewport::set_grid_enabled(bool enabled) {
 }
 
 void OhaoViewport::import_model(const String& path) {
-    if (!m_scene || !m_renderer) {
-        UtilityFunctions::printerr("[OHAO] Cannot import: scene or renderer not initialized!");
-        return;
-    }
-
-    std::string filepath = path.utf8().get_data();
-    UtilityFunctions::print("[OHAO] Importing model: ", path);
-
-    auto model = std::make_shared<ohao::Model>();
-    bool loaded = false;
-
-    if (filepath.size() >= 4) {
-        std::string ext = filepath.substr(filepath.find_last_of('.'));
-        if (ext == ".obj" || ext == ".OBJ") {
-            loaded = model->loadFromOBJ(filepath);
-        } else if (ext == ".gltf" || ext == ".glb" || ext == ".GLTF" || ext == ".GLB") {
-            loaded = model->loadFromGLTF(filepath);
-        } else {
-            UtilityFunctions::printerr("[OHAO] Unsupported format: ", path);
-            return;
-        }
-    }
-
-    if (!loaded) {
-        UtilityFunctions::printerr("[OHAO] Failed to load model: ", path);
-        return;
-    }
-
-    std::string name = filepath.substr(filepath.find_last_of("/\\") + 1);
-    name = name.substr(0, name.find_last_of('.'));
-
-    auto actor = m_scene->createActor(name);
-    if (actor) {
-        actor->setModel(model);
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(glm::vec3(0.0f));
-        }
-    }
-
-    finish_sync();
-    UtilityFunctions::print("[OHAO] Model imported: ", name.c_str());
+    m_scene_sync.importModel(m_scene, m_renderer, std::string(path.utf8().get_data()));
 }
 
 void OhaoViewport::set_gizmo_mode(int mode) {
@@ -1413,257 +1082,63 @@ void OhaoViewport::spawn_particles_directed(const Vector3& position, int type, c
     }
 }
 
-// ===== Actor Transform API =====
+// ===== Actor Transform API (delegates to ActorController) =====
 
 void OhaoViewport::set_actor_position(const String& actor_name, const Vector3& position) {
-    if (!m_scene) return;
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (!actor) {
-        // Rate-limit: only log first miss per name
-        static std::unordered_map<std::string, int> missCount;
-        if (missCount[name]++ < 3) {
-            UtilityFunctions::printerr("[OHAO] set_actor_position: actor '", actor_name, "' NOT FOUND in scene");
-        }
-        return;
-    }
-    auto transform = actor->getTransform();
-    if (transform) {
-        transform->setPosition(glm::vec3(position.x, position.y, position.z));
-    }
+    m_actors.setPosition(m_scene, actor_name.utf8().get_data(), glm::vec3(position.x, position.y, position.z));
 }
 
 void OhaoViewport::set_actor_rotation(const String& actor_name, const Vector3& rotation_deg) {
-    if (!m_scene) return;
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (!actor) return;
-    auto transform = actor->getTransform();
-    if (transform) {
-        glm::vec3 rad(glm::radians(rotation_deg.x), glm::radians(rotation_deg.y), glm::radians(rotation_deg.z));
-        transform->setRotation(glm::quat(rad));
-    }
+    m_actors.setRotation(m_scene, actor_name.utf8().get_data(), glm::vec3(rotation_deg.x, rotation_deg.y, rotation_deg.z));
 }
 
 void OhaoViewport::set_actor_scale(const String& actor_name, const Vector3& scale) {
-    if (!m_scene) return;
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (!actor) return;
-    auto transform = actor->getTransform();
-    if (transform) {
-        transform->setScale(glm::vec3(scale.x, scale.y, scale.z));
-    }
+    m_actors.setScale(m_scene, actor_name.utf8().get_data(), glm::vec3(scale.x, scale.y, scale.z));
 }
 
-// ===== Actor Lifecycle =====
+// ===== Actor Lifecycle (delegates to ActorController) =====
 
 void OhaoViewport::remove_actor(const String& actor_name) {
-    if (!m_scene) return;
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (actor) {
-        m_scene->removeActor(actor);
-        // Rebuild GPU buffers so removed mesh disappears
-        if (m_renderer) m_renderer->updateSceneBuffers();
-    }
+    m_actors.removeActor(m_scene, m_renderer, actor_name.utf8().get_data());
 }
 
 bool OhaoViewport::has_actor(const String& actor_name) const {
-    if (!m_scene) return false;
-    std::string name = actor_name.utf8().get_data();
-    return m_scene->findActor(name) != nullptr;
+    return m_actors.hasActor(m_scene, actor_name.utf8().get_data());
 }
 
-// ===== Texture / Material API =====
+// ===== Texture / Material API (delegates to ActorController) =====
 
 void OhaoViewport::set_actor_texture(const String& actor_name, const String& texture_path) {
-    if (!m_scene || !m_renderer) return;
-
-    auto* texMgr = m_renderer->getTextureManager();
-    if (!texMgr) {
-        UtilityFunctions::printerr("[OHAO] Texture manager not available");
-        return;
-    }
-
-    // Find actor by name
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (!actor) {
-        UtilityFunctions::printerr("[OHAO] Actor not found: ", actor_name);
-        return;
-    }
-
-    // Resolve res:// path
-    std::string absPath = SceneSync::resolveResPath(texture_path);
-
-    // Load texture into bindless manager
-    auto handle = texMgr->loadTexture(absPath, ohao::BindlessTextureType::Albedo);
-    if (!handle.valid()) {
-        UtilityFunctions::printerr("[OHAO] Failed to load texture: ", texture_path);
-        return;
-    }
-    texMgr->updateDescriptorSet();
-
-    // Set on material component
-    auto materialComp = actor->getComponent<ohao::MaterialComponent>();
-    if (materialComp) {
-        materialComp->setAlbedoTexture(absPath);
-    }
-
-    UtilityFunctions::print("[OHAO] Texture set on '", actor_name, "': ", texture_path);
+    m_actors.setTexture(m_scene, m_renderer, actor_name.utf8().get_data(), SceneSync::resolveResPath(texture_path));
 }
 
 void OhaoViewport::set_actor_normal_map(const String& actor_name, const String& normal_path) {
-    if (!m_scene || !m_renderer) return;
-
-    auto* texMgr = m_renderer->getTextureManager();
-    if (!texMgr) return;
-
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (!actor) {
-        UtilityFunctions::printerr("[OHAO] Actor not found: ", actor_name);
-        return;
-    }
-
-    std::string absPath = SceneSync::resolveResPath(normal_path);
-
-    auto handle = texMgr->loadTexture(absPath, ohao::BindlessTextureType::Normal);
-    if (!handle.valid()) {
-        UtilityFunctions::printerr("[OHAO] Failed to load normal map: ", normal_path);
-        return;
-    }
-    texMgr->updateDescriptorSet();
-
-    auto materialComp = actor->getComponent<ohao::MaterialComponent>();
-    if (materialComp) {
-        materialComp->setNormalTexture(absPath);
-    }
-
-    UtilityFunctions::print("[OHAO] Normal map set on '", actor_name, "': ", normal_path);
+    m_actors.setNormalMap(m_scene, m_renderer, actor_name.utf8().get_data(), SceneSync::resolveResPath(normal_path));
 }
 
 void OhaoViewport::set_actor_pbr(const String& actor_name, float metallic, float roughness) {
-    if (!m_scene) return;
-
-    std::string name = actor_name.utf8().get_data();
-    auto actor = m_scene->findActor(name);
-    if (!actor) {
-        UtilityFunctions::printerr("[OHAO] Actor not found: ", actor_name);
-        return;
-    }
-
-    auto materialComp = actor->getComponent<ohao::MaterialComponent>();
-    if (materialComp) {
-        materialComp->getMaterial().metallic = metallic;
-        materialComp->getMaterial().roughness = roughness;
-    }
+    m_actors.setPBR(m_scene, actor_name.utf8().get_data(), metallic, roughness);
 }
 
 void OhaoViewport::set_actor_material_preset(const String& actor_name, const String& preset_name) {
-    // Material presets are handled in GDScript (OhaoPresets.MATERIALS)
-    // This C++ method applies the texture + PBR params directly
-    // For now, delegate to GDScript via helper — but provide a C++ fallback
     UtilityFunctions::print("[OHAO] set_actor_material_preset: use OhaoPresets.apply_material() from GDScript");
 }
 
-// ===== Actor Physics API =====
+// ===== Actor Physics API (delegates to ActorController) =====
 
-void OhaoViewport::set_actor_body_type(const String& actor_name, int type) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    if (!phys) return;
-    ohao::physics::dynamics::RigidBodyType rt;
-    switch (type) {
-        case 1: rt = ohao::physics::dynamics::RigidBodyType::STATIC; break;
-        case 2: rt = ohao::physics::dynamics::RigidBodyType::KINEMATIC; break;
-        default: rt = ohao::physics::dynamics::RigidBodyType::DYNAMIC; break;
-    }
-    phys->setRigidBodyType(rt);
-}
-
-void OhaoViewport::set_actor_mass(const String& actor_name, float mass) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    if (phys) phys->setMass(mass);
-}
-
-void OhaoViewport::set_actor_restitution(const String& actor_name, float restitution) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    if (phys) phys->setRestitution(restitution);
-}
-
-void OhaoViewport::set_actor_friction(const String& actor_name, float friction) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    if (phys) phys->setFriction(friction);
-}
-
-void OhaoViewport::set_actor_gravity_enabled(const String& actor_name, bool enabled) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    if (phys) phys->setGravityEnabled(enabled);
-}
+int OhaoViewport::get_actor_body_handle(const String& actor_name)                      { return m_actors.getBodyHandle(m_scene, actor_name.utf8().get_data()); }
+void OhaoViewport::set_actor_body_type(const String& actor_name, int type)              { m_actors.setBodyType(m_scene, actor_name.utf8().get_data(), type); }
+void OhaoViewport::set_actor_mass(const String& actor_name, float mass)                 { m_actors.setMass(m_scene, actor_name.utf8().get_data(), mass); }
+void OhaoViewport::set_actor_restitution(const String& actor_name, float restitution)   { m_actors.setRestitution(m_scene, actor_name.utf8().get_data(), restitution); }
+void OhaoViewport::set_actor_friction(const String& actor_name, float friction)         { m_actors.setFriction(m_scene, actor_name.utf8().get_data(), friction); }
+void OhaoViewport::set_actor_gravity_enabled(const String& actor_name, bool enabled)    { m_actors.setGravityEnabled(m_scene, actor_name.utf8().get_data(), enabled); }
 
 void OhaoViewport::set_actor_linear_velocity(const String& actor_name, const Vector3& velocity) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    if (phys) phys->setLinearVelocity(glm::vec3(velocity.x, velocity.y, velocity.z));
+    m_actors.setLinearVelocity(m_scene, actor_name.utf8().get_data(), glm::vec3(velocity.x, velocity.y, velocity.z));
 }
 
 void OhaoViewport::sync_actor_physics_shape(const String& actor_name) {
-    if (!m_scene) return;
-    auto actor = m_scene->findActor(actor_name.utf8().get_data());
-    if (!actor) return;
-    auto phys = actor->getComponent<ohao::PhysicsComponent>();
-    auto transform = actor->getTransform();
-    if (!phys || !transform) return;
-
-    glm::vec3 scale = transform->getScale();
-
-    // Detect existing shape type and recreate with correct dimensions
-    auto existingShape = phys->getCollisionShape();
-    if (existingShape) {
-        using ST = ohao::physics::collision::ShapeType;
-        switch (existingShape->getType()) {
-            case ST::SPHERE: {
-                // For spheres, use the average axis as radius (scale is diameter)
-                float radius = (scale.x + scale.y + scale.z) / 6.0f;
-                phys->createSphereShape(radius);
-                return;
-            }
-            case ST::CAPSULE: {
-                float radius = scale.x * 0.5f;
-                float height = scale.y;
-                phys->createCapsuleShape(radius, height);
-                return;
-            }
-            case ST::CYLINDER: {
-                float radius = scale.x * 0.5f;
-                float height = scale.y;
-                phys->createCylinderShape(radius, height);
-                return;
-            }
-            default:
-                break;
-        }
-    }
-    // Default: box with half-extents from scale
-    phys->createBoxShape(glm::vec3(scale.x * 0.5f, scale.y * 0.5f, scale.z * 0.5f));
+    m_actors.syncPhysicsShape(m_scene, actor_name.utf8().get_data());
 }
 
 // ===== Audio =====

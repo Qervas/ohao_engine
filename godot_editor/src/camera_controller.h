@@ -59,6 +59,8 @@ public:
     bool wasRightClickDrag() const { return m_right_click_dragged; }
 
 private:
+    void updateArrowKeyRotation(float delta, ohao::Camera& camera);
+    void updateFPSMovement(float delta, ohao::Camera& camera);
     void updateOrbitCamera(ohao::Camera& camera);
 
     // Camera mode

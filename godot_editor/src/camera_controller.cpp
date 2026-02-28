@@ -36,34 +36,34 @@ namespace godot {
 CameraController::CameraController() {}
 
 void CameraController::update(double delta, ohao::Camera& camera) {
-    // Handle arrow key rotation
-    if (m_rotate_up || m_rotate_down || m_rotate_left || m_rotate_right) {
-        float rotSpeed = m_rotation_speed * static_cast<float>(delta);
-        if (m_move_fast) {
-            rotSpeed *= m_fast_move_multiplier;
-        }
+    float dt = static_cast<float>(delta);
+    updateArrowKeyRotation(dt, camera);
+    updateFPSMovement(dt, camera);
+}
 
-        float deltaYaw = 0.0f;
-        float deltaPitch = 0.0f;
+void CameraController::updateArrowKeyRotation(float delta, ohao::Camera& camera) {
+    if (!m_rotate_up && !m_rotate_down && !m_rotate_left && !m_rotate_right) return;
 
-        if (m_rotate_left)  deltaYaw -= rotSpeed;
-        if (m_rotate_right) deltaYaw += rotSpeed;
-        if (m_rotate_up)    deltaPitch += rotSpeed;
-        if (m_rotate_down)  deltaPitch -= rotSpeed;
+    float rotSpeed = m_rotation_speed * delta;
+    if (m_move_fast) rotSpeed *= m_fast_move_multiplier;
 
-        camera.rotate(deltaPitch, deltaYaw);
-    }
+    float deltaYaw = 0.0f;
+    float deltaPitch = 0.0f;
 
-    // Check if any movement keys are pressed
+    if (m_rotate_left)  deltaYaw -= rotSpeed;
+    if (m_rotate_right) deltaYaw += rotSpeed;
+    if (m_rotate_up)    deltaPitch += rotSpeed;
+    if (m_rotate_down)  deltaPitch -= rotSpeed;
+
+    camera.rotate(deltaPitch, deltaYaw);
+}
+
+void CameraController::updateFPSMovement(float delta, ohao::Camera& camera) {
     if (!m_move_forward && !m_move_backward && !m_move_left && !m_move_right &&
-        !m_move_up && !m_move_down) {
-        return;
-    }
+        !m_move_up && !m_move_down) return;
 
-    float speed = m_move_speed * static_cast<float>(delta);
-    if (m_move_fast) {
-        speed *= m_fast_move_multiplier;
-    }
+    float speed = m_move_speed * delta;
+    if (m_move_fast) speed *= m_fast_move_multiplier;
 
     glm::vec3 front = camera.getFront();
     glm::vec3 right = camera.getRight();

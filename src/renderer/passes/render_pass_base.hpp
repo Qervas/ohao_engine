@@ -12,6 +12,31 @@ namespace ohao {
 class Scene;
 struct FrameResources;
 
+// Shared render target resources (defined before RenderPassBase so helpers can return it)
+struct RenderTarget {
+    VkImage image{VK_NULL_HANDLE};
+    VkDeviceMemory memory{VK_NULL_HANDLE};
+    VkImageView view{VK_NULL_HANDLE};
+    VkFormat format;
+    uint32_t width{0};
+    uint32_t height{0};
+
+    void destroy(VkDevice device) {
+        if (view != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, view, nullptr);
+            view = VK_NULL_HANDLE;
+        }
+        if (image != VK_NULL_HANDLE) {
+            vkDestroyImage(device, image, nullptr);
+            image = VK_NULL_HANDLE;
+        }
+        if (memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, memory, nullptr);
+            memory = VK_NULL_HANDLE;
+        }
+    }
+};
+
 // Base class for all render passes
 class RenderPassBase {
 public:
@@ -49,6 +74,42 @@ protected:
 
     // Helper to find memory type
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
+    // --- Vulkan resource helpers (reduce per-pass boilerplate) ---
+
+    // Create image + memory + view in one call
+    RenderTarget createRenderTarget(VkFormat format, uint32_t width, uint32_t height,
+                                    VkImageUsageFlags usage,
+                                    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT);
+
+    // Create sampler with common defaults
+    VkSampler createSampler(VkFilter filter = VK_FILTER_LINEAR,
+                            VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+
+    // Single image layout transition
+    static void transitionImage(VkCommandBuffer cmd, VkImage image,
+                                VkImageLayout oldLayout, VkImageLayout newLayout,
+                                VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                                VkAccessFlags srcAccess, VkAccessFlags dstAccess);
+
+    // Create compute pipeline from shader path
+    bool createComputePipeline(const std::string& shaderPath,
+                               VkDescriptorSetLayout descriptorLayout,
+                               uint32_t pushConstantSize,
+                               VkPipeline& outPipeline, VkPipelineLayout& outLayout);
+
+    // Safe Vulkan handle cleanup (null-check + destroy + reset)
+    void safeDestroy(VkPipeline& handle);
+    void safeDestroy(VkPipelineLayout& handle);
+    void safeDestroy(VkDescriptorPool& handle);
+    void safeDestroy(VkDescriptorSetLayout& handle);
+    void safeDestroy(VkSampler& handle);
+    void safeDestroy(VkImageView& handle);
+    void safeDestroy(VkImage& handle);
+    void safeDestroy(VkBuffer& handle);
+    void safeDestroy(VkFramebuffer& handle);
+    void safeDestroy(VkRenderPass& handle);
+    void safeFree(VkDeviceMemory& handle);
 };
 
 // Attachment description for G-Buffer and render targets
@@ -68,31 +129,6 @@ enum class GBufferAttachment : uint32_t {
     Velocity = 3,    // RG: Motion vectors
     Depth = 4,       // Depth buffer
     Count = 5
-};
-
-// Shared render target resources
-struct RenderTarget {
-    VkImage image{VK_NULL_HANDLE};
-    VkDeviceMemory memory{VK_NULL_HANDLE};
-    VkImageView view{VK_NULL_HANDLE};
-    VkFormat format;
-    uint32_t width{0};
-    uint32_t height{0};
-
-    void destroy(VkDevice device) {
-        if (view != VK_NULL_HANDLE) {
-            vkDestroyImageView(device, view, nullptr);
-            view = VK_NULL_HANDLE;
-        }
-        if (image != VK_NULL_HANDLE) {
-            vkDestroyImage(device, image, nullptr);
-            image = VK_NULL_HANDLE;
-        }
-        if (memory != VK_NULL_HANDLE) {
-            vkFreeMemory(device, memory, nullptr);
-            memory = VK_NULL_HANDLE;
-        }
-    }
 };
 
 // Cascade shadow map data

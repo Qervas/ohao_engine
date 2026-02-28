@@ -25,6 +25,7 @@
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/light_component.hpp"
 #include "renderer/components/material_component.hpp"
+#include "engine/asset/model.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -278,11 +279,12 @@ void SceneSync::clearScene(ohao::Scene* scene) {
     UtilityFunctions::print("[OHAO] Scene cleared");
 }
 
-void SceneSync::addCube(ohao::Scene* scene, const String& name, const Vector3& position,
-                        const Vector3& rotation, const Vector3& scale, const Color& color) {
+void SceneSync::addPrimitive(ohao::Scene* scene, int primitiveType, const String& name,
+                              const Vector3& position, const Vector3& rotation,
+                              const Vector3& scale, const Color& color) {
     if (!scene) return;
     std::string actorName = name.utf8().get_data();
-    auto actor = scene->createActorWithComponents(actorName, ohao::PrimitiveType::Cube);
+    auto actor = scene->createActorWithComponents(actorName, static_cast<ohao::PrimitiveType>(primitiveType));
     if (actor) {
         auto transform = actor->getTransform();
         if (transform) {
@@ -294,75 +296,27 @@ void SceneSync::addCube(ohao::Scene* scene, const String& name, const Vector3& p
         if (material) {
             material->getMaterial().baseColor = to_glm_color(color);
         }
-        auto mesh = actor->getComponent<ohao::MeshComponent>();
-        if (mesh && mesh->getModel()) {
-            UtilityFunctions::print("[OHAO] addCube '", name, "' OK: pos=(",
-                position.x, ",", position.y, ",", position.z, ") verts=",
-                static_cast<int>(mesh->getModel()->vertices.size()),
-                " total_actors=", static_cast<int>(scene->getAllActors().size()));
-        } else {
-            UtilityFunctions::printerr("[OHAO] addCube '", name, "' FAILED: no mesh/model!");
-        }
-    } else {
-        UtilityFunctions::printerr("[OHAO] addCube '", name, "' FAILED: createActorWithComponents returned null!");
     }
+}
+
+void SceneSync::addCube(ohao::Scene* scene, const String& name, const Vector3& position,
+                        const Vector3& rotation, const Vector3& scale, const Color& color) {
+    addPrimitive(scene, static_cast<int>(ohao::PrimitiveType::Cube), name, position, rotation, scale, color);
 }
 
 void SceneSync::addSphere(ohao::Scene* scene, const String& name, const Vector3& position,
                           const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!scene) return;
-    std::string actorName = name.utf8().get_data();
-    auto actor = scene->createActorWithComponents(actorName, ohao::PrimitiveType::Sphere);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
+    addPrimitive(scene, static_cast<int>(ohao::PrimitiveType::Sphere), name, position, rotation, scale, color);
 }
 
 void SceneSync::addPlane(ohao::Scene* scene, const String& name, const Vector3& position,
                          const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!scene) return;
-    std::string actorName = name.utf8().get_data();
-    auto actor = scene->createActorWithComponents(actorName, ohao::PrimitiveType::Platform);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
+    addPrimitive(scene, static_cast<int>(ohao::PrimitiveType::Platform), name, position, rotation, scale, color);
 }
 
 void SceneSync::addCylinder(ohao::Scene* scene, const String& name, const Vector3& position,
                             const Vector3& rotation, const Vector3& scale, const Color& color) {
-    if (!scene) return;
-    std::string actorName = name.utf8().get_data();
-    auto actor = scene->createActorWithComponents(actorName, ohao::PrimitiveType::Cylinder);
-    if (actor) {
-        auto transform = actor->getTransform();
-        if (transform) {
-            transform->setPosition(to_glm(position));
-            transform->setRotation(glm::quat(glm::radians(to_glm(rotation))));
-            transform->setScale(to_glm(scale));
-        }
-        auto material = actor->getComponent<ohao::MaterialComponent>();
-        if (material) {
-            material->getMaterial().baseColor = to_glm_color(color);
-        }
-    }
+    addPrimitive(scene, static_cast<int>(ohao::PrimitiveType::Cylinder), name, position, rotation, scale, color);
 }
 
 void SceneSync::addDirectionalLight(ohao::Scene* scene, const String& name, const Vector3& position,
@@ -413,6 +367,51 @@ void SceneSync::addPointLight(ohao::Scene* scene, const String& name, const Vect
             light->setRange(range);
         }
     }
+}
+
+bool SceneSync::importModel(ohao::Scene* scene, ohao::OffscreenRenderer* renderer, const std::string& filepath) {
+    if (!scene || !renderer) {
+        UtilityFunctions::printerr("[OHAO] Cannot import: scene or renderer not initialized!");
+        return false;
+    }
+
+    UtilityFunctions::print("[OHAO] Importing model: ", filepath.c_str());
+
+    auto model = std::make_shared<ohao::Model>();
+    bool loaded = false;
+
+    if (filepath.size() >= 4) {
+        std::string ext = filepath.substr(filepath.find_last_of('.'));
+        if (ext == ".obj" || ext == ".OBJ") {
+            loaded = model->loadFromOBJ(filepath);
+        } else if (ext == ".gltf" || ext == ".glb" || ext == ".GLTF" || ext == ".GLB") {
+            loaded = model->loadFromGLTF(filepath);
+        } else {
+            UtilityFunctions::printerr("[OHAO] Unsupported format: ", filepath.c_str());
+            return false;
+        }
+    }
+
+    if (!loaded) {
+        UtilityFunctions::printerr("[OHAO] Failed to load model: ", filepath.c_str());
+        return false;
+    }
+
+    std::string name = filepath.substr(filepath.find_last_of("/\\") + 1);
+    name = name.substr(0, name.find_last_of('.'));
+
+    auto actor = scene->createActor(name);
+    if (actor) {
+        actor->setModel(model);
+        auto transform = actor->getTransform();
+        if (transform) {
+            transform->setPosition(glm::vec3(0.0f));
+        }
+    }
+
+    finishSync(renderer);
+    UtilityFunctions::print("[OHAO] Model imported: ", name.c_str());
+    return true;
 }
 
 void SceneSync::finishSync(ohao::OffscreenRenderer* renderer) {

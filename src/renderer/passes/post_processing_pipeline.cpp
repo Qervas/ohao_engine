@@ -72,71 +72,37 @@ void PostProcessingPipeline::cleanup() {
     vkDeviceWaitIdle(m_device);
 
     // Cleanup sub-passes
-    if (m_bloomPass) {
-        m_bloomPass->cleanup();
-        m_bloomPass.reset();
-    }
-    if (m_taaPass) {
-        m_taaPass->cleanup();
-        m_taaPass.reset();
-    }
-    if (m_ssgiPass) {
-        m_ssgiPass->cleanup();
-        m_ssgiPass.reset();
-    }
-    if (m_ssaoPass) {
-        m_ssaoPass->cleanup();
-        m_ssaoPass.reset();
-    }
-    if (m_ssrPass) {
-        m_ssrPass->cleanup();
-        m_ssrPass.reset();
-    }
-    if (m_volumetricPass) {
-        m_volumetricPass->cleanup();
-        m_volumetricPass.reset();
-    }
-    if (m_motionBlurPass) {
-        m_motionBlurPass->cleanup();
-        m_motionBlurPass.reset();
-    }
-    if (m_dofPass) {
-        m_dofPass->cleanup();
-        m_dofPass.reset();
-    }
+    auto resetPass = [](auto& pass) {
+        if (pass) { pass->cleanup(); pass.reset(); }
+    };
+    resetPass(m_bloomPass);
+    resetPass(m_taaPass);
+    resetPass(m_ssgiPass);
+    resetPass(m_ssaoPass);
+    resetPass(m_ssrPass);
+    resetPass(m_volumetricPass);
+    resetPass(m_motionBlurPass);
+    resetPass(m_dofPass);
 
     // Cleanup composite pass
-    if (m_compositePipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_compositePipeline, nullptr);
-    if (m_compositeLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_compositeLayout, nullptr);
-    if (m_compositeDescPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, m_compositeDescPool, nullptr);
-    if (m_compositeDescLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, m_compositeDescLayout, nullptr);
-
-    m_compositePipeline = VK_NULL_HANDLE;
-    m_compositeLayout = VK_NULL_HANDLE;
-    m_compositeDescPool = VK_NULL_HANDLE;
-    m_compositeDescLayout = VK_NULL_HANDLE;
+    safeDestroy(m_compositePipeline);
+    safeDestroy(m_compositeLayout);
+    safeDestroy(m_compositeDescPool);
+    safeDestroy(m_compositeDescLayout);
     m_compositeDescSet = VK_NULL_HANDLE;
 
     destroyIntermediateHDR();
 
     // Cleanup tonemapping
-    if (m_tonemapPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, m_tonemapPipeline, nullptr);
-    if (m_tonemapLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, m_tonemapLayout, nullptr);
-    if (m_tonemapDescPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, m_tonemapDescPool, nullptr);
-    if (m_tonemapDescLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, m_tonemapDescLayout, nullptr);
-    if (m_tonemapFramebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(m_device, m_tonemapFramebuffer, nullptr);
-    if (m_tonemapRenderPass != VK_NULL_HANDLE) vkDestroyRenderPass(m_device, m_tonemapRenderPass, nullptr);
-    if (m_sampler != VK_NULL_HANDLE) vkDestroySampler(m_device, m_sampler, nullptr);
+    safeDestroy(m_tonemapPipeline);
+    safeDestroy(m_tonemapLayout);
+    safeDestroy(m_tonemapDescPool);
+    safeDestroy(m_tonemapDescLayout);
+    safeDestroy(m_tonemapFramebuffer);
+    safeDestroy(m_tonemapRenderPass);
+    safeDestroy(m_sampler);
 
     destroyFinalOutput();
-
-    m_tonemapPipeline = VK_NULL_HANDLE;
-    m_tonemapLayout = VK_NULL_HANDLE;
-    m_tonemapDescPool = VK_NULL_HANDLE;
-    m_tonemapDescLayout = VK_NULL_HANDLE;
-    m_tonemapFramebuffer = VK_NULL_HANDLE;
-    m_tonemapRenderPass = VK_NULL_HANDLE;
-    m_sampler = VK_NULL_HANDLE;
 }
 
 void PostProcessingPipeline::executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex) {
@@ -284,10 +250,7 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     createIntermediateHDR();
 
     // Recreate final output
-    if (m_tonemapFramebuffer != VK_NULL_HANDLE) {
-        vkDestroyFramebuffer(m_device, m_tonemapFramebuffer, nullptr);
-        m_tonemapFramebuffer = VK_NULL_HANDLE;
-    }
+    safeDestroy(m_tonemapFramebuffer);
     destroyFinalOutput();
     createFinalOutput();
 
@@ -608,18 +571,9 @@ bool PostProcessingPipeline::createFinalOutput() {
 }
 
 void PostProcessingPipeline::destroyFinalOutput() {
-    if (m_finalOutputView != VK_NULL_HANDLE) {
-        vkDestroyImageView(m_device, m_finalOutputView, nullptr);
-        m_finalOutputView = VK_NULL_HANDLE;
-    }
-    if (m_finalOutput != VK_NULL_HANDLE) {
-        vkDestroyImage(m_device, m_finalOutput, nullptr);
-        m_finalOutput = VK_NULL_HANDLE;
-    }
-    if (m_finalMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_finalMemory, nullptr);
-        m_finalMemory = VK_NULL_HANDLE;
-    }
+    safeDestroy(m_finalOutputView);
+    safeDestroy(m_finalOutput);
+    safeFree(m_finalMemory);
 }
 
 bool PostProcessingPipeline::createTonemappingPass() {
@@ -873,18 +827,9 @@ bool PostProcessingPipeline::createIntermediateHDR() {
 }
 
 void PostProcessingPipeline::destroyIntermediateHDR() {
-    if (m_intermediateHDRView != VK_NULL_HANDLE) {
-        vkDestroyImageView(m_device, m_intermediateHDRView, nullptr);
-        m_intermediateHDRView = VK_NULL_HANDLE;
-    }
-    if (m_intermediateHDR != VK_NULL_HANDLE) {
-        vkDestroyImage(m_device, m_intermediateHDR, nullptr);
-        m_intermediateHDR = VK_NULL_HANDLE;
-    }
-    if (m_intermediateHDRMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_intermediateHDRMemory, nullptr);
-        m_intermediateHDRMemory = VK_NULL_HANDLE;
-    }
+    safeDestroy(m_intermediateHDRView);
+    safeDestroy(m_intermediateHDR);
+    safeFree(m_intermediateHDRMemory);
 }
 
 // ===================================================================
