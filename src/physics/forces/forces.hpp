@@ -37,6 +37,9 @@
 // Environmental forces
 #include "environmental_force.hpp"
 
+// Spatial force volumes
+#include "force_volume.hpp"
+
 namespace ohao {
 namespace physics {
 namespace forces {

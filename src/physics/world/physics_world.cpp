@@ -707,6 +707,75 @@ void PhysicsWorld::applyRadialImpulse(const glm::vec3& center, float strength, f
 }
 
 // ============================================================================
+// Global Wind / Water
+// ============================================================================
+
+void PhysicsWorld::setWind(const glm::vec3& direction, float strength, float turbulence) {
+    if (m_windForceId != 0) {
+        m_forceRegistry.unregisterForce(m_windForceId);
+        m_windForceId = 0;
+    }
+    auto wind = std::make_unique<forces::WindForce>(direction, strength);
+    wind->setTurbulence(turbulence);
+    m_windForceId = m_forceRegistry.registerForce(std::move(wind), "world_wind");
+}
+
+void PhysicsWorld::clearWind() {
+    if (m_windForceId != 0) {
+        m_forceRegistry.unregisterForce(m_windForceId);
+        m_windForceId = 0;
+    }
+}
+
+void PhysicsWorld::setWater(float liquidLevel, float density, float drag) {
+    if (m_waterForceId != 0) {
+        m_forceRegistry.unregisterForce(m_waterForceId);
+        m_waterForceId = 0;
+    }
+    auto buoyancy = std::make_unique<forces::BuoyancyForce>(density, liquidLevel);
+    buoyancy->setFluidDrag(drag);
+    m_waterForceId = m_forceRegistry.registerForce(std::move(buoyancy), "world_water");
+}
+
+void PhysicsWorld::clearWater() {
+    if (m_waterForceId != 0) {
+        m_forceRegistry.unregisterForce(m_waterForceId);
+        m_waterForceId = 0;
+    }
+}
+
+// Force Volumes
+
+int PhysicsWorld::createForceVolumeBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::vec3& force) {
+    auto vol = std::make_unique<forces::ForceVolume>(center, halfExtents, force);
+    size_t regId = m_forceRegistry.registerForce(std::move(vol), "force_volume");
+    int handle = m_nextForceVolumeHandle++;
+    m_forceVolumeMap[handle] = regId;
+    return handle;
+}
+
+int PhysicsWorld::createForceVolumeSphere(const glm::vec3& center, float radius, const glm::vec3& force) {
+    auto vol = std::make_unique<forces::ForceVolume>(center, radius, force);
+    size_t regId = m_forceRegistry.registerForce(std::move(vol), "force_volume");
+    int handle = m_nextForceVolumeHandle++;
+    m_forceVolumeMap[handle] = regId;
+    return handle;
+}
+
+void PhysicsWorld::destroyForceVolume(int handle) {
+    auto it = m_forceVolumeMap.find(handle);
+    if (it == m_forceVolumeMap.end()) return;
+    m_forceRegistry.unregisterForce(it->second);
+    m_forceVolumeMap.erase(it);
+}
+
+void PhysicsWorld::setForceVolumeEnabled(int handle, bool enabled) {
+    auto it = m_forceVolumeMap.find(handle);
+    if (it == m_forceVolumeMap.end()) return;
+    m_forceRegistry.setForceEnabled(it->second, enabled);
+}
+
+// ============================================================================
 // Constraints
 // ============================================================================
 

@@ -207,6 +207,22 @@ void ActorController::setGravityEnabled(ohao::Scene* scene, const std::string& n
     if (phys) phys->setGravityEnabled(enabled);
 }
 
+void ActorController::setLinearDamping(ohao::Scene* scene, const std::string& name, float damping) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setLinearDamping(damping);
+}
+
+void ActorController::setAngularDamping(ohao::Scene* scene, const std::string& name, float damping) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setAngularDamping(damping);
+}
+
 void ActorController::setGravityScale(ohao::Scene* scene, const std::string& name, float scale) {
     if (!scene) return;
     auto actor = scene->findActor(name);

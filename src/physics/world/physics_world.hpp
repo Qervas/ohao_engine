@@ -248,6 +248,23 @@ public:
     // falloff: 0=linear, 1=quadratic, 2=constant
     void applyRadialImpulse(const glm::vec3& center, float strength, float radius, int falloff = 0);
 
+    // Global wind — persistent directional force on all dynamic bodies. turbulence 0..1.
+    void setWind(const glm::vec3& direction, float strength, float turbulence = 0.1f);
+    void clearWind();
+
+    // Global buoyancy — water plane at liquidLevel Y. density: water=1000, oil=900.
+    void setWater(float liquidLevel, float density = 1000.0f, float drag = 0.1f);
+    void clearWater();
+
+    // Force volumes — spatial AABB/sphere regions that apply a force to bodies inside.
+    // Returns a handle (>0) usable with destroyForceVolume / setForceVolumeEnabled.
+    int createForceVolumeBox(const glm::vec3& center, const glm::vec3& halfExtents,
+                             const glm::vec3& force);
+    int createForceVolumeSphere(const glm::vec3& center, float radius,
+                                const glm::vec3& force);
+    void destroyForceVolume(int handle);
+    void setForceVolumeEnabled(int handle, bool enabled);
+
 private:
     PhysicsWorldConfig m_config;
     SimulationState m_state{SimulationState::STOPPED};
@@ -258,6 +275,10 @@ private:
 
     // Force system
     forces::ForceRegistry m_forceRegistry;
+    size_t m_windForceId{0};    // 0 = not registered
+    size_t m_waterForceId{0};   // 0 = not registered
+    std::unordered_map<int, size_t> m_forceVolumeMap;  // user handle -> registry id
+    int m_nextForceVolumeHandle{1};
 
     // Profile system
     std::unique_ptr<ProfileManager> m_profileManager;

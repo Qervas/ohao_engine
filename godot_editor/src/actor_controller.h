@@ -49,6 +49,8 @@ public:
     void setFriction(ohao::Scene* scene, const std::string& name, float friction);
     void setGravityEnabled(ohao::Scene* scene, const std::string& name, bool enabled);
     void setGravityScale(ohao::Scene* scene, const std::string& name, float scale);
+    void setLinearDamping(ohao::Scene* scene, const std::string& name, float damping);
+    void setAngularDamping(ohao::Scene* scene, const std::string& name, float damping);
     void applyRadialImpulse(ohao::Scene* scene, const glm::vec3& center, float strength, float radius, int falloff);
     void setLinearVelocity(ohao::Scene* scene, const std::string& name, const glm::vec3& velocity);
     void syncPhysicsShape(ohao::Scene* scene, const std::string& name);

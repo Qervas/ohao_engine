@@ -325,9 +325,21 @@ public:
     void set_actor_friction(const String& actor_name, float friction);
     void set_actor_gravity_enabled(const String& actor_name, bool enabled);
     void set_actor_gravity_scale(const String& actor_name, float scale);
+    void set_actor_linear_damping(const String& actor_name, float damping);
+    void set_actor_angular_damping(const String& actor_name, float damping);
     void apply_radial_impulse(const Vector3& center, float strength, float radius, int falloff);
     void set_actor_linear_velocity(const String& actor_name, const Vector3& velocity);
     void sync_actor_physics_shape(const String& actor_name);
+
+    // === World Force Effects ===
+    void set_wind(const Vector3& direction, float strength, float turbulence);
+    void clear_wind();
+    void set_water(float liquid_level, float density, float drag);
+    void clear_water();
+    int create_force_volume_box(const Vector3& center, const Vector3& half_extents, const Vector3& force);
+    int create_force_volume_sphere(const Vector3& center, float radius, const Vector3& force);
+    void destroy_force_volume(int handle);
+    void set_force_volume_enabled(int handle, bool enabled);
 
     // === Texture / Material API ===
     void set_actor_texture(const String& actor_name, const String& texture_path);

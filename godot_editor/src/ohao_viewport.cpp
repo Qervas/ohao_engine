@@ -311,9 +311,21 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_actor_friction", "actor_name", "friction"), &OhaoViewport::set_actor_friction);
     ClassDB::bind_method(D_METHOD("set_actor_gravity_enabled", "actor_name", "enabled"), &OhaoViewport::set_actor_gravity_enabled);
     ClassDB::bind_method(D_METHOD("set_actor_gravity_scale", "actor_name", "scale"), &OhaoViewport::set_actor_gravity_scale);
+    ClassDB::bind_method(D_METHOD("set_actor_linear_damping", "actor_name", "damping"), &OhaoViewport::set_actor_linear_damping);
+    ClassDB::bind_method(D_METHOD("set_actor_angular_damping", "actor_name", "damping"), &OhaoViewport::set_actor_angular_damping);
     ClassDB::bind_method(D_METHOD("apply_radial_impulse", "center", "strength", "radius", "falloff"), &OhaoViewport::apply_radial_impulse);
     ClassDB::bind_method(D_METHOD("set_actor_linear_velocity", "actor_name", "velocity"), &OhaoViewport::set_actor_linear_velocity);
     ClassDB::bind_method(D_METHOD("sync_actor_physics_shape", "actor_name"), &OhaoViewport::sync_actor_physics_shape);
+
+    // === World Force Effects ===
+    ClassDB::bind_method(D_METHOD("set_wind", "direction", "strength", "turbulence"), &OhaoViewport::set_wind);
+    ClassDB::bind_method(D_METHOD("clear_wind"), &OhaoViewport::clear_wind);
+    ClassDB::bind_method(D_METHOD("set_water", "liquid_level", "density", "drag"), &OhaoViewport::set_water);
+    ClassDB::bind_method(D_METHOD("clear_water"), &OhaoViewport::clear_water);
+    ClassDB::bind_method(D_METHOD("create_force_volume_box", "center", "half_extents", "force"), &OhaoViewport::create_force_volume_box);
+    ClassDB::bind_method(D_METHOD("create_force_volume_sphere", "center", "radius", "force"), &OhaoViewport::create_force_volume_sphere);
+    ClassDB::bind_method(D_METHOD("destroy_force_volume", "handle"), &OhaoViewport::destroy_force_volume);
+    ClassDB::bind_method(D_METHOD("set_force_volume_enabled", "handle", "enabled"), &OhaoViewport::set_force_volume_enabled);
 
     // === Texture / Material API ===
     ADD_GROUP("Materials", "");
@@ -1145,7 +1157,9 @@ void OhaoViewport::set_actor_mass(const String& actor_name, float mass)         
 void OhaoViewport::set_actor_restitution(const String& actor_name, float restitution)   { m_actors.setRestitution(m_scene, actor_name.utf8().get_data(), restitution); }
 void OhaoViewport::set_actor_friction(const String& actor_name, float friction)         { m_actors.setFriction(m_scene, actor_name.utf8().get_data(), friction); }
 void OhaoViewport::set_actor_gravity_enabled(const String& actor_name, bool enabled)    { m_actors.setGravityEnabled(m_scene, actor_name.utf8().get_data(), enabled); }
-void OhaoViewport::set_actor_gravity_scale(const String& actor_name, float scale)       { m_actors.setGravityScale(m_scene, actor_name.utf8().get_data(), scale); }
+void OhaoViewport::set_actor_gravity_scale(const String& actor_name, float scale)        { m_actors.setGravityScale(m_scene, actor_name.utf8().get_data(), scale); }
+void OhaoViewport::set_actor_linear_damping(const String& actor_name, float damping)    { m_actors.setLinearDamping(m_scene, actor_name.utf8().get_data(), damping); }
+void OhaoViewport::set_actor_angular_damping(const String& actor_name, float damping)   { m_actors.setAngularDamping(m_scene, actor_name.utf8().get_data(), damping); }
 
 void OhaoViewport::apply_radial_impulse(const Vector3& center, float strength, float radius, int falloff) {
     m_actors.applyRadialImpulse(m_scene, glm::vec3(center.x, center.y, center.z), strength, radius, falloff);
@@ -1153,6 +1167,48 @@ void OhaoViewport::apply_radial_impulse(const Vector3& center, float strength, f
 
 void OhaoViewport::set_actor_linear_velocity(const String& actor_name, const Vector3& velocity) {
     m_actors.setLinearVelocity(m_scene, actor_name.utf8().get_data(), glm::vec3(velocity.x, velocity.y, velocity.z));
+}
+
+// === World Force Effects ===
+
+static ohao::physics::PhysicsWorld* getPhysWorld(ohao::Scene* scene) {
+    if (!scene) return nullptr;
+    auto* w = scene->getPhysicsWorld();
+    return (w && w->hasBackend()) ? w : nullptr;
+}
+
+void OhaoViewport::set_wind(const Vector3& direction, float strength, float turbulence) {
+    if (auto* w = getPhysWorld(m_scene)) w->setWind(glm::vec3(direction.x, direction.y, direction.z), strength, turbulence);
+}
+void OhaoViewport::clear_wind() {
+    if (auto* w = getPhysWorld(m_scene)) w->clearWind();
+}
+void OhaoViewport::set_water(float liquid_level, float density, float drag) {
+    if (auto* w = getPhysWorld(m_scene)) w->setWater(liquid_level, density, drag);
+}
+void OhaoViewport::clear_water() {
+    if (auto* w = getPhysWorld(m_scene)) w->clearWater();
+}
+int OhaoViewport::create_force_volume_box(const Vector3& center, const Vector3& half_extents, const Vector3& force) {
+    auto* w = getPhysWorld(m_scene);
+    if (!w) return -1;
+    return w->createForceVolumeBox(
+        glm::vec3(center.x, center.y, center.z),
+        glm::vec3(half_extents.x, half_extents.y, half_extents.z),
+        glm::vec3(force.x, force.y, force.z));
+}
+int OhaoViewport::create_force_volume_sphere(const Vector3& center, float radius, const Vector3& force) {
+    auto* w = getPhysWorld(m_scene);
+    if (!w) return -1;
+    return w->createForceVolumeSphere(
+        glm::vec3(center.x, center.y, center.z), radius,
+        glm::vec3(force.x, force.y, force.z));
+}
+void OhaoViewport::destroy_force_volume(int handle) {
+    if (auto* w = getPhysWorld(m_scene)) w->destroyForceVolume(handle);
+}
+void OhaoViewport::set_force_volume_enabled(int handle, bool enabled) {
+    if (auto* w = getPhysWorld(m_scene)) w->setForceVolumeEnabled(handle, enabled);
 }
 
 void OhaoViewport::sync_actor_physics_shape(const String& actor_name) {
