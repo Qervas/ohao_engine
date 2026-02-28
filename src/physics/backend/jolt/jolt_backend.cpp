@@ -470,7 +470,7 @@ BodyHandle JoltPhysicsBackend::createBody(const BodyCreationInfo& info) {
         bodySettings.mRestitution = info.restitution;
         bodySettings.mLinearDamping = info.linearDamping;
         bodySettings.mAngularDamping = info.angularDamping;
-        bodySettings.mGravityFactor = info.gravityEnabled ? 1.0f : 0.0f;
+        bodySettings.mGravityFactor = info.gravityEnabled ? info.gravityScale : 0.0f;
         bodySettings.mAllowSleeping = true;
 
         // CCD
@@ -708,6 +708,12 @@ void JoltPhysicsBackend::setGravityEnabled(BodyHandle h, bool enabled) {
     JPH::BodyID id = lookupBodyID(h);
     if (id.IsInvalid() || !m_physicsSystem) return;
     m_physicsSystem->GetBodyInterface().SetGravityFactor(id, enabled ? 1.0f : 0.0f);
+}
+
+void JoltPhysicsBackend::setGravityScale(BodyHandle h, float scale) {
+    JPH::BodyID id = lookupBodyID(h);
+    if (id.IsInvalid() || !m_physicsSystem) return;
+    m_physicsSystem->GetBodyInterface().SetGravityFactor(id, scale);
 }
 
 // ============================================================================

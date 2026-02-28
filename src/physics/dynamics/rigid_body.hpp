@@ -131,6 +131,10 @@ public:
     // === CONSTRAINTS ===
     void setGravityEnabled(bool enabled) { m_gravityEnabled = enabled; }
     bool isGravityEnabled() const { return m_gravityEnabled; }
+
+    // Per-body gravity scale (UE5 GravityScale). 0=zero-G, 0.5=half, 2=double.
+    void setGravityScale(float scale) { m_gravityScale = scale < 0.0f ? 0.0f : scale; }
+    float getGravityScale() const { return m_gravityScale; }
     
     void setKinematicTarget(const glm::vec3& position, const glm::quat& rotation) {
         m_kinematicTargetPos = position;
@@ -220,6 +224,7 @@ private:
     
     // Constraints
     bool m_gravityEnabled{true};
+    float m_gravityScale{1.0f};
     
     // Kinematic targets (for kinematic bodies)
     glm::vec3 m_kinematicTargetPos{0.0f};

@@ -555,6 +555,7 @@ backend::BodyCreationInfo PhysicsWorld::buildCreationInfo(const dynamics::RigidB
     info.linearDamping = body->getLinearDamping();
     info.angularDamping = body->getAngularDamping();
     info.gravityEnabled = body->isGravityEnabled();
+    info.gravityScale = body->getGravityScale();
 
     // Map body type
     switch (body->getType()) {
@@ -685,6 +686,24 @@ std::vector<backend::ContactEvent> PhysicsWorld::getContactEvents() {
 
 void PhysicsWorld::setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide) {
     if (hasBackend()) m_backend->setLayerCollision(layer1, layer2, shouldCollide);
+}
+
+// ============================================================================
+// Force Utilities
+// ============================================================================
+
+void PhysicsWorld::applyRadialImpulse(const glm::vec3& center, float strength, float radius, int falloff) {
+    if (!hasBackend() || radius <= 0.0f) return;
+    for (auto& body : m_rigidBodies) {
+        if (!body || !body->isDynamic() || !body->hasBackendBody()) continue;
+        glm::vec3 delta = body->getPosition() - center;
+        float dist = glm::length(delta);
+        if (dist >= radius || dist < 1e-6f) continue;
+        float t = 1.0f - dist / radius;
+        float factor = (falloff == 1) ? t * t : (falloff == 2) ? 1.0f : t;
+        glm::vec3 impulse = glm::normalize(delta) * (strength * factor);
+        m_backend->applyImpulse(body->getBackendHandle(), impulse, glm::vec3(0.0f));
+    }
 }
 
 // ============================================================================

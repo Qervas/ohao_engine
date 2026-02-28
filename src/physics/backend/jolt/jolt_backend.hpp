@@ -71,6 +71,7 @@ public:
     void setLinearDamping(BodyHandle h, float damping) override;
     void setAngularDamping(BodyHandle h, float damping) override;
     void setGravityEnabled(BodyHandle h, bool enabled) override;
+    void setGravityScale(BodyHandle h, float scale) override;
 
     // === Sleep ===
     void setAwake(BodyHandle h, bool awake) override;

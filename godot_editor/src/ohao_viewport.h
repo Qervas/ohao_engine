@@ -324,6 +324,8 @@ public:
     void set_actor_restitution(const String& actor_name, float restitution);
     void set_actor_friction(const String& actor_name, float friction);
     void set_actor_gravity_enabled(const String& actor_name, bool enabled);
+    void set_actor_gravity_scale(const String& actor_name, float scale);
+    void apply_radial_impulse(const Vector3& center, float strength, float radius, int falloff);
     void set_actor_linear_velocity(const String& actor_name, const Vector3& velocity);
     void sync_actor_physics_shape(const String& actor_name);
 

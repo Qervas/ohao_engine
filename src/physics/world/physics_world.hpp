@@ -243,6 +243,11 @@ public:
     // before physics stepping starts (needed for constraint creation).
     void flushPendingBodies() { syncPendingBodiesToBackend(); }
 
+    // === FORCE UTILITIES ===
+    // Radial impulse — applies an outward impulse to all dynamic bodies within radius.
+    // falloff: 0=linear, 1=quadratic, 2=constant
+    void applyRadialImpulse(const glm::vec3& center, float strength, float radius, int falloff = 0);
+
 private:
     PhysicsWorldConfig m_config;
     SimulationState m_state{SimulationState::STOPPED};

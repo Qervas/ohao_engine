@@ -423,6 +423,16 @@ void PhysicsComponent::setGravityEnabled(bool enabled) {
     }
 }
 
+void PhysicsComponent::setGravityScale(float scale) {
+    m_gravityScale = scale;
+    if (m_rigidBody) {
+        m_rigidBody->setGravityScale(scale);
+    }
+    if (m_rigidBody && m_physicsWorld && m_physicsWorld->hasBackend() && m_rigidBody->hasBackendBody()) {
+        m_physicsWorld->getBackend()->setGravityScale(m_rigidBody->getBackendHandle(), scale);
+    }
+}
+
 void PhysicsComponent::setAwake(bool awake) {
     if (m_rigidBody) {
         m_rigidBody->setAwake(awake);

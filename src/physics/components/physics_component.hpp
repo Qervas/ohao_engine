@@ -102,7 +102,10 @@ public:
     // === SETTINGS ===
     void setGravityEnabled(bool enabled);
     bool isGravityEnabled() const { return m_gravityEnabled; }
-    
+
+    void setGravityScale(float scale);
+    float getGravityScale() const { return m_gravityScale; }
+
     void setAwake(bool awake);
     bool isAwake() const;
     
@@ -124,6 +127,7 @@ private:
     
     // Settings
     bool m_gravityEnabled{true};
+    float m_gravityScale{1.0f};
     bool m_initialized{false};
 };
 

@@ -85,6 +85,11 @@ const GROUND_ON_STEEP := 1
 const GROUND_NOT_SUPPORTED := 2
 const GROUND_IN_AIR := 3
 
+# Radial impulse falloff types (apply_radial_impulse)
+const FALLOFF_LINEAR := 0      # strength * (1 - dist/radius)
+const FALLOFF_QUADRATIC := 1   # strength * (1 - dist/radius)^2
+const FALLOFF_CONSTANT := 2    # full strength regardless of distance
+
 # Audio categories (OhaoViewport)
 const AUDIO_SFX := 0
 const AUDIO_MUSIC := 1

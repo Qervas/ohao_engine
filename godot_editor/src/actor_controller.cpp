@@ -8,6 +8,7 @@
 #include "renderer/components/material_component.hpp"
 #include "physics/components/physics_component.hpp"
 #include "physics/dynamics/rigid_body.hpp"
+#include "physics/world/physics_world.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -204,6 +205,22 @@ void ActorController::setGravityEnabled(ohao::Scene* scene, const std::string& n
     if (!actor) return;
     auto phys = actor->getComponent<ohao::PhysicsComponent>();
     if (phys) phys->setGravityEnabled(enabled);
+}
+
+void ActorController::setGravityScale(ohao::Scene* scene, const std::string& name, float scale) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setGravityScale(scale);
+}
+
+void ActorController::applyRadialImpulse(ohao::Scene* scene, const glm::vec3& center, float strength, float radius, int falloff) {
+    if (!scene) return;
+    auto* physWorld = scene->getPhysicsWorld();
+    if (physWorld && physWorld->hasBackend()) {
+        physWorld->applyRadialImpulse(center, strength, radius, falloff);
+    }
 }
 
 void ActorController::setLinearVelocity(ohao::Scene* scene, const std::string& name, const glm::vec3& velocity) {

@@ -146,6 +146,7 @@ struct BodyCreationInfo {
     float linearDamping = 0.01f;
     float angularDamping = 0.05f;
     bool gravityEnabled = true;
+    float gravityScale = 1.0f;  // Multiplier on world gravity (0=no gravity, 0.5=half, 2=double)
     ShapeInfo shape;
 
     // CCD - prevents fast objects from tunneling through thin surfaces
@@ -353,6 +354,7 @@ public:
     virtual void setLinearDamping(BodyHandle h, float damping) = 0;
     virtual void setAngularDamping(BodyHandle h, float damping) = 0;
     virtual void setGravityEnabled(BodyHandle h, bool enabled) = 0;
+    virtual void setGravityScale(BodyHandle h, float scale) = 0;
 
     // === SLEEP ===
     virtual void setAwake(BodyHandle h, bool awake) = 0;
@@ -457,6 +459,7 @@ public:
     void setLinearDamping(BodyHandle, float) override {}
     void setAngularDamping(BodyHandle, float) override {}
     void setGravityEnabled(BodyHandle, bool) override {}
+    void setGravityScale(BodyHandle, float) override {}
 
     void setAwake(BodyHandle, bool) override {}
     bool isAwake(BodyHandle) const override { return false; }

@@ -310,6 +310,8 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_actor_restitution", "actor_name", "restitution"), &OhaoViewport::set_actor_restitution);
     ClassDB::bind_method(D_METHOD("set_actor_friction", "actor_name", "friction"), &OhaoViewport::set_actor_friction);
     ClassDB::bind_method(D_METHOD("set_actor_gravity_enabled", "actor_name", "enabled"), &OhaoViewport::set_actor_gravity_enabled);
+    ClassDB::bind_method(D_METHOD("set_actor_gravity_scale", "actor_name", "scale"), &OhaoViewport::set_actor_gravity_scale);
+    ClassDB::bind_method(D_METHOD("apply_radial_impulse", "center", "strength", "radius", "falloff"), &OhaoViewport::apply_radial_impulse);
     ClassDB::bind_method(D_METHOD("set_actor_linear_velocity", "actor_name", "velocity"), &OhaoViewport::set_actor_linear_velocity);
     ClassDB::bind_method(D_METHOD("sync_actor_physics_shape", "actor_name"), &OhaoViewport::sync_actor_physics_shape);
 
@@ -1143,6 +1145,11 @@ void OhaoViewport::set_actor_mass(const String& actor_name, float mass)         
 void OhaoViewport::set_actor_restitution(const String& actor_name, float restitution)   { m_actors.setRestitution(m_scene, actor_name.utf8().get_data(), restitution); }
 void OhaoViewport::set_actor_friction(const String& actor_name, float friction)         { m_actors.setFriction(m_scene, actor_name.utf8().get_data(), friction); }
 void OhaoViewport::set_actor_gravity_enabled(const String& actor_name, bool enabled)    { m_actors.setGravityEnabled(m_scene, actor_name.utf8().get_data(), enabled); }
+void OhaoViewport::set_actor_gravity_scale(const String& actor_name, float scale)       { m_actors.setGravityScale(m_scene, actor_name.utf8().get_data(), scale); }
+
+void OhaoViewport::apply_radial_impulse(const Vector3& center, float strength, float radius, int falloff) {
+    m_actors.applyRadialImpulse(m_scene, glm::vec3(center.x, center.y, center.z), strength, radius, falloff);
+}
 
 void OhaoViewport::set_actor_linear_velocity(const String& actor_name, const Vector3& velocity) {
     m_actors.setLinearVelocity(m_scene, actor_name.utf8().get_data(), glm::vec3(velocity.x, velocity.y, velocity.z));
