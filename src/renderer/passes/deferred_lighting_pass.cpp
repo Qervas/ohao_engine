@@ -214,8 +214,10 @@ void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkSampler ssgiSample
     m_ssgiSampler = ssgiSampler;
 }
 
-void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& invViewProj) {
+void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& view,
+                                          const glm::mat4& invViewProj) {
     m_params.cameraPos = position;
+    m_params.view = view;
     m_params.invViewProj = invViewProj;
 }
 
@@ -227,14 +229,15 @@ void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
 void DeferredLightingPass::updateDescriptorSets() {
     if (!m_gbufferPass || m_descriptorSet == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write ALL 12 bindings. Use dummy resources as fallback for unbound bindings.
+    // Always write ALL 13 bindings. Use dummy resources as fallback for unbound bindings.
     // Vulkan requires all declared bindings to be written before the descriptor set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
     std::array<VkDescriptorImageInfo, 12> imageInfos{};
-    std::array<VkWriteDescriptorSet, 12> writes{};
+    std::array<VkWriteDescriptorSet, 13> writes{};
     VkDescriptorBufferInfo bufferInfo{};
+    VkDescriptorBufferInfo cascadeBufferInfo{};
 
     // G-Buffer textures (bindings 0-4) — always available after GBuffer init
     std::array<VkImageView, 5> gbufferViews = {
@@ -347,7 +350,19 @@ void DeferredLightingPass::updateDescriptorSets() {
     writes[11].descriptorCount = 1;
     writes[11].pImageInfo = &imageInfos[10];
 
-    vkUpdateDescriptorSets(m_device, 12, writes.data(), 0, nullptr);
+    // CascadeData UBO (binding 12) — use dummy buffer if not yet set
+    cascadeBufferInfo.buffer = m_cascadeBuffer != VK_NULL_HANDLE ? m_cascadeBuffer : m_dummyBuffer;
+    cascadeBufferInfo.offset = 0;
+    cascadeBufferInfo.range = VK_WHOLE_SIZE;
+
+    writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[12].dstSet = m_descriptorSet;
+    writes[12].dstBinding = 12;
+    writes[12].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[12].descriptorCount = 1;
+    writes[12].pBufferInfo = &cascadeBufferInfo;
+
+    vkUpdateDescriptorSets(m_device, 13, writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -458,14 +473,15 @@ bool DeferredLightingPass::createDescriptors() {
     // Bindings:
     // 0-4: G-Buffer (position, normal, albedo, velocity, depth)
     // 5: Light buffer (SSBO)
-    // 6: Shadow map
+    // 6: Shadow map array (sampler2DArray, 4 cascades)
     // 7: Irradiance cubemap
     // 8: Prefiltered cubemap
     // 9: BRDF LUT
     // 10: SSAO texture
     // 11: SSGI texture
+    // 12: CascadeData UBO
 
-    std::array<VkDescriptorSetLayoutBinding, 12> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 13> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -507,6 +523,12 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[11].descriptorCount = 1;
     bindings[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // CascadeData UBO (12)
+    bindings[12].binding = 12;
+    bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[12].descriptorCount = 1;
+    bindings[12].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -517,11 +539,13 @@ bool DeferredLightingPass::createDescriptors() {
     }
 
     // Descriptor pool
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
+    std::array<VkDescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = 11;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[1].descriptorCount = 1;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[2].descriptorCount = 1;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -696,11 +720,12 @@ bool DeferredLightingPass::createDummyResources() {
         return false;
     }
 
-    // 256-byte buffer for fallback SSBO binding (binding 5)
+    // 512-byte buffer for fallback SSBO (binding 5) and UBO (binding 12) fallbacks.
+    // CascadeData is 288 bytes, so 512 is sufficient for both uses.
     VkBufferCreateInfo bufInfo{};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = 256;
-    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufInfo.size = 512;
+    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     if (vkCreateBuffer(m_device, &bufInfo, nullptr, &m_dummyBuffer) != VK_SUCCESS) {
@@ -721,8 +746,8 @@ bool DeferredLightingPass::createDummyResources() {
 
     // Zero out the buffer
     void* data;
-    vkMapMemory(m_device, m_dummyBufferMemory, 0, 256, 0, &data);
-    memset(data, 0, 256);
+    vkMapMemory(m_device, m_dummyBufferMemory, 0, 512, 0, &data);
+    memset(data, 0, 512);
     vkUnmapMemory(m_device, m_dummyBufferMemory);
 
     return true;

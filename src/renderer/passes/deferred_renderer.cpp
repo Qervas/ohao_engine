@@ -48,9 +48,10 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Connect G-Buffer to lighting
     m_lightingPass->setGBufferPass(m_gbufferPass.get());
 
-    // Connect shadow map to lighting
+    // Connect shadow map and cascade data to lighting
     m_lightingPass->setShadowMap(m_csmPass->getShadowMapArrayView(),
                                   m_csmPass->getShadowSampler());
+    m_lightingPass->setCascadeBuffer(m_csmPass->getCascadeBuffer());
 
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
@@ -179,7 +180,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // Update lighting pass
     if (m_lightingPass) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
-        m_lightingPass->setCameraData(m_cameraPos, invViewProj);
+        m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
         m_lightingPass->setLightBuffer(m_lightBuffer);
         m_lightingPass->setLightCount(m_lightCount);
 

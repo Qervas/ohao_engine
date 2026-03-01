@@ -38,7 +38,10 @@ public:
     void setLightCount(uint32_t count) { m_lightCount = count; }
 
     // Camera data
-    void setCameraData(const glm::vec3& position, const glm::mat4& invViewProj);
+    void setCameraData(const glm::vec3& position, const glm::mat4& view, const glm::mat4& invViewProj);
+
+    // Cascade shadow map data (UBO from CSMPass, not owned here)
+    void setCascadeBuffer(VkBuffer buf) { m_cascadeBuffer = buf; }
 
 private:
     bool createRenderPass();
@@ -80,6 +83,7 @@ private:
     VkSampler m_ssaoSampler{VK_NULL_HANDLE};
     VkImageView m_ssgiView{VK_NULL_HANDLE};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
+    VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};
@@ -95,15 +99,16 @@ private:
     uint32_t m_width{0};
     uint32_t m_height{0};
 
-    // Push constants
+    // Push constants (must stay <= 256 bytes — NVIDIA limit)
     struct LightingParams {
-        glm::mat4 invViewProj;
-        glm::vec3 cameraPos;
-        float padding1;
-        glm::vec2 screenSize;
-        uint32_t lightCount;
-        uint32_t flags; // Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
-    };
+        glm::mat4 invViewProj;  // 64
+        glm::mat4 view;         // 64  — for cascade depth selection
+        glm::vec3 cameraPos;    // 12
+        float padding1;         // 4
+        glm::vec2 screenSize;   // 8
+        uint32_t lightCount;    // 4
+        uint32_t flags;         // 4  — Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
+    };                          // Total: 160 bytes
 
     LightingParams m_params{};
 };
