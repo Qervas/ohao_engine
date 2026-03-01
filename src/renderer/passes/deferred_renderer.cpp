@@ -129,6 +129,20 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         std::cout << "DeferredRenderer: RainPass OK" << std::endl;
     }
 
+    // Initialize snow pass (procedural snowflakes + blizzard streaks, runs after rain)
+    m_snowPass = std::make_unique<SnowPass>();
+    if (!m_snowPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: SnowPass failed (non-fatal)" << std::endl;
+        m_snowPass.reset();
+    } else {
+        if (m_lightingPass) {
+            m_snowPass->setHDROutput(m_lightingPass->getOutputView(),
+                                     m_lightingPass->getOutputImage());
+        }
+        m_snowPass->onResize(m_width, m_height);
+        std::cout << "DeferredRenderer: SnowPass OK" << std::endl;
+    }
+
     // Initialize sky pass (Preetham analytical sky, runs after cloud pass)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
@@ -171,6 +185,10 @@ void DeferredRenderer::cleanup() {
         m_particleRenderPass = VK_NULL_HANDLE;
     }
 
+    if (m_snowPass) {
+        m_snowPass->cleanup();
+        m_snowPass.reset();
+    }
     if (m_rainPass) {
         m_rainPass->cleanup();
         m_rainPass.reset();
@@ -244,6 +262,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         else
             m_wetness = std::max(m_wetness - m_dryRate  * m_deltaTime, wetnessTarget);
         m_lightingPass->setWetness(m_wetness);
+
+        // Snow accumulation integration (slower than wetness — snow builds up and melts very slowly)
+        float snowTarget = (m_snowEnabled && m_snowIntensity > 0.001f)
+                           ? m_snowIntensity : 0.0f;
+        if (m_snowAccumulation < snowTarget)
+            m_snowAccumulation = std::min(m_snowAccumulation + m_snowAccumRate * m_deltaTime, snowTarget);
+        else
+            m_snowAccumulation = std::max(m_snowAccumulation - m_snowMeltRate * m_deltaTime, snowTarget);
+        m_lightingPass->setSnowCover(m_snowAccumulation);
 
         // SSAO texture is set after executeSSAO() call below
     }
@@ -438,6 +465,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_rainPass->execute(cmd, frameIndex);
     }
 
+    // 4.66. Snow pass — procedural snowflakes composited into HDR
+    if (m_snowPass) {
+        m_snowPass->setEnabled(m_snowEnabled);
+        m_snowPass->setIntensity(m_snowIntensity);
+        m_snowPass->setWindX(m_snowWindX);
+        m_snowPass->setTime(m_totalTime);
+        m_snowPass->execute(cmd, frameIndex);
+    }
+
     // 4.7. Particle system (forward pass over HDR, before post-processing)
     if (m_particleSystem && m_lightingPass) {
         m_totalTime += m_deltaTime;
@@ -560,9 +596,15 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     }
     if (m_rainPass) {
         m_rainPass->onResize(width, height);
-        // Reconnect to the reallocated lighting output image/view
         if (m_lightingPass) {
             m_rainPass->setHDROutput(m_lightingPass->getOutputView(),
+                                     m_lightingPass->getOutputImage());
+        }
+    }
+    if (m_snowPass) {
+        m_snowPass->onResize(width, height);
+        if (m_lightingPass) {
+            m_snowPass->setHDROutput(m_lightingPass->getOutputView(),
                                      m_lightingPass->getOutputImage());
         }
     }

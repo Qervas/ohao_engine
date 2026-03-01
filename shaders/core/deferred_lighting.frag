@@ -48,7 +48,7 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
-// Push constants (matches C++ LightingParams — 168 bytes, under NVIDIA 256-byte limit)
+// Push constants (matches C++ LightingParams — 176 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
     mat4 view;           // for cascade depth selection
@@ -59,6 +59,8 @@ layout(push_constant) uniform PushConstants {
     uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
     float wetness;       // 0=dry, 1=fully wet — drives surface material modulation
     float paddingW;
+    float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
+    float paddingS;
 } pc;
 
 // Constants
@@ -192,8 +194,18 @@ void main() {
     if (pc.wetness > 0.001) {
         float slopeFactor = clamp(N.y * 2.0, 0.0, 1.0);
         float w = pc.wetness * slopeFactor;
-        albedo    *= 1.0 - w * 0.30;                              // darken (light absorbed by water)
-        roughness  = mix(roughness, max(roughness * 0.15, 0.02), w); // near-mirror when fully wet
+        albedo    *= 1.0 - w * 0.30;
+        roughness  = mix(roughness, max(roughness * 0.15, 0.02), w);
+    }
+
+    // Snow accumulation — white matte coating on upward-facing surfaces.
+    // Steeper cutoff than wetness: snow only sticks to surfaces above ~17° from horizontal.
+    if (pc.snowCover > 0.001) {
+        float slopeFactor = clamp((N.y - 0.3) * (1.0 / 0.7), 0.0, 1.0);
+        float s = pc.snowCover * slopeFactor;
+        albedo    = mix(albedo,    vec3(0.82, 0.87, 0.92), s); // white-ish snow tint
+        roughness = mix(roughness, 0.90,                    s); // snow is matte
+        metallic  = mix(metallic,  0.0,                     s); // snow is non-metallic
     }
 
     // View direction — use push constant camera position

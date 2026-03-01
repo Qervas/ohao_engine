@@ -64,6 +64,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.000, "fog_scatter": 0.60,
 		"fog_r": 0.70, "fog_g": 0.80, "fog_b": 1.00,
 		"rain_intensity": 0.0,  "wind_x": 0.00,
+		"snow_intensity": 0.0,  "snow_wind_x": 0.00,
 	},
 	"partly_cloudy": {
 		"turb_add":  0.6,  "int_mult":  0.88,
@@ -71,6 +72,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.005, "fog_scatter": 0.50,
 		"fog_r": 0.75, "fog_g": 0.82, "fog_b": 1.00,
 		"rain_intensity": 0.0,  "wind_x": -0.04,
+		"snow_intensity": 0.0,  "snow_wind_x": -0.04,
 	},
 	"overcast": {
 		"turb_add":  3.0,  "int_mult":  0.42,
@@ -78,6 +80,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.018, "fog_scatter": 0.70,
 		"fog_r": 0.65, "fog_g": 0.70, "fog_b": 0.75,
 		"rain_intensity": 0.0,  "wind_x": -0.06,
+		"snow_intensity": 0.0,  "snow_wind_x": -0.06,
 	},
 	"foggy": {
 		"turb_add":  2.0,  "int_mult":  0.55,
@@ -85,6 +88,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.065, "fog_scatter": 0.92,
 		"fog_r": 0.80, "fog_g": 0.82, "fog_b": 0.85,
 		"rain_intensity": 0.0,  "wind_x": 0.00,
+		"snow_intensity": 0.0,  "snow_wind_x": 0.00,
 	},
 	"rain": {
 		"turb_add":  4.0,  "int_mult":  0.32,
@@ -92,6 +96,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.030, "fog_scatter": 0.85,
 		"fog_r": 0.50, "fog_g": 0.55, "fog_b": 0.60,
 		"rain_intensity": 0.75, "wind_x": -0.10,
+		"snow_intensity": 0.0,  "snow_wind_x": -0.10,
 	},
 	"stormy": {
 		"turb_add":  6.5,  "int_mult":  0.18,
@@ -99,6 +104,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.045, "fog_scatter": 0.80,
 		"fog_r": 0.28, "fog_g": 0.32, "fog_b": 0.38,
 		"rain_intensity": 1.00, "wind_x": -0.18,
+		"snow_intensity": 0.0,  "snow_wind_x": -0.18,
 	},
 	"blizzard": {
 		"turb_add":  3.5,  "int_mult":  0.50,
@@ -106,6 +112,7 @@ const WEATHER_STATES: Dictionary = {
 		"fog_density": 0.090, "fog_scatter": 0.95,
 		"fog_r": 0.88, "fog_g": 0.90, "fog_b": 0.95,
 		"rain_intensity": 0.0,  "wind_x": -0.12,  # blizzard uses fog, not liquid rain
+		"snow_intensity": 1.0,  "snow_wind_x": -0.12,
 	},
 }
 
@@ -266,6 +273,12 @@ static func _apply_state(vp: OhaoViewport, p: Dictionary) -> void:
 	vp.set_rain_enabled(rain > 0.01)
 	vp.set_rain_intensity(maxf(rain, 0.0))
 	vp.set_rain_wind_x(p.get("wind_x", -0.08))
+
+	# Snow
+	var snow: float = p.get("snow_intensity", 0.0)
+	vp.set_snow_enabled(snow > 0.01)
+	vp.set_snow_intensity(maxf(snow, 0.0))
+	vp.set_snow_wind_x(p.get("snow_wind_x", 0.0))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,6 +455,12 @@ class _WeatherController extends Node:
 		_vp.set_rain_intensity(maxf(rain, 0.0))
 		_vp.set_rain_wind_x(p.get("wind_x", -0.08))
 
+		# Snow
+		var snow: float = p.get("snow_intensity", 0.0)
+		_vp.set_snow_enabled(snow > 0.01)
+		_vp.set_snow_intensity(maxf(snow, 0.0))
+		_vp.set_snow_wind_x(p.get("snow_wind_x", 0.0))
+
 
 	func _lerp_params(a: Dictionary, b: Dictionary, t: float) -> Dictionary:
 		return {
@@ -457,6 +476,8 @@ class _WeatherController extends Node:
 			"fog_b":          lerpf(a.get("fog_b", 1.0), b.get("fog_b", 1.0), t),
 			"rain_intensity": lerpf(a.get("rain_intensity", 0.0), b.get("rain_intensity", 0.0), t),
 			"wind_x":         lerpf(a.get("wind_x", 0.0),         b.get("wind_x", 0.0),         t),
+			"snow_intensity": lerpf(a.get("snow_intensity", 0.0), b.get("snow_intensity", 0.0), t),
+			"snow_wind_x":    lerpf(a.get("snow_wind_x", 0.0),    b.get("snow_wind_x", 0.0),    t),
 		}
 
 

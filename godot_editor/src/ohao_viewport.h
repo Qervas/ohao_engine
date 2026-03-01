@@ -286,6 +286,20 @@ public:
     // Manual trigger — fires a strike immediately regardless of timer
     void  trigger_lightning();
 
+    // Snow settings
+    void  set_snow_enabled(bool v);
+    bool  get_snow_enabled() const      { return m_render_settings.getSnowEnabled(); }
+    void  set_snow_intensity(float v);
+    float get_snow_intensity() const    { return m_render_settings.getSnowIntensity(); }
+    void  set_snow_wind_x(float v);
+    float get_snow_wind_x() const       { return m_render_settings.getSnowWindX(); }
+    void  set_snow_accum_rate(float v);
+    float get_snow_accum_rate() const   { return m_render_settings.getSnowAccumRate(); }
+    void  set_snow_melt_rate(float v);
+    float get_snow_melt_rate() const    { return m_render_settings.getSnowMeltRate(); }
+    // Read-only — query current snow accumulation on ground (driven by snow automatically)
+    float get_snow_accumulation() const;
+
     // Cloud settings
     void set_cloud_enabled(bool enabled);
     bool get_cloud_enabled() const { return m_render_settings.getCloudEnabled(); }

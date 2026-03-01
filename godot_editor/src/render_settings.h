@@ -140,6 +140,18 @@ public:
     void  setLightningBrightness(float v)   { m_lightning_brightness = v; }
     float getLightningBrightness() const    { return m_lightning_brightness; }
 
+    // === Snow Settings ===
+    void  setSnowEnabled(bool v)      { m_snow_enabled    = v; }
+    bool  getSnowEnabled() const      { return m_snow_enabled; }
+    void  setSnowIntensity(float v)   { m_snow_intensity  = v; }
+    float getSnowIntensity() const    { return m_snow_intensity; }
+    void  setSnowWindX(float v)       { m_snow_wind_x     = v; }
+    float getSnowWindX() const        { return m_snow_wind_x; }
+    void  setSnowAccumRate(float v)   { m_snow_accum_rate = v; }
+    float getSnowAccumRate() const    { return m_snow_accum_rate; }
+    void  setSnowMeltRate(float v)    { m_snow_melt_rate  = v; }
+    float getSnowMeltRate() const     { return m_snow_melt_rate; }
+
     // === Cloud Settings ===
     void setCloudEnabled(bool v)          { m_cloud_enabled = v; }
     bool getCloudEnabled() const          { return m_cloud_enabled; }
@@ -226,6 +238,13 @@ private:
     bool  m_lightning_enabled    = false;
     float m_lightning_interval   = 8.0f;
     float m_lightning_brightness = 3.5f;
+
+    // Snow
+    bool  m_snow_enabled    = false;
+    float m_snow_intensity  = 1.0f;
+    float m_snow_wind_x     = -0.08f;
+    float m_snow_accum_rate = 0.02f;
+    float m_snow_melt_rate  = 0.003f;
 
     // Clouds
     bool  m_cloud_enabled  = false;

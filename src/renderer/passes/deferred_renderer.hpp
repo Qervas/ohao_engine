@@ -9,6 +9,7 @@
 #include "sky_pass.hpp"
 #include "cloud_pass.hpp"
 #include "rain_pass.hpp"
+#include "snow_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
@@ -106,6 +107,17 @@ public:
     void  setRainWindX(float v);
     float getRainWindX() const    { return m_rainWindX; }
 
+    // Snow configuration
+    void  setSnowEnabled(bool e)      { m_snowEnabled   = e; }
+    bool  getSnowEnabled() const      { return m_snowEnabled; }
+    void  setSnowIntensity(float v)   { m_snowIntensity = glm::clamp(v, 0.0f, 1.0f); }
+    float getSnowIntensity() const    { return m_snowIntensity; }
+    void  setSnowWindX(float v)       { m_snowWindX     = glm::clamp(v, -1.0f, 1.0f); }
+    float getSnowWindX() const        { return m_snowWindX; }
+    float getSnowAccumulation() const { return m_snowAccumulation; }
+    void  setSnowAccumRate(float r)   { m_snowAccumRate = glm::clamp(r, 0.0f, 10.0f); }
+    void  setSnowMeltRate(float r)    { m_snowMeltRate  = glm::clamp(r, 0.0f, 10.0f); }
+
     // Ground wetness — temporal integration driven by rain state.
     // Surfaces accumulate wetness at wetRate/s and dry at dryRate/s.
     // Surface wetness is readable so scripts can react (footstep sounds, etc.)
@@ -154,6 +166,7 @@ private:
     std::unique_ptr<SkyPass>   m_skyPass;
     std::unique_ptr<CloudPass> m_cloudPass;
     std::unique_ptr<RainPass>  m_rainPass;
+    std::unique_ptr<SnowPass>  m_snowPass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -202,6 +215,16 @@ private:
     bool  m_rainEnabled{false};
     float m_rainIntensity{1.0f};
     float m_rainWindX{-0.08f};
+
+    // Snow state
+    bool  m_snowEnabled{false};
+    float m_snowIntensity{1.0f};
+    float m_snowWindX{-0.08f};
+
+    // Snow accumulation (temporal — like wetness but for blizzard)
+    float m_snowAccumulation{0.0f}; // current ground cover [0, 1]
+    float m_snowAccumRate{0.02f};   // units/sec to accumulate (~50s to max)
+    float m_snowMeltRate{0.003f};   // units/sec to melt      (~333s to melt)
 
     // Ground wetness (temporal integration — driven from rain state each frame)
     float m_wetness{0.0f};   // current surface wetness [0, 1]

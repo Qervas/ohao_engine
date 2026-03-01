@@ -294,6 +294,31 @@ void OhaoViewport::_bind_methods() {
 
     ClassDB::bind_method(D_METHOD("trigger_lightning"), &OhaoViewport::trigger_lightning);
 
+    // === Snow Settings ===
+    ADD_GROUP("Snow", "snow_");
+
+    ClassDB::bind_method(D_METHOD("set_snow_enabled", "enabled"), &OhaoViewport::set_snow_enabled);
+    ClassDB::bind_method(D_METHOD("get_snow_enabled"), &OhaoViewport::get_snow_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "snow_enabled"), "set_snow_enabled", "get_snow_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_snow_intensity", "intensity"), &OhaoViewport::set_snow_intensity);
+    ClassDB::bind_method(D_METHOD("get_snow_intensity"), &OhaoViewport::get_snow_intensity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "snow_intensity", PROPERTY_HINT_RANGE, "0.0,1.0,0.01"), "set_snow_intensity", "get_snow_intensity");
+
+    ClassDB::bind_method(D_METHOD("set_snow_wind_x", "wind_x"), &OhaoViewport::set_snow_wind_x);
+    ClassDB::bind_method(D_METHOD("get_snow_wind_x"), &OhaoViewport::get_snow_wind_x);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "snow_wind_x", PROPERTY_HINT_RANGE, "-1.0,1.0,0.01"), "set_snow_wind_x", "get_snow_wind_x");
+
+    ClassDB::bind_method(D_METHOD("set_snow_accum_rate", "rate"), &OhaoViewport::set_snow_accum_rate);
+    ClassDB::bind_method(D_METHOD("get_snow_accum_rate"), &OhaoViewport::get_snow_accum_rate);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "snow_accum_rate", PROPERTY_HINT_RANGE, "0.0,10.0,0.001"), "set_snow_accum_rate", "get_snow_accum_rate");
+
+    ClassDB::bind_method(D_METHOD("set_snow_melt_rate", "rate"), &OhaoViewport::set_snow_melt_rate);
+    ClassDB::bind_method(D_METHOD("get_snow_melt_rate"), &OhaoViewport::get_snow_melt_rate);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "snow_melt_rate", PROPERTY_HINT_RANGE, "0.0,10.0,0.001"), "set_snow_melt_rate", "get_snow_melt_rate");
+
+    ClassDB::bind_method(D_METHOD("get_snow_accumulation"), &OhaoViewport::get_snow_accumulation);
+
     // === Cloud Settings ===
     ADD_GROUP("Clouds", "cloud_");
 
@@ -997,6 +1022,17 @@ void OhaoViewport::trigger_lightning() {
     if (!m_renderer) return;
     auto* deferred = m_renderer->getDeferredRenderer();
     if (deferred) deferred->triggerLightning();
+}
+
+void OhaoViewport::set_snow_enabled(bool v)       { m_render_settings.setSnowEnabled(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_snow_intensity(float v)    { m_render_settings.setSnowIntensity(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_snow_wind_x(float v)       { m_render_settings.setSnowWindX(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_snow_accum_rate(float v)   { m_render_settings.setSnowAccumRate(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_snow_melt_rate(float v)    { m_render_settings.setSnowMeltRate(v); m_render_settings.apply(m_renderer); }
+float OhaoViewport::get_snow_accumulation() const {
+    if (!m_renderer) return 0.0f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getSnowAccumulation() : 0.0f;
 }
 
 void OhaoViewport::set_cloud_enabled(bool enabled) { m_render_settings.setCloudEnabled(enabled); m_render_settings.apply(m_renderer); }

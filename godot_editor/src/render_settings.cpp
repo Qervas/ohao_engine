@@ -90,6 +90,13 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     deferred->setLightningInterval(m_lightning_interval);
     deferred->setLightningBrightness(m_lightning_brightness);
 
+    // Snow
+    deferred->setSnowEnabled(m_snow_enabled);
+    deferred->setSnowIntensity(m_snow_intensity);
+    deferred->setSnowWindX(m_snow_wind_x);
+    deferred->setSnowAccumRate(m_snow_accum_rate);
+    deferred->setSnowMeltRate(m_snow_melt_rate);
+
     // Clouds
     deferred->setCloudEnabled(m_cloud_enabled);
     deferred->setCloudCoverage(m_cloud_coverage);

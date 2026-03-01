@@ -45,6 +45,8 @@ public:
 
     // Wetness (0=dry, 1=fully wet) — set each frame before execute()
     void setWetness(float w) { m_params.wetness = glm::clamp(w, 0.0f, 1.0f); }
+    // Snow cover (0=bare, 1=fully covered) — set each frame before execute()
+    void setSnowCover(float s) { m_params.snowCover = glm::clamp(s, 0.0f, 1.0f); }
 
 private:
     bool createRenderPass();
@@ -113,7 +115,9 @@ private:
         uint32_t flags;         // 4  — Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
         float wetness;          // 4  — 0=dry, 1=fully wet (rain accumulation)
         float paddingW;         // 4
-    };                          // Total: 168 bytes
+        float snowCover;        // 4  — 0=bare, 1=snow-covered (blizzard accumulation)
+        float paddingS;         // 4
+    };                          // Total: 176 bytes
 
     LightingParams m_params{};
 };
