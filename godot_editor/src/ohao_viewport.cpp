@@ -9,6 +9,8 @@
 
 // Include OHAO headers
 #include "physics/world/physics_world.hpp"
+#include "physics/components/physics_component.hpp"
+#include "engine/actor/actor.hpp"
 #include "renderer/offscreen/offscreen_renderer.hpp"
 #include "renderer/camera/camera.hpp"
 #include "renderer/passes/deferred_renderer.hpp"
@@ -23,6 +25,16 @@ namespace godot {
 // ===== GDScript Bindings =====
 
 void OhaoViewport::_bind_methods() {
+    // === Collision Signals ===
+    ADD_SIGNAL(MethodInfo("body_entered",
+        PropertyInfo(Variant::STRING, "body1_name"),
+        PropertyInfo(Variant::STRING, "body2_name"),
+        PropertyInfo(Variant::VECTOR3, "contact_point"),
+        PropertyInfo(Variant::FLOAT,   "impulse")));
+    ADD_SIGNAL(MethodInfo("body_exited",
+        PropertyInfo(Variant::STRING, "body1_name"),
+        PropertyInfo(Variant::STRING, "body2_name")));
+
     // === Core Methods ===
     ClassDB::bind_method(D_METHOD("initialize_renderer"), &OhaoViewport::initialize_renderer);
     ClassDB::bind_method(D_METHOD("shutdown_renderer"), &OhaoViewport::shutdown_renderer);
@@ -327,6 +339,19 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("destroy_force_volume", "handle"), &OhaoViewport::destroy_force_volume);
     ClassDB::bind_method(D_METHOD("set_force_volume_enabled", "handle", "enabled"), &OhaoViewport::set_force_volume_enabled);
 
+    // === Sleep / Wake ===
+    ClassDB::bind_method(D_METHOD("set_actor_awake", "actor_name", "awake"), &OhaoViewport::set_actor_awake);
+    ClassDB::bind_method(D_METHOD("is_actor_awake", "actor_name"), &OhaoViewport::is_actor_awake);
+
+    // === Collision Layer Assignment ===
+    ClassDB::bind_method(D_METHOD("set_actor_layer", "actor_name", "layer"), &OhaoViewport::set_actor_layer);
+
+    // === Springs ===
+    ClassDB::bind_method(D_METHOD("create_spring", "body1_name", "body2_name", "stiffness", "rest_length", "damping"), &OhaoViewport::create_spring);
+    ClassDB::bind_method(D_METHOD("create_anchor_spring", "body_name", "anchor", "stiffness", "rest_length", "damping"), &OhaoViewport::create_anchor_spring);
+    ClassDB::bind_method(D_METHOD("destroy_spring", "handle"), &OhaoViewport::destroy_spring);
+    ClassDB::bind_method(D_METHOD("set_spring_enabled", "handle", "enabled"), &OhaoViewport::set_spring_enabled);
+
     // === Texture / Material API ===
     ADD_GROUP("Materials", "");
     ClassDB::bind_method(D_METHOD("set_actor_texture", "actor_name", "texture_path"), &OhaoViewport::set_actor_texture);
@@ -426,6 +451,27 @@ void OhaoViewport::_process(double delta) {
     // Physics
     if (m_physics.isPlaying() && m_renderer) {
         m_renderer->updatePhysics(static_cast<float>(delta) * m_physics.getSpeed());
+    }
+
+    // Drain and dispatch contact events as Godot signals
+    if (m_scene) {
+        auto* physWorld = m_scene->getPhysicsWorld();
+        if (physWorld && physWorld->hasBackend()) {
+            auto events = physWorld->getContactEvents();
+            for (auto& ev : events) {
+                std::string n1 = physWorld->resolveHandleName(ev.body1);
+                std::string n2 = physWorld->resolveHandleName(ev.body2);
+                if (n1.empty() || n2.empty()) continue;
+                if (ev.type == ohao::physics::backend::ContactEvent::BEGIN) {
+                    emit_signal("body_entered",
+                        String(n1.c_str()), String(n2.c_str()),
+                        Vector3(ev.contactPoint.x, ev.contactPoint.y, ev.contactPoint.z),
+                        static_cast<double>(glm::length(ev.relativeVelocity)));
+                } else if (ev.type == ohao::physics::backend::ContactEvent::END) {
+                    emit_signal("body_exited", String(n1.c_str()), String(n2.c_str()));
+                }
+            }
+        }
     }
 
     // Gizmo transform for selected object (skip in GAME mode)
@@ -1213,6 +1259,57 @@ void OhaoViewport::set_force_volume_enabled(int handle, bool enabled) {
 
 void OhaoViewport::sync_actor_physics_shape(const String& actor_name) {
     m_actors.syncPhysicsShape(m_scene, actor_name.utf8().get_data());
+}
+
+// === Sleep / Wake ===
+void OhaoViewport::set_actor_awake(const String& actor_name, bool awake) {
+    m_actors.setAwake(m_scene, actor_name.utf8().get_data(), awake);
+}
+bool OhaoViewport::is_actor_awake(const String& actor_name) {
+    return m_actors.isAwake(m_scene, actor_name.utf8().get_data());
+}
+
+// === Collision Layer Assignment ===
+void OhaoViewport::set_actor_layer(const String& actor_name, int layer) {
+    m_actors.setLayer(m_scene, actor_name.utf8().get_data(), static_cast<uint16_t>(layer));
+}
+
+// === Springs ===
+// Helper to find a RigidBody* by actor name
+static ohao::physics::dynamics::RigidBody* findRigidBody(ohao::Scene* scene, const std::string& name) {
+    if (!scene) return nullptr;
+    auto actor = scene->findActor(name);
+    if (!actor) return nullptr;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (!phys) return nullptr;
+    return phys->getRigidBody().get();
+}
+
+int OhaoViewport::create_spring(const String& body1, const String& body2,
+                                 float stiffness, float rest_length, float damping) {
+    auto* w = getPhysWorld(m_scene);
+    if (!w) return -1;
+    auto* rb1 = findRigidBody(m_scene, body1.utf8().get_data());
+    auto* rb2 = findRigidBody(m_scene, body2.utf8().get_data());
+    if (!rb1 || !rb2) return -1;
+    return w->createSpring(rb1, rb2, stiffness, rest_length, damping);
+}
+
+int OhaoViewport::create_anchor_spring(const String& body_name, const Vector3& anchor,
+                                        float stiffness, float rest_length, float damping) {
+    auto* w = getPhysWorld(m_scene);
+    if (!w) return -1;
+    auto* rb = findRigidBody(m_scene, body_name.utf8().get_data());
+    if (!rb) return -1;
+    return w->createAnchorSpring(rb, glm::vec3(anchor.x, anchor.y, anchor.z),
+                                  stiffness, rest_length, damping);
+}
+
+void OhaoViewport::destroy_spring(int handle) {
+    if (auto* w = getPhysWorld(m_scene)) w->destroySpring(handle);
+}
+void OhaoViewport::set_spring_enabled(int handle, bool enabled) {
+    if (auto* w = getPhysWorld(m_scene)) w->setSpringEnabled(handle, enabled);
 }
 
 // ===== Audio =====

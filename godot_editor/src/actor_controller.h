@@ -54,6 +54,9 @@ public:
     void applyRadialImpulse(ohao::Scene* scene, const glm::vec3& center, float strength, float radius, int falloff);
     void setLinearVelocity(ohao::Scene* scene, const std::string& name, const glm::vec3& velocity);
     void syncPhysicsShape(ohao::Scene* scene, const std::string& name);
+    void setAwake(ohao::Scene* scene, const std::string& name, bool awake);
+    bool isAwake(ohao::Scene* scene, const std::string& name);
+    void setLayer(ohao::Scene* scene, const std::string& name, uint16_t layer);
 };
 
 } // namespace godot

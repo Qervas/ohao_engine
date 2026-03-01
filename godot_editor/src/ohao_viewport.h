@@ -341,6 +341,19 @@ public:
     void destroy_force_volume(int handle);
     void set_force_volume_enabled(int handle, bool enabled);
 
+    // === Sleep / Wake ===
+    void set_actor_awake(const String& actor_name, bool awake);
+    bool is_actor_awake(const String& actor_name);
+
+    // === Collision Layer Assignment ===
+    void set_actor_layer(const String& actor_name, int layer);
+
+    // === Springs ===
+    int  create_spring(const String& body1, const String& body2, float stiffness, float rest_length, float damping);
+    int  create_anchor_spring(const String& body_name, const Vector3& anchor, float stiffness, float rest_length, float damping);
+    void destroy_spring(int handle);
+    void set_spring_enabled(int handle, bool enabled);
+
     // === Texture / Material API ===
     void set_actor_texture(const String& actor_name, const String& texture_path);
     void set_actor_normal_map(const String& actor_name, const String& normal_path);

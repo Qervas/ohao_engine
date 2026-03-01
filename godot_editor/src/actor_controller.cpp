@@ -285,4 +285,33 @@ void ActorController::syncPhysicsShape(ohao::Scene* scene, const std::string& na
     phys->createBoxShape(glm::vec3(scale.x * 0.5f, scale.y * 0.5f, scale.z * 0.5f));
 }
 
+void ActorController::setAwake(ohao::Scene* scene, const std::string& name, bool awake) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->setAwake(awake);
+}
+
+bool ActorController::isAwake(ohao::Scene* scene, const std::string& name) {
+    if (!scene) return false;
+    auto actor = scene->findActor(name);
+    if (!actor) return false;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    return phys ? phys->isAwake() : false;
+}
+
+void ActorController::setLayer(ohao::Scene* scene, const std::string& name, uint16_t layer) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (!phys) return;
+    auto rb = phys->getRigidBody();
+    if (!rb || !rb->hasBackendBody()) return;
+    auto* physWorld = scene->getPhysicsWorld();
+    if (physWorld && physWorld->hasBackend())
+        physWorld->setBodyLayer(rb->getBackendHandle(), layer);
+}
+
 } // namespace godot

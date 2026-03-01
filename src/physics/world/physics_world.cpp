@@ -1,5 +1,6 @@
 #include "physics_world.hpp"
 #include "physics/components/physics_component.hpp"
+#include "engine/actor/actor.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/forces/forces.hpp"
 #include "physics/debug/force_debugger.hpp"
@@ -688,6 +689,23 @@ void PhysicsWorld::setLayerCollision(uint16_t layer1, uint16_t layer2, bool shou
     if (hasBackend()) m_backend->setLayerCollision(layer1, layer2, shouldCollide);
 }
 
+void PhysicsWorld::setBodyLayer(backend::BodyHandle handle, uint16_t layer) {
+    if (hasBackend()) m_backend->setBodyLayer(handle, layer);
+}
+
+std::string PhysicsWorld::resolveHandleName(backend::BodyHandle handle) const {
+    if (handle == backend::INVALID_BODY) return "";
+    for (auto& body : m_rigidBodies) {
+        if (body && body->getBackendHandle() == handle) {
+            auto* comp = body->getComponent();
+            if (!comp) return "";
+            auto* actor = comp->getOwner();
+            return actor ? actor->getName() : "";
+        }
+    }
+    return "";
+}
+
 // ============================================================================
 // Force Utilities
 // ============================================================================
@@ -704,6 +722,43 @@ void PhysicsWorld::applyRadialImpulse(const glm::vec3& center, float strength, f
         glm::vec3 impulse = glm::normalize(delta) * (strength * factor);
         m_backend->applyImpulse(body->getBackendHandle(), impulse, glm::vec3(0.0f));
     }
+}
+
+// ============================================================================
+// Springs
+// ============================================================================
+
+int PhysicsWorld::createSpring(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                               float stiffness, float restLength, float damping) {
+    if (!bodyA || !bodyB) return -1;
+    auto spring = std::make_unique<forces::SpringForce>(bodyA, bodyB, stiffness, restLength, damping);
+    size_t regId = m_forceRegistry.registerForce(std::move(spring), "spring");
+    int handle = m_nextSpringHandle++;
+    m_springMap[handle] = regId;
+    return handle;
+}
+
+int PhysicsWorld::createAnchorSpring(dynamics::RigidBody* body, const glm::vec3& anchor,
+                                     float stiffness, float restLength, float damping) {
+    if (!body) return -1;
+    auto spring = std::make_unique<forces::AnchorSpringForce>(body, anchor, stiffness, restLength, damping);
+    size_t regId = m_forceRegistry.registerForce(std::move(spring), "anchor_spring");
+    int handle = m_nextSpringHandle++;
+    m_springMap[handle] = regId;
+    return handle;
+}
+
+void PhysicsWorld::destroySpring(int handle) {
+    auto it = m_springMap.find(handle);
+    if (it == m_springMap.end()) return;
+    m_forceRegistry.unregisterForce(it->second);
+    m_springMap.erase(it);
+}
+
+void PhysicsWorld::setSpringEnabled(int handle, bool enabled) {
+    auto it = m_springMap.find(handle);
+    if (it == m_springMap.end()) return;
+    m_forceRegistry.setForceEnabled(it->second, enabled);
 }
 
 // ============================================================================

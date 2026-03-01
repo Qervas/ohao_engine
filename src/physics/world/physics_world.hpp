@@ -86,6 +86,9 @@ public:
     // Body access (for profile system)
     const std::vector<std::shared_ptr<dynamics::RigidBody>>& getRigidBodies() const { return m_rigidBodies; }
 
+    // Resolve a backend BodyHandle to the owning actor's name ("" if not found)
+    std::string resolveHandleName(backend::BodyHandle handle) const;
+
     // Test-only: Add raw rigid body without component (for Python tests)
     void addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> body);
     
@@ -120,6 +123,8 @@ public:
 
     // === COLLISION LAYERS ===
     void setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide);
+    // Assign a body to a layer (changes its collision layer in the backend)
+    void setBodyLayer(backend::BodyHandle handle, uint16_t layer);
 
     // === CONSTRAINTS ===
     backend::ConstraintHandle createConstraint(const backend::ConstraintSettings& settings);
@@ -265,6 +270,16 @@ public:
     void destroyForceVolume(int handle);
     void setForceVolumeEnabled(int handle, bool enabled);
 
+    // === SPRINGS ===
+    // Body-to-body spring (both ends attached to dynamic bodies)
+    int createSpring(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+                     float stiffness, float restLength, float damping);
+    // Anchored spring (one end fixed in world space)
+    int createAnchorSpring(dynamics::RigidBody* body, const glm::vec3& anchor,
+                           float stiffness, float restLength, float damping);
+    void destroySpring(int handle);
+    void setSpringEnabled(int handle, bool enabled);
+
 private:
     PhysicsWorldConfig m_config;
     SimulationState m_state{SimulationState::STOPPED};
@@ -279,6 +294,8 @@ private:
     size_t m_waterForceId{0};   // 0 = not registered
     std::unordered_map<int, size_t> m_forceVolumeMap;  // user handle -> registry id
     int m_nextForceVolumeHandle{1};
+    std::unordered_map<int, size_t> m_springMap;        // user handle -> registry id
+    int m_nextSpringHandle{1};
 
     // Profile system
     std::unique_ptr<ProfileManager> m_profileManager;
