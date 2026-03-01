@@ -75,6 +75,14 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     if (m_sky_enabled) {
         deferred->setSunDirection(m_sun_direction);
     }
+
+    // Clouds
+    deferred->setCloudEnabled(m_cloud_enabled);
+    deferred->setCloudCoverage(m_cloud_coverage);
+    deferred->setCloudDensity(m_cloud_density);
+    deferred->setCloudAltMin(m_cloud_alt_min);
+    deferred->setCloudAltMax(m_cloud_alt_max);
+    deferred->setCloudSpeed(m_cloud_speed);
 }
 
 } // namespace godot

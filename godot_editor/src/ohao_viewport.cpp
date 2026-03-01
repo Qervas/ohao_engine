@@ -243,6 +243,33 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_sky_intensity"), &OhaoViewport::get_sky_intensity);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sky_intensity", PROPERTY_HINT_RANGE, "0.0,5.0,0.1"), "set_sky_intensity", "get_sky_intensity");
 
+    // === Cloud Settings ===
+    ADD_GROUP("Clouds", "cloud_");
+
+    ClassDB::bind_method(D_METHOD("set_cloud_enabled", "enabled"), &OhaoViewport::set_cloud_enabled);
+    ClassDB::bind_method(D_METHOD("get_cloud_enabled"), &OhaoViewport::get_cloud_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "cloud_enabled"), "set_cloud_enabled", "get_cloud_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_cloud_coverage", "coverage"), &OhaoViewport::set_cloud_coverage);
+    ClassDB::bind_method(D_METHOD("get_cloud_coverage"), &OhaoViewport::get_cloud_coverage);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_coverage", PROPERTY_HINT_RANGE, "0.0,1.0,0.01"), "set_cloud_coverage", "get_cloud_coverage");
+
+    ClassDB::bind_method(D_METHOD("set_cloud_density", "density"), &OhaoViewport::set_cloud_density);
+    ClassDB::bind_method(D_METHOD("get_cloud_density"), &OhaoViewport::get_cloud_density);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_density", PROPERTY_HINT_RANGE, "0.0,5.0,0.05"), "set_cloud_density", "get_cloud_density");
+
+    ClassDB::bind_method(D_METHOD("set_cloud_altitude_min", "alt"), &OhaoViewport::set_cloud_altitude_min);
+    ClassDB::bind_method(D_METHOD("get_cloud_altitude_min"), &OhaoViewport::get_cloud_altitude_min);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_altitude_min", PROPERTY_HINT_RANGE, "100.0,5000.0,10.0"), "set_cloud_altitude_min", "get_cloud_altitude_min");
+
+    ClassDB::bind_method(D_METHOD("set_cloud_altitude_max", "alt"), &OhaoViewport::set_cloud_altitude_max);
+    ClassDB::bind_method(D_METHOD("get_cloud_altitude_max"), &OhaoViewport::get_cloud_altitude_max);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_altitude_max", PROPERTY_HINT_RANGE, "1000.0,15000.0,10.0"), "set_cloud_altitude_max", "get_cloud_altitude_max");
+
+    ClassDB::bind_method(D_METHOD("set_cloud_speed", "speed"), &OhaoViewport::set_cloud_speed);
+    ClassDB::bind_method(D_METHOD("get_cloud_speed"), &OhaoViewport::get_cloud_speed);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_speed", PROPERTY_HINT_RANGE, "0.0,10.0,0.1"), "set_cloud_speed", "get_cloud_speed");
+
     // === Camera Mode ===
     ADD_GROUP("Camera", "camera_");
 
@@ -864,6 +891,13 @@ Vector3 OhaoViewport::get_sun_direction() const {
     glm::vec3 d = m_render_settings.getSunDirection();
     return Vector3(d.x, d.y, d.z);
 }
+
+void OhaoViewport::set_cloud_enabled(bool enabled) { m_render_settings.setCloudEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_cloud_coverage(float v)     { m_render_settings.setCloudCoverage(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_cloud_density(float v)      { m_render_settings.setCloudDensity(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_cloud_altitude_min(float v) { m_render_settings.setCloudAltMin(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_cloud_altitude_max(float v) { m_render_settings.setCloudAltMax(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_cloud_speed(float v)        { m_render_settings.setCloudSpeed(v); m_render_settings.apply(m_renderer); }
 
 // ===== Scene Management (delegates to SceneSync) =====
 

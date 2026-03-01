@@ -104,7 +104,17 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         }
     }
 
-    // Initialize sky pass (Preetham analytical sky, runs after deferred lighting)
+    // Initialize cloud pass (volumetric ray-march, runs before sky pass)
+    m_cloudPass = std::make_unique<CloudPass>();
+    if (!m_cloudPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: CloudPass failed (non-fatal)" << std::endl;
+        m_cloudPass.reset();
+    } else {
+        m_cloudPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        std::cout << "DeferredRenderer: CloudPass OK" << std::endl;
+    }
+
+    // Initialize sky pass (Preetham analytical sky, runs after cloud pass)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
         std::cerr << "DeferredRenderer: SkyPass failed (non-fatal)" << std::endl;
@@ -113,6 +123,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
                                 m_lightingPass->getOutputImage());
         m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        if (m_cloudPass) {
+            m_skyPass->setCloudBuffer(m_cloudPass->getOutputView());
+        }
         std::cout << "DeferredRenderer: SkyPass OK" << std::endl;
     }
 
@@ -143,6 +156,10 @@ void DeferredRenderer::cleanup() {
         m_particleRenderPass = VK_NULL_HANDLE;
     }
 
+    if (m_cloudPass) {
+        m_cloudPass->cleanup();
+        m_cloudPass.reset();
+    }
     if (m_skyPass) {
         m_skyPass->cleanup();
         m_skyPass.reset();
@@ -320,7 +337,19 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     m_renderGraph.compile();
     m_renderGraph.execute(cmd);
 
-    // 4.5. Sky pass — fills empty (sky) pixels in the HDR output with Preetham sky
+    // 4.5. Cloud pass — ray-march volumetric clouds into half-res buffer
+    if (m_cloudPass) {
+        glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
+        m_cloudPass->setEnabled(m_cloudEnabled);
+        m_cloudPass->setCameraData(invViewProj, m_cameraPos);
+        m_cloudPass->setSunData(-m_lightDirection,
+                                glm::vec3(1.0f, 0.95f, 0.85f),
+                                m_skyIntensity);
+        m_cloudPass->setTime(m_totalTime);
+        m_cloudPass->execute(cmd, frameIndex);
+    }
+
+    // 4.6. Sky pass — fills sky pixels with Preetham sky + cloud composite
     if (m_skyPass && m_skyEnabled) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_skyPass->setCameraData(invViewProj, m_cameraPos);
@@ -332,7 +361,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_skyPass->execute(cmd, frameIndex);
     }
 
-    // 4.6. Particle system (forward pass over HDR, before post-processing)
+    // 4.7. Particle system (forward pass over HDR, before post-processing)
     if (m_particleSystem && m_lightingPass) {
         m_totalTime += m_deltaTime;
 
@@ -446,6 +475,12 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_overlayPass) m_overlayPass->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
+    if (m_cloudPass) {
+        m_cloudPass->onResize(width, height);
+        if (m_gbufferPass) {
+            m_cloudPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        }
+    }
     if (m_skyPass) {
         m_skyPass->onResize(width, height);
         // Reconnect to reallocated lighting output image/view
@@ -455,6 +490,9 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         }
         if (m_gbufferPass) {
             m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        }
+        if (m_cloudPass) {
+            m_skyPass->setCloudBuffer(m_cloudPass->getOutputView());
         }
     }
 
@@ -599,6 +637,37 @@ void DeferredRenderer::setSkyIntensity(float i) {
 
 void DeferredRenderer::setSkyGroundColor(const glm::vec3& c) {
     m_skyGroundColor = c;
+}
+
+// Cloud API
+void DeferredRenderer::setCloudEnabled(bool e) {
+    m_cloudEnabled = e;
+    if (m_cloudPass) m_cloudPass->setEnabled(e);
+}
+
+void DeferredRenderer::setCloudCoverage(float v) {
+    m_cloudCoverage = v;
+    if (m_cloudPass) m_cloudPass->setCoverage(v);
+}
+
+void DeferredRenderer::setCloudDensity(float v) {
+    m_cloudDensity = v;
+    if (m_cloudPass) m_cloudPass->setDensity(v);
+}
+
+void DeferredRenderer::setCloudAltMin(float v) {
+    m_cloudAltMin = v;
+    if (m_cloudPass) m_cloudPass->setAltMin(v);
+}
+
+void DeferredRenderer::setCloudAltMax(float v) {
+    m_cloudAltMax = v;
+    if (m_cloudPass) m_cloudPass->setAltMax(v);
+}
+
+void DeferredRenderer::setCloudSpeed(float v) {
+    m_cloudSpeed = v;
+    if (m_cloudPass) m_cloudPass->setSpeed(v);
 }
 
 void DeferredRenderer::setWireframeEnabled(bool enabled) {

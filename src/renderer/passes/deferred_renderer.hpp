@@ -7,6 +7,7 @@
 #include "overlay_pass.hpp"
 #include "gizmo_pass.hpp"
 #include "sky_pass.hpp"
+#include "cloud_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
@@ -82,6 +83,20 @@ public:
     void setSkyIntensity(float i);
     void setSkyGroundColor(const glm::vec3& c);
 
+    // Cloud configuration
+    void setCloudEnabled(bool e);
+    bool getCloudEnabled() const { return m_cloudEnabled; }
+    void setCloudCoverage(float v);
+    float getCloudCoverage() const { return m_cloudCoverage; }
+    void setCloudDensity(float v);
+    float getCloudDensity() const { return m_cloudDensity; }
+    void setCloudAltMin(float v);
+    float getCloudAltMin() const { return m_cloudAltMin; }
+    void setCloudAltMax(float v);
+    float getCloudAltMax() const { return m_cloudAltMax; }
+    void setCloudSpeed(float v);
+    float getCloudSpeed() const { return m_cloudSpeed; }
+
     // Particle system
     void spawnParticles(const glm::vec3& position, ParticleType type,
                         const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
@@ -109,6 +124,7 @@ private:
     std::unique_ptr<OverlayPass> m_overlayPass;
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;
+    std::unique_ptr<CloudPass> m_cloudPass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -144,6 +160,14 @@ private:
     float     m_skyTurbidity{2.5f};
     float     m_skyIntensity{1.0f};
     glm::vec3 m_skySunDirection{0.3f, 0.9f, 0.3f};
+
+    // Cloud state
+    bool  m_cloudEnabled{false};
+    float m_cloudCoverage{0.5f};
+    float m_cloudDensity{0.45f};
+    float m_cloudAltMin{1500.0f};
+    float m_cloudAltMax{8000.0f};
+    float m_cloudSpeed{1.0f};
 
     // Particle system
     std::unique_ptr<ParticleSystem> m_particleSystem;

@@ -118,6 +118,20 @@ public:
     void setSkyIntensity(float v)         { m_sky_intensity = v; }
     float getSkyIntensity() const         { return m_sky_intensity; }
 
+    // === Cloud Settings ===
+    void setCloudEnabled(bool v)          { m_cloud_enabled = v; }
+    bool getCloudEnabled() const          { return m_cloud_enabled; }
+    void setCloudCoverage(float v)        { m_cloud_coverage = v; }
+    float getCloudCoverage() const        { return m_cloud_coverage; }
+    void setCloudDensity(float v)         { m_cloud_density = v; }
+    float getCloudDensity() const         { return m_cloud_density; }
+    void setCloudAltMin(float v)          { m_cloud_alt_min = v; }
+    float getCloudAltMin() const          { return m_cloud_alt_min; }
+    void setCloudAltMax(float v)          { m_cloud_alt_max = v; }
+    float getCloudAltMax() const          { return m_cloud_alt_max; }
+    void setCloudSpeed(float v)           { m_cloud_speed = v; }
+    float getCloudSpeed() const           { return m_cloud_speed; }
+
 private:
     int m_render_mode = 0;  // 0=Forward, 1=Deferred
 
@@ -176,6 +190,14 @@ private:
     glm::vec3 m_sun_direction = glm::vec3(0.3f, 0.9f, 0.3f);  // normalized, toward sun
     float     m_sky_turbidity = 2.5f;
     float     m_sky_intensity = 1.0f;
+
+    // Clouds
+    bool  m_cloud_enabled  = false;
+    float m_cloud_coverage = 0.5f;
+    float m_cloud_density  = 0.45f;
+    float m_cloud_alt_min  = 1500.0f;
+    float m_cloud_alt_max  = 8000.0f;
+    float m_cloud_speed    = 1.0f;
 };
 
 } // namespace godot

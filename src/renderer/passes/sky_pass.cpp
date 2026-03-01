@@ -51,6 +51,10 @@ void SkyPass::cleanup() {
         vkDestroySampler(m_device, m_sampler, nullptr);
         m_sampler = VK_NULL_HANDLE;
     }
+    if (m_linearSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_device, m_linearSampler, nullptr);
+        m_linearSampler = VK_NULL_HANDLE;
+    }
 }
 
 void SkyPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
@@ -123,6 +127,13 @@ void SkyPass::setDepthBuffer(VkImageView depth) {
     }
 }
 
+void SkyPass::setCloudBuffer(VkImageView view) {
+    m_cloudView = view;
+    if (m_descriptorSet != VK_NULL_HANDLE) {
+        updateDescriptors();
+    }
+}
+
 void SkyPass::setHDROutput(VkImageView view, VkImage image) {
     m_hdrView  = view;
     m_hdrImage = image;
@@ -136,6 +147,7 @@ void SkyPass::setHDROutput(VkImageView view, VkImage image) {
 // ---------------------------------------------------------------------------
 
 bool SkyPass::createSampler() {
+    // Depth sampler: NEAREST, no compare
     VkSamplerCreateInfo si{};
     si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     si.magFilter    = VK_FILTER_NEAREST;
@@ -143,9 +155,20 @@ bool SkyPass::createSampler() {
     si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.compareEnable = VK_FALSE;  // plain depth sampling (r = depth value in [0,1])
+    si.compareEnable = VK_FALSE;
     si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-    return vkCreateSampler(m_device, &si, nullptr, &m_sampler) == VK_SUCCESS;
+    if (vkCreateSampler(m_device, &si, nullptr, &m_sampler) != VK_SUCCESS) return false;
+
+    // Linear sampler: for cloud buffer (bilinear upscale from half-res)
+    VkSamplerCreateInfo ls{};
+    ls.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ls.magFilter    = VK_FILTER_LINEAR;
+    ls.minFilter    = VK_FILTER_LINEAR;
+    ls.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ls.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ls.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ls.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    return vkCreateSampler(m_device, &ls, nullptr, &m_linearSampler) == VK_SUCCESS;
 }
 
 bool SkyPass::createRenderPass() {
@@ -225,18 +248,22 @@ void SkyPass::destroyFramebuffer() {
 }
 
 bool SkyPass::createDescriptors() {
-    // Binding 0: depth buffer sampler
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding         = 0;
-    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 0: depth buffer (NEAREST, DEPTH_STENCIL_READ_ONLY)
+    // Binding 1: cloud buffer (LINEAR, GENERAL — half-res RGBA16F)
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding         = 0;
+    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding         = 1;
+    bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings    = &binding;
-
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings    = bindings.data();
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr,
                                     &m_descriptorLayout) != VK_SUCCESS) {
         return false;
@@ -244,7 +271,7 @@ bool SkyPass::createDescriptors() {
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 1;
+    poolSize.descriptorCount = 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -269,23 +296,44 @@ bool SkyPass::createDescriptors() {
 void SkyPass::updateDescriptors() {
     if (m_descriptorSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
 
-    VkDescriptorImageInfo imgInfo{};
-    imgInfo.sampler     = m_sampler;
-    imgInfo.imageView   = m_depthView;
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    std::vector<VkWriteDescriptorSet> writes;
 
-    // If depth view not set yet, skip (will be updated when set)
-    if (m_depthView == VK_NULL_HANDLE) return;
+    // Binding 0: depth buffer
+    VkDescriptorImageInfo depthInfo{};
+    depthInfo.sampler     = m_sampler;
+    depthInfo.imageView   = m_depthView;
+    depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    if (m_depthView != VK_NULL_HANDLE) {
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet          = m_descriptorSet;
+        w.dstBinding      = 0;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.descriptorCount = 1;
+        w.pImageInfo      = &depthInfo;
+        writes.push_back(w);
+    }
 
-    VkWriteDescriptorSet write{};
-    write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet          = m_descriptorSet;
-    write.dstBinding      = 0;
-    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.descriptorCount = 1;
-    write.pImageInfo      = &imgInfo;
+    // Binding 1: cloud buffer (GENERAL layout, linear sampler)
+    VkDescriptorImageInfo cloudInfo{};
+    cloudInfo.sampler     = m_linearSampler;
+    cloudInfo.imageView   = m_cloudView;
+    cloudInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    if (m_cloudView != VK_NULL_HANDLE && m_linearSampler != VK_NULL_HANDLE) {
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet          = m_descriptorSet;
+        w.dstBinding      = 1;
+        w.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w.descriptorCount = 1;
+        w.pImageInfo      = &cloudInfo;
+        writes.push_back(w);
+    }
 
-    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    if (!writes.empty()) {
+        vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
+    }
 }
 
 bool SkyPass::createPipeline() {

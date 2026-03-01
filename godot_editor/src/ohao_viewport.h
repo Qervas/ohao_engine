@@ -253,6 +253,20 @@ public:
     void set_sky_intensity(float intensity);
     float get_sky_intensity() const { return m_render_settings.getSkyIntensity(); }
 
+    // Cloud settings
+    void set_cloud_enabled(bool enabled);
+    bool get_cloud_enabled() const { return m_render_settings.getCloudEnabled(); }
+    void set_cloud_coverage(float v);
+    float get_cloud_coverage() const { return m_render_settings.getCloudCoverage(); }
+    void set_cloud_density(float v);
+    float get_cloud_density() const { return m_render_settings.getCloudDensity(); }
+    void set_cloud_altitude_min(float v);
+    float get_cloud_altitude_min() const { return m_render_settings.getCloudAltMin(); }
+    void set_cloud_altitude_max(float v);
+    float get_cloud_altitude_max() const { return m_render_settings.getCloudAltMax(); }
+    void set_cloud_speed(float v);
+    float get_cloud_speed() const { return m_render_settings.getCloudSpeed(); }
+
     // === Physics Controls ===
     void play_physics();
     void pause_physics();
