@@ -251,6 +251,8 @@ public:
     void set_physics_speed(float speed);
     float get_physics_speed() const { return m_physics.getSpeed(); }
     bool is_physics_playing() const { return m_physics.isPlaying(); }
+    void set_gravity(Vector3 gravity);
+    Vector3 get_gravity() const;
 
     // === Raycasting ===
     Dictionary cast_ray(const Vector3& origin, const Vector3& direction, float max_distance, int layer_mask = 0xFFFF);

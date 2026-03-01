@@ -47,6 +47,20 @@ static func build(vp, desc: Dictionary) -> void:
 			for key in r:
 				vp.call("set_" + key, r[key])
 
+	# Apply control template if specified
+	# "control": "fps"  or  "control": {"template": "fps", "move_speed": 8.0}
+	if desc.has("control"):
+		var c = desc["control"]
+		var overrides: Dictionary = desc.get("control_params", {})
+		if c is String:
+			OhaoControl.apply(vp, c, overrides)
+		elif c is Dictionary:
+			var tname: String = c.get("template", "orbit")
+			var c_copy := c.duplicate()
+			c_copy.erase("template")
+			c_copy.merge(overrides, true)
+			OhaoControl.apply(vp, tname, c_copy)
+
 	# Attach in-game settings panel if requested
 	if desc.get("settings_panel", false):
 		var PanelClass = load("res://addons/ohao_helpers/ohao_settings_panel.gd")

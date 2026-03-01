@@ -115,28 +115,35 @@ void PostProcessingPipeline::executeSSAO(VkCommandBuffer cmd, uint32_t frameInde
 void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     m_didExecute = false;
 
-    // Skip if no HDR input available
     if (m_hdrInputView == VK_NULL_HANDLE) return;
 
     VkImageView currentInput = m_hdrInputView;
 
-    // ── 1. Volumetric Fog (compute) ────────────────────────────────────
-    if (m_volumetricsEnabled && m_volumetricPass) {
-        m_volumetricPass->execute(cmd, frameIndex);
-        // Output in SHADER_READ_ONLY_OPTIMAL via getScatteringView()
+    // ── 1. SSR (Screen-Space Reflections) ─────────────────────────────
+    VkImageView ssrOutput = VK_NULL_HANDLE;
+    if (m_ssrEnabled && m_ssrPass) {
+        m_ssrPass->execute(cmd, frameIndex);
+        ssrOutput = m_ssrPass->getReflectionView();
     }
 
-    // ── 2. Composite (merge volumetric fog into HDR) ───────────────────
-    if (m_volumetricsEnabled && m_volumetricPass &&
+    // ── 2. Volumetric Fog ─────────────────────────────────────────────
+    VkImageView volOutput = VK_NULL_HANDLE;
+    if (m_volumetricsEnabled && m_volumetricPass) {
+        m_volumetricPass->execute(cmd, frameIndex);
+        volOutput = m_volumetricPass->getScatteringView();
+    }
+
+    // ── 3. Composite (merge SSR reflections + volumetric fog into HDR) ─
+    if ((ssrOutput != VK_NULL_HANDLE || volOutput != VK_NULL_HANDLE) &&
         m_compositePipeline != VK_NULL_HANDLE && m_intermediateHDRView != VK_NULL_HANDLE) {
-        VkImageView volView = m_volumetricPass->getScatteringView();
         uint32_t flags = 0;
-        if (volView != VK_NULL_HANDLE) flags |= 2;  // bit 1 = volumetric
-        executeComposite(cmd, currentInput, VK_NULL_HANDLE, volView, flags);
+        if (ssrOutput != VK_NULL_HANDLE) flags |= 1;  // bit 0 = SSR
+        if (volOutput  != VK_NULL_HANDLE) flags |= 2;  // bit 1 = volumetric
+        executeComposite(cmd, currentInput, ssrOutput, volOutput, flags);
         currentInput = m_intermediateHDRView;
     }
 
-    // ── 3. Bloom ───────────────────────────────────────────────────────
+    // ── 4. Bloom ──────────────────────────────────────────────────────
     float bloomStrength = 0.0f;
     if (m_bloomEnabled && m_bloomPass) {
         m_bloomPass->setInputImage(currentInput);
@@ -144,24 +151,38 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         bloomStrength = 1.0f;
     }
 
-    // ── 4. TAA (temporal anti-aliasing) ────────────────────────────────
+    // ── 5. Motion Blur ────────────────────────────────────────────────
+    if (m_motionBlurEnabled && m_motionBlurPass) {
+        m_motionBlurPass->setColorBuffer(currentInput);
+        m_motionBlurPass->updateDescriptorSet();
+        m_motionBlurPass->execute(cmd, frameIndex);
+        VkImageView mbOut = m_motionBlurPass->getOutputView();
+        if (mbOut != VK_NULL_HANDLE) currentInput = mbOut;
+    }
+
+    // ── 6. TAA (temporal anti-aliasing) ───────────────────────────────
     if (m_taaEnabled && m_taaPass) {
         m_taaPass->setCurrentFrame(currentInput);
         m_taaPass->execute(cmd, frameIndex);
         VkImageView taaOutput = m_taaPass->getOutputView();
-        if (taaOutput != VK_NULL_HANDLE) {
-            currentInput = taaOutput;
-        }
+        if (taaOutput != VK_NULL_HANDLE) currentInput = taaOutput;
     }
 
-    // ── 5. Tonemapping: HDR → LDR ─────────────────────────────────────
+    // ── 7. DoF (Depth of Field) ───────────────────────────────────────
+    if (m_dofEnabled && m_dofPass) {
+        m_dofPass->setColorBuffer(currentInput);
+        m_dofPass->updateDescriptorSet();
+        m_dofPass->execute(cmd, frameIndex);
+        VkImageView dofOut = m_dofPass->getOutputView();
+        if (dofOut != VK_NULL_HANDLE) currentInput = dofOut;
+    }
+
+    // ── 8. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
         m_tonemapFramebuffer != VK_NULL_HANDLE && m_tonemapDescSet != VK_NULL_HANDLE) {
 
-        // Rebind tonemapping input to final chain output
         updateTonemapInput(currentInput);
 
-        // Update bloom binding if bloom produced output
         if (bloomStrength > 0.0f && m_bloomPass) {
             VkImageView bloomView = m_bloomPass->getBloomOutput();
             if (bloomView != VK_NULL_HANDLE) {

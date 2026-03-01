@@ -93,6 +93,12 @@ func settings() -> GDScript:
 	return load("res://addons/ohao_helpers/ohao_settings.gd")
 
 
+## Get the control template system (static class).
+## OhaoControl.apply(vp, "fps") / OhaoControl.list() / OhaoControl.recommended_for([...])
+func control() -> GDScript:
+	return load("res://addons/ohao_helpers/ohao_control.gd")
+
+
 ## Create an in-game settings panel and optionally add it to a parent node.
 func create_settings_panel(parent: Node = null) -> CanvasLayer:
 	var PanelClass = load("res://addons/ohao_helpers/ohao_settings_panel.gd")

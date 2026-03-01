@@ -262,6 +262,8 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_physics_speed"), &OhaoViewport::get_physics_speed);
     ClassDB::bind_method(D_METHOD("is_physics_playing"), &OhaoViewport::is_physics_playing);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "physics_speed", PROPERTY_HINT_RANGE, "0.1,10.0,0.1"), "set_physics_speed", "get_physics_speed");
+    ClassDB::bind_method(D_METHOD("set_gravity", "gravity"), &OhaoViewport::set_gravity);
+    ClassDB::bind_method(D_METHOD("get_gravity"), &OhaoViewport::get_gravity);
 
     // === Raycasting ===
     ClassDB::bind_method(D_METHOD("cast_ray", "origin", "direction", "max_distance", "layer_mask"), &OhaoViewport::cast_ray, DEFVAL(0xFFFF));
@@ -965,6 +967,24 @@ void OhaoViewport::pause_physics()             { m_physics.pause(m_scene); }
 void OhaoViewport::step_physics()              { m_physics.step(m_scene); }
 void OhaoViewport::stop_physics()              { m_physics.stop(m_scene); }
 void OhaoViewport::set_physics_speed(float s)  { m_physics.setSpeed(s); }
+
+void OhaoViewport::set_gravity(Vector3 gravity) {
+    if (m_scene) {
+        auto* world = m_scene->getPhysicsWorld();
+        if (world) world->setGravity(glm::vec3(gravity.x, gravity.y, gravity.z));
+    }
+}
+
+Vector3 OhaoViewport::get_gravity() const {
+    if (m_scene) {
+        auto* world = m_scene->getPhysicsWorld();
+        if (world) {
+            auto g = world->getGravity();
+            return Vector3(g.x, g.y, g.z);
+        }
+    }
+    return Vector3(0.0f, -9.81f, 0.0f);
+}
 
 // ===== Raycasting (delegates to PhysicsController) =====
 

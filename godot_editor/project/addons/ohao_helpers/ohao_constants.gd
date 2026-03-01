@@ -90,6 +90,16 @@ const FALLOFF_LINEAR := 0      # strength * (1 - dist/radius)
 const FALLOFF_QUADRATIC := 1   # strength * (1 - dist/radius)^2
 const FALLOFF_CONSTANT := 2    # full strength regardless of distance
 
+# Control templates (OhaoControl)
+const CONTROL_FPS := "fps"
+const CONTROL_ORBIT := "orbit"
+const CONTROL_RTS := "rts"
+const CONTROL_PHYSICS_SANDBOX := "physics_sandbox"
+const CONTROL_CINEMATIC := "cinematic"
+const CONTROL_VEHICLE := "vehicle"
+const CONTROL_TOP_DOWN := "top_down"
+const CONTROL_PUZZLE := "puzzle"
+
 # Audio categories (OhaoViewport)
 const AUDIO_SFX := 0
 const AUDIO_MUSIC := 1
