@@ -79,6 +79,7 @@ public:
     // Execute SSGI separately (called before lighting pass by DeferredRenderer)
     void executeSSGI(VkCommandBuffer cmd, uint32_t frameIndex);
     VkImageView getSSGIOutput() const;
+    VkImage getSSGIImage() const;
     VkSampler getSSGISampler() const;
 
     // SSR configuration
@@ -118,6 +119,7 @@ public:
     VkImage getOutputImage() const { return m_finalOutput; }
     bool didExecute() const { return m_didExecute; }
     VkImageView getSSAOOutput() const;
+    VkImage getSSAOImage() const;
     VkSampler getSSAOSampler() const;
     VkImageView getSSROutput() const;
     VkImageView getVolumetricOutput() const;

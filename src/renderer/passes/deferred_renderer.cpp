@@ -103,6 +103,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         }
     }
 
+    // Initialize render graph and import all pass outputs
+    importGraphTextures();
+
     std::cout << "DeferredRenderer: Fully initialized" << std::endl;
     return true;
 }
@@ -111,6 +114,8 @@ void DeferredRenderer::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
 
     vkDeviceWaitIdle(m_device);
+
+    m_renderGraph.shutdown();
 
     if (m_particleSystem) {
         m_particleSystem->cleanup();
@@ -202,50 +207,101 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // Execute render passes in order
+    // --- Render Graph: barrier-tracked passes (CSM → GBuffer → SSAO → SSGI → Lighting) ---
+    // The graph computes inter-pass image layout barriers centrally.
+    // Each pass still manages its own VkRenderPass/VkFramebuffer internally.
 
-    // 1. Shadow pass (CSM)
+    m_renderGraph.reset();
+
+    // 1. Shadow pass (CSM) — writes shadow map, leaves at DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     if (m_csmPass) {
-        m_csmPass->execute(cmd, frameIndex);
+        m_renderGraph.addPass("CSM",
+            [&](PassBuilder& builder) {
+                if (m_graphShadowHandle.isValid())
+                    builder.declareDepthWrite(m_graphShadowHandle,
+                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            },
+            [&](VkCommandBuffer c) { m_csmPass->execute(c, frameIndex); });
     }
 
-    // 2. G-Buffer pass
+    // 2. G-Buffer pass — writes MRT outputs; render pass finalLayouts are:
+    //    color buffers → SHADER_READ_ONLY_OPTIMAL, depth → DEPTH_STENCIL_READ_ONLY_OPTIMAL
     if (m_gbufferPass) {
-        m_gbufferPass->execute(cmd, frameIndex);
+        m_renderGraph.addPass("GBuffer",
+            [&](PassBuilder& builder) {
+                if (m_graphNormalHandle.isValid())
+                    builder.declareColorWrite(m_graphNormalHandle,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                if (m_graphAlbedoHandle.isValid())
+                    builder.declareColorWrite(m_graphAlbedoHandle,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                if (m_graphDepthHandle.isValid())
+                    builder.declareDepthWrite(m_graphDepthHandle,
+                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            },
+            [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); });
     }
 
-    // 3. SSAO (pre-lighting, computed as part of post-processing pipeline)
+    // 3. SSAO — reads normal buffer (already at SHADER_READ_ONLY after GBuffer).
+    //    SSAO self-manages its output transitions internally (UNDEFINED→GENERAL→SHADER_READ_ONLY).
     if (m_postProcessing && m_gbufferPass) {
-        m_postProcessing->executeSSAO(cmd, frameIndex);
+        m_renderGraph.addComputePass("SSAO",
+            [&](PassBuilder& builder) {
+                if (m_graphNormalHandle.isValid())
+                    builder.readComputeTexture(m_graphNormalHandle);
+            },
+            [&](VkCommandBuffer c) {
+                m_postProcessing->executeSSAO(c, frameIndex);
+                if (m_lightingPass) {
+                    VkImageView ssaoView = m_postProcessing->getSSAOOutput();
+                    VkSampler ssaoSampler = m_postProcessing->getSSAOSampler();
+                    if (ssaoView != VK_NULL_HANDLE && ssaoSampler != VK_NULL_HANDLE)
+                        m_lightingPass->setSSAOTexture(ssaoView, ssaoSampler);
+                }
+            });
 
-        // Pass SSAO result to lighting
-        if (m_lightingPass) {
-            VkImageView ssaoView = m_postProcessing->getSSAOOutput();
-            VkSampler ssaoSampler = m_postProcessing->getSSAOSampler();
-            if (ssaoView != VK_NULL_HANDLE && ssaoSampler != VK_NULL_HANDLE) {
-                m_lightingPass->setSSAOTexture(ssaoView, ssaoSampler);
-            }
-        }
+        // 3.5. SSGI — reads normal + albedo (both at SHADER_READ_ONLY after GBuffer).
+        m_renderGraph.addComputePass("SSGI",
+            [&](PassBuilder& builder) {
+                if (m_graphNormalHandle.isValid())
+                    builder.readComputeTexture(m_graphNormalHandle);
+                if (m_graphAlbedoHandle.isValid())
+                    builder.readComputeTexture(m_graphAlbedoHandle);
+            },
+            [&](VkCommandBuffer c) {
+                m_postProcessing->executeSSGI(c, frameIndex);
+                if (m_lightingPass) {
+                    VkImageView ssgiView = m_postProcessing->getSSGIOutput();
+                    VkSampler ssgiSampler = m_postProcessing->getSSGISampler();
+                    if (ssgiView != VK_NULL_HANDLE && ssgiSampler != VK_NULL_HANDLE)
+                        m_lightingPass->setSSGITexture(ssgiView, ssgiSampler);
+                }
+            });
     }
 
-    // 3.5. SSGI (pre-lighting, half-res indirect lighting)
-    if (m_postProcessing && m_gbufferPass) {
-        m_postProcessing->executeSSGI(cmd, frameIndex);
-
-        // Pass SSGI result to lighting
-        if (m_lightingPass) {
-            VkImageView ssgiView = m_postProcessing->getSSGIOutput();
-            VkSampler ssgiSampler = m_postProcessing->getSSGISampler();
-            if (ssgiView != VK_NULL_HANDLE && ssgiSampler != VK_NULL_HANDLE) {
-                m_lightingPass->setSSGITexture(ssgiView, ssgiSampler);
-            }
-        }
-    }
-
-    // 4. Deferred lighting pass
+    // 4. Deferred lighting — reads GBuffer + shadow. Key barrier: shadow map
+    //    DEPTH_STENCIL_ATTACHMENT_OPTIMAL → SHADER_READ_ONLY_OPTIMAL (was missing before).
     if (m_lightingPass && m_gbufferPass) {
-        m_lightingPass->execute(cmd, frameIndex);
+        m_renderGraph.addPass("DeferredLighting",
+            [&](PassBuilder& builder) {
+                if (m_graphNormalHandle.isValid())
+                    builder.readTexture(m_graphNormalHandle,
+                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                if (m_graphAlbedoHandle.isValid())
+                    builder.readTexture(m_graphAlbedoHandle,
+                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                if (m_graphShadowHandle.isValid())
+                    builder.readTexture(m_graphShadowHandle,
+                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                if (m_graphLightingHandle.isValid())
+                    builder.declareColorWrite(m_graphLightingHandle,
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            },
+            [&](VkCommandBuffer c) { m_lightingPass->execute(c, frameIndex); });
     }
+
+    m_renderGraph.compile();
+    m_renderGraph.execute(cmd);
 
     // 4.5. Particle system (forward pass over HDR, before post-processing)
     if (m_particleSystem && m_lightingPass) {
@@ -382,6 +438,9 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         m_postProcessing->setAlbedoBuffer(m_gbufferPass->getAlbedoView());
         m_postProcessing->setPositionBuffer(m_gbufferPass->getPositionView());
     }
+
+    // Re-import all textures with new dimensions (passes reallocated their images on resize)
+    importGraphTextures();
 }
 
 void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
@@ -535,6 +594,86 @@ void DeferredRenderer::spawnParticles(const glm::vec3& position, ParticleType ty
     }
 
     m_pendingEmits.push(config);
+}
+
+void DeferredRenderer::importGraphTextures() {
+    // Reinitialize the graph to clear previous imported handles.
+    m_renderGraph.shutdown();
+    m_renderGraph.initialize(m_device, m_physicalDevice);
+
+    // Reset handles
+    m_graphDepthHandle   = TextureHandle::invalid();
+    m_graphNormalHandle  = TextureHandle::invalid();
+    m_graphAlbedoHandle  = TextureHandle::invalid();
+    m_graphShadowHandle  = TextureHandle::invalid();
+    m_graphSSAOHandle    = TextureHandle::invalid();
+    m_graphSSGIHandle    = TextureHandle::invalid();
+    m_graphLightingHandle = TextureHandle::invalid();
+
+    uint32_t w = m_width  > 0 ? m_width  : 1920u;
+    uint32_t h = m_height > 0 ? m_height : 1080u;
+
+    if (m_gbufferPass) {
+        if (m_gbufferPass->getDepthImage() != VK_NULL_HANDLE) {
+            m_graphDepthHandle = m_renderGraph.importTexture(
+                "gbuffer_depth",
+                m_gbufferPass->getDepthImage(), m_gbufferPass->getDepthView(),
+                m_gbufferPass->getDepthFormat(), w, h,
+                VK_IMAGE_LAYOUT_UNDEFINED);
+        }
+        if (m_gbufferPass->getNormalImage() != VK_NULL_HANDLE) {
+            m_graphNormalHandle = m_renderGraph.importTexture(
+                "gbuffer_normal",
+                m_gbufferPass->getNormalImage(), m_gbufferPass->getNormalView(),
+                m_gbufferPass->getNormalFormat(), w, h,
+                VK_IMAGE_LAYOUT_UNDEFINED);
+        }
+        if (m_gbufferPass->getAlbedoImage() != VK_NULL_HANDLE) {
+            m_graphAlbedoHandle = m_renderGraph.importTexture(
+                "gbuffer_albedo",
+                m_gbufferPass->getAlbedoImage(), m_gbufferPass->getAlbedoView(),
+                m_gbufferPass->getAlbedoFormat(), w, h,
+                VK_IMAGE_LAYOUT_UNDEFINED);
+        }
+    }
+
+    if (m_csmPass && m_csmPass->getShadowMapImage() != VK_NULL_HANDLE) {
+        // CSM shadow map is an array image; we import the full-array view.
+        // Width/height reflect the per-layer size (SHADOW_MAP_SIZE x SHADOW_MAP_SIZE).
+        m_graphShadowHandle = m_renderGraph.importTexture(
+            "csm_shadow",
+            m_csmPass->getShadowMapImage(), m_csmPass->getShadowMapArrayView(),
+            VK_FORMAT_D32_SFLOAT,
+            CSMPass::SHADOW_MAP_SIZE, CSMPass::SHADOW_MAP_SIZE,
+            VK_IMAGE_LAYOUT_UNDEFINED);
+    }
+
+    if (m_postProcessing) {
+        VkImage ssaoImg = m_postProcessing->getSSAOImage();
+        if (ssaoImg != VK_NULL_HANDLE) {
+            m_graphSSAOHandle = m_renderGraph.importTexture(
+                "ssao_output", ssaoImg, m_postProcessing->getSSAOOutput(),
+                VK_FORMAT_R8_UNORM, w, h, VK_IMAGE_LAYOUT_UNDEFINED);
+        }
+        VkImage ssgiImg = m_postProcessing->getSSGIImage();
+        if (ssgiImg != VK_NULL_HANDLE) {
+            m_graphSSGIHandle = m_renderGraph.importTexture(
+                "ssgi_output", ssgiImg, m_postProcessing->getSSGIOutput(),
+                VK_FORMAT_R16G16B16A16_SFLOAT, w / 2, h / 2,
+                VK_IMAGE_LAYOUT_UNDEFINED);
+        }
+    }
+
+    if (m_lightingPass && m_lightingPass->getOutputImage() != VK_NULL_HANDLE) {
+        m_graphLightingHandle = m_renderGraph.importTexture(
+            "lighting_output",
+            m_lightingPass->getOutputImage(), m_lightingPass->getOutputView(),
+            VK_FORMAT_R16G16B16A16_SFLOAT, w, h,
+            VK_IMAGE_LAYOUT_UNDEFINED);
+    }
+
+    std::cout << "DeferredRenderer: RenderGraph re-imported textures ("
+              << w << "x" << h << ")" << std::endl;
 }
 
 bool DeferredRenderer::createParticleRenderPass() {

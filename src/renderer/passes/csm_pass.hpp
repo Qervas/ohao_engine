@@ -43,6 +43,9 @@ public:
     VkImageView getShadowMapArrayView() const { return m_shadowMapArrayView; }
     VkSampler getShadowSampler() const { return m_shadowSampler; }
 
+    // VkImage handle for render graph import
+    VkImage getShadowMapImage() const { return m_shadowMap; }
+
     // Get cascade data for shader
     const CascadeData& getCascadeData() const { return m_cascadeData; }
     VkBuffer getCascadeBuffer() const { return m_cascadeBuffer; }

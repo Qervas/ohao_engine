@@ -345,6 +345,11 @@ VkImageView PostProcessingPipeline::getSSAOOutput() const {
     return VK_NULL_HANDLE;
 }
 
+VkImage PostProcessingPipeline::getSSAOImage() const {
+    if (m_ssaoPass) return m_ssaoPass->getOutputImage();
+    return VK_NULL_HANDLE;
+}
+
 VkSampler PostProcessingPipeline::getSSAOSampler() const {
     if (m_ssaoPass) return m_ssaoPass->getSampler();
     return VK_NULL_HANDLE;
@@ -384,6 +389,11 @@ void PostProcessingPipeline::executeSSGI(VkCommandBuffer cmd, uint32_t frameInde
 
 VkImageView PostProcessingPipeline::getSSGIOutput() const {
     if (m_ssgiPass) return m_ssgiPass->getOutputView();
+    return VK_NULL_HANDLE;
+}
+
+VkImage PostProcessingPipeline::getSSGIImage() const {
+    if (m_ssgiPass) return m_ssgiPass->getOutputImage();
     return VK_NULL_HANDLE;
 }
 

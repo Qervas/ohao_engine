@@ -35,6 +35,7 @@ public:
 
     // Get output (half resolution RGBA16F)
     VkImageView getOutputView() const { return m_giOutputView; }
+    VkImage getOutputImage() const { return m_giOutput; }
     VkSampler getSampler() const { return m_sampler; }
 
 private:

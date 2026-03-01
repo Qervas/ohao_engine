@@ -138,6 +138,32 @@ void PassBuilder::writeBuffer(BufferHandle handle) {
     m_graph.addPassWrite(m_passIndex, access);
 }
 
+void PassBuilder::declareColorWrite(TextureHandle handle, VkImageLayout finalLayout) {
+    ResourceAccess access{};
+    access.texture = handle;
+    access.textureUsage = TextureUsage::ColorAttachment;
+    access.stageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    access.accessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    access.imageLayout = finalLayout;
+    m_graph.addPassWrite(m_passIndex, access);
+    // NOT added to colorAttachments — the pass manages its own VkRenderPass
+}
+
+void PassBuilder::declareDepthWrite(TextureHandle handle, VkImageLayout finalLayout) {
+    ResourceAccess access{};
+    access.texture = handle;
+    access.textureUsage = TextureUsage::DepthAttachment;
+    access.stageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    access.accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    access.imageLayout = finalLayout;
+    m_graph.addPassWrite(m_passIndex, access);
+    // NOT added to depthAttachment — the pass manages its own VkRenderPass
+}
+
+void PassBuilder::readComputeTexture(TextureHandle handle) {
+    readTexture(handle, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+}
+
 void PassBuilder::setComputeOnly() {
     m_graph.m_passes[m_passIndex].type = PassType::Compute;
 }
@@ -209,16 +235,17 @@ void RenderGraph::shutdown() {
 void RenderGraph::addPass(const std::string& name,
                            std::function<void(PassBuilder&)> setup,
                            std::function<void(VkCommandBuffer)> execute) {
+    uint32_t passIdx = static_cast<uint32_t>(m_passes.size());
     RenderPassDef pass{};
     pass.name = name;
-    pass.index = static_cast<uint32_t>(m_passes.size());
+    pass.index = passIdx;
     pass.type = PassType::Graphics;
     pass.executeCallback = std::move(execute);
 
     m_passes.push_back(std::move(pass));
 
     // Run setup to populate resource dependencies
-    PassBuilder builder(*this, pass.index);
+    PassBuilder builder(*this, passIdx);
     setup(builder);
 
     m_compiled = false;
@@ -227,15 +254,16 @@ void RenderGraph::addPass(const std::string& name,
 void RenderGraph::addComputePass(const std::string& name,
                                    std::function<void(PassBuilder&)> setup,
                                    std::function<void(VkCommandBuffer)> execute) {
+    uint32_t passIdx = static_cast<uint32_t>(m_passes.size());
     RenderPassDef pass{};
     pass.name = name;
-    pass.index = static_cast<uint32_t>(m_passes.size());
+    pass.index = passIdx;
     pass.type = PassType::Compute;
     pass.executeCallback = std::move(execute);
 
     m_passes.push_back(std::move(pass));
 
-    PassBuilder builder(*this, pass.index);
+    PassBuilder builder(*this, passIdx);
     setup(builder);
 
     m_compiled = false;
@@ -399,10 +427,16 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
                 imageBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 imageBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 imageBarrier.image = tex.image;
+                // Determine aspect from format, not layout (depth textures can transition
+                // to SHADER_READ_ONLY_OPTIMAL and still need VK_IMAGE_ASPECT_DEPTH_BIT).
+                auto isDepthFormat = [](VkFormat fmt) {
+                    return fmt == VK_FORMAT_D32_SFLOAT ||
+                           fmt == VK_FORMAT_D24_UNORM_S8_UINT ||
+                           fmt == VK_FORMAT_D16_UNORM ||
+                           fmt == VK_FORMAT_D32_SFLOAT_S8_UINT;
+                };
                 imageBarrier.subresourceRange.aspectMask =
-                    (barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL ||
-                     barrier.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)
-                    ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+                    isDepthFormat(tex.format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
                 imageBarrier.subresourceRange.baseMipLevel = 0;
                 imageBarrier.subresourceRange.levelCount = 1;
                 imageBarrier.subresourceRange.baseArrayLayer = 0;
@@ -477,11 +511,11 @@ void RenderGraph::reset() {
     m_compiled = false;
     m_outputHandle = TextureHandle::invalid();
 
-    // Reset layouts for next frame
+    // Reset layouts for next frame (all textures, including imported external ones).
+    // Using UNDEFINED means the first barrier each frame will be UNDEFINED→target,
+    // which is always valid in Vulkan regardless of actual prior layout.
     for (auto& tex : m_physicalTextures) {
-        if (tex.ownsMemory) {
-            tex.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        }
+        tex.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     }
 }
 

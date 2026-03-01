@@ -47,6 +47,20 @@ public:
     VkImageView getVelocityView() const { return m_gbuffer[3].view; }
     VkImageView getDepthView() const { return m_gbuffer[4].view; }
 
+    // VkImage handles for render graph import
+    VkImage getPositionImage() const { return m_gbuffer[0].image; }
+    VkImage getNormalImage() const { return m_gbuffer[1].image; }
+    VkImage getAlbedoImage() const { return m_gbuffer[2].image; }
+    VkImage getVelocityImage() const { return m_gbuffer[3].image; }
+    VkImage getDepthImage() const { return m_gbuffer[4].image; }
+
+    // Format accessors for render graph import
+    VkFormat getPositionFormat() const { return m_gbuffer[0].format; }
+    VkFormat getNormalFormat() const { return m_gbuffer[1].format; }
+    VkFormat getAlbedoFormat() const { return m_gbuffer[2].format; }
+    VkFormat getVelocityFormat() const { return m_gbuffer[3].format; }
+    VkFormat getDepthFormat() const { return m_gbuffer[4].format; }
+
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkFramebuffer getFramebuffer() const { return m_framebuffer; }
 

@@ -54,6 +54,19 @@ public:
     void readBuffer(BufferHandle handle, BufferUsage usage);
     void writeBuffer(BufferHandle handle);
 
+    // Declare that this pass writes a color attachment via its own self-managed VkRenderPass.
+    // finalLayout should match the render pass attachment's finalLayout so barriers are correct.
+    void declareColorWrite(TextureHandle handle,
+                           VkImageLayout finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    // Declare that this pass writes a depth attachment via its own self-managed VkRenderPass.
+    // finalLayout should match the render pass attachment's finalLayout.
+    void declareDepthWrite(TextureHandle handle,
+                           VkImageLayout finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+    // Shorthand: read a texture in a compute shader
+    void readComputeTexture(TextureHandle handle);
+
     // Mark pass as compute-only (no render pass needed)
     void setComputeOnly();
 

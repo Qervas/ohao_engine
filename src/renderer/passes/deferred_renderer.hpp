@@ -7,6 +7,7 @@
 #include "overlay_pass.hpp"
 #include "gizmo_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
+#include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
 #include <memory>
 #include <unordered_map>
@@ -137,6 +138,22 @@ private:
 
     bool createParticleRenderPass();
     bool createParticleFramebuffer();
+
+    // Render graph for centralized barrier tracking
+    RenderGraph m_renderGraph;
+
+    // Imported texture handles (valid after importGraphTextures())
+    TextureHandle m_graphDepthHandle;
+    TextureHandle m_graphNormalHandle;
+    TextureHandle m_graphAlbedoHandle;
+    TextureHandle m_graphShadowHandle;
+    TextureHandle m_graphSSAOHandle;
+    TextureHandle m_graphSSGIHandle;
+    TextureHandle m_graphLightingHandle;
+
+    // (Re-)import all per-pass render targets into the graph.
+    // Called once after initialize() and again after each onResize().
+    void importGraphTextures();
 };
 
 } // namespace ohao

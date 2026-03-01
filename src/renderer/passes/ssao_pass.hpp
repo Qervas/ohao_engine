@@ -29,6 +29,7 @@ public:
 
     // Get output
     VkImageView getOutputView() const { return m_aoOutputView; }
+    VkImage getOutputImage() const { return m_aoOutput; }
     VkSampler getSampler() const { return m_sampler; }
 
 private:
