@@ -105,3 +105,18 @@ if(BUILD_FORCE_TESTS)
     message(STATUS "Building force generator tests")
     add_subdirectory(tests/force_generators)
 endif()
+
+# Shadow system tests — OFF until renderer/lighting/ headers are implemented
+# (tests/shadow_system/ references unified_light.hpp, shader_bindings.hpp, ohao_vk_descriptor_builder.hpp)
+option(BUILD_SHADOW_TESTS "Build shadow system tests" OFF)
+if(BUILD_SHADOW_TESTS)
+    message(STATUS "Building shadow system tests")
+    add_subdirectory(tests/shadow_system)
+endif()
+
+# Engine subsystem tests (EventBus, CommandHistory, Scene, SceneSerializer)
+option(BUILD_ENGINE_TESTS "Build engine subsystem tests" ON)
+if(BUILD_ENGINE_TESTS)
+    message(STATUS "Building engine subsystem tests")
+    add_subdirectory(tests/engine)
+endif()
