@@ -1,6 +1,27 @@
 # OHAO API Keyword Index
-# Format:  keyword, keyword2 → file.md#section
-# Usage:   Grep("your_keyword", "docs/INDEX.md") → read that file#section
+# Format:  keyword, keyword2 → file.md#section  OR  http://localhost:9756/path
+# Usage:   Grep("your_keyword", "docs/INDEX.md") → read that file#section or call endpoint
+
+# === LIVE ENGINE HTTP SERVER (OhaoServer autoload, port 9756) ===
+# Query or modify the running engine directly — no code required.
+# WebFetch("http://localhost:9756/", "list all endpoints")
+live server, http server, runtime, OhaoServer, port 9756 → http://localhost:9756/
+list actors, scene state, what is in the scene → http://localhost:9756/scene (GET)
+add actor, spawn object, create cube, create sphere → http://localhost:9756/scene/actor (POST)
+remove actor, delete object → http://localhost:9756/scene/actor?name=X (DELETE)
+build scene, scene from dict, template → http://localhost:9756/scene/build (POST)
+clear scene, reset scene → http://localhost:9756/scene/clear (POST)
+get camera, camera position, camera state → http://localhost:9756/camera (GET)
+move camera, set camera, camera rotation → http://localhost:9756/camera (POST)
+get effects, effect state, what effects are on → http://localhost:9756/effects (GET)
+set effects, enable bloom, enable ssao, configure post-processing → http://localhost:9756/effects (POST)
+apply rendering preset, horror, cyberpunk → http://localhost:9756/effects/preset (POST)
+physics state, is physics running → http://localhost:9756/physics (GET)
+start physics, play simulation → http://localhost:9756/physics/play (POST)
+pause physics → http://localhost:9756/physics/pause (POST)
+step physics, advance N frames → http://localhost:9756/physics/step (POST)
+stop physics, reset simulation → http://localhost:9756/physics/stop (POST)
+raycast from server, cast ray, query hit → http://localhost:9756/physics/raycast (POST)
 
 # === PHYSICS — Bodies ===
 body, rigid body, physics body, dynamic, static, kinematic, mass, friction, restitution → physics.md#bodies

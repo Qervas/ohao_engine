@@ -23,6 +23,7 @@ config/features=PackedStringArray("4.6", "Forward Plus")
 
 Ohao="*res://addons/ohao_helpers/ohao_helpers.gd"
 OhaoAI="*res://addons/ohao_helpers/ohao_ai_textures.gd"
+OhaoServer="*res://addons/ohao_helpers/ohao_server.gd"
 
 [display]
 

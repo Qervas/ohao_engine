@@ -18,6 +18,7 @@ Grep("scene build", "docs/INDEX.md")→ scene.md#builder
 docs/
   API.md        ← you are here (navigation root, always tiny)
   INDEX.md      ← keyword → file#section map (search here first)
+  server.md     ← live HTTP server :9756 — read/write running engine without code
   physics.md    ← bodies, constraints, breaking, grab/throw, character, raycasting
   render.md     ← post-processing effects, materials, viewport toggles
   scene.md      ← scene builder, actors, lights, templates, sync
@@ -33,7 +34,8 @@ docs/
 | Set up a joint/hinge | physics.md#constraints |
 | Grab and throw objects | physics.md#grab |
 | Enable bloom/SSAO | render.md#effects |
-| Build a scene from dict | scene.md#builder |
+| Build a scene from dict | scene.md#builder or POST /scene/build |
+| Inspect live running engine | server.md |
 | Play a sound | audio.md |
 | Raycast from camera | physics.md#queries |
 | FPS player movement | gdscript.md#fps-pattern |
