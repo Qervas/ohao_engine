@@ -63,42 +63,49 @@ const WEATHER_STATES: Dictionary = {
 		"cloud_coverage": 0.00, "cloud_density": 0.45, "cloud_speed": 1.0,
 		"fog_density": 0.000, "fog_scatter": 0.60,
 		"fog_r": 0.70, "fog_g": 0.80, "fog_b": 1.00,
+		"rain_intensity": 0.0,  "wind_x": 0.00,
 	},
 	"partly_cloudy": {
 		"turb_add":  0.6,  "int_mult":  0.88,
 		"cloud_coverage": 0.38, "cloud_density": 0.32, "cloud_speed": 1.5,
 		"fog_density": 0.005, "fog_scatter": 0.50,
 		"fog_r": 0.75, "fog_g": 0.82, "fog_b": 1.00,
+		"rain_intensity": 0.0,  "wind_x": -0.04,
 	},
 	"overcast": {
 		"turb_add":  3.0,  "int_mult":  0.42,
 		"cloud_coverage": 0.87, "cloud_density": 0.62, "cloud_speed": 2.0,
 		"fog_density": 0.018, "fog_scatter": 0.70,
 		"fog_r": 0.65, "fog_g": 0.70, "fog_b": 0.75,
+		"rain_intensity": 0.0,  "wind_x": -0.06,
 	},
 	"foggy": {
 		"turb_add":  2.0,  "int_mult":  0.55,
 		"cloud_coverage": 0.55, "cloud_density": 0.30, "cloud_speed": 0.3,
 		"fog_density": 0.065, "fog_scatter": 0.92,
 		"fog_r": 0.80, "fog_g": 0.82, "fog_b": 0.85,
+		"rain_intensity": 0.0,  "wind_x": 0.00,
 	},
 	"rain": {
 		"turb_add":  4.0,  "int_mult":  0.32,
 		"cloud_coverage": 0.90, "cloud_density": 0.75, "cloud_speed": 3.0,
 		"fog_density": 0.030, "fog_scatter": 0.85,
 		"fog_r": 0.50, "fog_g": 0.55, "fog_b": 0.60,
+		"rain_intensity": 0.75, "wind_x": -0.10,
 	},
 	"stormy": {
 		"turb_add":  6.5,  "int_mult":  0.18,
 		"cloud_coverage": 0.96, "cloud_density": 0.90, "cloud_speed": 6.0,
 		"fog_density": 0.045, "fog_scatter": 0.80,
 		"fog_r": 0.28, "fog_g": 0.32, "fog_b": 0.38,
+		"rain_intensity": 1.00, "wind_x": -0.18,
 	},
 	"blizzard": {
 		"turb_add":  3.5,  "int_mult":  0.50,
 		"cloud_coverage": 0.92, "cloud_density": 0.70, "cloud_speed": 4.5,
 		"fog_density": 0.090, "fog_scatter": 0.95,
 		"fog_r": 0.88, "fog_g": 0.90, "fog_b": 0.95,
+		"rain_intensity": 0.0,  "wind_x": -0.12,  # blizzard uses fog, not liquid rain
 	},
 }
 
@@ -253,6 +260,12 @@ static func _apply_state(vp: OhaoViewport, p: Dictionary) -> void:
 	vp.set_volumetric_density(maxf(fog, 0.0))
 	vp.set_volumetric_scattering(p.get("fog_scatter", 0.7))
 	vp.set_fog_color(Color(p.get("fog_r", 0.7), p.get("fog_g", 0.8), p.get("fog_b", 1.0)))
+
+	# Rain
+	var rain: float = p.get("rain_intensity", 0.0)
+	vp.set_rain_enabled(rain > 0.01)
+	vp.set_rain_intensity(maxf(rain, 0.0))
+	vp.set_rain_wind_x(p.get("wind_x", -0.08))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -423,6 +436,12 @@ class _WeatherController extends Node:
 		_vp.set_volumetric_scattering(p.get("fog_scatter", 0.7))
 		_vp.set_fog_color(Color(p.get("fog_r", 0.7), p.get("fog_g", 0.8), p.get("fog_b", 1.0)))
 
+		# Rain
+		var rain: float = p.get("rain_intensity", 0.0)
+		_vp.set_rain_enabled(rain > 0.01)
+		_vp.set_rain_intensity(maxf(rain, 0.0))
+		_vp.set_rain_wind_x(p.get("wind_x", -0.08))
+
 
 	func _lerp_params(a: Dictionary, b: Dictionary, t: float) -> Dictionary:
 		return {
@@ -436,6 +455,8 @@ class _WeatherController extends Node:
 			"fog_r":          lerpf(a.get("fog_r", 0.7), b.get("fog_r", 0.7), t),
 			"fog_g":          lerpf(a.get("fog_g", 0.8), b.get("fog_g", 0.8), t),
 			"fog_b":          lerpf(a.get("fog_b", 1.0), b.get("fog_b", 1.0), t),
+			"rain_intensity": lerpf(a.get("rain_intensity", 0.0), b.get("rain_intensity", 0.0), t),
+			"wind_x":         lerpf(a.get("wind_x", 0.0),         b.get("wind_x", 0.0),         t),
 		}
 
 

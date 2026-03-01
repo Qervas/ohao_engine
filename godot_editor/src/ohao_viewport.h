@@ -260,6 +260,14 @@ public:
     void set_time_of_day(float hours);
     float get_time_of_day() const { return m_time_of_day; }
 
+    // Rain settings
+    void set_rain_enabled(bool enabled);
+    bool get_rain_enabled() const { return m_render_settings.getRainEnabled(); }
+    void set_rain_intensity(float v);
+    float get_rain_intensity() const { return m_render_settings.getRainIntensity(); }
+    void set_rain_wind_x(float v);
+    float get_rain_wind_x() const { return m_render_settings.getRainWindX(); }
+
     // Cloud settings
     void set_cloud_enabled(bool enabled);
     bool get_cloud_enabled() const { return m_render_settings.getCloudEnabled(); }

@@ -114,6 +114,20 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         std::cout << "DeferredRenderer: CloudPass OK" << std::endl;
     }
 
+    // Initialize rain pass (procedural rain streaks, runs after sky pass)
+    m_rainPass = std::make_unique<RainPass>();
+    if (!m_rainPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: RainPass failed (non-fatal)" << std::endl;
+        m_rainPass.reset();
+    } else {
+        if (m_lightingPass) {
+            m_rainPass->setHDROutput(m_lightingPass->getOutputView(),
+                                     m_lightingPass->getOutputImage());
+        }
+        m_rainPass->onResize(m_width, m_height);
+        std::cout << "DeferredRenderer: RainPass OK" << std::endl;
+    }
+
     // Initialize sky pass (Preetham analytical sky, runs after cloud pass)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
@@ -156,6 +170,10 @@ void DeferredRenderer::cleanup() {
         m_particleRenderPass = VK_NULL_HANDLE;
     }
 
+    if (m_rainPass) {
+        m_rainPass->cleanup();
+        m_rainPass.reset();
+    }
     if (m_cloudPass) {
         m_cloudPass->cleanup();
         m_cloudPass.reset();
@@ -361,6 +379,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_skyPass->execute(cmd, frameIndex);
     }
 
+    // 4.65. Rain pass — procedural rain streaks composited into HDR
+    if (m_rainPass) {
+        m_rainPass->setEnabled(m_rainEnabled);
+        m_rainPass->setIntensity(m_rainIntensity);
+        m_rainPass->setWindX(m_rainWindX);
+        m_rainPass->setTime(m_totalTime);
+        m_rainPass->execute(cmd, frameIndex);
+    }
+
     // 4.7. Particle system (forward pass over HDR, before post-processing)
     if (m_particleSystem && m_lightingPass) {
         m_totalTime += m_deltaTime;
@@ -479,6 +506,14 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         m_cloudPass->onResize(width, height);
         if (m_gbufferPass) {
             m_cloudPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        }
+    }
+    if (m_rainPass) {
+        m_rainPass->onResize(width, height);
+        // Reconnect to the reallocated lighting output image/view
+        if (m_lightingPass) {
+            m_rainPass->setHDROutput(m_lightingPass->getOutputView(),
+                                     m_lightingPass->getOutputImage());
         }
     }
     if (m_skyPass) {
@@ -668,6 +703,22 @@ void DeferredRenderer::setCloudAltMax(float v) {
 void DeferredRenderer::setCloudSpeed(float v) {
     m_cloudSpeed = v;
     if (m_cloudPass) m_cloudPass->setSpeed(v);
+}
+
+// Rain API
+void DeferredRenderer::setRainEnabled(bool e) {
+    m_rainEnabled = e;
+    if (m_rainPass) m_rainPass->setEnabled(e);
+}
+
+void DeferredRenderer::setRainIntensity(float v) {
+    m_rainIntensity = glm::clamp(v, 0.0f, 1.0f);
+    if (m_rainPass) m_rainPass->setIntensity(m_rainIntensity);
+}
+
+void DeferredRenderer::setRainWindX(float v) {
+    m_rainWindX = glm::clamp(v, -1.0f, 1.0f);
+    if (m_rainPass) m_rainPass->setWindX(m_rainWindX);
 }
 
 void DeferredRenderer::setWireframeEnabled(bool enabled) {

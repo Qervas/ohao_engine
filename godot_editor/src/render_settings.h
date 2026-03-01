@@ -118,6 +118,14 @@ public:
     void setSkyIntensity(float v)         { m_sky_intensity = v; }
     float getSkyIntensity() const         { return m_sky_intensity; }
 
+    // === Rain Settings ===
+    void setRainEnabled(bool v)     { m_rain_enabled   = v; }
+    bool getRainEnabled() const     { return m_rain_enabled; }
+    void setRainIntensity(float v)  { m_rain_intensity = v; }
+    float getRainIntensity() const  { return m_rain_intensity; }
+    void setRainWindX(float v)      { m_rain_wind_x    = v; }
+    float getRainWindX() const      { return m_rain_wind_x; }
+
     // === Cloud Settings ===
     void setCloudEnabled(bool v)          { m_cloud_enabled = v; }
     bool getCloudEnabled() const          { return m_cloud_enabled; }
@@ -190,6 +198,11 @@ private:
     glm::vec3 m_sun_direction = glm::vec3(0.3f, 0.9f, 0.3f);  // normalized, toward sun
     float     m_sky_turbidity = 2.5f;
     float     m_sky_intensity = 1.0f;
+
+    // Rain
+    bool  m_rain_enabled   = false;
+    float m_rain_intensity = 1.0f;
+    float m_rain_wind_x    = -0.08f;
 
     // Clouds
     bool  m_cloud_enabled  = false;

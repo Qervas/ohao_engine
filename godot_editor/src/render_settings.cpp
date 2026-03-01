@@ -76,6 +76,11 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
         deferred->setSunDirection(m_sun_direction);
     }
 
+    // Rain
+    deferred->setRainEnabled(m_rain_enabled);
+    deferred->setRainIntensity(m_rain_intensity);
+    deferred->setRainWindX(m_rain_wind_x);
+
     // Clouds
     deferred->setCloudEnabled(m_cloud_enabled);
     deferred->setCloudCoverage(m_cloud_coverage);

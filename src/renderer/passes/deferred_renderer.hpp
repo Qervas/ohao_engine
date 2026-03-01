@@ -8,6 +8,7 @@
 #include "gizmo_pass.hpp"
 #include "sky_pass.hpp"
 #include "cloud_pass.hpp"
+#include "rain_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
@@ -97,6 +98,14 @@ public:
     void setCloudSpeed(float v);
     float getCloudSpeed() const { return m_cloudSpeed; }
 
+    // Rain configuration
+    void  setRainEnabled(bool e);
+    bool  getRainEnabled() const  { return m_rainEnabled; }
+    void  setRainIntensity(float v);
+    float getRainIntensity() const { return m_rainIntensity; }
+    void  setRainWindX(float v);
+    float getRainWindX() const    { return m_rainWindX; }
+
     // Particle system
     void spawnParticles(const glm::vec3& position, ParticleType type,
                         const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
@@ -125,6 +134,7 @@ private:
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;
     std::unique_ptr<CloudPass> m_cloudPass;
+    std::unique_ptr<RainPass>  m_rainPass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -168,6 +178,11 @@ private:
     float m_cloudAltMin{1500.0f};
     float m_cloudAltMax{8000.0f};
     float m_cloudSpeed{1.0f};
+
+    // Rain state
+    bool  m_rainEnabled{false};
+    float m_rainIntensity{1.0f};
+    float m_rainWindX{-0.08f};
 
     // Particle system
     std::unique_ptr<ParticleSystem> m_particleSystem;
