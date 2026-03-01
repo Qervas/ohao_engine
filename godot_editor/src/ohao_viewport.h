@@ -243,6 +243,16 @@ public:
     void set_taa_blend_factor(float factor);
     float get_taa_blend_factor() const { return m_render_settings.getTAABlendFactor(); }
 
+    // Sky settings
+    void set_sky_enabled(bool enabled);
+    bool get_sky_enabled() const { return m_render_settings.getSkyEnabled(); }
+    void set_sun_direction(const Vector3& dir);
+    Vector3 get_sun_direction() const;
+    void set_sky_turbidity(float turbidity);
+    float get_sky_turbidity() const { return m_render_settings.getSkyTurbidity(); }
+    void set_sky_intensity(float intensity);
+    float get_sky_intensity() const { return m_render_settings.getSkyIntensity(); }
+
     // === Physics Controls ===
     void play_physics();
     void pause_physics();

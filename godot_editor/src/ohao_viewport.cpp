@@ -224,6 +224,25 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_taa_blend_factor"), &OhaoViewport::get_taa_blend_factor);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "taa_blend_factor", PROPERTY_HINT_RANGE, "0.01,0.5,0.01"), "set_taa_blend_factor", "get_taa_blend_factor");
 
+    // === Sky Settings ===
+    ADD_GROUP("Sky", "sky_");
+
+    ClassDB::bind_method(D_METHOD("set_sky_enabled", "enabled"), &OhaoViewport::set_sky_enabled);
+    ClassDB::bind_method(D_METHOD("get_sky_enabled"), &OhaoViewport::get_sky_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "sky_enabled"), "set_sky_enabled", "get_sky_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_sun_direction", "dir"), &OhaoViewport::set_sun_direction);
+    ClassDB::bind_method(D_METHOD("get_sun_direction"), &OhaoViewport::get_sun_direction);
+    ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "sun_direction"), "set_sun_direction", "get_sun_direction");
+
+    ClassDB::bind_method(D_METHOD("set_sky_turbidity", "turbidity"), &OhaoViewport::set_sky_turbidity);
+    ClassDB::bind_method(D_METHOD("get_sky_turbidity"), &OhaoViewport::get_sky_turbidity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sky_turbidity", PROPERTY_HINT_RANGE, "1.0,10.0,0.1"), "set_sky_turbidity", "get_sky_turbidity");
+
+    ClassDB::bind_method(D_METHOD("set_sky_intensity", "intensity"), &OhaoViewport::set_sky_intensity);
+    ClassDB::bind_method(D_METHOD("get_sky_intensity"), &OhaoViewport::get_sky_intensity);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sky_intensity", PROPERTY_HINT_RANGE, "0.0,5.0,0.1"), "set_sky_intensity", "get_sky_intensity");
+
     // === Camera Mode ===
     ADD_GROUP("Camera", "camera_");
 
@@ -831,6 +850,20 @@ void OhaoViewport::set_dof_aperture(float aperture)        { m_render_settings.s
 void OhaoViewport::set_dof_max_blur(float blur)            { m_render_settings.setDoFMaxBlur(blur); m_render_settings.apply(m_renderer); }
 
 void OhaoViewport::set_taa_blend_factor(float factor)      { m_render_settings.setTAABlendFactor(factor); m_render_settings.apply(m_renderer); }
+
+void OhaoViewport::set_sky_enabled(bool enabled)   { m_render_settings.setSkyEnabled(enabled); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_sky_turbidity(float t)      { m_render_settings.setSkyTurbidity(t); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_sky_intensity(float i)      { m_render_settings.setSkyIntensity(i); m_render_settings.apply(m_renderer); }
+
+void OhaoViewport::set_sun_direction(const Vector3& dir) {
+    m_render_settings.setSunDirection(glm::vec3(dir.x, dir.y, dir.z));
+    m_render_settings.apply(m_renderer);
+}
+
+Vector3 OhaoViewport::get_sun_direction() const {
+    glm::vec3 d = m_render_settings.getSunDirection();
+    return Vector3(d.x, d.y, d.z);
+}
 
 // ===== Scene Management (delegates to SceneSync) =====
 

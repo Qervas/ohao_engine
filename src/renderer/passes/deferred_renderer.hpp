@@ -6,6 +6,7 @@
 #include "post_processing_pipeline.hpp"
 #include "overlay_pass.hpp"
 #include "gizmo_pass.hpp"
+#include "sky_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
@@ -73,6 +74,14 @@ public:
     void setGizmoTransform(const glm::mat4& model);
     void setGizmoHighlightedAxis(GizmoAxis axis);
 
+    // Sky configuration
+    void setSkyEnabled(bool enabled);
+    bool getSkyEnabled() const { return m_skyEnabled; }
+    void setSunDirection(const glm::vec3& dir);
+    void setSkyTurbidity(float t);
+    void setSkyIntensity(float i);
+    void setSkyGroundColor(const glm::vec3& c);
+
     // Particle system
     void spawnParticles(const glm::vec3& position, ParticleType type,
                         const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
@@ -99,6 +108,7 @@ private:
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
     std::unique_ptr<OverlayPass> m_overlayPass;
     std::unique_ptr<GizmoPass> m_gizmoPass;
+    std::unique_ptr<SkyPass>   m_skyPass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -127,6 +137,13 @@ private:
     bool m_wireframeEnabled{false};
     bool m_gridEnabled{true};
     bool m_gizmoEnabled{false};
+
+    // Sky state
+    bool      m_skyEnabled{true};
+    glm::vec3 m_skyGroundColor{0.08f, 0.07f, 0.06f};
+    float     m_skyTurbidity{2.5f};
+    float     m_skyIntensity{1.0f};
+    glm::vec3 m_skySunDirection{0.3f, 0.9f, 0.3f};
 
     // Particle system
     std::unique_ptr<ParticleSystem> m_particleSystem;

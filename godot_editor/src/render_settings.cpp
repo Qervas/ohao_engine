@@ -66,6 +66,15 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
 
     // TAA
     pp->setTAABlendFactor(m_taa_blend_factor);
+
+    // Sky (applied to DeferredRenderer directly, not PostProcessingPipeline)
+    deferred->setSkyEnabled(m_sky_enabled);
+    deferred->setSkyTurbidity(m_sky_turbidity);
+    deferred->setSkyIntensity(m_sky_intensity);
+    // Only update sun direction if sky is enabled (avoids overwriting CSM light direction)
+    if (m_sky_enabled) {
+        deferred->setSunDirection(m_sun_direction);
+    }
 }
 
 } // namespace godot

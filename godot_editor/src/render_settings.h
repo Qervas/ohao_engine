@@ -108,6 +108,16 @@ public:
     void setTAABlendFactor(float v)   { m_taa_blend_factor = v; }
     float getTAABlendFactor() const   { return m_taa_blend_factor; }
 
+    // === Sky Settings ===
+    void setSkyEnabled(bool v)            { m_sky_enabled = v; }
+    bool getSkyEnabled() const            { return m_sky_enabled; }
+    void setSunDirection(const glm::vec3& d) { m_sun_direction = d; }
+    glm::vec3 getSunDirection() const     { return m_sun_direction; }
+    void setSkyTurbidity(float v)         { m_sky_turbidity = v; }
+    float getSkyTurbidity() const         { return m_sky_turbidity; }
+    void setSkyIntensity(float v)         { m_sky_intensity = v; }
+    float getSkyIntensity() const         { return m_sky_intensity; }
+
 private:
     int m_render_mode = 0;  // 0=Forward, 1=Deferred
 
@@ -160,6 +170,12 @@ private:
 
     // TAA
     float m_taa_blend_factor = 0.1f;
+
+    // Sky
+    bool      m_sky_enabled   = true;
+    glm::vec3 m_sun_direction = glm::vec3(0.3f, 0.9f, 0.3f);  // normalized, toward sun
+    float     m_sky_turbidity = 2.5f;
+    float     m_sky_intensity = 1.0f;
 };
 
 } // namespace godot

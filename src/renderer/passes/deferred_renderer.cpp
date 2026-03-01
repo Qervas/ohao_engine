@@ -104,6 +104,18 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         }
     }
 
+    // Initialize sky pass (Preetham analytical sky, runs after deferred lighting)
+    m_skyPass = std::make_unique<SkyPass>();
+    if (!m_skyPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: SkyPass failed (non-fatal)" << std::endl;
+        m_skyPass.reset();
+    } else {
+        m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
+                                m_lightingPass->getOutputImage());
+        m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        std::cout << "DeferredRenderer: SkyPass OK" << std::endl;
+    }
+
     // Initialize render graph and import all pass outputs
     importGraphTextures();
 
@@ -131,6 +143,10 @@ void DeferredRenderer::cleanup() {
         m_particleRenderPass = VK_NULL_HANDLE;
     }
 
+    if (m_skyPass) {
+        m_skyPass->cleanup();
+        m_skyPass.reset();
+    }
     if (m_gizmoPass) {
         m_gizmoPass->cleanup();
         m_gizmoPass.reset();
@@ -304,7 +320,19 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     m_renderGraph.compile();
     m_renderGraph.execute(cmd);
 
-    // 4.5. Particle system (forward pass over HDR, before post-processing)
+    // 4.5. Sky pass — fills empty (sky) pixels in the HDR output with Preetham sky
+    if (m_skyPass && m_skyEnabled) {
+        glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
+        m_skyPass->setCameraData(invViewProj, m_cameraPos);
+        // Sun direction: opposite of the directional light direction (light points down → sun up)
+        m_skyPass->setSunDirection(-m_lightDirection);
+        m_skyPass->setTurbidity(m_skyTurbidity);
+        m_skyPass->setSunIntensity(m_skyIntensity);
+        m_skyPass->setGroundColor(m_skyGroundColor);
+        m_skyPass->execute(cmd, frameIndex);
+    }
+
+    // 4.6. Particle system (forward pass over HDR, before post-processing)
     if (m_particleSystem && m_lightingPass) {
         m_totalTime += m_deltaTime;
 
@@ -418,6 +446,17 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_overlayPass) m_overlayPass->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
+    if (m_skyPass) {
+        m_skyPass->onResize(width, height);
+        // Reconnect to reallocated lighting output image/view
+        if (m_lightingPass) {
+            m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
+                                    m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
+        }
+    }
 
     // Recreate particle framebuffer (it references lighting output which was resized)
     if (m_particleSystem && m_particleRenderPass != VK_NULL_HANDLE) {
@@ -537,6 +576,29 @@ glm::vec2 DeferredRenderer::getJitterOffset(uint32_t frameIndex) const {
         return m_postProcessing->getJitterOffset(frameIndex);
     }
     return glm::vec2(0.0f);
+}
+
+void DeferredRenderer::setSkyEnabled(bool enabled) {
+    m_skyEnabled = enabled;
+    if (m_skyPass) m_skyPass->setEnabled(enabled);
+}
+
+void DeferredRenderer::setSunDirection(const glm::vec3& dir) {
+    m_skySunDirection = glm::normalize(dir);
+    // Also update light direction (sun direction = -light direction for CSM)
+    m_lightDirection = -m_skySunDirection;
+}
+
+void DeferredRenderer::setSkyTurbidity(float t) {
+    m_skyTurbidity = t;
+}
+
+void DeferredRenderer::setSkyIntensity(float i) {
+    m_skyIntensity = i;
+}
+
+void DeferredRenderer::setSkyGroundColor(const glm::vec3& c) {
+    m_skyGroundColor = c;
 }
 
 void DeferredRenderer::setWireframeEnabled(bool enabled) {
