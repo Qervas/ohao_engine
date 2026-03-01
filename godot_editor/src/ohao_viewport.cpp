@@ -285,6 +285,14 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_constraint_enabled", "handle", "enabled"), &OhaoViewport::set_constraint_enabled);
     ClassDB::bind_method(D_METHOD("set_constraint_motor", "handle", "enabled", "speed", "max_force"), &OhaoViewport::set_constraint_motor);
     ClassDB::bind_method(D_METHOD("set_constraint_limits", "handle", "min", "max"), &OhaoViewport::set_constraint_limits);
+    ClassDB::bind_method(D_METHOD("set_constraint_breaking", "handle", "max_force", "max_torque"), &OhaoViewport::set_constraint_breaking);
+    ClassDB::bind_method(D_METHOD("get_and_clear_broken_constraints"), &OhaoViewport::get_and_clear_broken_constraints);
+
+    // === Physics Grab/Throw ===
+    ClassDB::bind_method(D_METHOD("grab_body", "body_handle", "world_pos"), &OhaoViewport::grab_body);
+    ClassDB::bind_method(D_METHOD("move_grab", "token", "world_pos"), &OhaoViewport::move_grab);
+    ClassDB::bind_method(D_METHOD("release_grab", "token"), &OhaoViewport::release_grab);
+    ClassDB::bind_method(D_METHOD("throw_grab", "token", "velocity"), &OhaoViewport::throw_grab);
 
     // === Character Controller ===
     ClassDB::bind_method(D_METHOD("create_character", "position", "capsule_radius", "capsule_height", "max_slope_deg", "mass"), &OhaoViewport::create_character, DEFVAL(50.0f), DEFVAL(80.0f));
@@ -1088,6 +1096,40 @@ void OhaoViewport::destroy_constraint(int h)                               { m_p
 void OhaoViewport::set_constraint_enabled(int h, bool e)                   { m_physics.setConstraintEnabled(m_scene, static_cast<uint32_t>(h), e); }
 void OhaoViewport::set_constraint_motor(int h, bool e, float s, float f)   { m_physics.setConstraintMotor(m_scene, static_cast<uint32_t>(h), e, s, f); }
 void OhaoViewport::set_constraint_limits(int h, float mn, float mx)        { m_physics.setConstraintLimits(m_scene, static_cast<uint32_t>(h), mn, mx); }
+
+void OhaoViewport::set_constraint_breaking(int h, float max_force, float max_torque) {
+    m_physics.setConstraintBreaking(m_scene, static_cast<uint32_t>(h), max_force, max_torque);
+}
+
+Array OhaoViewport::get_and_clear_broken_constraints() {
+    Array result;
+    auto broken = m_physics.getAndClearBrokenConstraints(m_scene);
+    for (uint32_t handle : broken) {
+        result.append(static_cast<int>(handle));
+    }
+    return result;
+}
+
+// ===== Physics Grab/Throw =====
+
+int OhaoViewport::grab_body(int body_handle, const Vector3& world_pos) {
+    glm::vec3 pos(world_pos.x, world_pos.y, world_pos.z);
+    return m_physics.grabBody(m_scene, static_cast<uint32_t>(body_handle), pos);
+}
+
+void OhaoViewport::move_grab(int token, const Vector3& world_pos) {
+    glm::vec3 pos(world_pos.x, world_pos.y, world_pos.z);
+    m_physics.moveGrab(m_scene, token, pos);
+}
+
+void OhaoViewport::release_grab(int token) {
+    m_physics.releaseGrab(m_scene, token);
+}
+
+void OhaoViewport::throw_grab(int token, const Vector3& velocity) {
+    glm::vec3 vel(velocity.x, velocity.y, velocity.z);
+    m_physics.throwGrab(m_scene, token, vel);
+}
 
 // ===== Character Controller (delegates to PhysicsController) =====
 

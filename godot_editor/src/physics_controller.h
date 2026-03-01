@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <vector>
+#include <unordered_map>
 #include <cstdint>
 
 // Forward declare OHAO types
@@ -89,6 +90,8 @@ public:
     void setConstraintEnabled(ohao::Scene* scene, uint32_t handle, bool enabled);
     void setConstraintMotor(ohao::Scene* scene, uint32_t handle, bool enabled, float speed, float maxForce);
     void setConstraintLimits(ohao::Scene* scene, uint32_t handle, float minVal, float maxVal);
+    void setConstraintBreaking(ohao::Scene* scene, uint32_t handle, float maxForce, float maxTorque);
+    std::vector<uint32_t> getAndClearBrokenConstraints(ohao::Scene* scene);
 
     // === Character Controller ===
     int createCharacter(ohao::Scene* scene, const glm::vec3& position, float capsuleRadius, float capsuleHeight,
@@ -110,9 +113,25 @@ public:
     void updateCharacter(ohao::Scene* scene, uint32_t handle, float delta,
                          const glm::vec3& gravity, const glm::vec3& movementInput);
 
+    // === Physics Grab/Throw ===
+    // Grab a dynamic body with a mouse-spring (POINT constraint to a kinematic ghost body).
+    // Returns a grab token (>= 0), or -1 on failure.
+    int grabBody(ohao::Scene* scene, uint32_t bodyHandle, const glm::vec3& worldPos);
+    void moveGrab(ohao::Scene* scene, int token, const glm::vec3& worldPos);
+    void releaseGrab(ohao::Scene* scene, int token);
+    void throwGrab(ohao::Scene* scene, int token, const glm::vec3& velocity);
+
 private:
     bool m_playing = false;
     float m_speed = 1.0f;
+
+    struct GrabState {
+        uint32_t grabbedBody   = 0; // the dynamic body being dragged
+        uint32_t ghostBody     = 0; // kinematic anchor body
+        uint32_t constraint    = 0; // POINT constraint linking them
+    };
+    std::unordered_map<int, GrabState> m_grabs;
+    int m_nextGrabToken = 0;
 };
 
 } // namespace godot

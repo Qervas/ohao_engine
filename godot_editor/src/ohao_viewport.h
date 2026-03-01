@@ -278,6 +278,14 @@ public:
     void set_constraint_enabled(int constraint_handle, bool enabled);
     void set_constraint_motor(int constraint_handle, bool enabled, float speed, float max_force);
     void set_constraint_limits(int constraint_handle, float min_val, float max_val);
+    void set_constraint_breaking(int constraint_handle, float max_force, float max_torque);
+    Array get_and_clear_broken_constraints();
+
+    // === Physics Grab/Throw ===
+    int grab_body(int body_handle, const Vector3& world_pos);
+    void move_grab(int token, const Vector3& world_pos);
+    void release_grab(int token);
+    void throw_grab(int token, const Vector3& velocity);
 
     // === Character Controller ===
     int create_character(const Vector3& position, float capsule_radius, float capsule_height,

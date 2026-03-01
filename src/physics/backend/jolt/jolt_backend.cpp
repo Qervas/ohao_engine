@@ -55,6 +55,7 @@
 #include <cmath>
 #include <algorithm>
 
+
 JPH_SUPPRESS_WARNINGS
 
 namespace ohao {
@@ -417,6 +418,71 @@ void JoltPhysicsBackend::step(float deltaTime) {
         // (done externally via updateCharacter calls)
 
         m_physicsSystem->Update(deltaTime, m_collisionSteps, m_tempAllocator.get(), m_jobSystem.get());
+
+        // Check constraint breaking thresholds
+        m_brokenConstraints.clear();
+        for (auto it = m_constraints.begin(); it != m_constraints.end(); ) {
+            auto& data = it->second;
+            if (data.breakingForce <= 0.0f && data.breakingTorque <= 0.0f) {
+                ++it;
+                continue;
+            }
+            JPH::Constraint* c = data.constraint.GetPtr();
+            float linearImpulse  = 0.0f;
+            float angularImpulse = 0.0f;
+            switch (data.type) {
+                case ConstraintType::FIXED: {
+                    auto* fc = static_cast<JPH::FixedConstraint*>(c);
+                    linearImpulse  = fc->GetTotalLambdaPosition().Length();
+                    angularImpulse = fc->GetTotalLambdaRotation().Length();
+                    break;
+                }
+                case ConstraintType::POINT: {
+                    auto* pc = static_cast<JPH::PointConstraint*>(c);
+                    linearImpulse = pc->GetTotalLambdaPosition().Length();
+                    break;
+                }
+                case ConstraintType::HINGE: {
+                    auto* hc = static_cast<JPH::HingeConstraint*>(c);
+                    linearImpulse  = hc->GetTotalLambdaPosition().Length();
+                    angularImpulse = hc->GetTotalLambdaRotation().Length();
+                    break;
+                }
+                case ConstraintType::SLIDER: {
+                    auto* sc = static_cast<JPH::SliderConstraint*>(c);
+                    linearImpulse  = sc->GetTotalLambdaPosition().Length();
+                    angularImpulse = sc->GetTotalLambdaRotation().Length();
+                    break;
+                }
+                case ConstraintType::CONE_TWIST: {
+                    auto* cc = static_cast<JPH::ConeConstraint*>(c);
+                    linearImpulse  = cc->GetTotalLambdaPosition().Length();
+                    angularImpulse = std::abs(cc->GetTotalLambdaRotation());
+                    break;
+                }
+                case ConstraintType::DISTANCE: {
+                    auto* dc = static_cast<JPH::DistanceConstraint*>(c);
+                    linearImpulse = std::abs(dc->GetTotalLambdaPosition());
+                    break;
+                }
+                case ConstraintType::SIX_DOF: {
+                    auto* sc = static_cast<JPH::SixDOFConstraint*>(c);
+                    linearImpulse  = sc->GetTotalLambdaPosition().Length();
+                    angularImpulse = sc->GetTotalLambdaRotation().Length();
+                    break;
+                }
+                default: break;
+            }
+            bool broken = (data.breakingForce  > 0.0f && linearImpulse  > data.breakingForce) ||
+                          (data.breakingTorque > 0.0f && angularImpulse > data.breakingTorque);
+            if (broken) {
+                m_brokenConstraints.push_back(it->first);
+                m_physicsSystem->RemoveConstraint(data.constraint);
+                it = m_constraints.erase(it);
+            } else {
+                ++it;
+            }
+        }
 
         // Dispatch contact events to user listener
         if (m_userContactListener) {
@@ -1151,7 +1217,7 @@ ConstraintHandle JoltPhysicsBackend::createConstraint(const ConstraintSettings& 
     m_physicsSystem->AddConstraint(constraint);
 
     ConstraintHandle handle = m_nextConstraintHandle++;
-    m_constraints[handle] = { constraint, settings.type };
+    m_constraints[handle] = { constraint, settings.type, settings.breakingForce, settings.breakingTorque };
     return handle;
 }
 
@@ -1219,6 +1285,19 @@ void JoltPhysicsBackend::setConstraintLimits(ConstraintHandle handle, float min,
 
 size_t JoltPhysicsBackend::getConstraintCount() const {
     return m_constraints.size();
+}
+
+void JoltPhysicsBackend::setConstraintBreaking(ConstraintHandle handle, float maxForce, float maxTorque) {
+    auto it = m_constraints.find(handle);
+    if (it == m_constraints.end()) return;
+    it->second.breakingForce  = maxForce;
+    it->second.breakingTorque = maxTorque;
+}
+
+std::vector<ConstraintHandle> JoltPhysicsBackend::getAndClearBrokenConstraints() {
+    std::vector<ConstraintHandle> result = std::move(m_brokenConstraints);
+    m_brokenConstraints.clear();
+    return result;
 }
 
 // ============================================================================

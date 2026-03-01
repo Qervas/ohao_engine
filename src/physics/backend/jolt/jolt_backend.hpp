@@ -121,6 +121,8 @@ public:
     void setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) override;
     void setConstraintLimits(ConstraintHandle handle, float min, float max) override;
     size_t getConstraintCount() const override;
+    void setConstraintBreaking(ConstraintHandle handle, float maxForce, float maxTorque) override;
+    std::vector<ConstraintHandle> getAndClearBrokenConstraints() override;
 
     // === Character Controller ===
     CharacterHandle createCharacter(const CharacterCreationInfo& info) override;
@@ -183,9 +185,14 @@ private:
     struct ConstraintData {
         JPH::Ref<JPH::Constraint> constraint;
         ConstraintType type;
+        float breakingForce  = 0.0f; // 0 = disabled
+        float breakingTorque = 0.0f; // 0 = disabled
     };
     std::unordered_map<ConstraintHandle, ConstraintData> m_constraints;
     ConstraintHandle m_nextConstraintHandle = 0;
+
+    // Constraints broken during the last step() call (cleared each step)
+    std::vector<ConstraintHandle> m_brokenConstraints;
 
     // Character controller management
     struct CharacterData {

@@ -873,6 +873,15 @@ void PhysicsWorld::setConstraintLimits(backend::ConstraintHandle handle, float m
     if (hasBackend()) m_backend->setConstraintLimits(handle, min, max);
 }
 
+void PhysicsWorld::setConstraintBreaking(backend::ConstraintHandle handle, float maxForce, float maxTorque) {
+    if (hasBackend()) m_backend->setConstraintBreaking(handle, maxForce, maxTorque);
+}
+
+std::vector<backend::ConstraintHandle> PhysicsWorld::getAndClearBrokenConstraints() {
+    if (!hasBackend()) return {};
+    return m_backend->getAndClearBrokenConstraints();
+}
+
 // ============================================================================
 // Character Controller
 // ============================================================================

@@ -1,6 +1,7 @@
 #include "physics_controller.h"
 
 #include "physics/world/physics_world.hpp"
+#include "physics/backend/physics_backend.hpp"
 #include "engine/scene/scene.hpp"
 
 #include <vector>
@@ -232,6 +233,23 @@ void PhysicsController::setConstraintLimits(ohao::Scene* scene, uint32_t handle,
     if (physWorld) physWorld->setConstraintLimits(handle, minVal, maxVal);
 }
 
+void PhysicsController::setConstraintBreaking(ohao::Scene* scene, uint32_t handle, float maxForce, float maxTorque) {
+    if (!scene) return;
+    auto* physWorld = scene->getPhysicsWorld();
+    if (physWorld) physWorld->setConstraintBreaking(handle, maxForce, maxTorque);
+}
+
+std::vector<uint32_t> PhysicsController::getAndClearBrokenConstraints(ohao::Scene* scene) {
+    if (!scene) return {};
+    auto* physWorld = scene->getPhysicsWorld();
+    if (!physWorld) return {};
+    auto handles = physWorld->getAndClearBrokenConstraints();
+    std::vector<uint32_t> result;
+    result.reserve(handles.size());
+    for (auto h : handles) result.push_back(static_cast<uint32_t>(h));
+    return result;
+}
+
 // ===== Character Controller =====
 
 int PhysicsController::createCharacter(ohao::Scene* scene, const glm::vec3& position, float capsuleRadius,
@@ -294,6 +312,91 @@ void PhysicsController::updateCharacter(ohao::Scene* scene, uint32_t handle, flo
     if (!scene) return;
     auto* physWorld = scene->getPhysicsWorld();
     if (physWorld) physWorld->updateCharacter(handle, delta, gravity, movementInput);
+}
+
+// ===== Physics Grab/Throw =====
+
+int PhysicsController::grabBody(ohao::Scene* scene, uint32_t bodyHandle, const glm::vec3& worldPos) {
+    if (!scene) return -1;
+    auto* physWorld = scene->getPhysicsWorld();
+    if (!physWorld || !physWorld->hasBackend()) return -1;
+
+    auto* backend = physWorld->getBackend();
+
+    // Create a small kinematic ghost body at the grab point
+    ohao::physics::backend::BodyCreationInfo ghostInfo;
+    ghostInfo.position      = worldPos;
+    ghostInfo.rotation      = glm::quat(1, 0, 0, 0);
+    ghostInfo.motionType    = ohao::physics::backend::MotionType::KINEMATIC;
+    ghostInfo.layer         = ohao::physics::backend::CollisionLayer::KINEMATIC;
+    ghostInfo.mass          = 0.0f;
+    ghostInfo.gravityEnabled = false;
+    ghostInfo.shape.type    = ohao::physics::backend::ShapeInfo::Type::SPHERE;
+    ghostInfo.shape.radius  = 0.01f; // near-zero sphere so it barely collides
+
+    auto ghostHandle = backend->createBody(ghostInfo);
+    if (ghostHandle == ohao::physics::backend::INVALID_BODY) return -1;
+
+    // POINT constraint linking the grabbed body and the ghost at the grab point
+    // Both anchors are world-space; Jolt will convert them to local space internally
+    ohao::physics::backend::ConstraintSettings cs;
+    cs.type    = ohao::physics::backend::ConstraintType::POINT;
+    cs.body1   = static_cast<ohao::physics::backend::BodyHandle>(bodyHandle);
+    cs.body2   = ghostHandle;
+    cs.anchor1 = worldPos;
+    cs.anchor2 = worldPos;
+
+    auto constraintHandle = backend->createConstraint(cs);
+    if (constraintHandle == ohao::physics::backend::INVALID_CONSTRAINT) {
+        backend->destroyBody(ghostHandle);
+        return -1;
+    }
+
+    int token = m_nextGrabToken++;
+    m_grabs[token] = { bodyHandle, static_cast<uint32_t>(ghostHandle), static_cast<uint32_t>(constraintHandle) };
+    return token;
+}
+
+void PhysicsController::moveGrab(ohao::Scene* scene, int token, const glm::vec3& worldPos) {
+    auto it = m_grabs.find(token);
+    if (it == m_grabs.end()) return;
+    if (!scene) return;
+    auto* physWorld = scene->getPhysicsWorld();
+    if (!physWorld || !physWorld->hasBackend()) return;
+
+    // Move the ghost kinematic body; the POINT constraint will pull the grabbed body
+    physWorld->getBackend()->setPosition(
+        static_cast<ohao::physics::backend::BodyHandle>(it->second.ghostBody), worldPos);
+}
+
+void PhysicsController::releaseGrab(ohao::Scene* scene, int token) {
+    auto it = m_grabs.find(token);
+    if (it == m_grabs.end()) return;
+    if (scene) {
+        auto* physWorld = scene->getPhysicsWorld();
+        if (physWorld && physWorld->hasBackend()) {
+            auto* backend = physWorld->getBackend();
+            backend->destroyConstraint(
+                static_cast<ohao::physics::backend::ConstraintHandle>(it->second.constraint));
+            backend->destroyBody(
+                static_cast<ohao::physics::backend::BodyHandle>(it->second.ghostBody));
+        }
+    }
+    m_grabs.erase(it);
+}
+
+void PhysicsController::throwGrab(ohao::Scene* scene, int token, const glm::vec3& velocity) {
+    auto it = m_grabs.find(token);
+    if (it == m_grabs.end()) return;
+    // Apply velocity to the grabbed body before releasing
+    if (scene) {
+        auto* physWorld = scene->getPhysicsWorld();
+        if (physWorld && physWorld->hasBackend()) {
+            physWorld->getBackend()->setLinearVelocity(
+                static_cast<ohao::physics::backend::BodyHandle>(it->second.grabbedBody), velocity);
+        }
+    }
+    releaseGrab(scene, token);
 }
 
 } // namespace godot

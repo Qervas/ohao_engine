@@ -404,6 +404,9 @@ public:
     virtual void setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) = 0;
     virtual void setConstraintLimits(ConstraintHandle handle, float min, float max) = 0;
     virtual size_t getConstraintCount() const = 0;
+    // Breaking thresholds: impulse (N·s) per step; 0 = disabled
+    virtual void setConstraintBreaking(ConstraintHandle handle, float maxForce, float maxTorque) = 0;
+    virtual std::vector<ConstraintHandle> getAndClearBrokenConstraints() = 0;
 
     // === CHARACTER CONTROLLER ===
     virtual CharacterHandle createCharacter(const CharacterCreationInfo& info) = 0;
@@ -497,6 +500,8 @@ public:
     void setConstraintMotorState(ConstraintHandle, bool, float, float) override {}
     void setConstraintLimits(ConstraintHandle, float, float) override {}
     size_t getConstraintCount() const override { return 0; }
+    void setConstraintBreaking(ConstraintHandle, float, float) override {}
+    std::vector<ConstraintHandle> getAndClearBrokenConstraints() override { return {}; }
 
     // Character controller
     CharacterHandle createCharacter(const CharacterCreationInfo&) override { return INVALID_CHARACTER; }

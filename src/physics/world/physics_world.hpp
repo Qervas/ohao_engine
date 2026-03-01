@@ -132,6 +132,8 @@ public:
     void setConstraintEnabled(backend::ConstraintHandle handle, bool enabled);
     void setConstraintMotorState(backend::ConstraintHandle handle, bool enabled, float speed, float maxForce);
     void setConstraintLimits(backend::ConstraintHandle handle, float min, float max);
+    void setConstraintBreaking(backend::ConstraintHandle handle, float maxForce, float maxTorque);
+    std::vector<backend::ConstraintHandle> getAndClearBrokenConstraints();
 
     // === CHARACTER CONTROLLER ===
     backend::CharacterHandle createCharacter(const backend::CharacterCreationInfo& info);
