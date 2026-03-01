@@ -98,3 +98,10 @@ if(BUILD_AUDIO_TESTS)
     message(STATUS "Building audio system tests")
     add_subdirectory(tests/audio)
 endif()
+
+# Force generator tests
+option(BUILD_FORCE_TESTS "Build force generator tests" ON)
+if(BUILD_FORCE_TESTS)
+    message(STATUS "Building force generator tests")
+    add_subdirectory(tests/force_generators)
+endif()
