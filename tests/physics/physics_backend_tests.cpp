@@ -20,6 +20,7 @@
 
 #include "physics/backend/physics_backend.hpp"
 #include "physics/world/physics_world.hpp"
+#include "physics/collision/shapes/box_shape.hpp"
 
 using namespace ohao::physics;
 using namespace ohao::physics::backend;
@@ -1310,6 +1311,319 @@ bool testInvalidHandleOperations() {
 }
 
 // =============================================================================
+// ROUND 1-4 TESTS: Gravity Scale, Radial Impulse, Damping, Wind, Buoyancy,
+//                  Force Volumes, Collision Signals, Sleep/Wake, Actor Layer,
+//                  Springs, Apply Forces, Velocity Getters, CCD, Axis Lock
+// =============================================================================
+
+// --- Round 1: Gravity scale ---
+bool testGravityScale() {
+    TEST_BEGIN("Per-body gravity scale (setGravityScale)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto floor = createFloor();
+    auto heavy = createDynamicBox(glm::vec3(0, 5, 0), 1.0f);
+    auto light  = createDynamicBox(glm::vec3(3, 5, 0), 1.0f);
+
+    g_backend->setGravityScale(light, 0.0f); // zero-G body should not fall
+
+    for (int i = 0; i < 60; i++) g_backend->step(1.0f / 60.0f);
+
+    float heavyY = g_backend->getPosition(heavy).y;
+    float lightY = g_backend->getPosition(light).y;
+    EXPECT_TRUE(heavyY < 4.0f);   // heavy fell
+    EXPECT_TRUE(lightY > 4.5f);   // zero-G stayed near original position
+
+    g_backend->destroyBody(heavy);
+    g_backend->destroyBody(light);
+    g_backend->destroyBody(floor);
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 1: Radial impulse (via PhysicsWorld) ---
+bool testRadialImpulse() {
+    TEST_BEGIN("Radial impulse (applyRadialImpulse)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    PhysicsWorldConfig cfg;
+    cfg.gravity = glm::vec3(0, 0, 0); // no gravity — isolate impulse
+    auto world = std::make_unique<PhysicsWorld>(cfg);
+
+    // Add a dynamic body at (2, 0, 0) — needs a collision shape for backend creation
+    auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+    body->setPosition(glm::vec3(2, 0, 0));
+    body->setMass(1.0f);
+    body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(body);
+    world->flushPendingBodies();
+
+    glm::vec3 preVel = world->getBackend()->getLinearVelocity(body->getBackendHandle());
+    EXPECT_NEAR(glm::length(preVel), 0.0f, 0.01f);
+
+    world->applyRadialImpulse(glm::vec3(0, 0, 0), 100.0f, 5.0f, 0 /*LINEAR*/);
+
+    // Step once so Jolt processes the impulse
+    world->stepOnce();
+
+    glm::vec3 postVel = world->getBackend()->getLinearVelocity(body->getBackendHandle());
+    EXPECT_TRUE(glm::length(postVel) > 1.0f); // body got kicked
+
+    world->shutdown();
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 2: Gravity scale == 0 stays still (reuses testGravityScale logic) ---
+bool testLinearDampingBackend() {
+    TEST_BEGIN("Linear damping reduces velocity");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto h = createDynamicBox(glm::vec3(200, 100, 200), 1.0f); // isolated position
+    g_backend->setLinearVelocity(h, glm::vec3(10, 0, 0));
+    g_backend->setLinearDamping(h, 0.9f); // heavy damping
+
+    for (int i = 0; i < 120; i++) g_backend->step(1.0f / 60.0f); // 2 seconds
+
+    float xSpeed = g_backend->getLinearVelocity(h).x; // only check damped axis (gravity affects Y)
+    EXPECT_TRUE(xSpeed < 5.0f); // X velocity should have been damped significantly
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 2: Wind via PhysicsWorld ForceRegistry ---
+bool testWindForce() {
+    TEST_BEGIN("Wind force (PhysicsWorld::setWind)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    PhysicsWorldConfig cfg;
+    cfg.gravity = glm::vec3(0, 0, 0);
+    auto world = std::make_unique<PhysicsWorld>(cfg);
+
+    auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+    body->setPosition(glm::vec3(0, 0, 0));
+    body->setMass(1.0f);
+    body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(body);
+    world->flushPendingBodies();
+
+    world->setWind(glm::vec3(1, 0, 0), 500.0f, 0.0f); // strong wind in X
+
+    for (int i = 0; i < 30; i++) world->stepOnce();
+
+    float xVel = world->getBackend()->getLinearVelocity(body->getBackendHandle()).x;
+    EXPECT_TRUE(xVel > 1.0f); // wind pushed body in +X
+
+    world->clearWind();
+    world->shutdown();
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 2: Force volume ---
+bool testForceVolume() {
+    TEST_BEGIN("Force volume (createForceVolumeBox)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    PhysicsWorldConfig cfg;
+    cfg.gravity = glm::vec3(0, 0, 0);
+    auto world = std::make_unique<PhysicsWorld>(cfg);
+
+    auto bodyIn  = std::make_shared<dynamics::RigidBody>(nullptr);
+    bodyIn->setPosition(glm::vec3(0, 0, 0));
+    bodyIn->setMass(1.0f);
+    bodyIn->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(bodyIn);
+
+    auto bodyOut = std::make_shared<dynamics::RigidBody>(nullptr);
+    bodyOut->setPosition(glm::vec3(100, 0, 0)); // outside volume
+    bodyOut->setMass(1.0f);
+    bodyOut->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(bodyOut);
+    world->flushPendingBodies();
+
+    // Box volume centered at origin, force = +Y 500
+    world->createForceVolumeBox(glm::vec3(0,0,0), glm::vec3(5,5,5), glm::vec3(0,500,0));
+
+    for (int i = 0; i < 30; i++) world->stepOnce();
+
+    float inY  = world->getBackend()->getLinearVelocity(bodyIn->getBackendHandle()).y;
+    float outY = world->getBackend()->getLinearVelocity(bodyOut->getBackendHandle()).y;
+    EXPECT_TRUE(inY  > 1.0f);  // inside volume — pushed up
+    EXPECT_NEAR(outY, 0.0f, 0.5f); // outside — not affected
+
+    world->shutdown();
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 3: Sleep/wake ---
+bool testSleepWake() {
+    TEST_BEGIN("Sleep/wake (setAwake)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto h = createDynamicBox(glm::vec3(0, 0.5f, 0), 1.0f);
+    g_backend->setAwake(h, false); // put to sleep
+    EXPECT_FALSE(g_backend->isAwake(h));
+
+    g_backend->setAwake(h, true);
+    EXPECT_TRUE(g_backend->isAwake(h));
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 3: Collision layer assignment ---
+bool testCollisionLayerAssignment() {
+    TEST_BEGIN("Collision layer assignment (setBodyLayer)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto h = createDynamicBox(glm::vec3(0, 5, 0), 1.0f);
+    // Should not crash — valid layer values 0-15
+    g_backend->setBodyLayer(h, CollisionLayer::STATIC);
+    g_backend->setBodyLayer(h, CollisionLayer::DYNAMIC);
+    uint16_t layer = g_backend->getBodyLayer(h);
+    EXPECT_EQ(layer, CollisionLayer::DYNAMIC);
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 3: Spring via PhysicsWorld ---
+bool testSpringForce() {
+    TEST_BEGIN("Spring force (createSpring)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    PhysicsWorldConfig cfg;
+    cfg.gravity = glm::vec3(0, 0, 0);
+    auto world = std::make_unique<PhysicsWorld>(cfg);
+
+    auto bodyA = std::make_shared<dynamics::RigidBody>(nullptr);
+    bodyA->setPosition(glm::vec3(-2, 0, 0));
+    bodyA->setMass(1.0f);
+    bodyA->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(bodyA);
+
+    auto bodyB = std::make_shared<dynamics::RigidBody>(nullptr);
+    bodyB->setPosition(glm::vec3(2, 0, 0));
+    bodyB->setMass(1.0f);
+    bodyB->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(bodyB);
+    world->flushPendingBodies();
+
+    int handle = world->createSpring(bodyA.get(), bodyB.get(), 50.0f, 1.0f, 0.5f);
+    EXPECT_TRUE(handle > 0);
+
+    // Spring should pull bodies toward rest length = 1m (they're 4m apart)
+    for (int i = 0; i < 60; i++) world->stepOnce();
+
+    float distAfter = glm::length(
+        world->getBackend()->getPosition(bodyB->getBackendHandle()) -
+        world->getBackend()->getPosition(bodyA->getBackendHandle()));
+    // Distance should decrease from 4m toward rest length 1m
+    EXPECT_TRUE(distAfter < 3.5f);
+
+    world->destroySpring(handle);
+    world->shutdown();
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 4: Velocity getters ---
+bool testVelocityGetters() {
+    TEST_BEGIN("Velocity getters (getLinearVelocity/getAngularVelocity)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto h = createDynamicBox(glm::vec3(0, 5, 0), 1.0f);
+    g_backend->setLinearVelocity(h, glm::vec3(3, 0, 0));
+    g_backend->setAngularVelocity(h, glm::vec3(0, 1, 0));
+
+    auto lv = g_backend->getLinearVelocity(h);
+    auto av = g_backend->getAngularVelocity(h);
+    EXPECT_NEAR(lv.x, 3.0f, 0.1f);
+    EXPECT_NEAR(av.y, 1.0f, 0.1f);
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 4: CCD toggle ---
+bool testCCDToggleRuntime() {
+    TEST_BEGIN("CCD toggle at runtime (setCCDEnabled)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    auto h = createDynamicBox(glm::vec3(0, 5, 0), 1.0f);
+    // Should not crash — just flips the motion quality
+    g_backend->setCCDEnabled(h, true);
+    g_backend->setCCDEnabled(h, false);
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 4: Axis lock ---
+bool testAxisLock() {
+    TEST_BEGIN("Axis lock (freeze linear Y via PhysicsWorld)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    PhysicsWorldConfig cfg;
+    cfg.gravity = glm::vec3(0, -9.81f, 0);
+    auto world = std::make_unique<PhysicsWorld>(cfg);
+
+    auto body = std::make_shared<dynamics::RigidBody>(nullptr);
+    body->setPosition(glm::vec3(0, 5, 0));
+    body->setMass(1.0f);
+    body->setFreezeLinearAxes(2); // bit1 = Y axis frozen
+    body->setCollisionShape(std::make_shared<collision::BoxShape>(glm::vec3(0.5f)));
+    world->addRigidBodyForTesting(body);
+    world->flushPendingBodies();
+
+    float startY = world->getBackend()->getPosition(body->getBackendHandle()).y;
+
+    for (int i = 0; i < 60; i++) world->stepOnce();
+
+    float endY = world->getBackend()->getPosition(body->getBackendHandle()).y;
+    // Y velocity is zeroed each step so body shouldn't fall significantly
+    EXPECT_NEAR(endY, startY, 1.0f);
+
+    world->shutdown();
+    TEST_PASS();
+    return true;
+}
+
+// --- Round 1: GravityScale via BodyCreationInfo ---
+bool testGravityScaleCreation() {
+    TEST_BEGIN("Gravity scale in BodyCreationInfo (gravityScale=0 floats)");
+    if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
+
+    BodyCreationInfo info;
+    info.shape.type = ShapeInfo::BOX;
+    info.shape.halfExtents = glm::vec3(0.5f);
+    info.motionType = MotionType::DYNAMIC;
+    info.position = glm::vec3(0, 10, 0);
+    info.mass = 1.0f;
+    info.gravityScale = 0.0f; // should float
+
+    auto h = g_backend->createBody(info);
+    EXPECT_NE(h, INVALID_BODY);
+
+    for (int i = 0; i < 60; i++) g_backend->step(1.0f / 60.0f);
+
+    float y = g_backend->getPosition(h).y;
+    EXPECT_TRUE(y > 9.0f); // should not have fallen
+
+    g_backend->destroyBody(h);
+    TEST_PASS();
+    return true;
+}
+
+// =============================================================================
 // TEST RUNNER
 // =============================================================================
 
@@ -1404,6 +1718,27 @@ void runAllTests() {
     std::cout << "\n\033[1m--- Handle Safety ---\033[0m" << std::endl;
     testInvalidHandleConstants();
     testInvalidHandleOperations();
+
+    // 12. Round 1-4 UE5-parity features
+    std::cout << "\n\033[1m--- Round 1: Gravity Scale + Radial Impulse ---\033[0m" << std::endl;
+    testGravityScale();
+    testGravityScaleCreation();
+    testRadialImpulse();
+
+    std::cout << "\n\033[1m--- Round 2: Damping + Wind + Force Volume ---\033[0m" << std::endl;
+    testLinearDampingBackend();
+    testWindForce();
+    testForceVolume();
+
+    std::cout << "\n\033[1m--- Round 3: Sleep/Wake + Layer + Spring ---\033[0m" << std::endl;
+    testSleepWake();
+    testCollisionLayerAssignment();
+    testSpringForce();
+
+    std::cout << "\n\033[1m--- Round 4: Velocity Getters + CCD + Axis Lock ---\033[0m" << std::endl;
+    testVelocityGetters();
+    testCCDToggleRuntime();
+    testAxisLock();
 
     // Cleanup
     shutdownBackend();
