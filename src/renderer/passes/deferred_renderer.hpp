@@ -10,6 +10,10 @@
 #include "cloud_pass.hpp"
 #include "rain_pass.hpp"
 #include "snow_pass.hpp"
+#include "sand_pass.hpp"
+#include "god_rays_pass.hpp"
+#include "aurora_pass.hpp"
+#include "rainbow_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
@@ -118,12 +122,42 @@ public:
     void  setSnowAccumRate(float r)   { m_snowAccumRate = glm::clamp(r, 0.0f, 10.0f); }
     void  setSnowMeltRate(float r)    { m_snowMeltRate  = glm::clamp(r, 0.0f, 10.0f); }
 
+    // Sand / Sandstorm configuration
+    void  setSandEnabled(bool e)      { m_sandEnabled   = e; }
+    bool  getSandEnabled() const      { return m_sandEnabled; }
+    void  setSandIntensity(float v)   { m_sandIntensity = glm::clamp(v, 0.0f, 1.0f); }
+    float getSandIntensity() const    { return m_sandIntensity; }
+    void  setSandWindX(float v)       { m_sandWindX     = glm::clamp(v, -1.0f, 1.0f); }
+    float getSandWindX() const        { return m_sandWindX; }
+
+    // God Rays configuration
+    void  setGodRaysEnabled(bool e)       { m_godRaysEnabled   = e; }
+    bool  getGodRaysEnabled() const       { return m_godRaysEnabled; }
+    void  setGodRaysIntensity(float v)    { m_godRaysIntensity = glm::clamp(v, 0.0f, 2.0f); }
+    float getGodRaysIntensity() const     { return m_godRaysIntensity; }
+
+    // Aurora configuration
+    void  setAuroraEnabled(bool e)    { m_auroraEnabled   = e; }
+    bool  getAuroraEnabled() const    { return m_auroraEnabled; }
+    void  setAuroraIntensity(float v) { m_auroraIntensity = glm::clamp(v, 0.0f, 1.0f); }
+    float getAuroraIntensity() const  { return m_auroraIntensity; }
+    void  setAuroraHue(float v)       { m_auroraHue       = glm::clamp(v, 0.0f, 1.0f); }
+
+    // Rainbow configuration
+    void  setRainbowEnabled(bool e)   { m_rainbowEnabled  = e; }
+    bool  getRainbowEnabled() const   { return m_rainbowEnabled; }
+
     // Ground wetness — temporal integration driven by rain state.
     // Surfaces accumulate wetness at wetRate/s and dry at dryRate/s.
     // Surface wetness is readable so scripts can react (footstep sounds, etc.)
     float getSurfaceWetness() const { return m_wetness; }
     void  setWetnessRate(float r)   { m_wetRate  = glm::clamp(r, 0.0f, 10.0f); }
     void  setDryingRate(float r)    { m_dryRate  = glm::clamp(r, 0.0f, 10.0f); }
+
+    // Frost — accumulates when snowAccumulation > 0.6, melts when snow clears.
+    float getFrostCover() const     { return m_frostCover; }
+    void  setFrostAccumRate(float r){ m_frostAccumRate = glm::clamp(r, 0.0f, 10.0f); }
+    void  setFrostMeltRate(float r) { m_frostMeltRate  = glm::clamp(r, 0.0f, 10.0f); }
 
     // Lightning — auto-triggered when rain intensity >= autoThreshold.
     // Also exposed for scripted control (cutscenes, horror events, etc.)
@@ -165,8 +199,12 @@ private:
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;
     std::unique_ptr<CloudPass> m_cloudPass;
-    std::unique_ptr<RainPass>  m_rainPass;
-    std::unique_ptr<SnowPass>  m_snowPass;
+    std::unique_ptr<RainPass>    m_rainPass;
+    std::unique_ptr<SnowPass>   m_snowPass;
+    std::unique_ptr<SandPass>   m_sandPass;
+    std::unique_ptr<GodRaysPass> m_godRaysPass;
+    std::unique_ptr<AuroraPass>  m_auroraPass;
+    std::unique_ptr<RainbowPass> m_rainbowPass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -230,6 +268,28 @@ private:
     float m_wetness{0.0f};   // current surface wetness [0, 1]
     float m_wetRate{0.03f};  // units/sec to accumulate (default: ~33s to max)
     float m_dryRate{0.005f}; // units/sec to dry        (default: ~200s to dry)
+
+    // Frost (temporal — accumulates when snow > 0.6, melts when snow clears)
+    float m_frostCover{0.0f};
+    float m_frostAccumRate{0.005f};
+    float m_frostMeltRate{0.002f};
+
+    // Sand state
+    bool  m_sandEnabled{false};
+    float m_sandIntensity{1.0f};
+    float m_sandWindX{-0.08f};
+
+    // God rays state
+    bool  m_godRaysEnabled{true};
+    float m_godRaysIntensity{1.0f};
+
+    // Aurora state
+    bool  m_auroraEnabled{false};
+    float m_auroraIntensity{0.5f};
+    float m_auroraHue{0.0f};
+
+    // Rainbow state
+    bool  m_rainbowEnabled{true}; // auto-enabled when rain is active
 
     // Lightning flash state machine
     bool  m_lightningEnabled{false};

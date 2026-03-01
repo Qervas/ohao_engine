@@ -314,6 +314,47 @@ public:
     void set_cloud_speed(float v);
     float get_cloud_speed() const { return m_render_settings.getCloudSpeed(); }
 
+    // Sand (sandstorm) settings
+    void  set_sand_enabled(bool v);
+    bool  get_sand_enabled() const    { return m_render_settings.getSandEnabled(); }
+    void  set_sand_intensity(float v);
+    float get_sand_intensity() const  { return m_render_settings.getSandIntensity(); }
+    void  set_sand_wind_x(float v);
+    float get_sand_wind_x() const     { return m_render_settings.getSandWindX(); }
+
+    // Frost settings
+    void  set_frost_accum_rate(float v);
+    float get_frost_accum_rate() const { return m_render_settings.getFrostAccumRate(); }
+    void  set_frost_melt_rate(float v);
+    float get_frost_melt_rate() const  { return m_render_settings.getFrostMeltRate(); }
+    float get_frost_cover() const;
+
+    // God rays settings
+    void  set_god_rays_enabled(bool v);
+    bool  get_god_rays_enabled() const    { return m_render_settings.getGodRaysEnabled(); }
+    void  set_god_rays_intensity(float v);
+    float get_god_rays_intensity() const  { return m_render_settings.getGodRaysIntensity(); }
+
+    // Aurora settings
+    void  set_aurora_enabled(bool v);
+    bool  get_aurora_enabled() const    { return m_render_settings.getAuroraEnabled(); }
+    void  set_aurora_intensity(float v);
+    float get_aurora_intensity() const  { return m_render_settings.getAuroraIntensity(); }
+    void  set_aurora_hue(float v);
+    float get_aurora_hue() const        { return m_render_settings.getAuroraHue(); }
+
+    // Rainbow settings
+    void  set_rainbow_enabled(bool v);
+    bool  get_rainbow_enabled() const  { return m_render_settings.getRainbowEnabled(); }
+
+    // Heat haze settings
+    void  set_heat_haze_enabled(bool v);
+    bool  get_heat_haze_enabled() const    { return m_render_settings.getHeatHazeEnabled(); }
+    void  set_heat_haze_intensity(float v);
+    float get_heat_haze_intensity() const  { return m_render_settings.getHeatHazeIntensity(); }
+    void  set_heat_haze_frequency(float v);
+    float get_heat_haze_frequency() const  { return m_render_settings.getHeatHazeFrequency(); }
+
     // === Physics Controls ===
     void play_physics();
     void pause_physics();

@@ -143,6 +143,20 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         std::cout << "DeferredRenderer: SnowPass OK" << std::endl;
     }
 
+    // Initialize sand pass (ochre streaks, runs after snow)
+    m_sandPass = std::make_unique<SandPass>();
+    if (!m_sandPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: SandPass failed (non-fatal)" << std::endl;
+        m_sandPass.reset();
+    } else {
+        if (m_lightingPass) {
+            m_sandPass->setHDROutput(m_lightingPass->getOutputView(),
+                                     m_lightingPass->getOutputImage());
+        }
+        m_sandPass->onResize(m_width, m_height);
+        std::cout << "DeferredRenderer: SandPass OK" << std::endl;
+    }
+
     // Initialize sky pass (Preetham analytical sky, runs after cloud pass)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
@@ -156,6 +170,58 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
             m_skyPass->setCloudBuffer(m_cloudPass->getOutputView());
         }
         std::cout << "DeferredRenderer: SkyPass OK" << std::endl;
+    }
+
+    // Initialize God Rays pass (radial light shafts, step 4.61)
+    m_godRaysPass = std::make_unique<GodRaysPass>();
+    if (!m_godRaysPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: GodRaysPass failed (non-fatal)" << std::endl;
+        m_godRaysPass.reset();
+    } else {
+        if (m_lightingPass) {
+            m_godRaysPass->setHDROutput(m_lightingPass->getOutputView(),
+                                        m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            // Create a depth-compatible sampler for the pass
+            m_godRaysPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
+        }
+        m_godRaysPass->onResize(m_width, m_height);
+        std::cout << "DeferredRenderer: GodRaysPass OK" << std::endl;
+    }
+
+    // Initialize Aurora pass (sky ribbon effect, step 4.62)
+    m_auroraPass = std::make_unique<AuroraPass>();
+    if (!m_auroraPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: AuroraPass failed (non-fatal)" << std::endl;
+        m_auroraPass.reset();
+    } else {
+        if (m_lightingPass) {
+            m_auroraPass->setHDROutput(m_lightingPass->getOutputView(),
+                                       m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            m_auroraPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
+        }
+        m_auroraPass->onResize(m_width, m_height);
+        std::cout << "DeferredRenderer: AuroraPass OK" << std::endl;
+    }
+
+    // Initialize Rainbow pass (prismatic arc, step 4.63)
+    m_rainbowPass = std::make_unique<RainbowPass>();
+    if (!m_rainbowPass->initialize(device, physicalDevice)) {
+        std::cerr << "DeferredRenderer: RainbowPass failed (non-fatal)" << std::endl;
+        m_rainbowPass.reset();
+    } else {
+        if (m_lightingPass) {
+            m_rainbowPass->setHDROutput(m_lightingPass->getOutputView(),
+                                        m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            m_rainbowPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
+        }
+        m_rainbowPass->onResize(m_width, m_height);
+        std::cout << "DeferredRenderer: RainbowPass OK" << std::endl;
     }
 
     // Initialize render graph and import all pass outputs
@@ -185,6 +251,22 @@ void DeferredRenderer::cleanup() {
         m_particleRenderPass = VK_NULL_HANDLE;
     }
 
+    if (m_rainbowPass) {
+        m_rainbowPass->cleanup();
+        m_rainbowPass.reset();
+    }
+    if (m_auroraPass) {
+        m_auroraPass->cleanup();
+        m_auroraPass.reset();
+    }
+    if (m_godRaysPass) {
+        m_godRaysPass->cleanup();
+        m_godRaysPass.reset();
+    }
+    if (m_sandPass) {
+        m_sandPass->cleanup();
+        m_sandPass.reset();
+    }
     if (m_snowPass) {
         m_snowPass->cleanup();
         m_snowPass.reset();
@@ -271,6 +353,14 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         else
             m_snowAccumulation = std::max(m_snowAccumulation - m_snowMeltRate * m_deltaTime, snowTarget);
         m_lightingPass->setSnowCover(m_snowAccumulation);
+
+        // Frost temporal integration: accumulates when snow > 0.6, melts when snow clears
+        float frostTarget = (m_snowAccumulation > 0.6f) ? 1.0f : 0.0f;
+        if (m_frostCover < frostTarget)
+            m_frostCover = std::min(m_frostCover + m_frostAccumRate * m_deltaTime, 1.0f);
+        else
+            m_frostCover = std::max(m_frostCover - m_frostMeltRate * m_deltaTime, 0.0f);
+        m_lightingPass->setFrostCover(m_frostCover);
 
         // SSAO texture is set after executeSSAO() call below
     }
@@ -474,6 +564,59 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_snowPass->execute(cmd, frameIndex);
     }
 
+    // 4.67. Sand pass — ochre streaks for sandstorm
+    if (m_sandPass) {
+        m_sandPass->setEnabled(m_sandEnabled);
+        m_sandPass->setIntensity(m_sandIntensity);
+        m_sandPass->setWindX(m_sandWindX);
+        m_sandPass->setTime(m_totalTime);
+        m_sandPass->execute(cmd, frameIndex);
+    }
+
+    // 4.61. God Rays — radial light shafts from sun position
+    if (m_godRaysPass) {
+        // Project sun direction to screen space
+        glm::vec4 sunClip = m_proj * m_view * glm::vec4(-m_lightDirection * 1000.0f, 1.0f);
+        glm::vec2 sunNDC  = (sunClip.w > 0.001f)
+            ? glm::vec2(sunClip.x / sunClip.w, sunClip.y / sunClip.w)
+            : glm::vec2(0.5f, 0.25f);
+        // NDC [-1,1] → UV [0,1]  (note Vulkan Y-down, sunNDC.y already flipped by proj)
+        glm::vec2 sunUV = glm::vec2(sunNDC.x * 0.5f + 0.5f, sunNDC.y * 0.5f + 0.5f);
+        m_godRaysPass->setSunScreenPos(sunUV);
+        m_godRaysPass->setIntensity(m_godRaysIntensity);
+        m_godRaysPass->setTime(m_totalTime);
+        // Only render when sun is above horizon (dot(sun, up) > 0)
+        bool sunVisible = -m_lightDirection.y > 0.05f;
+        m_godRaysPass->setEnabled(m_godRaysEnabled && sunVisible);
+        m_godRaysPass->execute(cmd, frameIndex);
+    }
+
+    // 4.62. Aurora — dancing ribbons in sky
+    if (m_auroraPass) {
+        m_auroraPass->setEnabled(m_auroraEnabled);
+        m_auroraPass->setIntensity(m_auroraIntensity);
+        m_auroraPass->setHue(m_auroraHue);
+        m_auroraPass->setTime(m_totalTime);
+        m_auroraPass->execute(cmd, frameIndex);
+    }
+
+    // 4.63. Rainbow — prismatic arc when raining with sun visible
+    if (m_rainbowPass) {
+        float rainbowIntensity = (m_rainEnabled && m_rainIntensity > 0.2f)
+            ? m_rainIntensity * 0.8f : 0.0f;
+        // Compute antisolar point: reflect sun through screen center
+        glm::vec4 sunClip = m_proj * m_view * glm::vec4(-m_lightDirection * 1000.0f, 1.0f);
+        glm::vec2 sunNDC  = (sunClip.w > 0.001f)
+            ? glm::vec2(sunClip.x / sunClip.w, sunClip.y / sunClip.w)
+            : glm::vec2(0.0f, -0.5f);
+        glm::vec2 sunUV       = glm::vec2(sunNDC.x * 0.5f + 0.5f, sunNDC.y * 0.5f + 0.5f);
+        glm::vec2 antiSolarUV = glm::vec2(1.0f) - sunUV;
+        m_rainbowPass->setAntiSolarPos(antiSolarUV);
+        m_rainbowPass->setIntensity(rainbowIntensity);
+        m_rainbowPass->setEnabled(m_rainbowEnabled && rainbowIntensity > 0.001f);
+        m_rainbowPass->execute(cmd, frameIndex);
+    }
+
     // 4.7. Particle system (forward pass over HDR, before post-processing)
     if (m_particleSystem && m_lightingPass) {
         m_totalTime += m_deltaTime;
@@ -520,10 +663,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     }
 
-    // 5. Post-processing (SSR, volumetric, bloom, motion blur, TAA, DoF, tonemapping)
+    // 5. Post-processing (SSR, volumetric, bloom, motion blur, TAA, DoF, heat haze, tonemapping)
     if (m_postProcessing && m_lightingPass) {
         m_postProcessing->setColorBuffer(m_lightingPass->getOutputView());
-        m_postProcessing->setHDRInput(m_lightingPass->getOutputView());
+        m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(),
+                                               m_lightingPass->getOutputImage());
+        m_postProcessing->setDeltaTime(m_deltaTime);
         m_postProcessing->execute(cmd, frameIndex);
     }
 
@@ -606,6 +751,43 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         if (m_lightingPass) {
             m_snowPass->setHDROutput(m_lightingPass->getOutputView(),
                                      m_lightingPass->getOutputImage());
+        }
+    }
+    if (m_sandPass) {
+        m_sandPass->onResize(width, height);
+        if (m_lightingPass) {
+            m_sandPass->setHDROutput(m_lightingPass->getOutputView(),
+                                     m_lightingPass->getOutputImage());
+        }
+    }
+    if (m_godRaysPass) {
+        m_godRaysPass->onResize(width, height);
+        if (m_lightingPass) {
+            m_godRaysPass->setHDROutput(m_lightingPass->getOutputView(),
+                                        m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            m_godRaysPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
+        }
+    }
+    if (m_auroraPass) {
+        m_auroraPass->onResize(width, height);
+        if (m_lightingPass) {
+            m_auroraPass->setHDROutput(m_lightingPass->getOutputView(),
+                                       m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            m_auroraPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
+        }
+    }
+    if (m_rainbowPass) {
+        m_rainbowPass->onResize(width, height);
+        if (m_lightingPass) {
+            m_rainbowPass->setHDROutput(m_lightingPass->getOutputView(),
+                                        m_lightingPass->getOutputImage());
+        }
+        if (m_gbufferPass) {
+            m_rainbowPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
         }
     }
     if (m_skyPass) {

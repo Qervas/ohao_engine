@@ -346,6 +346,47 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_cloud_speed"), &OhaoViewport::get_cloud_speed);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "cloud_speed", PROPERTY_HINT_RANGE, "0.0,10.0,0.1"), "set_cloud_speed", "get_cloud_speed");
 
+    // === Sand (Sandstorm) ===
+    ClassDB::bind_method(D_METHOD("set_sand_enabled", "enabled"), &OhaoViewport::set_sand_enabled);
+    ClassDB::bind_method(D_METHOD("get_sand_enabled"), &OhaoViewport::get_sand_enabled);
+    ClassDB::bind_method(D_METHOD("set_sand_intensity", "intensity"), &OhaoViewport::set_sand_intensity);
+    ClassDB::bind_method(D_METHOD("get_sand_intensity"), &OhaoViewport::get_sand_intensity);
+    ClassDB::bind_method(D_METHOD("set_sand_wind_x", "wind_x"), &OhaoViewport::set_sand_wind_x);
+    ClassDB::bind_method(D_METHOD("get_sand_wind_x"), &OhaoViewport::get_sand_wind_x);
+
+    // === Frost / Ice ===
+    ClassDB::bind_method(D_METHOD("set_frost_accum_rate", "rate"), &OhaoViewport::set_frost_accum_rate);
+    ClassDB::bind_method(D_METHOD("get_frost_accum_rate"), &OhaoViewport::get_frost_accum_rate);
+    ClassDB::bind_method(D_METHOD("set_frost_melt_rate", "rate"), &OhaoViewport::set_frost_melt_rate);
+    ClassDB::bind_method(D_METHOD("get_frost_melt_rate"), &OhaoViewport::get_frost_melt_rate);
+    ClassDB::bind_method(D_METHOD("get_frost_cover"), &OhaoViewport::get_frost_cover);
+
+    // === God Rays ===
+    ClassDB::bind_method(D_METHOD("set_god_rays_enabled", "enabled"), &OhaoViewport::set_god_rays_enabled);
+    ClassDB::bind_method(D_METHOD("get_god_rays_enabled"), &OhaoViewport::get_god_rays_enabled);
+    ClassDB::bind_method(D_METHOD("set_god_rays_intensity", "intensity"), &OhaoViewport::set_god_rays_intensity);
+    ClassDB::bind_method(D_METHOD("get_god_rays_intensity"), &OhaoViewport::get_god_rays_intensity);
+
+    // === Aurora Borealis ===
+    ClassDB::bind_method(D_METHOD("set_aurora_enabled", "enabled"), &OhaoViewport::set_aurora_enabled);
+    ClassDB::bind_method(D_METHOD("get_aurora_enabled"), &OhaoViewport::get_aurora_enabled);
+    ClassDB::bind_method(D_METHOD("set_aurora_intensity", "intensity"), &OhaoViewport::set_aurora_intensity);
+    ClassDB::bind_method(D_METHOD("get_aurora_intensity"), &OhaoViewport::get_aurora_intensity);
+    ClassDB::bind_method(D_METHOD("set_aurora_hue", "hue"), &OhaoViewport::set_aurora_hue);
+    ClassDB::bind_method(D_METHOD("get_aurora_hue"), &OhaoViewport::get_aurora_hue);
+
+    // === Rainbow ===
+    ClassDB::bind_method(D_METHOD("set_rainbow_enabled", "enabled"), &OhaoViewport::set_rainbow_enabled);
+    ClassDB::bind_method(D_METHOD("get_rainbow_enabled"), &OhaoViewport::get_rainbow_enabled);
+
+    // === Heat Haze ===
+    ClassDB::bind_method(D_METHOD("set_heat_haze_enabled", "enabled"), &OhaoViewport::set_heat_haze_enabled);
+    ClassDB::bind_method(D_METHOD("get_heat_haze_enabled"), &OhaoViewport::get_heat_haze_enabled);
+    ClassDB::bind_method(D_METHOD("set_heat_haze_intensity", "intensity"), &OhaoViewport::set_heat_haze_intensity);
+    ClassDB::bind_method(D_METHOD("get_heat_haze_intensity"), &OhaoViewport::get_heat_haze_intensity);
+    ClassDB::bind_method(D_METHOD("set_heat_haze_frequency", "frequency"), &OhaoViewport::set_heat_haze_frequency);
+    ClassDB::bind_method(D_METHOD("get_heat_haze_frequency"), &OhaoViewport::get_heat_haze_frequency);
+
     // === Camera Mode ===
     ADD_GROUP("Camera", "camera_");
 
@@ -1041,6 +1082,37 @@ void OhaoViewport::set_cloud_density(float v)      { m_render_settings.setCloudD
 void OhaoViewport::set_cloud_altitude_min(float v) { m_render_settings.setCloudAltMin(v); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_cloud_altitude_max(float v) { m_render_settings.setCloudAltMax(v); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_cloud_speed(float v)        { m_render_settings.setCloudSpeed(v); m_render_settings.apply(m_renderer); }
+
+// Sand (sandstorm)
+void OhaoViewport::set_sand_enabled(bool v)    { m_render_settings.setSandEnabled(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_sand_intensity(float v) { m_render_settings.setSandIntensity(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_sand_wind_x(float v)    { m_render_settings.setSandWindX(v); m_render_settings.apply(m_renderer); }
+
+// Frost
+void OhaoViewport::set_frost_accum_rate(float v) { m_render_settings.setFrostAccumRate(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_frost_melt_rate(float v)  { m_render_settings.setFrostMeltRate(v); m_render_settings.apply(m_renderer); }
+float OhaoViewport::get_frost_cover() const {
+    if (!m_renderer) return 0.0f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getFrostCover() : 0.0f;
+}
+
+// God rays
+void OhaoViewport::set_god_rays_enabled(bool v)    { m_render_settings.setGodRaysEnabled(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_god_rays_intensity(float v)  { m_render_settings.setGodRaysIntensity(v); m_render_settings.apply(m_renderer); }
+
+// Aurora
+void OhaoViewport::set_aurora_enabled(bool v)    { m_render_settings.setAuroraEnabled(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_aurora_intensity(float v) { m_render_settings.setAuroraIntensity(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_aurora_hue(float v)       { m_render_settings.setAuroraHue(v); m_render_settings.apply(m_renderer); }
+
+// Rainbow
+void OhaoViewport::set_rainbow_enabled(bool v) { m_render_settings.setRainbowEnabled(v); m_render_settings.apply(m_renderer); }
+
+// Heat haze
+void OhaoViewport::set_heat_haze_enabled(bool v)    { m_render_settings.setHeatHazeEnabled(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_heat_haze_intensity(float v) { m_render_settings.setHeatHazeIntensity(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_heat_haze_frequency(float v) { m_render_settings.setHeatHazeFrequency(v); m_render_settings.apply(m_renderer); }
 
 // ===== Scene Management (delegates to SceneSync) =====
 

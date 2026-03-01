@@ -9,6 +9,7 @@
 #include "volumetric_pass.hpp"
 #include "motion_blur_pass.hpp"
 #include "dof_pass.hpp"
+#include "heat_haze_pass.hpp"
 #include <memory>
 
 namespace ohao {
@@ -35,6 +36,7 @@ public:
 
     // Input configuration
     void setHDRInput(VkImageView hdrInput);
+    void setHDRInputWithImage(VkImageView hdrInput, VkImage hdrImage);
     void setDepthBuffer(VkImageView depth);
     void setNormalBuffer(VkImageView normal);
     void setVelocityBuffer(VkImageView velocity);
@@ -113,6 +115,15 @@ public:
     void setDoFNearRange(float start, float end);
     void setDoFFarRange(float start, float end);
 
+    // Heat haze configuration
+    void setHeatHazeEnabled(bool v)      { m_heatHazeEnabled   = v; }
+    bool getHeatHazeEnabled() const      { return m_heatHazeEnabled; }
+    void setHeatHazeIntensity(float v)   { m_heatHazeIntensity = glm::clamp(v, 0.0f, 2.0f); }
+    float getHeatHazeIntensity() const   { return m_heatHazeIntensity; }
+    void setHeatHazeFrequency(float v)   { m_heatHazeFrequency = glm::clamp(v, 0.5f, 50.0f); }
+    float getHeatHazeFrequency() const   { return m_heatHazeFrequency; }
+    void setDeltaTime(float dt)          { m_totalTime += dt; }
+
     // Execute SSAO separately (called before lighting pass by DeferredRenderer)
     void executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex);
 
@@ -151,7 +162,8 @@ private:
     std::unique_ptr<SSRPass> m_ssrPass;
     std::unique_ptr<VolumetricPass> m_volumetricPass;
     std::unique_ptr<MotionBlurPass> m_motionBlurPass;
-    std::unique_ptr<DoFPass> m_dofPass;
+    std::unique_ptr<DoFPass>      m_dofPass;
+    std::unique_ptr<HeatHazePass> m_heatHazePass;
 
     // Tonemapping (final pass)
     VkRenderPass m_tonemapRenderPass{VK_NULL_HANDLE};
@@ -196,8 +208,17 @@ private:
     bool m_volumetricsEnabled{false};
     bool m_motionBlurEnabled{false};
     bool m_dofEnabled{false};
+    bool m_heatHazeEnabled{false};
     bool m_tonemappingEnabled{true};
     bool m_didExecute{false};
+
+    // Heat haze parameters
+    float m_heatHazeIntensity{0.5f};
+    float m_heatHazeFrequency{8.0f};
+    float m_totalTime{0.0f};
+
+    // Track both input image and its VkImage for heat haze barrier
+    VkImage m_hdrInputImage{VK_NULL_HANDLE};
 
     // Color buffer for SSR
     VkImageView m_colorBufferView{VK_NULL_HANDLE};

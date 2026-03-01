@@ -47,6 +47,8 @@ public:
     void setWetness(float w) { m_params.wetness = glm::clamp(w, 0.0f, 1.0f); }
     // Snow cover (0=bare, 1=fully covered) — set each frame before execute()
     void setSnowCover(float s) { m_params.snowCover = glm::clamp(s, 0.0f, 1.0f); }
+    // Frost cover (0=bare, 1=fully frosted) — set each frame before execute()
+    void setFrostCover(float f) { m_params.frostCover = glm::clamp(f, 0.0f, 1.0f); }
 
 private:
     bool createRenderPass();
@@ -117,7 +119,9 @@ private:
         float paddingW;         // 4
         float snowCover;        // 4  — 0=bare, 1=snow-covered (blizzard accumulation)
         float paddingS;         // 4
-    };                          // Total: 176 bytes
+        float frostCover;       // 4  — 0=bare, 1=frost/ice coated (forms above snow threshold)
+        float paddingF;         // 4
+    };                          // Total: 184 bytes
 
     LightingParams m_params{};
 };

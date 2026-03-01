@@ -55,6 +55,11 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
+    m_heatHazePass = std::make_unique<HeatHazePass>();
+    if (!m_heatHazePass->initialize(device, physicalDevice)) {
+        return false;
+    }
+
     // Create intermediate HDR + composite pass
     if (!createIntermediateHDR()) return false;
     if (!createCompositePass()) return false;
@@ -83,6 +88,7 @@ void PostProcessingPipeline::cleanup() {
     resetPass(m_volumetricPass);
     resetPass(m_motionBlurPass);
     resetPass(m_dofPass);
+    resetPass(m_heatHazePass);
 
     // Cleanup composite pass
     safeDestroy(m_compositePipeline);
@@ -177,7 +183,21 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (dofOut != VK_NULL_HANDLE) currentInput = dofOut;
     }
 
-    // ── 8. Tonemapping: HDR → LDR ─────────────────────────────────────
+    // ── 8. Heat Haze (screen-space UV distortion) ────────────────────
+    // m_hdrInputImage is used only as a non-null sentinel in HeatHazePass;
+    // the actual barrier in execute() operates only on the owned output buffer.
+    if (m_heatHazeEnabled && m_heatHazePass && m_hdrInputImage != VK_NULL_HANDLE) {
+        m_heatHazePass->setEnabled(m_heatHazeEnabled);
+        m_heatHazePass->setIntensity(m_heatHazeIntensity);
+        m_heatHazePass->setFrequency(m_heatHazeFrequency);
+        m_heatHazePass->setTime(m_totalTime);
+        m_heatHazePass->setInputImage(currentInput, m_hdrInputImage);
+        m_heatHazePass->execute(cmd, frameIndex);
+        VkImageView hazeOut = m_heatHazePass->getOutputView();
+        if (hazeOut != VK_NULL_HANDLE) currentInput = hazeOut;
+    }
+
+    // ── 9. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
         m_tonemapFramebuffer != VK_NULL_HANDLE && m_tonemapDescSet != VK_NULL_HANDLE) {
 
@@ -267,6 +287,7 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     if (m_volumetricPass) m_volumetricPass->onResize(width, height);
     if (m_motionBlurPass) m_motionBlurPass->onResize(width, height);
     if (m_dofPass) m_dofPass->onResize(width, height);
+    if (m_heatHazePass) m_heatHazePass->onResize(width, height);
 
     // Recreate intermediate HDR (for composite pass)
     destroyIntermediateHDR();
@@ -516,6 +537,12 @@ VkImageView PostProcessingPipeline::getDoFOutput() const {
 
 void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {
     m_hdrInputView = hdrInput;
+    updateTonemapDescriptors();
+}
+
+void PostProcessingPipeline::setHDRInputWithImage(VkImageView hdrInput, VkImage hdrImage) {
+    m_hdrInputView  = hdrInput;
+    m_hdrInputImage = hdrImage;
     updateTonemapDescriptors();
 }
 

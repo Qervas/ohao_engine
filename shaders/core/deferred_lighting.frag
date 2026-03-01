@@ -48,7 +48,7 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
-// Push constants (matches C++ LightingParams — 176 bytes, under NVIDIA 256-byte limit)
+// Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
     mat4 view;           // for cascade depth selection
@@ -61,6 +61,8 @@ layout(push_constant) uniform PushConstants {
     float paddingW;
     float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
     float paddingS;
+    float frostCover;    // 0=bare, 1=fully frost/ice coated
+    float paddingF;
 } pc;
 
 // Constants
@@ -206,6 +208,24 @@ void main() {
         albedo    = mix(albedo,    vec3(0.82, 0.87, 0.92), s); // white-ish snow tint
         roughness = mix(roughness, 0.90,                    s); // snow is matte
         metallic  = mix(metallic,  0.0,                     s); // snow is non-metallic
+    }
+
+    // Mud — high wetness on non-metallic surfaces develops an earth-tone tint.
+    // Only appears at wetness > 0.5 to avoid tinting lightly-wet surfaces.
+    if (pc.wetness > 0.5) {
+        float slopeFactor = clamp(N.y * 2.0, 0.0, 1.0);
+        float w = pc.wetness * slopeFactor;
+        float mud = clamp((w - 0.5) * 2.0, 0.0, 1.0) * (1.0 - metallic);
+        const vec3 mudTint = vec3(0.35, 0.27, 0.18);  // dark earth
+        albedo = mix(albedo, albedo * mudTint, mud * 0.55);
+    }
+
+    // Frost / Ice — forms when snow accumulation is high; crystalline coating.
+    if (pc.frostCover > 0.001) {
+        float f = pc.frostCover;
+        albedo    = mix(albedo,    vec3(0.78, 0.88, 0.95), f * 0.50);  // pale ice blue
+        roughness = mix(roughness, 0.08,                    f * 0.70);  // ice = very smooth
+        metallic  = mix(metallic,  0.10,                    f * 0.40);  // slight reflectance
     }
 
     // View direction — use push constant camera position

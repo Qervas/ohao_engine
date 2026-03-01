@@ -166,6 +166,46 @@ public:
     void setCloudSpeed(float v)           { m_cloud_speed = v; }
     float getCloudSpeed() const           { return m_cloud_speed; }
 
+    // === Sand (Sandstorm) Settings ===
+    void  setSandEnabled(bool v)    { m_sand_enabled    = v; }
+    bool  getSandEnabled() const    { return m_sand_enabled; }
+    void  setSandIntensity(float v) { m_sand_intensity  = v; }
+    float getSandIntensity() const  { return m_sand_intensity; }
+    void  setSandWindX(float v)     { m_sand_wind_x     = v; }
+    float getSandWindX() const      { return m_sand_wind_x; }
+
+    // === Frost Settings ===
+    void  setFrostAccumRate(float v) { m_frost_accum_rate = v; }
+    float getFrostAccumRate() const  { return m_frost_accum_rate; }
+    void  setFrostMeltRate(float v)  { m_frost_melt_rate  = v; }
+    float getFrostMeltRate() const   { return m_frost_melt_rate; }
+
+    // === God Rays Settings ===
+    void  setGodRaysEnabled(bool v)    { m_god_rays_enabled   = v; }
+    bool  getGodRaysEnabled() const    { return m_god_rays_enabled; }
+    void  setGodRaysIntensity(float v) { m_god_rays_intensity = v; }
+    float getGodRaysIntensity() const  { return m_god_rays_intensity; }
+
+    // === Aurora Settings ===
+    void  setAuroraEnabled(bool v)    { m_aurora_enabled   = v; }
+    bool  getAuroraEnabled() const    { return m_aurora_enabled; }
+    void  setAuroraIntensity(float v) { m_aurora_intensity = v; }
+    float getAuroraIntensity() const  { return m_aurora_intensity; }
+    void  setAuroraHue(float v)       { m_aurora_hue       = v; }
+    float getAuroraHue() const        { return m_aurora_hue; }
+
+    // === Rainbow Settings ===
+    void  setRainbowEnabled(bool v)    { m_rainbow_enabled   = v; }
+    bool  getRainbowEnabled() const    { return m_rainbow_enabled; }
+
+    // === Heat Haze Settings ===
+    void  setHeatHazeEnabled(bool v)    { m_heat_haze_enabled   = v; }
+    bool  getHeatHazeEnabled() const    { return m_heat_haze_enabled; }
+    void  setHeatHazeIntensity(float v) { m_heat_haze_intensity = v; }
+    float getHeatHazeIntensity() const  { return m_heat_haze_intensity; }
+    void  setHeatHazeFrequency(float v) { m_heat_haze_frequency = v; }
+    float getHeatHazeFrequency() const  { return m_heat_haze_frequency; }
+
 private:
     int m_render_mode = 0;  // 0=Forward, 1=Deferred
 
@@ -253,6 +293,32 @@ private:
     float m_cloud_alt_min  = 1500.0f;
     float m_cloud_alt_max  = 8000.0f;
     float m_cloud_speed    = 1.0f;
+
+    // Sand (sandstorm)
+    bool  m_sand_enabled    = false;
+    float m_sand_intensity  = 1.0f;
+    float m_sand_wind_x     = -0.20f;
+
+    // Frost temporal rates
+    float m_frost_accum_rate = 0.005f;
+    float m_frost_melt_rate  = 0.002f;
+
+    // God rays
+    bool  m_god_rays_enabled   = false;
+    float m_god_rays_intensity = 0.8f;
+
+    // Aurora
+    bool  m_aurora_enabled   = false;
+    float m_aurora_intensity = 0.6f;
+    float m_aurora_hue       = 0.0f;  // 0=green, 1=purple
+
+    // Rainbow
+    bool  m_rainbow_enabled  = false;
+
+    // Heat haze
+    bool  m_heat_haze_enabled   = false;
+    float m_heat_haze_intensity = 0.5f;
+    float m_heat_haze_frequency = 8.0f;
 };
 
 } // namespace godot

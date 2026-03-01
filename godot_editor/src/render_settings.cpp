@@ -104,6 +104,32 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     deferred->setCloudAltMin(m_cloud_alt_min);
     deferred->setCloudAltMax(m_cloud_alt_max);
     deferred->setCloudSpeed(m_cloud_speed);
+
+    // Sand (sandstorm)
+    deferred->setSandEnabled(m_sand_enabled);
+    deferred->setSandIntensity(m_sand_intensity);
+    deferred->setSandWindX(m_sand_wind_x);
+
+    // Frost temporal rates
+    deferred->setFrostAccumRate(m_frost_accum_rate);
+    deferred->setFrostMeltRate(m_frost_melt_rate);
+
+    // God rays
+    deferred->setGodRaysEnabled(m_god_rays_enabled);
+    deferred->setGodRaysIntensity(m_god_rays_intensity);
+
+    // Aurora
+    deferred->setAuroraEnabled(m_aurora_enabled);
+    deferred->setAuroraIntensity(m_aurora_intensity);
+    deferred->setAuroraHue(m_aurora_hue);
+
+    // Rainbow
+    deferred->setRainbowEnabled(m_rainbow_enabled);
+
+    // Heat haze
+    pp->setHeatHazeEnabled(m_heat_haze_enabled);
+    pp->setHeatHazeIntensity(m_heat_haze_intensity);
+    pp->setHeatHazeFrequency(m_heat_haze_frequency);
 }
 
 } // namespace godot

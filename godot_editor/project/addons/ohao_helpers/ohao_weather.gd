@@ -24,7 +24,7 @@
 ##   wx.stop()
 ##
 ## ── WEATHER STATES ────────────────────────────────────────────────────────────
-##   clear, partly_cloudy, overcast, foggy, rain, stormy, blizzard
+##   clear, partly_cloudy, overcast, foggy, rain, stormy, blizzard, sandstorm
 ##
 ## ── TIME PRESETS ──────────────────────────────────────────────────────────────
 ##   midnight, predawn, dawn, sunrise, morning, noon, afternoon,
@@ -57,6 +57,10 @@ const TIMES: Dictionary = {
 # fog_density  : volumetric fog density (0=off, 0.02=light, 0.1=thick)
 # fog_scatter  : in-scatter strength (0-1)
 # fog_r/g/b    : fog/ambient color tint
+# wind_strength   : physics wind force magnitude
+# wind_turbulence : physics wind turbulence
+# rain_vol / wind_vol : ambient audio volumes (0-1)
+# sand_intensity / sand_wind_x : sandstorm GPU pass params
 const WEATHER_STATES: Dictionary = {
 	"clear": {
 		"turb_add":  0.0,  "int_mult":  1.00,
@@ -65,6 +69,9 @@ const WEATHER_STATES: Dictionary = {
 		"fog_r": 0.70, "fog_g": 0.80, "fog_b": 1.00,
 		"rain_intensity": 0.0,  "wind_x": 0.00,
 		"snow_intensity": 0.0,  "snow_wind_x": 0.00,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 0.0,   "wind_turbulence": 0.0,
+		"rain_vol": 0.0,        "wind_vol": 0.0,
 	},
 	"partly_cloudy": {
 		"turb_add":  0.6,  "int_mult":  0.88,
@@ -73,6 +80,9 @@ const WEATHER_STATES: Dictionary = {
 		"fog_r": 0.75, "fog_g": 0.82, "fog_b": 1.00,
 		"rain_intensity": 0.0,  "wind_x": -0.04,
 		"snow_intensity": 0.0,  "snow_wind_x": -0.04,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 2.0,   "wind_turbulence": 0.1,
+		"rain_vol": 0.0,        "wind_vol": 0.1,
 	},
 	"overcast": {
 		"turb_add":  3.0,  "int_mult":  0.42,
@@ -81,6 +91,9 @@ const WEATHER_STATES: Dictionary = {
 		"fog_r": 0.65, "fog_g": 0.70, "fog_b": 0.75,
 		"rain_intensity": 0.0,  "wind_x": -0.06,
 		"snow_intensity": 0.0,  "snow_wind_x": -0.06,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 3.0,   "wind_turbulence": 0.2,
+		"rain_vol": 0.0,        "wind_vol": 0.2,
 	},
 	"foggy": {
 		"turb_add":  2.0,  "int_mult":  0.55,
@@ -89,6 +102,9 @@ const WEATHER_STATES: Dictionary = {
 		"fog_r": 0.80, "fog_g": 0.82, "fog_b": 0.85,
 		"rain_intensity": 0.0,  "wind_x": 0.00,
 		"snow_intensity": 0.0,  "snow_wind_x": 0.00,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 0.5,   "wind_turbulence": 0.05,
+		"rain_vol": 0.05,       "wind_vol": 0.1,
 	},
 	"rain": {
 		"turb_add":  4.0,  "int_mult":  0.32,
@@ -97,6 +113,9 @@ const WEATHER_STATES: Dictionary = {
 		"fog_r": 0.50, "fog_g": 0.55, "fog_b": 0.60,
 		"rain_intensity": 0.75, "wind_x": -0.10,
 		"snow_intensity": 0.0,  "snow_wind_x": -0.10,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 5.0,   "wind_turbulence": 0.3,
+		"rain_vol": 0.7,        "wind_vol": 0.3,
 	},
 	"stormy": {
 		"turb_add":  6.5,  "int_mult":  0.18,
@@ -105,14 +124,31 @@ const WEATHER_STATES: Dictionary = {
 		"fog_r": 0.28, "fog_g": 0.32, "fog_b": 0.38,
 		"rain_intensity": 1.00, "wind_x": -0.18,
 		"snow_intensity": 0.0,  "snow_wind_x": -0.18,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 15.0,  "wind_turbulence": 0.7,
+		"rain_vol": 1.0,        "wind_vol": 0.8,
 	},
 	"blizzard": {
 		"turb_add":  3.5,  "int_mult":  0.50,
 		"cloud_coverage": 0.92, "cloud_density": 0.70, "cloud_speed": 4.5,
 		"fog_density": 0.090, "fog_scatter": 0.95,
 		"fog_r": 0.88, "fog_g": 0.90, "fog_b": 0.95,
-		"rain_intensity": 0.0,  "wind_x": -0.12,  # blizzard uses fog, not liquid rain
+		"rain_intensity": 0.0,  "wind_x": -0.12,
 		"snow_intensity": 1.0,  "snow_wind_x": -0.12,
+		"sand_intensity": 0.0,  "sand_wind_x": 0.00,
+		"wind_strength": 12.0,  "wind_turbulence": 0.8,
+		"rain_vol": 0.0,        "wind_vol": 1.0,
+	},
+	"sandstorm": {
+		"turb_add":  5.0,  "int_mult":  0.25,
+		"cloud_coverage": 0.60, "cloud_density": 0.50, "cloud_speed": 8.0,
+		"fog_density": 0.070, "fog_scatter": 0.90,
+		"fog_r": 0.72, "fog_g": 0.60, "fog_b": 0.38,
+		"rain_intensity": 0.0,  "wind_x": -0.20,
+		"snow_intensity": 0.0,  "snow_wind_x": -0.20,
+		"sand_intensity": 1.0,  "sand_wind_x": -0.20,
+		"wind_strength": 18.0,  "wind_turbulence": 0.9,
+		"rain_vol": 0.0,        "wind_vol": 1.0,
 	},
 }
 
@@ -280,6 +316,20 @@ static func _apply_state(vp: OhaoViewport, p: Dictionary) -> void:
 	vp.set_snow_intensity(maxf(snow, 0.0))
 	vp.set_snow_wind_x(p.get("snow_wind_x", 0.0))
 
+	# Sand
+	var sand: float = p.get("sand_intensity", 0.0)
+	vp.set_sand_enabled(sand > 0.01)
+	vp.set_sand_intensity(maxf(sand, 0.0))
+	vp.set_sand_wind_x(p.get("sand_wind_x", 0.0))
+
+	# Wind coupling to physics
+	var ws: float = p.get("wind_strength", 0.0)
+	if ws > 0.05:
+		var wx: float = p.get("wind_x", p.get("sand_wind_x", -0.1))
+		vp.set_wind(Vector3(wx, 0.0, 0.1).normalized(), ws, p.get("wind_turbulence", 0.1))
+	else:
+		vp.clear_wind()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _WeatherClock — simple day/night clock Node (no weather).
@@ -343,6 +393,12 @@ class _WeatherController extends Node:
 	var _from_params: Dictionary = {}
 	var _to_params:   Dictionary = {}
 
+	# Ambient audio handles
+	var _rain_handle: int = -1
+	var _wind_handle: int = -1
+	var _audio_ready: bool = false
+	var _audio_tried: bool = false
+
 
 	## Start a smooth transition to a new weather state.
 	## duration: seconds for the full crossfade.
@@ -399,12 +455,32 @@ class _WeatherController extends Node:
 	## Remove this controller from the scene.
 	func stop() -> void:
 		_time_running = false
+		# Stop ambient audio
+		if _audio_ready and is_instance_valid(_vp):
+			if _rain_handle >= 0: _vp.stop_sound(_rain_handle)
+			if _wind_handle >= 0: _vp.stop_sound(_wind_handle)
+		_audio_ready = false
 		queue_free()
+
+
+	func _init_audio() -> void:
+		if _audio_tried or not is_instance_valid(_vp):
+			return
+		_audio_tried = true
+		# Loop both ambient tracks at zero volume — we fade in/out via set_sound_volume
+		_rain_handle = _vp.play_sound("res://sounds/ambient/rain.wav", 2, true, 0.0)
+		_wind_handle = _vp.play_sound("res://sounds/ambient/wind.wav", 2, true, 0.0)
+		if _rain_handle >= 0 and _wind_handle >= 0:
+			_audio_ready = true
 
 
 	func _process(delta: float) -> void:
 		if not is_instance_valid(_vp):
 			return
+
+		# Lazy audio init on first frame
+		if not _audio_tried:
+			_init_audio()
 
 		# 1. Advance time
 		if _time_running:
@@ -426,6 +502,11 @@ class _WeatherController extends Node:
 
 		# 5. Apply weather on top
 		_apply_lerped(lerped)
+
+		# 6. Update ambient audio volumes
+		if _audio_ready:
+			_vp.set_sound_volume(_rain_handle, lerped.get("rain_vol", 0.0))
+			_vp.set_sound_volume(_wind_handle, lerped.get("wind_vol", 0.0))
 
 
 	func _apply_lerped(p: Dictionary) -> void:
@@ -461,6 +542,20 @@ class _WeatherController extends Node:
 		_vp.set_snow_intensity(maxf(snow, 0.0))
 		_vp.set_snow_wind_x(p.get("snow_wind_x", 0.0))
 
+		# Sand
+		var sand: float = p.get("sand_intensity", 0.0)
+		_vp.set_sand_enabled(sand > 0.01)
+		_vp.set_sand_intensity(maxf(sand, 0.0))
+		_vp.set_sand_wind_x(p.get("sand_wind_x", 0.0))
+
+		# Wind coupling to physics
+		var ws: float = p.get("wind_strength", 0.0)
+		if ws > 0.05:
+			var wx: float = p.get("wind_x", p.get("sand_wind_x", -0.1))
+			_vp.set_wind(Vector3(wx, 0.0, 0.1).normalized(), ws, p.get("wind_turbulence", 0.1))
+		else:
+			_vp.clear_wind()
+
 
 	func _lerp_params(a: Dictionary, b: Dictionary, t: float) -> Dictionary:
 		return {
@@ -478,6 +573,12 @@ class _WeatherController extends Node:
 			"wind_x":         lerpf(a.get("wind_x", 0.0),         b.get("wind_x", 0.0),         t),
 			"snow_intensity": lerpf(a.get("snow_intensity", 0.0), b.get("snow_intensity", 0.0), t),
 			"snow_wind_x":    lerpf(a.get("snow_wind_x", 0.0),    b.get("snow_wind_x", 0.0),    t),
+			"sand_intensity": lerpf(a.get("sand_intensity", 0.0), b.get("sand_intensity", 0.0), t),
+			"sand_wind_x":    lerpf(a.get("sand_wind_x", 0.0),    b.get("sand_wind_x", 0.0),    t),
+			"wind_strength":  lerpf(a.get("wind_strength", 0.0),  b.get("wind_strength", 0.0),  t),
+			"wind_turbulence":lerpf(a.get("wind_turbulence",0.0), b.get("wind_turbulence",0.0), t),
+			"rain_vol":       lerpf(a.get("rain_vol", 0.0),        b.get("rain_vol", 0.0),        t),
+			"wind_vol":       lerpf(a.get("wind_vol", 0.0),        b.get("wind_vol", 0.0),        t),
 		}
 
 
