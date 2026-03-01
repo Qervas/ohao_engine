@@ -99,6 +99,15 @@ func control() -> GDScript:
 	return load("res://addons/ohao_helpers/ohao_control.gd")
 
 
+## Get the weather/day-night system (static class).
+## OhaoWeather.set_time(vp, 14.5)           # 2:30 PM
+## OhaoWeather.preset(vp, "sunset")          # named preset
+## OhaoWeather.create_clock(vp, 6.0, 0.05)  # auto-advancing clock Node
+## OhaoWeather.weather_preset(vp, "golden_hour")
+func weather() -> GDScript:
+	return load("res://addons/ohao_helpers/ohao_weather.gd")
+
+
 ## Create an in-game settings panel and optionally add it to a parent node.
 func create_settings_panel(parent: Node = null) -> CanvasLayer:
 	var PanelClass = load("res://addons/ohao_helpers/ohao_settings_panel.gd")

@@ -86,6 +86,9 @@ private:
     int m_gizmo_mode = 0;
     bool m_gizmo_enabled = true;
 
+    // === Time of Day ===
+    float m_time_of_day = 12.0f;  // hours [0, 24)
+
 protected:
     static void _bind_methods();
 
@@ -252,6 +255,10 @@ public:
     float get_sky_turbidity() const { return m_render_settings.getSkyTurbidity(); }
     void set_sky_intensity(float intensity);
     float get_sky_intensity() const { return m_render_settings.getSkyIntensity(); }
+
+    // Time of day (drives sun direction, sky intensity, turbidity automatically)
+    void set_time_of_day(float hours);
+    float get_time_of_day() const { return m_time_of_day; }
 
     // Cloud settings
     void set_cloud_enabled(bool enabled);

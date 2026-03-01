@@ -19,6 +19,9 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/constants.hpp>
+
+#include <cmath>
 
 namespace godot {
 
@@ -242,6 +245,11 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_sky_intensity", "intensity"), &OhaoViewport::set_sky_intensity);
     ClassDB::bind_method(D_METHOD("get_sky_intensity"), &OhaoViewport::get_sky_intensity);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sky_intensity", PROPERTY_HINT_RANGE, "0.0,5.0,0.1"), "set_sky_intensity", "get_sky_intensity");
+
+    // === Time of Day ===
+    ClassDB::bind_method(D_METHOD("set_time_of_day", "hours"), &OhaoViewport::set_time_of_day);
+    ClassDB::bind_method(D_METHOD("get_time_of_day"), &OhaoViewport::get_time_of_day);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "time_of_day", PROPERTY_HINT_RANGE, "0.0,24.0,0.01"), "set_time_of_day", "get_time_of_day");
 
     // === Cloud Settings ===
     ADD_GROUP("Clouds", "cloud_");
@@ -890,6 +898,40 @@ void OhaoViewport::set_sun_direction(const Vector3& dir) {
 Vector3 OhaoViewport::get_sun_direction() const {
     glm::vec3 d = m_render_settings.getSunDirection();
     return Vector3(d.x, d.y, d.z);
+}
+
+void OhaoViewport::set_time_of_day(float hours) {
+    // Clamp to [0, 24)
+    hours = std::fmod(hours, 24.0f);
+    if (hours < 0.0f) hours += 24.0f;
+    m_time_of_day = hours;
+
+    // Sun arc: dawn at 6am, zenith at noon, dusk at 18pm
+    // t = 0 at dawn (6am), t = 0.5 at noon, t = 1 at dusk (18pm)
+    float t = glm::clamp((hours - 6.0f) / 12.0f, 0.0f, 1.0f);
+    float elevAngle = t * glm::pi<float>();  // 0 → PI
+    float sinElev = std::sin(elevAngle);     // 0 → 1 → 0 (vertical height)
+    float cosElev = std::cos(elevAngle);     // 1 → 0 → -1 (east → west)
+
+    // Sun direction vector (toward sun from world origin)
+    // East at 6am (-cosElev=−1,+X), overhead at noon (0,+Y), West at 6pm (+X)
+    // Small +Z tilt for natural south-sky angle
+    glm::vec3 sunDir = glm::normalize(glm::vec3(-cosElev, sinElev + 0.01f, 0.3f));
+
+    // Sky intensity: smooth ramp up after dawn, peak at noon, down before dusk; dark at night
+    float dayWindow = glm::clamp((hours - 5.0f), 0.0f, 1.0f)   // fade in from 5am
+                    * glm::clamp((19.5f - hours), 0.0f, 1.0f);  // fade out to 7:30pm
+    float dayIntensity = glm::mix(0.15f, 1.0f, sinElev);        // horizon dim, noon bright
+    float skyIntensity = glm::mix(0.04f, dayIntensity, dayWindow);
+
+    // Turbidity: clear at noon, atmospheric at dawn/dusk (more scattering)
+    float turbidity = glm::mix(3.5f, 2.0f, sinElev);            // dusk=3.5, noon=2.0
+    turbidity = glm::clamp(turbidity, 1.8f, 5.0f);
+
+    m_render_settings.setSunDirection(sunDir);
+    m_render_settings.setSkyIntensity(skyIntensity);
+    m_render_settings.setSkyTurbidity(turbidity);
+    m_render_settings.apply(m_renderer);
 }
 
 void OhaoViewport::set_cloud_enabled(bool enabled) { m_render_settings.setCloudEnabled(enabled); m_render_settings.apply(m_renderer); }
