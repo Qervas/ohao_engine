@@ -126,6 +126,12 @@ public:
     void setRainWindX(float v)      { m_rain_wind_x    = v; }
     float getRainWindX() const      { return m_rain_wind_x; }
 
+    // === Wetness Rate Settings ===
+    void  setWetnessRate(float v)   { m_wetness_rate  = v; }
+    float getWetnessRate() const    { return m_wetness_rate; }
+    void  setDryingRate(float v)    { m_drying_rate   = v; }
+    float getDryingRate() const     { return m_drying_rate; }
+
     // === Cloud Settings ===
     void setCloudEnabled(bool v)          { m_cloud_enabled = v; }
     bool getCloudEnabled() const          { return m_cloud_enabled; }
@@ -203,6 +209,10 @@ private:
     bool  m_rain_enabled   = false;
     float m_rain_intensity = 1.0f;
     float m_rain_wind_x    = -0.08f;
+
+    // Wetness rates
+    float m_wetness_rate   = 0.03f;
+    float m_drying_rate    = 0.005f;
 
     // Clouds
     bool  m_cloud_enabled  = false;

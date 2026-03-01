@@ -106,6 +106,13 @@ public:
     void  setRainWindX(float v);
     float getRainWindX() const    { return m_rainWindX; }
 
+    // Ground wetness — temporal integration driven by rain state.
+    // Surfaces accumulate wetness at wetRate/s and dry at dryRate/s.
+    // Surface wetness is readable so scripts can react (footstep sounds, etc.)
+    float getSurfaceWetness() const { return m_wetness; }
+    void  setWetnessRate(float r)   { m_wetRate  = glm::clamp(r, 0.0f, 10.0f); }
+    void  setDryingRate(float r)    { m_dryRate  = glm::clamp(r, 0.0f, 10.0f); }
+
     // Particle system
     void spawnParticles(const glm::vec3& position, ParticleType type,
                         const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
@@ -183,6 +190,11 @@ private:
     bool  m_rainEnabled{false};
     float m_rainIntensity{1.0f};
     float m_rainWindX{-0.08f};
+
+    // Ground wetness (temporal integration — driven from rain state each frame)
+    float m_wetness{0.0f};   // current surface wetness [0, 1]
+    float m_wetRate{0.03f};  // units/sec to accumulate (default: ~33s to max)
+    float m_dryRate{0.005f}; // units/sec to dry        (default: ~200s to dry)
 
     // Particle system
     std::unique_ptr<ParticleSystem> m_particleSystem;

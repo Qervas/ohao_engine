@@ -235,6 +235,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_lightingPass->setLightBuffer(m_lightBuffer);
         m_lightingPass->setLightCount(m_lightCount);
 
+        // Temporal wetness integration: ramp toward rain intensity, dry slowly when off
+        float wetnessTarget = (m_rainEnabled && m_rainIntensity > 0.001f)
+                              ? m_rainIntensity : 0.0f;
+        if (m_wetness < wetnessTarget)
+            m_wetness = std::min(m_wetness + m_wetRate  * m_deltaTime, wetnessTarget);
+        else
+            m_wetness = std::max(m_wetness - m_dryRate  * m_deltaTime, wetnessTarget);
+        m_lightingPass->setWetness(m_wetness);
+
         // SSAO texture is set after executeSSAO() call below
     }
 

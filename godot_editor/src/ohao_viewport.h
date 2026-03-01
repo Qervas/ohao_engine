@@ -268,6 +268,14 @@ public:
     void set_rain_wind_x(float v);
     float get_rain_wind_x() const { return m_render_settings.getRainWindX(); }
 
+    // Wetness rate settings (how fast surfaces wet/dry)
+    void  set_wetness_rate(float v);
+    float get_wetness_rate() const { return m_render_settings.getWetnessRate(); }
+    void  set_drying_rate(float v);
+    float get_drying_rate() const  { return m_render_settings.getDryingRate(); }
+    // Read-only — query current surface wetness level (driven by rain automatically)
+    float get_surface_wetness() const;
+
     // Cloud settings
     void set_cloud_enabled(bool enabled);
     bool get_cloud_enabled() const { return m_render_settings.getCloudEnabled(); }

@@ -48,7 +48,7 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
-// Push constants (matches C++ LightingParams — 160 bytes, under NVIDIA 256-byte limit)
+// Push constants (matches C++ LightingParams — 168 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
     mat4 view;           // for cascade depth selection
@@ -56,7 +56,9 @@ layout(push_constant) uniform PushConstants {
     float padding1;
     vec2 screenSize;
     uint lightCount;
-    uint flags;  // Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
+    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
+    float wetness;       // 0=dry, 1=fully wet — drives surface material modulation
+    float paddingW;
 } pc;
 
 // Constants
@@ -184,6 +186,15 @@ void main() {
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
+
+    // Ground wetness — modulate material based on rain accumulation.
+    // Slope factor: horizontal faces (N.y near 1) accumulate water; vertical walls don't.
+    if (pc.wetness > 0.001) {
+        float slopeFactor = clamp(N.y * 2.0, 0.0, 1.0);
+        float w = pc.wetness * slopeFactor;
+        albedo    *= 1.0 - w * 0.30;                              // darken (light absorbed by water)
+        roughness  = mix(roughness, max(roughness * 0.15, 0.02), w); // near-mirror when fully wet
+    }
 
     // View direction — use push constant camera position
     vec3 V = normalize(pc.cameraPos - fragPos);

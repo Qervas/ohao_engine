@@ -43,6 +43,9 @@ public:
     // Cascade shadow map data (UBO from CSMPass, not owned here)
     void setCascadeBuffer(VkBuffer buf) { m_cascadeBuffer = buf; }
 
+    // Wetness (0=dry, 1=fully wet) — set each frame before execute()
+    void setWetness(float w) { m_params.wetness = glm::clamp(w, 0.0f, 1.0f); }
+
 private:
     bool createRenderPass();
     bool createFramebuffer();
@@ -108,7 +111,9 @@ private:
         glm::vec2 screenSize;   // 8
         uint32_t lightCount;    // 4
         uint32_t flags;         // 4  — Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
-    };                          // Total: 160 bytes
+        float wetness;          // 4  — 0=dry, 1=fully wet (rain accumulation)
+        float paddingW;         // 4
+    };                          // Total: 168 bytes
 
     LightingParams m_params{};
 };

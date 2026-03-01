@@ -266,6 +266,16 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_rain_wind_x"), &OhaoViewport::get_rain_wind_x);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rain_wind_x", PROPERTY_HINT_RANGE, "-1.0,1.0,0.01"), "set_rain_wind_x", "get_rain_wind_x");
 
+    ClassDB::bind_method(D_METHOD("set_wetness_rate", "rate"), &OhaoViewport::set_wetness_rate);
+    ClassDB::bind_method(D_METHOD("get_wetness_rate"), &OhaoViewport::get_wetness_rate);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "wetness_rate", PROPERTY_HINT_RANGE, "0.0,10.0,0.001"), "set_wetness_rate", "get_wetness_rate");
+
+    ClassDB::bind_method(D_METHOD("set_drying_rate", "rate"), &OhaoViewport::set_drying_rate);
+    ClassDB::bind_method(D_METHOD("get_drying_rate"), &OhaoViewport::get_drying_rate);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "drying_rate", PROPERTY_HINT_RANGE, "0.0,10.0,0.001"), "set_drying_rate", "get_drying_rate");
+
+    ClassDB::bind_method(D_METHOD("get_surface_wetness"), &OhaoViewport::get_surface_wetness);
+
     // === Cloud Settings ===
     ADD_GROUP("Clouds", "cloud_");
 
@@ -952,6 +962,13 @@ void OhaoViewport::set_time_of_day(float hours) {
 void OhaoViewport::set_rain_enabled(bool enabled) { m_render_settings.setRainEnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_rain_intensity(float v)    { m_render_settings.setRainIntensity(v); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_rain_wind_x(float v)       { m_render_settings.setRainWindX(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_wetness_rate(float v)      { m_render_settings.setWetnessRate(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_drying_rate(float v)       { m_render_settings.setDryingRate(v); m_render_settings.apply(m_renderer); }
+float OhaoViewport::get_surface_wetness() const {
+    if (!m_renderer) return 0.0f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getSurfaceWetness() : 0.0f;
+}
 
 void OhaoViewport::set_cloud_enabled(bool enabled) { m_render_settings.setCloudEnabled(enabled); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_cloud_coverage(float v)     { m_render_settings.setCloudCoverage(v); m_render_settings.apply(m_renderer); }
