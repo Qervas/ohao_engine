@@ -54,6 +54,8 @@ public:
     void setTonemapOperator(TonemapOperator op) { m_tonemapOp = op; }
     void setExposure(float exposure) { m_exposure = exposure; }
     void setGamma(float gamma) { m_gamma = gamma; }
+    // Lightning flash — set each frame (0=off, 3+=bright strike)
+    void setFlashIntensity(float v) { m_flashIntensity = glm::max(v, 0.0f); }
 
     // Bloom configuration
     void setBloomThreshold(float threshold);
@@ -204,6 +206,7 @@ private:
     TonemapOperator m_tonemapOp{TonemapOperator::ACES};
     float m_exposure{1.0f};
     float m_gamma{2.2f};
+    float m_flashIntensity{0.0f};
 
     // Push constants for tonemapping (must match GLSL layout in tonemapping.frag)
     struct TonemapParams {
@@ -211,6 +214,8 @@ private:
         float gamma;
         float bloomStrength;   // 0.0 = no bloom composite, 1.0+ = bloom intensity
         uint32_t tonemapOp;    // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
+        float flashIntensity;  // lightning flash (0=none, 3+ = bright strike)
+        float paddingF;
     };
 
     // Push constants for composite pass (must match composite.comp)

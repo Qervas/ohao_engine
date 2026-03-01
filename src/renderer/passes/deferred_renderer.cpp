@@ -2,6 +2,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <array>
+#include <cmath>
 
 namespace ohao {
 
@@ -266,6 +267,46 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             m_postProcessing->setShadowMap(m_csmPass->getShadowMapArrayView(),
                                             m_csmPass->getShadowSampler());
         }
+
+        // Lightning flash — auto-enable when heavy rain active; also accepts manual trigger
+        bool stormActive = m_rainEnabled && m_rainIntensity >= 0.7f;
+        bool shouldStrike = m_lightningEnabled || stormActive;
+        if (shouldStrike) {
+            // Count down timer; forced trigger bypasses it
+            bool fireNow = m_lightningTimerForce;
+            m_lightningTimerForce = false;
+            if (!fireNow) {
+                m_lightningTimer -= m_deltaTime;
+                if (m_lightningTimer <= 0.0f) fireNow = true;
+            }
+            if (fireNow) {
+                // Randomize: use totalTime as cheap seed
+                float seed = std::fmod(m_totalTime * 127.3f, 1.0f);
+                float seed2 = std::fmod(m_totalTime * 311.7f, 1.0f);
+                m_flashIntensity  = m_lightningBrightness * (0.75f + 0.5f * seed);
+                m_flickerTimer    = 0.05f + 0.08f * seed2;  // secondary flicker delay
+                m_flickerFired    = false;
+                m_lightningPending = true;
+                // Shorter intervals during heavy storm
+                float intensityFactor = stormActive ? (0.4f + 0.6f * (1.0f - m_rainIntensity)) : 1.0f;
+                m_lightningTimer = m_lightningInterval * intensityFactor
+                                   * (0.5f + seed);  // ±50% jitter
+            }
+            // Secondary flicker
+            if (!m_flickerFired && m_flickerTimer > 0.0f) {
+                m_flickerTimer -= m_deltaTime;
+                if (m_flickerTimer <= 0.0f) {
+                    m_flashIntensity = m_flashIntensity * 0.4f + m_lightningBrightness * 0.6f;
+                    m_flickerFired = true;
+                }
+            }
+            // Exponential decay (~1.5s to reach near zero at default decay)
+            float decayFactor = std::pow(0.04f, m_deltaTime);
+            m_flashIntensity *= decayFactor;
+        } else {
+            m_flashIntensity = 0.0f;
+        }
+        m_postProcessing->setFlashIntensity(m_flashIntensity);
     }
 
     // --- Render Graph: barrier-tracked passes (CSM → GBuffer → SSAO → SSGI → Lighting) ---

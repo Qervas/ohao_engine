@@ -113,6 +113,18 @@ public:
     void  setWetnessRate(float r)   { m_wetRate  = glm::clamp(r, 0.0f, 10.0f); }
     void  setDryingRate(float r)    { m_dryRate  = glm::clamp(r, 0.0f, 10.0f); }
 
+    // Lightning — auto-triggered when rain intensity >= autoThreshold.
+    // Also exposed for scripted control (cutscenes, horror events, etc.)
+    void  setLightningEnabled(bool v)       { m_lightningEnabled = v; }
+    bool  getLightningEnabled() const       { return m_lightningEnabled; }
+    void  setLightningInterval(float s)     { m_lightningInterval = glm::max(s, 0.5f); }
+    float getLightningInterval() const      { return m_lightningInterval; }
+    void  setLightningBrightness(float v)   { m_lightningBrightness = glm::clamp(v, 0.1f, 10.0f); }
+    void  triggerLightning()                { m_lightningTimerForce = true; }
+    float getFlashIntensity() const         { return m_flashIntensity; }
+    // Drain pending signal (checked by OhaoViewport::_process to emit lightning_struck)
+    bool  consumeLightningPending()         { bool p = m_lightningPending; m_lightningPending = false; return p; }
+
     // Particle system
     void spawnParticles(const glm::vec3& position, ParticleType type,
                         const glm::vec3& direction = glm::vec3(0.0f, 1.0f, 0.0f));
@@ -195,6 +207,17 @@ private:
     float m_wetness{0.0f};   // current surface wetness [0, 1]
     float m_wetRate{0.03f};  // units/sec to accumulate (default: ~33s to max)
     float m_dryRate{0.005f}; // units/sec to dry        (default: ~200s to dry)
+
+    // Lightning flash state machine
+    bool  m_lightningEnabled{false};
+    float m_lightningInterval{8.0f};    // base seconds between strikes
+    float m_lightningBrightness{3.5f};  // peak flash HDR value
+    float m_lightningTimer{0.0f};       // countdown to next strike
+    float m_flashIntensity{0.0f};       // current flash (drives post-processing)
+    float m_flickerTimer{0.0f};         // countdown to secondary flicker
+    bool  m_flickerFired{true};         // secondary flicker already happened this strike
+    bool  m_lightningPending{false};    // drain flag for GDScript signal
+    bool  m_lightningTimerForce{false}; // manual trigger from GDScript
 
     // Particle system
     std::unique_ptr<ParticleSystem> m_particleSystem;

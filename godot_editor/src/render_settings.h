@@ -132,6 +132,14 @@ public:
     void  setDryingRate(float v)    { m_drying_rate   = v; }
     float getDryingRate() const     { return m_drying_rate; }
 
+    // === Lightning Settings ===
+    void  setLightningEnabled(bool v)       { m_lightning_enabled    = v; }
+    bool  getLightningEnabled() const       { return m_lightning_enabled; }
+    void  setLightningInterval(float v)     { m_lightning_interval   = v; }
+    float getLightningInterval() const      { return m_lightning_interval; }
+    void  setLightningBrightness(float v)   { m_lightning_brightness = v; }
+    float getLightningBrightness() const    { return m_lightning_brightness; }
+
     // === Cloud Settings ===
     void setCloudEnabled(bool v)          { m_cloud_enabled = v; }
     bool getCloudEnabled() const          { return m_cloud_enabled; }
@@ -213,6 +221,11 @@ private:
     // Wetness rates
     float m_wetness_rate   = 0.03f;
     float m_drying_rate    = 0.005f;
+
+    // Lightning
+    bool  m_lightning_enabled    = false;
+    float m_lightning_interval   = 8.0f;
+    float m_lightning_brightness = 3.5f;
 
     // Clouds
     bool  m_cloud_enabled  = false;

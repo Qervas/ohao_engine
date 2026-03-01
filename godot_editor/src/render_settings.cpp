@@ -85,6 +85,11 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     deferred->setWetnessRate(m_wetness_rate);
     deferred->setDryingRate(m_drying_rate);
 
+    // Lightning
+    deferred->setLightningEnabled(m_lightning_enabled);
+    deferred->setLightningInterval(m_lightning_interval);
+    deferred->setLightningBrightness(m_lightning_brightness);
+
     // Clouds
     deferred->setCloudEnabled(m_cloud_enabled);
     deferred->setCloudCoverage(m_cloud_coverage);

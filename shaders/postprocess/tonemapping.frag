@@ -14,6 +14,8 @@ layout(push_constant) uniform TonemapParams {
     float gamma;
     float bloomStrength;
     uint tonemapOperator;  // 0=ACES, 1=Reinhard, 2=Uncharted2, 3=Neutral
+    float flashIntensity;  // lightning flash — additive pre-tonemap HDR brightening
+    float paddingF;
 } params;
 
 // ACES filmic tonemapping
@@ -75,6 +77,11 @@ void main() {
     // Add bloom
     vec3 bloom = texture(bloomInput, inTexCoord).rgb;
     hdrColor += bloom * params.bloomStrength;
+
+    // Lightning flash — warm-white additive HDR brightening (tonemapper compresses it naturally)
+    if (params.flashIntensity > 0.001) {
+        hdrColor += params.flashIntensity * vec3(1.0, 0.97, 0.88);
+    }
 
     // Apply exposure
     hdrColor *= params.exposure;

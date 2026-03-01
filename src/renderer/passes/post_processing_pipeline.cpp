@@ -233,10 +233,12 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
                                 m_tonemapLayout, 0, 1, &m_tonemapDescSet, 0, nullptr);
 
         TonemapParams params{};
-        params.exposure = m_exposure;
-        params.gamma = m_gamma;
-        params.bloomStrength = bloomStrength;
-        params.tonemapOp = static_cast<uint32_t>(m_tonemapOp);
+        params.exposure       = m_exposure;
+        params.gamma          = m_gamma;
+        params.bloomStrength  = bloomStrength;
+        params.tonemapOp      = static_cast<uint32_t>(m_tonemapOp);
+        params.flashIntensity = m_flashIntensity;
+        params.paddingF       = 0.0f;
 
         vkCmdPushConstants(cmd, m_tonemapLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(params), &params);

@@ -37,6 +37,7 @@ void OhaoViewport::_bind_methods() {
     ADD_SIGNAL(MethodInfo("body_exited",
         PropertyInfo(Variant::STRING, "body1_name"),
         PropertyInfo(Variant::STRING, "body2_name")));
+    ADD_SIGNAL(MethodInfo("lightning_struck"));
 
     // === Core Methods ===
     ClassDB::bind_method(D_METHOD("initialize_renderer"), &OhaoViewport::initialize_renderer);
@@ -275,6 +276,23 @@ void OhaoViewport::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "drying_rate", PROPERTY_HINT_RANGE, "0.0,10.0,0.001"), "set_drying_rate", "get_drying_rate");
 
     ClassDB::bind_method(D_METHOD("get_surface_wetness"), &OhaoViewport::get_surface_wetness);
+
+    // === Lightning Settings ===
+    ADD_GROUP("Lightning", "lightning_");
+
+    ClassDB::bind_method(D_METHOD("set_lightning_enabled", "enabled"), &OhaoViewport::set_lightning_enabled);
+    ClassDB::bind_method(D_METHOD("get_lightning_enabled"), &OhaoViewport::get_lightning_enabled);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lightning_enabled"), "set_lightning_enabled", "get_lightning_enabled");
+
+    ClassDB::bind_method(D_METHOD("set_lightning_interval", "seconds"), &OhaoViewport::set_lightning_interval);
+    ClassDB::bind_method(D_METHOD("get_lightning_interval"), &OhaoViewport::get_lightning_interval);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lightning_interval", PROPERTY_HINT_RANGE, "0.5,60.0,0.5"), "set_lightning_interval", "get_lightning_interval");
+
+    ClassDB::bind_method(D_METHOD("set_lightning_brightness", "brightness"), &OhaoViewport::set_lightning_brightness);
+    ClassDB::bind_method(D_METHOD("get_lightning_brightness"), &OhaoViewport::get_lightning_brightness);
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lightning_brightness", PROPERTY_HINT_RANGE, "0.1,10.0,0.1"), "set_lightning_brightness", "get_lightning_brightness");
+
+    ClassDB::bind_method(D_METHOD("trigger_lightning"), &OhaoViewport::trigger_lightning);
 
     // === Cloud Settings ===
     ADD_GROUP("Clouds", "cloud_");
@@ -583,11 +601,14 @@ void OhaoViewport::_process(double delta) {
     // Gizmo transform for selected object (skip in GAME mode)
     m_selection.updateGizmo(m_renderer, !m_game_mode && m_gizmo_enabled);
 
-    // Delta time for particle system
+    // Delta time + drain lightning signal
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
         if (deferred) {
             deferred->setDeltaTime(static_cast<float>(delta));
+            if (deferred->consumeLightningPending()) {
+                emit_signal("lightning_struck");
+            }
         }
     }
 
@@ -968,6 +989,14 @@ float OhaoViewport::get_surface_wetness() const {
     if (!m_renderer) return 0.0f;
     auto* deferred = m_renderer->getDeferredRenderer();
     return deferred ? deferred->getSurfaceWetness() : 0.0f;
+}
+void OhaoViewport::set_lightning_enabled(bool v)    { m_render_settings.setLightningEnabled(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_lightning_interval(float v)  { m_render_settings.setLightningInterval(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::set_lightning_brightness(float v){ m_render_settings.setLightningBrightness(v); m_render_settings.apply(m_renderer); }
+void OhaoViewport::trigger_lightning() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->triggerLightning();
 }
 
 void OhaoViewport::set_cloud_enabled(bool enabled) { m_render_settings.setCloudEnabled(enabled); m_render_settings.apply(m_renderer); }

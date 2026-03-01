@@ -276,6 +276,16 @@ public:
     // Read-only — query current surface wetness level (driven by rain automatically)
     float get_surface_wetness() const;
 
+    // Lightning settings
+    void  set_lightning_enabled(bool v);
+    bool  get_lightning_enabled() const { return m_render_settings.getLightningEnabled(); }
+    void  set_lightning_interval(float v);
+    float get_lightning_interval() const { return m_render_settings.getLightningInterval(); }
+    void  set_lightning_brightness(float v);
+    float get_lightning_brightness() const { return m_render_settings.getLightningBrightness(); }
+    // Manual trigger — fires a strike immediately regardless of timer
+    void  trigger_lightning();
+
     // Cloud settings
     void set_cloud_enabled(bool enabled);
     bool get_cloud_enabled() const { return m_render_settings.getCloudEnabled(); }
