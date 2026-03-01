@@ -532,8 +532,26 @@ void PhysicsWorld::syncBodiesFromBackend() {
         if (body->isDynamic()) {
             body->setPosition(m_backend->getPosition(h));
             body->setRotation(m_backend->getRotation(h));
-            body->setLinearVelocity(m_backend->getLinearVelocity(h));
-            body->setAngularVelocity(m_backend->getAngularVelocity(h));
+            glm::vec3 lv = m_backend->getLinearVelocity(h);
+            glm::vec3 av = m_backend->getAngularVelocity(h);
+
+            // Axis lock: zero out frozen velocity axes
+            uint8_t fl = body->getFreezeLinearAxes();
+            uint8_t fr = body->getFreezeRotationalAxes();
+            if (fl) {
+                if (fl & 1) lv.x = 0.0f;
+                if (fl & 2) lv.y = 0.0f;
+                if (fl & 4) lv.z = 0.0f;
+                m_backend->setLinearVelocity(h, lv);
+            }
+            if (fr) {
+                if (fr & 1) av.x = 0.0f;
+                if (fr & 2) av.y = 0.0f;
+                if (fr & 4) av.z = 0.0f;
+                m_backend->setAngularVelocity(h, av);
+            }
+            body->setLinearVelocity(lv);
+            body->setAngularVelocity(av);
         }
 
         // Sync to transform component (visual representation)

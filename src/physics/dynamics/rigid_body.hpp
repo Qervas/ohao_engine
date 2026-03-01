@@ -135,6 +135,13 @@ public:
     // Per-body gravity scale (UE5 GravityScale). 0=zero-G, 0.5=half, 2=double.
     void setGravityScale(float scale) { m_gravityScale = scale < 0.0f ? 0.0f : scale; }
     float getGravityScale() const { return m_gravityScale; }
+
+    // Axis lock — freeze position/rotation axes. Bitmask: bit0=X, bit1=Y, bit2=Z.
+    // Applied via velocity zeroing each physics step (no body recreation needed).
+    void setFreezeLinearAxes(uint8_t mask) { m_freezeLinear = mask; }
+    uint8_t getFreezeLinearAxes() const { return m_freezeLinear; }
+    void setFreezeRotationalAxes(uint8_t mask) { m_freezeRotational = mask; }
+    uint8_t getFreezeRotationalAxes() const { return m_freezeRotational; }
     
     void setKinematicTarget(const glm::vec3& position, const glm::quat& rotation) {
         m_kinematicTargetPos = position;
@@ -225,6 +232,8 @@ private:
     // Constraints
     bool m_gravityEnabled{true};
     float m_gravityScale{1.0f};
+    uint8_t m_freezeLinear{0};      // bitmask: bit0=X, bit1=Y, bit2=Z
+    uint8_t m_freezeRotational{0};
     
     // Kinematic targets (for kinematic bodies)
     glm::vec3 m_kinematicTargetPos{0.0f};

@@ -57,6 +57,23 @@ public:
     void setAwake(ohao::Scene* scene, const std::string& name, bool awake);
     bool isAwake(ohao::Scene* scene, const std::string& name);
     void setLayer(ohao::Scene* scene, const std::string& name, uint16_t layer);
+
+    // Force application by name
+    void applyForce(ohao::Scene* scene, const std::string& name, const glm::vec3& force, const glm::vec3& relPos);
+    void applyImpulse(ohao::Scene* scene, const std::string& name, const glm::vec3& impulse, const glm::vec3& relPos);
+    void applyTorque(ohao::Scene* scene, const std::string& name, const glm::vec3& torque);
+
+    // Velocity / mass getters
+    glm::vec3 getLinearVelocity(ohao::Scene* scene, const std::string& name);
+    glm::vec3 getAngularVelocity(ohao::Scene* scene, const std::string& name);
+    float getMass(ohao::Scene* scene, const std::string& name);
+
+    // CCD
+    void setCCDEnabled(ohao::Scene* scene, const std::string& name, bool enabled);
+
+    // Axis lock (freeze position/rotation axes, bitmask: bit0=X, bit1=Y, bit2=Z)
+    void setFreezeLinearAxes(ohao::Scene* scene, const std::string& name, uint8_t axes);
+    void setFreezeRotationalAxes(ohao::Scene* scene, const std::string& name, uint8_t axes);
 };
 
 } // namespace godot

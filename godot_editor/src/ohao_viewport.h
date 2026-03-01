@@ -341,6 +341,23 @@ public:
     void destroy_force_volume(int handle);
     void set_force_volume_enabled(int handle, bool enabled);
 
+    // === Apply Forces by Actor Name ===
+    void apply_force_on_actor(const String& actor_name, const Vector3& force, const Vector3& rel_pos);
+    void apply_impulse_on_actor(const String& actor_name, const Vector3& impulse, const Vector3& rel_pos);
+    void apply_torque_on_actor(const String& actor_name, const Vector3& torque);
+
+    // === Velocity / Mass Getters ===
+    Vector3 get_actor_linear_velocity(const String& actor_name);
+    Vector3 get_actor_angular_velocity(const String& actor_name);
+    float   get_actor_mass(const String& actor_name);
+
+    // === CCD ===
+    void set_actor_ccd_enabled(const String& actor_name, bool enabled);
+
+    // === Axis Lock ===
+    void set_actor_freeze_linear(const String& actor_name, bool x, bool y, bool z);
+    void set_actor_freeze_rotation(const String& actor_name, bool x, bool y, bool z);
+
     // === Sleep / Wake ===
     void set_actor_awake(const String& actor_name, bool awake);
     bool is_actor_awake(const String& actor_name);

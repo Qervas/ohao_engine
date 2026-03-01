@@ -314,4 +314,89 @@ void ActorController::setLayer(ohao::Scene* scene, const std::string& name, uint
         physWorld->setBodyLayer(rb->getBackendHandle(), layer);
 }
 
+// === Force application ===
+void ActorController::applyForce(ohao::Scene* scene, const std::string& name, const glm::vec3& force, const glm::vec3& relPos) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->applyForce(force, relPos);
+}
+
+void ActorController::applyImpulse(ohao::Scene* scene, const std::string& name, const glm::vec3& impulse, const glm::vec3& relPos) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->applyImpulse(impulse, relPos);
+}
+
+void ActorController::applyTorque(ohao::Scene* scene, const std::string& name, const glm::vec3& torque) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (phys) phys->applyTorque(torque);
+}
+
+// === Velocity / mass getters ===
+glm::vec3 ActorController::getLinearVelocity(ohao::Scene* scene, const std::string& name) {
+    if (!scene) return glm::vec3(0.0f);
+    auto actor = scene->findActor(name);
+    if (!actor) return glm::vec3(0.0f);
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    return phys ? phys->getLinearVelocity() : glm::vec3(0.0f);
+}
+
+glm::vec3 ActorController::getAngularVelocity(ohao::Scene* scene, const std::string& name) {
+    if (!scene) return glm::vec3(0.0f);
+    auto actor = scene->findActor(name);
+    if (!actor) return glm::vec3(0.0f);
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    return phys ? phys->getAngularVelocity() : glm::vec3(0.0f);
+}
+
+float ActorController::getMass(ohao::Scene* scene, const std::string& name) {
+    if (!scene) return 0.0f;
+    auto actor = scene->findActor(name);
+    if (!actor) return 0.0f;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    return phys ? phys->getMass() : 0.0f;
+}
+
+// === CCD ===
+void ActorController::setCCDEnabled(ohao::Scene* scene, const std::string& name, bool enabled) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (!phys) return;
+    auto rb = phys->getRigidBody();
+    if (!rb || !rb->hasBackendBody()) return;
+    auto* physWorld = scene->getPhysicsWorld();
+    if (physWorld && physWorld->hasBackend())
+        physWorld->getBackend()->setCCDEnabled(rb->getBackendHandle(), enabled);
+}
+
+// === Axis lock ===
+void ActorController::setFreezeLinearAxes(ohao::Scene* scene, const std::string& name, uint8_t axes) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (!phys) return;
+    auto rb = phys->getRigidBody();
+    if (rb) rb->setFreezeLinearAxes(axes);
+}
+
+void ActorController::setFreezeRotationalAxes(ohao::Scene* scene, const std::string& name, uint8_t axes) {
+    if (!scene) return;
+    auto actor = scene->findActor(name);
+    if (!actor) return;
+    auto phys = actor->getComponent<ohao::PhysicsComponent>();
+    if (!phys) return;
+    auto rb = phys->getRigidBody();
+    if (rb) rb->setFreezeRotationalAxes(axes);
+}
+
 } // namespace godot

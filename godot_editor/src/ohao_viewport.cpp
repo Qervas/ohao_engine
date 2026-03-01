@@ -339,6 +339,23 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("destroy_force_volume", "handle"), &OhaoViewport::destroy_force_volume);
     ClassDB::bind_method(D_METHOD("set_force_volume_enabled", "handle", "enabled"), &OhaoViewport::set_force_volume_enabled);
 
+    // === Apply Forces by Actor Name ===
+    ClassDB::bind_method(D_METHOD("apply_force_on_actor", "actor_name", "force", "rel_pos"), &OhaoViewport::apply_force_on_actor);
+    ClassDB::bind_method(D_METHOD("apply_impulse_on_actor", "actor_name", "impulse", "rel_pos"), &OhaoViewport::apply_impulse_on_actor);
+    ClassDB::bind_method(D_METHOD("apply_torque_on_actor", "actor_name", "torque"), &OhaoViewport::apply_torque_on_actor);
+
+    // === Velocity / Mass Getters ===
+    ClassDB::bind_method(D_METHOD("get_actor_linear_velocity", "actor_name"), &OhaoViewport::get_actor_linear_velocity);
+    ClassDB::bind_method(D_METHOD("get_actor_angular_velocity", "actor_name"), &OhaoViewport::get_actor_angular_velocity);
+    ClassDB::bind_method(D_METHOD("get_actor_mass", "actor_name"), &OhaoViewport::get_actor_mass);
+
+    // === CCD ===
+    ClassDB::bind_method(D_METHOD("set_actor_ccd_enabled", "actor_name", "enabled"), &OhaoViewport::set_actor_ccd_enabled);
+
+    // === Axis Lock ===
+    ClassDB::bind_method(D_METHOD("set_actor_freeze_linear", "actor_name", "x", "y", "z"), &OhaoViewport::set_actor_freeze_linear);
+    ClassDB::bind_method(D_METHOD("set_actor_freeze_rotation", "actor_name", "x", "y", "z"), &OhaoViewport::set_actor_freeze_rotation);
+
     // === Sleep / Wake ===
     ClassDB::bind_method(D_METHOD("set_actor_awake", "actor_name", "awake"), &OhaoViewport::set_actor_awake);
     ClassDB::bind_method(D_METHOD("is_actor_awake", "actor_name"), &OhaoViewport::is_actor_awake);
@@ -1259,6 +1276,45 @@ void OhaoViewport::set_force_volume_enabled(int handle, bool enabled) {
 
 void OhaoViewport::sync_actor_physics_shape(const String& actor_name) {
     m_actors.syncPhysicsShape(m_scene, actor_name.utf8().get_data());
+}
+
+// === Apply Forces by Actor Name ===
+void OhaoViewport::apply_force_on_actor(const String& n, const Vector3& f, const Vector3& r) {
+    m_actors.applyForce(m_scene, n.utf8().get_data(), glm::vec3(f.x,f.y,f.z), glm::vec3(r.x,r.y,r.z));
+}
+void OhaoViewport::apply_impulse_on_actor(const String& n, const Vector3& i, const Vector3& r) {
+    m_actors.applyImpulse(m_scene, n.utf8().get_data(), glm::vec3(i.x,i.y,i.z), glm::vec3(r.x,r.y,r.z));
+}
+void OhaoViewport::apply_torque_on_actor(const String& n, const Vector3& t) {
+    m_actors.applyTorque(m_scene, n.utf8().get_data(), glm::vec3(t.x,t.y,t.z));
+}
+
+// === Velocity / Mass Getters ===
+Vector3 OhaoViewport::get_actor_linear_velocity(const String& n) {
+    auto v = m_actors.getLinearVelocity(m_scene, n.utf8().get_data());
+    return Vector3(v.x, v.y, v.z);
+}
+Vector3 OhaoViewport::get_actor_angular_velocity(const String& n) {
+    auto v = m_actors.getAngularVelocity(m_scene, n.utf8().get_data());
+    return Vector3(v.x, v.y, v.z);
+}
+float OhaoViewport::get_actor_mass(const String& n) {
+    return m_actors.getMass(m_scene, n.utf8().get_data());
+}
+
+// === CCD ===
+void OhaoViewport::set_actor_ccd_enabled(const String& n, bool enabled) {
+    m_actors.setCCDEnabled(m_scene, n.utf8().get_data(), enabled);
+}
+
+// === Axis Lock ===
+void OhaoViewport::set_actor_freeze_linear(const String& n, bool x, bool y, bool z) {
+    uint8_t mask = (x ? 1 : 0) | (y ? 2 : 0) | (z ? 4 : 0);
+    m_actors.setFreezeLinearAxes(m_scene, n.utf8().get_data(), mask);
+}
+void OhaoViewport::set_actor_freeze_rotation(const String& n, bool x, bool y, bool z) {
+    uint8_t mask = (x ? 1 : 0) | (y ? 2 : 0) | (z ? 4 : 0);
+    m_actors.setFreezeRotationalAxes(m_scene, n.utf8().get_data(), mask);
 }
 
 // === Sleep / Wake ===
