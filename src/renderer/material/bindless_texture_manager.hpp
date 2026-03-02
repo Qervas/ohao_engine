@@ -89,6 +89,14 @@ public:
     // Mark texture as persistent (won't be unloaded during streaming)
     void setTexturePersistent(BindlessTextureHandle handle, bool persistent);
 
+    // Quick accessors for a specific texture's view/sampler
+    VkImageView getImageView(BindlessTextureHandle handle) const {
+        const auto* info = getTextureInfo(handle);
+        return info ? info->view : VK_NULL_HANDLE;
+    }
+    VkSampler getSampler(BindlessTextureHandle /*handle*/) const { return m_defaultSampler; }
+    VkSampler getDefaultSampler() const { return m_defaultSampler; }
+
     // Descriptor set for shader binding
     VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
     VkDescriptorSet getDescriptorSet() const { return m_descriptorSet; }
