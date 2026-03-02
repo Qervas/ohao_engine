@@ -1,0 +1,101 @@
+#version 450
+// Phillips spectrum initialisation — run once at startup or when wind changes.
+// Writes h0(k) and conj(h0(-k)) packed into a single RGBA32F texel.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D h0Img;
+
+layout(push_constant) uniform SpectrumInitPC {
+    float windX;        //  4
+    float windZ;        //  8
+    float patchSize;    // 12
+    float amplitude;    // 16
+    int   N;            // 20
+    float gravity;      // 24
+    float suppression;  // 28 — directional suppression for waves opposing wind
+    float pad;          // 32
+} pc;
+
+const float PI      = 3.14159265359;
+const float TWO_PI  = 6.28318530718;
+
+// ── Deterministic hash (Wang hash) ─────────────────────────────────────────
+uint wangHash(uint x) {
+    x  = (x ^ 61u) ^ (x >> 16u);
+    x *= 9u;
+    x  = x ^ (x >> 4u);
+    x *= 0x27d4eb2du;
+    x  = x ^ (x >> 15u);
+    return x;
+}
+
+float hash2f(uvec2 p) {
+    uint n = wangHash(p.x + wangHash(p.y + 12345u));
+    return float(n) * (1.0 / 4294967296.0);
+}
+
+// ── Box-Muller: uniform pair → standard normal ──────────────────────────────
+vec2 gaussianRandom(uvec2 seed) {
+    float u1 = max(hash2f(seed),                              1e-6);
+    float u2 = hash2f(seed + uvec2(93847u, 654321u));
+    float mag = sqrt(-2.0 * log(u1));
+    return vec2(mag * cos(TWO_PI * u2),
+                mag * sin(TWO_PI * u2));
+}
+
+// ── Phillips spectrum ────────────────────────────────────────────────────────
+// P_h(k) = A * exp(-1 / (kL)^2) / k^4 * |k^·w^|^2
+float phillipsSpectrum(vec2 k, vec2 wind) {
+    float kLen = length(k);
+    if (kLen < 1e-4) return 0.0;
+    float kLen2 = kLen * kLen;
+    float kLen4 = kLen2 * kLen2;
+
+    float windLen = length(wind);
+    if (windLen < 1e-4) return 0.0;
+    float L  = windLen * windLen / pc.gravity;
+    float kL = kLen * L;
+
+    float kDotW = dot(normalize(k), normalize(wind));
+    float spec  = pc.amplitude * exp(-1.0 / (kL * kL)) / kLen4 * (kDotW * kDotW);
+
+    // Suppress waves travelling opposite to wind
+    if (kDotW < 0.0) spec *= pc.suppression;
+
+    // High-frequency cutoff: suppress at wavelengths < L/1000
+    float l = L / 1000.0;
+    spec *= exp(-kLen2 * l * l);
+
+    return max(spec, 0.0);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int N = pc.N;
+    if (coord.x >= N || coord.y >= N) return;
+
+    // k-space: k = (2π/L) * (n - N/2) maps grid [0,N) → frequencies [-N/2, N/2)
+    vec2 kVec = (TWO_PI / pc.patchSize) * vec2(
+        float(coord.x) - float(N) * 0.5,
+        float(coord.y) - float(N) * 0.5
+    );
+
+    vec2 wind = vec2(pc.windX, pc.windZ);
+
+    float sqrtPh    = sqrt(phillipsSpectrum( kVec, wind));
+    float sqrtPhNeg = sqrt(phillipsSpectrum(-kVec, wind));
+
+    // Independent Gaussian samples for h0(k) and h0(-k)
+    vec2 g1 = gaussianRandom(uvec2(coord));
+    vec2 g2 = gaussianRandom(uvec2(coord) + uvec2(77777u, 33333u));
+
+    // h0(k)  = (1/sqrt(2)) * gauss * sqrt(P(k))
+    vec2 h0k    = (1.0 / sqrt(2.0)) * g1 * sqrtPh;
+    // conj(h0(-k)) = (1/sqrt(2)) * conj(gauss2 * sqrt(P(-k)))
+    //              = (1/sqrt(2)) * (g2.x, -g2.y) * sqrtPhNeg
+    vec2 h0kNeg = (1.0 / sqrt(2.0)) * vec2(g2.x, -g2.y) * sqrtPhNeg;
+
+    // Pack: .rg = h0(k),  .ba = conj(h0(-k))
+    imageStore(h0Img, coord, vec4(h0k, h0kNeg));
+}
