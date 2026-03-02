@@ -14,12 +14,21 @@
 #include "god_rays_pass.hpp"
 #include "aurora_pass.hpp"
 #include "rainbow_pass.hpp"
+#include "terrain_pass.hpp"
+#include "water_pass.hpp"
+#include "waves/fft_ocean_sim.hpp"
+#include "caustics_pass.hpp"
+#include "ripple_pass.hpp"
+#include "underwater_pass.hpp"
+#include "decal_pass.hpp"
+#include "foliage_pass.hpp"
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
 #include <memory>
 #include <unordered_map>
 #include <queue>
+#include <string>
 
 namespace ohao {
 
@@ -147,6 +156,122 @@ public:
     void  setRainbowEnabled(bool e)   { m_rainbowEnabled  = e; }
     bool  getRainbowEnabled() const   { return m_rainbowEnabled; }
 
+    // ── Terrain — multi-tile streaming ───────────────────────────────────────
+    // A TerrainTile describes one tile in a tiled terrain grid.
+    // physicsHandle stores the Jolt body handle for that tile's heightfield (uint32_t).
+    struct TerrainTile {
+        float    offsetX{0.0f};
+        float    offsetZ{0.0f};
+        bool     active{false};
+        uint32_t physicsHandle{UINT32_MAX};  // BodyHandle = uint32_t (physics_backend.hpp)
+    };
+    static constexpr int MAX_TERRAIN_TILES = 9;  // 3×3 grid
+
+    // Add a terrain tile at world offset (x, z). Returns tile index or -1 if full.
+    int  addTerrainTile(float offsetX, float offsetZ);
+    void clearTerrainTiles();
+    void setTerrainTileCullRadius(float r) { m_terrainTileCullRadius = r; }
+
+    // ── Terrain ──────────────────────────────────────────────────────────────
+    void  setTerrainEnabled(bool v)       { m_terrainEnabled = v; }
+    bool  getTerrainEnabled() const       { return m_terrainEnabled; }
+    void  setTerrainHeightScale(float v)  { m_terrainHeightScale = v; }
+    float getTerrainHeightScale() const   { return m_terrainHeightScale; }
+    void  setTerrainSize(float v)         { m_terrainSize = v; }
+    float getTerrainSize() const          { return m_terrainSize; }
+    // Load heightmap / splatmap / layer textures from path (uses BindlessTextureManager)
+    void  setTerrainHeightmapPath(const std::string& path);
+    void  setTerrainSplatMapPath(const std::string& path);
+    void  setTerrainLayerAlbedo(uint32_t layer, const std::string& path);
+    void  setTerrainLayerNormal(uint32_t layer, const std::string& path);
+    // Procedural generation API
+    void  setTerrainType(int type);           // 0=external, 1-6=procedural types
+    void  setTerrainGenFrequency(float f);
+    void  setTerrainGenOctaves(int n);
+    void  setTerrainGenOffset(glm::vec2 off);
+    void  setTerrainGenResolution(uint32_t r);
+    void  setTerrainMacroVariationPath(const std::string& path);
+    void  generateTerrain();                  // triggers GPU gen on next frame
+    TerrainPass* getTerrainPass() { return m_terrainPass.get(); }
+
+    // ── Water ────────────────────────────────────────────────────────────────
+    void  setWaterEnabled(bool v)         { m_waterEnabled = v; }
+    bool  getWaterEnabled() const         { return m_waterEnabled; }
+    void  setWaterLevel(float v)          { m_waterLevel = v; }
+    float getWaterLevel() const           { return m_waterLevel; }
+    void  setWaterSize(float v)           { m_waterSize = v; }
+    float getWaterSize() const            { return m_waterSize; }
+    void  setWaterFoamIntensity(float v)  { m_waterFoamIntensity = glm::clamp(v, 0.0f, 1.0f); }
+    float getWaterFoamIntensity() const   { return m_waterFoamIntensity; }
+    void  setWaterWaveAmplitude(float v)  { m_waterWaveAmplitude = glm::clamp(v, 0.0f, 2.0f); }
+    float getWaterWaveAmplitude() const   { return m_waterWaveAmplitude; }
+    void  setWaterNormalMap1(const std::string& path);
+    void  setWaterNormalMap2(const std::string& path);
+    void  setWaterSceneColor(VkImageView view);    // HDR scene color for refraction
+    void  setWaterSSROutput(VkImageView view);      // SSR output for reflections
+    void  setWaterSunDirection(const glm::vec3& dir, float intensity);
+    void  setWaterColors(const glm::vec3& shallow, const glm::vec3& deep);
+
+    // ── Caustics ─────────────────────────────────────────────────────────────
+    void  setCausticsEnabled(bool v)         { m_causticsEnabled = v; }
+    bool  getCausticsEnabled() const         { return m_causticsEnabled; }
+    void  setCausticsIntensity(float v);
+    float getCausticsIntensity() const       { return m_causticsIntensity; }
+    void  setCausticsTexturePath(const std::string& path);
+
+    // ── Water ripples ─────────────────────────────────────────────────────────
+    void  setWaterRipplesEnabled(bool v)     { m_waterRipplesEnabled = v; }
+    bool  getWaterRipplesEnabled() const     { return m_waterRipplesEnabled; }
+    void  addWaterRipple(float worldX, float worldZ, float strength);
+    void  clearWaterRipples();
+
+    // ── Enhanced water ────────────────────────────────────────────────────────
+    void  setWaterSSSStrength(float v);
+    float getWaterSSSStrength() const        { return m_waterSSSStrength; }
+    void  setWaterFoamTexturePath(const std::string& path);
+
+    // ── Wave simulation mode ──────────────────────────────────────────────────
+    // 0 = Gerstner (default — 4 inline waves in water.vert, zero GPU overhead)
+    // 1 = FFT Tessendorf (256×256 compute simulation, organic non-repeating surface)
+    void  setWaveMode(int mode);
+    int   getWaveMode() const               { return m_waveMode; }
+    void  setFFTWindSpeed(float s);
+    float getFFTWindSpeed() const           { return m_fftWindSpeed; }
+    void  setFFTWindDirection(float x, float z);
+    void  setFFTPatchSize(float s);
+    float getFFTPatchSize() const           { return m_fftPatchSize; }
+    void  setFFTChoppiness(float c);
+    float getFFTChoppiness() const          { return m_fftChoppiness; }
+    void  setFFTNormalStrength(float v);
+    float getFFTNormalStrength() const      { return m_fftNormalStrength; }
+
+    // ── Underwater ────────────────────────────────────────────────────────────
+    void  setUnderwaterEnabled(bool v)       { m_underwaterEnabled = v; }
+    bool  getUnderwaterEnabled() const       { return m_underwaterEnabled; }
+    void  setUnderwaterFogColor(const glm::vec3& c);
+    void  setUnderwaterFogDensity(float v);
+    float getUnderwaterFogDensity() const    { return m_underwaterFogDensity; }
+    void  setUnderwaterChromStrength(float v);
+    float getUnderwaterChromStrength() const { return m_underwaterChromStrength; }
+
+    // ── Decals ───────────────────────────────────────────────────────────────
+    void     setDecalsEnabled(bool v)     { m_decalsEnabled = v; }
+    bool     getDecalsEnabled() const     { return m_decalsEnabled; }
+    uint32_t addDecal(const glm::vec3& pos, const glm::vec3& normal,
+                      const glm::vec3& size, const std::string& albedoPath,
+                      float opacity = 0.9f, const glm::vec4& tint = glm::vec4(1.0f));
+    void     removeDecal(uint32_t handle);
+    void     clearDecals();
+
+    // ── Foliage ──────────────────────────────────────────────────────────────
+    void  setFoliageEnabled(bool v)       { m_foliageEnabled = v; }
+    bool  getFoliageEnabled() const       { return m_foliageEnabled; }
+    void  setFoliageCullDistance(float v) { m_foliageCullDistance = v; }
+    float getFoliageCullDistance() const  { return m_foliageCullDistance; }
+    void  setGrassTexturePath(const std::string& path);
+    void  addFoliageCluster(const glm::vec3& center, float radius, float density);
+    void  clearFoliage();
+
     // Ground wetness — temporal integration driven by rain state.
     // Surfaces accumulate wetness at wetRate/s and dry at dryRate/s.
     // Surface wetness is readable so scripts can react (footstep sounds, etc.)
@@ -205,6 +330,14 @@ private:
     std::unique_ptr<GodRaysPass> m_godRaysPass;
     std::unique_ptr<AuroraPass>  m_auroraPass;
     std::unique_ptr<RainbowPass> m_rainbowPass;
+    std::unique_ptr<TerrainPass>    m_terrainPass;
+    std::unique_ptr<WaterPass>      m_waterPass;
+    std::unique_ptr<FFTOceanSim>    m_fftOceanSim;
+    std::unique_ptr<CausticsPass>   m_causticsPass;
+    std::unique_ptr<RipplePass>     m_ripplePass;
+    std::unique_ptr<UnderwaterPass> m_underwaterPass;
+    std::unique_ptr<DecalPass>      m_decalPass;
+    std::unique_ptr<FoliagePass>    m_foliagePass;
 
     // Scene reference
     Scene* m_scene{nullptr};
@@ -290,6 +423,69 @@ private:
 
     // Rainbow state
     bool  m_rainbowEnabled{true}; // auto-enabled when rain is active
+
+    // Water state
+    bool  m_waterEnabled{false};
+    float m_waterLevel{0.0f};
+    float m_waterSize{1024.0f};
+    float m_waterFoamIntensity{0.6f};
+    float m_waterWaveAmplitude{0.3f};
+    // Normal map paths — stored so they can be reloaded after resize
+    std::string m_waterNormalMap1Path;
+    std::string m_waterNormalMap2Path;
+
+    // Wave mode (0=Gerstner, 1=FFT)
+    int   m_waveMode{0};
+    float m_fftWindSpeed{8.0f};
+    float m_fftWindDirX{1.0f};
+    float m_fftWindDirZ{0.0f};
+    float m_fftPatchSize{500.0f};
+    float m_fftChoppiness{1.4f};
+    float m_fftNormalStrength{1.0f};
+
+    // Caustics state
+    bool        m_causticsEnabled{false};
+    float       m_causticsIntensity{0.5f};
+    std::string m_causticsTexturePath;
+
+    // Water ripple state
+    bool  m_waterRipplesEnabled{false};
+
+    // Enhanced water
+    float       m_waterSSSStrength{0.35f};
+    std::string m_waterFoamTexturePath;
+
+    // Underwater state
+    bool      m_underwaterEnabled{true};
+    glm::vec3 m_underwaterFogColor{0.04f, 0.14f, 0.28f};
+    float     m_underwaterFogDensity{0.12f};
+    float     m_underwaterChromStrength{0.006f};
+
+    // Wind (derived from rain/sand wind state; used by foliage and future passes)
+    glm::vec3 m_windDirection{1.0f, 0.0f, 0.0f};
+    float     m_windStrength{0.1f};
+
+    // Terrain state
+    bool        m_terrainEnabled{false};
+    float       m_terrainHeightScale{100.0f};
+    float       m_terrainSize{1024.0f};
+
+    // Multi-tile terrain streaming
+    std::vector<TerrainTile> m_terrainTiles;
+    float                    m_terrainTileCullRadius{1200.0f};
+    std::string m_terrainHeightmapPath;
+    std::string m_terrainSplatMapPath;
+    std::array<std::string, 4> m_terrainLayerAlbedoPaths;
+    std::array<std::string, 4> m_terrainLayerNormalPaths;
+    VkSampler   m_terrainLayerSampler{VK_NULL_HANDLE}; // owned, created on first use
+
+    // Decals state
+    bool m_decalsEnabled{true};
+
+    // Foliage state
+    bool        m_foliageEnabled{false};
+    float       m_foliageCullDistance{120.0f};
+    std::string m_grassTexturePath;
 
     // Lightning flash state machine
     bool  m_lightningEnabled{false};

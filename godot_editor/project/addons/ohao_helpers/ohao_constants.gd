@@ -100,6 +100,19 @@ const CONTROL_VEHICLE := "vehicle"
 const CONTROL_TOP_DOWN := "top_down"
 const CONTROL_PUZZLE := "puzzle"
 
+# Wave simulation mode (set_wave_mode)
+const WAVE_GERSTNER := 0  # 4 inline Gerstner waves (default, zero GPU overhead)
+const WAVE_FFT      := 1  # Tessendorf FFT ocean — 256×256 compute, non-repeating surface
+
+# Terrain types (set_terrain_type)
+const TERRAIN_EXTERNAL  := 0  # use external heightmap (default)
+const TERRAIN_FLAT      := 1  # near-featureless, micro noise only
+const TERRAIN_HILLS     := 2  # smooth rolling fBm countryside
+const TERRAIN_MOUNTAINS := 3  # ridged multifractal with sharp peaks
+const TERRAIN_CANYON    := 4  # domain-warped mesas + Voronoi cracks
+const TERRAIN_DESERT    := 5  # directional dune ridges
+const TERRAIN_ARCTIC    := 6  # subtle pressure ridges, low elevation
+
 # Audio categories (OhaoViewport)
 const AUDIO_SFX := 0
 const AUDIO_MUSIC := 1

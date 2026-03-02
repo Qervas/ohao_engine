@@ -355,6 +355,112 @@ public:
     void  set_heat_haze_frequency(float v);
     float get_heat_haze_frequency() const  { return m_render_settings.getHeatHazeFrequency(); }
 
+    // === Terrain ===
+    void  set_terrain_enabled(bool v);
+    bool  get_terrain_enabled() const      { return m_render_settings.getTerrainEnabled(); }
+    void  set_terrain_height_scale(float v);
+    float get_terrain_height_scale() const { return m_render_settings.getTerrainHeightScale(); }
+    void  set_terrain_size(float v);
+    float get_terrain_size() const         { return m_render_settings.getTerrainSize(); }
+    // Texture paths — resolved from res:// and forwarded to DeferredRenderer
+    void  set_terrain_heightmap(const String& path);
+    void  set_terrain_splat_map(const String& path);
+    void  set_terrain_layer(int layer_index, const String& albedo_path, const String& normal_path);
+    // Runtime splatmap painting: channel 0=grass,1=dirt,2=rock,3=snow
+    void  paint_terrain_splat(Vector3 world_pos, int channel, float radius, float strength);
+    void  clear_terrain_splat();
+    // Procedural terrain generation
+    void  set_terrain_type(int type);            // 0=external heightmap, 1-6=procedural
+    void  set_terrain_frequency(float f);
+    void  set_terrain_octaves(int n);
+    void  set_terrain_offset(Vector2 off);
+    void  set_terrain_gen_resolution(int r);
+    void  set_terrain_macro_variation(const String& path);
+    void  generate_terrain();
+    // Sync terrain visual to Jolt physics heightfield (blocking GPU readback).
+    // Call once after generate_terrain() or set_terrain_heightmap().
+    // Returns true on success. Objects will collide with terrain after this call.
+    bool  sync_terrain_physics();
+    void  sync_terrain_weather_friction();
+    // Multi-tile terrain streaming API
+    int   add_terrain_tile(float offset_x, float offset_z);
+    void  clear_terrain_tiles();
+    void  set_terrain_tile_cull_radius(float r);
+
+    // === Water ===
+    void  set_water_enabled(bool v);
+    bool  get_water_enabled() const        { return m_render_settings.getWaterEnabled(); }
+    void  set_water_level(float v);
+    float get_water_level() const          { return m_render_settings.getWaterLevel(); }
+    void  set_water_size(float v);
+    float get_water_size() const           { return m_render_settings.getWaterSize(); }
+    void  set_water_foam_intensity(float v);
+    float get_water_foam_intensity() const { return m_render_settings.getWaterFoamIntensity(); }
+    void  set_water_wave_amplitude(float v);
+    float get_water_wave_amplitude() const { return m_render_settings.getWaterWaveAmplitude(); }
+    void  set_water_normal_maps(const String& nm1_path, const String& nm2_path);
+    void  set_water_shallow_color(const Color& c);
+    void  set_water_deep_color(const Color& c);
+    void  set_water_sun_intensity(float v);
+
+    // === Wave Mode (Gerstner / FFT) ===
+    void  set_wave_mode(int mode);
+    int   get_wave_mode() const;
+    void  set_fft_wind_speed(float s);
+    float get_fft_wind_speed() const;
+    void  set_fft_wind_direction(const Vector2& dir);
+    void  set_fft_patch_size(float s);
+    float get_fft_patch_size() const;
+    void  set_fft_choppiness(float c);
+    float get_fft_choppiness() const;
+    void  set_fft_normal_strength(float v);
+
+    // === Caustics ===
+    void  set_caustics_enabled(bool v);
+    bool  get_caustics_enabled() const;
+    void  set_caustics_intensity(float v);
+    float get_caustics_intensity() const;
+    void  set_caustics_texture(const String& path);
+
+    // === Water Ripples ===
+    void  set_water_ripples_enabled(bool v);
+    bool  get_water_ripples_enabled() const;
+    void  add_water_ripple(const Vector3& world_pos, float strength);
+    void  clear_water_ripples();
+
+    // === Enhanced Water ===
+    void  set_water_sss_strength(float v);
+    float get_water_sss_strength() const;
+    void  set_water_foam_texture(const String& path);
+
+    // === Underwater ===
+    void  set_underwater_enabled(bool v);
+    bool  get_underwater_enabled() const;
+    void  set_underwater_fog_color(const Color& c);
+    void  set_underwater_fog_density(float v);
+    float get_underwater_fog_density() const;
+    void  set_underwater_chrom_strength(float v);
+    float get_underwater_chrom_strength() const;
+
+    // === Decals ===
+    void  set_decals_enabled(bool v);
+    bool  get_decals_enabled() const       { return m_render_settings.getDecalsEnabled(); }
+    // Returns decal handle (0 = failure)
+    int   add_decal(const Vector3& pos, const Vector3& normal, const Vector3& size,
+                    const String& albedo_path, float opacity = 0.9f,
+                    const Color& tint = Color(1, 1, 1, 1));
+    void  remove_decal(int handle);
+    void  clear_decals();
+
+    // === Foliage ===
+    void  set_foliage_enabled(bool v);
+    bool  get_foliage_enabled() const         { return m_render_settings.getFoliageEnabled(); }
+    void  set_foliage_cull_distance(float v);
+    float get_foliage_cull_distance() const   { return m_render_settings.getFoliageCullDistance(); }
+    void  set_grass_texture(const String& path);
+    void  add_foliage_cluster(const Dictionary& params);
+    void  clear_foliage();
+
     // === Physics Controls ===
     void play_physics();
     void pause_physics();

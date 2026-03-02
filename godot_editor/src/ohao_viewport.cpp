@@ -22,6 +22,8 @@
 #include <glm/gtc/constants.hpp>
 
 #include <cmath>
+#include <iostream>
+#include <vector>
 
 namespace godot {
 
@@ -387,6 +389,108 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_heat_haze_frequency", "frequency"), &OhaoViewport::set_heat_haze_frequency);
     ClassDB::bind_method(D_METHOD("get_heat_haze_frequency"), &OhaoViewport::get_heat_haze_frequency);
 
+    // === Terrain ===
+    ClassDB::bind_method(D_METHOD("set_terrain_enabled", "enabled"), &OhaoViewport::set_terrain_enabled);
+    ClassDB::bind_method(D_METHOD("get_terrain_enabled"), &OhaoViewport::get_terrain_enabled);
+    ClassDB::bind_method(D_METHOD("set_terrain_height_scale", "scale"), &OhaoViewport::set_terrain_height_scale);
+    ClassDB::bind_method(D_METHOD("get_terrain_height_scale"), &OhaoViewport::get_terrain_height_scale);
+    ClassDB::bind_method(D_METHOD("set_terrain_size", "size"), &OhaoViewport::set_terrain_size);
+    ClassDB::bind_method(D_METHOD("get_terrain_size"), &OhaoViewport::get_terrain_size);
+    ClassDB::bind_method(D_METHOD("set_terrain_heightmap", "path"), &OhaoViewport::set_terrain_heightmap);
+    ClassDB::bind_method(D_METHOD("set_terrain_splat_map", "path"), &OhaoViewport::set_terrain_splat_map);
+    ClassDB::bind_method(D_METHOD("set_terrain_layer", "layer_index", "albedo_path", "normal_path"), &OhaoViewport::set_terrain_layer);
+    // Procedural generation
+    ClassDB::bind_method(D_METHOD("set_terrain_type", "type"), &OhaoViewport::set_terrain_type);
+    ClassDB::bind_method(D_METHOD("set_terrain_frequency", "freq"), &OhaoViewport::set_terrain_frequency);
+    ClassDB::bind_method(D_METHOD("set_terrain_octaves", "octaves"), &OhaoViewport::set_terrain_octaves);
+    ClassDB::bind_method(D_METHOD("set_terrain_offset", "offset"), &OhaoViewport::set_terrain_offset);
+    ClassDB::bind_method(D_METHOD("set_terrain_gen_resolution", "resolution"), &OhaoViewport::set_terrain_gen_resolution);
+    ClassDB::bind_method(D_METHOD("set_terrain_macro_variation", "path"), &OhaoViewport::set_terrain_macro_variation);
+    ClassDB::bind_method(D_METHOD("generate_terrain"), &OhaoViewport::generate_terrain);
+    ClassDB::bind_method(D_METHOD("sync_terrain_physics"), &OhaoViewport::sync_terrain_physics);
+    // Runtime splatmap painting
+    ClassDB::bind_method(D_METHOD("paint_terrain_splat", "world_pos", "channel", "radius", "strength"),
+                         &OhaoViewport::paint_terrain_splat);
+    ClassDB::bind_method(D_METHOD("clear_terrain_splat"), &OhaoViewport::clear_terrain_splat);
+    // Multi-tile terrain streaming
+    ClassDB::bind_method(D_METHOD("add_terrain_tile", "offset_x", "offset_z"),
+                         &OhaoViewport::add_terrain_tile);
+    ClassDB::bind_method(D_METHOD("clear_terrain_tiles"), &OhaoViewport::clear_terrain_tiles);
+    ClassDB::bind_method(D_METHOD("set_terrain_tile_cull_radius", "r"),
+                         &OhaoViewport::set_terrain_tile_cull_radius);
+
+    // === Water ===
+    ClassDB::bind_method(D_METHOD("set_water_enabled", "enabled"), &OhaoViewport::set_water_enabled);
+    ClassDB::bind_method(D_METHOD("get_water_enabled"), &OhaoViewport::get_water_enabled);
+    ClassDB::bind_method(D_METHOD("set_water_level", "level"), &OhaoViewport::set_water_level);
+    ClassDB::bind_method(D_METHOD("get_water_level"), &OhaoViewport::get_water_level);
+    ClassDB::bind_method(D_METHOD("set_water_size", "size"), &OhaoViewport::set_water_size);
+    ClassDB::bind_method(D_METHOD("get_water_size"), &OhaoViewport::get_water_size);
+    ClassDB::bind_method(D_METHOD("set_water_foam_intensity", "intensity"), &OhaoViewport::set_water_foam_intensity);
+    ClassDB::bind_method(D_METHOD("get_water_foam_intensity"), &OhaoViewport::get_water_foam_intensity);
+    ClassDB::bind_method(D_METHOD("set_water_wave_amplitude", "amplitude"), &OhaoViewport::set_water_wave_amplitude);
+    ClassDB::bind_method(D_METHOD("get_water_wave_amplitude"), &OhaoViewport::get_water_wave_amplitude);
+    ClassDB::bind_method(D_METHOD("set_water_normal_maps", "nm1_path", "nm2_path"), &OhaoViewport::set_water_normal_maps);
+    ClassDB::bind_method(D_METHOD("set_water_shallow_color", "color"), &OhaoViewport::set_water_shallow_color);
+    ClassDB::bind_method(D_METHOD("set_water_deep_color", "color"), &OhaoViewport::set_water_deep_color);
+    ClassDB::bind_method(D_METHOD("set_water_sun_intensity", "intensity"), &OhaoViewport::set_water_sun_intensity);
+
+    // Wave mode
+    ClassDB::bind_method(D_METHOD("set_wave_mode", "mode"), &OhaoViewport::set_wave_mode);
+    ClassDB::bind_method(D_METHOD("get_wave_mode"), &OhaoViewport::get_wave_mode);
+    ClassDB::bind_method(D_METHOD("set_fft_wind_speed", "speed"), &OhaoViewport::set_fft_wind_speed);
+    ClassDB::bind_method(D_METHOD("get_fft_wind_speed"), &OhaoViewport::get_fft_wind_speed);
+    ClassDB::bind_method(D_METHOD("set_fft_wind_direction", "dir"), &OhaoViewport::set_fft_wind_direction);
+    ClassDB::bind_method(D_METHOD("set_fft_patch_size", "size"), &OhaoViewport::set_fft_patch_size);
+    ClassDB::bind_method(D_METHOD("get_fft_patch_size"), &OhaoViewport::get_fft_patch_size);
+    ClassDB::bind_method(D_METHOD("set_fft_choppiness", "choppiness"), &OhaoViewport::set_fft_choppiness);
+    ClassDB::bind_method(D_METHOD("get_fft_choppiness"), &OhaoViewport::get_fft_choppiness);
+    ClassDB::bind_method(D_METHOD("set_fft_normal_strength", "strength"), &OhaoViewport::set_fft_normal_strength);
+
+
+    // === Caustics ===
+    ClassDB::bind_method(D_METHOD("set_caustics_enabled", "enabled"), &OhaoViewport::set_caustics_enabled);
+    ClassDB::bind_method(D_METHOD("get_caustics_enabled"), &OhaoViewport::get_caustics_enabled);
+    ClassDB::bind_method(D_METHOD("set_caustics_intensity", "intensity"), &OhaoViewport::set_caustics_intensity);
+    ClassDB::bind_method(D_METHOD("get_caustics_intensity"), &OhaoViewport::get_caustics_intensity);
+    ClassDB::bind_method(D_METHOD("set_caustics_texture", "path"), &OhaoViewport::set_caustics_texture);
+
+    // === Water Ripples ===
+    ClassDB::bind_method(D_METHOD("set_water_ripples_enabled", "enabled"), &OhaoViewport::set_water_ripples_enabled);
+    ClassDB::bind_method(D_METHOD("get_water_ripples_enabled"), &OhaoViewport::get_water_ripples_enabled);
+    ClassDB::bind_method(D_METHOD("add_water_ripple", "world_pos", "strength"), &OhaoViewport::add_water_ripple);
+    ClassDB::bind_method(D_METHOD("clear_water_ripples"), &OhaoViewport::clear_water_ripples);
+
+    // === Enhanced Water ===
+    ClassDB::bind_method(D_METHOD("set_water_sss_strength", "strength"), &OhaoViewport::set_water_sss_strength);
+    ClassDB::bind_method(D_METHOD("get_water_sss_strength"), &OhaoViewport::get_water_sss_strength);
+    ClassDB::bind_method(D_METHOD("set_water_foam_texture", "path"), &OhaoViewport::set_water_foam_texture);
+
+    // === Underwater ===
+    ClassDB::bind_method(D_METHOD("set_underwater_enabled", "enabled"), &OhaoViewport::set_underwater_enabled);
+    ClassDB::bind_method(D_METHOD("get_underwater_enabled"), &OhaoViewport::get_underwater_enabled);
+    ClassDB::bind_method(D_METHOD("set_underwater_fog_color", "color"), &OhaoViewport::set_underwater_fog_color);
+    ClassDB::bind_method(D_METHOD("set_underwater_fog_density", "density"), &OhaoViewport::set_underwater_fog_density);
+    ClassDB::bind_method(D_METHOD("get_underwater_fog_density"), &OhaoViewport::get_underwater_fog_density);
+    ClassDB::bind_method(D_METHOD("set_underwater_chrom_strength", "strength"), &OhaoViewport::set_underwater_chrom_strength);
+    ClassDB::bind_method(D_METHOD("get_underwater_chrom_strength"), &OhaoViewport::get_underwater_chrom_strength);
+
+    // === Decals ===
+    ClassDB::bind_method(D_METHOD("set_decals_enabled", "enabled"), &OhaoViewport::set_decals_enabled);
+    ClassDB::bind_method(D_METHOD("get_decals_enabled"), &OhaoViewport::get_decals_enabled);
+    ClassDB::bind_method(D_METHOD("add_decal", "pos", "normal", "size", "albedo_path", "opacity", "tint"), &OhaoViewport::add_decal);
+    ClassDB::bind_method(D_METHOD("remove_decal", "handle"), &OhaoViewport::remove_decal);
+    ClassDB::bind_method(D_METHOD("clear_decals"), &OhaoViewport::clear_decals);
+
+    // === Foliage ===
+    ClassDB::bind_method(D_METHOD("set_foliage_enabled", "enabled"), &OhaoViewport::set_foliage_enabled);
+    ClassDB::bind_method(D_METHOD("get_foliage_enabled"), &OhaoViewport::get_foliage_enabled);
+    ClassDB::bind_method(D_METHOD("set_foliage_cull_distance", "distance"), &OhaoViewport::set_foliage_cull_distance);
+    ClassDB::bind_method(D_METHOD("get_foliage_cull_distance"), &OhaoViewport::get_foliage_cull_distance);
+    ClassDB::bind_method(D_METHOD("set_grass_texture", "path"), &OhaoViewport::set_grass_texture);
+    ClassDB::bind_method(D_METHOD("add_foliage_cluster", "params"), &OhaoViewport::add_foliage_cluster);
+    ClassDB::bind_method(D_METHOD("clear_foliage"), &OhaoViewport::clear_foliage);
+
     // === Camera Mode ===
     ADD_GROUP("Camera", "camera_");
 
@@ -681,6 +785,7 @@ void OhaoViewport::_process(double delta) {
     // Render frame
     if (m_renderer) {
         m_renderer->render();
+        sync_terrain_weather_friction();
 
         const uint8_t* pixels = m_renderer->getPixels();
         if (pixels && m_image.is_valid()) {
@@ -1113,6 +1218,435 @@ void OhaoViewport::set_rainbow_enabled(bool v) { m_render_settings.setRainbowEna
 void OhaoViewport::set_heat_haze_enabled(bool v)    { m_render_settings.setHeatHazeEnabled(v); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_heat_haze_intensity(float v) { m_render_settings.setHeatHazeIntensity(v); m_render_settings.apply(m_renderer); }
 void OhaoViewport::set_heat_haze_frequency(float v) { m_render_settings.setHeatHazeFrequency(v); m_render_settings.apply(m_renderer); }
+
+// ===== Terrain =====
+
+void OhaoViewport::set_terrain_enabled(bool v) {
+    m_render_settings.setTerrainEnabled(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_terrain_height_scale(float v) {
+    m_render_settings.setTerrainHeightScale(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_terrain_size(float v) {
+    m_render_settings.setTerrainSize(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_terrain_heightmap(const String& path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    deferred->setTerrainHeightmapPath(SceneSync::resolveResPath(path));
+}
+void OhaoViewport::set_terrain_splat_map(const String& path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    deferred->setTerrainSplatMapPath(SceneSync::resolveResPath(path));
+}
+void OhaoViewport::set_terrain_layer(int layer_index, const String& albedo_path, const String& normal_path) {
+    if (!m_renderer || layer_index < 0 || layer_index > 3) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    deferred->setTerrainLayerAlbedo(static_cast<uint32_t>(layer_index), SceneSync::resolveResPath(albedo_path));
+    deferred->setTerrainLayerNormal(static_cast<uint32_t>(layer_index), SceneSync::resolveResPath(normal_path));
+}
+void OhaoViewport::set_terrain_type(int type) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainType(type);
+}
+void OhaoViewport::set_terrain_frequency(float f) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainGenFrequency(f);
+}
+void OhaoViewport::set_terrain_octaves(int n) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainGenOctaves(n);
+}
+void OhaoViewport::set_terrain_offset(Vector2 off) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainGenOffset(glm::vec2(off.x, off.y));
+}
+void OhaoViewport::set_terrain_gen_resolution(int r) {
+    if (!m_renderer || r < 64) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainGenResolution(static_cast<uint32_t>(r));
+}
+void OhaoViewport::set_terrain_macro_variation(const String& path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainMacroVariationPath(SceneSync::resolveResPath(path));
+}
+void OhaoViewport::generate_terrain() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->generateTerrain();
+}
+
+bool OhaoViewport::sync_terrain_physics() {
+    if (!m_renderer) return false;
+
+    // Read heightmap from GPU to CPU (blocking, one-time operation)
+    std::vector<float> heights;
+    uint32_t res = 0;
+    if (!m_renderer->readTerrainHeights(heights, res) || heights.empty()) {
+        std::cerr << "sync_terrain_physics: no procedural terrain to sync\n";
+        return false;
+    }
+
+    // Get terrain params needed for scaling
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return false;
+    float worldSize   = deferred->getTerrainSize();
+    float heightScale = deferred->getTerrainHeightScale();
+
+    // Get physics world directly from m_scene
+    if (!m_scene) return false;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return false;
+
+    // Create Jolt static heightfield body
+    auto handle = physWorld->addTerrainHeightfield(
+        heights.data(), res, worldSize, heightScale);
+
+    if (handle == ohao::physics::backend::INVALID_BODY) {
+        std::cerr << "sync_terrain_physics: Jolt heightfield creation failed\n";
+        return false;
+    }
+
+    std::cout << "sync_terrain_physics: terrain body created (handle=" << handle
+              << ", res=" << res << ", size=" << worldSize << "m)\n";
+    return true;
+}
+
+void OhaoViewport::sync_terrain_weather_friction() {
+    if (!m_renderer || !m_scene) return;
+    auto* physWorld = m_scene->getPhysicsWorld();
+    if (!physWorld) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    physWorld->updateTerrainFriction(
+        deferred->getSurfaceWetness(),
+        deferred->getSnowAccumulation(),
+        deferred->getFrostCover()
+    );
+}
+
+// ===== Terrain — runtime splatmap painting =====
+
+void OhaoViewport::paint_terrain_splat(Vector3 world_pos, int channel, float radius, float strength) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    auto* tp = deferred->getTerrainPass();
+    if (!tp) return;
+    tp->paintSplat(glm::vec2(world_pos.x, world_pos.z), channel, radius, strength,
+                   deferred->getTerrainSize());
+}
+
+void OhaoViewport::clear_terrain_splat() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    auto* tp = deferred->getTerrainPass();
+    if (tp) tp->clearSplatPaint();
+}
+
+// ===== Terrain — multi-tile streaming =====
+
+int OhaoViewport::add_terrain_tile(float offset_x, float offset_z) {
+    if (!m_renderer) return -1;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->addTerrainTile(offset_x, offset_z) : -1;
+}
+
+void OhaoViewport::clear_terrain_tiles() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->clearTerrainTiles();
+}
+
+void OhaoViewport::set_terrain_tile_cull_radius(float r) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setTerrainTileCullRadius(r);
+}
+
+// ===== Water =====
+
+void OhaoViewport::set_water_enabled(bool v) {
+    m_render_settings.setWaterEnabled(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_water_level(float v) {
+    m_render_settings.setWaterLevel(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_water_size(float v) {
+    m_render_settings.setWaterSize(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_water_foam_intensity(float v) {
+    m_render_settings.setWaterFoamIntensity(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_water_wave_amplitude(float v) {
+    m_render_settings.setWaterWaveAmplitude(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_water_normal_maps(const String& nm1_path, const String& nm2_path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    deferred->setWaterNormalMap1(SceneSync::resolveResPath(nm1_path));
+    deferred->setWaterNormalMap2(SceneSync::resolveResPath(nm2_path));
+}
+void OhaoViewport::set_water_shallow_color(const Color& c) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterColors(glm::vec3(c.r, c.g, c.b), glm::vec3(0.02f, 0.12f, 0.22f));
+}
+void OhaoViewport::set_water_deep_color(const Color& c) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterColors(glm::vec3(0.10f, 0.40f, 0.50f), glm::vec3(c.r, c.g, c.b));
+}
+void OhaoViewport::set_water_sun_intensity(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterSunDirection(glm::vec3(-0.3f, 0.8f, -0.5f), v);
+}
+
+// ===== Wave Mode (Gerstner / FFT) =====
+
+void OhaoViewport::set_wave_mode(int mode) {
+    if (!m_renderer) return;
+    auto* d = m_renderer->getDeferredRenderer();
+    if (d) d->setWaveMode(mode);
+}
+int OhaoViewport::get_wave_mode() const {
+    if (!m_renderer) return 0;
+    auto* d = m_renderer->getDeferredRenderer();
+    return d ? d->getWaveMode() : 0;
+}
+void OhaoViewport::set_fft_wind_speed(float s) {
+    if (!m_renderer) return;
+    auto* d = m_renderer->getDeferredRenderer();
+    if (d) d->setFFTWindSpeed(s);
+}
+float OhaoViewport::get_fft_wind_speed() const {
+    if (!m_renderer) return 8.0f;
+    auto* d = m_renderer->getDeferredRenderer();
+    return d ? d->getFFTWindSpeed() : 8.0f;
+}
+void OhaoViewport::set_fft_wind_direction(const Vector2& dir) {
+    if (!m_renderer) return;
+    auto* d = m_renderer->getDeferredRenderer();
+    if (d) d->setFFTWindDirection(dir.x, dir.y);
+}
+void OhaoViewport::set_fft_patch_size(float s) {
+    if (!m_renderer) return;
+    auto* d = m_renderer->getDeferredRenderer();
+    if (d) d->setFFTPatchSize(s);
+}
+float OhaoViewport::get_fft_patch_size() const {
+    if (!m_renderer) return 500.0f;
+    auto* d = m_renderer->getDeferredRenderer();
+    return d ? d->getFFTPatchSize() : 500.0f;
+}
+void OhaoViewport::set_fft_choppiness(float c) {
+    if (!m_renderer) return;
+    auto* d = m_renderer->getDeferredRenderer();
+    if (d) d->setFFTChoppiness(c);
+}
+float OhaoViewport::get_fft_choppiness() const {
+    if (!m_renderer) return 1.4f;
+    auto* d = m_renderer->getDeferredRenderer();
+    return d ? d->getFFTChoppiness() : 1.4f;
+}
+void OhaoViewport::set_fft_normal_strength(float v) {
+    if (!m_renderer) return;
+    auto* d = m_renderer->getDeferredRenderer();
+    if (d) d->setFFTNormalStrength(v);
+}
+
+// ===== Caustics =====
+
+void OhaoViewport::set_caustics_enabled(bool v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setCausticsEnabled(v);
+}
+bool OhaoViewport::get_caustics_enabled() const {
+    if (!m_renderer) return false;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getCausticsEnabled() : false;
+}
+void OhaoViewport::set_caustics_intensity(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setCausticsIntensity(v);
+}
+float OhaoViewport::get_caustics_intensity() const {
+    if (!m_renderer) return 0.5f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getCausticsIntensity() : 0.5f;
+}
+void OhaoViewport::set_caustics_texture(const String& path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setCausticsTexturePath(SceneSync::resolveResPath(path));
+}
+
+// ===== Water Ripples =====
+
+void OhaoViewport::set_water_ripples_enabled(bool v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterRipplesEnabled(v);
+}
+bool OhaoViewport::get_water_ripples_enabled() const {
+    if (!m_renderer) return false;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getWaterRipplesEnabled() : false;
+}
+void OhaoViewport::add_water_ripple(const Vector3& world_pos, float strength) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->addWaterRipple(world_pos.x, world_pos.z, strength);
+}
+void OhaoViewport::clear_water_ripples() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->clearWaterRipples();
+}
+
+// ===== Enhanced Water =====
+
+void OhaoViewport::set_water_sss_strength(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterSSSStrength(v);
+}
+float OhaoViewport::get_water_sss_strength() const {
+    if (!m_renderer) return 0.35f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getWaterSSSStrength() : 0.35f;
+}
+void OhaoViewport::set_water_foam_texture(const String& path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterFoamTexturePath(SceneSync::resolveResPath(path));
+}
+
+// ===== Underwater =====
+
+void OhaoViewport::set_underwater_enabled(bool v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setUnderwaterEnabled(v);
+}
+bool OhaoViewport::get_underwater_enabled() const {
+    if (!m_renderer) return false;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getUnderwaterEnabled() : false;
+}
+void OhaoViewport::set_underwater_fog_color(const Color& c) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setUnderwaterFogColor(glm::vec3(c.r, c.g, c.b));
+}
+void OhaoViewport::set_underwater_fog_density(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setUnderwaterFogDensity(v);
+}
+float OhaoViewport::get_underwater_fog_density() const {
+    if (!m_renderer) return 0.12f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getUnderwaterFogDensity() : 0.12f;
+}
+void OhaoViewport::set_underwater_chrom_strength(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setUnderwaterChromStrength(v);
+}
+float OhaoViewport::get_underwater_chrom_strength() const {
+    if (!m_renderer) return 0.006f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getUnderwaterChromStrength() : 0.006f;
+}
+
+// ===== Decals =====
+
+void OhaoViewport::set_decals_enabled(bool v) {
+    m_render_settings.setDecalsEnabled(v);
+    m_render_settings.apply(m_renderer);
+}
+int OhaoViewport::add_decal(const Vector3& pos, const Vector3& normal, const Vector3& size,
+                             const String& albedo_path, float opacity, const Color& tint) {
+    if (!m_renderer) return 0;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return 0;
+    uint32_t handle = deferred->addDecal(
+        glm::vec3(pos.x, pos.y, pos.z),
+        glm::vec3(normal.x, normal.y, normal.z),
+        glm::vec3(size.x, size.y, size.z),
+        SceneSync::resolveResPath(albedo_path),
+        opacity,
+        glm::vec4(tint.r, tint.g, tint.b, tint.a));
+    return static_cast<int>(handle);
+}
+void OhaoViewport::remove_decal(int handle) {
+    if (!m_renderer || handle <= 0) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    deferred->removeDecal(static_cast<uint32_t>(handle));
+}
+void OhaoViewport::clear_decals() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->clearDecals();
+}
+
+// ===== Foliage =====
+
+void OhaoViewport::set_foliage_enabled(bool v) {
+    m_render_settings.setFoliageEnabled(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_foliage_cull_distance(float v) {
+    m_render_settings.setFoliageCullDistance(v);
+    m_render_settings.apply(m_renderer);
+}
+void OhaoViewport::set_grass_texture(const String& path) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    deferred->setGrassTexturePath(SceneSync::resolveResPath(path));
+}
+void OhaoViewport::add_foliage_cluster(const Dictionary& params) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) return;
+    Vector3 center = params.has("center") ? params["center"].operator Vector3() : Vector3(0, 0, 0);
+    float radius   = params.has("radius")  ? static_cast<float>(params["radius"].operator double())  : 50.0f;
+    float density  = params.has("density") ? static_cast<float>(params["density"].operator double()) : 30.0f;
+    deferred->addFoliageCluster(
+        glm::vec3(center.x, center.y, center.z),
+        radius,
+        density);
+}
+void OhaoViewport::clear_foliage() {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->clearFoliage();
+}
 
 // ===== Scene Management (delegates to SceneSync) =====
 
