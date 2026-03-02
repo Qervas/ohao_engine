@@ -11,6 +11,8 @@ file(GLOB_RECURSE SHADER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.frag"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.comp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.geom"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.tesc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.tese"
 )
 
 # Create output directory
@@ -22,6 +24,7 @@ add_custom_command(
 # Find include files for dependency tracking (all subdirectories)
 file(GLOB_RECURSE SHADER_INCLUDES
     "${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/includes/water/*.glsl"
 )
 
 # Generate compilation commands for each shader
