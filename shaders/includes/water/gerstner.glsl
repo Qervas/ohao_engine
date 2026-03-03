@@ -27,11 +27,18 @@ vec3 gerstnerDisplace(vec3 pos, GerstnerWave w, float time) {
     float f = k * dot(d, pos.xz) - omega * time;
     float A = w.steepness / k;
     float Q = w.steepness / (k * max(A, 0.0001));
-    return vec3(
+    vec3 disp = vec3(
         Q * A * d.x * cos(f),
         A * sin(f),
         Q * A * d.y * cos(f)
     );
+    // Stokes 2nd-order correction — real waves pitch forward, steepening front face
+    float stokesAmp   = 0.5 * k * A * A;
+    float stokesPhase = 2.0 * f;
+    disp.y += stokesAmp * sin(stokesPhase);
+    disp.x += Q * stokesAmp * d.x * cos(stokesPhase);
+    disp.z += Q * stokesAmp * d.y * cos(stokesPhase);
+    return disp;
 }
 
 // Returns the normal perturbation contribution for one wave.
@@ -43,11 +50,18 @@ vec3 gerstnerNormal(vec3 pos, GerstnerWave w, float time) {
     float f = k * dot(d, pos.xz) - omega * time;
     float A = w.steepness / k;
     float Q = w.steepness / (k * max(A, 0.0001));
-    return vec3(
+    vec3 norm = vec3(
         -d.x * k * A * cos(f),
         -Q   * k * A * sin(f),
         -d.y * k * A * cos(f)
     );
+    // Stokes 2nd-order correction derivative — matching asymmetry
+    float stokesAmp   = 0.5 * k * A * A;
+    float stokesPhase = 2.0 * f;
+    norm.y -= Q * 2.0 * k * stokesAmp * sin(stokesPhase);
+    norm.x -= d.x * 2.0 * k * stokesAmp * cos(stokesPhase);
+    norm.z -= d.y * 2.0 * k * stokesAmp * cos(stokesPhase);
+    return norm;
 }
 
 #endif // OHAO_GERSTNER_GLSL

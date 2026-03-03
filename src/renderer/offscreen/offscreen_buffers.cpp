@@ -250,62 +250,27 @@ void OffscreenRenderer::updateLightBuffer() {
 
     int shadowCasterIndex = -1;  // Index of first shadow-casting light
 
-    // Debug: Print scene state
-    static int debugCounter = 0;
-    bool shouldPrintDebug = (debugCounter++ % 120 == 0);  // Print every ~2 seconds at 60fps
-
     // Collect lights from scene
     if (m_scene) {
-        size_t actorCount = m_scene->getAllActors().size();
-        if (shouldPrintDebug) {
-            std::cout << "[LightBuffer] Scene ptr=" << static_cast<void*>(m_scene)
-                      << " has " << actorCount << " actors" << std::endl;
-        }
-
         for (const auto& [actorId, actor] : m_scene->getAllActors()) {
             auto lightComp = actor->getComponent<LightComponent>();
-            if (!lightComp) {
-                if (shouldPrintDebug) {
-                    std::cout << "  Actor '" << actor->getName() << "' - no LightComponent" << std::endl;
-                }
-                continue;
-            }
-
-            if (shouldPrintDebug) {
-                std::cout << "  FOUND LIGHT: '" << actor->getName() << "' type="
-                          << static_cast<int>(lightComp->getLightType())
-                          << " pos=(" << actor->getTransform()->getPosition().x
-                          << "," << actor->getTransform()->getPosition().y
-                          << "," << actor->getTransform()->getPosition().z << ")"
-                          << " dir=(" << lightComp->getDirection().x
-                          << "," << lightComp->getDirection().y
-                          << "," << lightComp->getDirection().z << ")"
-                          << std::endl;
-            }
+            if (!lightComp) continue;
 
             if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
 
             LightData& light = lightUbo.lights[lightUbo.numLights];
 
-            // Get world position from actor's transform
             glm::vec3 worldPos = actor->getTransform()->getPosition();
             glm::vec3 worldDir = lightComp->getDirection();
 
-            // Pack light type into position.w
             light.position = glm::vec4(worldPos, static_cast<float>(lightComp->getLightType()));
-
-            // Pack range into direction.w
             light.direction = glm::vec4(worldDir, lightComp->getRange());
-
-            // Pack intensity into color.w
             light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
 
-            // Spot light params + shadow map index
-            // Only first directional or spot light casts shadows for now
             float shadowMapIndex = -1.0f;
             if (m_shadowsEnabled && shadowCasterIndex < 0) {
                 int lightType = static_cast<int>(lightComp->getLightType());
-                if (lightType == 0 || lightType == 2) {  // Directional or Spot
+                if (lightType == 0 || lightType == 2) {
                     shadowMapIndex = 0.0f;
                     shadowCasterIndex = lightUbo.numLights;
                 }
@@ -318,31 +283,8 @@ void OffscreenRenderer::updateLightBuffer() {
                 0.0f
             );
 
-            // Calculate light space matrix for shadow casting lights
             if (shadowMapIndex >= 0.0f) {
                 light.lightSpaceMatrix = calculateLightSpaceMatrix(light);
-                if (shouldPrintDebug) {
-                    std::cout << "  Light space matrix [0]: ("
-                              << light.lightSpaceMatrix[0][0] << ", "
-                              << light.lightSpaceMatrix[0][1] << ", "
-                              << light.lightSpaceMatrix[0][2] << ", "
-                              << light.lightSpaceMatrix[0][3] << ")" << std::endl;
-                    std::cout << "  Light space matrix [1]: ("
-                              << light.lightSpaceMatrix[1][0] << ", "
-                              << light.lightSpaceMatrix[1][1] << ", "
-                              << light.lightSpaceMatrix[1][2] << ", "
-                              << light.lightSpaceMatrix[1][3] << ")" << std::endl;
-                    std::cout << "  Light space matrix [2]: ("
-                              << light.lightSpaceMatrix[2][0] << ", "
-                              << light.lightSpaceMatrix[2][1] << ", "
-                              << light.lightSpaceMatrix[2][2] << ", "
-                              << light.lightSpaceMatrix[2][3] << ")" << std::endl;
-                    std::cout << "  Light space matrix [3]: ("
-                              << light.lightSpaceMatrix[3][0] << ", "
-                              << light.lightSpaceMatrix[3][1] << ", "
-                              << light.lightSpaceMatrix[3][2] << ", "
-                              << light.lightSpaceMatrix[3][3] << ")" << std::endl;
-                }
             } else {
                 light.lightSpaceMatrix = glm::mat4(1.0f);
             }
@@ -351,15 +293,13 @@ void OffscreenRenderer::updateLightBuffer() {
         }
     }
 
-    // If no lights in scene, add a default directional light with shadows
+    // If no lights in scene, add a default directional light (direction synced by renderDeferred)
     if (lightUbo.numLights == 0) {
-        if (shouldPrintDebug) {
-            std::cout << "[LightBuffer] WARNING: No lights found in scene, using HARDCODED default!" << std::endl;
-        }
         LightData& defaultLight = lightUbo.lights[0];
         defaultLight.position = glm::vec4(0.0f, 5.0f, 5.0f, 0.0f);  // type 0 = directional
         defaultLight.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
-        defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);  // white, intensity 1.0
+        // Intensity = PI compensates for PBR energy-conserving divide-by-PI in diffuse BRDF
+        defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());
         defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f, 0.0f);
 
         if (m_shadowsEnabled) {

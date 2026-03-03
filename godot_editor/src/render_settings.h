@@ -206,8 +206,38 @@ public:
     void  setHeatHazeFrequency(float v) { m_heat_haze_frequency = v; }
     float getHeatHazeFrequency() const  { return m_heat_haze_frequency; }
 
+    // === Terrain Settings ===
+    void  setTerrainEnabled(bool v)      { m_terrain_enabled    = v; }
+    bool  getTerrainEnabled() const      { return m_terrain_enabled; }
+    void  setTerrainHeightScale(float v) { m_terrain_height_scale = v; }
+    float getTerrainHeightScale() const  { return m_terrain_height_scale; }
+    void  setTerrainSize(float v)        { m_terrain_size = v; }
+    float getTerrainSize() const         { return m_terrain_size; }
+
+    // === Water Settings ===
+    void  setWaterEnabled(bool v)        { m_water_enabled       = v; }
+    bool  getWaterEnabled() const        { return m_water_enabled; }
+    void  setWaterLevel(float v)         { m_water_level         = v; }
+    float getWaterLevel() const          { return m_water_level; }
+    void  setWaterSize(float v)          { m_water_size          = v; }
+    float getWaterSize() const           { return m_water_size; }
+    void  setWaterFoamIntensity(float v) { m_water_foam_intensity = v; }
+    float getWaterFoamIntensity() const  { return m_water_foam_intensity; }
+    void  setWaterWaveAmplitude(float v) { m_water_wave_amplitude = v; }
+    float getWaterWaveAmplitude() const  { return m_water_wave_amplitude; }
+
+    // === Decals Settings ===
+    void  setDecalsEnabled(bool v)       { m_decals_enabled = v; }
+    bool  getDecalsEnabled() const       { return m_decals_enabled; }
+
+    // === Foliage Settings ===
+    void  setFoliageEnabled(bool v)       { m_foliage_enabled       = v; }
+    bool  getFoliageEnabled() const       { return m_foliage_enabled; }
+    void  setFoliageCullDistance(float v) { m_foliage_cull_distance = v; }
+    float getFoliageCullDistance() const  { return m_foliage_cull_distance; }
+
 private:
-    int m_render_mode = 0;  // 0=Forward, 1=Deferred
+    int m_render_mode = 1;  // 0=Forward, 1=Deferred (default: Deferred for sky/weather/post-processing)
 
     // Post-processing toggles (all off by default; presets/scripts enable explicitly)
     bool m_bloom_enabled = false;
@@ -319,6 +349,25 @@ private:
     bool  m_heat_haze_enabled   = false;
     float m_heat_haze_intensity = 0.5f;
     float m_heat_haze_frequency = 8.0f;
+
+    // Terrain
+    bool  m_terrain_enabled      = false;
+    float m_terrain_height_scale = 100.0f;
+    float m_terrain_size         = 1024.0f;
+
+    // Water
+    bool  m_water_enabled        = false;
+    float m_water_level          = 0.0f;
+    float m_water_size           = 1024.0f;
+    float m_water_foam_intensity = 0.6f;
+    float m_water_wave_amplitude = 0.3f;
+
+    // Decals
+    bool  m_decals_enabled = true;
+
+    // Foliage
+    bool  m_foliage_enabled       = false;
+    float m_foliage_cull_distance = 120.0f;
 };
 
 } // namespace godot

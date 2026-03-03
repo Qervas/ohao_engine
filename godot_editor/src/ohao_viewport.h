@@ -441,6 +441,21 @@ public:
     float get_underwater_fog_density() const;
     void  set_underwater_chrom_strength(float v);
     float get_underwater_chrom_strength() const;
+    void  set_underwater_distort_frequency(float v);
+    void  set_underwater_distort_speed(float v);
+
+    // === Ripple Tuning ===
+    void  set_water_ripple_damping(float v);
+    float get_water_ripple_damping() const;
+    void  set_water_ripple_speed(float v);
+    float get_water_ripple_speed() const;
+
+    // === Caustics Scale ===
+    void  set_caustics_scale(float v);
+    float get_caustics_scale() const;
+
+    // === Water Grid LOD ===
+    void  set_water_grid_resolution(int n);
 
     // === Decals ===
     void  set_decals_enabled(bool v);

@@ -274,7 +274,7 @@ void DeferredLightingPass::updateDescriptorSets() {
     writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[5].dstSet = m_descriptorSet;
     writes[5].dstBinding = 5;
-    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[5].descriptorCount = 1;
     writes[5].pBufferInfo = &bufferInfo;
 
@@ -491,9 +491,9 @@ bool DeferredLightingPass::createDescriptors() {
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
 
-    // Light buffer (5)
+    // Light buffer (5) — matches shader's "uniform LightingUBO" declaration
     bindings[5].binding = 5;
-    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[5].descriptorCount = 1;
     bindings[5].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
@@ -538,14 +538,12 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool
-    std::array<VkDescriptorPoolSize, 3> poolSizes{};
+    // Descriptor pool — 11 image samplers + 2 UBOs (light buffer + cascade data)
+    std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[0].descriptorCount = 11;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[1].descriptorCount = 1;
-    poolSizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[2].descriptorCount = 1;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[1].descriptorCount = 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

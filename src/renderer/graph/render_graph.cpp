@@ -397,9 +397,6 @@ bool RenderGraph::compile() {
     createFramebuffers();
 
     m_compiled = true;
-    std::cout << "RenderGraph compiled: " << m_passes.size() << " passes, "
-              << m_textureDescs.size() << " textures, "
-              << m_bufferDescs.size() << " buffers" << std::endl;
 
     return true;
 }

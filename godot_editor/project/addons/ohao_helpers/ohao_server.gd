@@ -350,7 +350,7 @@ func _handle_effects_preset(body: Variant) -> PackedByteArray:
 	var vp := Ohao.viewport()
 	if not vp:
 		return _err("No OhaoViewport found")
-	OhaoPresets.apply_rendering_preset(vp, body["rendering"])
+	OhaoPresets.apply_rendering(vp, body["rendering"])
 	return _ok({"preset": body["rendering"]})
 
 

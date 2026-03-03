@@ -186,7 +186,6 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             // Frustum culling: compute world-space AABB and test against frustum
             auto model = actor->getModel();
             if (model && !model->vertices.empty()) {
-                // Compute local AABB from mesh vertices
                 AABB localAABB;
                 localAABB.min = glm::vec3(FLT_MAX);
                 localAABB.max = glm::vec3(-FLT_MAX);
@@ -194,7 +193,6 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                     localAABB.min = glm::min(localAABB.min, v.position);
                     localAABB.max = glm::max(localAABB.max, v.position);
                 }
-                // Transform to world space and test
                 AABB worldAABB = localAABB.transformed(modelMatrix);
                 if (!frustum.isAABBVisible(worldAABB)) {
                     continue; // Culled - skip this actor
@@ -249,8 +247,9 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                                0, sizeof(GBufferUBO), &ubo);
 
             // Draw indexed
+            // vertexOffset=0 because indices are already pre-adjusted in updateSceneBuffers()
             vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
-                            bufferInfo.indexOffset, bufferInfo.vertexOffset, 0);
+                            bufferInfo.indexOffset, 0, 0);
         }
     }
 

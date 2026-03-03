@@ -474,6 +474,21 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_underwater_fog_density"), &OhaoViewport::get_underwater_fog_density);
     ClassDB::bind_method(D_METHOD("set_underwater_chrom_strength", "strength"), &OhaoViewport::set_underwater_chrom_strength);
     ClassDB::bind_method(D_METHOD("get_underwater_chrom_strength"), &OhaoViewport::get_underwater_chrom_strength);
+    ClassDB::bind_method(D_METHOD("set_underwater_distort_frequency", "v"), &OhaoViewport::set_underwater_distort_frequency);
+    ClassDB::bind_method(D_METHOD("set_underwater_distort_speed", "v"), &OhaoViewport::set_underwater_distort_speed);
+
+    // === Ripple Tuning ===
+    ClassDB::bind_method(D_METHOD("set_water_ripple_damping", "v"), &OhaoViewport::set_water_ripple_damping);
+    ClassDB::bind_method(D_METHOD("get_water_ripple_damping"), &OhaoViewport::get_water_ripple_damping);
+    ClassDB::bind_method(D_METHOD("set_water_ripple_speed", "v"), &OhaoViewport::set_water_ripple_speed);
+    ClassDB::bind_method(D_METHOD("get_water_ripple_speed"), &OhaoViewport::get_water_ripple_speed);
+
+    // === Caustics Scale ===
+    ClassDB::bind_method(D_METHOD("set_caustics_scale", "v"), &OhaoViewport::set_caustics_scale);
+    ClassDB::bind_method(D_METHOD("get_caustics_scale"), &OhaoViewport::get_caustics_scale);
+
+    // === Water Grid LOD ===
+    ClassDB::bind_method(D_METHOD("set_water_grid_resolution", "n"), &OhaoViewport::set_water_grid_resolution);
 
     // === Decals ===
     ClassDB::bind_method(D_METHOD("set_decals_enabled", "enabled"), &OhaoViewport::set_decals_enabled);
@@ -1580,6 +1595,60 @@ float OhaoViewport::get_underwater_chrom_strength() const {
     if (!m_renderer) return 0.006f;
     auto* deferred = m_renderer->getDeferredRenderer();
     return deferred ? deferred->getUnderwaterChromStrength() : 0.006f;
+}
+void OhaoViewport::set_underwater_distort_frequency(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setUnderwaterDistortFrequency(v);
+}
+void OhaoViewport::set_underwater_distort_speed(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setUnderwaterDistortSpeed(v);
+}
+
+// ===== Ripple Tuning =====
+
+void OhaoViewport::set_water_ripple_damping(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterRippleDamping(v);
+}
+float OhaoViewport::get_water_ripple_damping() const {
+    if (!m_renderer) return 0.005f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getWaterRippleDamping() : 0.005f;
+}
+void OhaoViewport::set_water_ripple_speed(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterRippleSpeed(v);
+}
+float OhaoViewport::get_water_ripple_speed() const {
+    if (!m_renderer) return 8.0f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getWaterRippleSpeed() : 8.0f;
+}
+
+// ===== Caustics Scale =====
+
+void OhaoViewport::set_caustics_scale(float v) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setCausticsScale(v);
+}
+float OhaoViewport::get_caustics_scale() const {
+    if (!m_renderer) return 0.08f;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    return deferred ? deferred->getCausticsScale() : 0.08f;
+}
+
+// ===== Water Grid LOD =====
+
+void OhaoViewport::set_water_grid_resolution(int n) {
+    if (!m_renderer) return;
+    auto* deferred = m_renderer->getDeferredRenderer();
+    if (deferred) deferred->setWaterGridResolution(n);
 }
 
 // ===== Decals =====

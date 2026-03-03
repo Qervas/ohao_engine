@@ -282,6 +282,18 @@ public:
     void destroySpring(int handle);
     void setSpringEnabled(int handle, bool enabled);
 
+    // === TERRAIN HEIGHTFIELD ===
+    // Create a static terrain heightfield body. Replaces any previous terrain body.
+    // heights: row-major normalized [0,1] values. Returns the body handle (INVALID_BODY on failure).
+    backend::BodyHandle addTerrainHeightfield(const float* heights, uint32_t resolution,
+                                              float worldSize, float heightScale);
+    void removeTerrainBody();
+
+    // Called each frame (or whenever weather values change) to keep Jolt
+    // terrain friction in sync with visual weather state.
+    // dry=0.70 → wet→0.40 → snow→0.25 → ice/frost→0.05
+    void updateTerrainFriction(float wetness, float snowCover, float frostCover = 0.f);
+
 private:
     PhysicsWorldConfig m_config;
     SimulationState m_state{SimulationState::STOPPED};
@@ -321,6 +333,9 @@ private:
 
     // Physics backend (Jolt, null, etc.)
     std::unique_ptr<backend::IPhysicsBackend> m_backend;
+
+    // Terrain heightfield body (one per world; INVALID_BODY = none)
+    backend::BodyHandle m_terrainBodyHandle{backend::INVALID_BODY};
 
     // Internal methods
     void updateActiveBodyPointers();

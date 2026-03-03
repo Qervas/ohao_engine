@@ -64,6 +64,7 @@ public:
     // Light configuration
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
+    glm::vec3 getLightDirection() const { return m_lightDirection; }
 
     // IBL configuration (optional)
     void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
@@ -173,7 +174,7 @@ public:
     void setTerrainTileCullRadius(float r) { m_terrainTileCullRadius = r; }
 
     // ── Terrain ──────────────────────────────────────────────────────────────
-    void  setTerrainEnabled(bool v)       { m_terrainEnabled = v; }
+    void  setTerrainEnabled(bool v)       { m_terrainEnabled = v; if (m_terrainPass) m_terrainPass->setEnabled(v); }
     bool  getTerrainEnabled() const       { return m_terrainEnabled; }
     void  setTerrainHeightScale(float v)  { m_terrainHeightScale = v; }
     float getTerrainHeightScale() const   { return m_terrainHeightScale; }
@@ -195,7 +196,7 @@ public:
     TerrainPass* getTerrainPass() { return m_terrainPass.get(); }
 
     // ── Water ────────────────────────────────────────────────────────────────
-    void  setWaterEnabled(bool v)         { m_waterEnabled = v; }
+    void  setWaterEnabled(bool v)         { m_waterEnabled = v; if (m_waterPass) m_waterPass->setEnabled(v); }
     bool  getWaterEnabled() const         { return m_waterEnabled; }
     void  setWaterLevel(float v)          { m_waterLevel = v; }
     float getWaterLevel() const           { return m_waterLevel; }
@@ -253,6 +254,26 @@ public:
     float getUnderwaterFogDensity() const    { return m_underwaterFogDensity; }
     void  setUnderwaterChromStrength(float v);
     float getUnderwaterChromStrength() const { return m_underwaterChromStrength; }
+
+    // ── Water ripple fine-tuning ───────────────────────────────────────────────
+    void  setWaterRippleDamping(float v);
+    float getWaterRippleDamping() const      { return m_waterRippleDamping; }
+    void  setWaterRippleSpeed(float v);
+    float getWaterRippleSpeed() const        { return m_waterRippleSpeed; }
+
+    // ── Caustics scale ────────────────────────────────────────────────────────
+    void  setCausticsScale(float v);
+    float getCausticsScale() const           { return m_causticsScale; }
+
+    // ── Underwater distort params ─────────────────────────────────────────────
+    void  setUnderwaterDistortFrequency(float v);
+    float getUnderwaterDistortFrequency() const { return m_underwaterDistortFreq; }
+    void  setUnderwaterDistortSpeed(float v);
+    float getUnderwaterDistortSpeed() const  { return m_underwaterDistortSpeed; }
+
+    // ── Water grid resolution (adaptive LOD) ─────────────────────────────────
+    void  setWaterGridResolution(int n);
+    int   getWaterGridResolution() const     { return m_waterGridN; }
 
     // ── Decals ───────────────────────────────────────────────────────────────
     void     setDecalsEnabled(bool v)     { m_decalsEnabled = v; }
@@ -460,6 +481,18 @@ private:
     glm::vec3 m_underwaterFogColor{0.04f, 0.14f, 0.28f};
     float     m_underwaterFogDensity{0.12f};
     float     m_underwaterChromStrength{0.006f};
+    float     m_underwaterDistortFreq{12.0f};
+    float     m_underwaterDistortSpeed{1.2f};
+
+    // Water ripple fine-tuning
+    float     m_waterRippleDamping{0.005f};
+    float     m_waterRippleSpeed{8.0f};
+
+    // Caustics scale
+    float     m_causticsScale{0.08f};
+
+    // Water grid LOD
+    int       m_waterGridN{64};
 
     // Wind (derived from rain/sand wind state; used by foliage and future passes)
     glm::vec3 m_windDirection{1.0f, 0.0f, 0.0f};

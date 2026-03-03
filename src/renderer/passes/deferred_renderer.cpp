@@ -1453,6 +1453,9 @@ void DeferredRenderer::spawnParticles(const glm::vec3& position, ParticleType ty
         case ParticleType::SMOKE:
             config = ParticleSystem::presetSmoke(position);
             break;
+        case ParticleType::WATER_SPLASH:
+            config = ParticleSystem::presetWaterSplash(position, direction);
+            break;
         default:
             config = ParticleSystem::presetImpactSpark(position, direction);
             break;
@@ -1785,6 +1788,36 @@ void DeferredRenderer::setUnderwaterFogDensity(float v) {
 void DeferredRenderer::setUnderwaterChromStrength(float v) {
     m_underwaterChromStrength = glm::clamp(v, 0.0f, 0.05f);
     if (m_underwaterPass) m_underwaterPass->setChromStrength(m_underwaterChromStrength);
+}
+
+void DeferredRenderer::setWaterRippleDamping(float v) {
+    m_waterRippleDamping = glm::clamp(v, 0.0f, 0.1f);
+    if (m_ripplePass) m_ripplePass->setDamping(m_waterRippleDamping);
+}
+
+void DeferredRenderer::setWaterRippleSpeed(float v) {
+    m_waterRippleSpeed = glm::clamp(v, 0.5f, 20.0f);
+    if (m_ripplePass) m_ripplePass->setWaveSpeed(m_waterRippleSpeed);
+}
+
+void DeferredRenderer::setCausticsScale(float v) {
+    m_causticsScale = glm::clamp(v, 0.01f, 0.5f);
+    if (m_causticsPass) m_causticsPass->setCausticsScale(m_causticsScale);
+}
+
+void DeferredRenderer::setUnderwaterDistortFrequency(float v) {
+    m_underwaterDistortFreq = glm::clamp(v, 1.0f, 40.0f);
+    if (m_underwaterPass) m_underwaterPass->setDistortFrequency(m_underwaterDistortFreq);
+}
+
+void DeferredRenderer::setUnderwaterDistortSpeed(float v) {
+    m_underwaterDistortSpeed = glm::clamp(v, 0.1f, 10.0f);
+    if (m_underwaterPass) m_underwaterPass->setDistortSpeed(m_underwaterDistortSpeed);
+}
+
+void DeferredRenderer::setWaterGridResolution(int n) {
+    m_waterGridN = glm::clamp(n, 32, 256);
+    if (m_waterPass) m_waterPass->setGridResolution(m_waterGridN);
 }
 
 // ---------------------------------------------------------------------------

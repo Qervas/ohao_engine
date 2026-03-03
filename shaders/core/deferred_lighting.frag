@@ -13,7 +13,7 @@ layout(set = 0, binding = 0) uniform sampler2D gBuffer0; // Position + Metallic
 layout(set = 0, binding = 1) uniform sampler2D gBuffer1; // Normal + Roughness
 layout(set = 0, binding = 2) uniform sampler2D gBuffer2; // Albedo + AO
 
-// Light data — declared as uniform (C++ binds SSBO; NVIDIA is permissive)
+// Light data — uniform buffer (C++ descriptor matches: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
 struct Light {
     vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)
     vec4 direction;     // xyz = direction, w = range

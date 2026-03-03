@@ -917,5 +917,64 @@ void PhysicsWorld::updateCharacter(backend::CharacterHandle handle, float deltaT
     if (hasBackend()) m_backend->updateCharacter(handle, deltaTime, gravity, movementInput);
 }
 
+// ============================================================================
+// Terrain Heightfield
+// ============================================================================
+
+backend::BodyHandle PhysicsWorld::addTerrainHeightfield(const float* heights,
+                                                         uint32_t resolution,
+                                                         float worldSize,
+                                                         float heightScale) {
+    if (!m_backend || !heights || resolution < 2) return backend::INVALID_BODY;
+
+    // Remove any existing terrain body first
+    removeTerrainBody();
+
+    float sampleStep = worldSize / static_cast<float>(resolution - 1);
+
+    backend::ShapeInfo shape;
+    shape.type                 = backend::ShapeInfo::HEIGHTFIELD;
+    shape.heightfieldData      = heights;
+    shape.heightfieldSizeX     = resolution;
+    shape.heightfieldSizeZ     = resolution;
+    shape.heightfieldScale     = glm::vec3(sampleStep, heightScale, sampleStep);
+    shape.heightfieldMinHeight = 0.0f;
+    shape.heightfieldMaxHeight = 1.0f;
+
+    backend::BodyCreationInfo info;
+    info.motionType    = backend::MotionType::STATIC;
+    info.shape         = shape;
+    info.friction      = 0.7f;
+    info.restitution   = 0.1f;
+    info.gravityEnabled = false;
+    info.layer         = static_cast<uint16_t>(1u << 10);  // LAYER_TERRAIN = 10
+    // Position: terrain is centered at origin, Y=0 is the minimum height
+    info.position      = glm::vec3(-worldSize * 0.5f, 0.0f, -worldSize * 0.5f);
+
+    m_terrainBodyHandle = m_backend->createBody(info);
+    return m_terrainBodyHandle;
+}
+
+void PhysicsWorld::removeTerrainBody() {
+    if (!m_backend || m_terrainBodyHandle == backend::INVALID_BODY) return;
+    m_backend->destroyBody(m_terrainBodyHandle);
+    m_terrainBodyHandle = backend::INVALID_BODY;
+}
+
+void PhysicsWorld::updateTerrainFriction(float wetness, float snowCover, float frostCover) {
+    if (!m_backend || m_terrainBodyHandle == backend::INVALID_BODY) return;
+
+    // Start with dry grass/dirt friction
+    float friction = 0.70f;
+    // Wet mud reduces friction proportional to wetness, on non-snow areas
+    friction = glm::mix(friction, 0.40f, wetness * (1.0f - snowCover));
+    // Snow further reduces (slippery)
+    friction = glm::mix(friction, 0.25f, snowCover);
+    // Frost/ice nearly removes all friction
+    friction = glm::mix(friction, 0.05f, frostCover);
+
+    m_backend->setFriction(m_terrainBodyHandle, friction);
+}
+
 } // namespace physics
 } // namespace ohao

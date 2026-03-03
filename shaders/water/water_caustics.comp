@@ -1,0 +1,68 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+
+// Caustics projection compute shader.
+// Runs pre-lighting (step 2.8): samples the GBuffer depth to reconstruct world
+// positions of submerged geometry, then additively writes animated caustic light
+// patterns into the GBuffer albedo.  The deferred lighting pass then shades the
+// caustic-lit albedo normally, producing realistic underwater light patterns.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sceneDepth;          // GBuffer depth (read)
+layout(set = 0, binding = 1, rgba8) uniform image2D gbufferAlbedo;  // GBuffer albedo (R/W)
+layout(set = 0, binding = 2) uniform sampler2D causticsTex;         // animated caustic atlas
+
+layout(push_constant) uniform CausticsPC {
+    mat4  invViewProj;       // 64 bytes
+    vec2  screenSize;        //  8
+    float waterLevel;        //  4
+    float time;              //  4 — 80
+    float causticsScale;     //  4
+    float causticsIntensity; //  4
+    float pad0;              //  4
+    float pad1;              //  4 — 96
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    if (coord.x >= int(pc.screenSize.x) || coord.y >= int(pc.screenSize.y)) return;
+
+    vec2  uv    = (vec2(coord) + 0.5) / pc.screenSize;
+    float depth = texture(sceneDepth, uv).r;
+    if (depth >= 0.9999) return;  // sky pixel — no geometry
+
+    // Reconstruct world-space position from depth
+    vec4 ndc   = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 world = pc.invViewProj * ndc;
+    vec3 wp    = world.xyz / world.w;
+
+    // Only apply caustics to geometry below the water surface
+    if (wp.y >= pc.waterLevel) return;
+
+    // Depth-based attenuation: caustics fade exponentially with depth
+    float waterDepth  = abs(wp.y - pc.waterLevel);
+    float depth_atten = exp(-waterDepth * 0.12);
+
+    // Three overlapping caustic samples with independent UV drift (3-layer pattern)
+    vec2 uv1 = wp.xz * pc.causticsScale
+             + vec2(sin(pc.time * 0.30), cos(pc.time * 0.20)) * 0.05;
+    vec2 uv2 = wp.xz * pc.causticsScale * 0.73
+             - vec2(cos(pc.time * 0.25), sin(pc.time * 0.35)) * 0.07;
+    vec2 uv3 = wp.xz * pc.causticsScale * 0.85
+             + vec2(sin(pc.time * 0.18) * 0.04, cos(pc.time * 0.28) * 0.06);
+
+    float c1 = texture(causticsTex, uv1).r;
+    float c2 = texture(causticsTex, uv2).r;
+    float c3 = texture(causticsTex, uv3).r;
+    // Power sharpens caustic rings; three-layer blend gives richer interference
+    float causticBrightness = pow((c1 + c2 + c3) * 0.333, 2.2) * depth_atten;
+
+    // Multiplicative trough darkening + additive crest lighting
+    vec4  albedoColor  = imageLoad(gbufferAlbedo, coord);
+    vec3  causticsColor = vec3(0.55, 0.78, 1.0);
+    float troughDark   = max(0.0, 0.5 - causticBrightness) * pc.causticsIntensity * 0.35;
+    vec3  finalColor   = albedoColor.rgb * (1.0 - troughDark)
+                       + causticsColor * causticBrightness * pc.causticsIntensity;
+    imageStore(gbufferAlbedo, coord, vec4(finalColor, albedoColor.a));
+}

@@ -136,7 +136,7 @@ struct CascadeData {
     glm::mat4 viewProj[4];
     glm::vec4 splitDepths;
     float cascadeBlendWidth{0.1f};
-    float shadowBias{0.005f};
+    float shadowBias{0.012f};
     float normalBias{0.02f};
     uint32_t cascadeCount{4};
 };

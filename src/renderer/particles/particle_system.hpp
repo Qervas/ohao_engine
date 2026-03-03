@@ -8,12 +8,13 @@
 namespace ohao {
 
 enum class ParticleType : uint32_t {
-    MUZZLE_FLASH = 0,
-    IMPACT_SPARK = 1,
-    EXPLOSION = 2,
-    SMOKE = 3,
-    DEBRIS = 4,
-    FIRE = 5
+    MUZZLE_FLASH  = 0,
+    IMPACT_SPARK  = 1,
+    EXPLOSION     = 2,
+    SMOKE         = 3,
+    DEBRIS        = 4,
+    FIRE          = 5,
+    WATER_SPLASH  = 6   // upward cone of water droplets, blue-tinted
 };
 
 struct ParticleEmitterConfig {
@@ -61,6 +62,7 @@ public:
     static ParticleEmitterConfig presetImpactSpark(const glm::vec3& pos, const glm::vec3& normal);
     static ParticleEmitterConfig presetExplosion(const glm::vec3& pos);
     static ParticleEmitterConfig presetSmoke(const glm::vec3& pos);
+    static ParticleEmitterConfig presetWaterSplash(const glm::vec3& pos, const glm::vec3& dir);
 
     uint32_t getMaxParticles() const { return m_maxParticles; }
 

@@ -284,7 +284,7 @@ static func _set_input_mode(vp, mode: int) -> void:
 	if mode == OhaoConst.INPUT_GAME:
 		vp.set_input_mode(OhaoConst.INPUT_GAME)
 		# Make parent Controls transparent so mouse events reach _unhandled_input
-		var node := vp.get_parent()
+		var node: Node = vp.get_parent()
 		while node:
 			if node is Control:
 				node.set_meta("_ohao_prev_mouse_filter", node.mouse_filter)
@@ -293,7 +293,7 @@ static func _set_input_mode(vp, mode: int) -> void:
 	else:
 		vp.set_input_mode(OhaoConst.INPUT_EDITOR)
 		# Restore parent Controls' mouse filters
-		var node := vp.get_parent()
+		var node: Node = vp.get_parent()
 		while node:
 			if node is Control and node.has_meta("_ohao_prev_mouse_filter"):
 				node.mouse_filter = node.get_meta("_ohao_prev_mouse_filter")

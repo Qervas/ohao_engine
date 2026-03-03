@@ -3,6 +3,7 @@
 #include <vector>
 #include <iostream>
 #include <cstring>
+#include <cmath>
 
 namespace ohao {
 
@@ -79,6 +80,14 @@ void WaterPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     if (m_hdrView        == VK_NULL_HANDLE) return;
     if (m_depthView      == VK_NULL_HANDLE) return;
     if (m_indexCount     == 0)             return;
+
+    // If grid resolution changed, destroy the old mesh so it is rebuilt below.
+    if (m_meshDirty && m_resourcesUploaded) {
+        vkDeviceWaitIdle(m_device);
+        destroyGridMesh();
+        m_resourcesUploaded = false;
+        m_meshDirty         = false;
+    }
 
     // Upload grid mesh on first execute (deferred from initialize to avoid
     // needing an external command buffer at init time).
@@ -249,6 +258,14 @@ void WaterPass::setWaveSim(IWaveSim* sim) {
         m_fftNormalView       = VK_NULL_HANDLE;
     }
     m_descriptorDirty = true;
+}
+
+void WaterPass::setGridResolution(int n) {
+    int clamped = glm::clamp(n, 32, 256);
+    if (clamped != m_gridN) {
+        m_gridN     = clamped;
+        m_meshDirty = true;
+    }
 }
 
 void WaterPass::setSunDirection(const glm::vec3& dir, float intensity) {
@@ -778,13 +795,15 @@ bool WaterPass::createPipeline() {
 }
 
 bool WaterPass::createGridMesh() {
-    // Generate a GRID_N × GRID_N quad grid.
-    // Each vertex is a vec2 XZ position in normalized [-0.5, 0.5] space.
+    // Generate a m_gridN × m_gridN quad grid.
+    // Each vertex is a vec2 XZ position in normalized [-0.5, 0.5] space with
+    // exponential spacing — vertices cluster near the camera centre giving a
+    // natural camera-centred LOD without tessellation shaders.
     // The vertex shader converts to world space using waterSize.
     //
-    // Layout: (GRID_N+1)×(GRID_N+1) vertices, GRID_N×GRID_N×2 triangles.
+    // Layout: (N+1)×(N+1) vertices, N×N×2 triangles.
 
-    const uint32_t N     = GRID_N;
+    const uint32_t N     = static_cast<uint32_t>(m_gridN);
     const uint32_t verts = (N + 1) * (N + 1);
     const uint32_t tris  = N * N * 2;
     const uint32_t idxCount = tris * 3;
@@ -792,12 +811,25 @@ bool WaterPass::createGridMesh() {
     std::vector<float>    vtxData(verts * 2);
     std::vector<uint32_t> idxData(idxCount);
 
-    // Fill vertex positions
+    // Exponential warp function: maps t in [0,1] to warped position in [-0.5,0.5]
+    // Vertices are denser near the centre (t=0.5), sparser toward the edges.
+    const float kWarpExp  = 1.8f;  // higher = more aggressive clustering
+    const float kWarpNorm = std::exp(0.9f) - 1.0f;  // normaliser for [0,0.5] range
+
+    auto warpPos = [&](uint32_t idx, uint32_t count) -> float {
+        float t        = static_cast<float>(idx) / static_cast<float>(count);
+        float centered = t - 0.5f;                         // [-0.5, 0.5]
+        float absC     = std::abs(centered);
+        float sign_c   = (centered >= 0.0f) ? 1.0f : -1.0f;
+        return sign_c * (std::exp(absC * kWarpExp) - 1.0f) / kWarpNorm * 0.5f;
+    };
+
+    // Fill vertex positions with exponential spacing
     for (uint32_t j = 0; j <= N; ++j) {
         for (uint32_t i = 0; i <= N; ++i) {
             uint32_t idx = (j * (N + 1) + i) * 2;
-            vtxData[idx + 0] = (static_cast<float>(i) / static_cast<float>(N)) - 0.5f;
-            vtxData[idx + 1] = (static_cast<float>(j) / static_cast<float>(N)) - 0.5f;
+            vtxData[idx + 0] = warpPos(i, N);
+            vtxData[idx + 1] = warpPos(j, N);
         }
     }
 

@@ -1,5 +1,7 @@
 class_name OhaoSceneBuilder
 ## Declarative scene building from Dictionary descriptions.
+
+const _Control = preload("res://addons/ohao_helpers/ohao_control.gd")
 ##
 ## Usage:
 ##   OhaoSceneBuilder.build(vp, {
@@ -53,13 +55,13 @@ static func build(vp, desc: Dictionary) -> void:
 		var c = desc["control"]
 		var overrides: Dictionary = desc.get("control_params", {})
 		if c is String:
-			OhaoControl.apply(vp, c, overrides)
+			_Control.apply(vp, c, overrides)
 		elif c is Dictionary:
 			var tname: String = c.get("template", "orbit")
-			var c_copy := c.duplicate()
+			var c_copy: Dictionary = c.duplicate()
 			c_copy.erase("template")
 			c_copy.merge(overrides, true)
-			OhaoControl.apply(vp, tname, c_copy)
+			_Control.apply(vp, tname, c_copy)
 
 	# Attach in-game settings panel if requested
 	if desc.get("settings_panel", false):

@@ -104,6 +104,11 @@ public:
 
     void setTime(float v)          { m_time = v; }
 
+    // Adaptive grid resolution (exponential vertex spacing for camera-centered LOD).
+    // Range [32, 256]; triggers GPU buffer rebuild on the next execute().
+    void setGridResolution(int n);
+    int  getGridResolution() const { return m_gridN; }
+
 private:
     // Push constants (vert + frag): 2×mat4 + 5×vec4 = 208 bytes
     // .a channels of shallowColor/deepColor repurposed for SSS and ripple strength.
@@ -160,7 +165,9 @@ private:
     VkDeviceMemory m_dummyCubeMemory{VK_NULL_HANDLE};
     VkImageView    m_dummyCubeView{VK_NULL_HANDLE};
     // Grid mesh (N×N quads of vec2 XZ vertices)
-    static constexpr uint32_t GRID_N = 64;        // 64×64 quads
+    // m_gridN replaces static constexpr GRID_N; m_meshDirty triggers rebuild
+    int            m_gridN{64};
+    bool           m_meshDirty{false};
     VkBuffer       m_vertexBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_vertexMemory{VK_NULL_HANDLE};
     VkBuffer       m_indexBuffer{VK_NULL_HANDLE};

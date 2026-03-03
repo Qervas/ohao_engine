@@ -621,6 +621,26 @@ ParticleEmitterConfig ParticleSystem::presetSmoke(const glm::vec3& pos) {
     return config;
 }
 
+ParticleEmitterConfig ParticleSystem::presetWaterSplash(const glm::vec3& pos, const glm::vec3& dir) {
+    ParticleEmitterConfig config;
+    config.position    = pos;
+    config.direction   = dir;
+    config.spreadAngle = 1.2f;    // upward spray cone
+    config.minSpeed    = 1.5f;
+    config.maxSpeed    = 4.0f;
+    config.minLifetime = 0.3f;
+    config.maxLifetime = 0.9f;
+    config.startSize   = 0.04f;   // water droplet — small
+    config.endSize     = 0.02f;
+    config.colorStart  = glm::vec4(0.55f, 0.75f, 1.0f, 0.9f);  // water-blue
+    config.colorEnd    = glm::vec4(0.7f,  0.85f, 1.0f, 0.0f);  // fade to white
+    config.gravity     = -6.0f;   // arcs up then falls
+    config.drag        = 0.5f;
+    config.emitCount   = 32;
+    config.type        = ParticleType::WATER_SPLASH;
+    return config;
+}
+
 uint32_t ParticleSystem::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
     vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProperties);

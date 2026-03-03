@@ -131,6 +131,10 @@ public:
     // Check if scene has renderable meshes
     bool hasSceneMeshes() const { return m_hasSceneMeshes; }
 
+    // Read GPU terrain heightmap back to CPU (blocking — one-time call at setup).
+    // Returns false if no procedural terrain exists. outRes = square resolution.
+    bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
+
 private:
     // Vulkan setup (no window required)
     bool createInstance();

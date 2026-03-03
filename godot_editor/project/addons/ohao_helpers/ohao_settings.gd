@@ -204,18 +204,18 @@ static func get_effect_status(vp, effect_name: String) -> Dictionary:
 	var result := {}
 
 	# Read toggle state
-	var toggle_getter := "get_" + effect["toggle"]
+	var toggle_getter: String = "get_" + effect["toggle"]
 	if vp.has_method(toggle_getter):
 		result["enabled"] = vp.call(toggle_getter)
 	else:
 		# Fallback: try is_ prefix
-		var is_getter := "is_" + effect["toggle"]
+		var is_getter: String = "is_" + effect["toggle"]
 		if vp.has_method(is_getter):
 			result["enabled"] = vp.call(is_getter)
 
 	# Read param values
 	for key in effect["params"]:
-		var getter := "get_" + key
+		var getter: String = "get_" + key
 		if vp.has_method(getter):
 			result[key] = vp.call(getter)
 		else:

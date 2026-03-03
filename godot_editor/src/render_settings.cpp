@@ -130,6 +130,25 @@ void RenderSettings::apply(ohao::OffscreenRenderer* renderer) {
     pp->setHeatHazeEnabled(m_heat_haze_enabled);
     pp->setHeatHazeIntensity(m_heat_haze_intensity);
     pp->setHeatHazeFrequency(m_heat_haze_frequency);
+
+    // Terrain
+    deferred->setTerrainEnabled(m_terrain_enabled);
+    deferred->setTerrainHeightScale(m_terrain_height_scale);
+    deferred->setTerrainSize(m_terrain_size);
+
+    // Water
+    deferred->setWaterEnabled(m_water_enabled);
+    deferred->setWaterLevel(m_water_level);
+    deferred->setWaterSize(m_water_size);
+    deferred->setWaterFoamIntensity(m_water_foam_intensity);
+    deferred->setWaterWaveAmplitude(m_water_wave_amplitude);
+
+    // Decals
+    deferred->setDecalsEnabled(m_decals_enabled);
+
+    // Foliage
+    deferred->setFoliageEnabled(m_foliage_enabled);
+    deferred->setFoliageCullDistance(m_foliage_cull_distance);
 }
 
 } // namespace godot

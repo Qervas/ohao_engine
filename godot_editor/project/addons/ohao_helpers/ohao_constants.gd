@@ -37,6 +37,9 @@ const PARTICLE_MUZZLE_FLASH := 0
 const PARTICLE_IMPACT_SPARK := 1
 const PARTICLE_EXPLOSION := 2
 const PARTICLE_SMOKE := 3
+const PARTICLE_DEBRIS := 4
+const PARTICLE_FIRE := 5
+const PARTICLE_WATER_SPLASH := 6
 
 # Gizmo modes (OhaoViewport)
 const GIZMO_TRANSLATE := 0
