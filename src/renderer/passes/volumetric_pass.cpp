@@ -1,5 +1,6 @@
 #include "volumetric_pass.hpp"
 #include <array>
+#include <vector>
 #include <iostream>
 
 namespace ohao {
@@ -62,6 +63,33 @@ void VolumetricPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     if (m_depthView == VK_NULL_HANDLE || m_scatterPipeline == VK_NULL_HANDLE) {
         return;
     }
+    if (m_scatteringOutput == VK_NULL_HANDLE) return;
+
+    // Transition scattering output to GENERAL for compute write
+    {
+        VkImageMemoryBarrier preBarrier{};
+        preBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        preBarrier.oldLayout = m_outputTransitioned
+            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            : VK_IMAGE_LAYOUT_UNDEFINED;
+        preBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        preBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        preBarrier.image = m_scatteringOutput;
+        preBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        preBarrier.srcAccessMask = m_outputTransitioned ? VK_ACCESS_SHADER_READ_BIT : 0;
+        preBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+
+        vkCmdPipelineBarrier(cmd,
+            m_outputTransitioned
+                ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &preBarrier);
+    }
+
+    // Update descriptors each frame (depth/shadow/light views may have changed)
+    updateDescriptorSet();
 
     // Bind pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_scatterPipeline);
@@ -88,29 +116,31 @@ void VolumetricPass::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(VolumetricParams), &params);
 
-    // Dispatch - one thread per pixel (scaled down for performance)
+    // Dispatch - one thread per pixel
     uint32_t groupsX = (m_width + 7) / 8;
     uint32_t groupsY = (m_height + 7) / 8;
     vkCmdDispatch(cmd, groupsX, groupsY, 1);
 
-    // Barrier for output
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.image = m_scatteringOutput;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    // Transition: GENERAL → SHADER_READ_ONLY for composite sampling
+    {
+        VkImageMemoryBarrier postBarrier{};
+        postBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        postBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        postBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        postBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        postBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        postBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        postBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        postBarrier.image = m_scatteringOutput;
+        postBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &barrier);
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &postBarrier);
+    }
+
+    m_outputTransitioned = true;
 }
 
 void VolumetricPass::onResize(uint32_t width, uint32_t height) {
@@ -123,6 +153,7 @@ void VolumetricPass::onResize(uint32_t width, uint32_t height) {
 
     destroyResources();
     createScatteringOutput();
+    m_outputTransitioned = false;  // New image needs UNDEFINED→GENERAL transition
     updateDescriptorSet();
 }
 
@@ -149,47 +180,74 @@ void VolumetricPass::setMatrices(const glm::mat4& view, const glm::mat4& proj,
 
 void VolumetricPass::updateDescriptorSet() {
     if (m_descriptorSet == VK_NULL_HANDLE) return;
+    if (m_depthView == VK_NULL_HANDLE || m_scatteringView == VK_NULL_HANDLE) return;
 
-    std::array<VkWriteDescriptorSet, 3> writes{};
+    std::vector<VkWriteDescriptorSet> writes;
 
-    // Depth buffer
+    // Binding 0: Depth buffer (DEPTH_STENCIL_READ_ONLY layout)
     VkDescriptorImageInfo depthInfo{};
     depthInfo.sampler = m_sampler;
     depthInfo.imageView = m_depthView;
-    depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    depthInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_descriptorSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &depthInfo;
+    VkWriteDescriptorSet w0{};
+    w0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w0.dstSet = m_descriptorSet;
+    w0.dstBinding = 0;
+    w0.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w0.descriptorCount = 1;
+    w0.pImageInfo = &depthInfo;
+    writes.push_back(w0);
 
-    // Shadow map (binding 1)
+    // Binding 1: Shadow map
     VkDescriptorImageInfo shadowInfo{};
     shadowInfo.sampler = m_shadowSampler ? m_shadowSampler : m_sampler;
     shadowInfo.imageView = m_shadowView ? m_shadowView : m_depthView;  // Fallback
-    shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    shadowInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_descriptorSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &shadowInfo;
+    VkWriteDescriptorSet w1{};
+    w1.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w1.dstSet = m_descriptorSet;
+    w1.dstBinding = 1;
+    w1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w1.descriptorCount = 1;
+    w1.pImageInfo = &shadowInfo;
+    writes.push_back(w1);
 
-    // Scattering output (binding 4)
+    // Binding 2: Light buffer (UBO)
+    if (m_lightBuffer != VK_NULL_HANDLE) {
+        VkDescriptorBufferInfo lightInfo{};
+        lightInfo.buffer = m_lightBuffer;
+        lightInfo.offset = 0;
+        lightInfo.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet w2{};
+        w2.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w2.dstSet = m_descriptorSet;
+        w2.dstBinding = 2;
+        w2.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w2.descriptorCount = 1;
+        w2.pBufferInfo = &lightInfo;
+        writes.push_back(w2);
+    }
+
+    // Binding 3: Froxel volume (3D storage image, declared but unused by shader)
+    // Don't write — shader never reads from it. Binding exists in layout for future use.
+
+    // Binding 4: Scattering output (storage image)
     VkDescriptorImageInfo scatterInfo{};
     scatterInfo.sampler = VK_NULL_HANDLE;
     scatterInfo.imageView = m_scatteringView;
     scatterInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_descriptorSet;
-    writes[2].dstBinding = 4;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[2].descriptorCount = 1;
-    writes[2].pImageInfo = &scatterInfo;
+    VkWriteDescriptorSet w4{};
+    w4.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w4.dstSet = m_descriptorSet;
+    w4.dstBinding = 4;
+    w4.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    w4.descriptorCount = 1;
+    w4.pImageInfo = &scatterInfo;
+    writes.push_back(w4);
 
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()),
                            writes.data(), 0, nullptr);

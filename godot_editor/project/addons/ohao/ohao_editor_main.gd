@@ -132,10 +132,6 @@ func _connect_signals() -> void:
 		if ohao_viewport and ohao_viewport.has_method("set_wireframe_enabled"):
 			ohao_viewport.set_wireframe_enabled(enabled)
 	)
-	toolbar.grid_toggled.connect(func(enabled: bool) -> void:
-		if ohao_viewport and ohao_viewport.has_method("set_grid_enabled"):
-			ohao_viewport.set_grid_enabled(enabled)
-	)
 	toolbar.import_model_requested.connect(_on_import_model_requested)
 	toolbar.post_process_toggled.connect(_toggle_post_process)
 

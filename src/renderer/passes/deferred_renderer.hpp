@@ -4,7 +4,6 @@
 #include "deferred_lighting_pass.hpp"
 #include "csm_pass.hpp"
 #include "post_processing_pipeline.hpp"
-#include "overlay_pass.hpp"
 #include "gizmo_pass.hpp"
 #include "sky_pass.hpp"
 #include "cloud_pass.hpp"
@@ -79,10 +78,6 @@ public:
     // Wireframe mode
     void setWireframeEnabled(bool enabled);
     bool getWireframeEnabled() const { return m_wireframeEnabled; }
-
-    // Grid overlay
-    void setGridEnabled(bool enabled) { m_gridEnabled = enabled; }
-    bool getGridEnabled() const { return m_gridEnabled; }
 
     // Gizmo controls
     void setGizmoEnabled(bool enabled);
@@ -341,7 +336,6 @@ private:
     std::unique_ptr<CSMPass> m_csmPass;
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
-    std::unique_ptr<OverlayPass> m_overlayPass;
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;
     std::unique_ptr<CloudPass> m_cloudPass;
@@ -385,7 +379,6 @@ private:
 
     // Debug modes
     bool m_wireframeEnabled{false};
-    bool m_gridEnabled{true};
     bool m_gizmoEnabled{false};
 
     // Sky state

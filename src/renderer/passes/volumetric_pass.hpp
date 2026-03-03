@@ -96,6 +96,9 @@ private:
     static constexpr uint32_t FROXEL_TILE_SIZE = 8;
     static constexpr uint32_t FROXEL_DEPTH_SLICES = 128;
 
+    // Layout tracking
+    bool m_outputTransitioned{false};  // Whether scattering output has been transitioned from UNDEFINED
+
     // Parameters
     float m_density{0.01f};        // Base fog density
     float m_scattering{0.8f};      // Henyey-Greenstein g parameter (-1 to 1)

@@ -64,15 +64,6 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     }
     std::cout << "DeferredRenderer: PostProcessing OK" << std::endl;
 
-    // Initialize overlay pass (grid, debug visualizations)
-    m_overlayPass = std::make_unique<OverlayPass>();
-    if (!m_overlayPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: OverlayPass failed (non-fatal)" << std::endl;
-        m_overlayPass.reset();
-    } else {
-        std::cout << "DeferredRenderer: OverlayPass OK" << std::endl;
-    }
-
     // Initialize gizmo pass (transform handles)
     m_gizmoPass = std::make_unique<GizmoPass>();
     if (!m_gizmoPass->initialize(device, physicalDevice)) {
@@ -448,10 +439,6 @@ void DeferredRenderer::cleanup() {
     if (m_gizmoPass) {
         m_gizmoPass->cleanup();
         m_gizmoPass.reset();
-    }
-    if (m_overlayPass) {
-        m_overlayPass->cleanup();
-        m_overlayPass.reset();
     }
     if (m_postProcessing) {
         m_postProcessing->cleanup();
@@ -1021,38 +1008,13 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_postProcessing->execute(cmd, frameIndex);
     }
 
-    // 6. Overlay pass (grid, debug visualizations)
-    if (m_overlayPass && m_gridEnabled) {
-        // Use post-processing output if it actually ran, otherwise fall back to lighting output
-        VkImageView inputView = VK_NULL_HANDLE;
-        if (m_postProcessing && m_postProcessing->didExecute()) {
-            inputView = m_postProcessing->getOutputView();
-        }
-        if (inputView == VK_NULL_HANDLE && m_lightingPass) {
-            inputView = m_lightingPass->getOutputView();
-        }
-        VkImageView depthView = m_gbufferPass ? m_gbufferPass->getDepthView() : VK_NULL_HANDLE;
-
-        if (inputView != VK_NULL_HANDLE && depthView != VK_NULL_HANDLE) {
-            glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
-            m_overlayPass->setInputImage(inputView);
-            m_overlayPass->setDepthBuffer(depthView);
-            m_overlayPass->setCameraData(m_view, m_proj, invViewProj, m_cameraPos);
-            m_overlayPass->setGridEnabled(m_gridEnabled);
-            m_overlayPass->execute(cmd, frameIndex);
-        }
-    }
-
-    // 7. Gizmo pass (transform handles for selected objects)
+    // 6. Gizmo pass (transform handles for selected objects)
     if (m_gizmoPass && m_gizmoEnabled) {
         // Determine the final output image — must be from a pass that actually ran
         VkImage finalImage = VK_NULL_HANDLE;
         VkImageView finalView = VK_NULL_HANDLE;
 
-        if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputView() != VK_NULL_HANDLE) {
-            finalImage = m_overlayPass->getOutputImage();
-            finalView = m_overlayPass->getOutputView();
-        } else if (m_postProcessing && m_postProcessing->didExecute()) {
+        if (m_postProcessing && m_postProcessing->didExecute()) {
             finalImage = m_postProcessing->getOutputImage();
             finalView = m_postProcessing->getOutputView();
         } else if (m_lightingPass) {
@@ -1080,7 +1042,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
-    if (m_overlayPass) m_overlayPass->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
     if (m_cloudPass) {
         m_cloudPass->onResize(width, height);
@@ -1294,9 +1255,6 @@ void DeferredRenderer::setIBLTextures(VkImageView irradiance, VkImageView prefil
 }
 
 VkImageView DeferredRenderer::getFinalOutput() const {
-    if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputView() != VK_NULL_HANDLE) {
-        return m_overlayPass->getOutputView();
-    }
     if (m_postProcessing && m_postProcessing->didExecute()) {
         return m_postProcessing->getOutputView();
     }
@@ -1307,9 +1265,6 @@ VkImageView DeferredRenderer::getFinalOutput() const {
 }
 
 VkImage DeferredRenderer::getFinalOutputImage() const {
-    if (m_overlayPass && m_gridEnabled && m_overlayPass->getOutputImage() != VK_NULL_HANDLE) {
-        return m_overlayPass->getOutputImage();
-    }
     if (m_postProcessing && m_postProcessing->didExecute()) {
         return m_postProcessing->getOutputImage();
     }

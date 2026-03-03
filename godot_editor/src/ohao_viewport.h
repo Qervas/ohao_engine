@@ -79,9 +79,6 @@ private:
     // === Wireframe Mode ===
     bool m_wireframe_enabled = false;
 
-    // === Grid Overlay ===
-    bool m_grid_enabled = true;
-
     // === Gizmo State ===
     int m_gizmo_mode = 0;
     bool m_gizmo_enabled = true;
@@ -533,10 +530,6 @@ public:
     // === Wireframe Mode ===
     void set_wireframe_enabled(bool enabled);
     bool get_wireframe_enabled() const { return m_wireframe_enabled; }
-
-    // === Grid Overlay ===
-    void set_grid_enabled(bool enabled);
-    bool get_grid_enabled() const { return m_grid_enabled; }
 
     // === Model Import ===
     void import_model(const String& path);

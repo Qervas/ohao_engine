@@ -85,9 +85,9 @@ void main() {
     // Sample depth
     float depth = texture(depthBuffer, uv).r;
 
-    // Skip sky pixels
+    // Skip sky pixels — transmittance=1 means fully transparent (no fog at infinity)
     if (depth >= 1.0) {
-        imageStore(scatterOutput, pixelCoord, vec4(0.0));
+        imageStore(scatterOutput, pixelCoord, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
 

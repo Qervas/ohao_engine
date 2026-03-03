@@ -592,11 +592,6 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_wireframe_enabled"), &OhaoViewport::get_wireframe_enabled);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "wireframe_enabled"), "set_wireframe_enabled", "get_wireframe_enabled");
 
-    // === Grid ===
-    ClassDB::bind_method(D_METHOD("set_grid_enabled", "enabled"), &OhaoViewport::set_grid_enabled);
-    ClassDB::bind_method(D_METHOD("get_grid_enabled"), &OhaoViewport::get_grid_enabled);
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "grid_enabled"), "set_grid_enabled", "get_grid_enabled");
-
     // === Model Import ===
     ClassDB::bind_method(D_METHOD("import_model", "path"), &OhaoViewport::import_model);
 
@@ -1821,7 +1816,6 @@ void OhaoViewport::set_input_mode(int mode) {
         if (m_renderer) {
             ohao::DeferredRenderer* def = m_renderer->getDeferredRenderer();
             if (def) {
-                def->setGridEnabled(false);
                 def->setGizmoEnabled(false);
             }
         }
@@ -1830,12 +1824,6 @@ void OhaoViewport::set_input_mode(int mode) {
         m_picking_enabled = true;
         m_camera.clearMovementState();
         set_mouse_filter(MOUSE_FILTER_STOP);  // Capture mouse events for editor controls
-        if (m_renderer) {
-            ohao::DeferredRenderer* def = m_renderer->getDeferredRenderer();
-            if (def) {
-                def->setGridEnabled(m_grid_enabled);
-            }
-        }
     }
     queue_redraw();
 }
@@ -2065,14 +2053,6 @@ void OhaoViewport::set_wireframe_enabled(bool enabled) {
     if (m_renderer) {
         ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
         if (deferred) deferred->setWireframeEnabled(enabled);
-    }
-}
-
-void OhaoViewport::set_grid_enabled(bool enabled) {
-    m_grid_enabled = enabled;
-    if (m_renderer) {
-        ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
-        if (deferred) deferred->setGridEnabled(enabled);
     }
 }
 
