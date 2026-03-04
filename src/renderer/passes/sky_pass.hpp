@@ -23,6 +23,9 @@ public:
     void setTurbidity(float t)                  { m_turbidity = glm::clamp(t, 1.0f, 10.0f); }
     void setSunIntensity(float i)               { m_sunIntensity = i; }
     void setGroundColor(const glm::vec3& c)     { m_groundColor = c; }
+    void setNightFactor(float f)                { m_nightFactor = glm::clamp(f, 0.0f, 1.0f); }
+    void setMoonDirection(const glm::vec3& d)   { m_moonDirection = glm::normalize(d); }
+    void setStarSeed(float s)                   { m_starSeed = s; }
     void setEnabled(bool e)                     { m_enabled = e; }
     bool getEnabled() const                     { return m_enabled; }
 
@@ -81,11 +84,19 @@ private:
     glm::vec3 m_groundColor{0.08f, 0.07f, 0.06f};
     bool      m_enabled{true};
 
+    // Night sky parameters
+    float     m_nightFactor{0.0f};
+    glm::vec3 m_moonDirection{0.0f, 0.5f, 0.3f};
+    float     m_starSeed{0.0f};
+
+    // Dirty flag — only update descriptors when views actually change
+    bool      m_descriptorsDirty{false};
+
     // Camera
     glm::mat4 m_invViewProj{1.0f};
     glm::vec3 m_cameraPos{0.0f};
 
-    // Push constants (112 bytes, matches sky.frag layout)
+    // Push constants (128 bytes — Vulkan guaranteed minimum)
     struct SkyParams {
         glm::mat4 invViewProj;   // 64
         glm::vec3 sunDirection;  // 12
@@ -93,7 +104,9 @@ private:
         glm::vec3 cameraPos;     // 12
         float     sunIntensity;  //  4  → 96
         glm::vec3 groundColor;   // 12
-        float     pad0;          //  4  → 112
+        float     nightFactor;   //  4  → 112
+        glm::vec3 moonDirection; // 12
+        float     starSeed;      //  4  → 128
     };
 };
 

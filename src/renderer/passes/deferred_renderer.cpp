@@ -820,6 +820,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_skyPass->setTurbidity(m_skyTurbidity);
         m_skyPass->setSunIntensity(m_skyIntensity);
         m_skyPass->setGroundColor(m_skyGroundColor);
+
+        // Night state already computed eagerly in setSunDirection()
+        m_skyPass->setNightFactor(m_nightFactor);
+        m_skyPass->setMoonDirection(m_moonDirection);
+        m_skyPass->setStarSeed(m_totalTime);
+
         m_skyPass->execute(cmd, frameIndex);
     }
 
@@ -1297,6 +1303,15 @@ void DeferredRenderer::setSunDirection(const glm::vec3& dir) {
     m_skySunDirection = glm::normalize(dir);
     // Also update light direction (sun direction = -light direction for CSM)
     m_lightDirection = -m_skySunDirection;
+
+    // Eagerly compute night state so it's available to the light buffer
+    // update (which runs BEFORE render()). Avoids one-frame lag between
+    // sky appearance and object lighting.
+    float sunHeight = m_skySunDirection.y;
+    m_nightFactor = 1.0f - glm::smoothstep(-0.3f, 0.1f, sunHeight);
+    glm::vec3 rawMoon = -m_skySunDirection + glm::vec3(0.0f, 0.15f, 0.2f);
+    float len = glm::length(rawMoon);
+    m_moonDirection = (len > 0.001f) ? rawMoon / len : glm::vec3(0.0f, 1.0f, 0.0f);
 }
 
 void DeferredRenderer::setSkyTurbidity(float t) {

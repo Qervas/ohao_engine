@@ -62,8 +62,13 @@ void SkyPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     if (m_framebuffer == VK_NULL_HANDLE || m_pipeline == VK_NULL_HANDLE) return;
     if (m_descriptorSet == VK_NULL_HANDLE) return;
 
-    // Update descriptors each frame in case depth view changed
-    updateDescriptors();
+    // Only update descriptors when views actually changed (resize etc.)
+    // Updating every frame on a shared descriptor set causes a race condition
+    // with in-flight frames at high refresh rates (144Hz+).
+    if (m_descriptorsDirty) {
+        updateDescriptors();
+        m_descriptorsDirty = false;
+    }
 
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -91,13 +96,15 @@ void SkyPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                             m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
 
     SkyParams params{};
-    params.invViewProj  = m_invViewProj;
-    params.sunDirection = m_sunDirection;
-    params.turbidity    = m_turbidity;
-    params.cameraPos    = m_cameraPos;
-    params.sunIntensity = m_sunIntensity;
-    params.groundColor  = m_groundColor;
-    params.pad0         = 0.0f;
+    params.invViewProj   = m_invViewProj;
+    params.sunDirection  = m_sunDirection;
+    params.turbidity     = m_turbidity;
+    params.cameraPos     = m_cameraPos;
+    params.sunIntensity  = m_sunIntensity;
+    params.groundColor   = m_groundColor;
+    params.nightFactor   = m_nightFactor;
+    params.moonDirection = m_moonDirection;
+    params.starSeed      = m_starSeed;
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SkyParams), &params);
@@ -122,16 +129,12 @@ void SkyPass::setCameraData(const glm::mat4& invViewProj, const glm::vec3& camer
 
 void SkyPass::setDepthBuffer(VkImageView depth) {
     m_depthView = depth;
-    if (m_descriptorSet != VK_NULL_HANDLE) {
-        updateDescriptors();
-    }
+    m_descriptorsDirty = true;
 }
 
 void SkyPass::setCloudBuffer(VkImageView view) {
     m_cloudView = view;
-    if (m_descriptorSet != VK_NULL_HANDLE) {
-        updateDescriptors();
-    }
+    m_descriptorsDirty = true;
 }
 
 void SkyPass::setHDROutput(VkImageView view, VkImage image) {

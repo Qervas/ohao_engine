@@ -626,7 +626,8 @@ void BloomPass::executeDownsample(VkCommandBuffer cmd) {
 
         SampleParams params{
             glm::vec2(1.0f / m_mipSizes[i - 1].x, 1.0f / m_mipSizes[i - 1].y),
-            m_filterRadius, 0.0f
+            m_filterRadius,
+            (i == 1) ? 1.0f : 0.0f  // First downsample uses Karis average (anti-firefly)
         };
         vkCmdPushConstants(cmd, m_downsampleLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(params), &params);
 

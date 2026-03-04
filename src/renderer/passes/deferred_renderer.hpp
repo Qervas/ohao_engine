@@ -64,6 +64,8 @@ public:
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
     glm::vec3 getLightDirection() const { return m_lightDirection; }
+    float getNightFactor() const { return m_nightFactor; }
+    glm::vec3 getMoonDirection() const { return m_moonDirection; }
 
     // IBL configuration (optional)
     void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
@@ -387,6 +389,10 @@ private:
     float     m_skyTurbidity{2.5f};
     float     m_skyIntensity{1.0f};
     glm::vec3 m_skySunDirection{0.3f, 0.9f, 0.3f};
+
+    // Night sky state (derived from sun direction each frame)
+    float     m_nightFactor{0.0f};
+    glm::vec3 m_moonDirection{0.0f, 0.5f, 0.3f};
 
     // Cloud state
     bool  m_cloudEnabled{false};

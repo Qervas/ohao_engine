@@ -1133,27 +1133,28 @@ void OhaoViewport::set_time_of_day(float hours) {
     if (hours < 0.0f) hours += 24.0f;
     m_time_of_day = hours;
 
-    // Sun arc: dawn at 6am, zenith at noon, dusk at 18pm
-    // t = 0 at dawn (6am), t = 0.5 at noon, t = 1 at dusk (18pm)
-    float t = glm::clamp((hours - 6.0f) / 12.0f, 0.0f, 1.0f);
-    float elevAngle = t * glm::pi<float>();  // 0 → PI
-    float sinElev = std::sin(elevAngle);     // 0 → 1 → 0 (vertical height)
-    float cosElev = std::cos(elevAngle);     // 1 → 0 → -1 (east → west)
+    // Full 24h sun arc: dawn=6am, noon=zenith, dusk=6pm, midnight=nadir
+    // t sweeps a full circle over 24 hours starting at dawn (hours=6)
+    float two_pi = 2.0f * glm::pi<float>();
+    float t = (hours - 6.0f) / 24.0f * two_pi;
+    float sinElev = std::sin(t);   // positive = above horizon, negative = below
+    float cosElev = std::cos(t);   // east-west sweep
 
-    // Sun direction vector (toward sun from world origin)
-    // East at 6am (-cosElev=−1,+X), overhead at noon (0,+Y), West at 6pm (+X)
-    // Small +Z tilt for natural south-sky angle
-    glm::vec3 sunDir = glm::normalize(glm::vec3(-cosElev, sinElev + 0.01f, 0.3f));
+    // Sun direction: Y = elevation, X = east-west, small Z tilt for south-sky angle
+    glm::vec3 sunDir = glm::normalize(glm::vec3(-cosElev, sinElev, 0.3f));
 
-    // Sky intensity: smooth ramp up after dawn, peak at noon, down before dusk; dark at night
-    float dayWindow = glm::clamp((hours - 5.0f), 0.0f, 1.0f)   // fade in from 5am
-                    * glm::clamp((19.5f - hours), 0.0f, 1.0f);  // fade out to 7:30pm
-    float dayIntensity = glm::mix(0.15f, 1.0f, sinElev);        // horizon dim, noon bright
-    float skyIntensity = glm::mix(0.04f, dayIntensity, dayWindow);
+    // Day factor: smooth transition around the horizon
+    // sunDir.y > 0.1 = full day, sunDir.y < -0.3 = full night
+    float sunHeight = sunDir.y;
+    float dayFactor = glm::smoothstep(-0.3f, 0.1f, sunHeight);
 
-    // Turbidity: clear at noon, atmospheric at dawn/dusk (more scattering)
-    float turbidity = glm::mix(3.5f, 2.0f, sinElev);            // dusk=3.5, noon=2.0
-    turbidity = glm::clamp(turbidity, 1.8f, 5.0f);
+    // Sky intensity: bright at noon, dim ambient (0.03) at night
+    float dayIntensity = glm::mix(0.15f, 1.0f, glm::clamp(sinElev, 0.0f, 1.0f));
+    float skyIntensity = glm::mix(0.03f, dayIntensity, dayFactor);
+
+    // Turbidity: lower at noon (2.0), moderate at dusk (3.5), 2.5 at night
+    float dayTurb = glm::mix(3.5f, 2.0f, glm::clamp(sinElev, 0.0f, 1.0f));
+    float turbidity = glm::clamp(glm::mix(2.5f, dayTurb, dayFactor), 1.8f, 5.0f);
 
     m_render_settings.setSunDirection(sunDir);
     m_render_settings.setSkyIntensity(skyIntensity);

@@ -392,12 +392,34 @@ void OffscreenRenderer::renderDeferred() {
         if (ld && ld->numLights == 1) {
             // No explicit scene lights — align the fallback sun with sky
             glm::vec3 skyLightDir = m_deferredRenderer->getLightDirection(); // points DOWN toward scene
+            float nightFactor = m_deferredRenderer->getNightFactor();
+
             if (glm::length(skyLightDir) > 0.001f) {
-                ld->lights[0].direction = glm::vec4(glm::normalize(skyLightDir), 100.0f);
+                if (nightFactor > 0.01f) {
+                    // Blend light direction from sun toward moon at night
+                    glm::vec3 moonDir = -m_deferredRenderer->getMoonDirection();
+                    glm::vec3 blendedDir = glm::normalize(glm::mix(
+                        glm::normalize(skyLightDir), moonDir, nightFactor));
+                    ld->lights[0].direction = glm::vec4(blendedDir, 100.0f);
+
+                    // Blend color from warm white (sun) to cool blue (moon)
+                    glm::vec3 sunColor  = glm::vec3(1.0f, 0.98f, 0.95f);
+                    glm::vec3 moonColor = glm::vec3(0.6f, 0.7f, 0.85f);
+                    glm::vec3 blendedColor = glm::mix(sunColor, moonColor, nightFactor);
+
+                    // Blend intensity from full (PI) to ~8% moonlight
+                    float sunIntensity  = glm::pi<float>();
+                    float moonIntensity = glm::pi<float>() * 0.08f;
+                    float blendedIntensity = glm::mix(sunIntensity, moonIntensity, nightFactor);
+
+                    ld->lights[0].color = glm::vec4(blendedColor, blendedIntensity);
+                } else {
+                    ld->lights[0].direction = glm::vec4(glm::normalize(skyLightDir), 100.0f);
+                }
                 ld->lights[0].lightSpaceMatrix = calculateLightSpaceMatrix(ld->lights[0]);
             }
-            // Moderate ambient so vertical faces aren't pitch black under a high sun
-            ld->ambientIntensity = 0.12f;
+            // Ambient: moderate during day, lower at night
+            ld->ambientIntensity = glm::mix(0.12f, 0.04f, nightFactor);
         }
     }
 
