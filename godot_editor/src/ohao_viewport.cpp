@@ -15,6 +15,7 @@
 #include "renderer/camera/camera.hpp"
 #include "renderer/passes/deferred_renderer.hpp"
 #include "engine/scene/scene.hpp"
+#include "engine/scene/scene_serializer.hpp"
 #include "renderer/gizmo/gizmo_meshes.hpp"
 
 #include <glm/glm.hpp>
@@ -697,6 +698,11 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_master_volume"), &OhaoViewport::get_master_volume);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "audio_master_volume", PROPERTY_HINT_RANGE, "0.0,1.0,0.05"), "set_master_volume", "get_master_volume");
     ClassDB::bind_method(D_METHOD("stop_all_sounds"), &OhaoViewport::stop_all_sounds);
+
+    // === God-Mode Perception (MCP) ===
+    ClassDB::bind_method(D_METHOD("get_scene_state"), &OhaoViewport::get_scene_state);
+    ClassDB::bind_method(D_METHOD("save_screenshot", "path"), &OhaoViewport::save_screenshot);
+    ClassDB::bind_method(D_METHOD("capture_screenshot"), &OhaoViewport::capture_screenshot);
 
     // Signals
     ADD_SIGNAL(MethodInfo("actor_selected", PropertyInfo(Variant::STRING, "name")));
@@ -2340,6 +2346,173 @@ Dictionary OhaoViewport::get_render_stats() const {
     stats["tonemapping_enabled"] = m_render_settings.getTonemappingEnabled();
     stats["synced_objects"] = m_scene_sync.getSyncedObjectCount();
     return stats;
+}
+
+// ===== God-Mode Perception (MCP) =====
+
+Dictionary OhaoViewport::get_scene_state() const {
+    Dictionary result;
+
+    // --- Actors from SceneSerializer ---
+    Array actors_array;
+    if (m_scene) {
+        auto json = ohao::SceneSerializer::serialize(m_scene);
+        if (json.contains("actors")) {
+            for (const auto& actorJson : json["actors"]) {
+                Dictionary actor_dict;
+                actor_dict["name"] = String(actorJson.value("name", "").c_str());
+                actor_dict["id"] = (int64_t)actorJson.value("id", (uint64_t)0);
+
+                // Transform
+                if (actorJson.contains("transform")) {
+                    Dictionary transform;
+                    const auto& t = actorJson["transform"];
+                    if (t.contains("position")) {
+                        Array pos;
+                        for (const auto& v : t["position"]) pos.append((float)v);
+                        transform["position"] = pos;
+                    }
+                    if (t.contains("rotation")) {
+                        Array rot;
+                        for (const auto& v : t["rotation"]) rot.append((float)v);
+                        transform["rotation"] = rot;
+                    }
+                    if (t.contains("scale")) {
+                        Array scl;
+                        for (const auto& v : t["scale"]) scl.append((float)v);
+                        transform["scale"] = scl;
+                    }
+                    actor_dict["transform"] = transform;
+                }
+
+                // Mesh
+                if (actorJson.contains("mesh")) {
+                    Dictionary mesh;
+                    mesh["primitive"] = String(actorJson["mesh"].value("primitive", "cube").c_str());
+                    actor_dict["mesh"] = mesh;
+                }
+
+                // Material
+                if (actorJson.contains("material")) {
+                    Dictionary mat;
+                    const auto& m = actorJson["material"];
+                    if (m.contains("baseColor")) {
+                        Array c;
+                        for (const auto& v : m["baseColor"]) c.append((float)v);
+                        mat["baseColor"] = c;
+                    }
+                    if (m.contains("metallic")) mat["metallic"] = (float)m["metallic"];
+                    if (m.contains("roughness")) mat["roughness"] = (float)m["roughness"];
+                    actor_dict["material"] = mat;
+                }
+
+                // Light
+                if (actorJson.contains("light")) {
+                    Dictionary light;
+                    const auto& l = actorJson["light"];
+                    light["type"] = String(l.value("type", "point").c_str());
+                    if (l.contains("color")) {
+                        Array c;
+                        for (const auto& v : l["color"]) c.append((float)v);
+                        light["color"] = c;
+                    }
+                    if (l.contains("intensity")) light["intensity"] = (float)l["intensity"];
+                    if (l.contains("range")) light["range"] = (float)l["range"];
+                    if (l.contains("direction")) {
+                        Array d;
+                        for (const auto& v : l["direction"]) d.append((float)v);
+                        light["direction"] = d;
+                    }
+                    actor_dict["light"] = light;
+                }
+
+                // Physics
+                if (actorJson.contains("physics")) {
+                    Dictionary phys;
+                    const auto& p = actorJson["physics"];
+                    phys["bodyType"] = String(p.value("bodyType", "dynamic").c_str());
+                    if (p.contains("mass")) phys["mass"] = (float)p["mass"];
+                    if (p.contains("friction")) phys["friction"] = (float)p["friction"];
+                    if (p.contains("restitution")) phys["restitution"] = (float)p["restitution"];
+                    actor_dict["physics"] = phys;
+                }
+
+                actors_array.append(actor_dict);
+            }
+        }
+        result["scene_name"] = String(json.value("name", "").c_str());
+    }
+    result["actors"] = actors_array;
+
+    // --- Camera state ---
+    Dictionary camera;
+    Vector3 cam_pos = get_camera_position();
+    Vector3 cam_fwd = get_camera_forward();
+    camera["position"] = Array::make(cam_pos.x, cam_pos.y, cam_pos.z);
+    camera["forward"] = Array::make(cam_fwd.x, cam_fwd.y, cam_fwd.z);
+    camera["mode"] = get_camera_mode();
+    result["camera"] = camera;
+
+    // --- Effects state ---
+    Dictionary effects;
+    effects["bloom"] = m_render_settings.getBloomEnabled();
+    effects["taa"] = m_render_settings.getTAAEnabled();
+    effects["ssao"] = m_render_settings.getSSAOEnabled();
+    effects["ssgi"] = m_render_settings.getSSGIEnabled();
+    effects["ssr"] = m_render_settings.getSSREnabled();
+    effects["volumetrics"] = m_render_settings.getVolumetricsEnabled();
+    effects["motion_blur"] = m_render_settings.getMotionBlurEnabled();
+    effects["dof"] = m_render_settings.getDoFEnabled();
+    effects["tonemapping"] = m_render_settings.getTonemappingEnabled();
+    result["effects"] = effects;
+
+    // --- Physics state ---
+    Dictionary physics;
+    physics["running"] = m_physics.isPlaying();
+    Vector3 grav = get_gravity();
+    physics["gravity"] = Array::make(grav.x, grav.y, grav.z);
+    physics["speed"] = m_physics.getSpeed();
+    result["physics"] = physics;
+
+    // --- Environment ---
+    Dictionary environment;
+    environment["time_of_day"] = m_time_of_day;
+    environment["cloud_enabled"] = m_render_settings.getCloudEnabled();
+    environment["cloud_coverage"] = m_render_settings.getCloudCoverage();
+    environment["rain_enabled"] = m_render_settings.getRainEnabled();
+    environment["rain_intensity"] = m_render_settings.getRainIntensity();
+    environment["snow_enabled"] = m_render_settings.getSnowEnabled();
+    environment["snow_intensity"] = m_render_settings.getSnowIntensity();
+    environment["terrain_enabled"] = m_render_settings.getTerrainEnabled();
+    environment["water_enabled"] = m_render_settings.getWaterEnabled();
+    environment["water_level"] = m_render_settings.getWaterLevel();
+    result["environment"] = environment;
+
+    // --- Render stats ---
+    result["render_stats"] = get_render_stats();
+
+    return result;
+}
+
+bool OhaoViewport::save_screenshot(const String& path) {
+    if (!m_initialized || !m_image.is_valid()) {
+        UtilityFunctions::push_warning("[OHAO] save_screenshot: no image available");
+        return false;
+    }
+    Error err = m_image->save_png(path);
+    if (err != OK) {
+        UtilityFunctions::push_warning("[OHAO] save_screenshot: save_png failed with error ", err);
+        return false;
+    }
+    return true;
+}
+
+PackedByteArray OhaoViewport::capture_screenshot() {
+    if (!m_initialized || !m_image.is_valid()) {
+        UtilityFunctions::push_warning("[OHAO] capture_screenshot: no image available");
+        return PackedByteArray();
+    }
+    return m_image->save_png_to_buffer();
 }
 
 } // namespace godot

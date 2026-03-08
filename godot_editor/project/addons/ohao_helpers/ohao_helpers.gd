@@ -99,6 +99,13 @@ func control() -> GDScript:
 	return load("res://addons/ohao_helpers/ohao_control.gd")
 
 
+## Get the god-mode helper (static class, MCP perception).
+## OhaoGod.look_at(vp, target, distance, elevation, azimuth)
+## OhaoGod.snapshot(vp, output_dir)
+func god() -> GDScript:
+	return load("res://addons/ohao_helpers/ohao_god.gd")
+
+
 ## Get the weather/day-night system (static class).
 ## OhaoWeather.set_time(vp, 14.5)           # 2:30 PM
 ## OhaoWeather.preset(vp, "sunset")          # named preset

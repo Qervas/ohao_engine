@@ -166,6 +166,14 @@ func _dispatch(raw: String) -> PackedByteArray:
 		["POST", "/physics/stop"]: return _handle_physics_stop()
 		["POST", "/physics/raycast"]: return _handle_raycast(body)
 
+		# God-mode perception endpoints (MCP)
+		["GET",  "/god/state"]:     return _handle_god_state()
+		["POST", "/god/screenshot"]:return _handle_god_screenshot(body)
+		["POST", "/god/capture"]:   return _handle_god_capture()
+		["POST", "/god/snapshot"]:  return _handle_god_snapshot(body)
+		["POST", "/god/look_at"]:   return _handle_god_look_at(body)
+		["POST", "/god/orbit_capture"]: return _handle_god_orbit_capture(body)
+
 	# DELETE /scene/actor?name=Box
 	if method == "DELETE" and path == "/scene/actor":
 		return _handle_remove_actor(query.get("name", ""))
@@ -199,6 +207,12 @@ func _handle_root() -> PackedByteArray:
 			{"method": "POST",   "path": "/physics/step",      "desc": "Step N frames: {steps: 10}"},
 			{"method": "POST",   "path": "/physics/stop",      "desc": "Stop and reset simulation"},
 			{"method": "POST",   "path": "/physics/raycast",   "desc": "Cast ray: {origin, direction, max_dist, layer_mask}"},
+			{"method": "GET",    "path": "/god/state",          "desc": "Full scene state: actors, camera, effects, physics, environment"},
+			{"method": "POST",   "path": "/god/screenshot",     "desc": "Save screenshot to disk: {path: 'C:/tmp/shot.png'}"},
+			{"method": "POST",   "path": "/god/capture",        "desc": "Capture viewport as base64 PNG inline"},
+			{"method": "POST",   "path": "/god/snapshot",       "desc": "Save state.json + screenshot.png: {output_dir: '...'}"},
+			{"method": "POST",   "path": "/god/look_at",        "desc": "Position camera: {target, distance, elevation, azimuth}"},
+			{"method": "POST",   "path": "/god/orbit_capture",  "desc": "Multi-angle capture: {target, distance, count, output_dir}"},
 		]
 	})
 
@@ -220,12 +234,28 @@ func _handle_scene_build(body: Variant) -> PackedByteArray:
 	var vp := Ohao.viewport()
 	if not vp:
 		return _err("No OhaoViewport found in scene tree")
-	# Track objects from the build dict
+	# Convert JSON arrays to Vector3/Color for OhaoSceneBuilder
+	var converted: Dictionary = body.duplicate(true)
+	if converted.has("objects"):
+		for i in converted["objects"].size():
+			var obj: Dictionary = converted["objects"][i]
+			if obj.has("pos"):   obj["pos"]   = _to_v3(obj["pos"])
+			if obj.has("rot"):   obj["rot"]   = _to_v3(obj["rot"])
+			if obj.has("scale"): obj["scale"] = _to_v3(obj["scale"])
+			if obj.has("color"): obj["color"] = _to_color(obj["color"])
+			if obj.has("dir"):   obj["dir"]   = _to_v3(obj["dir"])
+	if converted.has("lights"):
+		for i in converted["lights"].size():
+			var light: Dictionary = converted["lights"][i]
+			if light.has("pos"):   light["pos"]   = _to_v3(light["pos"])
+			if light.has("dir"):   light["dir"]   = _to_v3(light["dir"])
+			if light.has("color"): light["color"] = _to_color(light["color"])
+	# Track objects
 	if body.has("objects"):
 		for obj in body["objects"]:
 			if obj.has("name"):
 				_actors[obj["name"]] = _actor_entry_from_dict(obj)
-	OhaoSceneBuilder.build(vp, body)
+	OhaoSceneBuilder.build(vp, converted)
 	return _ok({"built": true, "actor_count": _actors.size()})
 
 
@@ -451,3 +481,82 @@ func _actor_entry_from_dict(d: Dictionary) -> Dictionary:
 		"rot":   _v3_to_a(_to_v3(d.get("rot",   [0,0,0]))),
 		"scale": _v3_to_a(_to_v3(d.get("scale", [1,1,1]))),
 	}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handlers — God Mode (MCP Perception)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _handle_god_state() -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	return _ok(vp.get_scene_state())
+
+
+func _handle_god_screenshot(body: Variant) -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	if not body is Dictionary or not body.has("path"):
+		return _err("Body must be JSON: {path: 'C:/tmp/shot.png'}")
+	var path: String = body["path"]
+	var ok := vp.save_screenshot(path)
+	if ok:
+		return _ok({"saved": true, "path": path})
+	return _err("Failed to save screenshot to: " + path)
+
+
+func _handle_god_capture() -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	var png_bytes := vp.capture_screenshot()
+	if png_bytes.is_empty():
+		return _err("Failed to capture screenshot (no image data)")
+	var size := vp.get_viewport_size()
+	return _ok({
+		"image_base64": Marshalls.raw_to_base64(png_bytes),
+		"format": "png",
+		"width": size.x,
+		"height": size.y,
+	})
+
+
+func _handle_god_snapshot(body: Variant) -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	if not body is Dictionary or not body.has("output_dir"):
+		return _err("Body must be JSON: {output_dir: 'C:/tmp/snap'}")
+	var result := OhaoGod.snapshot(vp, body["output_dir"])
+	return _ok(result)
+
+
+func _handle_god_look_at(body: Variant) -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	if not body is Dictionary or not body.has("target"):
+		return _err("Body must be JSON: {target: [x,y,z], distance?, elevation?, azimuth?}")
+	var target := _to_v3(body["target"])
+	var distance: float = float(body.get("distance", 10.0))
+	var elevation: float = float(body.get("elevation", 30.0))
+	var azimuth: float = float(body.get("azimuth", 0.0))
+	OhaoGod.look_at(vp, target, distance, elevation, azimuth)
+	return _ok({"target": _v3_to_a(target), "distance": distance,
+				"elevation": elevation, "azimuth": azimuth})
+
+
+func _handle_god_orbit_capture(body: Variant) -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	if not body is Dictionary or not body.has("target") or not body.has("output_dir"):
+		return _err("Body must be JSON: {target, output_dir, distance?, count?}")
+	var target := _to_v3(body["target"])
+	var distance: float = float(body.get("distance", 10.0))
+	var count: int = int(body.get("count", 4))
+	var output_dir: String = body["output_dir"]
+	var paths := OhaoGod.orbit_capture(vp, target, distance, count, output_dir)
+	return _ok({"paths": paths, "count": paths.size()})

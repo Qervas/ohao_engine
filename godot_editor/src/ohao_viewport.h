@@ -632,6 +632,11 @@ public:
 
     // === Utility ===
     Dictionary get_render_stats() const;
+
+    // === God-Mode Perception (MCP) ===
+    Dictionary get_scene_state() const;
+    bool save_screenshot(const String& path);
+    PackedByteArray capture_screenshot();
 };
 
 } // namespace godot
