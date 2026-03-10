@@ -45,7 +45,9 @@ public:
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
     void setSSAOEnabled(bool enabled) { m_ssaoEnabled = enabled; }
+    bool getSSAOEnabled() const { return m_ssaoEnabled; }
     void setSSGIEnabled(bool enabled) { m_ssgiEnabled = enabled; }
+    bool getSSGIEnabled() const { return m_ssgiEnabled; }
     void setSSREnabled(bool enabled) { m_ssrEnabled = enabled; }
     void setVolumetricsEnabled(bool enabled) { m_volumetricsEnabled = enabled; }
     void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }

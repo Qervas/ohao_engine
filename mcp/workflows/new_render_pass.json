@@ -1,0 +1,66 @@
+{
+  "name": "new_render_pass",
+  "description": "Create and integrate a new compute render pass into the deferred pipeline",
+  "steps": [
+    {
+      "id": 1,
+      "name": "inspect_pipeline",
+      "tool": "introspect_render_passes",
+      "description": "Understand current pipeline order and where the new pass should be inserted"
+    },
+    {
+      "id": 2,
+      "name": "design",
+      "tool": null,
+      "description": "Design the pass: decide inputs (depth, normals, HDR), outputs, algorithm, and execution order"
+    },
+    {
+      "id": 3,
+      "name": "generate_code",
+      "tool": "generate_compute_pass",
+      "description": "Generate C++ header, source, and GLSL shader from templates"
+    },
+    {
+      "id": 4,
+      "name": "validate_shader",
+      "tool": "test_compile_shader",
+      "description": "Compile the generated GLSL and check for errors"
+    },
+    {
+      "id": 5,
+      "name": "generate_integration",
+      "tool": "generate_integration_patch",
+      "description": "Get the exact code patches for deferred_renderer.hpp/.cpp"
+    },
+    {
+      "id": 6,
+      "name": "apply_patches",
+      "tool": null,
+      "description": "Apply the integration patches to wire the new pass into the pipeline"
+    },
+    {
+      "id": 7,
+      "name": "build",
+      "tool": "test_build_cpp",
+      "description": "Build the C++ engine with the new pass"
+    },
+    {
+      "id": 8,
+      "name": "build_gdext",
+      "tool": "test_build_gdext",
+      "description": "Build the GDExtension DLL"
+    },
+    {
+      "id": 9,
+      "name": "visual_verify",
+      "tool": "capture_screenshot",
+      "description": "Run the engine and capture a screenshot to verify the pass works"
+    },
+    {
+      "id": 10,
+      "name": "log_result",
+      "tool": "memory_log_experiment",
+      "description": "Log the experiment outcome in persistent memory"
+    }
+  ]
+}

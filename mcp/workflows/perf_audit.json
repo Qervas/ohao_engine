@@ -1,0 +1,66 @@
+{
+  "name": "perf_audit",
+  "description": "Profile the render pipeline, identify bottlenecks, and optimize",
+  "steps": [
+    {
+      "id": 1,
+      "name": "capture_baseline",
+      "tool": "memory_perf_baseline",
+      "description": "Capture current performance baseline with all effects enabled"
+    },
+    {
+      "id": 2,
+      "name": "inspect_pipeline",
+      "tool": "introspect_pipeline",
+      "description": "Get per-pass timing to identify the slowest passes"
+    },
+    {
+      "id": 3,
+      "name": "identify_bottleneck",
+      "tool": null,
+      "description": "Analyze timing data to find the biggest bottleneck"
+    },
+    {
+      "id": 4,
+      "name": "inspect_shader",
+      "tool": "introspect_shaders",
+      "description": "Examine the bottleneck shader's includes and complexity"
+    },
+    {
+      "id": 5,
+      "name": "plan_optimization",
+      "tool": null,
+      "description": "Design the optimization: reduce samples, lower resolution, simplify math"
+    },
+    {
+      "id": 6,
+      "name": "implement",
+      "tool": null,
+      "description": "Apply the optimization to the shader or C++ code"
+    },
+    {
+      "id": 7,
+      "name": "validate",
+      "tool": "test_compile_shader",
+      "description": "Compile and validate the optimized shader"
+    },
+    {
+      "id": 8,
+      "name": "measure",
+      "tool": "memory_perf_baseline",
+      "description": "Capture post-optimization performance"
+    },
+    {
+      "id": 9,
+      "name": "visual_check",
+      "tool": "capture_screenshot",
+      "description": "Verify visual quality wasn't degraded"
+    },
+    {
+      "id": 10,
+      "name": "log_result",
+      "tool": "memory_log_experiment",
+      "description": "Log optimization results: what changed, perf improvement, quality impact"
+    }
+  ]
+}

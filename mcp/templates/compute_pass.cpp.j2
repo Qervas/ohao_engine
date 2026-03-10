@@ -1,0 +1,133 @@
+{# Compute render pass implementation — generated from OHAO engine template #}
+#include "renderer/passes/{{ name }}_pass.hpp"
+#include <iostream>
+#include <array>
+
+namespace ohao {
+
+bool {{ class_name }}::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
+    m_device = device;
+    m_physicalDevice = physicalDevice;
+
+    m_sampler = createSampler(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    if (m_sampler == VK_NULL_HANDLE) return false;
+
+    // Descriptor set layout
+    std::array<VkDescriptorSetLayoutBinding, {{ bindings | length }}> layoutBindings{};
+    {% for b in bindings %}
+    layoutBindings[{{ loop.index0 }}] = {
+        {{ loop.index0 }}, VK_DESCRIPTOR_TYPE_{% if b.type == 'image' %}STORAGE_IMAGE{% elif b.type == 'sampler' %}COMBINED_IMAGE_SAMPLER{% else %}STORAGE_BUFFER{% endif %},
+        1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr
+    };
+    {% endfor %}
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = static_cast<uint32_t>(layoutBindings.size());
+    layoutInfo.pBindings = layoutBindings.data();
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
+        return false;
+    }
+
+    // Create compute pipeline
+    if (!createComputePipeline("{{ shader_spv }}", m_descriptorSetLayout, sizeof(PushConstants),
+                               m_pipelineLayout, m_pipeline)) {
+        return false;
+    }
+
+    // Descriptor pool
+    std::array<VkDescriptorPoolSize, 1> poolSizes{};
+    poolSizes[0] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, {{ bindings | length }}};
+
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    poolInfo.maxSets = 1;
+    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocInfo.descriptorPool = m_descriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_descriptorSetLayout;
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet) != VK_SUCCESS) {
+        return false;
+    }
+
+    std::cout << "{{ class_name }}: initialized" << std::endl;
+    return true;
+}
+
+void {{ class_name }}::cleanup() {
+    safeDestroy(m_pipeline);
+    safeDestroy(m_pipelineLayout);
+    safeDestroy(m_descriptorPool);
+    safeDestroy(m_descriptorSetLayout);
+    safeDestroy(m_sampler);
+    if (m_outputTarget.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_outputTarget.view, nullptr);
+        vkDestroyImage(m_device, m_outputTarget.image, nullptr);
+        vkFreeMemory(m_device, m_outputTarget.memory, nullptr);
+        m_outputTarget = {};
+    }
+}
+
+void {{ class_name }}::onResize(uint32_t width, uint32_t height) {
+    if (m_width == width && m_height == height) return;
+    m_width = width;
+    m_height = height;
+
+    // Recreate output target
+    if (m_outputTarget.view != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_device, m_outputTarget.view, nullptr);
+        vkDestroyImage(m_device, m_outputTarget.image, nullptr);
+        vkFreeMemory(m_device, m_outputTarget.memory, nullptr);
+    }
+    m_outputTarget = createRenderTarget(
+        {{ output_format }}, width, height,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+}
+
+void {{ class_name }}::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
+    if (m_pipeline == VK_NULL_HANDLE || m_width == 0) return;
+
+    // Update descriptors
+    {% for b in bindings %}
+    VkDescriptorImageInfo {{ b.name }}Info{};
+    {{ b.name }}Info.imageView = {% if b.name == 'output' %}m_outputTarget.view{% else %}m_{{ b.name }}View{% endif %};
+    {{ b.name }}Info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    {{ b.name }}Info.sampler = m_sampler;
+    {% endfor %}
+
+    std::array<VkWriteDescriptorSet, {{ bindings | length }}> writes{};
+    {% for b in bindings %}
+    writes[{{ loop.index0 }}] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[{{ loop.index0 }}].dstSet = m_descriptorSet;
+    writes[{{ loop.index0 }}].dstBinding = {{ loop.index0 }};
+    writes[{{ loop.index0 }}].descriptorCount = 1;
+    writes[{{ loop.index0 }}].descriptorType = VK_DESCRIPTOR_TYPE_{% if b.type == 'image' %}STORAGE_IMAGE{% elif b.type == 'sampler' %}COMBINED_IMAGE_SAMPLER{% else %}STORAGE_BUFFER{% endif %};
+    writes[{{ loop.index0 }}].pImageInfo = &{{ b.name }}Info;
+    {% endfor %}
+    vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+    // Dispatch
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout,
+                            0, 1, &m_descriptorSet, 0, nullptr);
+
+    PushConstants pc{};
+    {% if not push_constants %}
+    pc.width = m_width;
+    pc.height = m_height;
+    {% endif %}
+    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(PushConstants), &pc);
+
+    uint32_t groupsX = (m_width + 7) / 8;
+    uint32_t groupsY = (m_height + 7) / 8;
+    vkCmdDispatch(cmd, groupsX, groupsY, 1);
+}
+
+} // namespace ohao

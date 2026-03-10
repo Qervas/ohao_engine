@@ -704,6 +704,11 @@ void OhaoViewport::_bind_methods() {
     ClassDB::bind_method(D_METHOD("save_screenshot", "path"), &OhaoViewport::save_screenshot);
     ClassDB::bind_method(D_METHOD("capture_screenshot"), &OhaoViewport::capture_screenshot);
 
+    // === Introspection + Hot-reload (MCP AI self-development) ===
+    ClassDB::bind_method(D_METHOD("get_pipeline_info"), &OhaoViewport::get_pipeline_info);
+    ClassDB::bind_method(D_METHOD("get_perf_stats"), &OhaoViewport::get_perf_stats);
+    ClassDB::bind_method(D_METHOD("reload_shader", "pass_name", "spv_path"), &OhaoViewport::reload_shader);
+
     // Signals
     ADD_SIGNAL(MethodInfo("actor_selected", PropertyInfo(Variant::STRING, "name")));
     ADD_SIGNAL(MethodInfo("right_click_menu", PropertyInfo(Variant::VECTOR2, "position")));
@@ -2513,6 +2518,101 @@ PackedByteArray OhaoViewport::capture_screenshot() {
         return PackedByteArray();
     }
     return m_image->save_png_to_buffer();
+}
+
+// ===== Introspection (MCP AI self-development) =====
+
+Dictionary OhaoViewport::get_pipeline_info() const {
+    Dictionary result;
+    if (!m_renderer) {
+        result["error"] = "Renderer not initialized";
+        return result;
+    }
+    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) {
+        result["error"] = "Deferred renderer not available";
+        return result;
+    }
+
+    auto info = deferred->getPipelineInfo();
+
+    // Convert passes array
+    Array passes;
+    for (const auto& p : info["passes"]) {
+        Dictionary pass;
+        pass["name"]        = String(std::string(p["name"].get<std::string>()).c_str());
+        pass["type"]        = String(std::string(p["type"].get<std::string>()).c_str());
+        pass["order"]       = (int)p["order"].get<int>();
+        pass["initialized"] = (bool)p["initialized"].get<bool>();
+        pass["enabled"]     = (bool)p["enabled"].get<bool>();
+        passes.push_back(pass);
+    }
+    result["passes"]      = passes;
+    result["pass_count"]  = (int)info["pass_count"].get<int>();
+
+    auto& res = info["resolution"];
+    result["resolution"]  = Vector2i(res[0].get<int>(), res[1].get<int>());
+    result["delta_time"]  = (float)info["delta_time"].get<float>();
+    result["total_time"]  = (float)info["total_time"].get<float>();
+    return result;
+}
+
+Dictionary OhaoViewport::get_perf_stats() const {
+    Dictionary result;
+    if (!m_renderer) {
+        result["error"] = "Renderer not initialized";
+        return result;
+    }
+    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) {
+        result["error"] = "Deferred renderer not available";
+        return result;
+    }
+
+    auto stats = deferred->getPerfStats();
+
+    auto& res = stats["resolution"];
+    result["resolution"]    = Vector2i(res[0].get<int>(), res[1].get<int>());
+    result["delta_time"]    = (float)stats["delta_time"].get<float>();
+    result["total_time"]    = (float)stats["total_time"].get<float>();
+    result["fps_estimate"]  = (float)stats["fps_estimate"].get<float>();
+    result["active_passes"] = (int)stats["active_passes"].get<int>();
+    result["ssao_enabled"]  = (bool)stats["ssao_enabled"].get<bool>();
+    result["ssgi_enabled"]  = (bool)stats["ssgi_enabled"].get<bool>();
+
+    Dictionary effects;
+    for (auto it = stats["effects"].begin(); it != stats["effects"].end(); ++it) {
+        effects[String(it.key().c_str())] = (bool)it.value().get<bool>();
+    }
+    result["effects"] = effects;
+    return result;
+}
+
+// ===== Hot-reload (MCP AI shader experiments) =====
+
+bool OhaoViewport::reload_shader(const String& pass_name, const String& spv_path) {
+    if (!m_renderer) {
+        UtilityFunctions::push_warning("[OHAO] reload_shader: renderer not initialized");
+        return false;
+    }
+
+    String gdName = pass_name;
+    String gdPath = spv_path;
+    std::string name = std::string(gdName.utf8().get_data());
+    std::string path = std::string(gdPath.utf8().get_data());
+
+    ohao::DeferredRenderer* deferred = m_renderer->getDeferredRenderer();
+    if (!deferred) {
+        UtilityFunctions::push_warning("[OHAO] reload_shader: deferred renderer not available");
+        return false;
+    }
+    bool ok = deferred->reloadShaderForPass(name, path);
+    if (ok) {
+        UtilityFunctions::print("[OHAO] Hot-reloaded shader for pass: ", pass_name);
+    } else {
+        UtilityFunctions::push_warning("[OHAO] Hot-reload failed for pass: ", pass_name);
+    }
+    return ok;
 }
 
 } // namespace godot

@@ -108,6 +108,21 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         std::cout << "DeferredRenderer: CloudPass OK" << std::endl;
     }
 
+    // Initialize cloud shadow pass (top-down march, reuses cloud noise/weather textures)
+    if (m_cloudPass) {
+        m_cloudShadowPass = std::make_unique<CloudShadowPass>();
+        if (!m_cloudShadowPass->initialize(device, physicalDevice)) {
+            std::cerr << "DeferredRenderer: CloudShadowPass failed (non-fatal)" << std::endl;
+            m_cloudShadowPass.reset();
+        } else {
+            m_cloudShadowPass->setNoiseTexture(m_cloudPass->getNoiseView(),
+                                                m_cloudPass->getNoiseSampler());
+            m_cloudShadowPass->setWeatherTexture(m_cloudPass->getWeatherView(),
+                                                  m_cloudPass->getWeatherSampler());
+            std::cout << "DeferredRenderer: CloudShadowPass OK" << std::endl;
+        }
+    }
+
     // Initialize rain pass (procedural rain streaks, runs after sky pass)
     m_rainPass = std::make_unique<RainPass>();
     if (!m_rainPass->initialize(device, physicalDevice)) {
@@ -428,6 +443,10 @@ void DeferredRenderer::cleanup() {
         m_rainPass->cleanup();
         m_rainPass.reset();
     }
+    if (m_cloudShadowPass) {
+        m_cloudShadowPass->cleanup();
+        m_cloudShadowPass.reset();
+    }
     if (m_cloudPass) {
         m_cloudPass->cleanup();
         m_cloudPass.reset();
@@ -524,6 +543,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         else
             m_frostCover = std::max(m_frostCover - m_frostMeltRate * m_deltaTime, 0.0f);
         m_lightingPass->setFrostCover(m_frostCover);
+
+        // Cloud shadow (1-frame latency — shadow map computed after lighting)
+        if (m_cloudShadowPass && m_cloudEnabled) {
+            m_lightingPass->setCloudShadow(
+                m_cloudShadowPass->getOutputView(),
+                m_cloudShadowPass->getOutputSampler(),
+                m_cloudShadowPass->getMapCenter(),
+                m_cloudShadowPass->getMapExtent());
+        }
 
         // SSAO texture is set after executeSSAO() call below
     }
@@ -804,11 +832,25 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_cloudPass->setEnabled(m_cloudEnabled);
         m_cloudPass->setCameraData(invViewProj, m_cameraPos);
+        m_cloudPass->setPrevViewProj(m_prevViewProj);
+        m_cloudPass->setFrameIndex(frameIndex);
+        m_cloudPass->setLightningData(m_flashIntensity, m_cameraPos.x, m_cameraPos.z);
         m_cloudPass->setSunData(-m_lightDirection,
                                 glm::vec3(1.0f, 0.95f, 0.85f),
                                 m_skyIntensity);
         m_cloudPass->setTime(m_totalTime);
         m_cloudPass->execute(cmd, frameIndex);
+    }
+
+    // 4.55. Cloud shadow pass — top-down march for ground shadow
+    if (m_cloudShadowPass && m_cloudEnabled) {
+        m_cloudShadowPass->setSunDirection(-m_lightDirection);
+        m_cloudShadowPass->setCameraPos(m_cameraPos);
+        m_cloudShadowPass->setTime(m_totalTime);
+        m_cloudShadowPass->setCloudParams(
+            m_cloudAltMin, m_cloudAltMax, m_cloudCoverage,
+            m_cloudDensity, 0.15f, m_cloudSpeed);
+        m_cloudShadowPass->execute(cmd, frameIndex);
     }
 
     // 4.6. Sky pass — fills sky pixels with Preetham sky + cloud composite
@@ -2000,6 +2042,160 @@ int DeferredRenderer::addTerrainTile(float offsetX, float offsetZ) {
 
 void DeferredRenderer::clearTerrainTiles() {
     m_terrainTiles.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Introspection — pipeline info for MCP AI agents
+// ---------------------------------------------------------------------------
+
+nlohmann::json DeferredRenderer::getPipelineInfo() const {
+    using json = nlohmann::json;
+
+    auto passEntry = [](const char* name, const char* type, int order,
+                        bool initialized, bool enabled) -> json {
+        return {
+            {"name", name}, {"type", type}, {"order", order},
+            {"initialized", initialized}, {"enabled", enabled}
+        };
+    };
+
+    json passes = json::array();
+    // Render graph passes
+    passes.push_back(passEntry("CSM",              "graphics", 1,  m_csmPass != nullptr,        true));
+    passes.push_back(passEntry("GBuffer",           "graphics", 2,  m_gbufferPass != nullptr,    true));
+    passes.push_back(passEntry("Terrain",           "graphics", 3,  m_terrainPass != nullptr,    m_terrainPass != nullptr));
+    passes.push_back(passEntry("Foliage",           "graphics", 4,  m_foliagePass != nullptr,    m_foliagePass != nullptr));
+    passes.push_back(passEntry("Decals",            "graphics", 5,  m_decalPass != nullptr,      m_decalPass != nullptr));
+    passes.push_back(passEntry("SSAO",              "compute",  6,  true,                        m_postProcessing && m_postProcessing->getSSAOEnabled()));
+    passes.push_back(passEntry("SSGI",              "compute",  7,  true,                        m_postProcessing && m_postProcessing->getSSGIEnabled()));
+    passes.push_back(passEntry("DeferredLighting",  "graphics", 8,  m_lightingPass != nullptr,   true));
+
+    // Direct passes
+    passes.push_back(passEntry("CloudPass",         "compute",  9,  m_cloudPass != nullptr,          m_cloudEnabled));
+    passes.push_back(passEntry("CloudShadowPass",   "compute",  10, m_cloudShadowPass != nullptr,    m_cloudEnabled));
+    passes.push_back(passEntry("SkyPass",           "graphics", 11, m_skyPass != nullptr,            m_skyEnabled));
+    passes.push_back(passEntry("RainPass",          "graphics", 12, m_rainPass != nullptr,           m_rainEnabled));
+    passes.push_back(passEntry("SnowPass",          "graphics", 13, m_snowPass != nullptr,           m_snowEnabled));
+    passes.push_back(passEntry("SandPass",          "graphics", 14, m_sandPass != nullptr,           m_sandEnabled));
+    passes.push_back(passEntry("GodRaysPass",       "compute",  15, m_godRaysPass != nullptr,        m_godRaysEnabled));
+    passes.push_back(passEntry("AuroraPass",        "graphics", 16, m_auroraPass != nullptr,         m_auroraEnabled));
+    passes.push_back(passEntry("RainbowPass",       "graphics", 17, m_rainbowPass != nullptr,        m_rainbowEnabled));
+    passes.push_back(passEntry("FFTOceanSim",       "compute",  18, m_fftOceanSim != nullptr,        m_fftOceanSim != nullptr));
+    passes.push_back(passEntry("CausticsPass",      "compute",  19, m_causticsPass != nullptr,       m_causticsPass != nullptr));
+    passes.push_back(passEntry("RipplePass",        "compute",  20, m_ripplePass != nullptr,         m_ripplePass != nullptr));
+    passes.push_back(passEntry("WaterPass",         "graphics", 21, m_waterPass != nullptr,          m_waterPass != nullptr));
+    passes.push_back(passEntry("UnderwaterPass",    "graphics", 22, m_underwaterPass != nullptr,     m_underwaterPass != nullptr));
+    passes.push_back(passEntry("ParticleSystem",    "graphics", 23, m_particleSystem != nullptr,     m_particleSystem != nullptr));
+    passes.push_back(passEntry("PostProcessing",    "graphics", 24, m_postProcessing != nullptr,     true));
+    passes.push_back(passEntry("GizmoPass",         "graphics", 25, m_gizmoPass != nullptr,          m_gizmoEnabled));
+
+    return {
+        {"pass_count",  passes.size()},
+        {"passes",      passes},
+        {"resolution",  {m_width, m_height}},
+        {"delta_time",  m_deltaTime},
+        {"total_time",  m_totalTime},
+    };
+}
+
+nlohmann::json DeferredRenderer::getPerfStats() const {
+    using json = nlohmann::json;
+
+    // Count active passes
+    int activePasses = 0;
+    auto check = [&](bool initialized, bool enabled) {
+        if (initialized && enabled) ++activePasses;
+    };
+    check(m_gbufferPass != nullptr,    true);
+    check(m_csmPass != nullptr,        true);
+    check(m_lightingPass != nullptr,   true);
+    check(m_postProcessing != nullptr, true);
+    check(m_skyPass != nullptr,        m_skyEnabled);
+    check(m_cloudPass != nullptr,      m_cloudEnabled);
+    check(m_rainPass != nullptr,       m_rainEnabled);
+    check(m_snowPass != nullptr,       m_snowEnabled);
+    check(m_sandPass != nullptr,       m_sandEnabled);
+    check(m_godRaysPass != nullptr,    m_godRaysEnabled);
+    check(m_auroraPass != nullptr,     m_auroraEnabled);
+    check(m_rainbowPass != nullptr,    m_rainbowEnabled);
+    check(m_terrainPass != nullptr,    m_terrainPass != nullptr);
+    check(m_waterPass != nullptr,      m_waterPass != nullptr);
+    check(m_foliagePass != nullptr,    m_foliagePass != nullptr);
+    check(m_decalPass != nullptr,      m_decalPass != nullptr);
+
+    return {
+        {"resolution",    {m_width, m_height}},
+        {"delta_time",    m_deltaTime},
+        {"total_time",    m_totalTime},
+        {"fps_estimate",  m_deltaTime > 0.0f ? 1.0f / m_deltaTime : 0.0f},
+        {"active_passes", activePasses},
+        {"ssao_enabled",  m_postProcessing && m_postProcessing->getSSAOEnabled()},
+        {"ssgi_enabled",  m_postProcessing && m_postProcessing->getSSGIEnabled()},
+        {"effects", {
+            {"sky",        m_skyEnabled},
+            {"cloud",      m_cloudEnabled},
+            {"rain",       m_rainEnabled},
+            {"snow",       m_snowEnabled},
+            {"sand",       m_sandEnabled},
+            {"god_rays",   m_godRaysEnabled},
+            {"aurora",     m_auroraEnabled},
+            {"rainbow",    m_rainbowEnabled},
+        }},
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Hot-reload — runtime shader swap for MCP AI agents
+// ---------------------------------------------------------------------------
+
+bool DeferredRenderer::reloadShaderForPass(const std::string& passName, const std::string& spvPath) {
+    // Map pass names to pass pointers
+    struct PassEntry {
+        const char* name;
+        RenderPassBase* pass;
+    };
+
+    PassEntry entries[] = {
+        {"GBuffer",          m_gbufferPass.get()},
+        {"CSM",              m_csmPass.get()},
+        {"DeferredLighting", m_lightingPass.get()},
+        {"SkyPass",          m_skyPass.get()},
+        {"CloudPass",        m_cloudPass.get()},
+        {"CloudShadowPass",  m_cloudShadowPass.get()},
+        {"RainPass",         m_rainPass.get()},
+        {"SnowPass",         m_snowPass.get()},
+        {"SandPass",         m_sandPass.get()},
+        {"GodRaysPass",      m_godRaysPass.get()},
+        {"AuroraPass",       m_auroraPass.get()},
+        {"RainbowPass",      m_rainbowPass.get()},
+        {"TerrainPass",      m_terrainPass.get()},
+        {"WaterPass",        m_waterPass.get()},
+        {"CausticsPass",     m_causticsPass.get()},
+        {"RipplePass",       m_ripplePass.get()},
+        {"UnderwaterPass",   m_underwaterPass.get()},
+        {"DecalPass",        m_decalPass.get()},
+        {"FoliagePass",      m_foliagePass.get()},
+    };
+
+    for (const auto& e : entries) {
+        if (passName == e.name) {
+            if (!e.pass) {
+                std::cerr << "DeferredRenderer::reloadShader: pass '" << passName << "' not initialized" << std::endl;
+                return false;
+            }
+            bool ok = e.pass->reloadShader(spvPath);
+            if (ok) {
+                std::cout << "DeferredRenderer: hot-reloaded shader for " << passName << std::endl;
+            } else {
+                std::cerr << "DeferredRenderer: hot-reload FAILED for " << passName
+                          << " (pass doesn't support hot-reload or SPV invalid)" << std::endl;
+            }
+            return ok;
+        }
+    }
+
+    std::cerr << "DeferredRenderer::reloadShader: unknown pass '" << passName << "'" << std::endl;
+    return false;
 }
 
 } // namespace ohao

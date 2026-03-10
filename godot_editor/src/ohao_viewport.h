@@ -637,6 +637,13 @@ public:
     Dictionary get_scene_state() const;
     bool save_screenshot(const String& path);
     PackedByteArray capture_screenshot();
+
+    // === Introspection (MCP AI self-development) ===
+    Dictionary get_pipeline_info() const;
+    Dictionary get_perf_stats() const;
+
+    // === Hot-reload (MCP AI shader experiments) ===
+    bool reload_shader(const String& pass_name, const String& spv_path);
 };
 
 } // namespace godot

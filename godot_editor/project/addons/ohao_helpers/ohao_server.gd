@@ -173,6 +173,12 @@ func _dispatch(raw: String) -> PackedByteArray:
 		["POST", "/god/snapshot"]:  return _handle_god_snapshot(body)
 		["POST", "/god/look_at"]:   return _handle_god_look_at(body)
 		["POST", "/god/orbit_capture"]: return _handle_god_orbit_capture(body)
+		# Introspection (AI self-development)
+		["GET",  "/introspect/pipeline"]: return _handle_introspect_pipeline()
+		["GET",  "/introspect/perf"]:     return _handle_introspect_perf()
+		# Hot-reload (AI shader experiments)
+		["POST", "/hot_reload/shader"]:   return _handle_hot_reload_shader(body)
+		["POST", "/hot_reload/script"]:   return _handle_hot_reload_script(body)
 
 	# DELETE /scene/actor?name=Box
 	if method == "DELETE" and path == "/scene/actor":
@@ -213,6 +219,10 @@ func _handle_root() -> PackedByteArray:
 			{"method": "POST",   "path": "/god/snapshot",       "desc": "Save state.json + screenshot.png: {output_dir: '...'}"},
 			{"method": "POST",   "path": "/god/look_at",        "desc": "Position camera: {target, distance, elevation, azimuth}"},
 			{"method": "POST",   "path": "/god/orbit_capture",  "desc": "Multi-angle capture: {target, distance, count, output_dir}"},
+			{"method": "GET",    "path": "/introspect/pipeline","desc": "Render pipeline state: pass names, order, enabled flags"},
+			{"method": "GET",    "path": "/introspect/perf",    "desc": "Performance stats: fps, delta_time, active passes, effects"},
+			{"method": "POST",   "path": "/hot_reload/shader",  "desc": "Hot-reload shader: {pass_name, spv_path}"},
+			{"method": "POST",   "path": "/hot_reload/script",  "desc": "Reload GDScript: {path}"},
 		]
 	})
 
@@ -560,3 +570,52 @@ func _handle_god_orbit_capture(body: Variant) -> PackedByteArray:
 	var output_dir: String = body["output_dir"]
 	var paths := OhaoGod.orbit_capture(vp, target, distance, count, output_dir)
 	return _ok({"paths": paths, "count": paths.size()})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handlers — Introspection (AI self-development)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _handle_introspect_pipeline() -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	return _ok(vp.get_pipeline_info())
+
+
+func _handle_introspect_perf() -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	return _ok(vp.get_perf_stats())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handlers — Hot-reload (AI shader experiments)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _handle_hot_reload_shader(body: Variant) -> PackedByteArray:
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+	if not body is Dictionary or not body.has("pass_name") or not body.has("spv_path"):
+		return _err("Body must be JSON: {pass_name, spv_path}")
+	var pass_name: String = body["pass_name"]
+	var spv_path: String = body["spv_path"]
+	var ok: bool = vp.reload_shader(pass_name, spv_path)
+	if ok:
+		return _ok({"reloaded": true, "pass": pass_name})
+	else:
+		return _err("Hot-reload failed for pass: %s" % pass_name)
+
+
+func _handle_hot_reload_script(body: Variant) -> PackedByteArray:
+	if not body is Dictionary or not body.has("path"):
+		return _err("Body must be JSON: {path}")
+	var script_path: String = body["path"]
+	# Force reload the script resource
+	var res = ResourceLoader.load(script_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if res:
+		return _ok({"reloaded": true, "path": script_path})
+	else:
+		return _err("Failed to reload script: %s" % script_path)

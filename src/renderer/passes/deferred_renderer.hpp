@@ -7,6 +7,7 @@
 #include "gizmo_pass.hpp"
 #include "sky_pass.hpp"
 #include "cloud_pass.hpp"
+#include "cloud/cloud_shadow_pass.hpp"
 #include "rain_pass.hpp"
 #include "snow_pass.hpp"
 #include "sand_pass.hpp"
@@ -24,6 +25,7 @@
 #include "renderer/particles/particle_system.hpp"
 #include "renderer/graph/render_graph.hpp"
 #include "utils/common_types.hpp"
+#include <nlohmann/json.hpp>
 #include <memory>
 #include <unordered_map>
 #include <queue>
@@ -329,6 +331,13 @@ public:
     // Get jitter offset for TAA
     glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
+    // === Introspection (MCP AI agent support) ===
+    nlohmann::json getPipelineInfo() const;
+    nlohmann::json getPerfStats() const;
+
+    // === Hot-reload (runtime shader swap) ===
+    bool reloadShaderForPass(const std::string& passName, const std::string& spvPath);
+
 private:
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
@@ -341,6 +350,7 @@ private:
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;
     std::unique_ptr<CloudPass> m_cloudPass;
+    std::unique_ptr<CloudShadowPass> m_cloudShadowPass;
     std::unique_ptr<RainPass>    m_rainPass;
     std::unique_ptr<SnowPass>   m_snowPass;
     std::unique_ptr<SandPass>   m_sandPass;

@@ -1,9 +1,11 @@
 """
 OHAO Engine MCP Server — AI God-mode interface.
 
-Exposes 38 tools organized by domain: perception, scene, camera, effects,
-physics, terrain/water, audio, and control templates. Any MCP-compatible
-AI agent (Claude, GPT, Gemini) can connect via stdio or HTTP.
+Exposes 60+ tools organized by domain: perception, scene, camera, effects,
+physics, terrain/water, audio, control templates, introspection, memory,
+self-test, code generation, hot-reload, and workflow orchestration.
+
+Any MCP-compatible AI agent can connect via stdio or HTTP.
 
 Usage:
     python mcp/ohao_server.py          # stdio (Claude Code reads .mcp.json)
@@ -22,10 +24,14 @@ from engine_bridge import bridge
 mcp = FastMCP(
     "ohao-engine",
     instructions=(
-        "OHAO Game Engine — AI God-mode interface. "
-        "You can observe the full scene state, capture screenshots, "
-        "build scenes, configure effects, control physics, and more. "
-        "The engine must be running in Godot for tools to work."
+        "OHAO Game Engine — AI-native game engine with self-development capabilities. "
+        "You can observe the full scene state, capture screenshots, build scenes, "
+        "configure effects, control physics, introspect the codebase and render pipeline, "
+        "generate new render passes from templates, hot-reload shaders at runtime, "
+        "store persistent knowledge across sessions, run build validation and tests, "
+        "and follow structured workflows for complex multi-step tasks. "
+        "Some tools work offline (introspection, memory, generation). "
+        "Runtime tools require the engine running in Godot."
     ),
 )
 
@@ -664,6 +670,24 @@ def set_input_mode(mode: str) -> dict:
     mode_int = 1 if mode.lower() == "game" else 0
     return bridge.post("/camera", {"mode": mode_int})
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-development modules (introspect, remember, test, generate, reload, orchestrate)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import introspect
+import memory
+import selftest
+import generate
+import hotreload
+import orchestrate
+
+introspect.register(mcp, bridge)
+memory.register(mcp, bridge)
+selftest.register(mcp, bridge)
+generate.register(mcp, bridge)
+hotreload.register(mcp, bridge)
+orchestrate.register(mcp, bridge)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point

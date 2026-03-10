@@ -57,6 +57,10 @@ public:
     // Get pass name for debugging
     virtual const char* getName() const = 0;
 
+    // Hot-reload: load a new SPV and recreate the pipeline.
+    // Returns true if the pass supports hot-reload and succeeded.
+    virtual bool reloadShader(const std::string& spvPath) { (void)spvPath; return false; }
+
     // Set shader base path for all passes (call before initializing any pass)
     static void setShaderBasePath(const std::string& path) { s_shaderBasePath = path; }
     static const std::string& getShaderBasePath() { return s_shaderBasePath; }
