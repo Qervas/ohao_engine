@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <queue>
 #include <string>
+#include <array>
 
 namespace ohao {
 
@@ -566,6 +567,19 @@ private:
     // (Re-)import all per-pass render targets into the graph.
     // Called once after initialize() and again after each onResize().
     void importGraphTextures();
+
+    // === GPU Timing ===
+    static constexpr int GPU_TIMER_COUNT = 25;  // max passes to time
+    VkQueryPool m_timestampPool{VK_NULL_HANDLE};
+    float m_timestampPeriod{1.0f};  // nanoseconds per tick
+    bool m_gpuTimingEnabled{false};
+    std::array<float, GPU_TIMER_COUNT> m_passTimingsMs{};  // per-pass ms from last frame
+    std::array<const char*, GPU_TIMER_COUNT> m_passTimingNames{};
+    int m_passTimingCount{0};
+
+    bool initGpuTiming();
+    void cleanupGpuTiming();
+    void readbackGpuTimings();  // read previous frame's results
 };
 
 } // namespace ohao

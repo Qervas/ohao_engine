@@ -359,6 +359,9 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     // Initialize render graph and import all pass outputs
     importGraphTextures();
 
+    // GPU timing for per-pass profiling
+    initGpuTiming();
+
     std::cout << "DeferredRenderer: Fully initialized" << std::endl;
     return true;
 }
@@ -368,6 +371,7 @@ void DeferredRenderer::cleanup() {
 
     vkDeviceWaitIdle(m_device);
 
+    cleanupGpuTiming();
     m_renderGraph.shutdown();
 
     if (m_particleSystem) {
@@ -477,7 +481,84 @@ void DeferredRenderer::cleanup() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GPU Timing — VkQueryPool timestamp queries for per-pass profiling
+// ---------------------------------------------------------------------------
+
+bool DeferredRenderer::initGpuTiming() {
+    // Query timestamp period from physical device
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
+    m_timestampPeriod = props.limits.timestampPeriod;  // nanoseconds per tick
+
+    if (m_timestampPeriod == 0.0f) {
+        std::cerr << "DeferredRenderer: GPU does not support timestamps" << std::endl;
+        m_gpuTimingEnabled = false;
+        return false;
+    }
+
+    // Create query pool: 2 queries per pass (begin + end)
+    VkQueryPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    poolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    poolInfo.queryCount = GPU_TIMER_COUNT * 2;
+
+    if (vkCreateQueryPool(m_device, &poolInfo, nullptr, &m_timestampPool) != VK_SUCCESS) {
+        std::cerr << "DeferredRenderer: Failed to create timestamp query pool" << std::endl;
+        m_gpuTimingEnabled = false;
+        return false;
+    }
+
+    m_gpuTimingEnabled = true;
+    m_passTimingsMs.fill(0.0f);
+    m_passTimingNames.fill(nullptr);
+    m_passTimingCount = 0;
+
+    std::cout << "DeferredRenderer: GPU timing enabled (period=" << m_timestampPeriod << "ns)" << std::endl;
+    return true;
+}
+
+void DeferredRenderer::cleanupGpuTiming() {
+    if (m_timestampPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(m_device, m_timestampPool, nullptr);
+        m_timestampPool = VK_NULL_HANDLE;
+    }
+    m_gpuTimingEnabled = false;
+}
+
+void DeferredRenderer::readbackGpuTimings() {
+    if (!m_gpuTimingEnabled || m_passTimingCount == 0) return;
+
+    // Read all timestamp results (2 per pass: begin + end)
+    std::array<uint64_t, GPU_TIMER_COUNT * 2> timestamps{};
+    uint32_t queryCount = static_cast<uint32_t>(m_passTimingCount * 2);
+
+    VkResult result = vkGetQueryPoolResults(
+        m_device, m_timestampPool,
+        0, queryCount,
+        queryCount * sizeof(uint64_t), timestamps.data(), sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+
+    if (result == VK_SUCCESS) {
+        // Convert tick deltas to milliseconds
+        float nsToMs = m_timestampPeriod / 1'000'000.0f;
+        for (int i = 0; i < m_passTimingCount; i++) {
+            uint64_t begin = timestamps[i * 2];
+            uint64_t end   = timestamps[i * 2 + 1];
+            m_passTimingsMs[i] = static_cast<float>(end - begin) * nsToMs;
+        }
+    }
+    // VK_NOT_READY is fine — first frame has no results yet
+}
+
 void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
+    // Read back GPU timings from PREVIOUS frame (results are 1 frame behind)
+    if (m_gpuTimingEnabled) {
+        readbackGpuTimings();
+        vkCmdResetQueryPool(cmd, m_timestampPool, 0, GPU_TIMER_COUNT * 2);
+        m_passTimingCount = 0;
+    }
+
     // Update camera matrices for TAA jitter
     glm::vec2 jitter = m_postProcessing ? m_postProcessing->getJitterOffset(frameIndex) : glm::vec2(0.0f);
     glm::mat4 jitteredProj = m_proj;
@@ -824,11 +905,37 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_lightingPass->execute(c, frameIndex); });
     }
 
+    // Time the render graph (CSM+GBuffer+Terrain+Foliage+Decals+SSAO+SSGI+Lighting)
+    if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
+        m_passTimingNames[m_passTimingCount] = "RenderGraph";
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampPool, m_passTimingCount * 2);
+    }
     m_renderGraph.compile();
     m_renderGraph.execute(cmd);
+    if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_timestampPool, m_passTimingCount * 2 + 1);
+        m_passTimingCount++;
+    }
+
+    // GPU timing helper for direct passes
+    auto timerBegin = [&](const char* name) {
+        if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
+            m_passTimingNames[m_passTimingCount] = name;
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                m_timestampPool, m_passTimingCount * 2);
+        }
+    };
+    auto timerEnd = [&]() {
+        if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                m_timestampPool, m_passTimingCount * 2 + 1);
+            m_passTimingCount++;
+        }
+    };
 
     // 4.5. Cloud pass — ray-march volumetric clouds into half-res buffer
     if (m_cloudPass) {
+        timerBegin("CloudPass");
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_cloudPass->setEnabled(m_cloudEnabled);
         m_cloudPass->setCameraData(invViewProj, m_cameraPos);
@@ -840,10 +947,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                                 m_skyIntensity);
         m_cloudPass->setTime(m_totalTime);
         m_cloudPass->execute(cmd, frameIndex);
+        timerEnd();
     }
 
     // 4.55. Cloud shadow pass — top-down march for ground shadow
     if (m_cloudShadowPass && m_cloudEnabled) {
+        timerBegin("CloudShadow");
         m_cloudShadowPass->setSunDirection(-m_lightDirection);
         m_cloudShadowPass->setCameraPos(m_cameraPos);
         m_cloudShadowPass->setTime(m_totalTime);
@@ -851,10 +960,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             m_cloudAltMin, m_cloudAltMax, m_cloudCoverage,
             m_cloudDensity, 0.15f, m_cloudSpeed);
         m_cloudShadowPass->execute(cmd, frameIndex);
+        timerEnd();
     }
 
     // 4.6. Sky pass — fills sky pixels with Preetham sky + cloud composite
     if (m_skyPass && m_skyEnabled) {
+        timerBegin("SkyPass");
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_skyPass->setCameraData(invViewProj, m_cameraPos);
         // Sun direction: opposite of the directional light direction (light points down → sun up)
@@ -869,9 +980,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_skyPass->setStarSeed(m_totalTime);
 
         m_skyPass->execute(cmd, frameIndex);
+        timerEnd();
     }
 
     // 4.65. Rain pass — procedural rain streaks composited into HDR
+    timerBegin("Weather");
     if (m_rainPass) {
         m_rainPass->setEnabled(m_rainEnabled);
         m_rainPass->setIntensity(m_rainIntensity);
@@ -915,18 +1028,22 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_godRaysPass->setEnabled(m_godRaysEnabled && sunVisible);
         m_godRaysPass->execute(cmd, frameIndex);
     }
+    timerEnd();  // Weather (Rain+Snow+Sand+GodRays)
 
     // 4.62. Aurora — dancing ribbons in sky
     if (m_auroraPass) {
+        timerBegin("Aurora");
         m_auroraPass->setEnabled(m_auroraEnabled);
         m_auroraPass->setIntensity(m_auroraIntensity);
         m_auroraPass->setHue(m_auroraHue);
         m_auroraPass->setTime(m_totalTime);
         m_auroraPass->execute(cmd, frameIndex);
+        timerEnd();
     }
 
     // 4.63. Rainbow — prismatic arc when raining with sun visible
     if (m_rainbowPass) {
+        timerBegin("Rainbow");
         float rainbowIntensity = (m_rainEnabled && m_rainIntensity > 0.2f)
             ? m_rainIntensity * 0.8f : 0.0f;
         // Compute antisolar point: reflect sun through screen center
@@ -940,9 +1057,11 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_rainbowPass->setIntensity(rainbowIntensity);
         m_rainbowPass->setEnabled(m_rainbowEnabled && rainbowIntensity > 0.001f);
         m_rainbowPass->execute(cmd, frameIndex);
+        timerEnd();
     }
 
     // 4.625. FFT ocean simulation — compute-only, produces displacement + normal textures
+    timerBegin("Water");
     if (m_waveMode == 1 && m_fftOceanSim && m_waterEnabled) {
         // Sync FFT params to sim
         m_fftOceanSim->setPatchSize(m_fftPatchSize);
@@ -1000,8 +1119,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_underwaterPass->setChromStrength(m_underwaterChromStrength);
         m_underwaterPass->execute(cmd, frameIndex);
     }
+    timerEnd();  // Water (FFT+Ripple+Water+Underwater)
 
     // 4.7. Particle system (forward pass over HDR, before post-processing)
+    timerBegin("Particles");
     if (m_particleSystem && m_lightingPass) {
         m_totalTime += m_deltaTime;
 
@@ -1046,8 +1167,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             vkCmdEndRenderPass(cmd);
         }
     }
+    timerEnd();  // Particles
 
     // 5. Post-processing (SSR, volumetric, bloom, motion blur, TAA, DoF, heat haze, tonemapping)
+    timerBegin("PostProcessing");
     if (m_postProcessing && m_lightingPass) {
         m_postProcessing->setColorBuffer(m_lightingPass->getOutputView());
         m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(),
@@ -1055,8 +1178,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_postProcessing->setDeltaTime(m_deltaTime);
         m_postProcessing->execute(cmd, frameIndex);
     }
+    timerEnd();  // PostProcessing
 
     // 6. Gizmo pass (transform handles for selected objects)
+    timerBegin("Gizmo");
     if (m_gizmoPass && m_gizmoEnabled) {
         // Determine the final output image — must be from a pass that actually ran
         VkImage finalImage = VK_NULL_HANDLE;
@@ -1076,6 +1201,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             m_gizmoPass->execute(cmd, frameIndex);
         }
     }
+    timerEnd();  // Gizmo
 
     // Store current view-proj for next frame's motion vectors
     m_prevViewProj = m_proj * m_view;
@@ -2141,6 +2267,19 @@ nlohmann::json DeferredRenderer::getPerfStats() const {
             {"aurora",     m_auroraEnabled},
             {"rainbow",    m_rainbowEnabled},
         }},
+        {"gpu_timing_enabled", m_gpuTimingEnabled},
+        {"gpu_timings_ms",     [&]() {
+            json timings = json::object();
+            float totalMs = 0.0f;
+            for (int i = 0; i < m_passTimingCount; i++) {
+                if (m_passTimingNames[i]) {
+                    timings[m_passTimingNames[i]] = m_passTimingsMs[i];
+                    totalMs += m_passTimingsMs[i];
+                }
+            }
+            timings["_total"] = totalMs;
+            return timings;
+        }()},
     };
 }
 

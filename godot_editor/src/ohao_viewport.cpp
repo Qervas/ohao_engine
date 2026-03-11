@@ -2585,6 +2585,17 @@ Dictionary OhaoViewport::get_perf_stats() const {
         effects[String(it.key().c_str())] = (bool)it.value().get<bool>();
     }
     result["effects"] = effects;
+
+    // GPU per-pass timings
+    result["gpu_timing_enabled"] = (bool)stats["gpu_timing_enabled"].get<bool>();
+    if (stats.contains("gpu_timings_ms") && stats["gpu_timings_ms"].is_object()) {
+        Dictionary timings;
+        for (auto it = stats["gpu_timings_ms"].begin(); it != stats["gpu_timings_ms"].end(); ++it) {
+            timings[String(it.key().c_str())] = (float)it.value().get<double>();
+        }
+        result["gpu_timings_ms"] = timings;
+    }
+
     return result;
 }
 
