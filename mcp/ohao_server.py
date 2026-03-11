@@ -685,6 +685,7 @@ import events
 import visual_test
 import ai_player
 import experiment
+from agents import comms as agent_comms
 
 introspect.register(mcp, bridge)
 memory.register(mcp, bridge)
@@ -696,6 +697,7 @@ events.register(mcp, bridge)
 visual_test.register(mcp, bridge)
 ai_player.register(mcp, bridge)
 experiment.register(mcp, bridge)
+agent_comms.register(mcp, bridge)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
