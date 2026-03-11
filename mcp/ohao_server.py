@@ -684,6 +684,7 @@ import orchestrate
 import events
 import visual_test
 import ai_player
+import experiment
 
 introspect.register(mcp, bridge)
 memory.register(mcp, bridge)
@@ -694,6 +695,7 @@ orchestrate.register(mcp, bridge)
 events.register(mcp, bridge)
 visual_test.register(mcp, bridge)
 ai_player.register(mcp, bridge)
+experiment.register(mcp, bridge)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
