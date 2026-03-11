@@ -63,6 +63,9 @@ external/imgui
 *_LOGS.md
 __pycache__/
 
+# Playground (quick throwaway experiments, never committed)
+playground/
+
 # Misc
 imgui.ini
 Downloads/
