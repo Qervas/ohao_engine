@@ -102,6 +102,13 @@ protected:
                                uint32_t pushConstantSize,
                                VkPipeline& outPipeline, VkPipelineLayout& outLayout);
 
+    // Hot-reload helper: destroy old pipeline/layout, load SPV from absolute path,
+    // recreate pipeline with existing descriptor layout. Returns true on success.
+    bool reloadComputeShader(const std::string& absoluteSpvPath,
+                             VkDescriptorSetLayout descriptorLayout,
+                             uint32_t pushConstantSize,
+                             VkPipeline& pipeline, VkPipelineLayout& pipelineLayout);
+
     // Safe Vulkan handle cleanup (null-check + destroy + reset)
     void safeDestroy(VkPipeline& handle);
     void safeDestroy(VkPipelineLayout& handle);

@@ -1,5 +1,6 @@
 #include "render_pass_base.hpp"
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 
 namespace ohao {
@@ -186,6 +187,75 @@ bool RenderPassBase::createComputePipeline(const std::string& shaderPath,
     vkDestroyShaderModule(m_device, compShader, nullptr);
 
     return result == VK_SUCCESS;
+}
+
+bool RenderPassBase::reloadComputeShader(const std::string& absoluteSpvPath,
+                                          VkDescriptorSetLayout descriptorLayout,
+                                          uint32_t pushConstantSize,
+                                          VkPipeline& pipeline, VkPipelineLayout& pipelineLayout) {
+    // Wait for GPU to finish using the old pipeline
+    vkDeviceWaitIdle(m_device);
+
+    // Load SPV directly (absolute path, no base path prepend)
+    std::ifstream file(absoluteSpvPath, std::ios::ate | std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "reloadComputeShader: failed to open " << absoluteSpvPath << std::endl;
+        return false;
+    }
+    size_t fileSize = static_cast<size_t>(file.tellg());
+    std::vector<uint32_t> code(fileSize / sizeof(uint32_t));
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(code.data()), fileSize);
+    file.close();
+
+    VkShaderModule shaderModule = createShaderModule(code);
+    if (shaderModule == VK_NULL_HANDLE) {
+        std::cerr << "reloadComputeShader: invalid SPIR-V" << std::endl;
+        return false;
+    }
+
+    // Destroy old pipeline and layout
+    safeDestroy(pipeline);
+    safeDestroy(pipelineLayout);
+
+    // Recreate layout
+    VkPushConstantRange pushConstant{};
+    pushConstant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushConstant.offset = 0;
+    pushConstant.size = pushConstantSize;
+
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorLayout;
+    layoutInfo.pushConstantRangeCount = pushConstantSize > 0 ? 1u : 0u;
+    layoutInfo.pPushConstantRanges = pushConstantSize > 0 ? &pushConstant : nullptr;
+
+    if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+        vkDestroyShaderModule(m_device, shaderModule, nullptr);
+        std::cerr << "reloadComputeShader: pipeline layout creation failed" << std::endl;
+        return false;
+    }
+
+    // Recreate pipeline
+    VkPipelineShaderStageCreateInfo stageInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stageInfo.module = shaderModule;
+    stageInfo.pName = "main";
+
+    VkComputePipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    pipelineInfo.stage = stageInfo;
+    pipelineInfo.layout = pipelineLayout;
+
+    VkResult result = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+    vkDestroyShaderModule(m_device, shaderModule, nullptr);
+
+    if (result != VK_SUCCESS) {
+        std::cerr << "reloadComputeShader: pipeline creation failed" << std::endl;
+        return false;
+    }
+
+    std::cout << "reloadComputeShader: success for " << getName() << std::endl;
+    return true;
 }
 
 void RenderPassBase::safeDestroy(VkPipeline& handle) {

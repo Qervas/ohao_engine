@@ -344,4 +344,9 @@ void CausticsPass::updateDescriptors() {
                            writes.data(), 0, nullptr);
 }
 
+bool CausticsPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descLayout, sizeof(CausticsPC),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

@@ -198,4 +198,9 @@ void RainbowPass::updateDescriptors() {
     vkUpdateDescriptorSets(m_device, count, writes.data(), 0, nullptr);
 }
 
+bool RainbowPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(RainbowParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

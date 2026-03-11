@@ -167,4 +167,9 @@ void SandPass::updateDescriptors() {
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
+bool SandPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(SandParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

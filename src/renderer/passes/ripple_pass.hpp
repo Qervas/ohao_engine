@@ -42,6 +42,7 @@ public:
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t, uint32_t) override {}  // not screen-resolution dependent
     const char* getName() const override { return "RipplePass"; }
+    bool reloadShader(const std::string& spvPath) override;
 
     // Current ripple height map view (consumed by WaterPass)
     VkImageView getRippleMapView() const;

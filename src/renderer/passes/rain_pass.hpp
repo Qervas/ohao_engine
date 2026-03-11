@@ -31,6 +31,7 @@ public:
 
     void onResize(uint32_t width, uint32_t height) override;
     const char* getName() const override { return "RainPass"; }
+    bool reloadShader(const std::string& spvPath) override;
 
     // --- External image connection ---
     // Must be called before execute() and after any resize.

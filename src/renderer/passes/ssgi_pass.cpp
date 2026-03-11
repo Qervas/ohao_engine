@@ -372,4 +372,9 @@ bool SSGIPass::createPipeline() {
                                   sizeof(SSGIParams), m_pipeline, m_pipelineLayout);
 }
 
+bool SSGIPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(SSGIParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

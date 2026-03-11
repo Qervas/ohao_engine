@@ -15,6 +15,7 @@ public:
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
     const char* getName() const override { return "SSAOPass"; }
+    bool reloadShader(const std::string& spvPath) override;
 
     // Configuration
     void setDepthBuffer(VkImageView depth);

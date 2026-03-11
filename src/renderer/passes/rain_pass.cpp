@@ -201,4 +201,9 @@ void RainPass::updateDescriptors() {
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
+bool RainPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(RainParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

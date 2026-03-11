@@ -211,4 +211,9 @@ void HeatHazePass::updateDescriptors() {
     vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
+bool HeatHazePass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(HeatHazeParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

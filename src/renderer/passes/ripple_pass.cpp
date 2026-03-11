@@ -344,4 +344,9 @@ void RipplePass::updateDescriptors() {
     m_descDirty = false;
 }
 
+bool RipplePass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descLayout, sizeof(RipplePC),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

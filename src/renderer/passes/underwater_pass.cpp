@@ -243,4 +243,9 @@ void UnderwaterPass::updateDescriptors() {
                            writes.data(), 0, nullptr);
 }
 
+bool UnderwaterPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descLayout, sizeof(UnderwaterPC),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

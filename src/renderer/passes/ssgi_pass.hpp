@@ -17,6 +17,7 @@ public:
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
     const char* getName() const override { return "SSGIPass"; }
+    bool reloadShader(const std::string& spvPath) override;
 
     // Input buffers (full resolution)
     void setDepthBuffer(VkImageView depth);

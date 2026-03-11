@@ -195,4 +195,9 @@ void AuroraPass::updateDescriptors() {
     vkUpdateDescriptorSets(m_device, count, writes.data(), 0, nullptr);
 }
 
+bool AuroraPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(AuroraParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao

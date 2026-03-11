@@ -17,6 +17,7 @@ public:
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
     const char* getName() const override { return "HeatHazePass"; }
+    bool reloadShader(const std::string& spvPath) override;
 
     // Input: HDR from previous pass (sampler read)
     void setInputImage(VkImageView view, VkImage image);

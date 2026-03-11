@@ -175,4 +175,9 @@ void SnowPass::updateDescriptors() {
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
+bool SnowPass::reloadShader(const std::string& spvPath) {
+    return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(SnowParams),
+                               m_pipeline, m_pipelineLayout);
+}
+
 } // namespace ohao
