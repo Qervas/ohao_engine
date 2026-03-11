@@ -1,7 +1,10 @@
 #version 450
+#extension GL_GOOGLE_include_directive : enable
 
 // Depth of Field - Circle of Confusion calculation
 // Computes per-pixel CoC based on camera parameters and depth
+
+#include "includes/common/encoding.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -25,12 +28,6 @@ layout(push_constant) uniform DoFParams {
     float farPlane;
     uint bokehBlades;
 } params;
-
-// Convert hyperbolic depth to linear depth
-float linearizeDepth(float depth) {
-    return params.nearPlane * params.farPlane /
-           (params.farPlane - depth * (params.farPlane - params.nearPlane));
-}
 
 // Calculate Circle of Confusion diameter in pixels
 // Based on thin lens equation: CoC = |S2 - S1| * A * f / (S1 * (S2 - f))
@@ -115,7 +112,7 @@ void main() {
     }
 
     // Linearize depth
-    float linearDepth = linearizeDepth(depth);
+    float linearDepth = linearizeDepthNearFar(depth, params.nearPlane, params.farPlane);
 
     // Calculate CoC using simplified artistic approach
     // (Use calculateCoC for physically-based approach)

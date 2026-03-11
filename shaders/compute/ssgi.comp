@@ -1,8 +1,11 @@
 #version 450
+#extension GL_GOOGLE_include_directive : enable
 
 // Screen-Space Global Illumination (SSGI) Compute Shader
 // Half-resolution compute pass: ray-marches depth buffer, samples albedo at hit points
 // as single-bounce indirect radiance (color bleeding).
+
+#include "includes/common/encoding.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -34,23 +37,6 @@ layout(push_constant) uniform SSGIParams {
 } params;
 
 const float PI = 3.14159265359;
-
-// Decode octahedron-encoded normal (matches gbuffer encoding)
-vec3 decodeNormalOctahedron(vec2 encoded) {
-    vec2 f = encoded * 2.0 - 1.0;
-    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    float t = clamp(-n.z, 0.0, 1.0);
-    n.x += (n.x >= 0.0) ? -t : t;
-    n.y += (n.y >= 0.0) ? -t : t;
-    return normalize(n);
-}
-
-// Linearize depth from [0,1] to view-space Z
-float linearizeDepth(float d) {
-    float z = d;
-    // Vulkan uses [0,1] depth range; reverse-Z if applicable
-    return params.projection[3][2] / (z * params.projection[2][3] - params.projection[2][2]);
-}
 
 // Build a tangent-space basis from a world-space normal
 mat3 buildTBN(vec3 N) {
@@ -145,7 +131,7 @@ void main() {
 
             // Sample depth at projected position
             float sampleDepth = texture(depthBuffer, screenUV).r;
-            float linearSampleDepth = linearizeDepth(sampleDepth);
+            float linearSampleDepth = linearizeDepthProj(sampleDepth, params.projection);
 
             // Compute linear depth of march point in view space
             vec4 viewMarch = params.view * vec4(marchPos, 1.0);

@@ -273,7 +273,7 @@ void main() {
     float hW  = texture(heightmap, inUV + vec2(-ts2, 0.0)).r;
     float laplacian = 4.0 * hC - (hN + hS + hE + hW);  // >0=convex, <0=concave
     // Map: concave valleys darkened; convex ridges slightly brightened.
-    float cavityAO = clamp(1.0 + laplacian * 10.0, 0.25, 1.15);
+    float cavityAO = clamp(1.0 + laplacian * 10.0, 0.25, 1.0);
     // Snow fills cavities → reduce cavity effect under snow
     cavityAO = mix(cavityAO, 1.0, snowW * pc.snowCover);
     float ao = clamp(cavityAO, 0.0, 1.0);

@@ -1,0 +1,75 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+// Cloud Shadow Map — compute shader
+// Top-down vertical march through cloud slab to produce a 2D shadow map.
+// Output: R16F — shadow factor [0,1] where 0=fully shadowed, 1=clear sky.
+// Used by deferred lighting to darken surfaces under dense cloud cover.
+
+#include "includes/cloud/cloud_density.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Output cloud shadow map (R16F, GENERAL layout)
+layout(set = 0, binding = 0, r16f) uniform writeonly image2D outShadow;
+
+// 3D Perlin-Worley noise (RGBA8_UNORM, 128^3, REPEAT)
+layout(set = 0, binding = 1) uniform sampler3D noiseTexture;
+
+// Weather map (512^2 RGBA8: R=coverage, G=cloud type, B=precipitation)
+layout(set = 0, binding = 2) uniform sampler2D weatherMap;
+
+// Push constants (80 bytes — well under 256B limit)
+layout(push_constant) uniform PushConstants {
+    vec2  mapCenter;       //  0  (8)   — world XZ center of shadow map
+    vec2  mapExtent;       //  8  (8)   — half-size of shadow map in world units
+    vec2  outputSize;      // 16  (8)
+    float cloudAltMin;     // 24  (4)
+    float cloudAltMax;     // 28  (4) -> 32
+    float cloudCoverage;   // 32  (4)
+    float cloudDensity;    // 36  (4)
+    float cloudAbsorption; // 40  (4)
+    float time;            // 44  (4) -> 48
+    float cloudSpeed;      // 48  (4)
+    float pad0;            // 52  (4) -> 56
+    vec3  sunDirection;    // 56  (12)
+    float pad1;            // 68  (4) -> 72
+    float pad2;            // 72  (4)
+    float pad3;            // 76  (4) -> 80
+} pc;
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixelCoord, ivec2(pc.outputSize)))) return;
+
+    // Map pixel to world XZ position
+    vec2 uv = (vec2(pixelCoord) + 0.5) / pc.outputSize;
+    vec2 worldXZ = pc.mapCenter + (uv * 2.0 - 1.0) * pc.mapExtent;
+
+    // March vertically from top of cloud slab downward
+    const int SHADOW_STEPS = 16;
+    float slabHeight = pc.cloudAltMax - pc.cloudAltMin;
+    float stepLen = slabHeight / float(SHADOW_STEPS);
+
+    float densityAccum = 0.0;
+
+    for (int i = 0; i < SHADOW_STEPS; i++) {
+        float y = pc.cloudAltMax - (float(i) + 0.5) * stepLen;
+        vec3 pos = vec3(worldXZ.x, y, worldXZ.y);
+
+        float d = sampleCloudDensity(
+            pos, noiseTexture, weatherMap,
+            pc.cloudAltMin, pc.cloudAltMax,
+            pc.cloudCoverage, pc.cloudDensity,
+            pc.time, pc.cloudSpeed,
+            true
+        );
+
+        densityAccum += d * stepLen;
+    }
+
+    // Beer-Lambert extinction with 0.003 scaling to prevent over-darkening
+    float shadow = exp(-densityAccum * pc.cloudAbsorption * 0.003);
+
+    imageStore(outShadow, pixelCoord, vec4(shadow, 0.0, 0.0, 0.0));
+}

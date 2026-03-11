@@ -1,7 +1,11 @@
 #version 450
+#extension GL_GOOGLE_include_directive : enable
 
 // Screen-Space Reflections using hierarchical ray marching
 // Based on "Efficient GPU Screen-Space Ray Tracing" (McGuire & Mara, JCGT 2014)
+
+#include "includes/common/encoding.glsl"
+#include "includes/common/reconstruction.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -31,27 +35,11 @@ layout(push_constant) uniform SSRParams {
     uint padding;
 } params;
 
-// Reconstruct view-space position from depth
-vec3 reconstructViewPos(vec2 uv, float depth) {
-    vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
-    vec4 viewPos = params.invProjection * clipPos;
-    return viewPos.xyz / viewPos.w;
-}
-
 // Convert view-space position to screen UV
 vec3 projectToScreen(vec3 viewPos) {
     vec4 clipPos = params.projection * vec4(viewPos, 1.0);
     clipPos.xyz /= clipPos.w;
     return vec3(clipPos.xy * 0.5 + 0.5, clipPos.z);
-}
-
-// Decode normal from G-Buffer (octahedron encoding)
-vec3 decodeNormal(vec2 encoded) {
-    encoded = encoded * 2.0 - 1.0;
-    vec3 n = vec3(encoded.xy, 1.0 - abs(encoded.x) - abs(encoded.y));
-    float t = max(-n.z, 0.0);
-    n.xy += vec2(n.x >= 0.0 ? -t : t, n.y >= 0.0 ? -t : t);
-    return normalize(n);
 }
 
 // Get depth from Hi-Z buffer at specified mip level
@@ -173,7 +161,7 @@ void main() {
 
     // Get normal and roughness
     vec4 normalRoughness = texture(normalBuffer, uv);
-    vec3 normal = decodeNormal(normalRoughness.xy);
+    vec3 normal = decodeNormalOctahedron(normalRoughness.xy);
     float roughness = normalRoughness.w;
 
     // Skip rough surfaces (no sharp reflections)
@@ -183,7 +171,7 @@ void main() {
     }
 
     // Reconstruct view-space position
-    vec3 viewPos = reconstructViewPos(uv, depth);
+    vec3 viewPos = reconstructViewPos(uv, depth, params.invProjection);
 
     // Transform normal to view space
     vec3 viewNormal = mat3(params.view) * normal;

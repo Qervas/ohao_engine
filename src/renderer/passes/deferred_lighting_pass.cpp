@@ -164,6 +164,7 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
     if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO
     if (m_shadowMapView != VK_NULL_HANDLE) m_params.flags |= 4;  // Shadows
     if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // SSGI
+    if (m_cloudShadowView != VK_NULL_HANDLE) m_params.flags |= 16; // Cloud shadows
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(LightingParams), &m_params);
@@ -214,6 +215,14 @@ void DeferredLightingPass::setSSGITexture(VkImageView ssgi, VkSampler ssgiSample
     m_ssgiSampler = ssgiSampler;
 }
 
+void DeferredLightingPass::setCloudShadow(VkImageView view, VkSampler sampler,
+                                           const glm::vec2& center, const glm::vec2& extent) {
+    m_cloudShadowView = view;
+    m_cloudShadowSampler = sampler;
+    m_params.cloudShadowCenter = center;
+    m_params.cloudShadowExtent = extent;
+}
+
 void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& view,
                                           const glm::mat4& invViewProj) {
     m_params.cameraPos = position;
@@ -229,13 +238,13 @@ void DeferredLightingPass::setGBufferPass(GBufferPass* gbufferPass) {
 void DeferredLightingPass::updateDescriptorSets() {
     if (!m_gbufferPass || m_descriptorSet == VK_NULL_HANDLE || m_gbufferSampler == VK_NULL_HANDLE) return;
 
-    // Always write ALL 13 bindings. Use dummy resources as fallback for unbound bindings.
+    // Always write ALL 14 bindings. Use dummy resources as fallback for unbound bindings.
     // Vulkan requires all declared bindings to be written before the descriptor set is used.
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 12> imageInfos{};
-    std::array<VkWriteDescriptorSet, 13> writes{};
+    std::array<VkDescriptorImageInfo, 13> imageInfos{};
+    std::array<VkWriteDescriptorSet, 14> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
 
@@ -362,7 +371,19 @@ void DeferredLightingPass::updateDescriptorSets() {
     writes[12].descriptorCount = 1;
     writes[12].pBufferInfo = &cascadeBufferInfo;
 
-    vkUpdateDescriptorSets(m_device, 13, writes.data(), 0, nullptr);
+    // Cloud shadow map (binding 13) — use fallback if not set
+    imageInfos[11].sampler = m_cloudShadowSampler != VK_NULL_HANDLE ? m_cloudShadowSampler : fallbackSampler;
+    imageInfos[11].imageView = m_cloudShadowView != VK_NULL_HANDLE ? m_cloudShadowView : fallbackView;
+    imageInfos[11].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[13].dstSet = m_descriptorSet;
+    writes[13].dstBinding = 13;
+    writes[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[13].descriptorCount = 1;
+    writes[13].pImageInfo = &imageInfos[11];
+
+    vkUpdateDescriptorSets(m_device, 14, writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -480,8 +501,9 @@ bool DeferredLightingPass::createDescriptors() {
     // 10: SSAO texture
     // 11: SSGI texture
     // 12: CascadeData UBO
+    // 13: Cloud shadow map
 
-    std::array<VkDescriptorSetLayoutBinding, 13> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -529,6 +551,12 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[12].descriptorCount = 1;
     bindings[12].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // Cloud shadow map (13)
+    bindings[13].binding = 13;
+    bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[13].descriptorCount = 1;
+    bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -538,10 +566,10 @@ bool DeferredLightingPass::createDescriptors() {
         return false;
     }
 
-    // Descriptor pool — 11 image samplers + 2 UBOs (light buffer + cascade data)
+    // Descriptor pool — 12 image samplers + 2 UBOs (light buffer + cascade data)
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 11;
+    poolSizes[0].descriptorCount = 12;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 2;
 

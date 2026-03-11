@@ -1,8 +1,11 @@
 #version 450
+#extension GL_GOOGLE_include_directive : enable
 
 // Deferred Lighting Fragment Shader
 // Reads G-Buffer and evaluates all lights in a single pass.
 // CSM: selects cascade based on view-space depth, samples shadow map array.
+
+#include "includes/common/encoding.glsl"
 
 layout(location = 0) in vec2 inTexCoord;
 
@@ -48,6 +51,9 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
     uint  cascadeCount;
 } cascades;
 
+// Cloud shadow map (binding 13) — R16F, [0..1], 0=shadowed, 1=clear
+layout(set = 0, binding = 13) uniform sampler2D cloudShadowMap;
+
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
@@ -62,22 +68,14 @@ layout(push_constant) uniform PushConstants {
     float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
     float paddingS;
     float frostCover;    // 0=bare, 1=fully frost/ice coated
-    float paddingF;
-} pc;
+    float paddingF;      // -> 184
+    vec2 cloudShadowCenter; // world XZ center of cloud shadow map
+    vec2 cloudShadowExtent; // half-size in world units
+} pc;                   // Total: 200 bytes
 
 // Constants
 const float PI = 3.14159265359;
 const float EPSILON = 0.0001;
-
-// Normal decoding from octahedron
-vec3 decodeNormalOctahedron(vec2 encoded) {
-    vec2 f = encoded * 2.0 - 1.0;
-    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
-    float t = clamp(-n.z, 0.0, 1.0);
-    n.x += (n.x >= 0.0) ? -t : t;
-    n.y += (n.y >= 0.0) ? -t : t;
-    return normalize(n);
-}
 
 // GGX/Trowbridge-Reitz Normal Distribution
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
@@ -303,6 +301,16 @@ void main() {
 
     // Final color
     vec3 color = ambient + Lo;
+
+    // Cloud shadows — applied to final color (not per-light) with 0.3 floor
+    if ((pc.flags & 16u) != 0u) {
+        vec2 shadowUV = (fragPos.xz - pc.cloudShadowCenter) / (pc.cloudShadowExtent * 2.0) + 0.5;
+        if (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0) {
+            float cloudShadow = texture(cloudShadowMap, shadowUV).r;
+            cloudShadow = max(cloudShadow, 0.3); // never pitch-black
+            color *= cloudShadow;
+        }
+    }
 
     outColor = vec4(color, 1.0);
 }

@@ -24,6 +24,8 @@ public:
                         VkImageView brdfLUT, VkSampler iblSampler);
     void setSSAOTexture(VkImageView ssao, VkSampler ssaoSampler);
     void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
+    void setCloudShadow(VkImageView view, VkSampler sampler,
+                        const glm::vec2& center, const glm::vec2& extent);
 
     // Update descriptors when resources change
     void updateDescriptorSets();
@@ -91,6 +93,8 @@ private:
     VkImageView m_ssgiView{VK_NULL_HANDLE};
     VkSampler m_ssgiSampler{VK_NULL_HANDLE};
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
+    VkImageView m_cloudShadowView{VK_NULL_HANDLE};
+    VkSampler m_cloudShadowSampler{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};
@@ -120,8 +124,10 @@ private:
         float snowCover;        // 4  — 0=bare, 1=snow-covered (blizzard accumulation)
         float paddingS;         // 4
         float frostCover;       // 4  — 0=bare, 1=frost/ice coated (forms above snow threshold)
-        float paddingF;         // 4
-    };                          // Total: 184 bytes
+        float paddingF;         // 4  -> 184
+        glm::vec2 cloudShadowCenter; // 8  — world XZ center of cloud shadow map
+        glm::vec2 cloudShadowExtent; // 8  — half-size in world units
+    };                          // Total: 200 bytes
 
     LightingParams m_params{};
 };
