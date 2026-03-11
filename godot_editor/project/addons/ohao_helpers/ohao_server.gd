@@ -191,6 +191,10 @@ func _dispatch(raw: String) -> PackedByteArray:
 		["GET",  "/events/poll"]:         return _handle_events_poll(query)
 		["POST", "/events/unsubscribe"]:  return _handle_events_unsubscribe(body)
 		["GET",  "/events/history"]:      return _handle_events_history(query)
+		# AI Player — autonomous gameplay (no human in the loop)
+		["POST", "/god/play"]:            return _handle_god_play(body)
+		["GET",  "/god/game_state"]:      return _handle_god_game_state()
+		["POST", "/god/step_and_observe"]:return _handle_god_step_and_observe(body)
 
 	# DELETE /scene/actor?name=Box
 	if method == "DELETE" and path == "/scene/actor":
@@ -239,6 +243,9 @@ func _handle_root() -> PackedByteArray:
 			{"method": "GET",    "path": "/events/poll",         "desc": "Poll events: ?sub=<id> (or omit for recent)"},
 			{"method": "POST",   "path": "/events/unsubscribe", "desc": "Unsubscribe: {subscription_id}"},
 			{"method": "GET",    "path": "/events/history",      "desc": "Event history: ?count=50&type=collision"},
+			{"method": "POST",   "path": "/god/play",           "desc": "Inject game input: {actions: ['move_forward','jump'], mouse_delta?: [dx,dy]}"},
+			{"method": "GET",    "path": "/god/game_state",     "desc": "Game state from game_manager: health, score, ammo, enemies, custom data"},
+			{"method": "POST",   "path": "/god/step_and_observe","desc": "Atomic play loop: inject actions, step N frames, return state+screenshot"},
 		]
 	})
 
@@ -736,3 +743,171 @@ func _handle_events_history(query: Dictionary) -> PackedByteArray:
 		if type_filter == "" or evt["type"] == type_filter:
 			events.append(evt)
 	return _ok({"events": events, "count": events.size()})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handlers — AI Player (autonomous gameplay)
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _handle_god_play(body: Variant) -> PackedByteArray:
+	if not body is Dictionary:
+		return _err("Body must be JSON: {actions: ['move_forward','jump'], mouse_delta?: [dx,dy]}")
+
+	# Inject named input actions
+	var actions: Array = body.get("actions", [])
+	var released: Array = body.get("release", [])
+	for action_name in released:
+		if InputMap.has_action(action_name):
+			Input.action_release(action_name)
+	for action_name in actions:
+		if InputMap.has_action(action_name):
+			Input.action_press(action_name)
+
+	# Inject mouse look delta (for FPS camera)
+	if body.has("mouse_delta"):
+		var delta: Array = body["mouse_delta"]
+		if delta.size() >= 2:
+			var event := InputEventMouseMotion.new()
+			event.relative = Vector2(float(delta[0]), float(delta[1]))
+			Input.parse_input_event(event)
+
+	# Direct camera rotation (easier for AI than pixel deltas)
+	if body.has("look_at_position"):
+		var vp := Ohao.viewport()
+		if vp:
+			var target := _to_v3(body["look_at_position"])
+			var cam_pos := vp.get_camera_position()
+			var dir := (target - cam_pos).normalized()
+			var pitch := rad_to_deg(asin(dir.y))
+			var yaw := rad_to_deg(atan2(dir.x, -dir.z))
+			vp.set_camera_rotation_deg(pitch, -yaw - 90.0)
+
+	return _ok({"pressed": actions, "released": released})
+
+
+func _handle_god_game_state() -> PackedByteArray:
+	# Convention: game managers in "game_manager" group implement get_game_state()
+	var managers := get_tree().get_nodes_in_group("game_manager")
+	var game_state: Dictionary = {}
+
+	if managers.size() > 0:
+		var mgr = managers[0]
+		if mgr.has_method("get_game_state"):
+			game_state = mgr.get_game_state()
+
+	# Always include basic engine info
+	var vp := Ohao.viewport()
+	if vp:
+		var stats := vp.get_render_stats()
+		game_state["engine"] = {
+			"fps": stats.get("fps", 0),
+			"physics_state": _physics_state,
+			"actor_count": _actors.size(),
+		}
+		# Camera info for spatial awareness
+		game_state["camera"] = {
+			"position": _v3_to_a(vp.get_camera_position()),
+			"forward": _v3_to_a(vp.get_camera_forward()),
+		}
+
+	# Collect info from enemies group
+	var enemies := get_tree().get_nodes_in_group("enemies")
+	if enemies.size() > 0:
+		var enemy_data: Array = []
+		for e in enemies:
+			var info: Dictionary = {"name": e.name}
+			if e.has_method("is_alive"):
+				info["alive"] = e.is_alive()
+			if e.has_method("get_position") or "global_position" in e:
+				info["position"] = _v3_to_a(e.global_position)
+			enemy_data.append(info)
+		game_state["enemies"] = enemy_data
+		game_state["enemies_alive"] = enemies.filter(func(e): return not e.has_method("is_alive") or e.is_alive()).size()
+
+	# Collect info from player group
+	var players := get_tree().get_nodes_in_group("player")
+	if players.size() > 0:
+		var p = players[0]
+		if p.has_method("get_game_state"):
+			game_state["player"] = p.get_game_state()
+		elif "global_position" in p:
+			game_state["player"] = {"position": _v3_to_a(p.global_position)}
+
+	return _ok(game_state)
+
+
+func _handle_god_step_and_observe(body: Variant) -> PackedByteArray:
+	if not body is Dictionary:
+		return _err("Body must be JSON: {actions?, steps?, capture?}")
+
+	var vp := Ohao.viewport()
+	if not vp:
+		return _err("No OhaoViewport found")
+
+	# 1. Inject actions (same as /god/play)
+	var actions: Array = body.get("actions", [])
+	var released: Array = body.get("release", [])
+	for action_name in released:
+		if InputMap.has_action(action_name):
+			Input.action_release(action_name)
+	for action_name in actions:
+		if InputMap.has_action(action_name):
+			Input.action_press(action_name)
+
+	if body.has("mouse_delta"):
+		var delta: Array = body["mouse_delta"]
+		if delta.size() >= 2:
+			var event := InputEventMouseMotion.new()
+			event.relative = Vector2(float(delta[0]), float(delta[1]))
+			Input.parse_input_event(event)
+
+	if body.has("look_at_position"):
+		var target := _to_v3(body["look_at_position"])
+		var cam_pos := vp.get_camera_position()
+		var dir := (target - cam_pos).normalized()
+		var pitch := rad_to_deg(asin(dir.y))
+		var yaw := rad_to_deg(atan2(dir.x, -dir.z))
+		vp.set_camera_rotation_deg(pitch, -yaw - 90.0)
+
+	# 2. Step physics
+	var steps: int = int(body.get("steps", 1))
+	steps = clampi(steps, 1, 60)
+	for i in steps:
+		vp.step_physics()
+
+	# 3. Build observation response
+	var result: Dictionary = {
+		"stepped": steps,
+		"actions": actions,
+	}
+
+	# Game state
+	var game_state_response := _handle_god_game_state()
+	# Parse the game state from our own response
+	var game_json := JSON.new()
+	var response_str := game_state_response.get_string_from_utf8()
+	var body_start := response_str.find("\r\n\r\n")
+	if body_start >= 0:
+		var json_body := response_str.substr(body_start + 4)
+		if game_json.parse(json_body) == OK:
+			result["game_state"] = game_json.get_data()
+
+	# 4. Optional screenshot (expensive — only if requested)
+	var should_capture: bool = body.get("capture", false)
+	if should_capture:
+		var png_bytes := vp.capture_screenshot()
+		if not png_bytes.is_empty():
+			result["image_base64"] = Marshalls.raw_to_base64(png_bytes)
+			result["format"] = "png"
+			var size := vp.get_viewport_size()
+			result["width"] = size.x
+			result["height"] = size.y
+
+	# 5. Recent events (collisions, etc.) since last step
+	var recent_events: Array = []
+	var start := max(0, _event_buffer.size() - 10)
+	for i in range(start, _event_buffer.size()):
+		recent_events.append(_event_buffer[i])
+	result["events"] = recent_events
+
+	return _ok(result)
