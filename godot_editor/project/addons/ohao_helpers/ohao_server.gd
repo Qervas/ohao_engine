@@ -21,6 +21,13 @@ var _clients: Array = []
 
 var _settings_script = null   # loaded lazily
 
+# Event system
+var _event_buffer: Array = []          # Ring buffer of recent events
+var _event_buffer_max: int = 500       # Max events to keep
+var _subscriptions: Dictionary = {}     # sub_id -> {event_types, cursor}
+var _next_sub_id: int = 1
+var _events_connected: bool = false
+
 
 func _ready() -> void:
 	_settings_script = load("res://addons/ohao_helpers/ohao_settings.gd")
@@ -179,6 +186,11 @@ func _dispatch(raw: String) -> PackedByteArray:
 		# Hot-reload (AI shader experiments)
 		["POST", "/hot_reload/shader"]:   return _handle_hot_reload_shader(body)
 		["POST", "/hot_reload/script"]:   return _handle_hot_reload_script(body)
+		# Event subscription system (AI real-time observation)
+		["POST", "/events/subscribe"]:    return _handle_events_subscribe(body)
+		["GET",  "/events/poll"]:         return _handle_events_poll(query)
+		["POST", "/events/unsubscribe"]:  return _handle_events_unsubscribe(body)
+		["GET",  "/events/history"]:      return _handle_events_history(query)
 
 	# DELETE /scene/actor?name=Box
 	if method == "DELETE" and path == "/scene/actor":
@@ -223,6 +235,10 @@ func _handle_root() -> PackedByteArray:
 			{"method": "GET",    "path": "/introspect/perf",    "desc": "Performance stats: fps, delta_time, active passes, effects"},
 			{"method": "POST",   "path": "/hot_reload/shader",  "desc": "Hot-reload shader: {pass_name, spv_path}"},
 			{"method": "POST",   "path": "/hot_reload/script",  "desc": "Reload GDScript: {path}"},
+			{"method": "POST",   "path": "/events/subscribe",   "desc": "Subscribe to events: {event_types: ['collision','lightning',...]}"},
+			{"method": "GET",    "path": "/events/poll",         "desc": "Poll events: ?sub=<id> (or omit for recent)"},
+			{"method": "POST",   "path": "/events/unsubscribe", "desc": "Unsubscribe: {subscription_id}"},
+			{"method": "GET",    "path": "/events/history",      "desc": "Event history: ?count=50&type=collision"},
 		]
 	})
 
@@ -619,3 +635,104 @@ func _handle_hot_reload_script(body: Variant) -> PackedByteArray:
 		return _ok({"reloaded": true, "path": script_path})
 	else:
 		return _err("Failed to reload script: %s" % script_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Handlers — Event Subscription System
+# ─────────────────────────────────────────────────────────────────────────────
+
+func _connect_events() -> void:
+	if _events_connected:
+		return
+	var vp = Ohao.viewport()
+	if not vp:
+		return
+	if vp.has_signal("body_entered"):
+		vp.body_entered.connect(_on_body_entered)
+	if vp.has_signal("body_exited"):
+		vp.body_exited.connect(_on_body_exited)
+	if vp.has_signal("lightning_struck"):
+		vp.lightning_struck.connect(_on_lightning_struck)
+	if vp.has_signal("actor_selected"):
+		vp.actor_selected.connect(_on_actor_selected)
+	_events_connected = true
+
+
+func _on_body_entered(body1: String, body2: String, contact: Vector3, impulse: float) -> void:
+	_push_event("collision", {"body1": body1, "body2": body2,
+		"contact": [contact.x, contact.y, contact.z], "impulse": impulse})
+
+
+func _on_body_exited(body1: String, body2: String) -> void:
+	_push_event("collision_end", {"body1": body1, "body2": body2})
+
+
+func _on_lightning_struck() -> void:
+	_push_event("lightning", {})
+
+
+func _on_actor_selected(name: String) -> void:
+	_push_event("actor_selected", {"name": name})
+
+
+func _push_event(type: String, data: Dictionary) -> void:
+	var evt := {"type": type, "timestamp": Time.get_unix_time_from_system(), "data": data}
+	_event_buffer.append(evt)
+	if _event_buffer.size() > _event_buffer_max:
+		_event_buffer.pop_front()
+
+
+func _handle_events_subscribe(body: Variant) -> PackedByteArray:
+	if not body is Dictionary:
+		return _err("Body must be JSON: {event_types: ['collision', ...]}")
+	if not _events_connected:
+		_connect_events()
+	var types: Array = body.get("event_types", ["all"])
+	var sub_id := str(_next_sub_id)
+	_next_sub_id += 1
+	_subscriptions[sub_id] = {"event_types": types, "cursor": _event_buffer.size()}
+	return _ok({"subscription_id": sub_id, "event_types": types})
+
+
+func _handle_events_poll(query: Dictionary) -> PackedByteArray:
+	var sub_id: String = query.get("sub", "")
+	if sub_id == "":
+		# No subscription — return last 20 events
+		var start := max(0, _event_buffer.size() - 20)
+		var recent := _event_buffer.slice(start)
+		return _ok({"events": recent, "count": recent.size()})
+	if sub_id not in _subscriptions:
+		return _err("Unknown subscription: " + sub_id)
+	var sub: Dictionary = _subscriptions[sub_id]
+	var cursor: int = sub["cursor"]
+	var types: Array = sub["event_types"]
+	var events: Array = []
+	for i in range(cursor, _event_buffer.size()):
+		var evt: Dictionary = _event_buffer[i]
+		if "all" in types or evt["type"] in types:
+			events.append(evt)
+	sub["cursor"] = _event_buffer.size()
+	return _ok({"events": events, "count": events.size(), "subscription_id": sub_id})
+
+
+func _handle_events_unsubscribe(body: Variant) -> PackedByteArray:
+	if not body is Dictionary:
+		return _err("Body must be JSON: {subscription_id: '1'}")
+	var sub_id: String = body.get("subscription_id", "")
+	if sub_id in _subscriptions:
+		_subscriptions.erase(sub_id)
+		return _ok({"unsubscribed": sub_id})
+	return _err("Unknown subscription: " + sub_id)
+
+
+func _handle_events_history(query: Dictionary) -> PackedByteArray:
+	var count: int = int(query.get("count", "50"))
+	count = clampi(count, 1, 200)
+	var type_filter: String = query.get("type", "")
+	var events: Array = []
+	var start := max(0, _event_buffer.size() - count)
+	for i in range(start, _event_buffer.size()):
+		var evt: Dictionary = _event_buffer[i]
+		if type_filter == "" or evt["type"] == type_filter:
+			events.append(evt)
+	return _ok({"events": events, "count": events.size()})

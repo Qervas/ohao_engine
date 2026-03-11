@@ -681,6 +681,7 @@ import selftest
 import generate
 import hotreload
 import orchestrate
+import events
 
 introspect.register(mcp, bridge)
 memory.register(mcp, bridge)
@@ -688,6 +689,7 @@ selftest.register(mcp, bridge)
 generate.register(mcp, bridge)
 hotreload.register(mcp, bridge)
 orchestrate.register(mcp, bridge)
+events.register(mcp, bridge)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
