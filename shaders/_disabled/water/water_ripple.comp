@@ -1,0 +1,71 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+
+// GPU wave equation simulation — ping-pong 256×256 R16F height map.
+// Implements the discrete wave equation:
+//   h[t+1] = (2*h[t] - h[t-1]) * (1 - damping*dt)
+//           + c^2 * dt^2 * laplacian(h[t])
+// Physics objects call addRipple() from C++ which injects impulses into
+// the simulation; expanding ring waves radiate outward from impact points.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Ping-pong: srcHeight = h[t], dstHeight = h[t-1] on entry; h[t+1] on exit
+layout(set = 0, binding = 0, r16f) uniform image2D srcHeight;   // h[t]   (read)
+layout(set = 0, binding = 1, r16f) uniform image2D dstHeight;   // h[t-1] (read) / h[t+1] (write)
+
+struct RippleSource {
+    vec2  pos;       //  8
+    float strength;  //  4
+    float radius;    //  4 — 16 bytes
+};
+
+layout(push_constant) uniform RipplePC {
+    float terrainSize;         //  4
+    float damping;             //  4
+    float waveSpeed;           //  4
+    float dt;                  //  4 — 16
+    uint  rippleCount;         //  4
+    uint  mapSize;             //  4
+    float pad0;                //  4
+    float pad1;                //  4 — 32
+    RippleSource sources[12];  // 12 * 16 = 192 — 224
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int   mapSz = int(pc.mapSize);
+    if (coord.x >= mapSz || coord.y >= mapSz) return;
+
+    // Wave equation discrete Laplacian (4-neighbour stencil)
+    ivec2 N = clamp(coord + ivec2( 0,  1), ivec2(0), ivec2(mapSz - 1));
+    ivec2 S = clamp(coord + ivec2( 0, -1), ivec2(0), ivec2(mapSz - 1));
+    ivec2 E = clamp(coord + ivec2( 1,  0), ivec2(0), ivec2(mapSz - 1));
+    ivec2 W = clamp(coord + ivec2(-1,  0), ivec2(0), ivec2(mapSz - 1));
+
+    float hC    = imageLoad(srcHeight, coord).r;
+    float hN    = imageLoad(srcHeight, N).r;
+    float hS    = imageLoad(srcHeight, S).r;
+    float hE    = imageLoad(srcHeight, E).r;
+    float hW    = imageLoad(srcHeight, W).r;
+
+    float laplacian = hN + hS + hE + hW - 4.0 * hC;
+
+    // dstHeight stores h[t-1] on entry
+    float hPrev = imageLoad(dstHeight, coord).r;
+
+    float hNext = (2.0 * hC - hPrev) * (1.0 - pc.damping * pc.dt)
+                + pc.waveSpeed * pc.waveSpeed * pc.dt * pc.dt * laplacian;
+
+    // Inject ripple sources (up to 4 per frame)
+    vec2 worldPos = (vec2(coord) / float(mapSz) - 0.5) * pc.terrainSize;
+    for (uint i = 0; i < pc.rippleCount; i++) {
+        float d = length(worldPos - pc.sources[i].pos);
+        if (d < pc.sources[i].radius) {
+            float falloff = 1.0 - d / pc.sources[i].radius;
+            hNext += pc.sources[i].strength * falloff * falloff;
+        }
+    }
+
+    imageStore(dstHeight, coord, vec4(clamp(hNext, -1.0, 1.0), 0.0, 0.0, 1.0));
+}

@@ -165,11 +165,21 @@ bool OffscreenRenderer::initialize() {
             // Not fatal - forward rendering still works
         }
 
+        // Initialize RT acceleration structure manager
+        m_rtAccel = std::make_unique<RTAccelerationStructure>();
+        if (m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool)) {
+            std::cout << "Ray tracing: available" << std::endl;
+        } else {
+            std::cout << "Ray tracing: not available (continuing without RT)" << std::endl;
+            m_rtAccel.reset();
+        }
+
         m_initialized = true;
         std::cout << "OffscreenRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Multi-frame rendering: " << (m_frameResources.isInitialized() ? "enabled" : "disabled") << std::endl;
         std::cout << "Deferred rendering: " << (m_deferredRenderer ? "available" : "unavailable") << std::endl;
+        std::cout << "Ray tracing: " << (m_rtAccel ? "enabled" : "disabled") << std::endl;
         return true;
 
     } catch (const std::exception& e) {
@@ -377,6 +387,11 @@ void OffscreenRenderer::renderDeferred() {
 
     m_deferredRenderer->setScene(m_scene);
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
+
+    // Pass RT acceleration structure to deferred renderer for RT shadows
+    if (m_rtAccel && m_rtAccel->isSupported()) {
+        m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
+    }
 
     // Pass geometry buffers to deferred renderer
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
@@ -789,150 +804,7 @@ void OffscreenRenderer::resize(uint32_t width, uint32_t height) {
 }
 
 bool OffscreenRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& outRes) {
-    auto* deferred = m_deferredRenderer.get();
-    if (!deferred) return false;
-    TerrainPass* terrain = deferred->getTerrainPass();
-    if (!terrain || !terrain->hasProceduralHeightmap()) return false;
-
-    VkImage srcImage = terrain->getGenImage();
-    if (srcImage == VK_NULL_HANDLE) return false;
-
-    uint32_t res      = static_cast<uint32_t>(terrain->getGenResolution());
-    VkDeviceSize size = static_cast<VkDeviceSize>(res) * res * sizeof(float);
-
-    // ── Create staging buffer (host-visible, host-coherent) ──────────────────
-    VkBuffer       stagingBuf{VK_NULL_HANDLE};
-    VkDeviceMemory stagingMem{VK_NULL_HANDLE};
-    {
-        VkBufferCreateInfo bufInfo{};
-        bufInfo.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufInfo.size        = size;
-        bufInfo.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        if (vkCreateBuffer(m_device, &bufInfo, nullptr, &stagingBuf) != VK_SUCCESS)
-            return false;
-
-        VkMemoryRequirements req;
-        vkGetBufferMemoryRequirements(m_device, stagingBuf, &req);
-
-        // Find host-visible + coherent memory type
-        VkPhysicalDeviceMemoryProperties memProps;
-        vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
-        uint32_t memIdx = UINT32_MAX;
-        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
-            if ((req.memoryTypeBits & (1u << i)) &&
-                (memProps.memoryTypes[i].propertyFlags &
-                 (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                 (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-                memIdx = i;
-                break;
-            }
-        }
-        if (memIdx == UINT32_MAX) { vkDestroyBuffer(m_device, stagingBuf, nullptr); return false; }
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize  = req.size;
-        allocInfo.memoryTypeIndex = memIdx;
-        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingMem) != VK_SUCCESS) {
-            vkDestroyBuffer(m_device, stagingBuf, nullptr);
-            return false;
-        }
-        vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
-    }
-
-    // ── Allocate & record a command buffer ───────────────────────────────────
-    VkCommandBuffer cb{VK_NULL_HANDLE};
-    {
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool        = m_commandPool;
-        allocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-        if (vkAllocateCommandBuffers(m_device, &allocInfo, &cb) != VK_SUCCESS) {
-            vkFreeMemory(m_device, stagingMem, nullptr);
-            vkDestroyBuffer(m_device, stagingBuf, nullptr);
-            return false;
-        }
-    }
-
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cb, &beginInfo);
-
-    // Transition: SHADER_READ_ONLY_OPTIMAL → TRANSFER_SRC_OPTIMAL
-    VkImageMemoryBarrier toSrc{};
-    toSrc.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toSrc.oldLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toSrc.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toSrc.image               = srcImage;
-    toSrc.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toSrc.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-    toSrc.dstAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-    vkCmdPipelineBarrier(cb,
-        VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toSrc);
-
-    // Copy image → buffer
-    VkBufferImageCopy region{};
-    region.bufferOffset      = 0;
-    region.bufferRowLength   = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource  = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageOffset       = {0, 0, 0};
-    region.imageExtent       = {res, res, 1};
-    vkCmdCopyImageToBuffer(cb, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           stagingBuf, 1, &region);
-
-    // Transition back: TRANSFER_SRC_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
-    VkImageMemoryBarrier toRead{};
-    toRead.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toRead.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    toRead.newLayout           = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toRead.image               = srcImage;
-    toRead.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    toRead.srcAccessMask       = VK_ACCESS_TRANSFER_READ_BIT;
-    toRead.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(cb,
-        VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toRead);
-
-    vkEndCommandBuffer(cb);
-
-    // ── Submit + wait ─────────────────────────────────────────────────────────
-    VkFence fence{VK_NULL_HANDLE};
-    VkFenceCreateInfo fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    vkCreateFence(m_device, &fenceInfo, nullptr, &fence);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers    = &cb;
-    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
-    vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX);
-
-    // ── Copy data to output ───────────────────────────────────────────────────
-    void* mapped = nullptr;
-    vkMapMemory(m_device, stagingMem, 0, size, 0, &mapped);
-    outData.assign(static_cast<float*>(mapped), static_cast<float*>(mapped) + res * res);
-    vkUnmapMemory(m_device, stagingMem);
-    outRes = res;
-
-    // ── Cleanup ───────────────────────────────────────────────────────────────
-    vkDestroyFence(m_device, fence, nullptr);
-    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cb);
-    vkFreeMemory(m_device, stagingMem, nullptr);
-    vkDestroyBuffer(m_device, stagingBuf, nullptr);
-
-    return true;
+    return false; // Terrain pass disabled
 }
 
 } // namespace ohao

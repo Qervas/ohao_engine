@@ -1,0 +1,15 @@
+{
+  "experiments": [
+    {
+      "id": 1,
+      "description": "Added MCP introspection module",
+      "outcome": "success",
+      "details": "6 introspection tools, 31 render passes discovered",
+      "tags": [
+        "mcp",
+        "introspection"
+      ],
+      "timestamp": "2026-03-10T13:31:42Z"
+    }
+  ]
+}

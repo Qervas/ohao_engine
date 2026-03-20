@@ -162,7 +162,10 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
     m_params.flags = 0;
     if (m_irradianceView != VK_NULL_HANDLE) m_params.flags |= 1; // IBL
     if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO
-    if (m_shadowMapView != VK_NULL_HANDLE) m_params.flags |= 4;  // Shadows
+    if (m_rtShadowView != VK_NULL_HANDLE)
+        m_params.flags |= 32;  // RT shadows (bit 5)
+    else if (m_shadowMapView != VK_NULL_HANDLE)
+        m_params.flags |= 4;   // CSM fallback (bit 2)
     if (m_ssgiView != VK_NULL_HANDLE) m_params.flags |= 8;       // SSGI
     if (m_cloudShadowView != VK_NULL_HANDLE) m_params.flags |= 16; // Cloud shadows
 
@@ -223,6 +226,18 @@ void DeferredLightingPass::setCloudShadow(VkImageView view, VkSampler sampler,
     m_params.cloudShadowExtent = extent;
 }
 
+void DeferredLightingPass::setRTShadowMask(VkImageView view, VkSampler sampler) {
+    m_rtShadowView = view;
+    m_rtShadowSampler = sampler;
+    // Set flag bit 5 to tell the shader to use RT shadows
+    if (view != VK_NULL_HANDLE) {
+        m_params.flags |= 32u;   // bit 5 = RT shadows
+        m_params.flags &= ~4u;   // disable CSM (bit 2) when RT is active
+    } else {
+        m_params.flags &= ~32u;
+    }
+}
+
 void DeferredLightingPass::setCameraData(const glm::vec3& position, const glm::mat4& view,
                                           const glm::mat4& invViewProj) {
     m_params.cameraPos = position;
@@ -243,8 +258,8 @@ void DeferredLightingPass::updateDescriptorSets() {
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 13> imageInfos{};
-    std::array<VkWriteDescriptorSet, 14> writes{};
+    std::array<VkDescriptorImageInfo, 14> imageInfos{};
+    std::array<VkWriteDescriptorSet, 15> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
 
@@ -383,7 +398,19 @@ void DeferredLightingPass::updateDescriptorSets() {
     writes[13].descriptorCount = 1;
     writes[13].pImageInfo = &imageInfos[11];
 
-    vkUpdateDescriptorSets(m_device, 14, writes.data(), 0, nullptr);
+    // RT shadow mask (binding 14)
+    imageInfos[12].sampler = m_rtShadowSampler != VK_NULL_HANDLE ? m_rtShadowSampler : fallbackSampler;
+    imageInfos[12].imageView = m_rtShadowView != VK_NULL_HANDLE ? m_rtShadowView : fallbackView;
+    imageInfos[12].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[14].dstSet = m_descriptorSet;
+    writes[14].dstBinding = 14;
+    writes[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[14].descriptorCount = 1;
+    writes[14].pImageInfo = &imageInfos[12];
+
+    vkUpdateDescriptorSets(m_device, 15, writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -503,7 +530,7 @@ bool DeferredLightingPass::createDescriptors() {
     // 12: CascadeData UBO
     // 13: Cloud shadow map
 
-    std::array<VkDescriptorSetLayoutBinding, 14> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -557,6 +584,12 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[13].descriptorCount = 1;
     bindings[13].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // RT shadow mask (14)
+    bindings[14].binding = 14;
+    bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[14].descriptorCount = 1;
+    bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -569,7 +602,7 @@ bool DeferredLightingPass::createDescriptors() {
     // Descriptor pool — 12 image samplers + 2 UBOs (light buffer + cascade data)
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 12;
+    poolSizes[0].descriptorCount = 13;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 2;
 

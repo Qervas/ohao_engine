@@ -140,6 +140,11 @@ const SFX_RICOCHET := "sfx/ricochet.wav"
 const MUSIC_AMBIENT_DARK := "music/ambient_dark.wav"
 const MUSIC_AMBIENT_CALM := "music/ambient_calm.wav"
 const MUSIC_COMBAT := "music/combat.wav"
+# Character presets (OhaoCharacter)
+const CHARACTER_FPS := "fps"
+const CHARACTER_THIRD_PERSON := "third_person"
+const CHARACTER_SIDE_SCROLLER := "side_scroller"
+
 const AMBIENT_WIND := "ambient/wind.wav"
 const AMBIENT_RAIN := "ambient/rain.wav"
 const AMBIENT_DRIP := "ambient/drip.wav"

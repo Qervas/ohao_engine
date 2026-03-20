@@ -13,14 +13,11 @@ layout(location = 6) in vec4 inBoneWeights;
 
 layout(location = 0) out vec3 outWorldPos;
 
-// Per-object push constants
-layout(push_constant) uniform ObjectPushConstants {
-    mat4 model;
-    vec3 baseColor;
-    float metallic;
-    float roughness;
-    float ao;
-    vec2 padding;
+// Per-object push constants (80 bytes — matches C++ ShadowPushConstant)
+layout(push_constant) uniform ShadowPushConstants {
+    mat4 model;          // 64 bytes
+    uint cascadeIndex;   // 4 bytes
+    float pad[3];        // 12 bytes
 } object;
 
 // Bone matrices UBO

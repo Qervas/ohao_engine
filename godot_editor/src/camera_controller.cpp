@@ -78,6 +78,13 @@ void CameraController::updateFPSMovement(float delta, ohao::Camera& camera) {
     if (m_move_down)     movement -= up * speed;
 
     camera.move(movement);
+
+    // In orbit mode, also move the orbit target so rotation doesn't snap back
+    if (m_mode == ORBIT) {
+        m_orbit_target_x += movement.x;
+        m_orbit_target_y += movement.y;
+        m_orbit_target_z += movement.z;
+    }
 }
 
 bool CameraController::handleMouseMotion(float rel_x, float rel_y, ohao::Camera& camera) {

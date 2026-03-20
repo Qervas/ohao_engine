@@ -77,8 +77,6 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
     m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
     m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
-    m_postProcessing->setAlbedoBuffer(m_gbufferPass->getAlbedoView());
-    m_postProcessing->setPositionBuffer(m_gbufferPass->getPositionView());
 
     // Initialize particle system
     m_particleSystem = std::make_unique<ParticleSystem>();
@@ -98,74 +96,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         }
     }
 
-    // Initialize cloud pass (volumetric ray-march, runs before sky pass)
-    m_cloudPass = std::make_unique<CloudPass>();
-    if (!m_cloudPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: CloudPass failed (non-fatal)" << std::endl;
-        m_cloudPass.reset();
-    } else {
-        m_cloudPass->setDepthBuffer(m_gbufferPass->getDepthView());
-        std::cout << "DeferredRenderer: CloudPass OK" << std::endl;
-    }
-
-    // Initialize cloud shadow pass (top-down march, reuses cloud noise/weather textures)
-    if (m_cloudPass) {
-        m_cloudShadowPass = std::make_unique<CloudShadowPass>();
-        if (!m_cloudShadowPass->initialize(device, physicalDevice)) {
-            std::cerr << "DeferredRenderer: CloudShadowPass failed (non-fatal)" << std::endl;
-            m_cloudShadowPass.reset();
-        } else {
-            m_cloudShadowPass->setNoiseTexture(m_cloudPass->getNoiseView(),
-                                                m_cloudPass->getNoiseSampler());
-            m_cloudShadowPass->setWeatherTexture(m_cloudPass->getWeatherView(),
-                                                  m_cloudPass->getWeatherSampler());
-            std::cout << "DeferredRenderer: CloudShadowPass OK" << std::endl;
-        }
-    }
-
-    // Initialize rain pass (procedural rain streaks, runs after sky pass)
-    m_rainPass = std::make_unique<RainPass>();
-    if (!m_rainPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: RainPass failed (non-fatal)" << std::endl;
-        m_rainPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_rainPass->setHDROutput(m_lightingPass->getOutputView(),
-                                     m_lightingPass->getOutputImage());
-        }
-        m_rainPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: RainPass OK" << std::endl;
-    }
-
-    // Initialize snow pass (procedural snowflakes + blizzard streaks, runs after rain)
-    m_snowPass = std::make_unique<SnowPass>();
-    if (!m_snowPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: SnowPass failed (non-fatal)" << std::endl;
-        m_snowPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_snowPass->setHDROutput(m_lightingPass->getOutputView(),
-                                     m_lightingPass->getOutputImage());
-        }
-        m_snowPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: SnowPass OK" << std::endl;
-    }
-
-    // Initialize sand pass (ochre streaks, runs after snow)
-    m_sandPass = std::make_unique<SandPass>();
-    if (!m_sandPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: SandPass failed (non-fatal)" << std::endl;
-        m_sandPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_sandPass->setHDROutput(m_lightingPass->getOutputView(),
-                                     m_lightingPass->getOutputImage());
-        }
-        m_sandPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: SandPass OK" << std::endl;
-    }
-
-    // Initialize sky pass (Preetham analytical sky, runs after cloud pass)
+    // Initialize sky pass (Preetham analytical sky)
     m_skyPass = std::make_unique<SkyPass>();
     if (!m_skyPass->initialize(device, physicalDevice)) {
         std::cerr << "DeferredRenderer: SkyPass failed (non-fatal)" << std::endl;
@@ -174,186 +105,7 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         m_skyPass->setHDROutput(m_lightingPass->getOutputView(),
                                 m_lightingPass->getOutputImage());
         m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
-        if (m_cloudPass) {
-            m_skyPass->setCloudBuffer(m_cloudPass->getOutputView());
-        }
         std::cout << "DeferredRenderer: SkyPass OK" << std::endl;
-    }
-
-    // Initialize God Rays pass (radial light shafts, step 4.61)
-    m_godRaysPass = std::make_unique<GodRaysPass>();
-    if (!m_godRaysPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: GodRaysPass failed (non-fatal)" << std::endl;
-        m_godRaysPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_godRaysPass->setHDROutput(m_lightingPass->getOutputView(),
-                                        m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            // Create a depth-compatible sampler for the pass
-            m_godRaysPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-        m_godRaysPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: GodRaysPass OK" << std::endl;
-    }
-
-    // Initialize Aurora pass (sky ribbon effect, step 4.62)
-    m_auroraPass = std::make_unique<AuroraPass>();
-    if (!m_auroraPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: AuroraPass failed (non-fatal)" << std::endl;
-        m_auroraPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_auroraPass->setHDROutput(m_lightingPass->getOutputView(),
-                                       m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_auroraPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-        m_auroraPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: AuroraPass OK" << std::endl;
-    }
-
-    // Initialize Rainbow pass (prismatic arc, step 4.63)
-    m_rainbowPass = std::make_unique<RainbowPass>();
-    if (!m_rainbowPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: RainbowPass failed (non-fatal)" << std::endl;
-        m_rainbowPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_rainbowPass->setHDROutput(m_lightingPass->getOutputView(),
-                                        m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_rainbowPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-        m_rainbowPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: RainbowPass OK" << std::endl;
-    }
-
-    // Initialize terrain pass (GPU-tessellated heightmap, writes into GBuffer, step 2.5)
-    m_terrainPass = std::make_unique<TerrainPass>();
-    if (!m_terrainPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: TerrainPass failed (non-fatal)" << std::endl;
-        m_terrainPass.reset();
-    } else {
-        if (m_gbufferPass) {
-            m_terrainPass->setGBufferAttachments(
-                m_gbufferPass->getPositionView(),
-                m_gbufferPass->getNormalView(),
-                m_gbufferPass->getAlbedoView(),
-                m_gbufferPass->getVelocityView(),
-                m_gbufferPass->getDepthView(),
-                m_gbufferPass->getPositionFormat(),
-                m_gbufferPass->getDepthFormat());
-        }
-        std::cout << "DeferredRenderer: TerrainPass OK" << std::endl;
-    }
-
-    // Initialize foliage pass (GPU-instanced billboards, step 2.6)
-    m_foliagePass = std::make_unique<FoliagePass>();
-    if (!m_foliagePass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: FoliagePass failed (non-fatal)" << std::endl;
-        m_foliagePass.reset();
-    } else {
-        if (m_gbufferPass) {
-            m_foliagePass->setGBufferAttachments(
-                m_gbufferPass->getPositionView(),
-                m_gbufferPass->getNormalView(),
-                m_gbufferPass->getAlbedoView(),
-                m_gbufferPass->getVelocityView(),
-                m_gbufferPass->getDepthView(),
-                m_gbufferPass->getPositionFormat(),
-                m_gbufferPass->getDepthFormat());
-        }
-        std::cout << "DeferredRenderer: FoliagePass OK" << std::endl;
-    }
-
-    // Initialize decal pass (deferred OBB decals, step 2.7)
-    m_decalPass = std::make_unique<DecalPass>();
-    if (!m_decalPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: DecalPass failed (non-fatal)" << std::endl;
-        m_decalPass.reset();
-    } else {
-        if (m_gbufferPass) {
-            m_decalPass->setGBufferAlbedo(m_gbufferPass->getAlbedoView(),
-                                          m_gbufferPass->getAlbedoFormat());
-            m_decalPass->setDepthBuffer(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-        if (m_textureManager) {
-            m_decalPass->setBindlessManager(m_textureManager);
-        }
-        std::cout << "DeferredRenderer: DecalPass OK" << std::endl;
-    }
-
-    // Initialize Water pass (Gerstner wave forward render, after sky/weather)
-    m_waterPass = std::make_unique<WaterPass>();
-    if (!m_waterPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: WaterPass failed (non-fatal)" << std::endl;
-        m_waterPass.reset();
-    } else {
-        if (m_lightingPass) {
-            m_waterPass->setHDROutput(m_lightingPass->getOutputView(),
-                                      m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_waterPass->setDepthBuffer(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-        m_waterPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: WaterPass OK" << std::endl;
-    }
-
-    // Initialize FFT ocean simulation (compute-only, optional — failure falls back to Gerstner)
-    m_fftOceanSim = std::make_unique<FFTOceanSim>();
-    if (!m_fftOceanSim->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: FFTOceanSim failed (non-fatal — FFT mode unavailable)" << std::endl;
-        m_fftOceanSim.reset();
-    } else {
-        std::cout << "DeferredRenderer: FFTOceanSim OK" << std::endl;
-    }
-
-    // Initialize Caustics pass (pre-lighting caustic projection, step 2.8)
-    m_causticsPass = std::make_unique<CausticsPass>();
-    if (!m_causticsPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: CausticsPass failed (non-fatal)" << std::endl;
-        m_causticsPass.reset();
-    } else {
-        if (m_gbufferPass) {
-            m_causticsPass->setGBufferImages(
-                m_gbufferPass->getDepthView(),
-                m_gbufferPass->getAlbedoImage(),
-                m_gbufferPass->getAlbedoView());
-        }
-        m_causticsPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: CausticsPass OK" << std::endl;
-    }
-
-    // Initialize Ripple simulation pass (GPU wave equation, step 4.63)
-    m_ripplePass = std::make_unique<RipplePass>();
-    if (!m_ripplePass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: RipplePass failed (non-fatal)" << std::endl;
-        m_ripplePass.reset();
-    } else {
-        m_ripplePass->setTerrainSize(m_terrainSize);
-        std::cout << "DeferredRenderer: RipplePass OK" << std::endl;
-    }
-
-    // Initialize Underwater pass (post-effect when camera submerged, step 4.65)
-    m_underwaterPass = std::make_unique<UnderwaterPass>();
-    if (!m_underwaterPass->initialize(device, physicalDevice)) {
-        std::cerr << "DeferredRenderer: UnderwaterPass failed (non-fatal)" << std::endl;
-        m_underwaterPass.reset();
-    } else {
-        if (m_lightingPass) {
-            // Read and write from the same HDR image.
-            // The lighting pass output supports both SAMPLED and STORAGE usages.
-            m_underwaterPass->setHDRTarget(m_lightingPass->getOutputView(),
-                                           m_lightingPass->getOutputImage(),
-                                           m_lightingPass->getOutputView());
-        }
-        m_underwaterPass->onResize(m_width, m_height);
-        std::cout << "DeferredRenderer: UnderwaterPass OK" << std::endl;
     }
 
     // Initialize render graph and import all pass outputs
@@ -361,6 +113,26 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
 
     // GPU timing for per-pass profiling
     initGpuTiming();
+
+    // Initialize RT shadow technique
+    m_rtShadow = std::make_unique<RTShadowTechnique>();
+    if (m_rtShadow->init(device, physicalDevice, m_width, m_height)) {
+        m_useRTShadows = true;
+        std::cout << "DeferredRenderer: RTShadow OK" << std::endl;
+    } else {
+        std::cout << "DeferredRenderer: RTShadow not available (using CSM fallback)" << std::endl;
+        m_rtShadow.reset();
+    }
+
+    // Initialize RT GI technique
+    m_rtGI = std::make_unique<RTGITechnique>();
+    if (m_rtGI->init(device, physicalDevice, m_width, m_height)) {
+        m_useRTGI = true;
+        std::cout << "DeferredRenderer: RTGI OK" << std::endl;
+    } else {
+        std::cout << "DeferredRenderer: RTGI not available" << std::endl;
+        m_rtGI.reset();
+    }
 
     std::cout << "DeferredRenderer: Fully initialized" << std::endl;
     return true;
@@ -387,74 +159,6 @@ void DeferredRenderer::cleanup() {
         m_particleRenderPass = VK_NULL_HANDLE;
     }
 
-    if (m_foliagePass) {
-        m_foliagePass->cleanup();
-        m_foliagePass.reset();
-    }
-    if (m_decalPass) {
-        m_decalPass->cleanup();
-        m_decalPass.reset();
-    }
-    if (m_terrainPass) {
-        m_terrainPass->cleanup();
-        m_terrainPass.reset();
-    }
-    if (m_underwaterPass) {
-        m_underwaterPass->cleanup();
-        m_underwaterPass.reset();
-    }
-    if (m_ripplePass) {
-        m_ripplePass->cleanup();
-        m_ripplePass.reset();
-    }
-    if (m_causticsPass) {
-        m_causticsPass->cleanup();
-        m_causticsPass.reset();
-    }
-    if (m_fftOceanSim) {
-        m_fftOceanSim->cleanup();
-        m_fftOceanSim.reset();
-    }
-    if (m_waterPass) {
-        m_waterPass->cleanup();
-        m_waterPass.reset();
-    }
-    if (m_terrainLayerSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(m_device, m_terrainLayerSampler, nullptr);
-        m_terrainLayerSampler = VK_NULL_HANDLE;
-    }
-    if (m_rainbowPass) {
-        m_rainbowPass->cleanup();
-        m_rainbowPass.reset();
-    }
-    if (m_auroraPass) {
-        m_auroraPass->cleanup();
-        m_auroraPass.reset();
-    }
-    if (m_godRaysPass) {
-        m_godRaysPass->cleanup();
-        m_godRaysPass.reset();
-    }
-    if (m_sandPass) {
-        m_sandPass->cleanup();
-        m_sandPass.reset();
-    }
-    if (m_snowPass) {
-        m_snowPass->cleanup();
-        m_snowPass.reset();
-    }
-    if (m_rainPass) {
-        m_rainPass->cleanup();
-        m_rainPass.reset();
-    }
-    if (m_cloudShadowPass) {
-        m_cloudShadowPass->cleanup();
-        m_cloudShadowPass.reset();
-    }
-    if (m_cloudPass) {
-        m_cloudPass->cleanup();
-        m_cloudPass.reset();
-    }
     if (m_skyPass) {
         m_skyPass->cleanup();
         m_skyPass.reset();
@@ -578,61 +282,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_csmPass->setCameraData(m_view, m_proj, m_nearPlane, m_farPlane);
     }
 
-    // Update wind direction from dominant weather state (used by foliage/terrain)
-    {
-        float wx = m_sandEnabled ? m_sandWindX :
-                   m_rainEnabled ? m_rainWindX : m_snowWindX;
-        float strength = m_sandEnabled ? m_sandIntensity :
-                         m_rainEnabled ? m_rainIntensity : m_snowIntensity;
-        if (std::abs(wx) > 0.001f) {
-            m_windDirection = glm::normalize(glm::vec3(wx, 0.0f, 0.0f));
-            m_windStrength  = glm::clamp(strength * 2.0f, 0.05f, 1.0f);
-        } else {
-            m_windStrength = 0.05f; // light breeze even with no weather
-        }
-    }
-
     // Update lighting pass
     if (m_lightingPass) {
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
         m_lightingPass->setCameraData(m_cameraPos, m_view, invViewProj);
         m_lightingPass->setLightBuffer(m_lightBuffer);
         m_lightingPass->setLightCount(m_lightCount);
-
-        // Temporal wetness integration: ramp toward rain intensity, dry slowly when off
-        float wetnessTarget = (m_rainEnabled && m_rainIntensity > 0.001f)
-                              ? m_rainIntensity : 0.0f;
-        if (m_wetness < wetnessTarget)
-            m_wetness = std::min(m_wetness + m_wetRate  * m_deltaTime, wetnessTarget);
-        else
-            m_wetness = std::max(m_wetness - m_dryRate  * m_deltaTime, wetnessTarget);
-        m_lightingPass->setWetness(m_wetness);
-
-        // Snow accumulation integration (slower than wetness — snow builds up and melts very slowly)
-        float snowTarget = (m_snowEnabled && m_snowIntensity > 0.001f)
-                           ? m_snowIntensity : 0.0f;
-        if (m_snowAccumulation < snowTarget)
-            m_snowAccumulation = std::min(m_snowAccumulation + m_snowAccumRate * m_deltaTime, snowTarget);
-        else
-            m_snowAccumulation = std::max(m_snowAccumulation - m_snowMeltRate * m_deltaTime, snowTarget);
-        m_lightingPass->setSnowCover(m_snowAccumulation);
-
-        // Frost temporal integration: accumulates when snow > 0.6, melts when snow clears
-        float frostTarget = (m_snowAccumulation > 0.6f) ? 1.0f : 0.0f;
-        if (m_frostCover < frostTarget)
-            m_frostCover = std::min(m_frostCover + m_frostAccumRate * m_deltaTime, 1.0f);
-        else
-            m_frostCover = std::max(m_frostCover - m_frostMeltRate * m_deltaTime, 0.0f);
-        m_lightingPass->setFrostCover(m_frostCover);
-
-        // Cloud shadow (1-frame latency — shadow map computed after lighting)
-        if (m_cloudShadowPass && m_cloudEnabled) {
-            m_lightingPass->setCloudShadow(
-                m_cloudShadowPass->getOutputView(),
-                m_cloudShadowPass->getOutputSampler(),
-                m_cloudShadowPass->getMapCenter(),
-                m_cloudShadowPass->getMapExtent());
-        }
 
         // SSAO texture is set after executeSSAO() call below
     }
@@ -642,63 +297,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         glm::mat4 invProj = glm::inverse(m_proj);
         glm::mat4 invView = glm::inverse(m_view);
         m_postProcessing->setProjectionMatrix(m_proj, invProj);
-
-        // SSR needs view/proj matrices for screen-space ray marching
-        m_postProcessing->setSSRMatrices(m_view, m_proj, invView, invProj);
-
-        // SSGI needs view/proj/invProj for screen-space ray marching
-        m_postProcessing->setSSGIMatrices(m_view, m_proj, invProj);
-
-        // Volumetric fog needs view/proj matrices + light/shadow data
-        m_postProcessing->setVolumetricMatrices(m_view, m_proj, invView, invProj);
-        m_postProcessing->setLightBuffer(m_lightBuffer);
-        if (m_csmPass) {
-            m_postProcessing->setShadowMap(m_csmPass->getShadowMapArrayView(),
-                                            m_csmPass->getShadowSampler());
-        }
-
-        // Lightning flash — auto-enable when heavy rain active; also accepts manual trigger
-        bool stormActive = m_rainEnabled && m_rainIntensity >= 0.7f;
-        bool shouldStrike = m_lightningEnabled || stormActive;
-        if (shouldStrike) {
-            // Count down timer; forced trigger bypasses it
-            bool fireNow = m_lightningTimerForce;
-            m_lightningTimerForce = false;
-            if (!fireNow) {
-                m_lightningTimer -= m_deltaTime;
-                if (m_lightningTimer <= 0.0f) fireNow = true;
-            }
-            if (fireNow) {
-                // Randomize: use totalTime as cheap seed
-                float seed = std::fmod(m_totalTime * 127.3f, 1.0f);
-                float seed2 = std::fmod(m_totalTime * 311.7f, 1.0f);
-                m_flashIntensity  = m_lightningBrightness * (0.75f + 0.5f * seed);
-                m_flickerTimer    = 0.05f + 0.08f * seed2;  // secondary flicker delay
-                m_flickerFired    = false;
-                m_lightningPending = true;
-                // Shorter intervals during heavy storm
-                float intensityFactor = stormActive ? (0.4f + 0.6f * (1.0f - m_rainIntensity)) : 1.0f;
-                m_lightningTimer = m_lightningInterval * intensityFactor
-                                   * (0.5f + seed);  // ±50% jitter
-            }
-            // Secondary flicker
-            if (!m_flickerFired && m_flickerTimer > 0.0f) {
-                m_flickerTimer -= m_deltaTime;
-                if (m_flickerTimer <= 0.0f) {
-                    m_flashIntensity = m_flashIntensity * 0.4f + m_lightningBrightness * 0.6f;
-                    m_flickerFired = true;
-                }
-            }
-            // Exponential decay (~1.5s to reach near zero at default decay)
-            float decayFactor = std::pow(0.04f, m_deltaTime);
-            m_flashIntensity *= decayFactor;
-        } else {
-            m_flashIntensity = 0.0f;
-        }
-        m_postProcessing->setFlashIntensity(m_flashIntensity);
     }
 
-    // --- Render Graph: barrier-tracked passes (CSM → GBuffer → SSAO → SSGI → Lighting) ---
+    // --- Render Graph: barrier-tracked passes (CSM → GBuffer → SSAO → Lighting) ---
     // The graph computes inter-pass image layout barriers centrally.
     // Each pass still manages its own VkRenderPass/VkFramebuffer internally.
 
@@ -733,120 +334,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_gbufferPass->execute(c, frameIndex); });
     }
 
-    // 2.5. Terrain pass — LOAD_OP_LOAD into GBuffer, writes displaced heightmap terrain
-    if (m_terrainPass && m_terrainEnabled) {
-        m_renderGraph.addPass("Terrain",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.declareColorWrite(m_graphNormalHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphAlbedoHandle.isValid())
-                    builder.declareColorWrite(m_graphAlbedoHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphDepthHandle.isValid())
-                    builder.declareDepthWrite(m_graphDepthHandle,
-                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-            },
-            [&](VkCommandBuffer c) {
-                m_terrainPass->setViewProjection(m_proj * m_view, m_cameraPos);
-                m_terrainPass->setSnowCover(m_snowAccumulation);
-                m_terrainPass->setWetness(m_wetness);
-                m_terrainPass->setFrostCover(m_frostCover);
-                m_terrainPass->setWaterLevel(m_waterLevel);
-                m_terrainPass->setTime(m_totalTime);
-
-                if (m_terrainTiles.empty()) {
-                    // Single-tile mode (default)
-                    m_terrainPass->setTileOffset(0.0f, 0.0f);
-                    m_terrainPass->execute(c, frameIndex);
-                } else {
-                    // Multi-tile mode: render each active tile within cull radius
-                    for (auto& tile : m_terrainTiles) {
-                        if (!tile.active) continue;
-                        // Distance cull: skip tiles far from camera
-                        float dx = tile.offsetX - m_cameraPos.x;
-                        float dz = tile.offsetZ - m_cameraPos.z;
-                        if (dx*dx + dz*dz > m_terrainTileCullRadius * m_terrainTileCullRadius) continue;
-                        m_terrainPass->setTileOffset(tile.offsetX, tile.offsetZ);
-                        m_terrainPass->execute(c, frameIndex);
-                    }
-                }
-            });
-    }
-
-    // 2.6. Foliage pass — GPU-instanced billboards + compute cull, writes into GBuffer
-    if (m_foliagePass && m_foliageEnabled) {
-        m_renderGraph.addPass("Foliage",
-            [&](PassBuilder& builder) {
-                if (m_graphNormalHandle.isValid())
-                    builder.declareColorWrite(m_graphNormalHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphAlbedoHandle.isValid())
-                    builder.declareColorWrite(m_graphAlbedoHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphDepthHandle.isValid())
-                    builder.declareDepthWrite(m_graphDepthHandle,
-                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-            },
-            [&](VkCommandBuffer c) {
-                m_foliagePass->setMatrices(m_proj * m_view, m_cameraPos);
-                m_foliagePass->setCullDistance(m_foliageCullDistance);
-                m_foliagePass->setTerrainSize(m_terrainSize);
-                // Feed terrain splatmap to foliage culling for density-aware placement
-                if (m_terrainPass && m_terrainPass->getSplatmapView() != VK_NULL_HANDLE) {
-                    m_foliagePass->setSplatmap(m_terrainPass->getSplatmapView(),
-                                               m_terrainPass->getHeightmapSampler());
-                }
-                // Compute frustum planes from view-projection matrix
-                glm::mat4 vp = m_proj * m_view;
-                std::array<glm::vec4, 6> planes;
-                // Gribb/Hartmann frustum extraction
-                for (int i = 0; i < 4; i++) planes[0][i] = vp[i][3] + vp[i][0]; // left
-                for (int i = 0; i < 4; i++) planes[1][i] = vp[i][3] - vp[i][0]; // right
-                for (int i = 0; i < 4; i++) planes[2][i] = vp[i][3] + vp[i][1]; // bottom
-                for (int i = 0; i < 4; i++) planes[3][i] = vp[i][3] - vp[i][1]; // top
-                for (int i = 0; i < 4; i++) planes[4][i] = vp[i][3] + vp[i][2]; // near
-                for (int i = 0; i < 4; i++) planes[5][i] = vp[i][3] - vp[i][2]; // far
-                m_foliagePass->setFrustumPlanes(planes);
-                m_foliagePass->setWind(m_windDirection, m_windStrength, m_totalTime);
-                m_foliagePass->execute(c, frameIndex);
-            });
-    }
-
-    // 2.7. Decal pass — OBB-projected decals blend into GBuffer albedo
-    if (m_decalPass && m_decalsEnabled) {
-        m_renderGraph.addPass("Decals",
-            [&](PassBuilder& builder) {
-                if (m_graphAlbedoHandle.isValid())
-                    builder.declareColorWrite(m_graphAlbedoHandle,
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                if (m_graphDepthHandle.isValid())
-                    builder.readTexture(m_graphDepthHandle,
-                                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-            },
-            [&](VkCommandBuffer c) {
-                glm::mat4 viewProj    = m_proj * m_view;
-                glm::mat4 invViewProj = glm::inverse(viewProj);
-                m_decalPass->setMatrices(viewProj, invViewProj,
-                                         glm::vec2(static_cast<float>(m_width),
-                                                   static_cast<float>(m_height)));
-                m_decalPass->execute(c, frameIndex);
-            });
-    }
-
-    // 2.8. Caustics pass — pre-lighting, additive caustic light on submerged geometry
-    if (m_causticsPass && m_causticsEnabled && m_waterEnabled) {
-        glm::mat4 viewProj    = m_proj * m_view;
-        glm::mat4 invViewProj = glm::inverse(viewProj);
-        m_causticsPass->setEnabled(m_causticsEnabled);
-        m_causticsPass->setInvViewProj(invViewProj);
-        m_causticsPass->setScreenSize(m_width, m_height);
-        m_causticsPass->setWaterLevel(m_waterLevel);
-        m_causticsPass->setTime(m_totalTime);
-        m_causticsPass->setCausticsIntensity(m_causticsIntensity);
-        m_causticsPass->execute(cmd, frameIndex);
-    }
-
     // 3. SSAO — reads normal buffer (already at SHADER_READ_ONLY after GBuffer).
     //    SSAO self-manages its output transitions internally (UNDEFINED→GENERAL→SHADER_READ_ONLY).
     if (m_postProcessing && m_gbufferPass) {
@@ -865,8 +352,44 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 }
             });
 
-        // 3.5. SSGI — reads normal + albedo (both at SHADER_READ_ONLY after GBuffer).
-        m_renderGraph.addComputePass("SSGI",
+    }
+
+    // 3.7. RT Shadows — traces shadow rays using TLAS, outputs shadow mask
+    if (m_useRTShadows && m_rtShadow && m_rtAccel && m_rtAccel->isSupported() &&
+        m_rtAccel->getInstanceCount() > 0 && m_gbufferPass) {
+        m_renderGraph.addComputePass("RTShadow",
+            [&](PassBuilder& builder) {
+                if (m_graphNormalHandle.isValid())
+                    builder.readComputeTexture(m_graphNormalHandle);
+            },
+            [&](VkCommandBuffer c) {
+                ShadowInput si{};
+                si.positionBuffer = m_gbufferPass->getPositionView();
+                si.normalBuffer = m_gbufferPass->getNormalView();
+                si.depthBuffer = m_gbufferPass->getDepthView();
+                si.view = m_view;
+                si.proj = m_proj;
+                si.cameraPos = m_cameraPos;
+                si.width = m_width;
+                si.height = m_height;
+                si.lightDirection = m_lightDirection;
+                si.lightType = 1;  // point light
+                // Use first scene light position if available, else default
+                si.lightPosition = glm::vec3(0, 4.5f, 0);
+                si.lightRange = 15.0f;
+                si.accel = m_rtAccel;
+                m_rtShadow->setLightRadius(0.5f);   // soft shadow — 0.5 unit light radius
+                m_rtShadow->setSampleCount(8);       // 8 rays per pixel for penumbra
+                m_rtShadow->render(c, si);
+
+                // Note: descriptor update happens before render graph execute (see below)
+            });
+    }
+
+    // 3.8. RT GI — traces indirect rays, outputs color bleeding
+    if (m_useRTGI && m_rtGI && m_rtAccel && m_rtAccel->isSupported() &&
+        m_rtAccel->getInstanceCount() > 0 && m_gbufferPass) {
+        m_renderGraph.addComputePass("RTGI",
             [&](PassBuilder& builder) {
                 if (m_graphNormalHandle.isValid())
                     builder.readComputeTexture(m_graphNormalHandle);
@@ -874,13 +397,23 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                     builder.readComputeTexture(m_graphAlbedoHandle);
             },
             [&](VkCommandBuffer c) {
-                m_postProcessing->executeSSGI(c, frameIndex);
-                if (m_lightingPass) {
-                    VkImageView ssgiView = m_postProcessing->getSSGIOutput();
-                    VkSampler ssgiSampler = m_postProcessing->getSSGISampler();
-                    if (ssgiView != VK_NULL_HANDLE && ssgiSampler != VK_NULL_HANDLE)
-                        m_lightingPass->setSSGITexture(ssgiView, ssgiSampler);
-                }
+                GIInput gi{};
+                gi.positionBuffer = m_gbufferPass->getPositionView();
+                gi.normalBuffer = m_gbufferPass->getNormalView();
+                gi.albedoBuffer = m_gbufferPass->getAlbedoView();
+                gi.depthBuffer = m_gbufferPass->getDepthView();
+                gi.view = m_view;
+                gi.proj = m_proj;
+                gi.cameraPos = m_cameraPos;
+                gi.width = m_width;
+                gi.height = m_height;
+                gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
+                gi.accel = m_rtAccel;
+                m_rtGI->setSampleCount(4);
+                m_rtGI->render(c, gi);
+
+                // Feed GI output to lighting pass via SSGI binding (11)
+                // Note: descriptor update happens before render graph execute
             });
     }
 
@@ -905,11 +438,29 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             [&](VkCommandBuffer c) { m_lightingPass->execute(c, frameIndex); });
     }
 
-    // Time the render graph (CSM+GBuffer+Terrain+Foliage+Decals+SSAO+SSGI+Lighting)
+    // Time the render graph (CSM+GBuffer+SSAO+Lighting)
     if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
         m_passTimingNames[m_passTimingCount] = "RenderGraph";
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampPool, m_passTimingCount * 2);
     }
+    // Pre-bind RT GI output to lighting pass (SSGI binding 11)
+    if (m_useRTGI && m_rtGI && m_lightingPass) {
+        auto giOut = m_rtGI->getOutput();
+        if (giOut.indirectLightView != VK_NULL_HANDLE) {
+            m_lightingPass->setSSGITexture(giOut.indirectLightView, VK_NULL_HANDLE);
+            m_lightingPass->updateDescriptorSets();
+        }
+    }
+
+    // Pre-bind RT shadow mask to lighting pass descriptors (must happen before execute)
+    if (m_useRTShadows && m_rtShadow && m_lightingPass) {
+        auto output = m_rtShadow->getOutput();
+        if (output.shadowMaskView != VK_NULL_HANDLE) {
+            m_lightingPass->setRTShadowMask(output.shadowMaskView, VK_NULL_HANDLE);
+            m_lightingPass->updateDescriptorSets();
+        }
+    }
+
     m_renderGraph.compile();
     m_renderGraph.execute(cmd);
     if (m_gpuTimingEnabled && m_passTimingCount < GPU_TIMER_COUNT) {
@@ -933,37 +484,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     };
 
-    // 4.5. Cloud pass — ray-march volumetric clouds into half-res buffer
-    if (m_cloudPass) {
-        timerBegin("CloudPass");
-        glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
-        m_cloudPass->setEnabled(m_cloudEnabled);
-        m_cloudPass->setCameraData(invViewProj, m_cameraPos);
-        m_cloudPass->setPrevViewProj(m_prevViewProj);
-        m_cloudPass->setFrameIndex(frameIndex);
-        m_cloudPass->setLightningData(m_flashIntensity, m_cameraPos.x, m_cameraPos.z);
-        m_cloudPass->setSunData(-m_lightDirection,
-                                glm::vec3(1.0f, 0.95f, 0.85f),
-                                m_skyIntensity);
-        m_cloudPass->setTime(m_totalTime);
-        m_cloudPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
-
-    // 4.55. Cloud shadow pass — top-down march for ground shadow
-    if (m_cloudShadowPass && m_cloudEnabled) {
-        timerBegin("CloudShadow");
-        m_cloudShadowPass->setSunDirection(-m_lightDirection);
-        m_cloudShadowPass->setCameraPos(m_cameraPos);
-        m_cloudShadowPass->setTime(m_totalTime);
-        m_cloudShadowPass->setCloudParams(
-            m_cloudAltMin, m_cloudAltMax, m_cloudCoverage,
-            m_cloudDensity, 0.15f, m_cloudSpeed);
-        m_cloudShadowPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
-
-    // 4.6. Sky pass — fills sky pixels with Preetham sky + cloud composite
+    // 4.6. Sky pass — fills sky pixels with Preetham sky
     if (m_skyPass && m_skyEnabled) {
         timerBegin("SkyPass");
         glm::mat4 invViewProj = glm::inverse(m_proj * m_view);
@@ -982,144 +503,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_skyPass->execute(cmd, frameIndex);
         timerEnd();
     }
-
-    // 4.65. Rain pass — procedural rain streaks composited into HDR
-    timerBegin("Weather");
-    if (m_rainPass) {
-        m_rainPass->setEnabled(m_rainEnabled);
-        m_rainPass->setIntensity(m_rainIntensity);
-        m_rainPass->setWindX(m_rainWindX);
-        m_rainPass->setTime(m_totalTime);
-        m_rainPass->execute(cmd, frameIndex);
-    }
-
-    // 4.66. Snow pass — procedural snowflakes composited into HDR
-    if (m_snowPass) {
-        m_snowPass->setEnabled(m_snowEnabled);
-        m_snowPass->setIntensity(m_snowIntensity);
-        m_snowPass->setWindX(m_snowWindX);
-        m_snowPass->setTime(m_totalTime);
-        m_snowPass->execute(cmd, frameIndex);
-    }
-
-    // 4.67. Sand pass — ochre streaks for sandstorm
-    if (m_sandPass) {
-        m_sandPass->setEnabled(m_sandEnabled);
-        m_sandPass->setIntensity(m_sandIntensity);
-        m_sandPass->setWindX(m_sandWindX);
-        m_sandPass->setTime(m_totalTime);
-        m_sandPass->execute(cmd, frameIndex);
-    }
-
-    // 4.61. God Rays — radial light shafts from sun position
-    if (m_godRaysPass) {
-        // Project sun direction to screen space
-        glm::vec4 sunClip = m_proj * m_view * glm::vec4(-m_lightDirection * 1000.0f, 1.0f);
-        glm::vec2 sunNDC  = (sunClip.w > 0.001f)
-            ? glm::vec2(sunClip.x / sunClip.w, sunClip.y / sunClip.w)
-            : glm::vec2(0.5f, 0.25f);
-        // NDC [-1,1] → UV [0,1]  (note Vulkan Y-down, sunNDC.y already flipped by proj)
-        glm::vec2 sunUV = glm::vec2(sunNDC.x * 0.5f + 0.5f, sunNDC.y * 0.5f + 0.5f);
-        m_godRaysPass->setSunScreenPos(sunUV);
-        m_godRaysPass->setIntensity(m_godRaysIntensity);
-        m_godRaysPass->setTime(m_totalTime);
-        // Only render when sun is above horizon (dot(sun, up) > 0)
-        bool sunVisible = -m_lightDirection.y > 0.05f;
-        m_godRaysPass->setEnabled(m_godRaysEnabled && sunVisible);
-        m_godRaysPass->execute(cmd, frameIndex);
-    }
-    timerEnd();  // Weather (Rain+Snow+Sand+GodRays)
-
-    // 4.62. Aurora — dancing ribbons in sky
-    if (m_auroraPass) {
-        timerBegin("Aurora");
-        m_auroraPass->setEnabled(m_auroraEnabled);
-        m_auroraPass->setIntensity(m_auroraIntensity);
-        m_auroraPass->setHue(m_auroraHue);
-        m_auroraPass->setTime(m_totalTime);
-        m_auroraPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
-
-    // 4.63. Rainbow — prismatic arc when raining with sun visible
-    if (m_rainbowPass) {
-        timerBegin("Rainbow");
-        float rainbowIntensity = (m_rainEnabled && m_rainIntensity > 0.2f)
-            ? m_rainIntensity * 0.8f : 0.0f;
-        // Compute antisolar point: reflect sun through screen center
-        glm::vec4 sunClip = m_proj * m_view * glm::vec4(-m_lightDirection * 1000.0f, 1.0f);
-        glm::vec2 sunNDC  = (sunClip.w > 0.001f)
-            ? glm::vec2(sunClip.x / sunClip.w, sunClip.y / sunClip.w)
-            : glm::vec2(0.0f, -0.5f);
-        glm::vec2 sunUV       = glm::vec2(sunNDC.x * 0.5f + 0.5f, sunNDC.y * 0.5f + 0.5f);
-        glm::vec2 antiSolarUV = glm::vec2(1.0f) - sunUV;
-        m_rainbowPass->setAntiSolarPos(antiSolarUV);
-        m_rainbowPass->setIntensity(rainbowIntensity);
-        m_rainbowPass->setEnabled(m_rainbowEnabled && rainbowIntensity > 0.001f);
-        m_rainbowPass->execute(cmd, frameIndex);
-        timerEnd();
-    }
-
-    // 4.625. FFT ocean simulation — compute-only, produces displacement + normal textures
-    timerBegin("Water");
-    if (m_waveMode == 1 && m_fftOceanSim && m_waterEnabled) {
-        // Sync FFT params to sim
-        m_fftOceanSim->setPatchSize(m_fftPatchSize);
-        m_fftOceanSim->setChoppiness(m_fftChoppiness);
-        m_fftOceanSim->setNormalStrength(m_fftNormalStrength);
-        m_fftOceanSim->simulate(cmd, m_totalTime, m_deltaTime);
-        // Wire FFT textures into WaterPass bindings 9+10
-        if (m_waterPass) m_waterPass->setWaveSim(m_fftOceanSim.get());
-    } else if (m_waveMode == 0 && m_waterPass) {
-        // Clear FFT binding so WaterPass uses Gerstner pipeline
-        m_waterPass->setWaveSim(nullptr);
-    }
-
-    // 4.63. Ripple simulation — GPU wave equation, output feeds WaterPass normals
-    if (m_ripplePass && m_waterRipplesEnabled && m_waterEnabled) {
-        m_ripplePass->setEnabled(m_waterRipplesEnabled);
-        m_ripplePass->setTerrainSize(m_waterSize);
-        m_ripplePass->setDeltaTime(m_deltaTime);
-        m_ripplePass->execute(cmd, frameIndex);
-        // Feed ripple map to water pass
-        if (m_waterPass) {
-            m_waterPass->setRippleMap(m_ripplePass->getRippleMapView());
-        }
-    }
-
-    // 4.64. Water pass — Gerstner wave forward render, semi-transparent, depth-tested
-    if (m_waterPass) {
-        glm::mat4 viewProj    = m_proj * m_view;
-        glm::mat4 invViewProj = glm::inverse(viewProj);
-        m_waterPass->setEnabled(m_waterEnabled);
-        m_waterPass->setWaterLevel(m_waterLevel);
-        m_waterPass->setWaterSize(m_waterSize);
-        m_waterPass->setFoamIntensity(m_waterFoamIntensity);
-        m_waterPass->setWaveAmplitude(m_waterWaveAmplitude);
-        m_waterPass->setTime(m_totalTime);
-        m_waterPass->setMatrices(viewProj, invViewProj, m_cameraPos);
-        m_waterPass->setWaterSSSStrength(m_waterSSSStrength);
-        // Feed HDR scene color + SSR into water for refraction + reflections
-        if (m_postProcessing) m_waterPass->setSSROutput(m_postProcessing->getSSROutput());
-        // Scene color (HDR lighting output before water) for refraction
-        if (m_lightingPass) m_waterPass->setSceneColor(m_lightingPass->getOutputView());
-        // Sun direction from weather/sky system
-        m_waterPass->setSunDirection(-m_lightDirection, m_skyIntensity > 0 ? m_skyIntensity : 8.0f);
-        m_waterPass->execute(cmd, frameIndex);
-    }
-
-    // 4.65. Underwater pass — chromatic aberration + depth fog when camera submerged
-    if (m_underwaterPass && m_underwaterEnabled && m_waterEnabled) {
-        float waterDepth = m_waterLevel - m_cameraPos.y;  // positive when underwater
-        m_underwaterPass->setEnabled(waterDepth > 0.0f);
-        m_underwaterPass->setWaterDepth(glm::max(waterDepth, 0.0f));
-        m_underwaterPass->setTime(m_totalTime);
-        m_underwaterPass->setFogColor(m_underwaterFogColor);
-        m_underwaterPass->setFogDensity(m_underwaterFogDensity);
-        m_underwaterPass->setChromStrength(m_underwaterChromStrength);
-        m_underwaterPass->execute(cmd, frameIndex);
-    }
-    timerEnd();  // Water (FFT+Ripple+Water+Underwater)
 
     // 4.7. Particle system (forward pass over HDR, before post-processing)
     timerBegin("Particles");
@@ -1169,10 +552,9 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
     timerEnd();  // Particles
 
-    // 5. Post-processing (SSR, volumetric, bloom, motion blur, TAA, DoF, heat haze, tonemapping)
+    // 5. Post-processing (bloom, TAA, SSAO, tonemapping)
     timerBegin("PostProcessing");
     if (m_postProcessing && m_lightingPass) {
-        m_postProcessing->setColorBuffer(m_lightingPass->getOutputView());
         m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(),
                                                m_lightingPass->getOutputImage());
         m_postProcessing->setDeltaTime(m_deltaTime);
@@ -1217,63 +599,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
-    if (m_cloudPass) {
-        m_cloudPass->onResize(width, height);
-        if (m_gbufferPass) {
-            m_cloudPass->setDepthBuffer(m_gbufferPass->getDepthView());
-        }
-    }
-    if (m_rainPass) {
-        m_rainPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_rainPass->setHDROutput(m_lightingPass->getOutputView(),
-                                     m_lightingPass->getOutputImage());
-        }
-    }
-    if (m_snowPass) {
-        m_snowPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_snowPass->setHDROutput(m_lightingPass->getOutputView(),
-                                     m_lightingPass->getOutputImage());
-        }
-    }
-    if (m_sandPass) {
-        m_sandPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_sandPass->setHDROutput(m_lightingPass->getOutputView(),
-                                     m_lightingPass->getOutputImage());
-        }
-    }
-    if (m_godRaysPass) {
-        m_godRaysPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_godRaysPass->setHDROutput(m_lightingPass->getOutputView(),
-                                        m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_godRaysPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-    }
-    if (m_auroraPass) {
-        m_auroraPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_auroraPass->setHDROutput(m_lightingPass->getOutputView(),
-                                       m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_auroraPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-    }
-    if (m_rainbowPass) {
-        m_rainbowPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_rainbowPass->setHDROutput(m_lightingPass->getOutputView(),
-                                        m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_rainbowPass->setDepthView(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-    }
     if (m_skyPass) {
         m_skyPass->onResize(width, height);
         // Reconnect to reallocated lighting output image/view
@@ -1284,64 +609,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         if (m_gbufferPass) {
             m_skyPass->setDepthBuffer(m_gbufferPass->getDepthView());
         }
-        if (m_cloudPass) {
-            m_skyPass->setCloudBuffer(m_cloudPass->getOutputView());
-        }
-    }
-    if (m_waterPass) {
-        m_waterPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_waterPass->setHDROutput(m_lightingPass->getOutputView(),
-                                      m_lightingPass->getOutputImage());
-        }
-        if (m_gbufferPass) {
-            m_waterPass->setDepthBuffer(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
-        }
-    }
-    if (m_causticsPass) {
-        m_causticsPass->onResize(width, height);
-        if (m_gbufferPass) {
-            m_causticsPass->setGBufferImages(
-                m_gbufferPass->getDepthView(),
-                m_gbufferPass->getAlbedoImage(),
-                m_gbufferPass->getAlbedoView());
-        }
-    }
-    if (m_underwaterPass) {
-        m_underwaterPass->onResize(width, height);
-        if (m_lightingPass) {
-            m_underwaterPass->setHDRTarget(m_lightingPass->getOutputView(),
-                                           m_lightingPass->getOutputImage(),
-                                           m_lightingPass->getOutputView());
-        }
-    }
-    if (m_terrainPass && m_gbufferPass) {
-        m_terrainPass->onResize(width, height);
-        m_terrainPass->setGBufferAttachments(
-            m_gbufferPass->getPositionView(),
-            m_gbufferPass->getNormalView(),
-            m_gbufferPass->getAlbedoView(),
-            m_gbufferPass->getVelocityView(),
-            m_gbufferPass->getDepthView(),
-            m_gbufferPass->getPositionFormat(),
-            m_gbufferPass->getDepthFormat());
-    }
-    if (m_foliagePass && m_gbufferPass) {
-        m_foliagePass->onResize(width, height);
-        m_foliagePass->setGBufferAttachments(
-            m_gbufferPass->getPositionView(),
-            m_gbufferPass->getNormalView(),
-            m_gbufferPass->getAlbedoView(),
-            m_gbufferPass->getVelocityView(),
-            m_gbufferPass->getDepthView(),
-            m_gbufferPass->getPositionFormat(),
-            m_gbufferPass->getDepthFormat());
-    }
-    if (m_decalPass && m_gbufferPass) {
-        m_decalPass->onResize(width, height);
-        m_decalPass->setGBufferAlbedo(m_gbufferPass->getAlbedoView(),
-                                      m_gbufferPass->getAlbedoFormat());
-        m_decalPass->setDepthBuffer(m_gbufferPass->getDepthView(), VK_NULL_HANDLE);
     }
 
     // Recreate particle framebuffer (it references lighting output which was resized)
@@ -1361,8 +628,6 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
         m_postProcessing->setDepthBuffer(m_gbufferPass->getDepthView());
         m_postProcessing->setNormalBuffer(m_gbufferPass->getNormalView());
         m_postProcessing->setVelocityBuffer(m_gbufferPass->getVelocityView());
-        m_postProcessing->setAlbedoBuffer(m_gbufferPass->getAlbedoView());
-        m_postProcessing->setPositionBuffer(m_gbufferPass->getPositionView());
     }
 
     // Re-import all textures with new dimensions (passes reallocated their images on resize)
@@ -1421,10 +686,6 @@ void DeferredRenderer::setIBLTextures(VkImageView irradiance, VkImageView prefil
                                        VkImageView brdfLUT, VkSampler iblSampler) {
     if (m_lightingPass) {
         m_lightingPass->setIBLTextures(irradiance, prefiltered, brdfLUT, iblSampler);
-    }
-    // Forward prefiltered env cube + BRDF LUT to water pass for IBL reflections.
-    if (m_waterPass) {
-        m_waterPass->setIBL(prefiltered, brdfLUT, iblSampler);
     }
 }
 
@@ -1492,53 +753,6 @@ void DeferredRenderer::setSkyIntensity(float i) {
 
 void DeferredRenderer::setSkyGroundColor(const glm::vec3& c) {
     m_skyGroundColor = c;
-}
-
-// Cloud API
-void DeferredRenderer::setCloudEnabled(bool e) {
-    m_cloudEnabled = e;
-    if (m_cloudPass) m_cloudPass->setEnabled(e);
-}
-
-void DeferredRenderer::setCloudCoverage(float v) {
-    m_cloudCoverage = v;
-    if (m_cloudPass) m_cloudPass->setCoverage(v);
-}
-
-void DeferredRenderer::setCloudDensity(float v) {
-    m_cloudDensity = v;
-    if (m_cloudPass) m_cloudPass->setDensity(v);
-}
-
-void DeferredRenderer::setCloudAltMin(float v) {
-    m_cloudAltMin = v;
-    if (m_cloudPass) m_cloudPass->setAltMin(v);
-}
-
-void DeferredRenderer::setCloudAltMax(float v) {
-    m_cloudAltMax = v;
-    if (m_cloudPass) m_cloudPass->setAltMax(v);
-}
-
-void DeferredRenderer::setCloudSpeed(float v) {
-    m_cloudSpeed = v;
-    if (m_cloudPass) m_cloudPass->setSpeed(v);
-}
-
-// Rain API
-void DeferredRenderer::setRainEnabled(bool e) {
-    m_rainEnabled = e;
-    if (m_rainPass) m_rainPass->setEnabled(e);
-}
-
-void DeferredRenderer::setRainIntensity(float v) {
-    m_rainIntensity = glm::clamp(v, 0.0f, 1.0f);
-    if (m_rainPass) m_rainPass->setIntensity(m_rainIntensity);
-}
-
-void DeferredRenderer::setRainWindX(float v) {
-    m_rainWindX = glm::clamp(v, -1.0f, 1.0f);
-    if (m_rainPass) m_rainPass->setWindX(m_rainWindX);
 }
 
 void DeferredRenderer::setWireframeEnabled(bool enabled) {
@@ -1613,7 +827,6 @@ void DeferredRenderer::importGraphTextures() {
     m_graphAlbedoHandle  = TextureHandle::invalid();
     m_graphShadowHandle  = TextureHandle::invalid();
     m_graphSSAOHandle    = TextureHandle::invalid();
-    m_graphSSGIHandle    = TextureHandle::invalid();
     m_graphLightingHandle = TextureHandle::invalid();
 
     uint32_t w = m_width  > 0 ? m_width  : 1920u;
@@ -1660,13 +873,6 @@ void DeferredRenderer::importGraphTextures() {
             m_graphSSAOHandle = m_renderGraph.importTexture(
                 "ssao_output", ssaoImg, m_postProcessing->getSSAOOutput(),
                 VK_FORMAT_R8_UNORM, w, h, VK_IMAGE_LAYOUT_UNDEFINED);
-        }
-        VkImage ssgiImg = m_postProcessing->getSSGIImage();
-        if (ssgiImg != VK_NULL_HANDLE) {
-            m_graphSSGIHandle = m_renderGraph.importTexture(
-                "ssgi_output", ssgiImg, m_postProcessing->getSSGIOutput(),
-                VK_FORMAT_R16G16B16A16_SFLOAT, w / 2, h / 2,
-                VK_IMAGE_LAYOUT_UNDEFINED);
         }
     }
 
@@ -1772,405 +978,6 @@ bool DeferredRenderer::createParticleFramebuffer() {
 }
 
 // ---------------------------------------------------------------------------
-// Water normal map loading — load via BindlessTextureManager + wire to WaterPass.
-// ---------------------------------------------------------------------------
-
-// Helper: load a texture and return its VkImageView (or VK_NULL_HANDLE on failure).
-static VkImageView loadTextureView(ohao::BindlessTextureManager* mgr,
-                                    const std::string& path,
-                                    ohao::BindlessTextureType type) {
-    if (!mgr || path.empty()) return VK_NULL_HANDLE;
-    auto handle = mgr->loadTexture(path, type);
-    if (!handle.valid()) return VK_NULL_HANDLE;
-    const auto* info = mgr->getTextureInfo(handle);
-    return info ? info->view : VK_NULL_HANDLE;
-}
-
-void DeferredRenderer::setWaterNormalMap1(const std::string& path) {
-    m_waterNormalMap1Path = path;
-    if (!m_waterPass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Normal);
-    if (v != VK_NULL_HANDLE) {
-        // If nm2 already set, keep it; otherwise re-use this map for both slots
-        VkImageView nm2 = loadTextureView(m_textureManager, m_waterNormalMap2Path,
-                                           BindlessTextureType::Normal);
-        m_waterPass->setNormalMaps(v, nm2 != VK_NULL_HANDLE ? nm2 : v, VK_NULL_HANDLE);
-    }
-}
-
-void DeferredRenderer::setWaterNormalMap2(const std::string& path) {
-    m_waterNormalMap2Path = path;
-    if (!m_waterPass || !m_textureManager) return;
-    VkImageView nm1 = loadTextureView(m_textureManager, m_waterNormalMap1Path,
-                                       BindlessTextureType::Normal);
-    VkImageView nm2 = loadTextureView(m_textureManager, path, BindlessTextureType::Normal);
-    if (nm1 != VK_NULL_HANDLE || nm2 != VK_NULL_HANDLE) {
-        m_waterPass->setNormalMaps(
-            nm1 != VK_NULL_HANDLE ? nm1 : nm2,
-            nm2 != VK_NULL_HANDLE ? nm2 : nm1,
-            VK_NULL_HANDLE);
-    }
-}
-
-void DeferredRenderer::setWaterSceneColor(VkImageView view) {
-    if (m_waterPass) m_waterPass->setSceneColor(view);
-}
-void DeferredRenderer::setWaterSSROutput(VkImageView view) {
-    if (m_waterPass) m_waterPass->setSSROutput(view);
-}
-void DeferredRenderer::setWaterSunDirection(const glm::vec3& dir, float intensity) {
-    if (m_waterPass) m_waterPass->setSunDirection(dir, intensity);
-}
-void DeferredRenderer::setWaterColors(const glm::vec3& shallow, const glm::vec3& deep) {
-    if (m_waterPass) m_waterPass->setWaterColors(shallow, deep);
-}
-
-// ---------------------------------------------------------------------------
-// Wave mode / FFT ocean API
-// ---------------------------------------------------------------------------
-
-void DeferredRenderer::setWaveMode(int mode) {
-    m_waveMode = glm::clamp(mode, 0, 1);
-    if (m_waveMode == 0 && m_waterPass) {
-        // Immediately switch WaterPass back to Gerstner so descriptors update.
-        m_waterPass->setWaveSim(nullptr);
-    }
-}
-
-void DeferredRenderer::setFFTWindSpeed(float s) {
-    m_fftWindSpeed = glm::max(s, 0.1f);
-    if (m_fftOceanSim) m_fftOceanSim->setWindSpeed(m_fftWindSpeed);
-}
-
-void DeferredRenderer::setFFTWindDirection(float x, float z) {
-    m_fftWindDirX = x; m_fftWindDirZ = z;
-    if (m_fftOceanSim) m_fftOceanSim->setWindDirection(x, z);
-}
-
-void DeferredRenderer::setFFTPatchSize(float s) {
-    m_fftPatchSize = glm::max(s, 10.0f);
-    if (m_fftOceanSim) m_fftOceanSim->setPatchSize(s);
-}
-
-void DeferredRenderer::setFFTChoppiness(float c) {
-    m_fftChoppiness = glm::clamp(c, 0.0f, 4.0f);
-    if (m_fftOceanSim) m_fftOceanSim->setChoppiness(c);
-}
-
-void DeferredRenderer::setFFTNormalStrength(float v) {
-    m_fftNormalStrength = glm::max(v, 0.1f);
-    if (m_fftOceanSim) m_fftOceanSim->setNormalStrength(v);
-}
-
-// ---------------------------------------------------------------------------
-// Caustics / Ripple / Underwater / Enhanced Water API
-// ---------------------------------------------------------------------------
-
-void DeferredRenderer::setCausticsIntensity(float v) {
-    m_causticsIntensity = glm::clamp(v, 0.0f, 2.0f);
-    if (m_causticsPass) m_causticsPass->setCausticsIntensity(m_causticsIntensity);
-}
-
-void DeferredRenderer::setCausticsTexturePath(const std::string& path) {
-    m_causticsTexturePath = path;
-    if (!m_textureManager || path.empty()) return;
-    // Load texture via bindless manager, then forward view+sampler to caustics pass
-    if (m_causticsPass) {
-        auto texIdx = m_textureManager->loadTexture(path);
-        VkImageView view     = m_textureManager->getImageView(texIdx);
-        VkSampler   sampler  = m_textureManager->getSampler(texIdx);
-        if (view != VK_NULL_HANDLE) {
-            m_causticsPass->setCausticsTexture(view, sampler);
-        }
-    }
-}
-
-void DeferredRenderer::addWaterRipple(float worldX, float worldZ, float strength) {
-    if (m_ripplePass) {
-        m_ripplePass->addRipple(glm::vec2(worldX, worldZ), strength, 4.0f);
-    }
-}
-
-void DeferredRenderer::clearWaterRipples() {
-    if (m_ripplePass) m_ripplePass->clearRipples();
-}
-
-void DeferredRenderer::setWaterSSSStrength(float v) {
-    m_waterSSSStrength = glm::clamp(v, 0.0f, 1.0f);
-    if (m_waterPass) m_waterPass->setWaterSSSStrength(m_waterSSSStrength);
-}
-
-void DeferredRenderer::setWaterFoamTexturePath(const std::string& path) {
-    m_waterFoamTexturePath = path;
-    if (!m_textureManager || path.empty()) return;
-    if (m_waterPass) {
-        auto texIdx = m_textureManager->loadTexture(path);
-        VkImageView view    = m_textureManager->getImageView(texIdx);
-        VkSampler   sampler = m_textureManager->getSampler(texIdx);
-        if (view != VK_NULL_HANDLE) {
-            m_waterPass->setFoamTexture(view, sampler);
-        }
-    }
-}
-
-void DeferredRenderer::setUnderwaterFogColor(const glm::vec3& c) {
-    m_underwaterFogColor = c;
-    if (m_underwaterPass) m_underwaterPass->setFogColor(c);
-}
-
-void DeferredRenderer::setUnderwaterFogDensity(float v) {
-    m_underwaterFogDensity = glm::clamp(v, 0.0f, 1.0f);
-    if (m_underwaterPass) m_underwaterPass->setFogDensity(m_underwaterFogDensity);
-}
-
-void DeferredRenderer::setUnderwaterChromStrength(float v) {
-    m_underwaterChromStrength = glm::clamp(v, 0.0f, 0.05f);
-    if (m_underwaterPass) m_underwaterPass->setChromStrength(m_underwaterChromStrength);
-}
-
-void DeferredRenderer::setWaterRippleDamping(float v) {
-    m_waterRippleDamping = glm::clamp(v, 0.0f, 0.1f);
-    if (m_ripplePass) m_ripplePass->setDamping(m_waterRippleDamping);
-}
-
-void DeferredRenderer::setWaterRippleSpeed(float v) {
-    m_waterRippleSpeed = glm::clamp(v, 0.5f, 20.0f);
-    if (m_ripplePass) m_ripplePass->setWaveSpeed(m_waterRippleSpeed);
-}
-
-void DeferredRenderer::setCausticsScale(float v) {
-    m_causticsScale = glm::clamp(v, 0.01f, 0.5f);
-    if (m_causticsPass) m_causticsPass->setCausticsScale(m_causticsScale);
-}
-
-void DeferredRenderer::setUnderwaterDistortFrequency(float v) {
-    m_underwaterDistortFreq = glm::clamp(v, 1.0f, 40.0f);
-    if (m_underwaterPass) m_underwaterPass->setDistortFrequency(m_underwaterDistortFreq);
-}
-
-void DeferredRenderer::setUnderwaterDistortSpeed(float v) {
-    m_underwaterDistortSpeed = glm::clamp(v, 0.1f, 10.0f);
-    if (m_underwaterPass) m_underwaterPass->setDistortSpeed(m_underwaterDistortSpeed);
-}
-
-void DeferredRenderer::setWaterGridResolution(int n) {
-    m_waterGridN = glm::clamp(n, 32, 256);
-    if (m_waterPass) m_waterPass->setGridResolution(m_waterGridN);
-}
-
-// ---------------------------------------------------------------------------
-// Terrain texture loading.
-// ---------------------------------------------------------------------------
-
-// Helper: get-or-create the shared linear-repeat sampler for terrain layers.
-static VkSampler getOrCreateLinearSampler(VkDevice device, VkSampler& cache) {
-    if (cache != VK_NULL_HANDLE) return cache;
-    VkSamplerCreateInfo info{};
-    info.sType            = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter        = VK_FILTER_LINEAR;
-    info.minFilter        = VK_FILTER_LINEAR;
-    info.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    info.addressModeU     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    info.addressModeV     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    info.addressModeW     = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    info.maxLod           = VK_LOD_CLAMP_NONE;
-    info.anisotropyEnable = VK_FALSE;
-    vkCreateSampler(device, &info, nullptr, &cache);
-    return cache;
-}
-
-void DeferredRenderer::setTerrainHeightmapPath(const std::string& path) {
-    m_terrainHeightmapPath = path;
-    if (!m_terrainPass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Height);
-    if (v != VK_NULL_HANDLE) {
-        m_terrainPass->setHeightmap(v, VK_NULL_HANDLE);
-        m_terrainPass->setEnabled(m_terrainEnabled);
-    }
-}
-
-void DeferredRenderer::setTerrainSplatMapPath(const std::string& path) {
-    m_terrainSplatMapPath = path;
-    if (!m_terrainPass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Custom);
-    if (v != VK_NULL_HANDLE) m_terrainPass->setSplatMap(v, VK_NULL_HANDLE);
-}
-
-void DeferredRenderer::setTerrainLayerAlbedo(uint32_t layer, const std::string& path) {
-    if (layer >= 4) return;
-    m_terrainLayerAlbedoPaths[layer] = path;
-    if (!m_terrainPass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Albedo);
-    if (v != VK_NULL_HANDLE) {
-        m_terrainPass->setLayerAlbedo(layer, v);
-        VkSampler s = getOrCreateLinearSampler(m_device, m_terrainLayerSampler);
-        if (s != VK_NULL_HANDLE) m_terrainPass->setLayerSampler(s);
-    }
-}
-
-void DeferredRenderer::setTerrainLayerNormal(uint32_t layer, const std::string& path) {
-    if (layer >= 4) return;
-    m_terrainLayerNormalPaths[layer] = path;
-    if (!m_terrainPass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Normal);
-    if (v != VK_NULL_HANDLE) m_terrainPass->setLayerNormal(layer, v);
-}
-
-void DeferredRenderer::setTerrainType(int type) {
-    if (!m_terrainPass) return;
-    m_terrainPass->setTerrainType(type);
-}
-
-void DeferredRenderer::setTerrainGenFrequency(float f) {
-    if (!m_terrainPass) return;
-    m_terrainPass->setGenFrequency(f);
-}
-
-void DeferredRenderer::setTerrainGenOctaves(int n) {
-    if (!m_terrainPass) return;
-    m_terrainPass->setGenOctaves(n);
-}
-
-void DeferredRenderer::setTerrainGenOffset(glm::vec2 off) {
-    if (!m_terrainPass) return;
-    m_terrainPass->setGenOffset(off);
-}
-
-void DeferredRenderer::setTerrainGenResolution(uint32_t r) {
-    if (!m_terrainPass) return;
-    m_terrainPass->setGenResolution(r);
-    m_terrainPass->setHeightmapResolution(r);
-}
-
-void DeferredRenderer::setTerrainMacroVariationPath(const std::string& path) {
-    if (!m_terrainPass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Custom);
-    if (v != VK_NULL_HANDLE) m_terrainPass->setMacroVariation(v);
-}
-
-void DeferredRenderer::generateTerrain() {
-    if (!m_terrainPass) return;
-    // ensureGenHeightmap allocates the storage image if needed; the actual
-    // dispatch happens inside TerrainPass::execute() on the next frame.
-    m_terrainPass->ensureGenHeightmap();
-}
-
-// ---------------------------------------------------------------------------
-// Decal management — delegates to DecalPass.
-// ---------------------------------------------------------------------------
-
-uint32_t DeferredRenderer::addDecal(const glm::vec3& pos, const glm::vec3& normal,
-                                     const glm::vec3& size, const std::string& albedoPath,
-                                     float opacity, const glm::vec4& tint) {
-    if (!m_decalPass) return 0;
-
-    // Build OBB matrices from pos + normal + size
-    // normal defines the Z-axis of the OBB; construct orthonormal frame
-    glm::vec3 n = glm::normalize(normal);
-    glm::vec3 tangent = glm::abs(n.y) < 0.9f ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
-    glm::vec3 t = glm::normalize(glm::cross(tangent, n));
-    glm::vec3 b = glm::cross(n, t);
-
-    // worldMatrix transforms [-1,1]³ unit cube to world space
-    glm::mat4 world(1.0f);
-    world[0] = glm::vec4(t * size.x * 0.5f, 0.0f);
-    world[1] = glm::vec4(b * size.y * 0.5f, 0.0f);
-    world[2] = glm::vec4(n * size.z * 0.5f, 0.0f);
-    world[3] = glm::vec4(pos, 1.0f);
-    glm::mat4 decalMat = glm::inverse(world);
-
-    // Resolve albedo to bindless index
-    uint32_t albedoIdx = 0xFFFFFFFFu;
-    if (m_textureManager && !albedoPath.empty()) {
-        auto handle = m_textureManager->loadTexture(albedoPath, BindlessTextureType::Albedo);
-        if (handle.valid()) albedoIdx = handle.index;
-    }
-
-    DecalPass::DecalDesc desc{};
-    desc.decalMatrix    = decalMat;
-    desc.worldMatrix    = world;
-    desc.colorTint      = tint;
-    desc.albedoIdx      = albedoIdx;
-    desc.normalIdx      = 0xFFFFFFFFu;
-    desc.opacity        = opacity;
-    desc.roughnessScale = 1.0f;
-
-    return m_decalPass->addDecal(desc);
-}
-
-void DeferredRenderer::removeDecal(uint32_t handle) {
-    if (m_decalPass) m_decalPass->removeDecal(handle);
-}
-
-void DeferredRenderer::clearDecals() {
-    if (m_decalPass) m_decalPass->clearDecals();
-}
-
-// ---------------------------------------------------------------------------
-// Foliage management — delegates to FoliagePass.
-// ---------------------------------------------------------------------------
-
-void DeferredRenderer::setGrassTexturePath(const std::string& path) {
-    m_grassTexturePath = path;
-    if (!m_foliagePass || !m_textureManager) return;
-    VkImageView v = loadTextureView(m_textureManager, path, BindlessTextureType::Albedo);
-    if (v != VK_NULL_HANDLE) {
-        m_foliagePass->setGrassTexture(v, VK_NULL_HANDLE);
-    }
-}
-
-void DeferredRenderer::addFoliageCluster(const glm::vec3& center, float radius, float density) {
-    if (!m_foliagePass) return;
-
-    // Generate a random scatter of instances within the cluster radius
-    std::vector<FoliagePass::FoliageInstance> instances;
-    int count = static_cast<int>(density * (radius * radius) / 10000.0f * radius);
-    count = std::max(1, std::min(count, 2048));  // clamp per-cluster
-
-    // Simple deterministic scatter using center as seed
-    float seed = center.x * 31.7f + center.z * 17.3f;
-    for (int i = 0; i < count; i++) {
-        seed = std::fmod(seed * 127.3f + 13.7f, 1000.0f);
-        float angle = seed / 1000.0f * 6.28318f;
-        seed = std::fmod(seed * 127.3f + 13.7f, 1000.0f);
-        float r = std::sqrt(seed / 1000.0f) * radius;
-        seed = std::fmod(seed * 127.3f + 13.7f, 1000.0f);
-
-        FoliagePass::FoliageInstance inst{};
-        inst.position = glm::vec3(center.x + std::cos(angle) * r,
-                                  center.y,
-                                  center.z + std::sin(angle) * r);
-        inst.scale    = 0.4f + (seed / 1000.0f) * 0.4f;
-        inst.color    = glm::vec4(0.3f + seed/3000.0f, 0.5f + seed/2000.0f, 0.1f, 1.0f);
-        instances.push_back(inst);
-    }
-
-    m_foliagePass->uploadInstances(instances);
-}
-
-void DeferredRenderer::clearFoliage() {
-    if (m_foliagePass) m_foliagePass->clearInstances();
-}
-
-// ---------------------------------------------------------------------------
-// Multi-tile terrain streaming
-// ---------------------------------------------------------------------------
-
-int DeferredRenderer::addTerrainTile(float offsetX, float offsetZ) {
-    if (static_cast<int>(m_terrainTiles.size()) >= MAX_TERRAIN_TILES) return -1;
-    TerrainTile t;
-    t.offsetX = offsetX;
-    t.offsetZ = offsetZ;
-    t.active  = true;
-    m_terrainTiles.push_back(t);
-    return static_cast<int>(m_terrainTiles.size() - 1);
-}
-
-void DeferredRenderer::clearTerrainTiles() {
-    m_terrainTiles.clear();
-}
-
-// ---------------------------------------------------------------------------
 // Introspection — pipeline info for MCP AI agents
 // ---------------------------------------------------------------------------
 
@@ -2189,31 +996,12 @@ nlohmann::json DeferredRenderer::getPipelineInfo() const {
     // Render graph passes
     passes.push_back(passEntry("CSM",              "graphics", 1,  m_csmPass != nullptr,        true));
     passes.push_back(passEntry("GBuffer",           "graphics", 2,  m_gbufferPass != nullptr,    true));
-    passes.push_back(passEntry("Terrain",           "graphics", 3,  m_terrainPass != nullptr,    m_terrainPass != nullptr));
-    passes.push_back(passEntry("Foliage",           "graphics", 4,  m_foliagePass != nullptr,    m_foliagePass != nullptr));
-    passes.push_back(passEntry("Decals",            "graphics", 5,  m_decalPass != nullptr,      m_decalPass != nullptr));
-    passes.push_back(passEntry("SSAO",              "compute",  6,  true,                        m_postProcessing && m_postProcessing->getSSAOEnabled()));
-    passes.push_back(passEntry("SSGI",              "compute",  7,  true,                        m_postProcessing && m_postProcessing->getSSGIEnabled()));
-    passes.push_back(passEntry("DeferredLighting",  "graphics", 8,  m_lightingPass != nullptr,   true));
-
-    // Direct passes
-    passes.push_back(passEntry("CloudPass",         "compute",  9,  m_cloudPass != nullptr,          m_cloudEnabled));
-    passes.push_back(passEntry("CloudShadowPass",   "compute",  10, m_cloudShadowPass != nullptr,    m_cloudEnabled));
-    passes.push_back(passEntry("SkyPass",           "graphics", 11, m_skyPass != nullptr,            m_skyEnabled));
-    passes.push_back(passEntry("RainPass",          "graphics", 12, m_rainPass != nullptr,           m_rainEnabled));
-    passes.push_back(passEntry("SnowPass",          "graphics", 13, m_snowPass != nullptr,           m_snowEnabled));
-    passes.push_back(passEntry("SandPass",          "graphics", 14, m_sandPass != nullptr,           m_sandEnabled));
-    passes.push_back(passEntry("GodRaysPass",       "compute",  15, m_godRaysPass != nullptr,        m_godRaysEnabled));
-    passes.push_back(passEntry("AuroraPass",        "graphics", 16, m_auroraPass != nullptr,         m_auroraEnabled));
-    passes.push_back(passEntry("RainbowPass",       "graphics", 17, m_rainbowPass != nullptr,        m_rainbowEnabled));
-    passes.push_back(passEntry("FFTOceanSim",       "compute",  18, m_fftOceanSim != nullptr,        m_fftOceanSim != nullptr));
-    passes.push_back(passEntry("CausticsPass",      "compute",  19, m_causticsPass != nullptr,       m_causticsPass != nullptr));
-    passes.push_back(passEntry("RipplePass",        "compute",  20, m_ripplePass != nullptr,         m_ripplePass != nullptr));
-    passes.push_back(passEntry("WaterPass",         "graphics", 21, m_waterPass != nullptr,          m_waterPass != nullptr));
-    passes.push_back(passEntry("UnderwaterPass",    "graphics", 22, m_underwaterPass != nullptr,     m_underwaterPass != nullptr));
-    passes.push_back(passEntry("ParticleSystem",    "graphics", 23, m_particleSystem != nullptr,     m_particleSystem != nullptr));
-    passes.push_back(passEntry("PostProcessing",    "graphics", 24, m_postProcessing != nullptr,     true));
-    passes.push_back(passEntry("GizmoPass",         "graphics", 25, m_gizmoPass != nullptr,          m_gizmoEnabled));
+    passes.push_back(passEntry("SSAO",              "compute",  3,  true,                        m_postProcessing && m_postProcessing->getSSAOEnabled()));
+    passes.push_back(passEntry("DeferredLighting",  "graphics", 4,  m_lightingPass != nullptr,   true));
+    passes.push_back(passEntry("SkyPass",           "graphics", 5,  m_skyPass != nullptr,        m_skyEnabled));
+    passes.push_back(passEntry("ParticleSystem",    "graphics", 6,  m_particleSystem != nullptr, m_particleSystem != nullptr));
+    passes.push_back(passEntry("PostProcessing",    "graphics", 7,  m_postProcessing != nullptr, true));
+    passes.push_back(passEntry("GizmoPass",         "graphics", 8,  m_gizmoPass != nullptr,      m_gizmoEnabled));
 
     return {
         {"pass_count",  passes.size()},
@@ -2237,17 +1025,6 @@ nlohmann::json DeferredRenderer::getPerfStats() const {
     check(m_lightingPass != nullptr,   true);
     check(m_postProcessing != nullptr, true);
     check(m_skyPass != nullptr,        m_skyEnabled);
-    check(m_cloudPass != nullptr,      m_cloudEnabled);
-    check(m_rainPass != nullptr,       m_rainEnabled);
-    check(m_snowPass != nullptr,       m_snowEnabled);
-    check(m_sandPass != nullptr,       m_sandEnabled);
-    check(m_godRaysPass != nullptr,    m_godRaysEnabled);
-    check(m_auroraPass != nullptr,     m_auroraEnabled);
-    check(m_rainbowPass != nullptr,    m_rainbowEnabled);
-    check(m_terrainPass != nullptr,    m_terrainPass != nullptr);
-    check(m_waterPass != nullptr,      m_waterPass != nullptr);
-    check(m_foliagePass != nullptr,    m_foliagePass != nullptr);
-    check(m_decalPass != nullptr,      m_decalPass != nullptr);
 
     return {
         {"resolution",    {m_width, m_height}},
@@ -2256,16 +1033,8 @@ nlohmann::json DeferredRenderer::getPerfStats() const {
         {"fps_estimate",  m_deltaTime > 0.0f ? 1.0f / m_deltaTime : 0.0f},
         {"active_passes", activePasses},
         {"ssao_enabled",  m_postProcessing && m_postProcessing->getSSAOEnabled()},
-        {"ssgi_enabled",  m_postProcessing && m_postProcessing->getSSGIEnabled()},
         {"effects", {
             {"sky",        m_skyEnabled},
-            {"cloud",      m_cloudEnabled},
-            {"rain",       m_rainEnabled},
-            {"snow",       m_snowEnabled},
-            {"sand",       m_sandEnabled},
-            {"god_rays",   m_godRaysEnabled},
-            {"aurora",     m_auroraEnabled},
-            {"rainbow",    m_rainbowEnabled},
         }},
         {"gpu_timing_enabled", m_gpuTimingEnabled},
         {"gpu_timings_ms",     [&]() {
@@ -2299,21 +1068,6 @@ bool DeferredRenderer::reloadShaderForPass(const std::string& passName, const st
         {"CSM",              m_csmPass.get()},
         {"DeferredLighting", m_lightingPass.get()},
         {"SkyPass",          m_skyPass.get()},
-        {"CloudPass",        m_cloudPass.get()},
-        {"CloudShadowPass",  m_cloudShadowPass.get()},
-        {"RainPass",         m_rainPass.get()},
-        {"SnowPass",         m_snowPass.get()},
-        {"SandPass",         m_sandPass.get()},
-        {"GodRaysPass",      m_godRaysPass.get()},
-        {"AuroraPass",       m_auroraPass.get()},
-        {"RainbowPass",      m_rainbowPass.get()},
-        {"TerrainPass",      m_terrainPass.get()},
-        {"WaterPass",        m_waterPass.get()},
-        {"CausticsPass",     m_causticsPass.get()},
-        {"RipplePass",       m_ripplePass.get()},
-        {"UnderwaterPass",   m_underwaterPass.get()},
-        {"DecalPass",        m_decalPass.get()},
-        {"FoliagePass",      m_foliagePass.get()},
     };
 
     for (const auto& e : entries) {

@@ -815,12 +815,21 @@ func _handle_god_game_state() -> PackedByteArray:
 	if enemies.size() > 0:
 		var enemy_data: Array = []
 		for e in enemies:
-			var info: Dictionary = {"name": e.name}
-			if e.has_method("is_alive"):
-				info["alive"] = e.is_alive()
-			if e.has_method("get_position") or "global_position" in e:
-				info["position"] = _v3_to_a(e.global_position)
-			enemy_data.append(info)
+			# Prefer get_game_state() for full info, else build manually
+			if e.has_method("get_game_state"):
+				enemy_data.append(e.get_game_state())
+			else:
+				var info: Dictionary = {"name": e.name}
+				if e.has_method("is_alive"):
+					info["alive"] = e.is_alive()
+				# Position: check parent Node3D (enemy AI is a plain Node)
+				if e.has_method("get_position"):
+					info["position"] = _v3_to_a(e.get_position())
+				elif "global_position" in e:
+					info["position"] = _v3_to_a(e.global_position)
+				elif e.get_parent() is Node3D:
+					info["position"] = _v3_to_a(e.get_parent().position)
+				enemy_data.append(info)
 		game_state["enemies"] = enemy_data
 		game_state["enemies_alive"] = enemies.filter(func(e): return not e.has_method("is_alive") or e.is_alive()).size()
 
@@ -830,7 +839,13 @@ func _handle_god_game_state() -> PackedByteArray:
 		var p = players[0]
 		if p.has_method("get_game_state"):
 			game_state["player"] = p.get_game_state()
-		elif "global_position" in p:
+		else:
+			# OhaoCharacter is a child — search children for get_game_state
+			for child in p.get_children():
+				if child.has_method("get_game_state"):
+					game_state["player"] = child.get_game_state()
+					break
+		if not game_state.has("player") and "global_position" in p:
 			game_state["player"] = {"position": _v3_to_a(p.global_position)}
 
 	return _ok(game_state)

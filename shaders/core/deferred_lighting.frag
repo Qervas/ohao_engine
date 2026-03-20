@@ -6,6 +6,7 @@
 // CSM: selects cascade based on view-space depth, samples shadow map array.
 
 #include "includes/common/encoding.glsl"
+#include "includes/brdf/brdf_ggx.glsl"
 
 layout(location = 0) in vec2 inTexCoord;
 
@@ -54,6 +55,9 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
 // Cloud shadow map (binding 13) — R16F, [0..1], 0=shadowed, 1=clear
 layout(set = 0, binding = 13) uniform sampler2D cloudShadowMap;
 
+// RT shadow mask (binding 14) — R8, 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR.
+layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
+
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
@@ -62,7 +66,7 @@ layout(push_constant) uniform PushConstants {
     float padding1;
     vec2 screenSize;
     uint lightCount;
-    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
+    uint flags;          // Bit 0: IBL, Bit 1: SSAO, Bit 2: CSM shadows, Bit 3: SSGI, Bit 4: cloud shadow, Bit 5: RT shadows
     float wetness;       // 0=dry, 1=fully wet — drives surface material modulation
     float paddingW;
     float snowCover;     // 0=bare, 1=fully snow-covered — white matte coating on flat faces
@@ -73,43 +77,8 @@ layout(push_constant) uniform PushConstants {
     vec2 cloudShadowExtent; // half-size in world units
 } pc;                   // Total: 200 bytes
 
-// Constants
-const float PI = 3.14159265359;
-const float EPSILON = 0.0001;
-
-// GGX/Trowbridge-Reitz Normal Distribution
-float DistributionGGX(vec3 N, vec3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    float nom = a2;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-    return nom / max(denom, EPSILON);
-}
-
-// Geometry function (Smith's method with GGX)
-float GeometrySchlickGGX(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    float nom = NdotV;
-    float denom = NdotV * (1.0 - k) + k;
-    return nom / max(denom, EPSILON);
-}
-
-float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
-    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
-    return ggx1 * ggx2;
-}
-
-// Fresnel-Schlick
-vec3 fresnelSchlick(float cosTheta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
+// BRDF functions provided by #include "includes/brdf/brdf_ggx.glsl"
+// Using height-correlated Smith-GGX (Frostbite/Unity quality)
 
 // Calculate attenuation for point/spot lights
 float calculateAttenuation(vec3 lightPos, vec3 fragPos, float range) {
@@ -184,7 +153,7 @@ void main() {
     float metallic = gBuffer0Sample.a;
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
-    float roughness = gBuffer1Sample.a;
+    float roughness = gBuffer1Sample.b; // B channel = 10 bits in A2R10G10B10
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -233,9 +202,8 @@ void main() {
     vec4 fragPosView = pc.view * vec4(fragPos, 1.0);
     float viewDepth = -fragPosView.z; // negate: right-handed view space, z is negative in front
 
-    // Calculate F0 (base reflectivity)
-    vec3 F0 = vec3(0.04);
-    F0 = mix(F0, albedo, metallic);
+    // Build BRDF surface once (used for all lights)
+    BRDFSurface surface = initBRDFSurface(fragPos, N, V, albedo, metallic, roughness, ao);
 
     // Accumulate lighting from SSBO data
     vec3 Lo = vec3(0.0);
@@ -263,31 +231,18 @@ void main() {
                                                      light.params.x, light.params.y);
         }
 
-        vec3 H = normalize(V + L);
-
-        // Cook-Torrance BRDF
-        float NDF = DistributionGGX(N, H, roughness);
-        float G = GeometrySmith(N, V, L, roughness);
-        vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-        vec3 numerator = NDF * G * F;
-        float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + EPSILON;
-        vec3 specular = numerator / denominator;
-
-        vec3 kS = F;
-        vec3 kD = vec3(1.0) - kS;
-        kD *= 1.0 - metallic;
-
-        float NdotL = max(dot(N, L), 0.0);
         vec3 radiance = light.color.rgb * light.color.w * attenuation;
 
-        // Cascaded shadow mapping for directional lights
+        // Shadow determination — RT shadows (bit 5) override CSM (bit 2)
         float shadow = 1.0;
-        if ((pc.flags & 4u) != 0u && lightType == 0) {
+        if ((pc.flags & 32u) != 0u) {
+            shadow = texture(rtShadowMask, inTexCoord).r;
+        } else if ((pc.flags & 4u) != 0u && lightType == 0) {
             shadow = calculateShadowCSM(fragPos, viewDepth);
         }
 
-        Lo += (kD * albedo / PI + specular) * radiance * NdotL * shadow;
+        // Cook-Torrance BRDF via include (height-correlated Smith-GGX)
+        Lo += evaluateBRDF(surface, L, radiance) * shadow;
     }
 
     // Ambient lighting

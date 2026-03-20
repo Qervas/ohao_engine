@@ -337,7 +337,7 @@ func _refresh_all() -> void:
 
 		# Refresh toggle
 		if _toggles.has(effect_name):
-			var toggle_getter := "get_" + effect["toggle"]
+			var toggle_getter: String = "get_" + effect["toggle"]
 			if _vp.has_method(toggle_getter):
 				_toggles[effect_name].set_pressed_no_signal(_vp.call(toggle_getter))
 
@@ -347,7 +347,7 @@ func _refresh_all() -> void:
 			if not _controls.has(param_key):
 				continue
 			var ctrl = _controls[param_key]
-			var getter := "get_" + param_key
+			var getter: String = "get_" + param_key
 			if _vp.has_method(getter):
 				var val = _vp.call(getter)
 				if ctrl is HSlider:

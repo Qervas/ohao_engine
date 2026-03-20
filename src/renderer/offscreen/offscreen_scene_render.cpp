@@ -5,6 +5,8 @@
 #include "renderer/components/material_component.hpp"
 #include "engine/asset/model.hpp"
 #include <cstring>
+#include <glm/gtc/matrix_transform.hpp>
+#include "renderer/passes/deferred_renderer.hpp"
 
 namespace ohao {
 
@@ -57,6 +59,7 @@ bool OffscreenRenderer::updateSceneBuffers() {
         // Store buffer info
         MeshBufferInfo bufferInfo{};
         bufferInfo.vertexOffset = vertexOffset;
+        bufferInfo.vertexCount = static_cast<uint32_t>(model->vertices.size());
         bufferInfo.indexOffset = indexOffset;
         bufferInfo.indexCount = indexCount;
         m_meshBufferMap[actor->getID()] = bufferInfo;
@@ -99,7 +102,7 @@ bool OffscreenRenderer::updateSceneBuffers() {
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = vertexBufferSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_vertexBuffer) != VK_SUCCESS) {
@@ -133,7 +136,7 @@ bool OffscreenRenderer::updateSceneBuffers() {
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = indexBufferSize;
-        bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        bufferInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_indexBuffer) != VK_SUCCESS) {
@@ -167,6 +170,10 @@ bool OffscreenRenderer::updateSceneBuffers() {
 
     std::cout << "Scene buffers updated: " << m_vertexCount << " vertices, "
               << m_indexCount << " indices across " << actorsWithModels.size() << " actors" << std::endl;
+
+    // RT acceleration structures — uses separate device-local buffers (not the raster vertex/index buffers)
+    m_rtAccelDirty = true;
+    buildAccelerationStructures();
 
     return true;
 }
@@ -332,6 +339,141 @@ void OffscreenRenderer::renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet de
 
     vkCmdEndRenderPass(cmd);
     // Render pass finalLayout transitions shadow image to SHADER_READ_ONLY_OPTIMAL
+}
+
+void OffscreenRenderer::buildAccelerationStructures() {
+    if (!m_rtAccel || !m_rtAccel->isSupported()) return;
+    if (!m_hasSceneMeshes || !m_scene) return;
+    if (m_vertexCount == 0 || m_indexCount == 0) return;
+
+    // Destroy old RT buffers
+    if (m_rtVertexBuffer) { vkDestroyBuffer(m_device, m_rtVertexBuffer, nullptr); m_rtVertexBuffer = VK_NULL_HANDLE; }
+    if (m_rtVertexMemory) { vkFreeMemory(m_device, m_rtVertexMemory, nullptr); m_rtVertexMemory = VK_NULL_HANDLE; }
+    if (m_rtIndexBuffer) { vkDestroyBuffer(m_device, m_rtIndexBuffer, nullptr); m_rtIndexBuffer = VK_NULL_HANDLE; }
+    if (m_rtIndexMemory) { vkFreeMemory(m_device, m_rtIndexMemory, nullptr); m_rtIndexMemory = VK_NULL_HANDLE; }
+
+    // Create device-local RT buffers with proper flags
+    auto createRTBuffer = [&](VkDeviceSize size, VkBuffer& buf, VkDeviceMemory& mem,
+                              VkBuffer srcBuf) -> bool {
+        VkBufferCreateInfo bufInfo{};
+        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufInfo.size = size;
+        bufInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                        VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (vkCreateBuffer(m_device, &bufInfo, nullptr, &buf) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetBufferMemoryRequirements(m_device, buf, &memReqs);
+
+        VkMemoryAllocateFlagsInfo allocFlags{};
+        allocFlags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        allocFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.pNext = &allocFlags;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memReqs.memoryTypeBits,
+                                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &mem) != VK_SUCCESS) return false;
+        vkBindBufferMemory(m_device, buf, mem, 0);
+
+        // Copy data from raster buffer to RT buffer
+        VkCommandBuffer cmd;
+        VkCommandBufferAllocateInfo cmdInfo{};
+        cmdInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmdInfo.commandPool = m_commandPool;
+        cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmdInfo.commandBufferCount = 1;
+        vkAllocateCommandBuffers(m_device, &cmdInfo, &cmd);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        VkBufferCopy copyRegion{};
+        copyRegion.size = size;
+        vkCmdCopyBuffer(cmd, srcBuf, buf, 1, &copyRegion);
+
+        vkEndCommandBuffer(cmd);
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &cmd;
+        vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_graphicsQueue);
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+        return true;
+    };
+
+    VkDeviceSize vertexSize = m_vertexCount * sizeof(Vertex);
+    VkDeviceSize indexSize = m_indexCount * sizeof(uint32_t);
+
+    if (!createRTBuffer(vertexSize, m_rtVertexBuffer, m_rtVertexMemory, m_vertexBuffer)) {
+        std::cerr << "[RT] Failed to create RT vertex buffer" << std::endl;
+        return;
+    }
+    if (!createRTBuffer(indexSize, m_rtIndexBuffer, m_rtIndexMemory, m_indexBuffer)) {
+        std::cerr << "[RT] Failed to create RT index buffer" << std::endl;
+        return;
+    }
+
+    // Rebuild acceleration structures using the RT buffers
+    m_rtAccel->destroy();
+    m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool);
+
+    std::unordered_map<uint64_t, BlasHandle> actorBlas;
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto it = m_meshBufferMap.find(actorId);
+        if (it == m_meshBufferMap.end()) continue;
+        const MeshBufferInfo& meshInfo = it->second;
+        if (meshInfo.indexCount == 0) continue;
+
+        VkDeviceSize vertexByteOffset = meshInfo.vertexOffset * sizeof(Vertex);
+        VkDeviceSize indexByteOffset = meshInfo.indexOffset * sizeof(uint32_t);
+
+        BlasHandle blas = m_rtAccel->createBLAS(
+            m_rtVertexBuffer, meshInfo.vertexCount, sizeof(Vertex),
+            m_rtIndexBuffer, meshInfo.indexCount,
+            vertexByteOffset, indexByteOffset, VK_NULL_HANDLE);
+
+        if (blas != INVALID_BLAS) actorBlas[actorId] = blas;
+    }
+
+    m_rtAccel->clearInstances();
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto blasIt = actorBlas.find(actorId);
+        if (blasIt == actorBlas.end()) continue;
+        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(),
+                               static_cast<uint32_t>(actorId));
+    }
+
+    // Collect per-instance material albedos for RT GI
+    std::vector<glm::vec3> materialAlbedos;
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        if (actorBlas.find(actorId) == actorBlas.end()) continue;
+        auto matComp = actor->getComponent<MaterialComponent>();
+        glm::vec3 albedo(0.73f);  // default white
+        if (matComp) albedo = matComp->getMaterial().baseColor;
+        materialAlbedos.push_back(albedo);
+    }
+
+    if (m_rtAccel->getInstanceCount() > 0) {
+        m_rtAccel->buildTLAS(VK_NULL_HANDLE);
+        std::cout << "[RT] Acceleration structures built: "
+                  << m_rtAccel->getBlasCount() << " BLAS, "
+                  << m_rtAccel->getInstanceCount() << " instances" << std::endl;
+
+        // Pass material albedos to deferred renderer's GI technique
+        if (m_deferredRenderer) {
+            auto* gi = m_deferredRenderer->getRT_GI();
+            if (gi) gi->setMaterialAlbedos(materialAlbedos);
+        }
+    }
+    m_rtAccelDirty = false;
 }
 
 } // namespace ohao

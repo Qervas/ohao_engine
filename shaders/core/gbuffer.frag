@@ -89,8 +89,9 @@ void main() {
 
     // GBuffer1: Encoded Normal + Roughness
     // Using octahedron encoding for normal, stored in xy
+    // Roughness in B (10 bits in A2R10G10B10 format), NOT A (only 2 bits)
     vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5; // Map to [0,1]
-    outGBuffer1 = vec4(encodedNormal, 0.0, pc.materialParams.y);
+    outGBuffer1 = vec4(encodedNormal, pc.materialParams.y, 0.0);
 
     // GBuffer2: Albedo + AO
     outGBuffer2 = vec4(albedo, pc.materialParams.z);

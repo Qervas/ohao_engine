@@ -1,0 +1,197 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+// 2D Cloud Layer — simple, artifact-free cloud plane
+// Single plane intersection + 2D FBM noise. No volumetric ray march.
+// Output: RGBA16F — RGB = cloud color, A = transmittance (1=clear, 0=opaque)
+
+#include "includes/lighting/phase.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outCloud;
+layout(set = 0, binding = 1) uniform sampler3D noiseTexture;   // reuse existing 3D noise as 2D source
+layout(set = 0, binding = 2) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 3) uniform sampler2D weatherMap;
+layout(set = 0, binding = 4) uniform sampler2D blueNoise;      // unused but bound
+layout(set = 0, binding = 5) uniform sampler2D historyBuffer;  // unused but bound
+
+layout(push_constant) uniform PushConstants {
+    mat4  invViewProj;
+    vec3  sunDirection;
+    float time;
+    vec3  cameraPos;
+    float cloudCoverage;
+    vec2  outputSize;
+    float cloudAltMin;
+    float cloudAltMax;
+    float cloudDensity;
+    float cloudAbsorption;
+    float cloudSpeed;
+    uint  frameIndex;
+    vec3  sunColor;
+    float sunIntensity;
+    mat4  prevViewProj;      // unused
+    float lightningIntensity;
+    float lightningPosX;
+    float lightningPosZ;
+    float pad;
+} pc;
+
+// ---------------------------------------------------------------------------
+// Hash + value noise (purely analytical, no texture tiling)
+// ---------------------------------------------------------------------------
+float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f); // smoothstep
+
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// FBM with non-integer lacunarity to avoid harmonic tiling
+float fbm(vec2 p, int octaves) {
+    float value = 0.0;
+    float amp = 0.5;
+    float freq = 1.0;
+    for (int i = 0; i < octaves; i++) {
+        value += amp * valueNoise(p * freq);
+        amp *= 0.5;
+        freq *= 2.13; // non-integer lacunarity — prevents grid alignment
+    }
+    return value;
+}
+
+// ---------------------------------------------------------------------------
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixelCoord, ivec2(pc.outputSize)))) return;
+
+    vec2 uv = (vec2(pixelCoord) + 0.5) / pc.outputSize;
+
+    // Skip geometry pixels
+    float depth = texture(depthBuffer, uv).r;
+    if (depth < 0.9998) {
+        imageStore(outCloud, pixelCoord, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    // Reconstruct view ray
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 worldFar = pc.invViewProj * vec4(ndc, 1.0, 1.0);
+    worldFar /= worldFar.w;
+    vec3 ro = pc.cameraPos;
+    vec3 rd = normalize(worldFar.xyz - ro);
+
+    // Intersect with cloud plane at middle altitude
+    float cloudAlt = mix(pc.cloudAltMin, pc.cloudAltMax, 0.4);
+    if (rd.y <= 0.001) {
+        // Looking below horizon or exactly horizontal — no clouds
+        imageStore(outCloud, pixelCoord, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    float t = (cloudAlt - ro.y) / rd.y;
+    if (t < 0.0) {
+        imageStore(outCloud, pixelCoord, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    vec3 hitPos = ro + rd * t;
+
+    // --- Cloud density from analytical FBM (no texture tiling) ---
+    float windTime = pc.time * pc.cloudSpeed;
+    vec2 cloudUV = hitPos.xz * 0.00002 + vec2(windTime * 0.0003, windTime * 0.0001);
+
+    // Large-scale shape: low frequency for big cloud masses
+    float shape = fbm(cloudUV * 3.0, 6);
+
+    // Domain warp: strong distortion for organic billowy shapes
+    vec2 warp = vec2(
+        fbm(cloudUV * 2.5 + vec2(1.7, 9.2), 4),
+        fbm(cloudUV * 2.5 + vec2(8.3, 2.8), 4)
+    );
+    float warpedShape = fbm((cloudUV + warp * 0.35) * 3.0, 6);
+
+    // Blend original + warped for natural look
+    float density = mix(shape, warpedShape, 0.6);
+
+    // Coverage threshold: remap density based on coverage setting
+    float coverageThreshold = 1.0 - pc.cloudCoverage;
+    density = smoothstep(coverageThreshold, coverageThreshold + 0.2, density);
+    density *= pc.cloudDensity * 4.0;
+
+    if (density < 0.001) {
+        imageStore(outCloud, pixelCoord, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    // --- Lighting ---
+    vec3 sunDir = normalize(pc.sunDirection);
+    float sunDot = max(dot(vec3(0.0, 1.0, 0.0), sunDir), 0.0);
+
+    // Simple self-shadow approximation: offset sample toward sun
+    vec2 shadowUV = cloudUV + sunDir.xz * 0.002;
+    float shadowShape = fbm((shadowUV + warp * 0.35) * 3.0, 4);
+    float shadowDensity = smoothstep(coverageThreshold, coverageThreshold + 0.2, shadowShape);
+    float shadow = exp(-shadowDensity * 2.0);
+
+    // Base cloud color: sunlit white + ambient blue
+    vec3 litColor = pc.sunColor * pc.sunIntensity * shadow * 0.6;
+    vec3 ambientColor = vec3(0.55, 0.6, 0.75) * 0.15;
+    vec3 cloudColor = litColor + ambientColor;
+
+    // Darken underside slightly
+    float viewAngle = max(dot(rd, vec3(0.0, 1.0, 0.0)), 0.0);
+    cloudColor *= mix(0.7, 1.0, viewAngle);
+
+    // Silver lining: bright edges when viewing near sun direction
+    float cosTheta = dot(rd, -sunDir);
+    float silverLining = pow(max(cosTheta, 0.0), 8.0) * 0.3;
+    cloudColor += pc.sunColor * pc.sunIntensity * silverLining * density;
+
+    // Lightning glow
+    if (pc.lightningIntensity > 0.001) {
+        float dx = hitPos.x - pc.lightningPosX;
+        float dz = hitPos.z - pc.lightningPosZ;
+        float dist2D = sqrt(dx * dx + dz * dz);
+        float glow = pc.lightningIntensity * exp(-dist2D * 0.0005);
+        cloudColor += vec3(0.9, 0.95, 1.0) * glow;
+    }
+
+    // --- Distance fade ---
+    // Clouds near horizon fade out (prevents hard cutoff)
+    float dist = length(hitPos.xz - ro.xz);
+    float distFade = 1.0 - smoothstep(40000.0, 80000.0, dist);
+    density *= distFade;
+
+    // Low-angle fade (clouds near horizon become thinner)
+    float angleFade = smoothstep(0.0, 0.08, rd.y);
+    density *= angleFade;
+
+    // Clamp
+    density = clamp(density, 0.0, 1.0);
+
+    // Output: RGB = scattered light, A = transmittance
+    float transmittance = exp(-density * pc.cloudAbsorption * 8.0);
+    vec3 scattered = cloudColor * (1.0 - transmittance);
+
+    // NaN guard
+    if (any(isnan(vec4(scattered, transmittance))) || any(isinf(vec4(scattered, transmittance)))) {
+        imageStore(outCloud, pixelCoord, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    imageStore(outCloud, pixelCoord, vec4(scattered, transmittance));
+}

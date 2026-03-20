@@ -124,6 +124,45 @@ func create_settings_panel(parent: Node = null) -> CanvasLayer:
 	return panel
 
 
+## Get the character system (static class).
+## OhaoCharacter.list_presets() / OhaoCharacter.recommended_for([...])
+func character() -> GDScript:
+	return load("res://addons/ohao_helpers/ohao_character.gd")
+
+
+## Quick factory for a player character with Jolt physics.
+## Returns a Node3D with OhaoCharacter controller attached.
+## Usage: var player = Ohao.make_character("fps", {move_speed = 8.0})
+func make_character(preset_name: String = "fps", overrides: Dictionary = {}) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Character"
+
+	var CharacterClass: GDScript = load("res://addons/ohao_helpers/ohao_character.gd")
+	var controller: Node = CharacterClass.new()
+	controller.preset = preset_name
+	controller._overrides = overrides
+	# Apply direct overrides to exported properties
+	for key in overrides:
+		if key in controller:
+			controller.set(key, overrides[key])
+
+	root.add_child(controller)
+
+	# Add visual mesh if requested
+	if overrides.get("visible", false):
+		var visual := OhaoMeshInstance.new()
+		visual.mesh_type = OhaoConst.MESH_CYLINDER
+		visual.mesh_color = overrides.get("color", Color(0.3, 0.5, 0.8))
+		visual.mesh_scale = Vector3(
+			controller.capsule_radius * 2.0,
+			controller.capsule_height,
+			controller.capsule_radius * 2.0
+		)
+		root.add_child(visual)
+
+	return root
+
+
 ## Quick factory for physics bodies.
 func make_physics_body(body_type: int = OhaoConst.BODY_DYNAMIC,
 		shape_type: int = OhaoConst.SHAPE_BOX,

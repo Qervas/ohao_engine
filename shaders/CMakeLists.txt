@@ -13,6 +13,12 @@ file(GLOB_RECURSE SHADER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.geom"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.tesc"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.tese"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.rgen"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.rmiss"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.rchit"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.rahit"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.rint"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.rcall"
 )
 
 # Create output directory
@@ -37,7 +43,7 @@ foreach(SHADER ${SHADER_SOURCES})
     set(SPIRV "${CMAKE_BINARY_DIR}/shaders/${SHADER_FLAT_NAME}.spv")
     add_custom_command(
         OUTPUT ${SPIRV}
-        COMMAND ${GLSLC} -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/includes ${SHADER} -o ${SPIRV}
+        COMMAND ${GLSLC} --target-env=vulkan1.3 -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/includes ${SHADER} -o ${SPIRV}
         DEPENDS ${SHADER} ${SHADER_INCLUDES} ${CMAKE_BINARY_DIR}/shaders
         COMMENT "Compiling shader ${SHADER_FLAT_NAME}"
     )

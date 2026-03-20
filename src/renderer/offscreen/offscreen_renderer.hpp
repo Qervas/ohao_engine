@@ -10,6 +10,7 @@
 #include "utils/common_types.hpp"
 #include "renderer/frame/frame_resources.hpp"
 #include "renderer/material/bindless_texture_manager.hpp"
+#include "renderer/rt/rt_acceleration_structure.hpp"
 
 namespace ohao {
 
@@ -115,6 +116,10 @@ public:
 
     // Texture manager access
     BindlessTextureManager* getTextureManager() { return m_textureManager.get(); }
+
+    // RT acceleration structure access
+    RTAccelerationStructure* getRT() { return m_rtAccel.get(); }
+    bool isRTSupported() const { return m_rtAccel && m_rtAccel->isSupported(); }
 
     // Pixel access (RGBA format, 4 bytes per pixel)
     const uint8_t* getPixels() const { return m_pixelBuffer.data(); }
@@ -264,6 +269,16 @@ private:
 
     // Flag to track if scene has renderable meshes
     bool m_hasSceneMeshes{false};
+
+    // RT acceleration structure
+    std::unique_ptr<RTAccelerationStructure> m_rtAccel;
+    bool m_rtAccelDirty{true};
+    void buildAccelerationStructures();
+    // Separate RT-flagged copies of vertex/index data (device-local + device address)
+    VkBuffer m_rtVertexBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_rtVertexMemory{VK_NULL_HANDLE};
+    VkBuffer m_rtIndexBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
 
     // Sync
     VkFence m_renderFence{VK_NULL_HANDLE};

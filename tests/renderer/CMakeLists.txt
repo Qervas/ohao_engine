@@ -1,36 +1,43 @@
-# OHAO Renderer Pipeline Tests
-# Tests all Phase 1-5 AAA renderer features
+# OHAO Renderer Standalone Tests
+# Run the Vulkan renderer WITHOUT Godot — pure C++ verification.
 
-add_executable(renderer_pipeline_tests
-    renderer_pipeline_tests.cpp
-)
+# Standalone renderer test — builds scene, renders to PNG
+add_executable(renderer_test renderer_test.cpp)
 
-target_include_directories(renderer_pipeline_tests PRIVATE
+target_include_directories(renderer_test PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
+    ${stb_SOURCE_DIR}
 )
 
-target_link_libraries(renderer_pipeline_tests PRIVATE
-    -Wl,--start-group
+target_link_libraries(renderer_test PRIVATE
     ohao_renderer
+    ohao_engine
     ohao_scene
     ohao_actor
     ohao_asset
+    ohao_animation
     ohao_component
     ohao_physics
+    ohao_audio
     ohao_ui
     ohao_utils
-    -Wl,--end-group
     ${Vulkan_LIBRARIES}
     glm
+    VulkanMemoryAllocator
 )
 
-# Link Jolt if available (ohao_physics depends on it)
 if(TARGET Jolt)
-    target_link_libraries(renderer_pipeline_tests PRIVATE Jolt)
+    target_link_libraries(renderer_test PRIVATE Jolt)
 endif()
 
-# Add test to CTest
-add_test(NAME RendererPipelineTests COMMAND renderer_pipeline_tests)
+# Copy shaders next to exe so renderer can find them
+add_custom_command(TARGET renderer_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:renderer_test>/bin/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/shaders"
+        "$<TARGET_FILE_DIR:renderer_test>/bin/shaders"
+    COMMENT "Copying shader SPVs for standalone renderer test"
+)
 
-message(STATUS "Renderer pipeline tests configured")
+message(STATUS "Standalone renderer test configured")

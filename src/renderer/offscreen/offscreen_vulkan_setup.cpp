@@ -9,22 +9,22 @@ bool OffscreenRenderer::createInstance() {
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "OHAO Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_2;
+    appInfo.apiVersion = VK_API_VERSION_1_3;  // Vulkan 1.3 for RT + buffer device address
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
-    // macOS requires portability enumeration
-#ifdef __APPLE__
-    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-    std::vector<const char*> extensions = {
-        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
-        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME
-    };
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-    createInfo.ppEnabledExtensionNames = extensions.data();
-#endif
+    // Validation layers — enable with OHAO_VALIDATION=1 env var
+    const char* validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
+    const char* instanceExtensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
+    if (std::getenv("OHAO_VALIDATION")) {
+        createInfo.enabledLayerCount = 1;
+        createInfo.ppEnabledLayerNames = validationLayers;
+        createInfo.enabledExtensionCount = 1;
+        createInfo.ppEnabledExtensionNames = instanceExtensions;
+        std::cout << "[OHAO] Validation layers ENABLED" << std::endl;
+    }
 
     if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
         return false;
@@ -45,11 +45,16 @@ bool OffscreenRenderer::pickPhysicalDevice() {
     std::vector<VkPhysicalDevice> devices(deviceCount);
     vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
 
-    // Pick first suitable device
+    // Prefer discrete GPU (NVIDIA) over integrated (Intel)
+    VkPhysicalDevice bestDevice = VK_NULL_HANDLE;
+    uint32_t bestQueueFamily = 0;
+    bool foundDiscrete = false;
+
     for (const auto& device : devices) {
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(device, &props);
-        std::cout << "Found GPU: " << props.deviceName << std::endl;
+        std::cout << "Found GPU: " << props.deviceName
+                  << " (type=" << props.deviceType << ")" << std::endl;
 
         // Find graphics queue family
         uint32_t queueFamilyCount = 0;
@@ -59,11 +64,25 @@ bool OffscreenRenderer::pickPhysicalDevice() {
 
         for (uint32_t i = 0; i < queueFamilyCount; i++) {
             if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                m_graphicsQueueFamily = i;
-                m_physicalDevice = device;
-                return true;
+                bool isDiscrete = (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
+                // Always prefer discrete over integrated
+                if (!foundDiscrete || isDiscrete) {
+                    bestDevice = device;
+                    bestQueueFamily = i;
+                    foundDiscrete = isDiscrete;
+                }
+                break;
             }
         }
+    }
+
+    if (bestDevice != VK_NULL_HANDLE) {
+        m_physicalDevice = bestDevice;
+        m_graphicsQueueFamily = bestQueueFamily;
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
+        std::cout << "Selected GPU: " << props.deviceName << std::endl;
+        return true;
     }
 
     return false;
@@ -77,26 +96,79 @@ bool OffscreenRenderer::createLogicalDevice() {
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
-    VkPhysicalDeviceFeatures deviceFeatures{};
+    // Device extensions — RT requires acceleration structure + ray tracing pipeline
+    std::vector<const char*> deviceExtensions = {
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,  // required by AS
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,     // required by AS
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,        // required by AS
+        VK_KHR_SPIRV_1_4_EXTENSION_NAME,                 // required by RT pipeline
+        VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,     // required by SPIR-V 1.4
+    };
+    // NVIDIA Windows only — no portability subset needed
 
-    std::vector<const char*> deviceExtensions;
-#ifdef __APPLE__
-    deviceExtensions.push_back("VK_KHR_portability_subset");
-#endif
+    // Vulkan 1.2 features (buffer device address, descriptor indexing)
+    VkPhysicalDeviceVulkan12Features features12{};
+    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    features12.bufferDeviceAddress = VK_TRUE;
+    features12.descriptorIndexing = VK_TRUE;
+    features12.runtimeDescriptorArray = VK_TRUE;
+    features12.descriptorBindingPartiallyBound = VK_TRUE;
+    features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+
+    // Vulkan 1.3 features (dynamic rendering, synchronization2)
+    VkPhysicalDeviceVulkan13Features features13{};
+    features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    features13.pNext = &features12;
+
+    // Acceleration structure features
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.pNext = &features13;
+    asFeatures.accelerationStructure = VK_TRUE;
+
+    // Ray tracing pipeline features
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rtFeatures{};
+    rtFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+    rtFeatures.pNext = &asFeatures;
+    rtFeatures.rayTracingPipeline = VK_TRUE;
+
+    VkPhysicalDeviceFeatures2 deviceFeatures2{};
+    deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    deviceFeatures2.pNext = &rtFeatures;
+    // Enable required device features (were previously in pEnabledFeatures)
+    // Enable all features the renderer uses
+    deviceFeatures2.features.samplerAnisotropy = VK_TRUE;
+    deviceFeatures2.features.fillModeNonSolid = VK_TRUE;
+    deviceFeatures2.features.geometryShader = VK_TRUE;
+    deviceFeatures2.features.tessellationShader = VK_TRUE;
+    deviceFeatures2.features.depthClamp = VK_TRUE;
+    deviceFeatures2.features.wideLines = VK_TRUE;
+    deviceFeatures2.features.multiDrawIndirect = VK_TRUE;
+    deviceFeatures2.features.shaderInt64 = VK_TRUE;
+    deviceFeatures2.features.fragmentStoresAndAtomics = VK_TRUE;
+    deviceFeatures2.features.vertexPipelineStoresAndAtomics = VK_TRUE;
 
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext = &deviceFeatures2;
     createInfo.queueCreateInfoCount = 1;
     createInfo.pQueueCreateInfos = &queueCreateInfo;
-    createInfo.pEnabledFeatures = &deviceFeatures;
+    createInfo.pEnabledFeatures = nullptr;  // using pNext features2 chain instead
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
     if (vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device) != VK_SUCCESS) {
+        std::cerr << "[OHAO] Failed to create logical device with RT extensions" << std::endl;
         return false;
     }
 
     vkGetDeviceQueue(m_device, m_graphicsQueueFamily, 0, &m_graphicsQueue);
+    std::cout << "[OHAO] Logical device created with RT extensions" << std::endl;
     return true;
 }
 

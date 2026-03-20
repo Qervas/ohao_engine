@@ -21,8 +21,9 @@ file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
 )
 
-# Exclude legacy directory (standalone GLFW rendering - deprecated)
+# Exclude legacy and disabled directories
 list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/legacy/")
+list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/_disabled/")
 
 # Create the renderer library
 add_library(ohao_renderer ${RENDERER_SOURCES})

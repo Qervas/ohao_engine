@@ -1,0 +1,124 @@
+#version 450
+
+// Per-pixel Motion Blur
+// Uses velocity buffer to blur along motion direction
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Input textures
+layout(set = 0, binding = 0) uniform sampler2D colorBuffer;
+layout(set = 0, binding = 1) uniform sampler2D velocityBuffer;
+layout(set = 0, binding = 2) uniform sampler2D depthBuffer;
+
+// Output
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D blurOutput;
+
+// Push constants
+layout(push_constant) uniform MotionBlurParams {
+    vec4 screenSize;     // xy = size, zw = 1/size
+    float intensity;
+    float velocityScale;
+    uint maxSamples;
+    uint tileSize;
+} params;
+
+// Soft depth comparison for handling depth discontinuities
+float softDepthCompare(float depthA, float depthB) {
+    const float softness = 0.01;
+    return clamp(1.0 - (depthA - depthB) / softness, 0.0, 1.0);
+}
+
+// Cone weight for sample weighting
+float cone(float dist, float velocityLen) {
+    return clamp(1.0 - dist / velocityLen, 0.0, 1.0);
+}
+
+// Cylinder weight
+float cylinder(float dist, float velocityLen) {
+    return 1.0 - smoothstep(0.95 * velocityLen, 1.05 * velocityLen, dist);
+}
+
+void main() {
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixelCoord.x >= int(params.screenSize.x) || pixelCoord.y >= int(params.screenSize.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixelCoord) + 0.5) * params.screenSize.zw;
+
+    // Sample center pixel
+    vec3 centerColor = texture(colorBuffer, uv).rgb;
+    vec2 centerVelocity = texture(velocityBuffer, uv).rg * params.velocityScale;
+    float centerDepth = texture(depthBuffer, uv).r;
+
+    // Velocity magnitude
+    float velocityLen = length(centerVelocity);
+
+    // Skip if velocity is negligible
+    if (velocityLen < 0.001) {
+        imageStore(blurOutput, pixelCoord, vec4(centerColor, 1.0));
+        return;
+    }
+
+    // Clamp velocity to reasonable range
+    float maxVelocity = 0.1; // 10% of screen
+    if (velocityLen > maxVelocity) {
+        centerVelocity = centerVelocity * (maxVelocity / velocityLen);
+        velocityLen = maxVelocity;
+    }
+
+    // Calculate number of samples based on velocity
+    uint numSamples = clamp(uint(velocityLen * params.screenSize.x * 0.5), 2u, params.maxSamples);
+
+    // Accumulate color along motion direction
+    vec3 accumColor = vec3(0.0);
+    float accumWeight = 0.0;
+
+    vec2 velocityDir = centerVelocity / velocityLen;
+    float stepSize = velocityLen / float(numSamples);
+
+    for (uint i = 0; i < numSamples; ++i) {
+        // Sample position along velocity vector
+        float t = (float(i) + 0.5) / float(numSamples) - 0.5;
+        vec2 sampleUV = uv + centerVelocity * t;
+
+        // Clamp to screen bounds
+        sampleUV = clamp(sampleUV, vec2(0.001), vec2(0.999));
+
+        // Sample color and depth
+        vec3 sampleColor = texture(colorBuffer, sampleUV).rgb;
+        vec2 sampleVelocity = texture(velocityBuffer, sampleUV).rg * params.velocityScale;
+        float sampleDepth = texture(depthBuffer, sampleUV).r;
+
+        // Distance from center
+        float dist = abs(t) * velocityLen;
+
+        // Foreground/background classification based on depth
+        float foreground = softDepthCompare(centerDepth, sampleDepth);
+        float background = softDepthCompare(sampleDepth, centerDepth);
+
+        // Weight based on velocity similarity and depth
+        float sampleVelocityLen = length(sampleVelocity);
+        float velocitySimilarity = max(0.0, dot(normalize(sampleVelocity + 0.001), velocityDir));
+
+        // Combined weight
+        float weight = 0.0;
+
+        // Case 1: Sample is in front - use cone filter
+        weight += foreground * cone(dist, velocityLen);
+
+        // Case 2: Sample is behind - use cylinder filter (softer falloff)
+        weight += background * cylinder(dist, velocityLen) * velocitySimilarity;
+
+        // Accumulate
+        accumColor += sampleColor * weight;
+        accumWeight += weight;
+    }
+
+    // Normalize and blend with original based on intensity
+    vec3 blurredColor = accumWeight > 0.0 ? accumColor / accumWeight : centerColor;
+    vec3 finalColor = mix(centerColor, blurredColor, params.intensity);
+
+    imageStore(blurOutput, pixelCoord, vec4(finalColor, 1.0));
+}

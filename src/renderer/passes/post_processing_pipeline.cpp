@@ -30,40 +30,6 @@ bool PostProcessingPipeline::initialize(VkDevice device, VkPhysicalDevice physic
         return false;
     }
 
-    m_ssgiPass = std::make_unique<SSGIPass>();
-    if (!m_ssgiPass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
-    m_ssrPass = std::make_unique<SSRPass>();
-    if (!m_ssrPass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
-    m_volumetricPass = std::make_unique<VolumetricPass>();
-    if (!m_volumetricPass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
-    m_motionBlurPass = std::make_unique<MotionBlurPass>();
-    if (!m_motionBlurPass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
-    m_dofPass = std::make_unique<DoFPass>();
-    if (!m_dofPass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
-    m_heatHazePass = std::make_unique<HeatHazePass>();
-    if (!m_heatHazePass->initialize(device, physicalDevice)) {
-        return false;
-    }
-
-    // Create intermediate HDR + composite pass
-    if (!createIntermediateHDR()) return false;
-    if (!createCompositePass()) return false;
-
     // Create tonemapping pass
     if (!createFinalOutput()) return false;
     if (!createTonemappingPass()) return false;
@@ -82,22 +48,7 @@ void PostProcessingPipeline::cleanup() {
     };
     resetPass(m_bloomPass);
     resetPass(m_taaPass);
-    resetPass(m_ssgiPass);
     resetPass(m_ssaoPass);
-    resetPass(m_ssrPass);
-    resetPass(m_volumetricPass);
-    resetPass(m_motionBlurPass);
-    resetPass(m_dofPass);
-    resetPass(m_heatHazePass);
-
-    // Cleanup composite pass
-    safeDestroy(m_compositePipeline);
-    safeDestroy(m_compositeLayout);
-    safeDestroy(m_compositeDescPool);
-    safeDestroy(m_compositeDescLayout);
-    m_compositeDescSet = VK_NULL_HANDLE;
-
-    destroyIntermediateHDR();
 
     // Cleanup tonemapping
     safeDestroy(m_tonemapPipeline);
@@ -125,31 +76,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
 
     VkImageView currentInput = m_hdrInputView;
 
-    // ── 1. SSR (Screen-Space Reflections) ─────────────────────────────
-    VkImageView ssrOutput = VK_NULL_HANDLE;
-    if (m_ssrEnabled && m_ssrPass) {
-        m_ssrPass->execute(cmd, frameIndex);
-        ssrOutput = m_ssrPass->getReflectionView();
-    }
-
-    // ── 2. Volumetric Fog ─────────────────────────────────────────────
-    VkImageView volOutput = VK_NULL_HANDLE;
-    if (m_volumetricsEnabled && m_volumetricPass) {
-        m_volumetricPass->execute(cmd, frameIndex);
-        volOutput = m_volumetricPass->getScatteringView();
-    }
-
-    // ── 3. Composite (merge SSR reflections + volumetric fog into HDR) ─
-    if ((ssrOutput != VK_NULL_HANDLE || volOutput != VK_NULL_HANDLE) &&
-        m_compositePipeline != VK_NULL_HANDLE && m_intermediateHDRView != VK_NULL_HANDLE) {
-        uint32_t flags = 0;
-        if (ssrOutput != VK_NULL_HANDLE) flags |= 1;  // bit 0 = SSR
-        if (volOutput  != VK_NULL_HANDLE) flags |= 2;  // bit 1 = volumetric
-        executeComposite(cmd, currentInput, ssrOutput, volOutput, flags);
-        currentInput = m_intermediateHDRView;
-    }
-
-    // ── 4. Bloom ──────────────────────────────────────────────────────
+    // ── 1. Bloom ──────────────────────────────────────────────────────
     float bloomStrength = 0.0f;
     if (m_bloomEnabled && m_bloomPass) {
         m_bloomPass->setInputImage(currentInput);
@@ -157,16 +84,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         bloomStrength = 1.0f;
     }
 
-    // ── 5. Motion Blur ────────────────────────────────────────────────
-    if (m_motionBlurEnabled && m_motionBlurPass) {
-        m_motionBlurPass->setColorBuffer(currentInput);
-        m_motionBlurPass->updateDescriptorSet();
-        m_motionBlurPass->execute(cmd, frameIndex);
-        VkImageView mbOut = m_motionBlurPass->getOutputView();
-        if (mbOut != VK_NULL_HANDLE) currentInput = mbOut;
-    }
-
-    // ── 6. TAA (temporal anti-aliasing) ───────────────────────────────
+    // ── 2. TAA (temporal anti-aliasing) ───────────────────────────────
     if (m_taaEnabled && m_taaPass) {
         m_taaPass->setCurrentFrame(currentInput);
         m_taaPass->execute(cmd, frameIndex);
@@ -174,30 +92,7 @@ void PostProcessingPipeline::execute(VkCommandBuffer cmd, uint32_t frameIndex) {
         if (taaOutput != VK_NULL_HANDLE) currentInput = taaOutput;
     }
 
-    // ── 7. DoF (Depth of Field) ───────────────────────────────────────
-    if (m_dofEnabled && m_dofPass) {
-        m_dofPass->setColorBuffer(currentInput);
-        m_dofPass->updateDescriptorSet();
-        m_dofPass->execute(cmd, frameIndex);
-        VkImageView dofOut = m_dofPass->getOutputView();
-        if (dofOut != VK_NULL_HANDLE) currentInput = dofOut;
-    }
-
-    // ── 8. Heat Haze (screen-space UV distortion) ────────────────────
-    // m_hdrInputImage is used only as a non-null sentinel in HeatHazePass;
-    // the actual barrier in execute() operates only on the owned output buffer.
-    if (m_heatHazeEnabled && m_heatHazePass && m_hdrInputImage != VK_NULL_HANDLE) {
-        m_heatHazePass->setEnabled(m_heatHazeEnabled);
-        m_heatHazePass->setIntensity(m_heatHazeIntensity);
-        m_heatHazePass->setFrequency(m_heatHazeFrequency);
-        m_heatHazePass->setTime(m_totalTime);
-        m_heatHazePass->setInputImage(currentInput, m_hdrInputImage);
-        m_heatHazePass->execute(cmd, frameIndex);
-        VkImageView hazeOut = m_heatHazePass->getOutputView();
-        if (hazeOut != VK_NULL_HANDLE) currentInput = hazeOut;
-    }
-
-    // ── 9. Tonemapping: HDR → LDR ─────────────────────────────────────
+    // ── 3. Tonemapping: HDR → LDR ─────────────────────────────────────
     if (m_tonemappingEnabled && m_tonemapPipeline != VK_NULL_HANDLE &&
         m_tonemapFramebuffer != VK_NULL_HANDLE && m_tonemapDescSet != VK_NULL_HANDLE) {
 
@@ -282,16 +177,6 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
     if (m_bloomPass) m_bloomPass->onResize(width, height);
     if (m_taaPass) m_taaPass->onResize(width, height);
     if (m_ssaoPass) m_ssaoPass->onResize(width, height);
-    if (m_ssgiPass) m_ssgiPass->onResize(width, height);
-    if (m_ssrPass) m_ssrPass->onResize(width, height);
-    if (m_volumetricPass) m_volumetricPass->onResize(width, height);
-    if (m_motionBlurPass) m_motionBlurPass->onResize(width, height);
-    if (m_dofPass) m_dofPass->onResize(width, height);
-    if (m_heatHazePass) m_heatHazePass->onResize(width, height);
-
-    // Recreate intermediate HDR (for composite pass)
-    destroyIntermediateHDR();
-    createIntermediateHDR();
 
     // Recreate final output
     safeDestroy(m_tonemapFramebuffer);
@@ -313,23 +198,15 @@ void PostProcessingPipeline::onResize(uint32_t width, uint32_t height) {
 
 void PostProcessingPipeline::setDepthBuffer(VkImageView depth) {
     if (m_ssaoPass) m_ssaoPass->setDepthBuffer(depth);
-    if (m_ssgiPass) m_ssgiPass->setDepthBuffer(depth);
-    if (m_ssrPass) m_ssrPass->setDepthBuffer(depth);
-    if (m_volumetricPass) m_volumetricPass->setDepthBuffer(depth);
-    if (m_motionBlurPass) m_motionBlurPass->setDepthBuffer(depth);
-    if (m_dofPass) m_dofPass->setDepthBuffer(depth);
     if (m_taaPass) m_taaPass->setDepthBuffer(depth);
 }
 
 void PostProcessingPipeline::setNormalBuffer(VkImageView normal) {
     if (m_ssaoPass) m_ssaoPass->setNormalBuffer(normal);
-    if (m_ssgiPass) m_ssgiPass->setNormalBuffer(normal);
-    if (m_ssrPass) m_ssrPass->setNormalBuffer(normal);
 }
 
 void PostProcessingPipeline::setVelocityBuffer(VkImageView velocity) {
     if (m_taaPass) m_taaPass->setVelocityBuffer(velocity);
-    if (m_motionBlurPass) m_motionBlurPass->setVelocityBuffer(velocity);
 }
 
 void PostProcessingPipeline::setBloomThreshold(float threshold) {
@@ -378,171 +255,13 @@ VkSampler PostProcessingPipeline::getSSAOSampler() const {
     return VK_NULL_HANDLE;
 }
 
-// SSGI configuration
-void PostProcessingPipeline::setSSGIRadius(float radius) {
-    if (m_ssgiPass) m_ssgiPass->setRadius(radius);
-}
-
-void PostProcessingPipeline::setSSGIIntensity(float intensity) {
-    if (m_ssgiPass) m_ssgiPass->setIntensity(intensity);
-}
-
-void PostProcessingPipeline::setSSGISampleCount(uint32_t count) {
-    if (m_ssgiPass) m_ssgiPass->setSampleCount(count);
-}
-
-void PostProcessingPipeline::setSSGIMatrices(const glm::mat4& view, const glm::mat4& proj,
-                                              const glm::mat4& invProj) {
-    if (m_ssgiPass) m_ssgiPass->setMatrices(view, proj, invProj);
-}
-
-void PostProcessingPipeline::setAlbedoBuffer(VkImageView albedo) {
-    if (m_ssgiPass) m_ssgiPass->setAlbedoBuffer(albedo);
-}
-
-void PostProcessingPipeline::setPositionBuffer(VkImageView position) {
-    if (m_ssgiPass) m_ssgiPass->setPositionBuffer(position);
-}
-
-void PostProcessingPipeline::executeSSGI(VkCommandBuffer cmd, uint32_t frameIndex) {
-    if (m_ssgiEnabled && m_ssgiPass) {
-        m_ssgiPass->execute(cmd, frameIndex);
-    }
-}
-
-VkImageView PostProcessingPipeline::getSSGIOutput() const {
-    if (m_ssgiPass) return m_ssgiPass->getOutputView();
-    return VK_NULL_HANDLE;
-}
-
-VkImage PostProcessingPipeline::getSSGIImage() const {
-    if (m_ssgiPass) return m_ssgiPass->getOutputImage();
-    return VK_NULL_HANDLE;
-}
-
-VkSampler PostProcessingPipeline::getSSGISampler() const {
-    if (m_ssgiPass) return m_ssgiPass->getSampler();
-    return VK_NULL_HANDLE;
-}
-
-VkImageView PostProcessingPipeline::getSSROutput() const {
-    if (m_ssrPass) return m_ssrPass->getReflectionView();
-    return VK_NULL_HANDLE;
-}
-
-void PostProcessingPipeline::setSSRMaxDistance(float dist) {
-    if (m_ssrPass) m_ssrPass->setMaxDistance(dist);
-}
-
-void PostProcessingPipeline::setSSRThickness(float thickness) {
-    if (m_ssrPass) m_ssrPass->setThickness(thickness);
-}
-
-void PostProcessingPipeline::setColorBuffer(VkImageView color) {
-    m_colorBufferView = color;
-    if (m_ssrPass) m_ssrPass->setColorBuffer(color);
-    if (m_motionBlurPass) m_motionBlurPass->setColorBuffer(color);
-    if (m_dofPass) m_dofPass->setColorBuffer(color);
-}
-
-void PostProcessingPipeline::setSSRMatrices(const glm::mat4& view, const glm::mat4& proj,
-                                             const glm::mat4& invView, const glm::mat4& invProj) {
-    if (m_ssrPass) m_ssrPass->setMatrices(view, proj, invView, invProj);
-}
-
-// Volumetric configuration
-void PostProcessingPipeline::setVolumetricDensity(float density) {
-    if (m_volumetricPass) m_volumetricPass->setDensity(density);
-}
-
-void PostProcessingPipeline::setVolumetricScattering(float g) {
-    if (m_volumetricPass) m_volumetricPass->setScattering(g);
-}
-
-void PostProcessingPipeline::setFogColor(const glm::vec3& color) {
-    if (m_volumetricPass) m_volumetricPass->setFogColor(color);
-}
-
-void PostProcessingPipeline::setFogHeight(float height) {
-    if (m_volumetricPass) m_volumetricPass->setFogHeight(height);
-}
-
-void PostProcessingPipeline::setLightBuffer(VkBuffer lightBuffer) {
-    if (m_volumetricPass) m_volumetricPass->setLightBuffer(lightBuffer);
-}
-
-void PostProcessingPipeline::setShadowMap(VkImageView shadow, VkSampler shadowSampler) {
-    if (m_volumetricPass) m_volumetricPass->setShadowMap(shadow, shadowSampler);
-}
-
-void PostProcessingPipeline::setVolumetricMatrices(const glm::mat4& view, const glm::mat4& proj,
-                                                    const glm::mat4& invView, const glm::mat4& invProj) {
-    if (m_volumetricPass) m_volumetricPass->setMatrices(view, proj, invView, invProj);
-}
-
-VkImageView PostProcessingPipeline::getVolumetricOutput() const {
-    if (m_volumetricPass) return m_volumetricPass->getScatteringView();
-    return VK_NULL_HANDLE;
-}
-
-// Motion blur configuration
-void PostProcessingPipeline::setMotionBlurIntensity(float intensity) {
-    if (m_motionBlurPass) m_motionBlurPass->setIntensity(intensity);
-}
-
-void PostProcessingPipeline::setMotionBlurSamples(uint32_t samples) {
-    if (m_motionBlurPass) m_motionBlurPass->setMaxSamples(samples);
-}
-
-void PostProcessingPipeline::setMotionBlurVelocityScale(float scale) {
-    if (m_motionBlurPass) m_motionBlurPass->setVelocityScale(scale);
-}
-
-VkImageView PostProcessingPipeline::getMotionBlurOutput() const {
-    if (m_motionBlurPass) return m_motionBlurPass->getOutputView();
-    return VK_NULL_HANDLE;
-}
-
-// DoF configuration
-void PostProcessingPipeline::setDoFFocusDistance(float distance) {
-    if (m_dofPass) m_dofPass->setFocusDistance(distance);
-}
-
-void PostProcessingPipeline::setDoFAperture(float fStop) {
-    if (m_dofPass) m_dofPass->setAperture(fStop);
-}
-
-void PostProcessingPipeline::setDoFMaxBlurRadius(float pixels) {
-    if (m_dofPass) m_dofPass->setMaxBlurRadius(pixels);
-}
-
-void PostProcessingPipeline::setDoFNearRange(float start, float end) {
-    if (m_dofPass) {
-        m_dofPass->setNearBlurStart(start);
-        m_dofPass->setNearBlurEnd(end);
-    }
-}
-
-void PostProcessingPipeline::setDoFFarRange(float start, float end) {
-    if (m_dofPass) {
-        m_dofPass->setFarBlurStart(start);
-        m_dofPass->setFarBlurEnd(end);
-    }
-}
-
-VkImageView PostProcessingPipeline::getDoFOutput() const {
-    if (m_dofPass) return m_dofPass->getOutputView();
-    return VK_NULL_HANDLE;
-}
-
 void PostProcessingPipeline::setHDRInput(VkImageView hdrInput) {
     m_hdrInputView = hdrInput;
     updateTonemapDescriptors();
 }
 
-void PostProcessingPipeline::setHDRInputWithImage(VkImageView hdrInput, VkImage hdrImage) {
+void PostProcessingPipeline::setHDRInputWithImage(VkImageView hdrInput, VkImage /*hdrImage*/) {
     m_hdrInputView  = hdrInput;
-    m_hdrInputImage = hdrImage;
     updateTonemapDescriptors();
 }
 
@@ -835,294 +554,6 @@ bool PostProcessingPipeline::createTonemappingPass() {
     return result == VK_SUCCESS;
 }
 
-// ===================================================================
-// Intermediate HDR image (for composite pass output)
-// ===================================================================
-
-bool PostProcessingPipeline::createIntermediateHDR() {
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    imageInfo.extent = {m_width, m_height, 1};
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_intermediateHDR) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkMemoryRequirements memReqs;
-    vkGetImageMemoryRequirements(m_device, m_intermediateHDR, &memReqs);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_intermediateHDRMemory) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkBindImageMemory(m_device, m_intermediateHDR, m_intermediateHDRMemory, 0);
-
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_intermediateHDR;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    return vkCreateImageView(m_device, &viewInfo, nullptr, &m_intermediateHDRView) == VK_SUCCESS;
-}
-
-void PostProcessingPipeline::destroyIntermediateHDR() {
-    safeDestroy(m_intermediateHDRView);
-    safeDestroy(m_intermediateHDR);
-    safeFree(m_intermediateHDRMemory);
-}
-
-// ===================================================================
-// Composite pass (merges SSR + volumetric into HDR scene)
-// ===================================================================
-
-bool PostProcessingPipeline::createCompositePass() {
-    // Descriptor layout: 3 samplers (scene, SSR, volumetric) + 1 storage image (output)
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
-
-    // Binding 0: HDR scene (sampler)
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    // Binding 1: SSR reflection (sampler)
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    // Binding 2: Volumetric scatter (sampler)
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    // Binding 3: Output image (storage)
-    bindings[3].binding = 3;
-    bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[3].descriptorCount = 1;
-    bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
-
-    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_compositeDescLayout) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Descriptor pool
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 3;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[1].descriptorCount = 1;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = 1;
-
-    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_compositeDescPool) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkDescriptorSetAllocateInfo descAllocInfo{};
-    descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    descAllocInfo.descriptorPool = m_compositeDescPool;
-    descAllocInfo.descriptorSetCount = 1;
-    descAllocInfo.pSetLayouts = &m_compositeDescLayout;
-
-    if (vkAllocateDescriptorSets(m_device, &descAllocInfo, &m_compositeDescSet) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Push constant range
-    VkPushConstantRange pushConstant{};
-    pushConstant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(CompositeParams);
-
-    // Pipeline layout
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &m_compositeDescLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
-
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_compositeLayout) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Load compute shader
-    VkShaderModule compShader = loadShaderModule("compute_composite.comp.spv");
-    if (compShader == VK_NULL_HANDLE) {
-        // Shader not yet compiled — composite pass will be skipped at runtime
-        return true;
-    }
-
-    VkPipelineShaderStageCreateInfo stageInfo{};
-    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stageInfo.module = compShader;
-    stageInfo.pName = "main";
-
-    VkComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.stage = stageInfo;
-    pipelineInfo.layout = m_compositeLayout;
-
-    VkResult result = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                                nullptr, &m_compositePipeline);
-
-    vkDestroyShaderModule(m_device, compShader, nullptr);
-
-    return result == VK_SUCCESS;
-}
-
-void PostProcessingPipeline::updateCompositeDescriptors(VkImageView scene,
-                                                         VkImageView ssr,
-                                                         VkImageView vol) {
-    if (m_compositeDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
-    if (scene == VK_NULL_HANDLE || m_intermediateHDRView == VK_NULL_HANDLE) return;
-
-    // ALWAYS write all 4 bindings (Vulkan requires all declared bindings to be valid)
-    // Use scene view as fallback for SSR/volumetric when not available
-    std::array<VkDescriptorImageInfo, 4> imageInfos{};
-    std::array<VkWriteDescriptorSet, 4> writes{};
-
-    // Binding 0: HDR scene
-    imageInfos[0].sampler = m_sampler;
-    imageInfos[0].imageView = scene;
-    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = m_compositeDescSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].descriptorCount = 1;
-    writes[0].pImageInfo = &imageInfos[0];
-
-    // Binding 1: SSR reflection (fallback to scene if null)
-    imageInfos[1].sampler = m_sampler;
-    imageInfos[1].imageView = ssr != VK_NULL_HANDLE ? ssr : scene;
-    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = m_compositeDescSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].descriptorCount = 1;
-    writes[1].pImageInfo = &imageInfos[1];
-
-    // Binding 2: Volumetric scatter (fallback to scene if null)
-    imageInfos[2].sampler = m_sampler;
-    imageInfos[2].imageView = vol != VK_NULL_HANDLE ? vol : scene;
-    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[2].dstSet = m_compositeDescSet;
-    writes[2].dstBinding = 2;
-    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[2].descriptorCount = 1;
-    writes[2].pImageInfo = &imageInfos[2];
-
-    // Binding 3: Output (storage image)
-    imageInfos[3].imageView = m_intermediateHDRView;
-    imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = m_compositeDescSet;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[3].descriptorCount = 1;
-    writes[3].pImageInfo = &imageInfos[3];
-
-    vkUpdateDescriptorSets(m_device, 4, writes.data(), 0, nullptr);
-}
-
-void PostProcessingPipeline::executeComposite(VkCommandBuffer cmd,
-                                               VkImageView sceneInput,
-                                               VkImageView ssrInput,
-                                               VkImageView volInput,
-                                               uint32_t flags) {
-    if (m_compositePipeline == VK_NULL_HANDLE || m_intermediateHDRView == VK_NULL_HANDLE) {
-        return;
-    }
-
-    // Transition intermediate HDR to GENERAL for storage write
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = m_intermediateHDR;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = 0;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-
-    vkCmdPipelineBarrier(cmd,
-                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                          0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-    // Update descriptors with current inputs
-    updateCompositeDescriptors(sceneInput, ssrInput, volInput);
-
-    // Bind and dispatch
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compositePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compositeLayout,
-                            0, 1, &m_compositeDescSet, 0, nullptr);
-
-    CompositeParams params{};
-    params.screenWidth = static_cast<float>(m_width);
-    params.screenHeight = static_cast<float>(m_height);
-    params.flags = flags;
-    params.padding = 0;
-
-    vkCmdPushConstants(cmd, m_compositeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(params), &params);
-
-    uint32_t groupsX = (m_width + 15) / 16;
-    uint32_t groupsY = (m_height + 15) / 16;
-    vkCmdDispatch(cmd, groupsX, groupsY, 1);
-
-    // Transition intermediate HDR to SHADER_READ_ONLY for subsequent passes
-    barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    vkCmdPipelineBarrier(cmd,
-                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                          0, 0, nullptr, 0, nullptr, 1, &barrier);
-}
 
 // ===================================================================
 // Dynamic tonemapping input rebind

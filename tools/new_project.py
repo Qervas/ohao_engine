@@ -54,6 +54,17 @@ def create_project(name: str, location: str | None = None) -> Path:
         shutil.copy2(gdext_src, gdext_dst)
         print(f"  Copied: {GDEXT_FILE}")
 
+    # 2b. Copy compiled shader SPV files (renderer needs these)
+    shader_src = GODOT_PROJECT / "bin" / "shaders"
+    shader_dst = project_dir / "bin" / "shaders"
+    if shader_src.exists():
+        shader_dst.mkdir(parents=True, exist_ok=True)
+        spv_count = 0
+        for spv in shader_src.glob("*.spv"):
+            shutil.copy2(spv, shader_dst / spv.name)
+            spv_count += 1
+        print(f"  Copied: {spv_count} shader SPV files")
+
     # 3. Symlink or copy addons
     for addon in ADDON_DIRS:
         addon_src = GODOT_PROJECT / "addons" / addon

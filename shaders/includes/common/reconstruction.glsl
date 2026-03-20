@@ -17,6 +17,19 @@ vec3 reconstructViewPos(vec2 uv, float depth, mat4 invProjection) {
     return viewPos.xyz / viewPos.w;
 }
 
+// Compact version: reconstruct from invProjParams = (1/proj[0][0], 1/proj[1][1], near, far)
+// Avoids passing a full mat4 inverse — saves 48 bytes of push constants
+vec3 reconstructViewPos(vec2 uv, float depth, vec4 invProjParams) {
+    vec2 ndc = uv * 2.0 - 1.0;
+    // Vulkan depth [0,1] → view-space Z
+    float near = invProjParams.z;
+    float far  = invProjParams.w;
+    float viewZ = -near * far / (depth * (far - near) - far); // linearize
+    return vec3(ndc.x * invProjParams.x * viewZ,
+                ndc.y * invProjParams.y * viewZ,
+                viewZ);
+}
+
 // ---------------------------------------------------------------------------
 // Reconstruct world-space position from UV + linear depth + inv matrices
 // Used by: volumetric_scatter

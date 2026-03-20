@@ -26,6 +26,7 @@ public:
     void setSSGITexture(VkImageView ssgi, VkSampler ssgiSampler);
     void setCloudShadow(VkImageView view, VkSampler sampler,
                         const glm::vec2& center, const glm::vec2& extent);
+    void setRTShadowMask(VkImageView view, VkSampler sampler);
 
     // Update descriptors when resources change
     void updateDescriptorSets();
@@ -95,6 +96,8 @@ private:
     VkBuffer m_cascadeBuffer{VK_NULL_HANDLE};
     VkImageView m_cloudShadowView{VK_NULL_HANDLE};
     VkSampler m_cloudShadowSampler{VK_NULL_HANDLE};
+    VkImageView m_rtShadowView{VK_NULL_HANDLE};
+    VkSampler m_rtShadowSampler{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};
