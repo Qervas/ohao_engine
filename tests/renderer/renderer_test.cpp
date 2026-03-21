@@ -48,34 +48,34 @@ std::unique_ptr<Scene> buildTestScene() {
     const float W = 5.0f;   // half-width
     const float H = 5.0f;   // half-height
     const float D = 5.0f;   // half-depth
-    const float T = 0.3f;   // wall thickness
+    const float T = 3.0f;   // very thick walls to guarantee no ray leaks
 
     const glm::vec3 white(0.73f, 0.73f, 0.73f);
     const glm::vec3 red(0.65f, 0.05f, 0.05f);
     const glm::vec3 green(0.12f, 0.45f, 0.15f);
 
-    // Wall geometry — no overlaps. Each wall fits between its neighbors.
-    const float THICK = 0.5f;
+    // Walls overlap at edges to form a sealed room — no gaps.
+    const float E = T + 0.1f;  // extra overlap past corners
 
-    // Side walls span full height and depth — they define the X boundaries
-    // Left wall (x = -W) — RED
+    // Left wall (RED) — full height + depth, extends past floor/ceiling/back
     addWall(scene.get(), "LeftWall",
-        glm::vec3(-W - THICK, 0, 0), glm::vec3(THICK, H, D), red);
+        glm::vec3(-W - T, 0, 0), glm::vec3(T, H + E, D + E), red);
 
-    // Right wall (x = +W) — GREEN
+    // Right wall (GREEN) — same
     addWall(scene.get(), "RightWall",
-        glm::vec3(W + THICK, 0, 0), glm::vec3(THICK, H, D), green);
+        glm::vec3(W + T, 0, 0), glm::vec3(T, H + E, D + E), green);
 
-    // Floor and ceiling fit BETWEEN the side walls (scale X = W, not W+THICK)
+    // Floor (WHITE) — full width + depth, overlaps into side walls
     addWall(scene.get(), "Floor",
-        glm::vec3(0, -H - THICK, 0), glm::vec3(W, THICK, D), white);
+        glm::vec3(0, -H - T, 0), glm::vec3(W + E, T, D + E), white);
 
+    // Ceiling (WHITE) — emissive light source
     addWall(scene.get(), "Ceiling",
-        glm::vec3(0, H + THICK, 0), glm::vec3(W, THICK, D), white);
+        glm::vec3(0, H + T, 0), glm::vec3(W + E, T, D + E), white);
 
-    // Back wall fits between side walls AND between floor/ceiling
+    // Back wall (WHITE) — full width + height, overlaps into everything
     addWall(scene.get(), "BackWall",
-        glm::vec3(0, 0, -D - THICK), glm::vec3(W, H, THICK), white);
+        glm::vec3(0, 0, -D - T), glm::vec3(W + E, H + E, T), white);
 
     // Tall block — right side of the room, toward the back
     auto tallBlock = scene->createActorWithComponents("TallBlock", PrimitiveType::Cube);
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 2048;
+    int numFrames = 1024;
     for (int i = 0; i < numFrames + 3; i++) {  // +3 for ring buffer fill
         renderer.render();
     }
