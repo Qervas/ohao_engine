@@ -102,65 +102,81 @@ std::unique_ptr<Scene> buildTestScene() {
     // Ceiling (y = +H, normal = -Y) — emissive light
     addWallQuad(scene.get(), "Ceiling",   LTB, RTB, RTF, LTF, glm::vec3(0,-1,0), white);
 
-    // Tall block — right side of the room, toward the back
-    auto tallBlock = scene->createActorWithComponents("TallBlock", PrimitiveType::Cube);
-    if (tallBlock) {
-        // Sits on the floor, so bottom at y = -H, height = 6 → center y = -H + 3
-        tallBlock->getTransform()->setPosition(glm::vec3(1.7f, -H + 3.0f, -1.5f));
-        tallBlock->getTransform()->setScale(glm::vec3(1.3f, 3.0f, 1.3f));
-        tallBlock->getTransform()->setRotation(glm::vec3(0, 18.0f, 0));
-        auto mat = tallBlock->getComponent<MaterialComponent>();
+    // === Three objects with different materials ===
+
+    // 1. Chrome sphere (metallic, mirror-like) — LEFT side
+    auto metalSphere = scene->createActorWithComponents("MetalSphere", PrimitiveType::Sphere);
+    if (metalSphere) {
+        metalSphere->getTransform()->setPosition(glm::vec3(-2.5f, -H + 1.5f, -1.0f));
+        metalSphere->getTransform()->setScale(glm::vec3(1.5f));
+        auto mat = metalSphere->getComponent<MaterialComponent>();
         if (mat) {
-            mat->getMaterial().baseColor = white;
-            mat->getMaterial().roughness = 0.9f;
+            mat->getMaterial().baseColor = glm::vec3(0.95f, 0.93f, 0.88f);  // silver
+            mat->getMaterial().roughness = 0.05f;   // mirror-like
+            mat->getMaterial().metallic = 1.0f;      // full metal
+        }
+    }
+
+    // 2. Tall clay block (super rough, matte) — CENTER-RIGHT
+    auto clayBlock = scene->createActorWithComponents("ClayBlock", PrimitiveType::Cube);
+    if (clayBlock) {
+        clayBlock->getTransform()->setPosition(glm::vec3(1.5f, -H + 2.5f, -1.5f));
+        clayBlock->getTransform()->setScale(glm::vec3(1.2f, 2.5f, 1.2f));
+        clayBlock->getTransform()->setRotation(glm::vec3(0, 20.0f, 0));
+        auto mat = clayBlock->getComponent<MaterialComponent>();
+        if (mat) {
+            mat->getMaterial().baseColor = glm::vec3(0.76f, 0.55f, 0.38f);  // terracotta
+            mat->getMaterial().roughness = 0.98f;    // super rough clay
             mat->getMaterial().metallic = 0.0f;
         }
     }
 
-    // Short block — left side of the room, toward the front
-    auto shortBlock = scene->createActorWithComponents("ShortBlock", PrimitiveType::Cube);
-    if (shortBlock) {
-        // Height = 3 → center y = -H + 1.5
-        shortBlock->getTransform()->setPosition(glm::vec3(-1.5f, -H + 1.5f, 1.5f));
-        shortBlock->getTransform()->setScale(glm::vec3(1.3f, 1.5f, 1.3f));
-        shortBlock->getTransform()->setRotation(glm::vec3(0, -15.0f, 0));
-        auto mat = shortBlock->getComponent<MaterialComponent>();
+    // 3. Glass-like sphere (glossy, slight tint) — RIGHT-FRONT
+    auto glassSphere = scene->createActorWithComponents("GlassSphere", PrimitiveType::Sphere);
+    if (glassSphere) {
+        glassSphere->getTransform()->setPosition(glm::vec3(2.0f, -H + 1.2f, 2.0f));
+        glassSphere->getTransform()->setScale(glm::vec3(1.2f));
+        auto mat = glassSphere->getComponent<MaterialComponent>();
         if (mat) {
-            mat->getMaterial().baseColor = white;
-            mat->getMaterial().roughness = 0.9f;
-            mat->getMaterial().metallic = 0.0f;
+            mat->getMaterial().baseColor = glm::vec3(0.9f, 0.95f, 1.0f);  // ice blue tint
+            mat->getMaterial().roughness = 0.02f;    // super smooth, glossy
+            mat->getMaterial().metallic = 0.0f;       // dielectric (glass-like)
         }
     }
 
-    // Z-up arrow doodle on the back wall — to verify camera orientation
-    // Arrow shaft: thin vertical bar on back wall
-    float bz = -D + 0.02f;  // slightly in front of back wall
-    glm::vec3 yellow(0.9f, 0.85f, 0.1f);
-    // Shaft: from y=-2 to y=2, width 0.3
-    addWallQuad(scene.get(), "ArrowShaft",
-        glm::vec3(-0.15f, -2.0f, bz), glm::vec3(0.15f, -2.0f, bz),
-        glm::vec3(0.15f,  2.0f, bz),  glm::vec3(-0.15f, 2.0f, bz),
-        glm::vec3(0,0,1), yellow);
-    // Arrowhead left: triangle approximated as thin quad
-    addWallQuad(scene.get(), "ArrowHeadL",
-        glm::vec3(-0.15f, 2.0f, bz), glm::vec3(-1.0f, 1.0f, bz),
-        glm::vec3(-0.8f, 1.2f, bz),  glm::vec3(-0.15f, 2.2f, bz),
-        glm::vec3(0,0,1), yellow);
-    // Arrowhead right
-    addWallQuad(scene.get(), "ArrowHeadR",
-        glm::vec3(0.15f, 2.0f, bz),  glm::vec3(0.15f, 2.2f, bz),
-        glm::vec3(0.8f, 1.2f, bz),   glm::vec3(1.0f, 1.0f, bz),
-        glm::vec3(0,0,1), yellow);
-    // "Y" label above arrow — small bar
-    addWallQuad(scene.get(), "LabelY",
-        glm::vec3(-0.4f, 2.8f, bz), glm::vec3(0.4f, 2.8f, bz),
-        glm::vec3(0.4f, 3.2f, bz),  glm::vec3(-0.4f, 3.2f, bz),
-        glm::vec3(0,0,1), yellow);
-    // Up arrow indicator: "^" shape above the Y label
-    addWallQuad(scene.get(), "UpCaret",
-        glm::vec3(0.0f, 3.8f, bz),  glm::vec3(0.5f, 3.3f, bz),
-        glm::vec3(0.35f, 3.3f, bz), glm::vec3(0.0f, 3.65f, bz),
-        glm::vec3(0,0,1), yellow);
+    // === Procedural wall painting on the back wall ===
+    // Checkerboard pattern made of small colored quads
+    float bz = -D + 0.02f;
+    float tileSize = 0.8f;
+    int gridW = 6, gridH = 4;
+    float startX = -(gridW * tileSize) / 2.0f;
+    float startY = -0.5f;  // center vertically
+    for (int gy = 0; gy < gridH; gy++) {
+        for (int gx = 0; gx < gridW; gx++) {
+            float x0 = startX + gx * tileSize;
+            float y0 = startY + gy * tileSize;
+            float x1 = x0 + tileSize * 0.9f;  // small gap between tiles
+            float y1 = y0 + tileSize * 0.9f;
+
+            // Procedural color: warm/cool checkerboard
+            bool checker = ((gx + gy) % 2) == 0;
+            glm::vec3 tileColor;
+            if (checker) {
+                // Warm tones
+                float t = float(gx + gy * gridW) / float(gridW * gridH);
+                tileColor = glm::vec3(0.85f - t*0.3f, 0.45f + t*0.2f, 0.25f);
+            } else {
+                float t = float(gx + gy * gridW) / float(gridW * gridH);
+                tileColor = glm::vec3(0.3f, 0.5f + t*0.3f, 0.7f - t*0.2f);
+            }
+
+            std::string tileName = "Tile_" + std::to_string(gx) + "_" + std::to_string(gy);
+            addWallQuad(scene.get(), tileName,
+                glm::vec3(x0, y0, bz), glm::vec3(x1, y0, bz),
+                glm::vec3(x1, y1, bz), glm::vec3(x0, y1, bz),
+                glm::vec3(0,0,1), tileColor);
+        }
+    }
 
     // Ceiling light — point light just below the ceiling, centered
     auto ceilingLight = scene->createActorWithComponents("CeilingLight", PrimitiveType::PointLight);

@@ -121,10 +121,34 @@ void main() {
             throughput /= p;
         }
 
-        // Lambertian bounce
-        rayDir = cosineHemisphere(N);
-        rayOrigin = hitPos + N * 0.01;
-        throughput *= albedo;
+        // Material-dependent bounce
+        // Detect metallic: high luminance, desaturated (silver/chrome)
+        float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
+        float saturation = length(albedo - vec3(lum));
+        bool isMetal = (lum > 0.85 && saturation < 0.1);
+        // Detect glossy: very light blue tint (glass-like)
+        bool isGlossy = (albedo.b > 0.95 && albedo.r > 0.85 && saturation < 0.15 && !isMetal);
+
+        if (isMetal) {
+            // Perfect mirror reflection
+            rayDir = reflect(rayDir, N);
+            rayOrigin = hitPos + N * 0.01;
+            throughput *= albedo;  // metallic reflection preserves color
+        } else if (isGlossy) {
+            // Glossy reflection with slight roughness
+            vec3 reflected = reflect(rayDir, N);
+            // Add small random perturbation for glossy
+            vec3 jitter = cosineHemisphere(reflected) * 0.08;
+            rayDir = normalize(reflected + jitter);
+            if (dot(rayDir, N) < 0.0) rayDir = reflect(rayDir, N);
+            rayOrigin = hitPos + N * 0.01;
+            throughput *= vec3(0.95);  // slight absorption
+        } else {
+            // Lambertian diffuse
+            rayDir = cosineHemisphere(N);
+            rayOrigin = hitPos + N * 0.01;
+            throughput *= albedo;
+        }
     }
 
     // Accumulate

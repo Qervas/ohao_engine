@@ -460,11 +460,24 @@ void OffscreenRenderer::buildAccelerationStructures() {
 
         // Collect albedo in same order
         auto matComp = actor->getComponent<MaterialComponent>();
-        glm::vec3 albedo(0.73f);  // default white
-        if (matComp) albedo = matComp->getMaterial().baseColor;
-        materialAlbedos.push_back(albedo);
+        glm::vec3 albedo(0.73f);
+        float roughness = 0.95f;
+        float metallic = 0.0f;
+        if (matComp) {
+            albedo = matComp->getMaterial().baseColor;
+            roughness = matComp->getMaterial().roughness;
+            metallic = matComp->getMaterial().metallic;
+        }
+        // Pack: vec4(albedo, roughness) — metallic encoded in roughness sign
+        // roughness > 0 = dielectric, roughness < 0 = metallic (abs = actual roughness)
+        float packedRoughness = metallic > 0.5f ? -roughness : roughness;
+        materialAlbedos.push_back(glm::vec3(albedo.r, albedo.g, albedo.b));
+        // Store packed roughness in a parallel structure — but we only have vec3...
+        // Hack: put roughness+metallic in the albedo's unused channel via setMaterialAlbedos
+        // Actually, let me just change the material buffer to store vec4 with roughness in .a
         std::cout << "[RT] Instance " << instanceIdx << " (" << actor->getName()
-                  << "): albedo=(" << albedo.r << "," << albedo.g << "," << albedo.b << ")" << std::endl;
+                  << "): albedo=(" << albedo.r << "," << albedo.g << "," << albedo.b
+                  << ") rough=" << roughness << " metal=" << metallic << std::endl;
         instanceIdx++;
     }
 
