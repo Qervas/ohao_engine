@@ -443,22 +443,25 @@ void OffscreenRenderer::buildAccelerationStructures() {
         if (blas != INVALID_BLAS) actorBlas[actorId] = blas;
     }
 
+    // Build TLAS instances + collect materials in the SAME order
     m_rtAccel->clearInstances();
+    std::vector<glm::vec3> materialAlbedos;
+    uint32_t instanceIdx = 0;
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
+        // customIndex = sequential index matching material buffer
         m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(),
-                               static_cast<uint32_t>(actorId));
-    }
+                               instanceIdx);
 
-    // Collect per-instance material albedos for RT GI
-    std::vector<glm::vec3> materialAlbedos;
-    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-        if (actorBlas.find(actorId) == actorBlas.end()) continue;
+        // Collect albedo in same order
         auto matComp = actor->getComponent<MaterialComponent>();
         glm::vec3 albedo(0.73f);  // default white
         if (matComp) albedo = matComp->getMaterial().baseColor;
         materialAlbedos.push_back(albedo);
+        std::cout << "[RT] Instance " << instanceIdx << " (" << actor->getName()
+                  << "): albedo=(" << albedo.r << "," << albedo.g << "," << albedo.b << ")" << std::endl;
+        instanceIdx++;
     }
 
     if (m_rtAccel->getInstanceCount() > 0) {

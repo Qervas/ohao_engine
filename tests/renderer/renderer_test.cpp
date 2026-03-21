@@ -168,8 +168,8 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    // More frames = less noise. 128 frames for good convergence.
-    int numFrames = 128;
+    // More frames = less noise. 256 samples for visible GI.
+    int numFrames = 256;
     for (int i = 0; i < numFrames + 3; i++) {  // +3 for ring buffer fill
         renderer.render();
     }

@@ -517,11 +517,11 @@ void OffscreenRenderer::renderPathTraced() {
     vkBeginCommandBuffer(cmd, &beginInfo);
 
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, 20.0f),
+        glm::vec3(0.0f, 0.0f, 12.0f),   // closer to the box
         glm::vec3(0.0f, 0.0f, 0.0f),
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    float fovRad = glm::radians(38.0f);
+    float fovRad = glm::radians(50.0f);  // wider to see more of the interior
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptProj = glm::perspectiveRH_ZO(fovRad, aspect, 0.1f, 1000.0f);
     // Don't Y-flip for path tracer — the rgen shader handles NDC directly
