@@ -435,6 +435,11 @@ void OffscreenRenderer::buildAccelerationStructures() {
         VkDeviceSize vertexByteOffset = meshInfo.vertexOffset * sizeof(Vertex);
         VkDeviceSize indexByteOffset = meshInfo.indexOffset * sizeof(uint32_t);
 
+        std::cout << "[RT] BLAS for " << actor->getName()
+                  << ": vOff=" << meshInfo.vertexOffset << " (" << vertexByteOffset << " bytes)"
+                  << " iOff=" << meshInfo.indexOffset << " (" << indexByteOffset << " bytes)"
+                  << " vCount=" << meshInfo.vertexCount << " iCount=" << meshInfo.indexCount << std::endl;
+
         BlasHandle blas = m_rtAccel->createBLAS(
             m_rtVertexBuffer, meshInfo.vertexCount, sizeof(Vertex),
             m_rtIndexBuffer, meshInfo.indexCount,
@@ -450,9 +455,8 @@ void OffscreenRenderer::buildAccelerationStructures() {
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
-        // Vertices are already in world space (pre-transformed during buffer upload)
-        // Use identity transform for TLAS to avoid double-transform
-        m_rtAccel->addInstance(blasIt->second, glm::mat4(1.0f), instanceIdx);
+        // Vertices are in LOCAL space (unit cube). TLAS transform places them in world space.
+        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), instanceIdx);
 
         // Collect albedo in same order
         auto matComp = actor->getComponent<MaterialComponent>();

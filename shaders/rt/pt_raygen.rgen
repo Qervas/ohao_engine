@@ -190,32 +190,14 @@ void main() {
         throughput *= hitAlbedo;  // diffuse BRDF: albedo/PI * cosTheta * PI = albedo
     }
 
-    // DEBUG: trace the PRIMARY ray (save original direction before bounce loop changes it)
-    vec3 primaryOrigin = vec3(pc.invView[3]);
-    vec3 primaryDir = normalize(-vec3(pc.invView[2])
-        + vec3(pc.invView[0]) * ndc.x * 1.0 * float(pc.params.x) / float(pc.params.y)
-        + vec3(pc.invView[1]) * ndc.y * 1.0);
+    // Accumulate over frames
+    vec4 prevAccum = imageLoad(accumBuffer, pixel);
+    float sampleCount = prevAccum.w + 1.0;
+    vec3 accumulated = (prevAccum.rgb * prevAccum.w + radiance) / sampleCount;
+    imageStore(accumBuffer, pixel, vec4(accumulated, sampleCount));
 
-    payload.hitDist = -1.0;
-    traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
-                primaryOrigin, 0.001, primaryDir, 10000.0, 0);
-
-    vec3 debugColor;
-    if (payload.hitDist < 0.0) {
-        debugColor = vec3(0.0);  // miss = black
-    } else {
-        // Visualize: instance index as color
-        uint inst = payload.hitInstance;
-        if (inst == 0u) debugColor = vec3(0.73);      // Floor = white
-        else if (inst == 1u) debugColor = vec3(1.0);   // Ceiling = bright
-        else if (inst == 2u) debugColor = vec3(0.8);   // BackWall = light gray
-        else if (inst == 3u) debugColor = vec3(0.65, 0.05, 0.05);  // Left = red
-        else if (inst == 4u) debugColor = vec3(0.12, 0.45, 0.15);  // Right = green
-        else if (inst == 5u) debugColor = vec3(0.5, 0.5, 1.0);     // TallBlock = blue
-        else if (inst == 6u) debugColor = vec3(1.0, 1.0, 0.0);     // ShortBlock = yellow
-        else debugColor = vec3(1.0, 0.0, 1.0);  // unknown = magenta
-    }
-
-    imageStore(accumBuffer, pixel, vec4(0));
-    imageStore(outputImage, pixel, vec4(debugColor, 1.0));
+    // Tonemap and write to output
+    vec3 ldr = ACESFilm(accumulated * 4.0);
+    ldr = pow(ldr, vec3(1.0 / 2.2));
+    imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

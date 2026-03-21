@@ -167,8 +167,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Debug: 1 frame for visualization
-    int numFrames = 1;
+    int numFrames = 512;
     for (int i = 0; i < numFrames + 3; i++) {  // +3 for ring buffer fill
         renderer.render();
     }

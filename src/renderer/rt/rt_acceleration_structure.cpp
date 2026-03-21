@@ -209,15 +209,17 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
                                                 VkCommandBuffer cmd) {
     if (!m_supported) return INVALID_BLAS;
 
-    // Geometry description — offsets point to the correct sub-range in combined buffers
+    // Geometry: point to BASE of combined buffers (not sub-range).
+    // Indices are global (pre-offset to reference correct vertices).
+    // Index byte offset applied via primitiveOffset in rangeInfo.
     VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
     triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
     triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = getBufferDeviceAddress(vertexBuffer) + vertexByteOffset;
+    triangles.vertexData.deviceAddress = getBufferDeviceAddress(vertexBuffer);  // base, no offset
     triangles.vertexStride = vertexStride;
-    triangles.maxVertex = vertexCount - 1;
+    triangles.maxVertex = vertexCount + static_cast<uint32_t>(vertexByteOffset / vertexStride) - 1;  // max global index
     triangles.indexType = VK_INDEX_TYPE_UINT32;
-    triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer) + indexByteOffset;
+    triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer);  // base, no offset
 
     VkAccelerationStructureGeometryKHR geometry{};
     geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -283,8 +285,8 @@ BlasHandle RTAccelerationStructure::createBLAS(VkBuffer vertexBuffer, uint32_t v
 
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
     rangeInfo.primitiveCount = primitiveCount;
-    rangeInfo.primitiveOffset = 0;
-    rangeInfo.firstVertex = 0;
+    rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);  // byte offset into index buffer
+    rangeInfo.firstVertex = 0;  // indices are already global
     rangeInfo.transformOffset = 0;
 
     const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
