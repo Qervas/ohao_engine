@@ -97,7 +97,20 @@ void main() {
 
         // Instance 4 = Ceiling = emissive light source
         if (payload.hitInstance == 4u) {
-            radiance += throughput * pc.lightColorAndRadius.xyz * 4.0;
+            // Only emit from the center portion of the ceiling (area light, not full ceiling)
+            // Light panel: |x| < 2 and |z| < 2 (small panel in center of 10x10 ceiling)
+            vec3 hp = payload.hitPos;
+            if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
+                radiance += throughput * pc.lightColorAndRadius.xyz * 6.0;
+            }
+            // Rest of ceiling is just white diffuse — doesn't emit, continues bouncing
+            else {
+                // Don't break — treat as regular white surface, keep bouncing
+                rayDir = cosineHemisphere(N);
+                rayOrigin = hitPos + N * 0.01;
+                throughput *= albedo;
+                continue;
+            }
             break;
         }
 
@@ -121,7 +134,7 @@ void main() {
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
     // Tonemap + gamma
-    vec3 ldr = ACES(acc * 2.0);
+    vec3 ldr = ACES(acc * 1.2);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
