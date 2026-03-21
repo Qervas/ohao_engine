@@ -1,203 +1,127 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
-// Path Tracer Ray Generation Shader
-// Full path tracing: primary ray → hit surface → evaluate BRDF → bounce → accumulate
-// No rasterization. Every pixel is a traced ray.
+// Brute-force path tracer — simplest possible correct implementation.
+// No NEE, no tricks. Just trace rays, bounce off surfaces, hit the light.
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
-layout(set = 0, binding = 1, rgba32f) uniform image2D accumBuffer;   // accumulation (HDR, multi-frame)
-layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;      // tonemapped output (LDR)
-
-// Material buffer — per-instance vec4 (rgb=albedo, a=roughness)
-layout(set = 0, binding = 3) readonly buffer MaterialBuffer {
-    vec4 materials[];
-} materialBuf;
+layout(set = 0, binding = 1, rgba32f) uniform image2D accumBuffer;
+layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;
+layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; } materialBuf;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
-    vec4 lightPosAndIntensity;   // xyz=light position, w=intensity
-    vec4 lightColorAndRadius;    // xyz=light color, w=light radius
-    uvec4 params;                // x=width, y=height, z=frameIndex, w=maxBounces
+    vec4 lightPosAndIntensity;
+    vec4 lightColorAndRadius;
+    uvec4 params;  // x=width, y=height, z=frameIndex, w=maxBounces
 } pc;
 
-// Payload: color accumulated along the path + hit info
 struct RayPayload {
-    vec3 color;      // accumulated radiance
-    vec3 attenuation;// path throughput
-    vec3 hitPos;     // world position of hit
-    vec3 hitNormal;  // world normal at hit
-    vec3 hitAlbedo;  // surface albedo
-    float hitDist;   // -1 = miss
-    uint hitInstance; // instance index
+    vec3 color;
+    vec3 attenuation;
+    vec3 hitPos;
+    vec3 hitNormal;
+    vec3 hitAlbedo;
+    float hitDist;
+    uint hitInstance;
 };
 
 layout(location = 0) rayPayloadEXT RayPayload payload;
 
-// ─── Random number generation (PCG) ─────────────────────────────────
-
-uint pcgState;
-
-void pcgInit(uvec2 pixel, uint frame) {
-    pcgState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
+// PCG random
+uint rngState;
+void rngInit(uvec2 pixel, uint frame) {
+    rngState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
 }
-
-uint pcgNext() {
-    pcgState = pcgState * 747796405u + 2891336453u;
-    uint word = ((pcgState >> ((pcgState >> 28u) + 4u)) ^ pcgState) * 277803737u;
-    return (word >> 22u) ^ word;
+uint rngNext() {
+    rngState = rngState * 747796405u + 2891336453u;
+    uint w = ((rngState >> ((rngState >> 28u) + 4u)) ^ rngState) * 277803737u;
+    return (w >> 22u) ^ w;
 }
+float rand01() { return float(rngNext()) / 4294967296.0; }
 
-float rand01() {
-    return float(pcgNext()) / 4294967296.0;
-}
-
-vec2 rand2() {
-    return vec2(rand01(), rand01());
-}
-
-// ─── Sampling ────────────────────────────────────────────────────────
-
-vec3 cosineSampleHemisphere(vec3 N) {
-    vec3 up = abs(N.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+// Cosine-weighted hemisphere sample
+vec3 cosineHemisphere(vec3 N) {
+    vec3 up = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
     vec3 T = normalize(cross(up, N));
     vec3 B = cross(N, T);
-
-    vec2 u = rand2();
-    float r = sqrt(u.x);
-    float phi = 6.2831853 * u.y;
-    float x = r * cos(phi);
-    float y = r * sin(phi);
-    float z = sqrt(max(0.0, 1.0 - u.x));
-
-    return normalize(T * x + B * y + N * z);
+    float r = sqrt(rand01());
+    float phi = 6.2831853 * rand01();
+    return normalize(T * r * cos(phi) + B * r * sin(phi) + N * sqrt(max(0.0, 1.0 - r*r)));
 }
 
-// ─── Tonemapping ─────────────────────────────────────────────────────
-
-vec3 ACESFilm(vec3 x) {
-    float a = 2.51;
-    float b = 0.03;
-    float c = 2.43;
-    float d = 0.59;
-    float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+// ACES tonemapping
+vec3 ACES(vec3 x) {
+    return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0);
 }
-
-// ─── Main ────────────────────────────────────────────────────────────
 
 void main() {
     ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
-    uint frameIndex = pc.params.z;
+    uint frameIdx = pc.params.z;
     uint maxBounces = pc.params.w;
+    rngInit(uvec2(pixel), frameIdx);
 
-    pcgInit(uvec2(pixel), frameIndex);
-
-    // Generate primary ray from camera with sub-pixel jitter
-    vec2 jitter = rand2() - 0.5;
+    // Camera ray with sub-pixel jitter
+    vec2 jitter = vec2(rand01(), rand01()) - 0.5;
     vec2 uv = (vec2(pixel) + 0.5 + jitter) / vec2(pc.params.xy);
     vec2 ndc = uv * 2.0 - 1.0;
 
-    // Direct camera ray — no matrix math, hardcoded for debugging
-    // Camera at (0,0,0) looking toward (0,0,-1), FOV 90°, aspect 16:9
-    vec3 rayOrigin = vec3(pc.invView[3]);  // camera position
-    float fovScale = 1.0;  // tan(45°) = 1.0 for 90° FOV
-    float aspectRatio = float(pc.params.x) / float(pc.params.y);
-    vec3 forward = -vec3(pc.invView[2]);
+    // Pinhole camera from invView
+    vec3 camPos = vec3(pc.invView[3]);
+    vec3 fwd = -vec3(pc.invView[2]);
     vec3 right = vec3(pc.invView[0]);
     vec3 up = vec3(pc.invView[1]);
-    vec3 rayDir = normalize(forward + right * ndc.x * fovScale * aspectRatio + up * ndc.y * fovScale);
+    float aspect = float(pc.params.x) / float(pc.params.y);
+    // Extract vertical FOV from inverse projection
+    float tanFovY = abs(pc.invProj[1][1]);
+    float tanFovX = tanFovY * aspect;
 
-    // Path trace
+    vec3 rayDir = normalize(fwd + right * ndc.x * tanFovX + up * ndc.y * tanFovY);
+    vec3 rayOrigin = camPos;
+
+    // Path trace — pure brute force
     vec3 radiance = vec3(0.0);
     vec3 throughput = vec3(1.0);
 
     for (uint bounce = 0u; bounce <= maxBounces; bounce++) {
         payload.hitDist = -1.0;
-        payload.color = vec3(0.0);
-
-        traceRayEXT(topLevelAS,
-                     gl_RayFlagsOpaqueEXT,
-                     0xFF, 0, 0, 0,
+        traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
                      rayOrigin, 0.001, rayDir, 10000.0, 0);
 
-        if (payload.hitDist < 0.0) {
-            // Miss — no contribution (enclosed scene like Cornell box)
-            break;
-        }
+        if (payload.hitDist < 0.0) break;  // miss — escaped scene
 
         vec3 hitPos = payload.hitPos;
-        vec3 hitNormal = payload.hitNormal;
-        vec3 hitAlbedo = payload.hitAlbedo;
+        vec3 N = payload.hitNormal;
+        vec3 albedo = payload.hitAlbedo;
 
-        // Emissive surface check — ceiling (instance 1) is the area light
-        if (payload.hitInstance == 1u) {
-            // Emission: Le = lightColor * intensity_scale
-            vec3 emission = pc.lightColorAndRadius.xyz * 25.0;
-            radiance += throughput * emission;
+        // Instance 3 = Ceiling = emissive light source
+        if (payload.hitInstance == 3u) {
+            radiance += throughput * pc.lightColorAndRadius.xyz * 20.0;
             break;
-        }
-
-        // Next Event Estimation: explicitly sample the emissive ceiling
-        // Pick a random point on the ceiling (y = H, x in [-W, W], z in [-D, D])
-        vec2 lightSample = rand2();
-        float ceilW = 5.0;  // half-width of ceiling
-        float ceilD = 5.0;  // half-depth
-        vec3 lightPoint = vec3(
-            (lightSample.x * 2.0 - 1.0) * ceilW,
-            4.9,  // just below ceiling inner face (ceiling slab at y=5.5)
-            (lightSample.y * 2.0 - 1.0) * ceilD
-        );
-        float ceilArea = 4.0 * ceilW * ceilD;  // total area of ceiling
-
-        vec3 toLight = lightPoint - hitPos;
-        float lightDist = length(toLight);
-        vec3 L = toLight / lightDist;
-        float NdotL = max(dot(hitNormal, L), 0.0);
-        float lightNdotL = max(L.y, 0.0);  // ceiling normal = (0,-1,0), dot(-L, normal) = L.y
-
-        if (NdotL > 0.0 && lightNdotL > 0.0) {
-            // Shadow ray to the light point
-            payload.hitDist = 999.0;
-            traceRayEXT(topLevelAS,
-                         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
-                         0xFF, 0, 0, 0,
-                         hitPos + hitNormal * 0.01, 0.001, L, lightDist - 0.02, 0);
-
-            bool inShadow = (payload.hitDist >= 0.0);
-
-            if (!inShadow) {
-                // Area light contribution:
-                // Lo = Le * BRDF * cos(θ_surface) * cos(θ_light) * A / d²
-                vec3 Le = pc.lightColorAndRadius.xyz * 25.0;
-                float geomTerm = NdotL * lightNdotL / (lightDist * lightDist);
-                vec3 brdfValue = hitAlbedo / 3.14159;  // Lambertian
-                radiance += throughput * Le * brdfValue * geomTerm * ceilArea;
-            }
         }
 
         // Russian roulette after bounce 2
         if (bounce > 1u) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
-            if (rand01() > p) break;
+            if (p < 0.01 || rand01() > p) break;
             throughput /= p;
         }
 
-        // Bounce: cosine-weighted hemisphere sampling (Lambertian diffuse)
-        rayDir = cosineSampleHemisphere(hitNormal);
-        rayOrigin = hitPos + hitNormal * 0.01;
-        throughput *= hitAlbedo;  // diffuse BRDF: albedo/PI * cosTheta * PI = albedo
+        // Lambertian bounce
+        rayDir = cosineHemisphere(N);
+        rayOrigin = hitPos + N * 0.01;
+        throughput *= albedo;
     }
 
-    // Accumulate over frames
-    vec4 prevAccum = imageLoad(accumBuffer, pixel);
-    float sampleCount = prevAccum.w + 1.0;
-    vec3 accumulated = (prevAccum.rgb * prevAccum.w + radiance) / sampleCount;
-    imageStore(accumBuffer, pixel, vec4(accumulated, sampleCount));
+    // Accumulate
+    vec4 prev = imageLoad(accumBuffer, pixel);
+    float count = prev.w + 1.0;
+    vec3 acc = (prev.rgb * prev.w + radiance) / count;
+    imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    // Tonemap and write to output
-    vec3 ldr = ACESFilm(accumulated * 3.0);
-    ldr = pow(ldr, vec3(1.0 / 2.2));
+    // Tonemap + gamma
+    vec3 ldr = ACES(acc * 2.5);
+    ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
