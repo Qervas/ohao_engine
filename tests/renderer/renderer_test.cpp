@@ -22,19 +22,47 @@
 
 using namespace ohao;
 
-// Helper to create a wall (scaled cube)
-void addWall(Scene* scene, const std::string& name, glm::vec3 pos, glm::vec3 scale, glm::vec3 color) {
-    auto wall = scene->createActorWithComponents(name, PrimitiveType::Cube);
-    if (wall) {
-        wall->getTransform()->setPosition(pos);
-        wall->getTransform()->setScale(scale);
-        auto mat = wall->getComponent<MaterialComponent>();
-        if (mat) {
-            mat->getMaterial().baseColor = color;
-            mat->getMaterial().roughness = 0.95f;
-            mat->getMaterial().metallic = 0.0f;
-        }
-    }
+// Create a single quad (2 triangles) with given corners and normal, add to model
+void addQuad(std::vector<Vertex>& verts, std::vector<uint32_t>& inds,
+             glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 normal, glm::vec3 color) {
+    uint32_t base = static_cast<uint32_t>(verts.size());
+    auto makeVert = [&](glm::vec3 pos) {
+        Vertex v{};
+        v.position = pos;
+        v.normal = normal;
+        v.color = color;
+        v.texCoord = glm::vec2(0);
+        v.tangent = glm::vec4(1,0,0,1);
+        v.boneIndices = glm::ivec4(0);
+        v.boneWeights = glm::vec4(1,0,0,0);
+        return v;
+    };
+    verts.push_back(makeVert(a));
+    verts.push_back(makeVert(b));
+    verts.push_back(makeVert(c));
+    verts.push_back(makeVert(d));
+    inds.push_back(base+0); inds.push_back(base+1); inds.push_back(base+2);
+    inds.push_back(base+0); inds.push_back(base+2); inds.push_back(base+3);
+}
+
+// Create a wall actor with a custom single-quad mesh (watertight, no gaps)
+void addWallQuad(Scene* scene, const std::string& name,
+                 glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+                 glm::vec3 normal, glm::vec3 color) {
+    auto actor = scene->createActor(name);
+    if (!actor) return;
+
+    auto model = std::make_shared<Model>();
+    addQuad(model->vertices, model->indices, a, b, c, d, normal, color);
+
+    auto meshComp = actor->addComponent<MeshComponent>();
+    meshComp->setModel(model);
+    meshComp->setVisible(true);
+
+    auto matComp = actor->addComponent<MaterialComponent>();
+    matComp->getMaterial().baseColor = color;
+    matComp->getMaterial().roughness = 0.95f;
+    matComp->getMaterial().metallic = 0.0f;
 }
 
 // Cornell Box — the standard reference scene for GI / RT rendering.
@@ -48,34 +76,31 @@ std::unique_ptr<Scene> buildTestScene() {
     const float W = 5.0f;   // half-width
     const float H = 5.0f;   // half-height
     const float D = 5.0f;   // half-depth
-    const float T = 3.0f;   // very thick walls to guarantee no ray leaks
-
     const glm::vec3 white(0.73f, 0.73f, 0.73f);
     const glm::vec3 red(0.65f, 0.05f, 0.05f);
     const glm::vec3 green(0.12f, 0.45f, 0.15f);
 
-    // Walls overlap at edges to form a sealed room — no gaps.
-    const float E = T + 0.1f;  // extra overlap past corners
+    // 8 corners of the room — shared by all walls, watertight
+    glm::vec3 LBB(-W, -H, -D);  // left-bottom-back
+    glm::vec3 RBB( W, -H, -D);  // right-bottom-back
+    glm::vec3 LTB(-W,  H, -D);  // left-top-back
+    glm::vec3 RTB( W,  H, -D);  // right-top-back
+    glm::vec3 LBF(-W, -H,  D);  // left-bottom-front
+    glm::vec3 RBF( W, -H,  D);  // right-bottom-front
+    glm::vec3 LTF(-W,  H,  D);  // left-top-front
+    glm::vec3 RTF( W,  H,  D);  // right-top-front
 
-    // Left wall (RED) — full height + depth, extends past floor/ceiling/back
-    addWall(scene.get(), "LeftWall",
-        glm::vec3(-W - T, 0, 0), glm::vec3(T, H + E, D + E), red);
-
-    // Right wall (GREEN) — same
-    addWall(scene.get(), "RightWall",
-        glm::vec3(W + T, 0, 0), glm::vec3(T, H + E, D + E), green);
-
-    // Floor (WHITE) — full width + depth, overlaps into side walls
-    addWall(scene.get(), "Floor",
-        glm::vec3(0, -H - T, 0), glm::vec3(W + E, T, D + E), white);
-
-    // Ceiling (WHITE) — emissive light source
-    addWall(scene.get(), "Ceiling",
-        glm::vec3(0, H + T, 0), glm::vec3(W + E, T, D + E), white);
-
-    // Back wall (WHITE) — full width + height, overlaps into everything
-    addWall(scene.get(), "BackWall",
-        glm::vec3(0, 0, -D - T), glm::vec3(W + E, H + E, T), white);
+    // 5 walls as quads — normals face INWARD
+    // Back wall (z = -D, normal = +Z)
+    addWallQuad(scene.get(), "BackWall",  LBB, RBB, RTB, LTB, glm::vec3(0,0,1), white);
+    // Left wall (x = -W, normal = +X) — RED
+    addWallQuad(scene.get(), "LeftWall",  LBB, LTB, LTF, LBF, glm::vec3(1,0,0), red);
+    // Right wall (x = +W, normal = -X) — GREEN
+    addWallQuad(scene.get(), "RightWall", RBB, RBF, RTF, RTB, glm::vec3(-1,0,0), green);
+    // Floor (y = -H, normal = +Y)
+    addWallQuad(scene.get(), "Floor",     LBB, LBF, RBF, RBB, glm::vec3(0,1,0), white);
+    // Ceiling (y = +H, normal = -Y) — emissive light
+    addWallQuad(scene.get(), "Ceiling",   LTB, RTB, RTF, LTF, glm::vec3(0,-1,0), white);
 
     // Tall block — right side of the room, toward the back
     auto tallBlock = scene->createActorWithComponents("TallBlock", PrimitiveType::Cube);
