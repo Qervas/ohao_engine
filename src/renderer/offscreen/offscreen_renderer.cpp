@@ -516,19 +516,28 @@ void OffscreenRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
+    // Camera at center of box looking at back wall
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, 12.0f),   // closer to the box
-        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 0.0f, 0.0f),    // center of box
+        glm::vec3(0.0f, 0.0f, -5.0f),   // back wall
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    float fovRad = glm::radians(50.0f);  // wider to see more of the interior
+    float fovDeg = 90.0f;
     float aspect = float(m_width) / float(m_height);
-    glm::mat4 ptProj = glm::perspectiveRH_ZO(fovRad, aspect, 0.1f, 1000.0f);
-    // Don't Y-flip for path tracer — the rgen shader handles NDC directly
+    glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(fovDeg), aspect, 0.1f, 1000.0f);
+    glm::mat4 iv = glm::inverse(ptView);
+    std::cout << "[PT] invView right=(" << iv[0][0] << "," << iv[0][1] << "," << iv[0][2] << ")" << std::endl;
+    std::cout << "[PT] invView up=(" << iv[1][0] << "," << iv[1][1] << "," << iv[1][2] << ")" << std::endl;
+    std::cout << "[PT] invView -fwd=(" << iv[2][0] << "," << iv[2][1] << "," << iv[2][2] << ")" << std::endl;
+    std::cout << "[PT] invView pos=(" << iv[3][0] << "," << iv[3][1] << "," << iv[3][2] << ")" << std::endl;
+    std::cout << "[PT] FOV=" << fovDeg << " aspect=" << aspect
+              << " proj[0][0]=" << ptProj[0][0] << " proj[1][1]=" << ptProj[1][1] << std::endl;
+    glm::mat4 invProj = glm::inverse(ptProj);
+    std::cout << "[PT] invProj[0][0]=" << invProj[0][0] << " invProj[1][1]=" << invProj[1][1] << std::endl;
 
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(-3.0f, 4.5f, -2.0f), 8.0f,
-                         glm::vec3(1.0f, 0.95f, 0.85f), 0.5f);
+                         glm::vec3(0.0f, 4.0f, 0.0f), 5000.0f,  // bright ceiling light
+                         glm::vec3(1.0f, 0.98f, 0.92f), 1.5f);  // warm white, large soft radius
 
     // Copy path tracer output to staging buffer for CPU readback
     VkImage ptOutput = m_pathTracer->getOutputImage();
