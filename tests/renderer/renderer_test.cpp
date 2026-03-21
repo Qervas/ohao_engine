@@ -132,6 +132,36 @@ std::unique_ptr<Scene> buildTestScene() {
         }
     }
 
+    // Z-up arrow doodle on the back wall — to verify camera orientation
+    // Arrow shaft: thin vertical bar on back wall
+    float bz = -D + 0.02f;  // slightly in front of back wall
+    glm::vec3 yellow(0.9f, 0.85f, 0.1f);
+    // Shaft: from y=-2 to y=2, width 0.3
+    addWallQuad(scene.get(), "ArrowShaft",
+        glm::vec3(-0.15f, -2.0f, bz), glm::vec3(0.15f, -2.0f, bz),
+        glm::vec3(0.15f,  2.0f, bz),  glm::vec3(-0.15f, 2.0f, bz),
+        glm::vec3(0,0,1), yellow);
+    // Arrowhead left: triangle approximated as thin quad
+    addWallQuad(scene.get(), "ArrowHeadL",
+        glm::vec3(-0.15f, 2.0f, bz), glm::vec3(-1.0f, 1.0f, bz),
+        glm::vec3(-0.8f, 1.2f, bz),  glm::vec3(-0.15f, 2.2f, bz),
+        glm::vec3(0,0,1), yellow);
+    // Arrowhead right
+    addWallQuad(scene.get(), "ArrowHeadR",
+        glm::vec3(0.15f, 2.0f, bz),  glm::vec3(0.15f, 2.2f, bz),
+        glm::vec3(0.8f, 1.2f, bz),   glm::vec3(1.0f, 1.0f, bz),
+        glm::vec3(0,0,1), yellow);
+    // "Y" label above arrow — small bar
+    addWallQuad(scene.get(), "LabelY",
+        glm::vec3(-0.4f, 2.8f, bz), glm::vec3(0.4f, 2.8f, bz),
+        glm::vec3(0.4f, 3.2f, bz),  glm::vec3(-0.4f, 3.2f, bz),
+        glm::vec3(0,0,1), yellow);
+    // Up arrow indicator: "^" shape above the Y label
+    addWallQuad(scene.get(), "UpCaret",
+        glm::vec3(0.0f, 3.8f, bz),  glm::vec3(0.5f, 3.3f, bz),
+        glm::vec3(0.35f, 3.3f, bz), glm::vec3(0.0f, 3.65f, bz),
+        glm::vec3(0,0,1), yellow);
+
     // Ceiling light — point light just below the ceiling, centered
     auto ceilingLight = scene->createActorWithComponents("CeilingLight", PrimitiveType::PointLight);
     if (ceilingLight) {

@@ -516,13 +516,13 @@ void OffscreenRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Cornell box camera — see all walls, floor, ceiling, blocks
+    // Cornell box camera — pulled back to see more of the room
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, 4.9f),     // just inside the front opening
-        glm::vec3(0.0f, 0.0f, 0.0f),     // look at exact center
+        glm::vec3(0.0f, 0.0f, 4.0f),     // slightly further back
+        glm::vec3(0.0f, 0.0f, -2.0f),    // look at center-back
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    float fovDeg = 65.0f;  // wide enough to see floor and ceiling
+    float fovDeg = 75.0f;
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(fovDeg), aspect, 0.1f, 1000.0f);
     glm::mat4 iv = glm::inverse(ptView);
