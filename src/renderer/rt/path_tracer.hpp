@@ -75,7 +75,7 @@ private:
     uint32_t m_height = 0;
 
     // Config
-    uint32_t m_maxBounces = 4;
+    uint32_t m_maxBounces = 8;
     uint32_t m_frameIndex = 0;
 
     // Accumulation buffer — RGBA32F HDR

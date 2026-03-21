@@ -97,7 +97,7 @@ void main() {
 
         // Instance 4 = Ceiling = emissive light source
         if (payload.hitInstance == 4u) {
-            radiance += throughput * pc.lightColorAndRadius.xyz * 5.0;
+            radiance += throughput * pc.lightColorAndRadius.xyz * 4.0;
             break;
         }
 
@@ -121,7 +121,7 @@ void main() {
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
     // Tonemap + gamma
-    vec3 ldr = ACES(acc * 3.5);
+    vec3 ldr = ACES(acc * 2.0);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
