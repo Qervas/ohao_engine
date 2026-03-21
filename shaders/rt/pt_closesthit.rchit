@@ -49,7 +49,13 @@ void main() {
     }
 
     // Transform normal to world space
-    payload.hitNormal = normalize(mat3(gl_ObjectToWorldEXT) * localNormal);
+    vec3 worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localNormal);
+
+    // Always face the incoming ray (handle inside-out geometry like Cornell box walls)
+    if (dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0) {
+        worldNormal = -worldNormal;
+    }
+    payload.hitNormal = worldNormal;
 
     // Look up albedo from material buffer
     payload.hitAlbedo = materialBuf.materials[gl_InstanceCustomIndexEXT].rgb;

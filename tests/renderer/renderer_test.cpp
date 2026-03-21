@@ -54,30 +54,29 @@ std::unique_ptr<Scene> buildTestScene() {
     const glm::vec3 red(0.65f, 0.05f, 0.05f);
     const glm::vec3 green(0.12f, 0.45f, 0.15f);
 
-    // Thick slab walls. Inner face at the box boundary, extends outward.
-    // Each wall is a full slab that goes well beyond the room in every direction.
-    const float THICK = 1.0f;  // wall thickness
-    const float BIG = W + H + D; // guaranteed overlap in all directions
+    // Precise wall geometry — each wall fits exactly, no overlap beyond the room.
+    // Side walls only span the room depth (not beyond the open front face).
+    const float THICK = 0.5f;
 
-    // Floor: inner face at y = -H, slab goes downward
+    // Floor (y = -H)
     addWall(scene.get(), "Floor",
-        glm::vec3(0, -H - THICK, 0), glm::vec3(BIG, THICK, BIG), white);
+        glm::vec3(0, -H - THICK, 0), glm::vec3(W + THICK, THICK, D + THICK), white);
 
-    // Ceiling: inner face at y = +H, slab goes upward
+    // Ceiling (y = +H)
     addWall(scene.get(), "Ceiling",
-        glm::vec3(0, H + THICK, 0), glm::vec3(BIG, THICK, BIG), white);
+        glm::vec3(0, H + THICK, 0), glm::vec3(W + THICK, THICK, D + THICK), white);
 
-    // Back wall: inner face at z = -D, slab goes backward
+    // Back wall (z = -D) — spans full width + height
     addWall(scene.get(), "BackWall",
-        glm::vec3(0, 0, -D - THICK), glm::vec3(BIG, BIG, THICK), white);
+        glm::vec3(0, 0, -D - THICK), glm::vec3(W + THICK, H + THICK, THICK), white);
 
-    // Left wall: inner face at x = -W, slab goes left — RED
+    // Left wall (x = -W) — RED — spans room height + depth, NOT past front face
     addWall(scene.get(), "LeftWall",
-        glm::vec3(-W - THICK, 0, 0), glm::vec3(THICK, BIG, BIG), red);
+        glm::vec3(-W - THICK, 0, 0), glm::vec3(THICK, H + THICK, D + THICK), red);
 
-    // Right wall: inner face at x = +W, slab goes right — GREEN
+    // Right wall (x = +W) — GREEN — same
     addWall(scene.get(), "RightWall",
-        glm::vec3(W + THICK, 0, 0), glm::vec3(THICK, BIG, BIG), green);
+        glm::vec3(W + THICK, 0, 0), glm::vec3(THICK, H + THICK, D + THICK), green);
 
     // Tall block — right side of the room, toward the back
     auto tallBlock = scene->createActorWithComponents("TallBlock", PrimitiveType::Cube);

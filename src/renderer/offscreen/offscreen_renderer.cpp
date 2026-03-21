@@ -516,13 +516,12 @@ void OffscreenRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Explicit camera for path tracer — bypasses engine camera system
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, 4.8f),    // just inside the front face of the box
-        glm::vec3(0.0f, 0.0f, -5.0f),   // look at back wall
+        glm::vec3(0.0f, 0.0f, 20.0f),
+        glm::vec3(0.0f, 0.0f, 0.0f),
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    float fovRad = glm::radians(60.0f); // wider FOV to see inside the box
+    float fovRad = glm::radians(38.0f);
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptProj = glm::perspectiveRH_ZO(fovRad, aspect, 0.1f, 1000.0f);
     // Don't Y-flip for path tracer — the rgen shader handles NDC directly
