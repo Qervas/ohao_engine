@@ -54,29 +54,28 @@ std::unique_ptr<Scene> buildTestScene() {
     const glm::vec3 red(0.65f, 0.05f, 0.05f);
     const glm::vec3 green(0.12f, 0.45f, 0.15f);
 
-    // Precise wall geometry — each wall fits exactly, no overlap beyond the room.
-    // Side walls only span the room depth (not beyond the open front face).
+    // Wall geometry — no overlaps. Each wall fits between its neighbors.
     const float THICK = 0.5f;
 
-    // Floor (y = -H)
-    addWall(scene.get(), "Floor",
-        glm::vec3(0, -H - THICK, 0), glm::vec3(W + THICK, THICK, D + THICK), white);
-
-    // Ceiling (y = +H)
-    addWall(scene.get(), "Ceiling",
-        glm::vec3(0, H + THICK, 0), glm::vec3(W + THICK, THICK, D + THICK), white);
-
-    // Back wall (z = -D) — spans full width + height
-    addWall(scene.get(), "BackWall",
-        glm::vec3(0, 0, -D - THICK), glm::vec3(W + THICK, H + THICK, THICK), white);
-
-    // Left wall (x = -W) — RED — spans room height + depth, NOT past front face
+    // Side walls span full height and depth — they define the X boundaries
+    // Left wall (x = -W) — RED
     addWall(scene.get(), "LeftWall",
-        glm::vec3(-W - THICK, 0, 0), glm::vec3(THICK, H + THICK, D + THICK), red);
+        glm::vec3(-W - THICK, 0, 0), glm::vec3(THICK, H, D), red);
 
-    // Right wall (x = +W) — GREEN — same
+    // Right wall (x = +W) — GREEN
     addWall(scene.get(), "RightWall",
-        glm::vec3(W + THICK, 0, 0), glm::vec3(THICK, H + THICK, D + THICK), green);
+        glm::vec3(W + THICK, 0, 0), glm::vec3(THICK, H, D), green);
+
+    // Floor and ceiling fit BETWEEN the side walls (scale X = W, not W+THICK)
+    addWall(scene.get(), "Floor",
+        glm::vec3(0, -H - THICK, 0), glm::vec3(W, THICK, D), white);
+
+    addWall(scene.get(), "Ceiling",
+        glm::vec3(0, H + THICK, 0), glm::vec3(W, THICK, D), white);
+
+    // Back wall fits between side walls AND between floor/ceiling
+    addWall(scene.get(), "BackWall",
+        glm::vec3(0, 0, -D - THICK), glm::vec3(W, H, THICK), white);
 
     // Tall block — right side of the room, toward the back
     auto tallBlock = scene->createActorWithComponents("TallBlock", PrimitiveType::Cube);

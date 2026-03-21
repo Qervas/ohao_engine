@@ -450,9 +450,9 @@ void OffscreenRenderer::buildAccelerationStructures() {
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
-        // customIndex = sequential index matching material buffer
-        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(),
-                               instanceIdx);
+        // Vertices are already in world space (pre-transformed during buffer upload)
+        // Use identity transform for TLAS to avoid double-transform
+        m_rtAccel->addInstance(blasIt->second, glm::mat4(1.0f), instanceIdx);
 
         // Collect albedo in same order
         auto matComp = actor->getComponent<MaterialComponent>();
