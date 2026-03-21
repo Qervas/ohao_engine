@@ -516,13 +516,13 @@ void OffscreenRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Camera at center of box looking at back wall
+    // Camera inside box near the open front, looking at back wall
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, 0.0f),    // center of box
+        glm::vec3(0.0f, 0.0f, 4.0f),    // near front face, inside
         glm::vec3(0.0f, 0.0f, -5.0f),   // back wall
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    float fovDeg = 90.0f;
+    float fovDeg = 70.0f;
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(fovDeg), aspect, 0.1f, 1000.0f);
     glm::mat4 iv = glm::inverse(ptView);
@@ -536,8 +536,8 @@ void OffscreenRenderer::renderPathTraced() {
     std::cout << "[PT] invProj[0][0]=" << invProj[0][0] << " invProj[1][1]=" << invProj[1][1] << std::endl;
 
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(0.0f, 4.0f, 0.0f), 5000.0f,  // bright ceiling light
-                         glm::vec3(1.0f, 0.98f, 0.92f), 1.5f);  // warm white, large soft radius
+                         glm::vec3(0.0f, 4.0f, 0.0f), 10000.0f,  // ceiling light (unused for NEE, kept for compat)
+                         glm::vec3(1.0f, 0.98f, 0.92f), 1.5f);
 
     // Copy path tracer output to staging buffer for CPU readback
     VkImage ptOutput = m_pathTracer->getOutputImage();

@@ -134,7 +134,7 @@ void main() {
         // Emissive surface check — ceiling (instance 1) is the area light
         if (payload.hitInstance == 1u) {
             // Emission: Le = lightColor * intensity_scale
-            vec3 emission = pc.lightColorAndRadius.xyz * 15.0;
+            vec3 emission = pc.lightColorAndRadius.xyz * 25.0;
             radiance += throughput * emission;
             break;
         }
@@ -170,7 +170,7 @@ void main() {
             if (!inShadow) {
                 // Area light contribution:
                 // Lo = Le * BRDF * cos(θ_surface) * cos(θ_light) * A / d²
-                vec3 Le = pc.lightColorAndRadius.xyz * 15.0;
+                vec3 Le = pc.lightColorAndRadius.xyz * 25.0;
                 float geomTerm = NdotL * lightNdotL / (lightDist * lightDist);
                 vec3 brdfValue = hitAlbedo / 3.14159;  // Lambertian
                 radiance += throughput * Le * brdfValue * geomTerm * ceilArea;
@@ -197,7 +197,7 @@ void main() {
     imageStore(accumBuffer, pixel, vec4(accumulated, sampleCount));
 
     // Tonemap and write to output
-    vec3 ldr = ACESFilm(accumulated * 4.0);
+    vec3 ldr = ACESFilm(accumulated * 3.0);
     ldr = pow(ldr, vec3(1.0 / 2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
