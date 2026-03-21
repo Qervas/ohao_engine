@@ -1,5 +1,6 @@
 #include "offscreen_renderer_impl.hpp"
 #include "renderer/camera/camera.hpp"
+#include <glm/gtc/matrix_transform.hpp>
 #include "renderer/passes/deferred_renderer.hpp"
 #include "engine/scene/scene.hpp"
 
@@ -169,6 +170,15 @@ bool OffscreenRenderer::initialize() {
         m_rtAccel = std::make_unique<RTAccelerationStructure>();
         if (m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool)) {
             std::cout << "Ray tracing: available" << std::endl;
+
+            // Initialize path tracer
+            m_pathTracer = std::make_unique<PathTracer>();
+            if (m_pathTracer->init(m_device, m_physicalDevice, m_width, m_height)) {
+                std::cout << "Path tracer: available" << std::endl;
+            } else {
+                std::cout << "Path tracer: init failed" << std::endl;
+                m_pathTracer.reset();
+            }
         } else {
             std::cout << "Ray tracing: not available (continuing without RT)" << std::endl;
             m_rtAccel.reset();
@@ -326,13 +336,17 @@ void OffscreenRenderer::render() {
     if (!m_initialized) return;
 
     // Check render mode
+    if (m_renderMode == RenderMode::PathTraced && m_pathTracer && m_rtAccel) {
+        renderPathTraced();
+        return;
+    }
+
     if (m_renderMode == RenderMode::Deferred && m_deferredRenderer) {
         renderDeferred();
         return;
     }
 
     // Forward rendering path
-    // Use multi-frame rendering if available
     if (m_frameResources.isInitialized()) {
         renderMultiFrame();
     } else {
@@ -345,8 +359,13 @@ void OffscreenRenderer::setRenderMode(RenderMode mode) {
         std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
         return;
     }
+    if (mode == RenderMode::PathTraced && (!m_pathTracer || !m_rtAccel)) {
+        std::cerr << "Path tracing not available, staying in current mode" << std::endl;
+        return;
+    }
     m_renderMode = mode;
-    std::cout << "Render mode set to: " << (mode == RenderMode::Deferred ? "Deferred" : "Forward") << std::endl;
+    const char* names[] = {"Forward", "Deferred", "PathTraced"};
+    std::cout << "Render mode set to: " << names[static_cast<int>(mode)] << std::endl;
 }
 
 bool OffscreenRenderer::initializeDeferredRenderer() {
@@ -468,6 +487,74 @@ void OffscreenRenderer::renderDeferred() {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
 
+    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
+
+    m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
+}
+
+void OffscreenRenderer::renderPathTraced() {
+    if (!m_pathTracer || !m_rtAccel) return;
+
+    FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
+    m_frameResources.waitForFrame(m_currentFrame);
+
+    // Read back previous frame's pixels
+    if (frame.stagingBufferMapped) {
+        memcpy(m_pixelBuffer.data(), frame.stagingBufferMapped, m_width * m_height * 4);
+    }
+
+    m_frameResources.resetFrame(m_currentFrame);
+
+    glm::mat4 view = m_camera->getViewMatrix();
+    glm::mat4 proj = m_camera->getProjectionMatrix();
+
+    VkCommandBuffer cmd = frame.commandBuffer;
+    vkResetCommandBuffer(cmd, 0);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    // Explicit camera for path tracer — bypasses engine camera system
+    glm::mat4 ptView = glm::lookAt(
+        glm::vec3(0.0f, 0.0f, 4.8f),    // just inside the front face of the box
+        glm::vec3(0.0f, 0.0f, -5.0f),   // look at back wall
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
+    float fovRad = glm::radians(60.0f); // wider FOV to see inside the box
+    float aspect = float(m_width) / float(m_height);
+    glm::mat4 ptProj = glm::perspectiveRH_ZO(fovRad, aspect, 0.1f, 1000.0f);
+    // Don't Y-flip for path tracer — the rgen shader handles NDC directly
+
+    m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
+                         glm::vec3(-3.0f, 4.5f, -2.0f), 8.0f,
+                         glm::vec3(1.0f, 0.95f, 0.85f), 0.5f);
+
+    // Copy path tracer output to staging buffer for CPU readback
+    VkImage ptOutput = m_pathTracer->getOutputImage();
+    if (ptOutput != VK_NULL_HANDLE && frame.stagingBuffer != VK_NULL_HANDLE) {
+        // Output is already in TRANSFER_SRC_OPTIMAL from render()
+        VkBufferImageCopy copyRegion{};
+        copyRegion.bufferOffset = 0;
+        copyRegion.bufferRowLength = 0;
+        copyRegion.bufferImageHeight = 0;
+        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.imageSubresource.mipLevel = 0;
+        copyRegion.imageSubresource.baseArrayLayer = 0;
+        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageExtent = {m_width, m_height, 1};
+
+        vkCmdCopyImageToBuffer(cmd, ptOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               frame.stagingBuffer, 1, &copyRegion);
+    }
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
 
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);

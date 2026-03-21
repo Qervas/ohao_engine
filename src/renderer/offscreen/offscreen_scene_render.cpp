@@ -467,10 +467,13 @@ void OffscreenRenderer::buildAccelerationStructures() {
                   << m_rtAccel->getBlasCount() << " BLAS, "
                   << m_rtAccel->getInstanceCount() << " instances" << std::endl;
 
-        // Pass material albedos to deferred renderer's GI technique
+        // Pass material albedos to RT techniques
         if (m_deferredRenderer) {
             auto* gi = m_deferredRenderer->getRT_GI();
             if (gi) gi->setMaterialAlbedos(materialAlbedos);
+        }
+        if (m_pathTracer) {
+            m_pathTracer->setMaterialAlbedos(materialAlbedos);
         }
     }
     m_rtAccelDirty = false;

@@ -1,0 +1,190 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Path Tracer Ray Generation Shader
+// Full path tracing: primary ray → hit surface → evaluate BRDF → bounce → accumulate
+// No rasterization. Every pixel is a traced ray.
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, rgba32f) uniform image2D accumBuffer;   // accumulation (HDR, multi-frame)
+layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;      // tonemapped output (LDR)
+
+// Material buffer — per-instance vec4 (rgb=albedo, a=roughness)
+layout(set = 0, binding = 3) readonly buffer MaterialBuffer {
+    vec4 materials[];
+} materialBuf;
+
+layout(push_constant) uniform PushConstants {
+    mat4 invView;
+    mat4 invProj;
+    vec4 lightPosAndIntensity;   // xyz=light position, w=intensity
+    vec4 lightColorAndRadius;    // xyz=light color, w=light radius
+    uvec4 params;                // x=width, y=height, z=frameIndex, w=maxBounces
+} pc;
+
+// Payload: color accumulated along the path + hit info
+struct RayPayload {
+    vec3 color;      // accumulated radiance
+    vec3 attenuation;// path throughput
+    vec3 hitPos;     // world position of hit
+    vec3 hitNormal;  // world normal at hit
+    vec3 hitAlbedo;  // surface albedo
+    float hitDist;   // -1 = miss
+    uint hitInstance; // instance index
+};
+
+layout(location = 0) rayPayloadEXT RayPayload payload;
+
+// ─── Random number generation (PCG) ─────────────────────────────────
+
+uint pcgState;
+
+void pcgInit(uvec2 pixel, uint frame) {
+    pcgState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
+}
+
+uint pcgNext() {
+    pcgState = pcgState * 747796405u + 2891336453u;
+    uint word = ((pcgState >> ((pcgState >> 28u) + 4u)) ^ pcgState) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float rand01() {
+    return float(pcgNext()) / 4294967296.0;
+}
+
+vec2 rand2() {
+    return vec2(rand01(), rand01());
+}
+
+// ─── Sampling ────────────────────────────────────────────────────────
+
+vec3 cosineSampleHemisphere(vec3 N) {
+    vec3 up = abs(N.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 T = normalize(cross(up, N));
+    vec3 B = cross(N, T);
+
+    vec2 u = rand2();
+    float r = sqrt(u.x);
+    float phi = 6.2831853 * u.y;
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+    float z = sqrt(max(0.0, 1.0 - u.x));
+
+    return normalize(T * x + B * y + N * z);
+}
+
+// ─── Tonemapping ─────────────────────────────────────────────────────
+
+vec3 ACESFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+// ─── Main ────────────────────────────────────────────────────────────
+
+void main() {
+    ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
+    uint frameIndex = pc.params.z;
+    uint maxBounces = pc.params.w;
+
+    pcgInit(uvec2(pixel), frameIndex);
+
+    // Generate primary ray from camera with sub-pixel jitter
+    vec2 jitter = rand2() - 0.5;
+    vec2 uv = (vec2(pixel) + 0.5 + jitter) / vec2(pc.params.xy);
+    vec2 ndc = uv * 2.0 - 1.0;
+
+    // Camera ray generation (NVIDIA VK_KHR_ray_tracing_pipeline tutorial approach)
+    vec4 origin4 = pc.invView * vec4(0, 0, 0, 1);
+    vec4 target4 = pc.invProj * vec4(ndc.x, ndc.y, 1.0, 1.0);
+    vec4 dir4 = pc.invView * vec4(normalize(target4.xyz / target4.w), 0);
+
+    vec3 rayOrigin = origin4.xyz;
+    vec3 rayDir = normalize(dir4.xyz);
+
+    // Path trace
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+
+    for (uint bounce = 0u; bounce <= maxBounces; bounce++) {
+        payload.hitDist = -1.0;
+        payload.color = vec3(0.0);
+
+        traceRayEXT(topLevelAS,
+                     gl_RayFlagsOpaqueEXT,
+                     0xFF, 0, 0, 0,
+                     rayOrigin, 0.001, rayDir, 10000.0, 0);
+
+        if (payload.hitDist < 0.0) {
+            // Miss — no contribution (enclosed scene like Cornell box)
+            break;
+        }
+
+        vec3 hitPos = payload.hitPos;
+        vec3 hitNormal = payload.hitNormal;
+        vec3 hitAlbedo = payload.hitAlbedo;
+
+        // Direct light contribution at hit point
+        vec3 lightPos = pc.lightPosAndIntensity.xyz;
+        float lightIntensity = pc.lightPosAndIntensity.w;
+        vec3 lightColor = pc.lightColorAndRadius.xyz;
+        float lightRadius = pc.lightColorAndRadius.w;
+
+        vec3 toLight = lightPos - hitPos;
+        float lightDist = length(toLight);
+        vec3 L = toLight / lightDist;
+        float NdotL = max(dot(hitNormal, L), 0.0);
+
+        if (NdotL > 0.0) {
+            // Shadow ray toward light (with jitter for soft shadow)
+            vec2 sr = rand2();
+            vec3 up2 = abs(L.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+            vec3 T2 = normalize(cross(up2, L));
+            vec3 B2 = cross(L, T2);
+            float angle = lightRadius * sqrt(sr.x);
+            float sphi = 6.2831853 * sr.y;
+            vec3 jitteredL = normalize(L + T2 * (angle * cos(sphi)) + B2 * (angle * sin(sphi)));
+
+            // Trace shadow ray
+            payload.hitDist = -1.0;
+            traceRayEXT(topLevelAS,
+                         gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                         0xFF, 0, 0, 0,
+                         hitPos + hitNormal * 0.01, 0.001, jitteredL, lightDist, 0);
+
+            if (payload.hitDist < 0.0) {
+                // Not shadowed — add direct light
+                float falloff = lightIntensity / (1.0 + lightDist * lightDist * 0.01);
+                radiance += throughput * hitAlbedo * lightColor * NdotL * falloff / 3.14159;
+            }
+        }
+
+        // Russian roulette after bounce 2
+        if (bounce > 1u) {
+            float p = max(throughput.r, max(throughput.g, throughput.b));
+            if (rand01() > p) break;
+            throughput /= p;
+        }
+
+        // Bounce: cosine-weighted hemisphere sampling (Lambertian diffuse)
+        rayDir = cosineSampleHemisphere(hitNormal);
+        rayOrigin = hitPos + hitNormal * 0.01;
+        throughput *= hitAlbedo;  // diffuse BRDF: albedo/PI * cosTheta * PI = albedo
+    }
+
+    // Accumulate over frames
+    vec4 prevAccum = imageLoad(accumBuffer, pixel);
+    float sampleCount = prevAccum.w + 1.0;
+    vec3 accumulated = (prevAccum.rgb * prevAccum.w + radiance) / sampleCount;
+    imageStore(accumBuffer, pixel, vec4(accumulated, sampleCount));
+
+    // Tonemap and write to output
+    vec3 ldr = ACESFilm(accumulated * 1.5);  // exposure boost
+    ldr = pow(ldr, vec3(1.0 / 2.2));          // gamma correction
+    imageStore(outputImage, pixel, vec4(ldr, 1.0));
+}

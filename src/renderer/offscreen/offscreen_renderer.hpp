@@ -11,6 +11,7 @@
 #include "renderer/frame/frame_resources.hpp"
 #include "renderer/material/bindless_texture_manager.hpp"
 #include "renderer/rt/rt_acceleration_structure.hpp"
+#include "renderer/rt/path_tracer.hpp"
 
 namespace ohao {
 
@@ -21,8 +22,9 @@ class DeferredRenderer;
 
 // Render mode selection
 enum class RenderMode {
-    Forward,    // Legacy forward rendering (8 light limit)
-    Deferred    // AAA deferred rendering (unlimited lights, CSM, post-processing)
+    Forward,      // Legacy forward rendering (8 light limit)
+    Deferred,     // AAA deferred rendering (CSM, post-processing)
+    PathTraced    // Full path tracing (reference quality, accumulates over frames)
 };
 
 // Simple vertex structure for basic rendering (Phase 1 triangle)
@@ -180,6 +182,7 @@ private:
     void recordCommandBuffer();
     void copyFramebufferToPixelBuffer();
     void renderMultiFrame();  // Multi-frame ring buffer rendering
+    void renderPathTraced();  // Full path tracing (RT pipeline, no rasterization)
     void renderLegacy();      // Legacy single-frame rendering
 
     // Cleanup
@@ -270,8 +273,9 @@ private:
     // Flag to track if scene has renderable meshes
     bool m_hasSceneMeshes{false};
 
-    // RT acceleration structure
+    // RT acceleration structure + path tracer
     std::unique_ptr<RTAccelerationStructure> m_rtAccel;
+    std::unique_ptr<PathTracer> m_pathTracer;
     bool m_rtAccelDirty{true};
     void buildAccelerationStructures();
     // Separate RT-flagged copies of vertex/index data (device-local + device address)

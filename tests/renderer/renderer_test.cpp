@@ -157,23 +157,21 @@ int main(int argc, char* argv[]) {
     // Box is 10 units deep (z=-5 to z=+5). Camera far enough to frame the whole room.
     auto& camera = renderer.getCamera();
     camera.setPosition(glm::vec3(0, 0, 14.0f));
-    camera.setFov(33.0f);  // tight FOV — frame only the box interior, no gaps visible
-    camera.setRotation(0.0f, -90.0f);  // look toward -Z
+    camera.setFov(33.0f);
+    // For rasterization: yaw=-90 means look toward -Z in the engine convention
+    // For path tracer: we use the same view matrix
+    camera.setRotation(0.0f, 90.0f);  // yaw=90 should look toward -Z in engine convention
 
-    // 4. Use deferred rendering — disable sky for enclosed room
-    renderer.setRenderMode(RenderMode::Deferred);
-    auto* deferred = renderer.getDeferredRenderer();
-    if (deferred) {
-        deferred->setSkyEnabled(false);
-        deferred->setRTShadowsEnabled(true);
-    }
+    // 4. Path traced mode — full RT, no rasterization
+    renderer.setRenderMode(RenderMode::PathTraced);
 
-    // 5. Render — need multiple frames to fill the ring buffer (3 frames in flight)
-    std::cout << "\n--- Rendering ---" << std::endl;
+    // 5. Render — accumulate multiple frames for convergence
+    std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    // Render enough frames to fill the ring buffer and stabilize
-    for (int i = 0; i < 6; i++) {
+    // More frames = less noise. 128 frames for good convergence.
+    int numFrames = 128;
+    for (int i = 0; i < numFrames + 3; i++) {  // +3 for ring buffer fill
         renderer.render();
     }
 
