@@ -183,7 +183,10 @@ private:
     void recordCommandBuffer();
     void copyFramebufferToPixelBuffer();
     void renderMultiFrame();  // Multi-frame ring buffer rendering
-    void renderPathTraced();  // Full path tracing (RT pipeline, no rasterization)
+    void renderPathTraced();     // Full path tracing (RT pipeline, no rasterization)
+public:
+    void finalizePathTraced();   // Run denoiser + final tonemap after all frames
+private:
     void renderLegacy();      // Legacy single-frame rendering
 
     // Cleanup

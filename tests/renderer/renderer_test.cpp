@@ -238,14 +238,19 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 1024;
-    for (int i = 0; i < numFrames + 3; i++) {  // +3 for ring buffer fill
+    int numFrames = 64;  // Low spp for denoiser test
+    for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
 
     auto end = std::chrono::high_resolution_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "Render time: " << ms << " ms" << std::endl;
+    std::cout << "Path trace time: " << ms << " ms" << std::endl;
+
+    // Run denoiser on final accumulated HDR, then render one more frame for tonemap
+    std::cout << "Running OptiX denoiser..." << std::endl;
+    renderer.finalizePathTraced();
+    std::cout << "Denoiser done" << std::endl;
 
     // 6. Save to PNG
     const uint8_t* pixels = renderer.getPixels();
