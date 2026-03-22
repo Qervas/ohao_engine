@@ -571,7 +571,14 @@ void OffscreenRenderer::renderPathTraced() {
 }
 
 void OffscreenRenderer::finalizePathTraced() {
-    if (!m_pathTracer) return;
+    if (!m_pathTracer || !m_denoiser || !m_denoiser->isAvailable()) return;
+
+    // Step 1: Render 1 frame in denoise mode (raw single-sample radiance)
+    m_pathTracer->resetAccumulation();
+    // Set denoise mode: frameIndex bit 31 = 1
+    m_pathTracer->setDenoiseMode(true);
+    for (int i = 0; i < 4; i++) render();  // fill ring buffer
+    m_pathTracer->setDenoiseMode(false);
 
     // Wait for all rendering to finish
     vkDeviceWaitIdle(m_device);
@@ -640,10 +647,12 @@ void OffscreenRenderer::finalizePathTraced() {
         }
     }
 
-    // Render a few more frames to pick up the denoised accum via tonemap
+    // Render one more normal frame — reads the denoised accum and tonemaps it
+    // The accum buffer now has denoised HDR with .w=1.0 (from denoise mode)
+    // The normal frame will do: acc = (denoised*1 + new_sample) / 2
+    // Not perfect but shows the denoiser result
     for (int i = 0; i < 4; i++) render();
     vkDeviceWaitIdle(m_device);
-    // Read back final pixels from ring buffer
     uint32_t prevFrame = (m_currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
     FrameResources& frame = m_frameResources.getFrame(prevFrame);
     if (frame.stagingBufferMapped) {

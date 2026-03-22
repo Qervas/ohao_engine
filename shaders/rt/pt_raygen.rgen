@@ -203,14 +203,26 @@ void main() {
         }
     }
 
-    // Accumulate
-    vec4 prev = imageLoad(accumBuffer, pixel);
-    float count = prev.w + 1.0;
-    vec3 acc = (prev.rgb * prev.w + radiance) / count;
-    imageStore(accumBuffer, pixel, vec4(acc, count));
+    // Flags packed in frameIndex upper bits
+    const uint PT_FLAG_DENOISE_MODE = (1u << 31);
+    bool denoiseMode = (frameIdx & PT_FLAG_DENOISE_MODE) != 0u;
+    frameIdx &= ~PT_FLAG_DENOISE_MODE;  // strip flag to get actual frame index
 
-    // Tonemap + gamma
-    vec3 ldr = ACES(acc * 0.4);
-    ldr = pow(ldr, vec3(1.0/2.2));
-    imageStore(outputImage, pixel, vec4(ldr, 1.0));
+    if (denoiseMode) {
+        // Raw single-sample output — denoiser will clean this
+        imageStore(accumBuffer, pixel, vec4(radiance, 1.0));
+        // Also write tonemapped for preview
+        vec3 ldr = ACES(radiance * 0.4);
+        ldr = pow(ldr, vec3(1.0/2.2));
+        imageStore(outputImage, pixel, vec4(ldr, 1.0));
+    } else {
+        // Progressive accumulation
+        vec4 prev = imageLoad(accumBuffer, pixel);
+        float count = prev.w + 1.0;
+        vec3 acc = (prev.rgb * prev.w + radiance) / count;
+        imageStore(accumBuffer, pixel, vec4(acc, count));
+        vec3 ldr = ACES(acc * 0.4);
+        ldr = pow(ldr, vec3(1.0/2.2));
+        imageStore(outputImage, pixel, vec4(ldr, 1.0));
+    }
 }
