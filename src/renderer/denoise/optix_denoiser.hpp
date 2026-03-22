@@ -16,10 +16,14 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 
-// Forward declare CUDA/OptiX types to avoid header dependency when OptiX isn't installed
+// CUDA types — use actual headers if available, else forward declare
+#if __has_include(<cuda.h>)
+#include <cuda.h>
+#else
 typedef void* CUcontext;
 typedef void* CUstream;
-typedef void* CUdeviceptr;
+typedef unsigned long long CUdeviceptr;
+#endif
 
 namespace ohao {
 

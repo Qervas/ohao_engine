@@ -184,6 +184,15 @@ bool OffscreenRenderer::initialize() {
             m_rtAccel.reset();
         }
 
+        // Initialize OptiX denoiser
+        m_denoiser = std::make_unique<OptiXDenoiser>();
+        if (m_denoiser->init(m_device, m_physicalDevice, m_instance, m_width, m_height)) {
+            std::cout << "OptiX denoiser: available" << std::endl;
+        } else {
+            std::cout << "OptiX denoiser: not available" << std::endl;
+            m_denoiser.reset();
+        }
+
         m_initialized = true;
         std::cout << "OffscreenRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;

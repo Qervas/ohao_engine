@@ -1,4 +1,9 @@
 #include "offscreen_renderer_impl.hpp"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <vulkan/vulkan_win32.h>
+#endif
 
 namespace ohao {
 
@@ -105,8 +110,11 @@ bool OffscreenRenderer::createLogicalDevice() {
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,        // required by AS
         VK_KHR_SPIRV_1_4_EXTENSION_NAME,                 // required by RT pipeline
         VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,     // required by SPIR-V 1.4
+        VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,            // Vulkan-CUDA interop
+        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,      // Win32 shared memory handles
+        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,         // Vulkan-CUDA sync
+        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,   // Win32 shared semaphores
     };
-    // NVIDIA Windows only — no portability subset needed
 
     // Vulkan 1.2 features (buffer device address, descriptor indexing)
     VkPhysicalDeviceVulkan12Features features12{};
