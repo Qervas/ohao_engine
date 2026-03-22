@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 64;  // Low spp for denoiser test
+    int numFrames = 1024;  // High spp — denoiser disabled until 1-spp pipeline is ready
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
@@ -247,10 +247,10 @@ int main(int argc, char* argv[]) {
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     std::cout << "Path trace time: " << ms << " ms" << std::endl;
 
-    // Run denoiser on final accumulated HDR, then render one more frame for tonemap
-    std::cout << "Running OptiX denoiser..." << std::endl;
-    renderer.finalizePathTraced();
-    std::cout << "Denoiser done" << std::endl;
+    // OptiX denoiser — disabled until 1-spp pipeline is ready
+    // The current accumulation approach conflicts with denoising (corrupts sample count)
+    // TODO: implement 1-spp mode where rgen outputs raw radiance, denoiser cleans it
+    // renderer.finalizePathTraced();
 
     // 6. Save to PNG
     const uint8_t* pixels = renderer.getPixels();
