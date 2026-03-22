@@ -63,6 +63,7 @@ public:
     // Config
     void setMaxBounces(uint32_t bounces) { m_maxBounces = bounces; }
     void setDenoiseMode(bool enabled) { m_denoiseMode = enabled; }
+    void setTonemapOnly(bool enabled) { m_tonemapOnly = enabled; }
     uint32_t getFrameIndex() const { return m_frameIndex; }
 
 private:
@@ -83,6 +84,7 @@ private:
     // Config
     uint32_t m_maxBounces = 8;
     bool m_denoiseMode = false;
+    bool m_tonemapOnly = false;
     VkBuffer m_normalBuffer = VK_NULL_HANDLE;  // external, not owned
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;   // external, not owned (RT index buffer)
     uint32_t m_normalVertexCount = 0;

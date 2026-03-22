@@ -60,7 +60,24 @@ void main() {
     ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
     uint frameIdx = pc.params.z;
     uint maxBounces = pc.params.w;
+
+    // Decode flags from frameIndex upper bits
+    const uint PT_FLAG_DENOISE_MODE = (1u << 31);
+    const uint PT_FLAG_TONEMAP_ONLY = (1u << 30);
+    bool denoiseMode = (frameIdx & PT_FLAG_DENOISE_MODE) != 0u;
+    bool tonemapOnly = (frameIdx & PT_FLAG_TONEMAP_ONLY) != 0u;
+    frameIdx &= ~(PT_FLAG_DENOISE_MODE | PT_FLAG_TONEMAP_ONLY);
+
     rngInit(uvec2(pixel), frameIdx);
+
+    // Tonemap-only mode: just read accum buffer and output LDR
+    if (tonemapOnly) {
+        vec4 hdr = imageLoad(accumBuffer, pixel);
+        vec3 ldr = ACES(hdr.rgb * 0.4);
+        ldr = pow(ldr, vec3(1.0/2.2));
+        imageStore(outputImage, pixel, vec4(ldr, 1.0));
+        return;
+    }
 
     // Camera ray with sub-pixel jitter
     vec2 jitter = vec2(rand01(), rand01()) - 0.5;
@@ -203,11 +220,7 @@ void main() {
         }
     }
 
-    // Flags packed in frameIndex upper bits
-    const uint PT_FLAG_DENOISE_MODE = (1u << 31);
-    bool denoiseMode = (frameIdx & PT_FLAG_DENOISE_MODE) != 0u;
-    frameIdx &= ~PT_FLAG_DENOISE_MODE;  // strip flag to get actual frame index
-
+    // Check denoise mode (flags already decoded above)
     if (denoiseMode) {
         // Raw single-sample output — denoiser will clean this
         imageStore(accumBuffer, pixel, vec4(radiance, 1.0));

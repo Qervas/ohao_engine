@@ -647,11 +647,11 @@ void OffscreenRenderer::finalizePathTraced() {
         }
     }
 
-    // Render one more normal frame — reads the denoised accum and tonemaps it
-    // The accum buffer now has denoised HDR with .w=1.0 (from denoise mode)
-    // The normal frame will do: acc = (denoised*1 + new_sample) / 2
-    // Not perfect but shows the denoiser result
-    for (int i = 0; i < 4; i++) render();
+    // Set tonemap-only mode and render frames to pick up denoised result
+    m_pathTracer->setTonemapOnly(true);
+    for (int i = 0; i < 4; i++) render();  // fill ring buffer with tonemapped result
+    m_pathTracer->setTonemapOnly(false);
+
     vkDeviceWaitIdle(m_device);
     uint32_t prevFrame = (m_currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
     FrameResources& frame = m_frameResources.getFrame(prevFrame);

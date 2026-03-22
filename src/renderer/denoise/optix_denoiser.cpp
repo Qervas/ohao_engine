@@ -267,14 +267,18 @@ void OptiXDenoiser::denoise(VkCommandBuffer cmd, VkQueue queue,
     layer.input = inputLayer;
     layer.output = outputLayer;
 
-    optixDenoiserInvoke(
+    OptixResult denoiseResult = optixDenoiserInvoke(
         reinterpret_cast<OptixDenoiser>(m_optixDenoiser),
         reinterpret_cast<CUstream>(m_cudaStream),
         &params,
         m_stateBuffer.cudaPtr, m_stateBuffer.size,
         &guide, &layer, 1,
-        0, 0,  // input offset
+        0, 0,
         m_scratchBuffer.cudaPtr, m_scratchBuffer.size);
+
+    if (denoiseResult != OPTIX_SUCCESS) {
+        std::cerr << "[Denoiser] optixDenoiserInvoke failed: " << denoiseResult << std::endl;
+    }
 
     cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(m_cudaStream));
 
@@ -303,6 +307,15 @@ void OptiXDenoiser::denoise(VkCommandBuffer cmd, VkQueue queue,
     copyBack.imageExtent = {m_width, m_height, 1};
     vkCmdCopyBufferToImage(cmd, m_outputBuffer.vkBuffer, outputImage,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyBack);
+
+    // SUBMIT the copy-back! (was missing — denoised data never reached the image)
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submitInfo2{};
+    submitInfo2.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo2.commandBufferCount = 1;
+    submitInfo2.pCommandBuffers = &cmd;
+    vkQueueSubmit(queue, 1, &submitInfo2, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
 }
 
 #else // !OHAO_HAS_OPTIX
