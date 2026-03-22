@@ -33,22 +33,41 @@ void main() {
     // For now, use the geometric normal from the hit
     // The barycentric coordinates are in baryCoord.xy, with z = 1 - x - y
 
-    // Approximate face normal from ray direction and object transform
-    // For axis-aligned boxes (Cornell box), the geometric normal = closest axis
+    // Compute normal in object space
     vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
 
-    // Compute face normal by finding which face of the unit cube was hit
-    vec3 absLocal = abs(hitLocal);
+    // Detect if this is a sphere or a box based on vertex count / geometry shape
+    // Sphere: normal = normalized local position (points outward from center)
+    // Box: normal = closest axis face
+    float sphereTest = length(hitLocal);  // for a unit sphere, this ≈ 1.0
     vec3 localNormal;
-    if (absLocal.x > absLocal.y && absLocal.x > absLocal.z) {
-        localNormal = vec3(sign(hitLocal.x), 0, 0);
-    } else if (absLocal.y > absLocal.z) {
-        localNormal = vec3(0, sign(hitLocal.y), 0);
+
+    // Distinguish sphere vs cube in object space:
+    // Cube: at least one component of |hitLocal| ≈ 1.0 (face), others < 1.0
+    // Sphere: all components satisfy x²+y²+z² ≈ 1.0
+    // Test: for a cube face, max(|xyz|) ≈ 1.0 and the other two are < 1.0
+    // For a sphere, the point lies on the unit sphere surface
+    vec3 al = abs(hitLocal);
+    float maxComp = max(al.x, max(al.y, al.z));
+    float cubeScore = maxComp;  // cube: one axis = 1.0
+    float sphereScore = abs(dot(hitLocal, hitLocal) - 1.0);  // sphere: r² = 1.0
+    bool isSphere = (sphereScore < 0.15 && cubeScore < 0.98);
+    if (isSphere) {
+        // Sphere-like: normal = radial direction from center
+        localNormal = normalize(hitLocal);
     } else {
-        localNormal = vec3(0, 0, sign(hitLocal.z));
+        // Box: normal = closest axis face
+        vec3 absLocal = abs(hitLocal);
+        if (absLocal.x > absLocal.y && absLocal.x > absLocal.z) {
+            localNormal = vec3(sign(hitLocal.x), 0, 0);
+        } else if (absLocal.y > absLocal.z) {
+            localNormal = vec3(0, sign(hitLocal.y), 0);
+        } else {
+            localNormal = vec3(0, 0, sign(hitLocal.z));
+        }
     }
 
-    // Transform normal to world space
+    // Transform normal to world space (use transpose of inverse for non-uniform scale)
     vec3 worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localNormal);
 
     // Always face the incoming ray (handle inside-out geometry like Cornell box walls)

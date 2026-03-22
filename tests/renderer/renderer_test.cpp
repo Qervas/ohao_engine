@@ -104,11 +104,11 @@ std::unique_ptr<Scene> buildTestScene() {
 
     // === Three objects with different materials ===
 
-    // 1. Chrome sphere (metallic, mirror-like) — LEFT side
+    // 1. Chrome sphere (metallic, mirror-like) — LEFT-CENTER, larger
     auto metalSphere = scene->createActorWithComponents("MetalSphere", PrimitiveType::Sphere);
     if (metalSphere) {
-        metalSphere->getTransform()->setPosition(glm::vec3(-2.5f, -H + 1.5f, -1.0f));
-        metalSphere->getTransform()->setScale(glm::vec3(1.5f));
+        metalSphere->getTransform()->setPosition(glm::vec3(-1.8f, -H + 2.0f, 0.0f));
+        metalSphere->getTransform()->setScale(glm::vec3(2.0f));
         auto mat = metalSphere->getComponent<MaterialComponent>();
         if (mat) {
             mat->getMaterial().baseColor = glm::vec3(0.95f, 0.93f, 0.88f);  // silver
@@ -131,11 +131,11 @@ std::unique_ptr<Scene> buildTestScene() {
         }
     }
 
-    // 3. Glass-like sphere (glossy, slight tint) — RIGHT-FRONT
+    // 3. Glass-like sphere (glossy, slight tint) — RIGHT-FRONT, larger
     auto glassSphere = scene->createActorWithComponents("GlassSphere", PrimitiveType::Sphere);
     if (glassSphere) {
-        glassSphere->getTransform()->setPosition(glm::vec3(2.0f, -H + 1.2f, 2.0f));
-        glassSphere->getTransform()->setScale(glm::vec3(1.2f));
+        glassSphere->getTransform()->setPosition(glm::vec3(2.5f, -H + 1.8f, 1.5f));
+        glassSphere->getTransform()->setScale(glm::vec3(1.8f));
         auto mat = glassSphere->getComponent<MaterialComponent>();
         if (mat) {
             mat->getMaterial().baseColor = glm::vec3(0.9f, 0.95f, 1.0f);  // ice blue tint
