@@ -534,19 +534,27 @@ void OffscreenRenderer::renderPathTraced() {
     float fovDeg = 55.0f;
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(fovDeg), aspect, 0.1f, 1000.0f);
-    glm::mat4 iv = glm::inverse(ptView);
-    std::cout << "[PT] invView right=(" << iv[0][0] << "," << iv[0][1] << "," << iv[0][2] << ")" << std::endl;
-    std::cout << "[PT] invView up=(" << iv[1][0] << "," << iv[1][1] << "," << iv[1][2] << ")" << std::endl;
-    std::cout << "[PT] invView -fwd=(" << iv[2][0] << "," << iv[2][1] << "," << iv[2][2] << ")" << std::endl;
-    std::cout << "[PT] invView pos=(" << iv[3][0] << "," << iv[3][1] << "," << iv[3][2] << ")" << std::endl;
-    std::cout << "[PT] FOV=" << fovDeg << " aspect=" << aspect
-              << " proj[0][0]=" << ptProj[0][0] << " proj[1][1]=" << ptProj[1][1] << std::endl;
-    glm::mat4 invProj = glm::inverse(ptProj);
-    std::cout << "[PT] invProj[0][0]=" << invProj[0][0] << " invProj[1][1]=" << invProj[1][1] << std::endl;
+    // Debug prints removed
 
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(0.0f, 4.0f, 0.0f), 10000.0f,  // ceiling light (unused for NEE, kept for compat)
+                         glm::vec3(0.0f, 4.0f, 0.0f), 10000.0f,
                          glm::vec3(1.0f, 0.98f, 0.92f), 1.5f);
+
+    // Run OptiX denoiser on the accumulation buffer (HDR)
+    if (m_denoiser && m_denoiser->isAvailable()) {
+        // The path tracer's accum buffer is RGBA32F with running average
+        // Denoise it in-place via the shared CUDA buffers
+        VkImage accumImage = m_pathTracer->getAccumImage();
+        VkImage outputImage = m_pathTracer->getOutputImage();
+        if (accumImage != VK_NULL_HANDLE) {
+            m_denoiser->denoise(cmd, m_graphicsQueue, accumImage, accumImage);
+            // Re-begin command buffer (denoise() ended it for CUDA sync)
+            VkCommandBufferBeginInfo bi2{};
+            bi2.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            bi2.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cmd, &bi2);
+        }
+    }
 
     // Copy path tracer output to staging buffer for CPU readback
     VkImage ptOutput = m_pathTracer->getOutputImage();

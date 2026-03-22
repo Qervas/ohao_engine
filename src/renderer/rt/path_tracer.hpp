@@ -45,6 +45,7 @@ public:
     void resize(uint32_t width, uint32_t height);
 
     VkImage getOutputImage() const { return m_outputImage; }
+    VkImage getAccumImage() const { return m_accumBuffer; }
     VkImageView getOutputView() const { return m_outputView; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
