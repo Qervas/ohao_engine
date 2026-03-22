@@ -46,6 +46,8 @@ public:
 
     VkImage getOutputImage() const { return m_outputImage; }
     VkImage getAccumImage() const { return m_accumBuffer; }
+    VkImage getAlbedoAOV() const { return m_albedoAOV; }
+    VkImage getNormalAOV() const { return m_normalAOV; }
     VkImageView getOutputView() const { return m_outputView; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
@@ -99,6 +101,14 @@ private:
     VkImage m_outputImage = VK_NULL_HANDLE;
     VkDeviceMemory m_outputMemory = VK_NULL_HANDLE;
     VkImageView m_outputView = VK_NULL_HANDLE;
+
+    // AOV buffers for denoiser guide (RGBA32F)
+    VkImage m_albedoAOV = VK_NULL_HANDLE;
+    VkDeviceMemory m_albedoAOVMemory = VK_NULL_HANDLE;
+    VkImageView m_albedoAOVView = VK_NULL_HANDLE;
+    VkImage m_normalAOV = VK_NULL_HANDLE;
+    VkDeviceMemory m_normalAOVMemory = VK_NULL_HANDLE;
+    VkImageView m_normalAOVView = VK_NULL_HANDLE;
 
     // Material buffer (per-instance albedo, vec4 SSBO)
     VkBuffer m_materialBuffer = VK_NULL_HANDLE;

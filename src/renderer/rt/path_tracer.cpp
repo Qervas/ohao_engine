@@ -182,6 +182,86 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_outputView) != VK_SUCCESS) return false;
     }
 
+    // --- Albedo AOV: RGBA32F for denoiser guide buffer ---
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_albedoAOV) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_albedoAOV, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_albedoAOVMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_albedoAOV, m_albedoAOVMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_albedoAOV;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_albedoAOVView) != VK_SUCCESS) return false;
+    }
+
+    // --- Normal AOV: RGBA32F for denoiser guide buffer ---
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_normalAOV) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_normalAOV, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_normalAOVMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_normalAOV, m_normalAOVMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_normalAOV;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_normalAOVView) != VK_SUCCESS) return false;
+    }
+
     return true;
 }
 
@@ -193,6 +273,14 @@ void PathTracer::destroyImages() {
     if (m_outputView) { vkDestroyImageView(m_device, m_outputView, nullptr); m_outputView = VK_NULL_HANDLE; }
     if (m_outputImage) { vkDestroyImage(m_device, m_outputImage, nullptr); m_outputImage = VK_NULL_HANDLE; }
     if (m_outputMemory) { vkFreeMemory(m_device, m_outputMemory, nullptr); m_outputMemory = VK_NULL_HANDLE; }
+
+    if (m_albedoAOVView) { vkDestroyImageView(m_device, m_albedoAOVView, nullptr); m_albedoAOVView = VK_NULL_HANDLE; }
+    if (m_albedoAOV) { vkDestroyImage(m_device, m_albedoAOV, nullptr); m_albedoAOV = VK_NULL_HANDLE; }
+    if (m_albedoAOVMemory) { vkFreeMemory(m_device, m_albedoAOVMemory, nullptr); m_albedoAOVMemory = VK_NULL_HANDLE; }
+
+    if (m_normalAOVView) { vkDestroyImageView(m_device, m_normalAOVView, nullptr); m_normalAOVView = VK_NULL_HANDLE; }
+    if (m_normalAOV) { vkDestroyImage(m_device, m_normalAOV, nullptr); m_normalAOV = VK_NULL_HANDLE; }
+    if (m_normalAOVMemory) { vkFreeMemory(m_device, m_normalAOVMemory, nullptr); m_normalAOVMemory = VK_NULL_HANDLE; }
 }
 
 // ─── Material buffer ─────────────────────────────────────────────────
@@ -258,14 +346,16 @@ void PathTracer::setMaterialData(const std::vector<glm::vec4>& materials) {
 // ─── Descriptor resources ────────────────────────────────────────────
 
 bool PathTracer::createDescriptorResources() {
-    // Layout: 6 bindings
+    // Layout: 8 bindings
     //   0: TLAS (acceleration structure)           — RAYGEN
     //   1: Accumulation buffer (storage image)     — RAYGEN   (RGBA32F)
     //   2: Output image (storage image)            — RAYGEN   (RGBA8)
     //   3: Material buffer SSBO                    — RAYGEN + CLOSEST_HIT
     //   4: Normal buffer SSBO (vec4 per vertex)    — CLOSEST_HIT
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
-    VkDescriptorSetLayoutBinding bindings[6] = {};
+    //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
+    //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
+    VkDescriptorSetLayoutBinding bindings[8] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -297,9 +387,19 @@ bool PathTracer::createDescriptorResources() {
     bindings[5].descriptorCount = 1;
     bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+    bindings[7].binding = 7;
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 6;
+    layoutInfo.bindingCount = 8;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -308,7 +408,7 @@ bool PathTracer::createDescriptorResources() {
     // Pool
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},  // accum + output + albedoAOV + normalAOV
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},  // material + normals + indices
     };
 
@@ -596,7 +696,17 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     indexBufInfo.offset = 0;
     indexBufInfo.range = VK_WHOLE_SIZE;
 
-    VkWriteDescriptorSet writes[6] = {};
+    // Binding 6: Albedo AOV (storage image, RGBA32F)
+    VkDescriptorImageInfo albedoAOVInfo{};
+    albedoAOVInfo.imageView = m_albedoAOVView;
+    albedoAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    // Binding 7: Normal AOV (storage image, RGBA32F)
+    VkDescriptorImageInfo normalAOVInfo{};
+    normalAOVInfo.imageView = m_normalAOVView;
+    normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[8] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -640,7 +750,21 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[5].pBufferInfo = &indexBufInfo;
 
-    vkUpdateDescriptorSets(m_device, 6, writes, 0, nullptr);
+    writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[6].dstSet = m_descriptorSet;
+    writes[6].dstBinding = 6;
+    writes[6].descriptorCount = 1;
+    writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[6].pImageInfo = &albedoAOVInfo;
+
+    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[7].dstSet = m_descriptorSet;
+    writes[7].dstBinding = 7;
+    writes[7].descriptorCount = 1;
+    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[7].pImageInfo = &normalAOVInfo;
+
+    vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
     // On first frame (frameIndex==0), transition from UNDEFINED to clear it;
@@ -673,6 +797,31 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
             0, 0, nullptr, 0, nullptr, 1, &outputBarrier);
+    }
+
+    // --- Transition AOV images to GENERAL for storage write ---
+    {
+        VkImageMemoryBarrier aovBarriers[2] = {};
+
+        aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[0].srcAccessMask = 0;
+        aovBarriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[0].image = m_albedoAOV;
+        aovBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        aovBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[1].srcAccessMask = 0;
+        aovBarriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[1].image = m_normalAOV;
+        aovBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            0, 0, nullptr, 0, nullptr, 2, aovBarriers);
     }
 
     // --- Bind pipeline and descriptors ---
@@ -714,6 +863,31 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+    }
+
+    // --- Transition AOV images to TRANSFER_SRC_OPTIMAL for denoiser readback ---
+    {
+        VkImageMemoryBarrier aovBarriers[2] = {};
+
+        aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        aovBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        aovBarriers[0].image = m_albedoAOV;
+        aovBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        aovBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        aovBarriers[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        aovBarriers[1].image = m_normalAOV;
+        aovBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 2, aovBarriers);
     }
 
     // Increment frame for progressive accumulation

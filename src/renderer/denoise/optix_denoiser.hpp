@@ -79,6 +79,8 @@ private:
 
     SharedBuffer m_inputBuffer;
     SharedBuffer m_outputBuffer;
+    SharedBuffer m_albedoGuide;
+    SharedBuffer m_normalGuide;
     SharedBuffer m_scratchBuffer;
     SharedBuffer m_stateBuffer;
 

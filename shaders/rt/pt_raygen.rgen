@@ -8,6 +8,8 @@ layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
 layout(set = 0, binding = 1, rgba32f) uniform image2D accumBuffer;
 layout(set = 0, binding = 2, rgba8) uniform image2D outputImage;
 layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; } materialBuf;
+layout(set = 0, binding = 6, rgba32f) uniform writeonly image2D albedoAOV;
+layout(set = 0, binding = 7, rgba32f) uniform writeonly image2D normalAOV;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
@@ -106,11 +108,24 @@ void main() {
         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
                      rayOrigin, 0.001, rayDir, 10000.0, 0);
 
-        if (payload.hitDist < 0.0) break;  // miss — escaped scene
+        if (payload.hitDist < 0.0) {
+            // miss — escaped scene
+            if (bounce == 0u) {
+                imageStore(albedoAOV, pixel, vec4(0));
+                imageStore(normalAOV, pixel, vec4(0));
+            }
+            break;
+        }
 
         vec3 hitPos = payload.hitPos;
         vec3 N = payload.hitNormal;
         vec3 albedo = payload.hitAlbedo;
+
+        // Write first-hit AOVs for denoiser guide buffers
+        if (bounce == 0u) {
+            imageStore(albedoAOV, pixel, vec4(albedo, 1.0));
+            imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));  // remap [-1,1] to [0,1]
+        }
 
         // === Emissive surface check ===
         if (payload.hitInstance == 4u) {

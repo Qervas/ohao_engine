@@ -107,8 +107,8 @@ bool OptiXDenoiser::initOptix() {
 
     // Create denoiser
     OptixDenoiserOptions denoiserOptions = {};
-    denoiserOptions.guideAlbedo = 0;  // No albedo guide for now
-    denoiserOptions.guideNormal = 0;  // No normal guide for now
+    denoiserOptions.guideAlbedo = 1;  // Use albedo guide for edge preservation
+    denoiserOptions.guideNormal = 1;  // Use normal guide for edge preservation
 
     OptixDenoiserModelKind modelKind = OPTIX_DENOISER_MODEL_KIND_HDR;
     res = optixDenoiserCreate(
@@ -154,6 +154,8 @@ bool OptiXDenoiser::createSharedBuffers() {
     VkDeviceSize imageSize = m_width * m_height * 4 * sizeof(float);  // RGBA32F
     if (!createSharedBuffer(m_inputBuffer, imageSize)) return false;
     if (!createSharedBuffer(m_outputBuffer, imageSize)) return false;
+    if (!createSharedBuffer(m_albedoGuide, imageSize)) return false;
+    if (!createSharedBuffer(m_normalGuide, imageSize)) return false;
     return true;
 }
 
@@ -231,14 +233,24 @@ void OptiXDenoiser::denoise(VkCommandBuffer cmd, VkQueue queue,
 
     VkDeviceSize imageSize = m_width * m_height * 4 * sizeof(float);
 
-    // 1. Copy noisy Vulkan image → shared buffer
+    // 1. Copy noisy image + guide images to shared buffers
     VkBufferImageCopy copyRegion{};
     copyRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copyRegion.imageExtent = {m_width, m_height, 1};
     vkCmdCopyImageToBuffer(cmd, noisyImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                            m_inputBuffer.vkBuffer, 1, &copyRegion);
 
-    // Submit and wait — CUDA needs the data
+    // Copy guide buffers if provided
+    if (albedoImage != VK_NULL_HANDLE) {
+        vkCmdCopyImageToBuffer(cmd, albedoImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_albedoGuide.vkBuffer, 1, &copyRegion);
+    }
+    if (normalImage != VK_NULL_HANDLE) {
+        vkCmdCopyImageToBuffer(cmd, normalImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_normalGuide.vkBuffer, 1, &copyRegion);
+    }
+
+    // Submit and wait — CUDA needs all data
     vkEndCommandBuffer(cmd);
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -263,6 +275,13 @@ void OptiXDenoiser::denoise(VkCommandBuffer cmd, VkQueue queue,
     outputLayer.data = m_outputBuffer.cudaPtr;
 
     OptixDenoiserGuideLayer guide = {};
+    // Albedo guide
+    guide.albedo = inputLayer;  // same format
+    guide.albedo.data = m_albedoGuide.cudaPtr;
+    // Normal guide
+    guide.normal = inputLayer;
+    guide.normal.data = m_normalGuide.cudaPtr;
+
     OptixDenoiserLayer layer = {};
     layer.input = inputLayer;
     layer.output = outputLayer;
@@ -363,6 +382,8 @@ void OptiXDenoiser::destroy() {
 #endif
     destroySharedBuffer(m_inputBuffer);
     destroySharedBuffer(m_outputBuffer);
+    destroySharedBuffer(m_albedoGuide);
+    destroySharedBuffer(m_normalGuide);
     m_available = false;
 }
 

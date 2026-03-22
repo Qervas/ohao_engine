@@ -615,7 +615,8 @@ void OffscreenRenderer::finalizePathTraced() {
                                  0, 0, nullptr, 0, nullptr, 1, &toSrc);
 
             // Run denoiser (copies to shared buffer, runs CUDA, copies back)
-            m_denoiser->denoise(cmd, m_graphicsQueue, accumImage, accumImage);
+            m_denoiser->denoise(cmd, m_graphicsQueue, accumImage, accumImage,
+                                m_pathTracer->getAlbedoAOV(), m_pathTracer->getNormalAOV());
 
             // denoise() submits and waits. Now the denoised data is back in accumImage.
             // Re-record cmd to transition accum back to GENERAL for the tonemap read
