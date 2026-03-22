@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 64;  // Low spp — denoiser will clean it
+    int numFrames = 128;  // More samples = sharper denoised result
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
