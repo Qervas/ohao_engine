@@ -451,6 +451,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
     // Build TLAS instances + collect materials in the SAME order
     m_rtAccel->clearInstances();
     std::vector<glm::vec3> materialAlbedos;
+    std::vector<glm::vec4> materialFullData;
     uint32_t instanceIdx = 0;
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto blasIt = actorBlas.find(actorId);
@@ -468,13 +469,12 @@ void OffscreenRenderer::buildAccelerationStructures() {
             roughness = matComp->getMaterial().roughness;
             metallic = matComp->getMaterial().metallic;
         }
-        // Pack: vec4(albedo, roughness) — metallic encoded in roughness sign
-        // roughness > 0 = dielectric, roughness < 0 = metallic (abs = actual roughness)
-        float packedRoughness = metallic > 0.5f ? -roughness : roughness;
+        // Pack into vec4: (r, g, b, packed_roughness_metallic)
+        // Negative roughness = metallic surface
+        float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;
         materialAlbedos.push_back(glm::vec3(albedo.r, albedo.g, albedo.b));
-        // Store packed roughness in a parallel structure — but we only have vec3...
-        // Hack: put roughness+metallic in the albedo's unused channel via setMaterialAlbedos
-        // Actually, let me just change the material buffer to store vec4 with roughness in .a
+        // Store full material data for path tracer
+        materialFullData.push_back(glm::vec4(albedo, packed));
         std::cout << "[RT] Instance " << instanceIdx << " (" << actor->getName()
                   << "): albedo=(" << albedo.r << "," << albedo.g << "," << albedo.b
                   << ") rough=" << roughness << " metal=" << metallic << std::endl;
@@ -493,7 +493,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
             if (gi) gi->setMaterialAlbedos(materialAlbedos);
         }
         if (m_pathTracer) {
-            m_pathTracer->setMaterialAlbedos(materialAlbedos);
+            m_pathTracer->setMaterialData(materialFullData);
         }
     }
     m_rtAccelDirty = false;

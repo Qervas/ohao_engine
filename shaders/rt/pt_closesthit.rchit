@@ -57,6 +57,9 @@ void main() {
     }
     payload.hitNormal = worldNormal;
 
-    // Look up albedo from material buffer
-    payload.hitAlbedo = materialBuf.materials[gl_InstanceCustomIndexEXT].rgb;
+    // Look up material from buffer: rgb=albedo, a=packed roughness (negative=metallic)
+    vec4 matData = materialBuf.materials[gl_InstanceCustomIndexEXT];
+    payload.hitAlbedo = matData.rgb;
+    // Pack roughness + metallic into attenuation.x
+    payload.attenuation = vec3(matData.a, 0.0, 0.0);  // attenuation.x = packed roughness
 }

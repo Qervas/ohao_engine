@@ -49,6 +49,7 @@ public:
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
+    void setMaterialData(const std::vector<glm::vec4>& materials);
 
     // Reset accumulation — call when camera moves so the buffer restarts
     void resetAccumulation();

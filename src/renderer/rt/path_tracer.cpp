@@ -234,12 +234,20 @@ bool PathTracer::createMaterialBuffer() {
 }
 
 void PathTracer::setMaterialAlbedos(const std::vector<glm::vec3>& albedos) {
-    // Update material data (vec3 -> vec4 with w=1)
     for (size_t i = 0; i < albedos.size() && i < m_materialData.size(); i++) {
         m_materialData[i] = glm::vec4(albedos[i], 1.0f);
     }
+    void* mapped;
+    VkDeviceSize size = m_materialData.size() * sizeof(glm::vec4);
+    vkMapMemory(m_device, m_materialMemory, 0, size, 0, &mapped);
+    memcpy(mapped, m_materialData.data(), size);
+    vkUnmapMemory(m_device, m_materialMemory);
+}
 
-    // Upload to GPU
+void PathTracer::setMaterialData(const std::vector<glm::vec4>& materials) {
+    for (size_t i = 0; i < materials.size() && i < m_materialData.size(); i++) {
+        m_materialData[i] = materials[i];
+    }
     void* mapped;
     VkDeviceSize size = m_materialData.size() * sizeof(glm::vec4);
     vkMapMemory(m_device, m_materialMemory, 0, size, 0, &mapped);
