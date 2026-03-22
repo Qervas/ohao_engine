@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 512;  // 4K + denoiser
+    int numFrames = 4096;  // 4K raw — no denoiser
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
@@ -247,8 +247,8 @@ int main(int argc, char* argv[]) {
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     std::cout << "Path trace time: " << ms << " ms" << std::endl;
 
-    std::cout << "Denoising..." << std::endl;
-    renderer.finalizePathTraced();
+    // No denoiser — raw quality at high spp is sharper
+    // renderer.finalizePathTraced();
 
     // 6. Save to PNG
     const uint8_t* pixels = renderer.getPixels();
