@@ -545,8 +545,8 @@ void OffscreenRenderer::buildAccelerationStructures() {
         }
         if (m_pathTracer) {
             m_pathTracer->setMaterialData(materialFullData);
-            if (m_rtNormalBuffer != VK_NULL_HANDLE) {
-                m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_vertexCount);
+            if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
+                m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
             }
         }
     }

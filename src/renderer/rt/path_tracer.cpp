@@ -258,40 +258,48 @@ void PathTracer::setMaterialData(const std::vector<glm::vec4>& materials) {
 // ─── Descriptor resources ────────────────────────────────────────────
 
 bool PathTracer::createDescriptorResources() {
-    // Layout: 4 bindings
+    // Layout: 6 bindings
     //   0: TLAS (acceleration structure)           — RAYGEN
     //   1: Accumulation buffer (storage image)     — RAYGEN   (RGBA32F)
     //   2: Output image (storage image)            — RAYGEN   (RGBA8)
     //   3: Material buffer SSBO                    — RAYGEN + CLOSEST_HIT
-    VkDescriptorSetLayoutBinding bindings[4] = {};
+    //   4: Normal buffer SSBO (vec4 per vertex)    — CLOSEST_HIT
+    //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
+    VkDescriptorSetLayoutBinding bindings[6] = {};
 
-    // 0: Acceleration structure
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // 1: Accumulation buffer (storage image, RGBA32F)
     bindings[1].binding = 1;
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // 2: Output image (storage image, RGBA8)
     bindings[2].binding = 2;
     bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[2].descriptorCount = 1;
     bindings[2].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // 3: Material buffer SSBO (per-instance albedo)
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[3].descriptorCount = 1;
     bindings[3].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[4].descriptorCount = 1;
+    bindings[4].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+    bindings[5].binding = 5;
+    bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[5].descriptorCount = 1;
+    bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 4;
+    layoutInfo.bindingCount = 6;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -300,8 +308,8 @@ bool PathTracer::createDescriptorResources() {
     // Pool
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},   // accum + output
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},  // material + normals + indices
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -576,7 +584,19 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     materialInfo.offset = 0;
     materialInfo.range = m_materialData.size() * sizeof(glm::vec4);
 
-    VkWriteDescriptorSet writes[4] = {};
+    // Binding 4: Normal buffer SSBO
+    VkDescriptorBufferInfo normalBufInfo{};
+    normalBufInfo.buffer = m_normalBuffer != VK_NULL_HANDLE ? m_normalBuffer : m_materialBuffer;
+    normalBufInfo.offset = 0;
+    normalBufInfo.range = VK_WHOLE_SIZE;
+
+    // Binding 5: Index buffer SSBO
+    VkDescriptorBufferInfo indexBufInfo{};
+    indexBufInfo.buffer = m_indexBuffer != VK_NULL_HANDLE ? m_indexBuffer : m_materialBuffer;
+    indexBufInfo.offset = 0;
+    indexBufInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet writes[6] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -606,7 +626,21 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[3].pBufferInfo = &materialInfo;
 
-    vkUpdateDescriptorSets(m_device, 4, writes, 0, nullptr);
+    writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[4].dstSet = m_descriptorSet;
+    writes[4].dstBinding = 4;
+    writes[4].descriptorCount = 1;
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[4].pBufferInfo = &normalBufInfo;
+
+    writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[5].dstSet = m_descriptorSet;
+    writes[5].dstBinding = 5;
+    writes[5].descriptorCount = 1;
+    writes[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[5].pBufferInfo = &indexBufInfo;
+
+    vkUpdateDescriptorSets(m_device, 6, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
     // On first frame (frameIndex==0), transition from UNDEFINED to clear it;

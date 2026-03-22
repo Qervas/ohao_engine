@@ -95,72 +95,111 @@ void main() {
         vec3 N = payload.hitNormal;
         vec3 albedo = payload.hitAlbedo;
 
-        // Instance 4 = Ceiling = emissive light source
+        // === Emissive surface check ===
         if (payload.hitInstance == 4u) {
-            // Only emit from the center portion of the ceiling (area light, not full ceiling)
-            // Light panel: |x| < 2 and |z| < 2 (small panel in center of 10x10 ceiling)
             vec3 hp = payload.hitPos;
             if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
+                // Hit the light panel — add emission
                 radiance += throughput * pc.lightColorAndRadius.xyz * 6.0;
-            }
-            // Rest of ceiling is just white diffuse — doesn't emit, continues bouncing
-            else {
-                // Don't break — treat as regular white surface, keep bouncing
-                rayDir = cosineHemisphere(N);
-                rayOrigin = hitPos + N * 0.01;
-                throughput *= albedo;
-                continue;
             }
             break;
         }
 
-        // Russian roulette after bounce 2
+        // === Decode material ===
+        float packedRoughness = payload.attenuation.x;
+        bool isMetal = (packedRoughness < 0.0);
+        float roughness = abs(packedRoughness);
+        if (roughness >= 10.0) roughness -= 10.0;
+        roughness = max(roughness, 0.01);
+
+        // F0: dielectric = 0.04, metal = albedo
+        vec3 F0 = isMetal ? albedo : vec3(0.04);
+
+        // === NEE: explicitly sample the ceiling light ===
+        if (!isMetal || roughness > 0.05) {  // skip NEE for perfect mirrors
+            // Random point on the emissive light panel (|x|<2, |z|<2, y≈5)
+            vec3 lightPoint = vec3(
+                (rand01() * 2.0 - 1.0) * 2.0,
+                4.99,
+                (rand01() * 2.0 - 1.0) * 2.0
+            );
+            float lightArea = 16.0;  // 4x4 panel
+            vec3 Le = pc.lightColorAndRadius.xyz * 6.0;
+
+            vec3 toLight = lightPoint - hitPos;
+            float lightDist = length(toLight);
+            vec3 L = toLight / lightDist;
+            float NdotL = max(dot(N, L), 0.0);
+            float lightCos = max(L.y, 0.0);  // light normal = (0,-1,0)
+
+            if (NdotL > 0.0 && lightCos > 0.0) {
+                // Shadow ray
+                payload.hitDist = 999.0;
+                traceRayEXT(topLevelAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xFF, 0, 0, 0,
+                    hitPos + N * 0.01, 0.001, L, lightDist - 0.02, 0);
+
+                if (payload.hitDist < 0.0) {  // miss = not blocked
+                    // BRDF evaluation for NEE
+                    vec3 brdfVal;
+                    if (roughness > 0.3) {
+                        // Diffuse: Lambertian
+                        brdfVal = (isMetal ? vec3(0.0) : albedo) / 3.14159;
+                    } else {
+                        // Glossy: simplified Cook-Torrance
+                        vec3 H = normalize(L + normalize(-rayDir));
+                        float NdotH = max(dot(N, H), 0.0);
+                        float VdotH = max(dot(normalize(-rayDir), H), 0.0);
+                        // GGX NDF
+                        float a = roughness * roughness;
+                        float a2 = a * a;
+                        float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (3.14159 * d * d + 0.0001);
+                        // Fresnel
+                        vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+                        // Simplified specular + diffuse
+                        vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                        brdfVal = kD * albedo / 3.14159 + F * D * 0.25;
+                    }
+
+                    float geom = NdotL * lightCos / (lightDist * lightDist);
+                    radiance += throughput * Le * brdfVal * geom * lightArea;
+                }
+            }
+        }
+
+        // === Russian roulette ===
         if (bounce > 1u) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
             if (p < 0.01 || rand01() > p) break;
             throughput /= p;
         }
 
-        // Material-dependent bounce — decode packed roughness from closest hit
-        // |packed| >= 10 means sphere (subtract 10), sign = metallic
-        float packedRoughness = payload.attenuation.x;
-        bool isMetal = (packedRoughness < 0.0);
-        float roughness = abs(packedRoughness);
-        if (roughness >= 10.0) roughness -= 10.0;  // strip sphere flag
-        bool isGlossy = (!isMetal && roughness < 0.1);
+        // === BRDF sampling for next bounce ===
+        float cosI = abs(dot(normalize(rayDir), N));
+        vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
+        float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
+        if (isMetal) specProb = 1.0;
 
-        if (isMetal) {
-            // Metal reflection — roughness controls blur
+        if (rand01() < specProb || roughness < 0.05) {
+            // Specular bounce
             vec3 reflected = reflect(rayDir, N);
-            vec3 jitter = cosineHemisphere(reflected) * roughness;
-            rayDir = normalize(reflected + jitter);
-            if (dot(rayDir, N) < 0.0) rayDir = cosineHemisphere(N);
-            rayOrigin = hitPos + N * 0.01;
-            throughput *= albedo;  // metallic reflection tinted by albedo
-        } else if (isGlossy) {
-            // Dielectric glossy (glass-like) — Fresnel approximation
-            float cosI = abs(dot(rayDir, N));
-            float F0 = 0.04;
-            float fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
-            if (rand01() < fresnel) {
-                // Specular reflection
-                vec3 reflected = reflect(rayDir, N);
+            if (roughness > 0.01) {
                 vec3 jitter = cosineHemisphere(reflected) * roughness;
-                rayDir = normalize(reflected + jitter);
-                if (dot(rayDir, N) < 0.0) rayDir = cosineHemisphere(N);
-                rayOrigin = hitPos + N * 0.01;
-                throughput *= vec3(1.0);
-            } else {
-                // Diffuse transmission/absorption
-                rayDir = cosineHemisphere(N);
-                rayOrigin = hitPos + N * 0.01;
-                throughput *= albedo;
+                reflected = normalize(reflected + jitter);
+                if (dot(reflected, N) < 0.0) reflected = cosineHemisphere(N);
             }
+            rayDir = reflected;
+            rayOrigin = hitPos + N * 0.01;
+            throughput *= isMetal ? albedo : vec3(1.0);
+            throughput /= max(specProb, 0.01);
         } else {
-            // Lambertian diffuse
+            // Diffuse bounce
             rayDir = cosineHemisphere(N);
             rayOrigin = hitPos + N * 0.01;
             throughput *= albedo;
+            throughput /= max(1.0 - specProb, 0.01);
         }
     }
 

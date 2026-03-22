@@ -2,7 +2,10 @@
 #extension GL_EXT_ray_tracing : require
 
 // Path Tracer Closest Hit Shader
-// Returns hit position, normal, and surface albedo from material buffer.
+// Uses object-space hit position to compute normals:
+// - Sphere: normalize(hitLocal) — always correct for sphere meshes
+// - Cube/quad: axis-aligned face normal
+// Shape type encoded in material buffer .a (|packed| >= 10 = sphere)
 
 struct RayPayload {
     vec3 color;
@@ -17,59 +20,58 @@ struct RayPayload {
 layout(location = 0) rayPayloadInEXT RayPayload payload;
 hitAttributeEXT vec2 baryCoord;
 
-// Material buffer — per-instance (rgb=albedo, a=roughness)
 layout(set = 0, binding = 3) readonly buffer MaterialBuffer {
     vec4 materials[];
 } materialBuf;
 
+// Normal buffer (per-vertex vec4) — for future interpolation
+layout(set = 0, binding = 4) readonly buffer NormalBuffer {
+    vec4 normals[];
+} normalBuf;
+
+// Index buffer (global uint indices)
+layout(set = 0, binding = 5) readonly buffer IndexBuffer {
+    uint indices[];
+} indexBuf;
+
 void main() {
-    // Compute hit position
     payload.hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
     payload.hitDist = gl_HitTEXT;
     payload.hitInstance = gl_InstanceCustomIndexEXT;
 
-    // Compute geometric normal from triangle vertices
-    // We use the object-to-world transform to get the world-space normal
-    // For now, use the geometric normal from the hit
-    // The barycentric coordinates are in baryCoord.xy, with z = 1 - x - y
-
-    // Compute normal in object space
+    // Object-space hit position
     vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
 
-    vec3 localNormal;
-
-    // Decode shape type from material buffer .a channel:
-    // |packed| >= 10.0 means sphere shape
+    // Shape type from material
     float packedVal = materialBuf.materials[gl_InstanceCustomIndexEXT].a;
     bool isSphere = (abs(packedVal) >= 10.0);
 
+    vec3 localNormal;
     if (isSphere) {
-        // Sphere-like: normal = radial direction from center
+        // Sphere: radial normal from center (always correct)
         localNormal = normalize(hitLocal);
     } else {
-        // Box: normal = closest axis face
-        vec3 absLocal = abs(hitLocal);
-        if (absLocal.x > absLocal.y && absLocal.x > absLocal.z) {
+        // Flat surface: axis-aligned face detection
+        vec3 al = abs(hitLocal);
+        if (al.x >= al.y && al.x >= al.z)
             localNormal = vec3(sign(hitLocal.x), 0, 0);
-        } else if (absLocal.y > absLocal.z) {
+        else if (al.y >= al.z)
             localNormal = vec3(0, sign(hitLocal.y), 0);
-        } else {
+        else
             localNormal = vec3(0, 0, sign(hitLocal.z));
-        }
     }
 
-    // Transform normal to world space (use transpose of inverse for non-uniform scale)
+    // World space (handles non-uniform scale via transpose-inverse approximation)
     vec3 worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localNormal);
 
-    // Always face the incoming ray (handle inside-out geometry like Cornell box walls)
-    if (dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0) {
+    // Face the ray
+    if (dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
-    }
+
     payload.hitNormal = worldNormal;
 
-    // Look up material from buffer: rgb=albedo, a=packed roughness (negative=metallic)
+    // Material
     vec4 matData = materialBuf.materials[gl_InstanceCustomIndexEXT];
     payload.hitAlbedo = matData.rgb;
-    // Pack roughness + metallic into attenuation.x
-    payload.attenuation = vec3(matData.a, 0.0, 0.0);  // attenuation.x = packed roughness
+    payload.attenuation = vec3(matData.a, 0.0, 0.0);
 }

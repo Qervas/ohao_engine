@@ -50,8 +50,8 @@ public:
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
     void setMaterialData(const std::vector<glm::vec4>& materials);
-    void setNormalBuffer(VkBuffer normalBuf, uint32_t vertexCount) {
-        m_normalBuffer = normalBuf; m_normalVertexCount = vertexCount;
+    void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) {
+        m_normalBuffer = normalBuf; m_indexBuffer = indexBuf; m_normalVertexCount = vertexCount;
     }
 
     // Reset accumulation — call when camera moves so the buffer restarts
@@ -81,6 +81,7 @@ private:
     // Config
     uint32_t m_maxBounces = 8;
     VkBuffer m_normalBuffer = VK_NULL_HANDLE;  // external, not owned
+    VkBuffer m_indexBuffer = VK_NULL_HANDLE;   // external, not owned (RT index buffer)
     uint32_t m_normalVertexCount = 0;
     uint32_t m_frameIndex = 0;
 
