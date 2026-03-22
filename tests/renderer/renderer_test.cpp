@@ -197,8 +197,8 @@ int main(int argc, char* argv[]) {
     std::string outputPath = "render_output.png";
     if (argc > 1) outputPath = argv[1];
 
-    uint32_t width = 3840;
-    uint32_t height = 2160;
+    uint32_t width = 1920;
+    uint32_t height = 1080;
 
     std::cout << "=== OHAO Standalone Renderer Test ===" << std::endl;
     std::cout << "Output: " << outputPath << " (" << width << "x" << height << ")" << std::endl;
@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 4096;  // 4K raw — no denoiser
+    int numFrames = 1024;
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
@@ -247,8 +247,6 @@ int main(int argc, char* argv[]) {
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     std::cout << "Path trace time: " << ms << " ms" << std::endl;
 
-    // No denoiser — raw quality at high spp is sharper
-    // renderer.finalizePathTraced();
 
     // 6. Save to PNG
     const uint8_t* pixels = renderer.getPixels();

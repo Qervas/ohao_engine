@@ -12,7 +12,6 @@
 #include "renderer/material/bindless_texture_manager.hpp"
 #include "renderer/rt/rt_acceleration_structure.hpp"
 #include "renderer/rt/path_tracer.hpp"
-#include "renderer/denoise/optix_denoiser.hpp"
 
 namespace ohao {
 
@@ -185,7 +184,6 @@ private:
     void renderMultiFrame();  // Multi-frame ring buffer rendering
     void renderPathTraced();     // Full path tracing (RT pipeline, no rasterization)
 public:
-    void finalizePathTraced();   // Run denoiser + final tonemap after all frames
 private:
     void renderLegacy();      // Legacy single-frame rendering
 
@@ -280,7 +278,6 @@ private:
     // RT acceleration structure + path tracer
     std::unique_ptr<RTAccelerationStructure> m_rtAccel;
     std::unique_ptr<PathTracer> m_pathTracer;
-    std::unique_ptr<OptiXDenoiser> m_denoiser;
     bool m_rtAccelDirty{true};
     void buildAccelerationStructures();
     // Separate RT-flagged copies of vertex/index data (device-local + device address)

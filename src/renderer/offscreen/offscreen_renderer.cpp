@@ -184,15 +184,6 @@ bool OffscreenRenderer::initialize() {
             m_rtAccel.reset();
         }
 
-        // Initialize OptiX denoiser
-        m_denoiser = std::make_unique<OptiXDenoiser>();
-        if (m_denoiser->init(m_device, m_physicalDevice, m_instance, m_width, m_height)) {
-            std::cout << "OptiX denoiser: available" << std::endl;
-        } else {
-            std::cout << "OptiX denoiser: not available" << std::endl;
-            m_denoiser.reset();
-        }
-
         m_initialized = true;
         std::cout << "OffscreenRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
@@ -541,7 +532,6 @@ void OffscreenRenderer::renderPathTraced() {
                          glm::vec3(1.0f, 0.98f, 0.92f), 1.5f);
 
     // Copy path tracer output to staging buffer for CPU readback
-    // (Denoising happens separately via finalizePathTraced())
     VkImage ptOutput = m_pathTracer->getOutputImage();
     if (ptOutput != VK_NULL_HANDLE && frame.stagingBuffer != VK_NULL_HANDLE) {
         // Output is already in TRANSFER_SRC_OPTIMAL from render()
@@ -568,97 +558,6 @@ void OffscreenRenderer::renderPathTraced() {
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, frame.renderFence);
 
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
-}
-
-void OffscreenRenderer::finalizePathTraced() {
-    if (!m_pathTracer || !m_denoiser || !m_denoiser->isAvailable()) return;
-
-    // Step 1: Render 1 frame in denoise mode (raw single-sample radiance)
-    m_pathTracer->resetAccumulation();
-    // Set denoise mode: frameIndex bit 31 = 1
-    m_pathTracer->setDenoiseMode(true);
-    for (int i = 0; i < 4; i++) render();  // fill ring buffer
-    m_pathTracer->setDenoiseMode(false);
-
-    // Wait for all rendering to finish
-    vkDeviceWaitIdle(m_device);
-
-    // Run OptiX denoiser on the final accumulated HDR buffer
-    if (m_denoiser && m_denoiser->isAvailable()) {
-        VkImage accumImage = m_pathTracer->getAccumImage();
-        if (accumImage != VK_NULL_HANDLE) {
-            // Allocate a one-shot command buffer for the copy + denoise flow
-            VkCommandBuffer cmd;
-            VkCommandBufferAllocateInfo allocInfo{};
-            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocInfo.commandPool = m_commandPool;
-            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocInfo.commandBufferCount = 1;
-            vkAllocateCommandBuffers(m_device, &allocInfo, &cmd);
-
-            VkCommandBufferBeginInfo beginInfo{};
-            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vkBeginCommandBuffer(cmd, &beginInfo);
-
-            // Transition accum buffer to TRANSFER_SRC for copy to shared buffer
-            VkImageMemoryBarrier toSrc{};
-            toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            toSrc.image = accumImage;
-            toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &toSrc);
-
-            // Run denoiser (copies to shared buffer, runs CUDA, copies back)
-            m_denoiser->denoise(cmd, m_graphicsQueue, accumImage, accumImage,
-                                m_pathTracer->getAlbedoAOV(), m_pathTracer->getNormalAOV());
-
-            // denoise() submits and waits. Now the denoised data is back in accumImage.
-            // Re-record cmd to transition accum back to GENERAL for the tonemap read
-            vkResetCommandBuffer(cmd, 0);
-            vkBeginCommandBuffer(cmd, &beginInfo);
-
-            VkImageMemoryBarrier toGeneral{};
-            toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            toGeneral.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toGeneral.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            toGeneral.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            toGeneral.image = accumImage;
-            toGeneral.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &toGeneral);
-
-            vkEndCommandBuffer(cmd);
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &cmd;
-            vkQueueSubmit(m_graphicsQueue, 1, &si, VK_NULL_HANDLE);
-            vkQueueWaitIdle(m_graphicsQueue);
-            vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
-
-            std::cout << "[Denoiser] Denoised final image" << std::endl;
-        }
-    }
-
-    // Set tonemap-only mode and render frames to pick up denoised result
-    m_pathTracer->setTonemapOnly(true);
-    for (int i = 0; i < 4; i++) render();  // fill ring buffer with tonemapped result
-    m_pathTracer->setTonemapOnly(false);
-
-    vkDeviceWaitIdle(m_device);
-    uint32_t prevFrame = (m_currentFrame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
-    FrameResources& frame = m_frameResources.getFrame(prevFrame);
-    if (frame.stagingBufferMapped) {
-        memcpy(m_pixelBuffer.data(), frame.stagingBufferMapped, m_width * m_height * 4);
-    }
 }
 
 void OffscreenRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {

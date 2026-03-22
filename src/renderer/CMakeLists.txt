@@ -28,21 +28,12 @@ list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/_disabled/")
 # Create the renderer library
 add_library(ohao_renderer ${RENDERER_SOURCES})
 
-# OptiX SDK (header-only, runtime-loaded)
-set(OPTIX_PATH "C:/ProgramData/NVIDIA Corporation/OptiX SDK 9.1.0" CACHE PATH "OptiX SDK path")
-find_package(CUDAToolkit QUIET)
-
 target_include_directories(ohao_renderer PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
     ${stb_SOURCE_DIR}
-    "${OPTIX_PATH}/include"
 )
-
-if(CUDAToolkit_FOUND)
-    target_include_directories(ohao_renderer PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
-endif()
 
 target_link_libraries(ohao_renderer PUBLIC
     ${Vulkan_LIBRARIES}
@@ -53,11 +44,5 @@ target_link_libraries(ohao_renderer PUBLIC
     VulkanMemoryAllocator
 )
 
-if(CUDAToolkit_FOUND)
-    target_link_libraries(ohao_renderer PUBLIC CUDA::cudart CUDA::cuda_driver)
-    message(STATUS "CUDA found: ${CUDAToolkit_VERSION} — OptiX denoiser ENABLED")
-else()
-    message(STATUS "CUDA not found — OptiX denoiser disabled")
-endif()
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})

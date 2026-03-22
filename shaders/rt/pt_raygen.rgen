@@ -63,23 +63,7 @@ void main() {
     uint frameIdx = pc.params.z;
     uint maxBounces = pc.params.w;
 
-    // Decode flags from frameIndex upper bits
-    const uint PT_FLAG_DENOISE_MODE = (1u << 31);
-    const uint PT_FLAG_TONEMAP_ONLY = (1u << 30);
-    bool denoiseMode = (frameIdx & PT_FLAG_DENOISE_MODE) != 0u;
-    bool tonemapOnly = (frameIdx & PT_FLAG_TONEMAP_ONLY) != 0u;
-    frameIdx &= ~(PT_FLAG_DENOISE_MODE | PT_FLAG_TONEMAP_ONLY);
-
     rngInit(uvec2(pixel), frameIdx);
-
-    // Tonemap-only mode: just read accum buffer and output LDR
-    if (tonemapOnly) {
-        vec4 hdr = imageLoad(accumBuffer, pixel);
-        vec3 ldr = ACES(hdr.rgb * 0.4);
-        ldr = pow(ldr, vec3(1.0/2.2));
-        imageStore(outputImage, pixel, vec4(ldr, 1.0));
-        return;
-    }
 
     // Camera ray with sub-pixel jitter
     vec2 jitter = vec2(rand01(), rand01()) - 0.5;
@@ -235,22 +219,14 @@ void main() {
         }
     }
 
-    // Check denoise mode (flags already decoded above)
-    if (denoiseMode) {
-        // Raw single-sample output — denoiser will clean this
-        imageStore(accumBuffer, pixel, vec4(radiance, 1.0));
-        // Also write tonemapped for preview
-        vec3 ldr = ACES(radiance * 0.4);
-        ldr = pow(ldr, vec3(1.0/2.2));
-        imageStore(outputImage, pixel, vec4(ldr, 1.0));
-    } else {
-        // Progressive accumulation
-        vec4 prev = imageLoad(accumBuffer, pixel);
-        float count = prev.w + 1.0;
-        vec3 acc = (prev.rgb * prev.w + radiance) / count;
-        imageStore(accumBuffer, pixel, vec4(acc, count));
-        vec3 ldr = ACES(acc * 0.4);
-        ldr = pow(ldr, vec3(1.0/2.2));
-        imageStore(outputImage, pixel, vec4(ldr, 1.0));
-    }
+    // Progressive accumulation
+    vec4 prev = imageLoad(accumBuffer, pixel);
+    float count = prev.w + 1.0;
+    vec3 acc = (prev.rgb * prev.w + radiance) / count;
+    imageStore(accumBuffer, pixel, vec4(acc, count));
+
+    // Tonemap + gamma
+    vec3 ldr = ACES(acc * 0.4);
+    ldr = pow(ldr, vec3(1.0/2.2));
+    imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

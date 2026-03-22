@@ -835,12 +835,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.invProj = glm::inverse(proj);
     pc.lightPosAndIntensity = glm::vec4(lightPos, lightIntensity);
     pc.lightColorAndRadius = glm::vec4(lightColor, lightRadius);
-    static constexpr uint32_t PT_FLAG_DENOISE_MODE = (1u << 31);
-    static constexpr uint32_t PT_FLAG_TONEMAP_ONLY = (1u << 30);
-    uint32_t frameIdxWithFlags = m_frameIndex;
-    if (m_denoiseMode) frameIdxWithFlags |= PT_FLAG_DENOISE_MODE;
-    if (m_tonemapOnly) frameIdxWithFlags |= PT_FLAG_TONEMAP_ONLY;
-    pc.params = glm::uvec4(m_width, m_height, frameIdxWithFlags, m_maxBounces);
+    pc.params = glm::uvec4(m_width, m_height, m_frameIndex, m_maxBounces);
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
                        VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
