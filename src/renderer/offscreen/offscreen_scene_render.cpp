@@ -421,6 +421,48 @@ void OffscreenRenderer::buildAccelerationStructures() {
         return;
     }
 
+    // Create normal buffer — extract normals from host-visible vertex buffer
+    {
+        if (m_rtNormalBuffer) { vkDestroyBuffer(m_device, m_rtNormalBuffer, nullptr); m_rtNormalBuffer = VK_NULL_HANDLE; }
+        if (m_rtNormalMemory) { vkFreeMemory(m_device, m_rtNormalMemory, nullptr); m_rtNormalMemory = VK_NULL_HANDLE; }
+
+        // Read vertex data from host-visible buffer to extract normals
+        VkDeviceSize normalBufSize = m_vertexCount * sizeof(glm::vec4);
+        std::vector<glm::vec4> normals(m_vertexCount);
+
+        void* vertMapped;
+        vkMapMemory(m_device, m_vertexBufferMemory, 0, vertexSize, 0, &vertMapped);
+        const Vertex* verts = static_cast<const Vertex*>(vertMapped);
+        for (uint32_t i = 0; i < m_vertexCount; i++) {
+            normals[i] = glm::vec4(verts[i].normal, 0.0f);
+        }
+        vkUnmapMemory(m_device, m_vertexBufferMemory);
+
+        // Create device-local normal buffer
+        VkBufferCreateInfo nbInfo{};
+        nbInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        nbInfo.size = normalBufSize;
+        nbInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        vkCreateBuffer(m_device, &nbInfo, nullptr, &m_rtNormalBuffer);
+
+        VkMemoryRequirements memReqs;
+        vkGetBufferMemoryRequirements(m_device, m_rtNormalBuffer, &memReqs);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memReqs.memoryTypeBits,
+                                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(m_device, &allocInfo, nullptr, &m_rtNormalMemory);
+        vkBindBufferMemory(m_device, m_rtNormalBuffer, m_rtNormalMemory, 0);
+
+        void* normalMapped;
+        vkMapMemory(m_device, m_rtNormalMemory, 0, normalBufSize, 0, &normalMapped);
+        memcpy(normalMapped, normals.data(), normalBufSize);
+        vkUnmapMemory(m_device, m_rtNormalMemory);
+
+        std::cout << "[RT] Normal buffer created: " << m_vertexCount << " normals" << std::endl;
+    }
+
     // Rebuild acceleration structures using the RT buffers
     m_rtAccel->destroy();
     m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool);
@@ -469,9 +511,18 @@ void OffscreenRenderer::buildAccelerationStructures() {
             roughness = matComp->getMaterial().roughness;
             metallic = matComp->getMaterial().metallic;
         }
-        // Pack into vec4: (r, g, b, packed_roughness_metallic)
-        // Negative roughness = metallic surface
+        // Detect sphere vs cube from mesh vertex count
+        // Sphere meshes have many more vertices than 24 (cube = 24)
+        bool isSphereShape = false;
+        auto meshComp2 = actor->getComponent<MeshComponent>();
+        if (meshComp2 && meshComp2->getModel()) {
+            isSphereShape = meshComp2->getModel()->vertices.size() > 100;
+        }
+        // Pack into vec4: (r, g, b, packed)
+        // packed encoding: sign = metallic, magnitude = roughness
+        // Add 10.0 if sphere shape (roughness is always < 1, so 10+ means sphere)
         float packed = metallic > 0.5f ? -(roughness + 0.001f) : roughness;
+        if (isSphereShape) packed += (packed >= 0 ? 10.0f : -10.0f);
         materialAlbedos.push_back(glm::vec3(albedo.r, albedo.g, albedo.b));
         // Store full material data for path tracer
         materialFullData.push_back(glm::vec4(albedo, packed));
@@ -494,6 +545,9 @@ void OffscreenRenderer::buildAccelerationStructures() {
         }
         if (m_pathTracer) {
             m_pathTracer->setMaterialData(materialFullData);
+            if (m_rtNormalBuffer != VK_NULL_HANDLE) {
+                m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_vertexCount);
+            }
         }
     }
     m_rtAccelDirty = false;

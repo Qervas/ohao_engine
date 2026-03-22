@@ -121,10 +121,12 @@ void main() {
             throughput /= p;
         }
 
-        // Material-dependent bounce — read packed roughness from closest hit
+        // Material-dependent bounce — decode packed roughness from closest hit
+        // |packed| >= 10 means sphere (subtract 10), sign = metallic
         float packedRoughness = payload.attenuation.x;
         bool isMetal = (packedRoughness < 0.0);
         float roughness = abs(packedRoughness);
+        if (roughness >= 10.0) roughness -= 10.0;  // strip sphere flag
         bool isGlossy = (!isMetal && roughness < 0.1);
 
         if (isMetal) {

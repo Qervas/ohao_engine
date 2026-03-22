@@ -36,22 +36,13 @@ void main() {
     // Compute normal in object space
     vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
 
-    // Detect if this is a sphere or a box based on vertex count / geometry shape
-    // Sphere: normal = normalized local position (points outward from center)
-    // Box: normal = closest axis face
-    float sphereTest = length(hitLocal);  // for a unit sphere, this ≈ 1.0
     vec3 localNormal;
 
-    // Distinguish sphere vs cube in object space:
-    // Cube: at least one component of |hitLocal| ≈ 1.0 (face), others < 1.0
-    // Sphere: all components satisfy x²+y²+z² ≈ 1.0
-    // Test: for a cube face, max(|xyz|) ≈ 1.0 and the other two are < 1.0
-    // For a sphere, the point lies on the unit sphere surface
-    vec3 al = abs(hitLocal);
-    float maxComp = max(al.x, max(al.y, al.z));
-    float cubeScore = maxComp;  // cube: one axis = 1.0
-    float sphereScore = abs(dot(hitLocal, hitLocal) - 1.0);  // sphere: r² = 1.0
-    bool isSphere = (sphereScore < 0.15 && cubeScore < 0.98);
+    // Decode shape type from material buffer .a channel:
+    // |packed| >= 10.0 means sphere shape
+    float packedVal = materialBuf.materials[gl_InstanceCustomIndexEXT].a;
+    bool isSphere = (abs(packedVal) >= 10.0);
+
     if (isSphere) {
         // Sphere-like: normal = radial direction from center
         localNormal = normalize(hitLocal);

@@ -282,6 +282,8 @@ private:
     VkBuffer m_rtVertexBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtVertexMemory{VK_NULL_HANDLE};
     VkBuffer m_rtIndexBuffer{VK_NULL_HANDLE};
+    VkBuffer m_rtNormalBuffer{VK_NULL_HANDLE};   // per-vertex normals for closest-hit
+    VkDeviceMemory m_rtNormalMemory{VK_NULL_HANDLE};
     VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
 
     // Sync
