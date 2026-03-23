@@ -92,7 +92,10 @@ void main() {
 
     payload.hitAlbedo = albedo;
 
-    // Roughness — stored in per-instance material buffer (binding 3)
+    // Roughness: use 0.7 default (matte) unless the per-instance material says metallic
     vec4 instanceMat = materialBuf.materials[gl_InstanceCustomIndexEXT];
-    payload.attenuation = vec3(instanceMat.a, 0.0, 0.0);
+    float roughness = abs(instanceMat.a);
+    if (roughness >= 10.0) roughness -= 10.0;  // strip sphere flag
+    if (roughness < 0.01) roughness = 0.7;     // default matte for untextured
+    payload.attenuation = vec3(roughness, 0.0, 0.0);
 }

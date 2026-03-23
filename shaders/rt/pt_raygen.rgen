@@ -196,6 +196,8 @@ void main() {
         float cosI = abs(dot(normalize(rayDir), N));
         vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
         float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
+        // Rough surfaces: suppress specular — diffuse dominates
+        specProb *= (1.0 - roughness * 0.9);
         if (isMetal) specProb = 1.0;
 
         if (rand01() < specProb || roughness < 0.05) {
