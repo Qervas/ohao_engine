@@ -305,9 +305,39 @@ bool Model::loadFromGLTF(const std::string& filename) {
                 }
             }
 
+            // Track material per triangle for RT texture lookup
+            uint32_t matIdx = primitive.material >= 0 ? static_cast<uint32_t>(primitive.material) : 0;
+            size_t numTriangles = 0;
+            if (primitive.indices >= 0) {
+                numTriangles = gltfModel.accessors[primitive.indices].count / 3;
+            } else {
+                numTriangles = vertexCount / 3;
+            }
+            for (size_t t = 0; t < numTriangles; t++) {
+                materialPerTriangle.push_back(matIdx);
+            }
+
             vertexOffset += static_cast<uint32_t>(vertexCount);
         }
     }
+
+    // Extract per-material base colors from GLTF materials
+    for (const auto& gltfMat : gltfModel.materials) {
+        const auto& pbr = gltfMat.pbrMetallicRoughness;
+        materialColors.push_back(glm::vec4(
+            static_cast<float>(pbr.baseColorFactor[0]),
+            static_cast<float>(pbr.baseColorFactor[1]),
+            static_cast<float>(pbr.baseColorFactor[2]),
+            static_cast<float>(pbr.roughnessFactor)
+        ));
+    }
+    if (materialColors.empty()) {
+        materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+    }
+
+    std::cout << "GLTF loaded: " << filename
+              << " (" << vertices.size() << " vertices, " << indices.size() << " indices, "
+              << materialColors.size() << " materials)" << std::endl;
 
     // Load skins (skeleton data)
     if (!gltfModel.skins.empty()) {

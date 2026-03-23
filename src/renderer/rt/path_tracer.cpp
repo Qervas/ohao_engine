@@ -355,7 +355,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[8] = {};
+    VkDescriptorSetLayoutBinding bindings[11] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -397,9 +397,27 @@ bool PathTracer::createDescriptorResources() {
     bindings[7].descriptorCount = 1;
     bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
+    // 8: UV buffer SSBO
+    bindings[8].binding = 8;
+    bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[8].descriptorCount = 1;
+    bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+    // 9: Material ID buffer (per-triangle)
+    bindings[9].binding = 9;
+    bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[9].descriptorCount = 1;
+    bindings[9].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+    // 10: Material color buffer (per-material)
+    bindings[10].binding = 10;
+    bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[10].descriptorCount = 1;
+    bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 8;
+    layoutInfo.bindingCount = 11;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -408,8 +426,8 @@ bool PathTracer::createDescriptorResources() {
     // Pool
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},  // accum + output + albedoAOV + normalAOV
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},  // material + normals + indices
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},  // material + normals + indices + UV + matID + matColor
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -706,7 +724,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     normalAOVInfo.imageView = m_normalAOVView;
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[8] = {};
+    VkWriteDescriptorSet writes[11] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -764,7 +782,46 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     writes[7].pImageInfo = &normalAOVInfo;
 
-    vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+    // Binding 8: UV buffer
+    VkDescriptorBufferInfo uvBufInfo{};
+    uvBufInfo.buffer = m_uvBuffer != VK_NULL_HANDLE ? m_uvBuffer : m_materialBuffer;
+    uvBufInfo.offset = 0;
+    uvBufInfo.range = VK_WHOLE_SIZE;
+
+    writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[8].dstSet = m_descriptorSet;
+    writes[8].dstBinding = 8;
+    writes[8].descriptorCount = 1;
+    writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[8].pBufferInfo = &uvBufInfo;
+
+    // Binding 9: Material ID buffer
+    VkDescriptorBufferInfo matIDBufInfo{};
+    matIDBufInfo.buffer = m_matIDBuffer != VK_NULL_HANDLE ? m_matIDBuffer : m_materialBuffer;
+    matIDBufInfo.offset = 0;
+    matIDBufInfo.range = VK_WHOLE_SIZE;
+
+    writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[9].dstSet = m_descriptorSet;
+    writes[9].dstBinding = 9;
+    writes[9].descriptorCount = 1;
+    writes[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[9].pBufferInfo = &matIDBufInfo;
+
+    // Binding 10: Material color buffer
+    VkDescriptorBufferInfo matColorBufInfo{};
+    matColorBufInfo.buffer = m_matColorBuffer != VK_NULL_HANDLE ? m_matColorBuffer : m_materialBuffer;
+    matColorBufInfo.offset = 0;
+    matColorBufInfo.range = VK_WHOLE_SIZE;
+
+    writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[10].dstSet = m_descriptorSet;
+    writes[10].dstBinding = 10;
+    writes[10].descriptorCount = 1;
+    writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[10].pBufferInfo = &matColorBufInfo;
+
+    vkUpdateDescriptorSets(m_device, 11, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
     // On first frame (frameIndex==0), transition from UNDEFINED to clear it;

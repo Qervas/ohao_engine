@@ -2,7 +2,7 @@
 #extension GL_EXT_ray_tracing : require
 
 // Path Tracer Closest Hit Shader
-// Interpolates per-vertex normals using barycentric coordinates.
+// Per-vertex normal interpolation + per-triangle material lookup
 
 struct RayPayload {
     vec3 color;
@@ -17,35 +17,29 @@ struct RayPayload {
 layout(location = 0) rayPayloadInEXT RayPayload payload;
 hitAttributeEXT vec2 baryCoord;
 
-layout(set = 0, binding = 3) readonly buffer MaterialBuffer {
-    vec4 materials[];
-} materialBuf;
-
-layout(set = 0, binding = 4) readonly buffer NormalBuffer {
-    vec4 normals[];
-} normalBuf;
-
-layout(set = 0, binding = 5) readonly buffer IndexBuffer {
-    uint indices[];
-} indexBuf;
+layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; } materialBuf;
+layout(set = 0, binding = 4) readonly buffer NormalBuffer { vec4 normals[]; } normalBuf;
+layout(set = 0, binding = 5) readonly buffer IndexBuffer { uint indices[]; } indexBuf;
+layout(set = 0, binding = 8) readonly buffer UVBuffer { vec2 uvs[]; } uvBuf;
+layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matIDBuf;
+layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
 
 void main() {
     payload.hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
     payload.hitDist = gl_HitTEXT;
     payload.hitInstance = gl_InstanceCustomIndexEXT;
 
-    // Barycentric interpolation of vertex normals
+    // Barycentric interpolation
     float u = baryCoord.x;
     float v = baryCoord.y;
     float w = 1.0 - u - v;
 
-    // gl_PrimitiveID is 0-based within each BLAS.
-    // primitiveOffset in BLAS build maps it to the correct global index range.
     uint baseIdx = gl_PrimitiveID * 3;
     uint i0 = indexBuf.indices[baseIdx + 0];
     uint i1 = indexBuf.indices[baseIdx + 1];
     uint i2 = indexBuf.indices[baseIdx + 2];
 
+    // Interpolate vertex normals
     vec3 n0 = normalBuf.normals[i0].xyz;
     vec3 n1 = normalBuf.normals[i1].xyz;
     vec3 n2 = normalBuf.normals[i2].xyz;
@@ -53,34 +47,30 @@ void main() {
 
     vec3 worldNormal;
     if (dot(interpolated, interpolated) > 0.0001) {
-        // Use interpolated vertex normal — transform to world space
         worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * normalize(interpolated));
     } else {
-        // Fallback: geometric normal from object-space hit position
         vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
         vec3 al = abs(hitLocal);
         vec3 localN;
-        if (al.x >= al.y && al.x >= al.z)
-            localN = vec3(sign(hitLocal.x), 0, 0);
-        else if (al.y >= al.z)
-            localN = vec3(0, sign(hitLocal.y), 0);
-        else
-            localN = vec3(0, 0, sign(hitLocal.z));
+        if (al.x >= al.y && al.x >= al.z) localN = vec3(sign(hitLocal.x), 0, 0);
+        else if (al.y >= al.z) localN = vec3(0, sign(hitLocal.y), 0);
+        else localN = vec3(0, 0, sign(hitLocal.z));
         worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
     }
 
-    // Only flip normals for thin geometry (quads/planes with < 10 vertices per instance)
-    // Solid meshes (characters, cars) should keep their original normals
-    // Heuristic: if the interpolated normal had valid data, trust it (solid mesh)
-    // Only flip for the fallback case (simple quads)
+    // Only flip normals for thin geometry (quads)
     bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
     payload.hitNormal = worldNormal;
 
-    // Material
-    vec4 matData = materialBuf.materials[gl_InstanceCustomIndexEXT];
-    payload.hitAlbedo = matData.rgb;
-    payload.attenuation = vec3(matData.a, 0.0, 0.0);
+    // Per-triangle material lookup
+    uint matID = matIDBuf.matIDs[gl_PrimitiveID];
+    vec4 matColor = matColorBuf.matColors[matID];
+    payload.hitAlbedo = matColor.rgb;
+
+    // Pack roughness into attenuation.x (same convention as before)
+    float roughness = matColor.a;
+    payload.attenuation = vec3(roughness, 0.0, 0.0);
 }

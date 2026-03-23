@@ -284,8 +284,14 @@ private:
     VkBuffer m_rtVertexBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtVertexMemory{VK_NULL_HANDLE};
     VkBuffer m_rtIndexBuffer{VK_NULL_HANDLE};
-    VkBuffer m_rtNormalBuffer{VK_NULL_HANDLE};   // per-vertex normals for closest-hit
+    VkBuffer m_rtNormalBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtNormalMemory{VK_NULL_HANDLE};
+    VkBuffer m_rtUVBuffer{VK_NULL_HANDLE};        // per-vertex UVs for texture sampling
+    VkDeviceMemory m_rtUVMemory{VK_NULL_HANDLE};
+    VkBuffer m_rtMatIDBuffer{VK_NULL_HANDLE};     // per-triangle material index
+    VkDeviceMemory m_rtMatIDMemory{VK_NULL_HANDLE};
+    VkBuffer m_rtMatColorBuffer{VK_NULL_HANDLE};  // per-material base color
+    VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
     VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
 
     // Sync

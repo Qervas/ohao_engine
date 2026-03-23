@@ -463,6 +463,133 @@ void OffscreenRenderer::buildAccelerationStructures() {
         std::cout << "[RT] Normal buffer created: " << m_vertexCount << " normals" << std::endl;
     }
 
+    // Create UV buffer — extract texcoords from vertex data
+    {
+        if (m_rtUVBuffer) { vkDestroyBuffer(m_device, m_rtUVBuffer, nullptr); m_rtUVBuffer = VK_NULL_HANDLE; }
+        if (m_rtUVMemory) { vkFreeMemory(m_device, m_rtUVMemory, nullptr); m_rtUVMemory = VK_NULL_HANDLE; }
+
+        VkDeviceSize uvBufSize = m_vertexCount * sizeof(glm::vec2);
+        std::vector<glm::vec2> uvs(m_vertexCount);
+        void* vertMapped;
+        vkMapMemory(m_device, m_vertexBufferMemory, 0, vertexSize, 0, &vertMapped);
+        const Vertex* verts = static_cast<const Vertex*>(vertMapped);
+        for (uint32_t i = 0; i < m_vertexCount; i++) {
+            uvs[i] = verts[i].texCoord;
+        }
+        vkUnmapMemory(m_device, m_vertexBufferMemory);
+
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = uvBufSize;
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        vkCreateBuffer(m_device, &bci, nullptr, &m_rtUVBuffer);
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(m_device, m_rtUVBuffer, &mr);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(m_device, &ai, nullptr, &m_rtUVMemory);
+        vkBindBufferMemory(m_device, m_rtUVBuffer, m_rtUVMemory, 0);
+        void* mapped;
+        vkMapMemory(m_device, m_rtUVMemory, 0, uvBufSize, 0, &mapped);
+        memcpy(mapped, uvs.data(), uvBufSize);
+        vkUnmapMemory(m_device, m_rtUVMemory);
+        std::cout << "[RT] UV buffer created: " << m_vertexCount << " UVs" << std::endl;
+    }
+
+    // Create material-ID buffer — per-triangle material index from loaded model
+    // And per-material color buffer
+    {
+        if (m_rtMatIDBuffer) { vkDestroyBuffer(m_device, m_rtMatIDBuffer, nullptr); m_rtMatIDBuffer = VK_NULL_HANDLE; }
+        if (m_rtMatIDMemory) { vkFreeMemory(m_device, m_rtMatIDMemory, nullptr); m_rtMatIDMemory = VK_NULL_HANDLE; }
+        if (m_rtMatColorBuffer) { vkDestroyBuffer(m_device, m_rtMatColorBuffer, nullptr); m_rtMatColorBuffer = VK_NULL_HANDLE; }
+        if (m_rtMatColorMemory) { vkFreeMemory(m_device, m_rtMatColorMemory, nullptr); m_rtMatColorMemory = VK_NULL_HANDLE; }
+
+        // Collect material IDs and colors from all actors' models
+        std::vector<uint32_t> allMatIDs;
+        std::vector<glm::vec4> allMatColors;
+
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto mc = actor->getComponent<MeshComponent>();
+            if (!mc || !mc->getModel()) continue;
+            auto model = mc->getModel();
+
+            // Append per-triangle material IDs (offset by current color count)
+            uint32_t colorOffset = static_cast<uint32_t>(allMatColors.size());
+            if (!model->materialPerTriangle.empty()) {
+                for (uint32_t mid : model->materialPerTriangle) {
+                    allMatIDs.push_back(mid + colorOffset);
+                }
+            } else {
+                // No per-triangle data — all triangles use material 0
+                size_t numTris = model->indices.size() / 3;
+                for (size_t t = 0; t < numTris; t++) {
+                    allMatIDs.push_back(colorOffset);
+                }
+            }
+
+            // Append material colors
+            if (!model->materialColors.empty()) {
+                for (const auto& mc2 : model->materialColors) {
+                    allMatColors.push_back(mc2);
+                }
+            } else {
+                // Default material
+                auto matComp = actor->getComponent<MaterialComponent>();
+                glm::vec3 col(0.8f);
+                float rough = 0.5f;
+                if (matComp) {
+                    col = matComp->getMaterial().baseColor;
+                    rough = matComp->getMaterial().roughness;
+                }
+                allMatColors.push_back(glm::vec4(col, rough));
+            }
+        }
+
+        if (allMatIDs.empty()) allMatIDs.push_back(0);
+        if (allMatColors.empty()) allMatColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+
+        // Upload material ID buffer
+        VkDeviceSize matIDSize = allMatIDs.size() * sizeof(uint32_t);
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = matIDSize;
+        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        vkCreateBuffer(m_device, &bci, nullptr, &m_rtMatIDBuffer);
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(m_device, m_rtMatIDBuffer, &mr);
+        VkMemoryAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(m_device, &ai, nullptr, &m_rtMatIDMemory);
+        vkBindBufferMemory(m_device, m_rtMatIDBuffer, m_rtMatIDMemory, 0);
+        void* mapped;
+        vkMapMemory(m_device, m_rtMatIDMemory, 0, matIDSize, 0, &mapped);
+        memcpy(mapped, allMatIDs.data(), matIDSize);
+        vkUnmapMemory(m_device, m_rtMatIDMemory);
+
+        // Upload material color buffer
+        VkDeviceSize matColorSize = allMatColors.size() * sizeof(glm::vec4);
+        bci.size = matColorSize;
+        vkCreateBuffer(m_device, &bci, nullptr, &m_rtMatColorBuffer);
+        vkGetBufferMemoryRequirements(m_device, m_rtMatColorBuffer, &mr);
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkAllocateMemory(m_device, &ai, nullptr, &m_rtMatColorMemory);
+        vkBindBufferMemory(m_device, m_rtMatColorBuffer, m_rtMatColorMemory, 0);
+        vkMapMemory(m_device, m_rtMatColorMemory, 0, matColorSize, 0, &mapped);
+        memcpy(mapped, allMatColors.data(), matColorSize);
+        vkUnmapMemory(m_device, m_rtMatColorMemory);
+
+        std::cout << "[RT] Material buffers created: " << allMatIDs.size() << " triangles, "
+                  << allMatColors.size() << " materials" << std::endl;
+    }
+
     // Rebuild acceleration structures using the RT buffers
     m_rtAccel->destroy();
     m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool);
@@ -547,6 +674,10 @@ void OffscreenRenderer::buildAccelerationStructures() {
             m_pathTracer->setMaterialData(materialFullData);
             if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
                 m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
+            }
+            if (m_rtUVBuffer) m_pathTracer->setUVBuffer(m_rtUVBuffer);
+            if (m_rtMatIDBuffer && m_rtMatColorBuffer) {
+                m_pathTracer->setMaterialBuffers(m_rtMatIDBuffer, m_rtMatColorBuffer);
             }
         }
     }

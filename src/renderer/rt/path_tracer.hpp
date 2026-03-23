@@ -56,6 +56,10 @@ public:
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) {
         m_normalBuffer = normalBuf; m_indexBuffer = indexBuf; m_normalVertexCount = vertexCount;
     }
+    void setUVBuffer(VkBuffer uvBuf) { m_uvBuffer = uvBuf; }
+    void setMaterialBuffers(VkBuffer matIDBuf, VkBuffer matColorBuf) {
+        m_matIDBuffer = matIDBuf; m_matColorBuffer = matColorBuf;
+    }
 
     // Reset accumulation — call when camera moves so the buffer restarts
     void resetAccumulation();
@@ -83,8 +87,11 @@ private:
 
     // Config
     uint32_t m_maxBounces = 8;
-    VkBuffer m_normalBuffer = VK_NULL_HANDLE;  // external, not owned
-    VkBuffer m_indexBuffer = VK_NULL_HANDLE;   // external, not owned (RT index buffer)
+    VkBuffer m_normalBuffer = VK_NULL_HANDLE;
+    VkBuffer m_indexBuffer = VK_NULL_HANDLE;
+    VkBuffer m_uvBuffer = VK_NULL_HANDLE;
+    VkBuffer m_matIDBuffer = VK_NULL_HANDLE;
+    VkBuffer m_matColorBuffer = VK_NULL_HANDLE;
     uint32_t m_normalVertexCount = 0;
     uint32_t m_frameIndex = 0;
 

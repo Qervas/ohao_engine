@@ -81,6 +81,14 @@ public:
     std::unordered_map<std::string, MaterialData> materials;
     std::vector<std::string> materialAssignments;
 
+    // Per-triangle material index (for RT texture lookup)
+    // materialPerTriangle[triangleIdx] = GLTF material index
+    std::vector<uint32_t> materialPerTriangle;
+
+    // Per-material base color (extracted from GLTF baseColorFactor)
+    // materialColors[materialIdx] = vec4(r, g, b, roughness)
+    std::vector<glm::vec4> materialColors;
+
     // Animation data (populated by GLTF loader for skinned meshes)
     std::shared_ptr<Skeleton> skeleton;
     std::vector<std::shared_ptr<AnimationClip>> animations;
