@@ -207,8 +207,19 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
         std::cerr << "Failed to load: " << modelPath << std::endl;
         return scene;
     }
+    // Compute bounding box for auto-framing
+    glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
+    for (const auto& v : model->vertices) {
+        bmin = glm::min(bmin, v.position);
+        bmax = glm::max(bmax, v.position);
+    }
+    glm::vec3 center = (bmin + bmax) * 0.5f;
+    float extent = glm::length(bmax - bmin);
     std::cout << "Loaded GLTF: " << model->vertices.size() << " vertices, "
-              << model->indices.size() / 3 << " triangles" << std::endl;
+              << model->indices.size() / 3 << " triangles"
+              << " | bbox: (" << bmin.x << "," << bmin.y << "," << bmin.z
+              << ") - (" << bmax.x << "," << bmax.y << "," << bmax.z
+              << ") extent=" << extent << std::endl;
 
     // Create actor with the loaded model — raise it above ground
     auto actor = scene->createActor("Model");
@@ -219,20 +230,21 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
     meshComp->setModel(model);
     meshComp->setVisible(true);
     auto matComp = actor->addComponent<MaterialComponent>();
-    matComp->getMaterial().baseColor = glm::vec3(0.85f, 0.15f, 0.1f);  // red car
-    matComp->getMaterial().roughness = 0.15f;   // glossy car paint
-    matComp->getMaterial().metallic = 0.8f;     // metallic
+    matComp->getMaterial().baseColor = glm::vec3(0.82f, 0.68f, 0.55f);  // skin tone
+    matComp->getMaterial().roughness = 0.6f;
+    matComp->getMaterial().metallic = 0.0f;
 
-    // Ground plane
+    // Ground plane — scaled for the model
+    float gs = extent * 2.0f;
     addWallQuad(scene.get(), "Ground",
-        glm::vec3(-50, 0, -50), glm::vec3(50, 0, -50),
-        glm::vec3(50, 0, 50), glm::vec3(-50, 0, 50),
-        glm::vec3(0, 1, 0), glm::vec3(0.3f, 0.3f, 0.32f));
+        glm::vec3(-gs, -30, -gs), glm::vec3(gs, -30, -gs),
+        glm::vec3(gs, -30, gs), glm::vec3(-gs, -30, gs),
+        glm::vec3(0, 1, 0), glm::vec3(0.35f, 0.35f, 0.38f));
 
-    // Sky dome (large sphere or just emissive ceiling — use a large quad above)
+    // Sky light — large emissive panel above
     addWallQuad(scene.get(), "SkyLight",
-        glm::vec3(-100, 30, -100), glm::vec3(100, 30, -100),
-        glm::vec3(100, 30, 100), glm::vec3(-100, 30, 100),
+        glm::vec3(-gs, 200, -gs), glm::vec3(gs, 200, -gs),
+        glm::vec3(gs, 200, gs), glm::vec3(-gs, 200, gs),
         glm::vec3(0, -1, 0), glm::vec3(0.9f, 0.92f, 0.95f));
 
     // Point light for the scene
@@ -271,7 +283,7 @@ int main(int argc, char* argv[]) {
 
     // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
-    std::string modelPath = "C:/Users/djmax/Downloads/hypercar.glb";
+    std::string modelPath = "C:/Users/djmax/Downloads/woman-dress-2/woman.glb";
     auto scene = buildGLTFScene(modelPath);
     // auto scene = buildTestScene();  // Cornell box fallback
     renderer.setScene(scene.get());

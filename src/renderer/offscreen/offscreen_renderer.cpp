@@ -519,8 +519,8 @@ void OffscreenRenderer::renderPathTraced() {
     // Camera — use engine camera position or default
     glm::vec3 camPos = m_camera->getPosition();
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(3.0f, 1.5f, 4.0f),    // closer to the car
-        glm::vec3(0.0f, 0.5f, 0.0f),    // look at car center
+        glm::vec3(150.0f, 80.0f, -60.0f),   // 3/4 view
+        glm::vec3(0.0f, 0.0f, -90.0f),      // center of model
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
     float fovDeg = 50.0f;
