@@ -212,7 +212,9 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
 
     // Create actor with the loaded model — raise it above ground
     auto actor = scene->createActor("Model");
-    actor->getTransform()->setPosition(glm::vec3(0.0f, 0.7f, 0.0f));  // lift above ground
+    actor->getTransform()->setPosition(glm::vec3(0.0f, 0.5f, 0.0f));
+    // GLTF models may need rotation to align with our Y-up coordinate system
+    // Try no rotation first — the GLTF spec is Y-up which matches our convention
     auto meshComp = actor->addComponent<MeshComponent>();
     meshComp->setModel(model);
     meshComp->setVisible(true);

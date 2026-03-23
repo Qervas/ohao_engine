@@ -2,10 +2,7 @@
 #extension GL_EXT_ray_tracing : require
 
 // Path Tracer Closest Hit Shader
-// Uses object-space hit position to compute normals:
-// - Sphere: normalize(hitLocal) — always correct for sphere meshes
-// - Cube/quad: axis-aligned face normal
-// Shape type encoded in material buffer .a (|packed| >= 10 = sphere)
+// Interpolates per-vertex normals using barycentric coordinates.
 
 struct RayPayload {
     vec3 color;
@@ -24,12 +21,10 @@ layout(set = 0, binding = 3) readonly buffer MaterialBuffer {
     vec4 materials[];
 } materialBuf;
 
-// Normal buffer (per-vertex vec4) — for future interpolation
 layout(set = 0, binding = 4) readonly buffer NormalBuffer {
     vec4 normals[];
 } normalBuf;
 
-// Index buffer (global uint indices)
 layout(set = 0, binding = 5) readonly buffer IndexBuffer {
     uint indices[];
 } indexBuf;
@@ -39,32 +34,42 @@ void main() {
     payload.hitDist = gl_HitTEXT;
     payload.hitInstance = gl_InstanceCustomIndexEXT;
 
-    // Object-space hit position
-    vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
+    // Barycentric interpolation of vertex normals
+    float u = baryCoord.x;
+    float v = baryCoord.y;
+    float w = 1.0 - u - v;
 
-    // Shape type from material
-    float packedVal = materialBuf.materials[gl_InstanceCustomIndexEXT].a;
-    bool isSphere = (abs(packedVal) >= 10.0);
+    // gl_PrimitiveID is 0-based within each BLAS.
+    // primitiveOffset in BLAS build maps it to the correct global index range.
+    uint baseIdx = gl_PrimitiveID * 3;
+    uint i0 = indexBuf.indices[baseIdx + 0];
+    uint i1 = indexBuf.indices[baseIdx + 1];
+    uint i2 = indexBuf.indices[baseIdx + 2];
 
-    vec3 localNormal;
-    if (isSphere) {
-        // Sphere: radial normal from center (always correct)
-        localNormal = normalize(hitLocal);
+    vec3 n0 = normalBuf.normals[i0].xyz;
+    vec3 n1 = normalBuf.normals[i1].xyz;
+    vec3 n2 = normalBuf.normals[i2].xyz;
+    vec3 interpolated = w * n0 + u * n1 + v * n2;
+
+    vec3 worldNormal;
+    if (dot(interpolated, interpolated) > 0.0001) {
+        // Use interpolated vertex normal — transform to world space
+        worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * normalize(interpolated));
     } else {
-        // Flat surface: axis-aligned face detection
+        // Fallback: geometric normal from object-space hit position
+        vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
         vec3 al = abs(hitLocal);
+        vec3 localN;
         if (al.x >= al.y && al.x >= al.z)
-            localNormal = vec3(sign(hitLocal.x), 0, 0);
+            localN = vec3(sign(hitLocal.x), 0, 0);
         else if (al.y >= al.z)
-            localNormal = vec3(0, sign(hitLocal.y), 0);
+            localN = vec3(0, sign(hitLocal.y), 0);
         else
-            localNormal = vec3(0, 0, sign(hitLocal.z));
+            localN = vec3(0, 0, sign(hitLocal.z));
+        worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
     }
 
-    // World space (handles non-uniform scale via transpose-inverse approximation)
-    vec3 worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localNormal);
-
-    // Face the ray
+    // Face the incoming ray
     if (dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
