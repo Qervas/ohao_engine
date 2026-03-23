@@ -112,13 +112,20 @@ void main() {
         }
 
         // === Emissive surface check ===
-        // Light panels: key (inst 2), fill (inst 3), top (inst 4)
+        // Cornell box: ceiling = instance 4, emits from center panel
+        // GLTF scene: instances 2-4 are lights (invisible to camera)
         uint inst = payload.hitInstance;
-        if (inst >= 2u && inst <= 4u) {
-            if (bounce == 0u) {
-                // Invisible to camera — skip, show black background
-                break;
+        if (inst == 4u && payload.hitPos.y > 3.0) {
+            // Cornell box ceiling — area light
+            vec3 hp = payload.hitPos;
+            if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
+                radiance += throughput * vec3(1.0, 0.98, 0.92) * 1.5;
             }
+            break;
+        }
+        // GLTF scene lights (invisible to primary rays)
+        if (inst >= 2u && inst <= 4u && inst != 4u) {
+            if (bounce == 0u) break;
             float intensity = (inst == 2u) ? 2.5 : 1.0;
             radiance += throughput * vec3(1.0) * intensity;
             break;
@@ -231,7 +238,7 @@ void main() {
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
     // Tonemap + gamma — lower exposure for character models
-    vec3 ldr = ACES(acc * 2.0);
+    vec3 ldr = ACES(acc * 1.0);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

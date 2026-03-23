@@ -544,8 +544,8 @@ void OffscreenRenderer::renderPathTraced() {
               << ") extent=" << sceneExtent << std::endl;
 
     // Camera: 3/4 front view
-    float camDist = sceneExtent * 1.0f;
-    glm::vec3 camPos2 = sceneCenter + glm::vec3(camDist * 0.3f, camDist * 0.1f, camDist * 0.6f);
+    float camDist = sceneExtent * 0.9f;
+    glm::vec3 camPos2 = sceneCenter + glm::vec3(camDist * 0.2f, camDist * 0.05f, camDist * 0.7f);
     glm::mat4 ptView = glm::lookAt(camPos2, sceneCenter, glm::vec3(0, 1, 0));
     float fovDeg = 65.0f;
     float aspect = float(m_width) / float(m_height);

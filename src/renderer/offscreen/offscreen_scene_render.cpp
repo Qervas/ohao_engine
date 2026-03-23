@@ -890,11 +890,12 @@ void OffscreenRenderer::buildAccelerationStructures() {
     std::vector<glm::vec3> materialAlbedos;
     std::vector<glm::vec4> materialFullData;
     uint32_t instanceIdx = 0;
+    uint32_t globalTriOffset = 0;
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
-        // Vertices are in LOCAL space (unit cube). TLAS transform places them in world space.
-        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), instanceIdx);
+        // customIndex = global triangle offset for material ID lookup
+        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), globalTriOffset);
 
         // Collect albedo in same order
         auto matComp = actor->getComponent<MaterialComponent>();
@@ -924,6 +925,11 @@ void OffscreenRenderer::buildAccelerationStructures() {
         std::cout << "[RT] Instance " << instanceIdx << " (" << actor->getName()
                   << "): albedo=(" << albedo.r << "," << albedo.g << "," << albedo.b
                   << ") rough=" << roughness << " metal=" << metallic << std::endl;
+        // Advance triangle offset for next instance
+        auto it2 = m_meshBufferMap.find(actorId);
+        if (it2 != m_meshBufferMap.end()) {
+            globalTriOffset += it2->second.indexCount / 3;
+        }
         instanceIdx++;
     }
 

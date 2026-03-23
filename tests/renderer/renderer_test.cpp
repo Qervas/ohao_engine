@@ -284,6 +284,60 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
     return scene;
 }
 
+// Cornell box with a GLTF model inside
+std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
+    auto scene = std::make_unique<Scene>("Cornell Box + Model");
+
+    const float W = 5.0f, H = 5.0f, D = 5.0f;
+    const glm::vec3 white(0.73f, 0.73f, 0.73f);
+    const glm::vec3 red(0.65f, 0.05f, 0.05f);
+    const glm::vec3 green(0.12f, 0.45f, 0.15f);
+
+    // Room corners
+    glm::vec3 LBB(-W,-H,-D), RBB(W,-H,-D), LTB(-W,H,-D), RTB(W,H,-D);
+    glm::vec3 LBF(-W,-H,D), RBF(W,-H,D), LTF(-W,H,D), RTF(W,H,D);
+
+    // 5 walls
+    addWallQuad(scene.get(), "BackWall",  LBB, RBB, RTB, LTB, glm::vec3(0,0,1), white);
+    addWallQuad(scene.get(), "LeftWall",  LBB, LTB, LTF, LBF, glm::vec3(1,0,0), red);
+    addWallQuad(scene.get(), "RightWall", RBB, RBF, RTF, RTB, glm::vec3(-1,0,0), green);
+    addWallQuad(scene.get(), "Floor",     LBB, LBF, RBF, RBB, glm::vec3(0,1,0), white);
+    addWallQuad(scene.get(), "Ceiling",   LTB, RTB, RTF, LTF, glm::vec3(0,-1,0), white);
+
+    // Load the woman model
+    auto model = std::make_shared<Model>();
+    if (model->loadFromGLTF(modelPath)) {
+        // Compute model bounds
+        glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
+        for (const auto& v : model->vertices) {
+            bmin = glm::min(bmin, v.position);
+            bmax = glm::max(bmax, v.position);
+        }
+        float modelHeight = bmax.z - bmin.z;  // Z is height in original FBX coords
+
+        // Scale to fit inside the Cornell box (model is ~188 units, box is 10 units)
+        float scale = (H * 1.6f) / modelHeight;  // 80% of box height
+
+        auto actor = scene->createActor("Woman");
+        actor->getTransform()->setRotation(glm::vec3(90.0f, 180.0f, 0.0f));
+        actor->getTransform()->setScale(glm::vec3(scale));
+        // Position: feet on the floor (y = -H)
+        actor->getTransform()->setPosition(glm::vec3(0.0f, -H + 0.1f, 0.0f));
+
+        auto meshComp = actor->addComponent<MeshComponent>();
+        meshComp->setModel(model);
+        meshComp->setVisible(true);
+        auto matComp = actor->addComponent<MaterialComponent>();
+        matComp->getMaterial().baseColor = glm::vec3(0.82f, 0.68f, 0.55f);
+        matComp->getMaterial().roughness = 0.85f;
+        matComp->getMaterial().metallic = 0.0f;
+
+        std::cout << "Woman model scaled by " << scale << " to fit Cornell box" << std::endl;
+    }
+
+    return scene;
+}
+
 int main(int argc, char* argv[]) {
     std::string outputPath = "render_output.png";
     if (argc > 1) outputPath = argv[1];
@@ -306,8 +360,9 @@ int main(int argc, char* argv[]) {
     // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
     std::string modelPath = "C:/Users/djmax/Downloads/woman-dress-2/woman.glb";
-    auto scene = buildGLTFScene(modelPath);
-    // auto scene = buildTestScene();  // Cornell box fallback
+    auto scene = buildCornellWithModel(modelPath);
+    // auto scene = buildGLTFScene(modelPath);
+    // auto scene = buildTestScene();
     renderer.setScene(scene.get());
 
     // Update scene buffers (uploads geometry to GPU, builds RT accel structures)

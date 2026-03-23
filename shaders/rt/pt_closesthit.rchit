@@ -68,7 +68,8 @@ void main() {
     payload.hitNormal = worldNormal;
 
     // Per-triangle material lookup
-    uint matID = matIDBuf.matIDs[gl_PrimitiveID];
+    // gl_InstanceCustomIndexEXT = global triangle offset for this instance
+    uint matID = matIDBuf.matIDs[gl_InstanceCustomIndexEXT + gl_PrimitiveID];
     vec4 matColor = matColorBuf.matColors[matID];
 
     // Check if this material has a texture (layer index stored in .a, -1 = no texture)
@@ -92,10 +93,8 @@ void main() {
 
     payload.hitAlbedo = albedo;
 
-    // Roughness: use 0.7 default (matte) unless the per-instance material says metallic
-    vec4 instanceMat = materialBuf.materials[gl_InstanceCustomIndexEXT];
-    float roughness = abs(instanceMat.a);
-    if (roughness >= 10.0) roughness -= 10.0;  // strip sphere flag
-    if (roughness < 0.01) roughness = 0.7;     // default matte for untextured
-    payload.attenuation = vec3(roughness, 0.0, 0.0);
+    // Roughness: default matte for organic materials
+    // Per-instance material buffer no longer indexed by customIndex (it's now triOffset)
+    // Use a fixed roughness for now — TODO: pass roughness per material
+    payload.attenuation = vec3(0.75, 0.0, 0.0);  // matte default
 }
