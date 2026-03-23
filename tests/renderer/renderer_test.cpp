@@ -230,8 +230,8 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
     meshComp->setModel(model);
     meshComp->setVisible(true);
     auto matComp = actor->addComponent<MaterialComponent>();
-    matComp->getMaterial().baseColor = glm::vec3(0.82f, 0.68f, 0.55f);  // skin tone
-    matComp->getMaterial().roughness = 0.6f;
+    matComp->getMaterial().baseColor = glm::vec3(0.82f, 0.68f, 0.55f);
+    matComp->getMaterial().roughness = 0.85f;   // matte — skin/fabric
     matComp->getMaterial().metallic = 0.0f;
 
     // Ground plane — scaled for the model
@@ -241,15 +241,33 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
         glm::vec3(gs, -30, gs), glm::vec3(-gs, -30, gs),
         glm::vec3(0, 1, 0), glm::vec3(0.35f, 0.35f, 0.38f));
 
-    // Studio key light — close, small, upper-right of model for strong directional shading
-    float lsz = extent * 0.15f;  // small light
-    float lh = center.y + extent * 0.4f;  // slightly above head height
-    float lx = center.x + extent * 0.5f;  // to the right
-    float lz = center.z + extent * 0.3f;  // slightly in front
+    // 3-point studio lighting — all BEHIND the camera so they're not visible
+    // Camera is at center + (0.3, 0.1, 0.6) * extent, so lights go further out
+
+    // Key light — upper-right, BEHIND camera
+    float lsz = extent * 0.3f;
     addWallQuad(scene.get(), "SkyLight",
-        glm::vec3(lx, lh, lz - lsz), glm::vec3(lx, lh, lz + lsz),
-        glm::vec3(lx, lh + lsz*2, lz + lsz), glm::vec3(lx, lh + lsz*2, lz - lsz),
-        glm::vec3(-1, 0, 0), glm::vec3(1.0f, 0.98f, 0.95f));
+        glm::vec3(center.x + extent*0.5f, center.y + extent*0.2f, center.z + extent*0.8f),
+        glm::vec3(center.x + extent*0.5f, center.y + extent*0.2f, center.z + extent*0.8f + lsz),
+        glm::vec3(center.x + extent*0.5f, center.y + extent*0.5f, center.z + extent*0.8f + lsz),
+        glm::vec3(center.x + extent*0.5f, center.y + extent*0.5f, center.z + extent*0.8f),
+        glm::vec3(-1, 0, 0), glm::vec3(1.0f));
+
+    // Fill light — left side, slightly behind camera
+    addWallQuad(scene.get(), "FillLight",
+        glm::vec3(center.x - extent*0.6f, center.y - lsz, center.z + extent*0.5f),
+        glm::vec3(center.x - extent*0.6f, center.y - lsz, center.z + extent*0.5f + lsz*2),
+        glm::vec3(center.x - extent*0.6f, center.y + lsz*2, center.z + extent*0.5f + lsz*2),
+        glm::vec3(center.x - extent*0.6f, center.y + lsz*2, center.z + extent*0.5f),
+        glm::vec3(1, 0, 0), glm::vec3(0.7f, 0.75f, 0.85f));
+
+    // Top light — directly above model
+    addWallQuad(scene.get(), "TopLight",
+        glm::vec3(center.x - lsz, center.y + extent*0.5f, center.z - lsz),
+        glm::vec3(center.x + lsz, center.y + extent*0.5f, center.z - lsz),
+        glm::vec3(center.x + lsz, center.y + extent*0.5f, center.z + lsz),
+        glm::vec3(center.x - lsz, center.y + extent*0.5f, center.z + lsz),
+        glm::vec3(0, -1, 0), glm::vec3(0.9f));
 
     // Point light for the scene
     auto light = scene->createActorWithComponents("SunLight", PrimitiveType::DirectionalLight);

@@ -112,12 +112,15 @@ void main() {
         }
 
         // === Emissive surface check ===
-        // Sky light: any surface hit at y > 25 is emissive
-        // Use position-dependent intensity for directional feel
-        // Emissive: any surface that's part of the "SkyLight" actor (instance 2 for GLTF scenes)
-        // Generic: check if albedo matches the light color (near-white, high luminance)
-        if (payload.hitInstance == 2u) {
-            radiance += throughput * pc.lightColorAndRadius.xyz * 1.5;
+        // Light panels: key (inst 2), fill (inst 3), top (inst 4)
+        uint inst = payload.hitInstance;
+        if (inst >= 2u && inst <= 4u) {
+            if (bounce == 0u) {
+                // Invisible to camera — skip, show black background
+                break;
+            }
+            float intensity = (inst == 2u) ? 2.5 : 1.0;
+            radiance += throughput * vec3(1.0) * intensity;
             break;
         }
 
