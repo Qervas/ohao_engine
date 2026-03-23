@@ -313,19 +313,37 @@ std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
             bmin = glm::min(bmin, v.position);
             bmax = glm::max(bmax, v.position);
         }
-        float modelHeight = bmax.z - bmin.z;  // Z is height in original FBX coords
+        glm::vec3 extent = bmax - bmin;
+        std::cout << "Model bounds: (" << bmin.x << "," << bmin.y << "," << bmin.z
+                  << ") - (" << bmax.x << "," << bmax.y << "," << bmax.z
+                  << ") extent=(" << extent.x << "," << extent.y << "," << extent.z << ")" << std::endl;
 
-        // Scale to fit inside the Cornell box (model is ~188 units, box is 10 units)
-        float scale = (H * 1.6f) / modelHeight;  // 80% of box height
+        // Auto-detect up axis: largest extent is the height
+        bool isYUp = (extent.y >= extent.z);
+        float modelHeight = isYUp ? extent.y : extent.z;
+        float modelBase = isYUp ? bmin.y : bmin.z;
+
+        // Scale to fit inside the Cornell box (80% of box height)
+        float scale = (H * 1.6f) / modelHeight;
 
         auto actor = scene->createActor("Woman");
-        actor->getTransform()->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));  // face toward camera (+Z)
+        if (isYUp) {
+            // Model already Y-up (standard GLTF) — face toward camera (+Z)
+            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0.0f, 180.0f, 0.0f))));
+        } else {
+            // Model is Z-up (FBX origin) — rotate to Y-up, face camera
+            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(-90.0f, 0.0f, 0.0f))));
+        }
         actor->getTransform()->setScale(glm::vec3(scale));
-        // Center in box, feet on floor
-        // After rotation, model height goes from ~0 to modelHeight*scale along Y
-        // Model center in original coords is at Z midpoint
-        float scaledHeight = modelHeight * scale;
-        actor->getTransform()->setPosition(glm::vec3(0.0f, -H, 0.0f));
+
+        // Position: center X/Z in box, feet on floor (y = -H)
+        glm::vec3 modelCenter = (bmin + bmax) * 0.5f;
+        float feetOffset = isYUp ? -modelBase * scale : 0.0f;
+        actor->getTransform()->setPosition(glm::vec3(
+            -modelCenter.x * scale,
+            -H + feetOffset,
+            isYUp ? -modelCenter.z * scale : 0.0f
+        ));
 
         auto meshComp = actor->addComponent<MeshComponent>();
         meshComp->setModel(model);
@@ -335,7 +353,18 @@ std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
         matComp->getMaterial().roughness = 0.85f;
         matComp->getMaterial().metallic = 0.0f;
 
-        std::cout << "Woman model scaled by " << scale << " to fit Cornell box" << std::endl;
+        glm::mat4 wm = actor->getTransform()->getWorldMatrix();
+        std::cout << "Model: " << (isYUp ? "Y-up" : "Z-up")
+                  << " height=" << modelHeight << " scale=" << scale << std::endl;
+        std::cout << "WorldMatrix row0: " << wm[0][0] << " " << wm[1][0] << " " << wm[2][0] << " " << wm[3][0] << std::endl;
+        std::cout << "WorldMatrix row1: " << wm[0][1] << " " << wm[1][1] << " " << wm[2][1] << " " << wm[3][1] << std::endl;
+        std::cout << "WorldMatrix row2: " << wm[0][2] << " " << wm[1][2] << " " << wm[2][2] << " " << wm[3][2] << std::endl;
+        std::cout << "WorldMatrix row3: " << wm[0][3] << " " << wm[1][3] << " " << wm[2][3] << " " << wm[3][3] << std::endl;
+        // Test: transform model corners through world matrix
+        glm::vec4 testMin = wm * glm::vec4(bmin, 1.0f);
+        glm::vec4 testMax = wm * glm::vec4(bmax, 1.0f);
+        std::cout << "Transformed min: " << testMin.x << "," << testMin.y << "," << testMin.z << std::endl;
+        std::cout << "Transformed max: " << testMax.x << "," << testMax.y << "," << testMax.z << std::endl;
     }
 
     return scene;
@@ -362,7 +391,7 @@ int main(int argc, char* argv[]) {
 
     // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
-    std::string modelPath = "C:/Users/djmax/Downloads/woman-dress-2/woman.glb";
+    std::string modelPath = "C:/Users/djmax/Downloads/realistic_female.glb";
     auto scene = buildCornellWithModel(modelPath);
     // auto scene = buildGLTFScene(modelPath);
     // auto scene = buildTestScene();
@@ -389,7 +418,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 4096;  // 4K cinematic quality — clean, no denoiser
+    int numFrames = 4096;  // 4K cinematic
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }

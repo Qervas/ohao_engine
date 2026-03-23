@@ -321,6 +321,23 @@ bool Model::loadFromGLTF(const std::string& filename) {
         }
     }
 
+    // Dump first material's extension keys for debugging
+    if (!gltfModel.materials.empty()) {
+        const auto& mat0 = gltfModel.materials[0];
+        std::cout << "  Mat0 extensions:";
+        for (const auto& [key, val] : mat0.extensions) std::cout << " " << key;
+        std::cout << std::endl;
+        std::cout << "  Mat0 extras keys:";
+        if (mat0.extras.IsObject()) {
+            for (const auto& key : mat0.extras.Keys()) std::cout << " " << key;
+        }
+        std::cout << std::endl;
+        // Check non-PBR texture slots
+        std::cout << "  Mat0 normalTex=" << mat0.normalTexture.index
+                  << " occlusionTex=" << mat0.occlusionTexture.index
+                  << " emissiveTex=" << mat0.emissiveTexture.index << std::endl;
+    }
+
     // Extract per-material base colors AND textures from GLTF materials
     for (size_t mi = 0; mi < gltfModel.materials.size(); mi++) {
         const auto& gltfMat = gltfModel.materials[mi];
@@ -332,9 +349,42 @@ bool Model::loadFromGLTF(const std::string& filename) {
             static_cast<float>(pbr.roughnessFactor)
         ));
 
+        // Check for KHR_materials_pbrSpecularGlossiness extension (CC3 models)
+        int diffuseTexIndex = pbr.baseColorTexture.index;
+        if (diffuseTexIndex < 0) {
+            auto extIt = gltfMat.extensions.find("KHR_materials_pbrSpecularGlossiness");
+            if (extIt != gltfMat.extensions.end() && extIt->second.IsObject()) {
+                const auto& sg = extIt->second;
+                // Get diffuse factor
+                if (sg.Has("diffuseFactor") && sg.Get("diffuseFactor").IsArray()) {
+                    const auto& df = sg.Get("diffuseFactor");
+                    if (df.ArrayLen() >= 3) {
+                        materialColors.back() = glm::vec4(
+                            static_cast<float>(df.Get(0).IsNumber() ? df.Get(0).Get<double>() : 1.0),
+                            static_cast<float>(df.Get(1).IsNumber() ? df.Get(1).Get<double>() : 1.0),
+                            static_cast<float>(df.Get(2).IsNumber() ? df.Get(2).Get<double>() : 1.0),
+                            materialColors.back().w
+                        );
+                    }
+                }
+                // Get glossiness → roughness conversion
+                if (sg.Has("glossinessFactor") && sg.Get("glossinessFactor").IsNumber()) {
+                    float glossiness = static_cast<float>(sg.Get("glossinessFactor").Get<double>());
+                    materialColors.back().w = 1.0f - glossiness;  // roughness = 1 - glossiness
+                }
+                // Get diffuse texture index
+                if (sg.Has("diffuseTexture") && sg.Get("diffuseTexture").IsObject()) {
+                    const auto& dt = sg.Get("diffuseTexture");
+                    if (dt.Has("index") && dt.Get("index").IsInt()) {
+                        diffuseTexIndex = dt.Get("index").Get<int>();
+                    }
+                }
+            }
+        }
+
         // Extract albedo texture if present
-        if (pbr.baseColorTexture.index >= 0) {
-            int texIdx = gltfModel.textures[pbr.baseColorTexture.index].source;
+        if (diffuseTexIndex >= 0 && diffuseTexIndex < static_cast<int>(gltfModel.textures.size())) {
+            int texIdx = gltfModel.textures[diffuseTexIndex].source;
             if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
                 const auto& img = gltfModel.images[texIdx];
                 if (!img.image.empty() && img.width > 0 && img.height > 0) {
@@ -384,6 +434,10 @@ bool Model::loadFromGLTF(const std::string& filename) {
             }
         }
         materialTextureIndex.push_back(-1);  // no texture for this material
+        std::cout << "  Material " << mi << " (" << gltfMat.name << "): color=("
+                  << pbr.baseColorFactor[0] << "," << pbr.baseColorFactor[1] << ","
+                  << pbr.baseColorFactor[2] << ") rough=" << pbr.roughnessFactor
+                  << " texIdx=" << pbr.baseColorTexture.index << std::endl;
     }
     if (materialColors.empty()) {
         materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
@@ -393,7 +447,9 @@ bool Model::loadFromGLTF(const std::string& filename) {
     std::cout << "GLTF loaded: " << filename
               << " (" << vertices.size() << " vertices, " << indices.size() << " indices, "
               << materialColors.size() << " materials, "
-              << albedoTextures.size() << " textures)" << std::endl;
+              << albedoTextures.size() << " textures, "
+              << gltfModel.images.size() << " images, "
+              << gltfModel.textures.size() << " gltf textures)" << std::endl;
 
     // Load skins (skeleton data)
     if (!gltfModel.skins.empty()) {

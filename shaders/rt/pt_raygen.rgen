@@ -112,14 +112,16 @@ void main() {
         }
 
         // === Emissive surface check ===
-        // Cornell box: ceiling = instance 4, emits from center panel
-        // GLTF scene: instances 2-4 are lights (invisible to camera)
         uint inst = payload.hitInstance;
         if (inst == 4u && payload.hitPos.y > 3.0) {
-            // Cornell box ceiling — area light
+            // Cornell box ceiling light panel
             vec3 hp = payload.hitPos;
             if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
-                radiance += throughput * vec3(1.0, 0.98, 0.92) * 1.5;
+                if (bounce == 0u) {
+                    // Primary ray sees the light directly — full emission
+                    radiance += throughput * vec3(1.0, 0.98, 0.92) * 1.5;
+                }
+                // bounce > 0: NEE already handles direct light, skip to avoid double-count
             }
             break;
         }
@@ -141,16 +143,17 @@ void main() {
         // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
-        // === NEE: disabled — hardcoded for Cornell box, needs generalization ===
-        if (false) {
-            // Random point on the emissive light panel (|x|<2, |z|<2, y≈5)
+        // === NEE: sample the ceiling light panel ===
+        {
+            vec3 Le = vec3(1.0, 0.98, 0.92) * 1.5;
+            float lightArea = 16.0;  // 4x4 panel
+
+            // Random point on light (x ∈ [-2,2], z ∈ [-2,2], y = 4.99)
             vec3 lightPoint = vec3(
                 (rand01() * 2.0 - 1.0) * 2.0,
                 4.99,
                 (rand01() * 2.0 - 1.0) * 2.0
             );
-            float lightArea = 16.0;  // 4x4 panel
-            vec3 Le = pc.lightColorAndRadius.xyz * 3.0;
 
             vec3 toLight = lightPoint - hitPos;
             float lightDist = length(toLight);
@@ -159,38 +162,43 @@ void main() {
             float lightCos = max(L.y, 0.0);  // light normal = (0,-1,0)
 
             if (NdotL > 0.0 && lightCos > 0.0) {
-                // Shadow ray
+                // Shadow ray — skip closest hit shader for speed
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
                     gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
                     0xFF, 0, 0, 0,
                     hitPos + N * 0.01, 0.001, L, lightDist - 0.02, 0);
 
-                if (payload.hitDist < 0.0) {  // miss = not blocked
-                    // BRDF evaluation for NEE
-                    vec3 brdfVal;
-                    if (roughness > 0.3) {
-                        // Diffuse: Lambertian
-                        brdfVal = (isMetal ? vec3(0.0) : albedo) / 3.14159;
-                    } else {
-                        // Glossy: simplified Cook-Torrance
-                        vec3 H = normalize(L + normalize(-rayDir));
-                        float NdotH = max(dot(N, H), 0.0);
-                        float VdotH = max(dot(normalize(-rayDir), H), 0.0);
-                        // GGX NDF
-                        float a = roughness * roughness;
-                        float a2 = a * a;
-                        float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                        float D = a2 / (3.14159 * d * d + 0.0001);
-                        // Fresnel
-                        vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
-                        // Simplified specular + diffuse
-                        vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
-                        brdfVal = kD * albedo / 3.14159 + F * D * 0.25;
-                    }
+                if (payload.hitDist < 0.0) {  // miss = unblocked
+                    // Full Cook-Torrance BRDF evaluation
+                    vec3 V = normalize(-rayDir);
+                    vec3 H = normalize(L + V);
+                    float NdotH = max(dot(N, H), 0.001);
+                    float NdotV = max(dot(N, V), 0.001);
+                    float VdotH = max(dot(V, H), 0.001);
 
-                    float geom = NdotL * lightCos / (lightDist * lightDist);
-                    radiance += throughput * Le * brdfVal * geom * lightArea;
+                    // GGX NDF
+                    float a = roughness * roughness;
+                    float a2 = a * a;
+                    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                    float D = a2 / (3.14159 * denom * denom + 0.0001);
+
+                    // Schlick Fresnel
+                    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+
+                    // Smith GGX geometry
+                    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+                    float G = (NdotL / (NdotL * (1.0 - k) + k))
+                            * (NdotV / (NdotV * (1.0 - k) + k));
+
+                    // Specular + diffuse
+                    vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
+                    vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                    vec3 diff = kD * albedo / 3.14159;
+
+                    // Area light geometric term
+                    float geomTerm = NdotL * lightCos / (lightDist * lightDist);
+                    radiance += throughput * Le * (diff + spec) * geomTerm * lightArea;
                 }
             }
         }
@@ -230,6 +238,10 @@ void main() {
             throughput /= max(1.0 - specProb, 0.01);
         }
     }
+
+    // Firefly clamp — cap extreme outlier samples
+    float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+    if (lum > 10.0) radiance *= 10.0 / lum;
 
     // Progressive accumulation
     vec4 prev = imageLoad(accumBuffer, pixel);
