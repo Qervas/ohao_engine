@@ -60,6 +60,9 @@ public:
     void setMaterialBuffers(VkBuffer matIDBuf, VkBuffer matColorBuf) {
         m_matIDBuffer = matIDBuf; m_matColorBuffer = matColorBuf;
     }
+    void setTextureArray(VkImageView view, VkSampler sampler, uint32_t count) {
+        m_textureArrayView = view; m_textureSampler = sampler; m_textureArrayCount = count;
+    }
 
     // Reset accumulation — call when camera moves so the buffer restarts
     void resetAccumulation();
@@ -92,6 +95,9 @@ private:
     VkBuffer m_uvBuffer = VK_NULL_HANDLE;
     VkBuffer m_matIDBuffer = VK_NULL_HANDLE;
     VkBuffer m_matColorBuffer = VK_NULL_HANDLE;
+    VkImageView m_textureArrayView = VK_NULL_HANDLE;
+    VkSampler m_textureSampler = VK_NULL_HANDLE;
+    uint32_t m_textureArrayCount = 0;
     uint32_t m_normalVertexCount = 0;
     uint32_t m_frameIndex = 0;
 

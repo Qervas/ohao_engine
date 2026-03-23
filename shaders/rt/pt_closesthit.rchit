@@ -1,8 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : require
 
 // Path Tracer Closest Hit Shader
-// Per-vertex normal interpolation + per-triangle material lookup
+// Per-vertex normal + UV interpolation, per-triangle material, texture sampling
 
 struct RayPayload {
     vec3 color;
@@ -23,6 +24,7 @@ layout(set = 0, binding = 5) readonly buffer IndexBuffer { uint indices[]; } ind
 layout(set = 0, binding = 8) readonly buffer UVBuffer { vec2 uvs[]; } uvBuf;
 layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matIDBuf;
 layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
+layout(set = 0, binding = 11) uniform sampler2DArray textureArray;
 
 void main() {
     payload.hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
@@ -58,7 +60,7 @@ void main() {
         worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
     }
 
-    // Only flip normals for thin geometry (quads)
+    // Only flip normals for thin geometry
     bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
@@ -68,9 +70,29 @@ void main() {
     // Per-triangle material lookup
     uint matID = matIDBuf.matIDs[gl_PrimitiveID];
     vec4 matColor = matColorBuf.matColors[matID];
-    payload.hitAlbedo = matColor.rgb;
 
-    // Pack roughness into attenuation.x (same convention as before)
-    float roughness = matColor.a;
-    payload.attenuation = vec3(roughness, 0.0, 0.0);
+    // Check if this material has a texture (layer index stored in .a, -1 = no texture)
+    float texLayer = matColor.a;
+    vec3 albedo;
+
+    if (texLayer >= 0.0) {
+        // Interpolate UVs
+        vec2 uv0 = uvBuf.uvs[i0];
+        vec2 uv1 = uvBuf.uvs[i1];
+        vec2 uv2 = uvBuf.uvs[i2];
+        vec2 texUV = w * uv0 + u * uv1 + v * uv2;
+
+        // Sample texture array at the material's layer
+        albedo = texture(textureArray, vec3(texUV, texLayer)).rgb;
+        // Convert from sRGB to linear (the texture is stored as SRGB format, Vulkan handles this)
+    } else {
+        // No texture — use material base color
+        albedo = matColor.rgb;
+    }
+
+    payload.hitAlbedo = albedo;
+
+    // Roughness — stored in per-instance material buffer (binding 3)
+    vec4 instanceMat = materialBuf.materials[gl_InstanceCustomIndexEXT];
+    payload.attenuation = vec3(instanceMat.a, 0.0, 0.0);
 }

@@ -292,6 +292,11 @@ private:
     VkDeviceMemory m_rtMatIDMemory{VK_NULL_HANDLE};
     VkBuffer m_rtMatColorBuffer{VK_NULL_HANDLE};  // per-material base color
     VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
+    VkImage m_rtTextureArray{VK_NULL_HANDLE};
+    VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
+    VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};
+    VkSampler m_rtTextureSampler{VK_NULL_HANDLE};
+    uint32_t m_rtTextureCount{0};
     VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
 
     // Sync

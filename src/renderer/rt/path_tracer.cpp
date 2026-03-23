@@ -355,7 +355,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[11] = {};
+    VkDescriptorSetLayoutBinding bindings[12] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -415,9 +415,15 @@ bool PathTracer::createDescriptorResources() {
     bindings[10].descriptorCount = 1;
     bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+    // 11: Texture array (combined image sampler, 2D array)
+    bindings[11].binding = 11;
+    bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[11].descriptorCount = 1;
+    bindings[11].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 11;
+    layoutInfo.bindingCount = 12;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -428,12 +434,13 @@ bool PathTracer::createDescriptorResources() {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},  // material + normals + indices + UV + matID + matColor
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},  // texture array
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 3;
+    poolInfo.poolSizeCount = 4;
     poolInfo.pPoolSizes = poolSizes;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
@@ -724,7 +731,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     normalAOVInfo.imageView = m_normalAOVView;
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[11] = {};
+    VkWriteDescriptorSet writes[12] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -821,7 +828,24 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[10].pBufferInfo = &matColorBufInfo;
 
-    vkUpdateDescriptorSets(m_device, 11, writes, 0, nullptr);
+    // Binding 11: Texture array (combined image sampler)
+    VkDescriptorImageInfo texArrayInfo{};
+    texArrayInfo.imageView = m_textureArrayView;
+    texArrayInfo.sampler = m_textureSampler;
+    texArrayInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    uint32_t writeCount = 11;
+    if (m_textureArrayView != VK_NULL_HANDLE && m_textureSampler != VK_NULL_HANDLE) {
+        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet = m_descriptorSet;
+        writes[11].dstBinding = 11;
+        writes[11].descriptorCount = 1;
+        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[11].pImageInfo = &texArrayInfo;
+        writeCount = 12;
+    }
+
+    vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
     // On first frame (frameIndex==0), transition from UNDEFINED to clear it;

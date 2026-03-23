@@ -590,6 +590,274 @@ void OffscreenRenderer::buildAccelerationStructures() {
                   << allMatColors.size() << " materials" << std::endl;
     }
 
+    // Create texture array from all actors' model textures
+    {
+        // Cleanup previous texture array resources
+        if (m_rtTextureSampler) { vkDestroySampler(m_device, m_rtTextureSampler, nullptr); m_rtTextureSampler = VK_NULL_HANDLE; }
+        if (m_rtTextureArrayView) { vkDestroyImageView(m_device, m_rtTextureArrayView, nullptr); m_rtTextureArrayView = VK_NULL_HANDLE; }
+        if (m_rtTextureArray) { vkDestroyImage(m_device, m_rtTextureArray, nullptr); m_rtTextureArray = VK_NULL_HANDLE; }
+        if (m_rtTextureArrayMemory) { vkFreeMemory(m_device, m_rtTextureArrayMemory, nullptr); m_rtTextureArrayMemory = VK_NULL_HANDLE; }
+        m_rtTextureCount = 0;
+
+        // Collect all texture data from all actors' models
+        struct CollectedTexture {
+            const uint8_t* pixels;
+            int width, height;
+        };
+        std::vector<CollectedTexture> allTextures;
+
+        // Build mapping: global material index -> texture array layer
+        // We'll update matColors[].a with the texture layer index
+        // To do this we need to re-read the matColor buffer and write it back
+        std::vector<int> globalMatTexLayer;  // parallel to the material color buffer
+        uint32_t globalMatOffset = 0;
+
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto mc = actor->getComponent<MeshComponent>();
+            if (!mc || !mc->getModel()) continue;
+            auto model = mc->getModel();
+
+            size_t numMats = model->materialColors.empty() ? 1 : model->materialColors.size();
+
+            for (size_t matIdx = 0; matIdx < numMats; matIdx++) {
+                int texLayer = -1;
+                if (matIdx < model->materialTextureIndex.size()) {
+                    int texIdx = model->materialTextureIndex[matIdx];
+                    if (texIdx >= 0 && texIdx < static_cast<int>(model->albedoTextures.size())) {
+                        const auto& td = model->albedoTextures[texIdx];
+                        if (!td.pixels.empty() && td.width > 0 && td.height > 0) {
+                            texLayer = static_cast<int>(allTextures.size());
+                            CollectedTexture ct;
+                            ct.pixels = td.pixels.data();
+                            ct.width = td.width;
+                            ct.height = td.height;
+                            allTextures.push_back(ct);
+                        }
+                    }
+                }
+                globalMatTexLayer.push_back(texLayer);
+            }
+        }
+
+        if (!allTextures.empty()) {
+            const uint32_t targetW = 1024;
+            const uint32_t targetH = 1024;
+            uint32_t numTextures = static_cast<uint32_t>(allTextures.size());
+            m_rtTextureCount = numTextures;
+
+            // Create VkImage (2D array)
+            VkImageCreateInfo imgInfo{};
+            imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imgInfo.imageType = VK_IMAGE_TYPE_2D;
+            imgInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+            imgInfo.extent = {targetW, targetH, 1};
+            imgInfo.mipLevels = 1;
+            imgInfo.arrayLayers = numTextures;
+            imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            if (vkCreateImage(m_device, &imgInfo, nullptr, &m_rtTextureArray) == VK_SUCCESS) {
+                VkMemoryRequirements memReqs;
+                vkGetImageMemoryRequirements(m_device, m_rtTextureArray, &memReqs);
+                VkMemoryAllocateInfo allocInfo{};
+                allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                allocInfo.allocationSize = memReqs.size;
+                allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memReqs.memoryTypeBits,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                vkAllocateMemory(m_device, &allocInfo, nullptr, &m_rtTextureArrayMemory);
+                vkBindImageMemory(m_device, m_rtTextureArray, m_rtTextureArrayMemory, 0);
+
+                // Create image view (2D array)
+                VkImageViewCreateInfo viewInfo{};
+                viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                viewInfo.image = m_rtTextureArray;
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+                viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+                viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                viewInfo.subresourceRange.baseMipLevel = 0;
+                viewInfo.subresourceRange.levelCount = 1;
+                viewInfo.subresourceRange.baseArrayLayer = 0;
+                viewInfo.subresourceRange.layerCount = numTextures;
+                vkCreateImageView(m_device, &viewInfo, nullptr, &m_rtTextureArrayView);
+
+                // Create sampler
+                VkSamplerCreateInfo samplerInfo{};
+                samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+                samplerInfo.magFilter = VK_FILTER_LINEAR;
+                samplerInfo.minFilter = VK_FILTER_LINEAR;
+                samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+                samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+                samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+                samplerInfo.anisotropyEnable = VK_FALSE;
+                samplerInfo.maxAnisotropy = 1.0f;
+                samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+                samplerInfo.unnormalizedCoordinates = VK_FALSE;
+                samplerInfo.compareEnable = VK_FALSE;
+                samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+                vkCreateSampler(m_device, &samplerInfo, nullptr, &m_rtTextureSampler);
+
+                // Upload each texture layer via staging buffer + command buffer
+                VkDeviceSize layerSize = targetW * targetH * 4;
+
+                // Allocate a one-time command buffer for all texture uploads
+                VkCommandBuffer uploadCmd;
+                VkCommandBufferAllocateInfo cmdAllocInfo{};
+                cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                cmdAllocInfo.commandPool = m_commandPool;
+                cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                cmdAllocInfo.commandBufferCount = 1;
+                vkAllocateCommandBuffers(m_device, &cmdAllocInfo, &uploadCmd);
+
+                VkCommandBufferBeginInfo beginInfo{};
+                beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                vkBeginCommandBuffer(uploadCmd, &beginInfo);
+
+                // Transition entire array to TRANSFER_DST_OPTIMAL
+                VkImageMemoryBarrier toDst{};
+                toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toDst.srcAccessMask = 0;
+                toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toDst.image = m_rtTextureArray;
+                toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, numTextures};
+                vkCmdPipelineBarrier(uploadCmd,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+                // Create one staging buffer large enough for one layer
+                VkBuffer stagingBuf;
+                VkDeviceMemory stagingMem;
+                VkBufferCreateInfo stagingBufInfo{};
+                stagingBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                stagingBufInfo.size = layerSize;
+                stagingBufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                vkCreateBuffer(m_device, &stagingBufInfo, nullptr, &stagingBuf);
+
+                VkMemoryRequirements stagingReqs;
+                vkGetBufferMemoryRequirements(m_device, stagingBuf, &stagingReqs);
+                VkMemoryAllocateInfo stagingAlloc{};
+                stagingAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                stagingAlloc.allocationSize = stagingReqs.size;
+                stagingAlloc.memoryTypeIndex = findMemoryType(m_physicalDevice, stagingReqs.memoryTypeBits,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                vkAllocateMemory(m_device, &stagingAlloc, nullptr, &stagingMem);
+                vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+                // Upload each texture layer one at a time (reusing staging buffer)
+                for (uint32_t layer = 0; layer < numTextures; layer++) {
+                    const auto& tex = allTextures[layer];
+                    int srcW = tex.width;
+                    int srcH = tex.height;
+
+                    // Resize to targetW x targetH if needed (nearest-neighbor)
+                    std::vector<uint8_t> resized;
+                    const uint8_t* srcPixels = tex.pixels;
+                    if (srcW != static_cast<int>(targetW) || srcH != static_cast<int>(targetH)) {
+                        resized.resize(targetW * targetH * 4);
+                        for (uint32_t y = 0; y < targetH; y++) {
+                            for (uint32_t x = 0; x < targetW; x++) {
+                                int sx = x * srcW / targetW;
+                                int sy = y * srcH / targetH;
+                                int srcIdx = (sy * srcW + sx) * 4;
+                                int dstIdx = (y * targetW + x) * 4;
+                                memcpy(&resized[dstIdx], &tex.pixels[srcIdx], 4);
+                            }
+                        }
+                        srcPixels = resized.data();
+                    }
+
+                    // We need to submit each layer separately because we reuse the staging buffer
+                    // First, end current command buffer, submit, wait, then start new one
+                    if (layer > 0) {
+                        vkEndCommandBuffer(uploadCmd);
+                        VkSubmitInfo submitInfo{};
+                        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                        submitInfo.commandBufferCount = 1;
+                        submitInfo.pCommandBuffers = &uploadCmd;
+                        vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+                        vkQueueWaitIdle(m_graphicsQueue);
+
+                        vkResetCommandBuffer(uploadCmd, 0);
+                        vkBeginCommandBuffer(uploadCmd, &beginInfo);
+                    }
+
+                    // Copy pixels to staging buffer
+                    void* mapped;
+                    vkMapMemory(m_device, stagingMem, 0, layerSize, 0, &mapped);
+                    memcpy(mapped, srcPixels, layerSize);
+                    vkUnmapMemory(m_device, stagingMem);
+
+                    // Copy staging buffer to image array layer
+                    VkBufferImageCopy region{};
+                    region.bufferOffset = 0;
+                    region.bufferRowLength = 0;
+                    region.bufferImageHeight = 0;
+                    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    region.imageSubresource.mipLevel = 0;
+                    region.imageSubresource.baseArrayLayer = layer;
+                    region.imageSubresource.layerCount = 1;
+                    region.imageOffset = {0, 0, 0};
+                    region.imageExtent = {targetW, targetH, 1};
+
+                    vkCmdCopyBufferToImage(uploadCmd, stagingBuf, m_rtTextureArray,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                }
+
+                // Transition entire array to SHADER_READ_ONLY_OPTIMAL
+                VkImageMemoryBarrier toShader{};
+                toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                toShader.image = m_rtTextureArray;
+                toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, numTextures};
+                vkCmdPipelineBarrier(uploadCmd,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                    0, 0, nullptr, 0, nullptr, 1, &toShader);
+
+                // Submit final batch
+                vkEndCommandBuffer(uploadCmd);
+                VkSubmitInfo submitInfo{};
+                submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                submitInfo.commandBufferCount = 1;
+                submitInfo.pCommandBuffers = &uploadCmd;
+                vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+                vkQueueWaitIdle(m_graphicsQueue);
+
+                // Cleanup staging buffer
+                vkDestroyBuffer(m_device, stagingBuf, nullptr);
+                vkFreeMemory(m_device, stagingMem, nullptr);
+                vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
+
+                // Now update the matColors buffer to pack texture layer index into alpha channel
+                // Re-read the matColor buffer, update alpha with texture layer, write back
+                if (m_rtMatColorBuffer && m_rtMatColorMemory && !globalMatTexLayer.empty()) {
+                    size_t matCount = globalMatTexLayer.size();
+                    VkDeviceSize matColorSize = matCount * sizeof(glm::vec4);
+                    void* matMapped;
+                    vkMapMemory(m_device, m_rtMatColorMemory, 0, matColorSize, 0, &matMapped);
+                    glm::vec4* matColors = static_cast<glm::vec4*>(matMapped);
+                    for (size_t i = 0; i < matCount; i++) {
+                        // Pack: matColors[i] = vec4(baseColor.rgb, float(textureLayerIndex))
+                        // Use -1.0 for materials without textures
+                        matColors[i].a = static_cast<float>(globalMatTexLayer[i]);
+                    }
+                    vkUnmapMemory(m_device, m_rtMatColorMemory);
+                }
+
+                std::cout << "[RT] Texture array created: " << numTextures
+                          << " textures at " << targetW << "x" << targetH << std::endl;
+            }
+        } else {
+            std::cout << "[RT] No textures found in scene models" << std::endl;
+        }
+    }
+
     // Rebuild acceleration structures using the RT buffers
     m_rtAccel->destroy();
     m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool);
@@ -678,6 +946,9 @@ void OffscreenRenderer::buildAccelerationStructures() {
             if (m_rtUVBuffer) m_pathTracer->setUVBuffer(m_rtUVBuffer);
             if (m_rtMatIDBuffer && m_rtMatColorBuffer) {
                 m_pathTracer->setMaterialBuffers(m_rtMatIDBuffer, m_rtMatColorBuffer);
+            }
+            if (m_rtTextureArrayView && m_rtTextureSampler && m_rtTextureCount > 0) {
+                m_pathTracer->setTextureArray(m_rtTextureArrayView, m_rtTextureSampler, m_rtTextureCount);
             }
         }
     }
