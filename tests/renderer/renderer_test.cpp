@@ -4,7 +4,11 @@
 //
 // Usage: ./renderer_test [output.png]
 
+// stb_image_write — implementation already in model_gltf.cpp, just include header
+// But we need our own for the standalone test
+#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#endif
 #include "stb_image_write.h"
 
 #include "renderer/offscreen/offscreen_renderer.hpp"
@@ -193,6 +197,57 @@ std::unique_ptr<Scene> buildTestScene() {
     return scene;
 }
 
+// Load a GLTF/GLB model into a scene with ground plane and lighting
+std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
+    auto scene = std::make_unique<Scene>("GLTF Scene");
+
+    // Load the model
+    auto model = std::make_shared<Model>();
+    if (!model->loadFromGLTF(modelPath)) {
+        std::cerr << "Failed to load: " << modelPath << std::endl;
+        return scene;
+    }
+    std::cout << "Loaded GLTF: " << model->vertices.size() << " vertices, "
+              << model->indices.size() / 3 << " triangles" << std::endl;
+
+    // Create actor with the loaded model — raise it above ground
+    auto actor = scene->createActor("Model");
+    actor->getTransform()->setPosition(glm::vec3(0.0f, 0.7f, 0.0f));  // lift above ground
+    auto meshComp = actor->addComponent<MeshComponent>();
+    meshComp->setModel(model);
+    meshComp->setVisible(true);
+    auto matComp = actor->addComponent<MaterialComponent>();
+    matComp->getMaterial().baseColor = glm::vec3(0.85f, 0.15f, 0.1f);  // red car
+    matComp->getMaterial().roughness = 0.15f;   // glossy car paint
+    matComp->getMaterial().metallic = 0.8f;     // metallic
+
+    // Ground plane
+    addWallQuad(scene.get(), "Ground",
+        glm::vec3(-50, 0, -50), glm::vec3(50, 0, -50),
+        glm::vec3(50, 0, 50), glm::vec3(-50, 0, 50),
+        glm::vec3(0, 1, 0), glm::vec3(0.3f, 0.3f, 0.32f));
+
+    // Sky dome (large sphere or just emissive ceiling — use a large quad above)
+    addWallQuad(scene.get(), "SkyLight",
+        glm::vec3(-100, 30, -100), glm::vec3(100, 30, -100),
+        glm::vec3(100, 30, 100), glm::vec3(-100, 30, 100),
+        glm::vec3(0, -1, 0), glm::vec3(0.9f, 0.92f, 0.95f));
+
+    // Point light for the scene
+    auto light = scene->createActorWithComponents("SunLight", PrimitiveType::DirectionalLight);
+    if (light) {
+        light->getTransform()->setPosition(glm::vec3(10, 20, 10));
+        auto lc = light->getComponent<LightComponent>();
+        if (lc) {
+            lc->setDirection(glm::normalize(glm::vec3(-0.3f, -0.8f, -0.4f)));
+            lc->setColor(glm::vec3(1.0f, 0.95f, 0.9f));
+            lc->setIntensity(5.0f);
+        }
+    }
+
+    return scene;
+}
+
 int main(int argc, char* argv[]) {
     std::string outputPath = "render_output.png";
     if (argc > 1) outputPath = argv[1];
@@ -212,9 +267,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 2. Build scene
+    // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
-    auto scene = buildTestScene();
+    std::string modelPath = "C:/Users/djmax/Downloads/hypercar.glb";
+    auto scene = buildGLTFScene(modelPath);
+    // auto scene = buildTestScene();  // Cornell box fallback
     renderer.setScene(scene.get());
 
     // Update scene buffers (uploads geometry to GPU, builds RT accel structures)
@@ -238,7 +295,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 1024;
+    int numFrames = 512;
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }

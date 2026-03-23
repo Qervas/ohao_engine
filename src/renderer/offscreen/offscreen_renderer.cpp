@@ -516,13 +516,14 @@ void OffscreenRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Close-up on objects
+    // Camera — use engine camera position or default
+    glm::vec3 camPos = m_camera->getPosition();
     glm::mat4 ptView = glm::lookAt(
-        glm::vec3(0.0f, -1.5f, 4.5f),
-        glm::vec3(0.0f, -2.5f, -1.0f),
+        glm::vec3(3.0f, 1.5f, 4.0f),    // closer to the car
+        glm::vec3(0.0f, 0.5f, 0.0f),    // look at car center
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
-    float fovDeg = 55.0f;
+    float fovDeg = 50.0f;
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(fovDeg), aspect, 0.1f, 1000.0f);
     // Debug prints removed

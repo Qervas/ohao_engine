@@ -31,6 +31,11 @@ if(TARGET Jolt)
     target_link_libraries(renderer_test PRIVATE Jolt)
 endif()
 
+# Allow duplicate stbi symbols (model_gltf.cpp defines STB_IMAGE_IMPLEMENTATION)
+if(MSVC)
+    target_link_options(renderer_test PRIVATE /FORCE:MULTIPLE)
+endif()
+
 # Copy shaders next to exe so renderer can find them
 add_custom_command(TARGET renderer_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:renderer_test>/bin/shaders"

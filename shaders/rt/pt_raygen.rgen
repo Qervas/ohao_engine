@@ -112,12 +112,9 @@ void main() {
         }
 
         // === Emissive surface check ===
-        if (payload.hitInstance == 4u) {
-            vec3 hp = payload.hitPos;
-            if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
-                // Hit the light panel — add emission
-                radiance += throughput * pc.lightColorAndRadius.xyz * 3.0;
-            }
+        // Sky light: any surface hit at y > 25 is emissive
+        if (payload.hitPos.y > 25.0) {
+            radiance += throughput * pc.lightColorAndRadius.xyz * 2.0;
             break;
         }
 
