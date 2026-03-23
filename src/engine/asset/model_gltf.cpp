@@ -321,8 +321,9 @@ bool Model::loadFromGLTF(const std::string& filename) {
         }
     }
 
-    // Extract per-material base colors from GLTF materials
-    for (const auto& gltfMat : gltfModel.materials) {
+    // Extract per-material base colors AND textures from GLTF materials
+    for (size_t mi = 0; mi < gltfModel.materials.size(); mi++) {
+        const auto& gltfMat = gltfModel.materials[mi];
         const auto& pbr = gltfMat.pbrMetallicRoughness;
         materialColors.push_back(glm::vec4(
             static_cast<float>(pbr.baseColorFactor[0]),
@@ -330,14 +331,69 @@ bool Model::loadFromGLTF(const std::string& filename) {
             static_cast<float>(pbr.baseColorFactor[2]),
             static_cast<float>(pbr.roughnessFactor)
         ));
+
+        // Extract albedo texture if present
+        if (pbr.baseColorTexture.index >= 0) {
+            int texIdx = gltfModel.textures[pbr.baseColorTexture.index].source;
+            if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                const auto& img = gltfModel.images[texIdx];
+                if (!img.image.empty() && img.width > 0 && img.height > 0) {
+                    TextureData td;
+                    td.width = img.width;
+                    td.height = img.height;
+                    td.materialIndex = static_cast<int>(mi);
+                    // tinygltf decodes to RGBA (component=4) or RGB (component=3)
+                    if (img.component == 4) {
+                        td.pixels = img.image;
+                    } else if (img.component == 3) {
+                        // Convert RGB → RGBA
+                        td.pixels.resize(img.width * img.height * 4);
+                        for (int p = 0; p < img.width * img.height; p++) {
+                            td.pixels[p*4+0] = img.image[p*3+0];
+                            td.pixels[p*4+1] = img.image[p*3+1];
+                            td.pixels[p*4+2] = img.image[p*3+2];
+                            td.pixels[p*4+3] = 255;
+                        }
+                    }
+                    // Compute average color from texture for material base color
+                    double avgR = 0, avgG = 0, avgB = 0;
+                    int pixCount = td.width * td.height;
+                    for (int p = 0; p < pixCount; p++) {
+                        avgR += td.pixels[p*4+0];
+                        avgG += td.pixels[p*4+1];
+                        avgB += td.pixels[p*4+2];
+                    }
+                    avgR /= (pixCount * 255.0);
+                    avgG /= (pixCount * 255.0);
+                    avgB /= (pixCount * 255.0);
+                    // Override the material base color with the texture's average color
+                    materialColors.back() = glm::vec4(
+                        static_cast<float>(avgR),
+                        static_cast<float>(avgG),
+                        static_cast<float>(avgB),
+                        materialColors.back().w  // keep roughness
+                    );
+                    std::cout << "  Material " << mi << " (" << gltfMat.name << "): tex "
+                              << td.width << "x" << td.height
+                              << " avg=(" << avgR << "," << avgG << "," << avgB << ")" << std::endl;
+
+                    materialTextureIndex.push_back(static_cast<int>(albedoTextures.size()));
+                    albedoTextures.push_back(std::move(td));
+                    continue;
+                }
+            }
+        }
+        materialTextureIndex.push_back(-1);  // no texture for this material
     }
     if (materialColors.empty()) {
         materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+        materialTextureIndex.push_back(-1);
     }
 
     std::cout << "GLTF loaded: " << filename
               << " (" << vertices.size() << " vertices, " << indices.size() << " indices, "
-              << materialColors.size() << " materials)" << std::endl;
+              << materialColors.size() << " materials, "
+              << albedoTextures.size() << " textures)" << std::endl;
 
     // Load skins (skeleton data)
     if (!gltfModel.skins.empty()) {

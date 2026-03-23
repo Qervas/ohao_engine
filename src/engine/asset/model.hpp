@@ -86,8 +86,17 @@ public:
     std::vector<uint32_t> materialPerTriangle;
 
     // Per-material base color (extracted from GLTF baseColorFactor)
-    // materialColors[materialIdx] = vec4(r, g, b, roughness)
     std::vector<glm::vec4> materialColors;
+
+    // Per-material texture data (RGBA pixels, decoded from GLTF images)
+    struct TextureData {
+        std::vector<uint8_t> pixels;  // RGBA8
+        int width = 0, height = 0;
+        int materialIndex = -1;       // which material this texture belongs to
+    };
+    std::vector<TextureData> albedoTextures;  // one per material that has a texture
+    // materialTextureIndex[materialIdx] = index into albedoTextures, or -1 if no texture
+    std::vector<int> materialTextureIndex;
 
     // Animation data (populated by GLTF loader for skinned meshes)
     std::shared_ptr<Skeleton> skeleton;
