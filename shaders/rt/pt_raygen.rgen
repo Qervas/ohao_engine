@@ -80,7 +80,7 @@ void main() {
     float tanFovY = abs(pc.invProj[1][1]);
     float tanFovX = tanFovY * aspect;
 
-    vec3 rayDir = normalize(fwd + right * ndc.x * tanFovX - up * ndc.y * tanFovY);  // -Y: fix upside-down
+    vec3 rayDir = normalize(fwd + right * ndc.x * tanFovX - up * ndc.y * tanFovY);  // -Y for Vulkan NDC
     vec3 rayOrigin = camPos;
 
     // Path trace — pure brute force

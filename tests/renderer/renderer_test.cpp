@@ -223,9 +223,9 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
 
     // Create actor with the loaded model — raise it above ground
     auto actor = scene->createActor("Model");
-    actor->getTransform()->setPosition(glm::vec3(0.0f, 0.5f, 0.0f));
-    // GLTF models may need rotation to align with our Y-up coordinate system
-    // Try no rotation first — the GLTF spec is Y-up which matches our convention
+    // FBX model: rotate to stand upright, then lift so feet touch ground
+    actor->getTransform()->setRotation(glm::vec3(90.0f, 180.0f, 0.0f));  // face forward
+    actor->getTransform()->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
     auto meshComp = actor->addComponent<MeshComponent>();
     meshComp->setModel(model);
     meshComp->setVisible(true);
