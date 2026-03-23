@@ -518,39 +518,10 @@ void OffscreenRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Camera — use engine camera position or default
-    glm::vec3 camPos = m_camera->getPosition();
-    // Auto-frame: compute bounds from actual model actors (skip Ground/SkyLight)
-    glm::vec3 sceneMin(FLT_MAX), sceneMax(-FLT_MAX);
-    if (m_scene) {
-        for (const auto& [id, actor] : m_scene->getAllActors()) {
-            std::string name = actor->getName();
-            if (name == "Ground" || name == "SkyLight") continue;
-            auto mc = actor->getComponent<MeshComponent>();
-            if (!mc || !mc->getModel() || mc->getModel()->vertices.size() < 10) continue;
-            glm::mat4 worldMat = actor->getTransform()->getWorldMatrix();
-            for (const auto& v : mc->getModel()->vertices) {
-                glm::vec3 wp = glm::vec3(worldMat * glm::vec4(v.position, 1.0f));
-                sceneMin = glm::min(sceneMin, wp);
-                sceneMax = glm::max(sceneMax, wp);
-            }
-        }
-    }
-    glm::vec3 sceneCenter = (sceneMin + sceneMax) * 0.5f;
-    float sceneExtent = glm::length(sceneMax - sceneMin);
-    std::cout << "[PT] Scene bounds: (" << sceneMin.x << "," << sceneMin.y << "," << sceneMin.z
-              << ") - (" << sceneMax.x << "," << sceneMax.y << "," << sceneMax.z
-              << ") center=(" << sceneCenter.x << "," << sceneCenter.y << "," << sceneCenter.z
-              << ") extent=" << sceneExtent << std::endl;
-
-    // Camera: 3/4 front view
-    float camDist = sceneExtent * 0.7f;
-    glm::vec3 camPos2 = sceneCenter + glm::vec3(camDist * 0.15f, camDist * 0.05f, camDist * 0.6f);
-    glm::mat4 ptView = glm::lookAt(camPos2, sceneCenter, glm::vec3(0, 1, 0));
-    float fovDeg = 65.0f;
+    // Use the engine camera's view/projection matrices directly
     float aspect = float(m_width) / float(m_height);
-    glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(fovDeg), aspect, 0.1f, 1000.0f);
-    // Debug prints removed
+    glm::mat4 ptView = m_camera->getViewMatrix();
+    glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
                          glm::vec3(0.0f, 4.0f, 0.0f), 10000.0f,

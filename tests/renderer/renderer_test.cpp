@@ -319,7 +319,7 @@ std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
         float scale = (H * 1.6f) / modelHeight;  // 80% of box height
 
         auto actor = scene->createActor("Woman");
-        actor->getTransform()->setRotation(glm::vec3(90.0f, 180.0f, 0.0f));
+        actor->getTransform()->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));  // face toward camera (+Z)
         actor->getTransform()->setScale(glm::vec3(scale));
         // Center in box, feet on floor
         // After rotation, model height goes from ~0 to modelHeight*scale along Y
@@ -376,11 +376,11 @@ int main(int argc, char* argv[]) {
     // 3. Camera at the open front of the box, looking in
     // Box is 10 units deep (z=-5 to z=+5). Camera far enough to frame the whole room.
     auto& camera = renderer.getCamera();
-    camera.setPosition(glm::vec3(0, 0, 14.0f));
-    camera.setFov(33.0f);
-    // For rasterization: yaw=-90 means look toward -Z in the engine convention
-    // For path tracer: we use the same view matrix
-    camera.setRotation(0.0f, 90.0f);  // yaw=90 should look toward -Z in engine convention
+    // Pull back from the Cornell box to frame the whole room + woman
+    // Box is ±5 on all axes. Woman center ~y=-1. Need to see head (y≈3) and feet (y≈-5).
+    camera.setPosition(glm::vec3(0.0f, -0.3f, 13.5f));
+    camera.setFov(30.0f);
+    camera.setRotation(0.0f, -90.0f);  // look toward -Z (into the box)
 
     // 4. Path traced mode — full RT, no rasterization
     renderer.setRenderMode(RenderMode::PathTraced);
@@ -389,7 +389,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 4096;  // 4K raw — clean, no denoiser
+    int numFrames = 4096;  // 4K cinematic quality — clean, no denoiser
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
