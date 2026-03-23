@@ -36,7 +36,9 @@ void main() {
     float v = baryCoord.y;
     float w = 1.0 - u - v;
 
-    uint baseIdx = gl_PrimitiveID * 3;
+    // gl_InstanceCustomIndexEXT = global triangle offset for this instance
+    uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;
+    uint baseIdx = globalTriID * 3;
     uint i0 = indexBuf.indices[baseIdx + 0];
     uint i1 = indexBuf.indices[baseIdx + 1];
     uint i2 = indexBuf.indices[baseIdx + 2];

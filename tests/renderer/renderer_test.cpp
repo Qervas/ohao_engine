@@ -321,8 +321,11 @@ std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
         auto actor = scene->createActor("Woman");
         actor->getTransform()->setRotation(glm::vec3(90.0f, 180.0f, 0.0f));
         actor->getTransform()->setScale(glm::vec3(scale));
-        // Position: feet on the floor (y = -H)
-        actor->getTransform()->setPosition(glm::vec3(0.0f, -H + 0.1f, 0.0f));
+        // Center in box, feet on floor
+        // After rotation, model height goes from ~0 to modelHeight*scale along Y
+        // Model center in original coords is at Z midpoint
+        float scaledHeight = modelHeight * scale;
+        actor->getTransform()->setPosition(glm::vec3(0.0f, -H, 0.0f));
 
         auto meshComp = actor->addComponent<MeshComponent>();
         meshComp->setModel(model);
