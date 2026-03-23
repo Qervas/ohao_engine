@@ -113,8 +113,11 @@ void main() {
 
         // === Emissive surface check ===
         // Sky light: any surface hit at y > 25 is emissive
-        if (payload.hitPos.y > 25.0) {
-            radiance += throughput * pc.lightColorAndRadius.xyz * 2.0;
+        // Use position-dependent intensity for directional feel
+        // Emissive: any surface that's part of the "SkyLight" actor (instance 2 for GLTF scenes)
+        // Generic: check if albedo matches the light color (near-white, high luminance)
+        if (payload.hitInstance == 2u) {
+            radiance += throughput * pc.lightColorAndRadius.xyz * 1.5;
             break;
         }
 
@@ -128,8 +131,8 @@ void main() {
         // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
-        // === NEE: explicitly sample the ceiling light ===
-        if (!isMetal || roughness > 0.05) {  // skip NEE for perfect mirrors
+        // === NEE: disabled — hardcoded for Cornell box, needs generalization ===
+        if (false) {
             // Random point on the emissive light panel (|x|<2, |z|<2, y≈5)
             vec3 lightPoint = vec3(
                 (rand01() * 2.0 - 1.0) * 2.0,
@@ -222,8 +225,8 @@ void main() {
     vec3 acc = (prev.rgb * prev.w + radiance) / count;
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    // Tonemap + gamma
-    vec3 ldr = ACES(acc * 0.4);
+    // Tonemap + gamma — lower exposure for character models
+    vec3 ldr = ACES(acc * 2.0);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

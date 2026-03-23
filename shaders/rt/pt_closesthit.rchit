@@ -69,8 +69,12 @@ void main() {
         worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
     }
 
-    // Face the incoming ray
-    if (dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
+    // Only flip normals for thin geometry (quads/planes with < 10 vertices per instance)
+    // Solid meshes (characters, cars) should keep their original normals
+    // Heuristic: if the interpolated normal had valid data, trust it (solid mesh)
+    // Only flip for the fallback case (simple quads)
+    bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
+    if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
     payload.hitNormal = worldNormal;

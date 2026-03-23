@@ -241,11 +241,15 @@ std::unique_ptr<Scene> buildGLTFScene(const std::string& modelPath) {
         glm::vec3(gs, -30, gs), glm::vec3(-gs, -30, gs),
         glm::vec3(0, 1, 0), glm::vec3(0.35f, 0.35f, 0.38f));
 
-    // Sky light — large emissive panel above
+    // Studio key light — close, small, upper-right of model for strong directional shading
+    float lsz = extent * 0.15f;  // small light
+    float lh = center.y + extent * 0.4f;  // slightly above head height
+    float lx = center.x + extent * 0.5f;  // to the right
+    float lz = center.z + extent * 0.3f;  // slightly in front
     addWallQuad(scene.get(), "SkyLight",
-        glm::vec3(-gs, 200, -gs), glm::vec3(gs, 200, -gs),
-        glm::vec3(gs, 200, gs), glm::vec3(-gs, 200, gs),
-        glm::vec3(0, -1, 0), glm::vec3(0.9f, 0.92f, 0.95f));
+        glm::vec3(lx, lh, lz - lsz), glm::vec3(lx, lh, lz + lsz),
+        glm::vec3(lx, lh + lsz*2, lz + lsz), glm::vec3(lx, lh + lsz*2, lz - lsz),
+        glm::vec3(-1, 0, 0), glm::vec3(1.0f, 0.98f, 0.95f));
 
     // Point light for the scene
     auto light = scene->createActorWithComponents("SunLight", PrimitiveType::DirectionalLight);
