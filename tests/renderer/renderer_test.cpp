@@ -345,8 +345,8 @@ int main(int argc, char* argv[]) {
     std::string outputPath = "render_output.png";
     if (argc > 1) outputPath = argv[1];
 
-    uint32_t width = 1920;
-    uint32_t height = 1080;
+    uint32_t width = 3840;
+    uint32_t height = 2160;
 
     std::cout << "=== OHAO Standalone Renderer Test ===" << std::endl;
     std::cout << "Output: " << outputPath << " (" << width << "x" << height << ")" << std::endl;
@@ -389,7 +389,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 512;
+    int numFrames = 4096;  // 4K raw — clean, no denoiser
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
