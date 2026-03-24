@@ -304,9 +304,13 @@ std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
     addWallQuad(scene.get(), "Floor",     LBB, LBF, RBF, RBB, glm::vec3(0,1,0), white);
     addWallQuad(scene.get(), "Ceiling",   LTB, RTB, RTF, LTF, glm::vec3(0,-1,0), white);
 
-    // Load the woman model
+    // Load the model (auto-detect format)
     auto model = std::make_shared<Model>();
-    if (model->loadFromGLTF(modelPath)) {
+    bool loaded = false;
+    std::string ext = modelPath.substr(modelPath.find_last_of('.') + 1);
+    if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
+    else loaded = model->loadFromGLTF(modelPath);
+    if (loaded) {
         // Compute model bounds
         glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
         for (const auto& v : model->vertices) {
@@ -391,7 +395,7 @@ int main(int argc, char* argv[]) {
 
     // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
-    std::string modelPath = "C:/Users/djmax/Downloads/realistic_female.glb";
+    std::string modelPath = "C:/Users/djmax/Downloads/scifi-girl-v01/girl_complete_03.obj";
     auto scene = buildCornellWithModel(modelPath);
     // auto scene = buildGLTFScene(modelPath);
     // auto scene = buildTestScene();

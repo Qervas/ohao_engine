@@ -523,9 +523,10 @@ void OffscreenRenderer::renderPathTraced() {
     glm::mat4 ptView = m_camera->getViewMatrix();
     glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
+    // Sphere light: position, intensity, color, radius
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(0.0f, 4.0f, 0.0f), 10000.0f,
-                         glm::vec3(1.0f, 0.98f, 0.92f), 1.5f);
+                         glm::vec3(3.0f, 2.0f, 3.0f), 15.0f,
+                         glm::vec3(1.0f, 0.95f, 0.9f), 0.8f);
 
     // Copy path tracer output to staging buffer for CPU readback
     VkImage ptOutput = m_pathTracer->getOutputImage();

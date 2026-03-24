@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -6,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "stb_image.h"
 #include <vulkan/vulkan_core.h>
 #include "engine/asset/model.hpp"
 #include "renderer/material/material.hpp"
@@ -184,10 +186,7 @@ bool Model::loadFromOBJ(const std::string& filename) {
                     }
                 }
                 
-                // Only log occasionally for very large models to reduce console spam
-                if ((faceIndices.size() >= 4) || (faceVertices.size() % 1000 == 0)) {
-                    std::cout << "Added face with " << faceIndices.size() << " vertices, material: '" << currentMaterial << "'" << std::endl;
-                }
+                // Suppress per-face logging for large models
             }
         }
         if (vertices.empty() || indices.empty()) {
@@ -201,9 +200,67 @@ bool Model::loadFromOBJ(const std::string& filename) {
 
         assignMaterialColors();
 
-        std::cout << "Successfully loaded " << vertices.size() << " vertices, "
-                  << indices.size() << " indices, and "
-                  << materialAssignments.size() << " material assignments" << std::endl;
+        // Build RT-compatible material buffers from OBJ material system
+        {
+            // Find textures directory relative to model
+            namespace fs = std::filesystem;
+            fs::path modelDir = fs::path(filename).parent_path();
+            fs::path texDir = modelDir / "textures";
+            if (!fs::exists(texDir)) texDir = modelDir;
+
+            std::unordered_map<std::string, uint32_t> matNameToIdx;
+            for (const auto& [name, mat] : materials) {
+                uint32_t idx = static_cast<uint32_t>(materialColors.size());
+                matNameToIdx[name] = idx;
+                materialColors.push_back(glm::vec4(mat.diffuse, 0.7f));
+
+                // Auto-discover diffuse texture: look for {name}_diff_*.{jpg,jpeg,png}
+                int texLayerIdx = -1;
+                if (fs::exists(texDir)) {
+                    for (const auto& entry : fs::directory_iterator(texDir)) {
+                        std::string fname = entry.path().filename().string();
+                        // Match: material name + "_diff_"
+                        if (fname.find(name + "_diff_") != std::string::npos) {
+                            std::string texPath = entry.path().string();
+                            int w, h, ch;
+                            stbi_uc* pixels = stbi_load(texPath.c_str(), &w, &h, &ch, STBI_rgb_alpha);
+                            if (pixels) {
+                                TextureData td;
+                                td.width = w;
+                                td.height = h;
+                                td.materialIndex = static_cast<int>(idx);
+                                td.pixels.assign(pixels, pixels + w * h * 4);
+                                stbi_image_free(pixels);
+                                texLayerIdx = static_cast<int>(albedoTextures.size());
+                                albedoTextures.push_back(std::move(td));
+                                std::cout << "  OBJ Material " << idx << " (" << name
+                                          << "): tex " << w << "x" << h << " from " << fname << std::endl;
+                            }
+                            break;
+                        }
+                    }
+                }
+                materialTextureIndex.push_back(texLayerIdx);
+                if (texLayerIdx < 0) {
+                    std::cout << "  OBJ Material " << idx << " (" << name << "): color=("
+                              << mat.diffuse.r << "," << mat.diffuse.g << "," << mat.diffuse.b << ")" << std::endl;
+                }
+            }
+            // Per-triangle material index
+            materialPerTriangle.resize(materialAssignments.size());
+            for (size_t i = 0; i < materialAssignments.size(); i++) {
+                auto it = matNameToIdx.find(materialAssignments[i]);
+                materialPerTriangle[i] = (it != matNameToIdx.end()) ? it->second : 0;
+            }
+            if (materialColors.empty()) {
+                materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+                materialTextureIndex.push_back(-1);
+            }
+        }
+
+        std::cout << "OBJ loaded: " << vertices.size() << " vertices, "
+                  << indices.size() << " indices, "
+                  << materialColors.size() << " materials" << std::endl;
 
         return true;
     } catch (const std::exception& e) {

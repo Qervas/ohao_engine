@@ -143,26 +143,35 @@ void main() {
         // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
-        // === NEE: sample the ceiling light panel ===
+        // === NEE: sample light sources ===
+        // Uses push constant light: position, intensity, color, radius
         {
-            vec3 Le = vec3(1.0, 0.98, 0.92) * 1.5;
-            float lightArea = 16.0;  // 4x4 panel
+            vec3 lightCenter = pc.lightPosAndIntensity.xyz;
+            float lightIntensity = pc.lightPosAndIntensity.w;
+            vec3 lightColor = pc.lightColorAndRadius.xyz;
+            float lightRadius = pc.lightColorAndRadius.w;
 
-            // Random point on light (x ∈ [-2,2], z ∈ [-2,2], y = 4.99)
-            vec3 lightPoint = vec3(
-                (rand01() * 2.0 - 1.0) * 2.0,
-                4.99,
-                (rand01() * 2.0 - 1.0) * 2.0
-            );
+            // Sample random point on sphere light surface
+            float u1 = rand01(), u2 = rand01();
+            float cosTheta = 1.0 - 2.0 * u1;
+            float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+            float phi = 6.2831853 * u2;
+            vec3 sphereOffset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * lightRadius;
+            vec3 lightPoint = lightCenter + sphereOffset;
+            vec3 lightNormal = normalize(sphereOffset);  // outward normal
 
             vec3 toLight = lightPoint - hitPos;
             float lightDist = length(toLight);
             vec3 L = toLight / lightDist;
             float NdotL = max(dot(N, L), 0.0);
-            float lightCos = max(L.y, 0.0);  // light normal = (0,-1,0)
+            float lightCos = max(dot(-L, lightNormal), 0.0);  // cosine at light surface
+
+            // Sphere area = 4 * pi * r^2
+            float lightArea = 4.0 * 3.14159 * lightRadius * lightRadius;
+            vec3 Le = lightColor * lightIntensity;
 
             if (NdotL > 0.0 && lightCos > 0.0) {
-                // Shadow ray — skip closest hit shader for speed
+                // Shadow ray
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
                     gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
@@ -170,33 +179,28 @@ void main() {
                     hitPos + N * 0.01, 0.001, L, lightDist - 0.02, 0);
 
                 if (payload.hitDist < 0.0) {  // miss = unblocked
-                    // Full Cook-Torrance BRDF evaluation
+                    // Cook-Torrance BRDF
                     vec3 V = normalize(-rayDir);
                     vec3 H = normalize(L + V);
                     float NdotH = max(dot(N, H), 0.001);
                     float NdotV = max(dot(N, V), 0.001);
                     float VdotH = max(dot(V, H), 0.001);
 
-                    // GGX NDF
                     float a = roughness * roughness;
                     float a2 = a * a;
                     float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
                     float D = a2 / (3.14159 * denom * denom + 0.0001);
 
-                    // Schlick Fresnel
                     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 
-                    // Smith GGX geometry
                     float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
                     float G = (NdotL / (NdotL * (1.0 - k) + k))
                             * (NdotV / (NdotV * (1.0 - k) + k));
 
-                    // Specular + diffuse
                     vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
                     vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
                     vec3 diff = kD * albedo / 3.14159;
 
-                    // Area light geometric term
                     float geomTerm = NdotL * lightCos / (lightDist * lightDist);
                     radiance += throughput * Le * (diff + spec) * geomTerm * lightArea;
                 }
@@ -249,7 +253,7 @@ void main() {
     vec3 acc = (prev.rgb * prev.w + radiance) / count;
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    // Tonemap + gamma — lower exposure for character models
+    // Tonemap + gamma
     vec3 ldr = ACES(acc * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
