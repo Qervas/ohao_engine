@@ -200,6 +200,42 @@ bool Model::loadFromOBJ(const std::string& filename) {
 
         assignMaterialColors();
 
+        // Filter out alpha-masked geometry (fur, eyelash, tear, etc.)
+        // These need alpha testing which our path tracer doesn't support
+        {
+            std::unordered_map<std::string, bool> alphaMats;
+            namespace fs = std::filesystem;
+            fs::path texDir = fs::path(filename).parent_path() / "textures";
+            if (fs::exists(texDir)) {
+                for (const auto& entry : fs::directory_iterator(texDir)) {
+                    std::string fname = entry.path().filename().string();
+                    if (fname.find("_alpha_") != std::string::npos) {
+                        // Extract material name before _alpha_
+                        std::string matName = fname.substr(0, fname.find("_alpha_"));
+                        alphaMats[matName] = true;
+                    }
+                }
+            }
+            if (!alphaMats.empty()) {
+                std::vector<uint32_t> newIndices;
+                std::vector<std::string> newAssignments;
+                for (size_t i = 0; i < materialAssignments.size(); i++) {
+                    if (alphaMats.find(materialAssignments[i]) == alphaMats.end()) {
+                        newIndices.push_back(indices[i * 3 + 0]);
+                        newIndices.push_back(indices[i * 3 + 1]);
+                        newIndices.push_back(indices[i * 3 + 2]);
+                        newAssignments.push_back(materialAssignments[i]);
+                    }
+                }
+                size_t removed = materialAssignments.size() - newAssignments.size();
+                if (removed > 0) {
+                    indices = std::move(newIndices);
+                    materialAssignments = std::move(newAssignments);
+                    std::cout << "Filtered " << removed << " alpha-masked triangles" << std::endl;
+                }
+            }
+        }
+
         // Build RT-compatible material buffers from OBJ material system
         {
             // Find textures directory relative to model
