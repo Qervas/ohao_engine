@@ -22,7 +22,7 @@ endif()
 target_include_directories(ohao_utils
     INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/ohao
 )
 
 source_group(

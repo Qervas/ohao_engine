@@ -6,4 +6,4 @@ add_subdirectory(renderer)
 add_subdirectory(utils)
 add_subdirectory(ui)
 
-# Note: Standalone executable removed - now runs as GDExtension in Godot Editor
+# Engine builds as static libraries. Link against them from examples/ or tests/.

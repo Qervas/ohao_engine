@@ -5,7 +5,7 @@ add_library(ohao_animation STATIC ${ANIMATION_SOURCES} ${ANIMATION_HEADERS})
 
 target_include_directories(ohao_animation PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
 )
 
 target_link_libraries(ohao_animation PUBLIC

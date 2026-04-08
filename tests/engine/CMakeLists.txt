@@ -6,7 +6,7 @@ add_executable(engine_tests
 )
 
 target_include_directories(engine_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${Vulkan_INCLUDE_DIRS}
 )
 

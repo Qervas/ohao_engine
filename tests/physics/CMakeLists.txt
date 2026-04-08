@@ -6,7 +6,7 @@ add_executable(physics_backend_tests
 )
 
 target_include_directories(physics_backend_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${Vulkan_INCLUDE_DIRS}
 )
 

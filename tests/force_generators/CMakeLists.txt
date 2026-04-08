@@ -6,7 +6,7 @@ add_executable(force_generator_tests
 )
 
 target_include_directories(force_generator_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
 )
 
 # ohao_physics contains all force generator and rigid body implementations

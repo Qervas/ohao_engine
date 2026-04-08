@@ -6,7 +6,7 @@ add_executable(audio_system_tests
 )
 
 target_include_directories(audio_system_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
 )
 
 target_link_libraries(audio_system_tests PRIVATE

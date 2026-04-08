@@ -5,5 +5,5 @@ add_library(ohao_commands STATIC
 
 target_include_directories(ohao_commands PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
 )

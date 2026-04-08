@@ -5,7 +5,7 @@ add_library(ohao_actor STATIC ${ACTOR_SOURCES} ${ACTOR_HEADERS})
 
 target_include_directories(ohao_actor PUBLIC 
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${Vulkan_INCLUDE_DIRS}
 )
 

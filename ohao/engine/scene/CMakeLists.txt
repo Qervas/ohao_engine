@@ -25,7 +25,7 @@ add_library(ohao_scene STATIC ${SCENE_SOURCES} ${SCENE_HEADERS})
 
 target_include_directories(ohao_scene PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${Vulkan_INCLUDE_DIRS}
 )
 

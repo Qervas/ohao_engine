@@ -30,7 +30,7 @@ target_link_libraries(ohao_physics_py PRIVATE
 set_target_properties(ohao_physics_py PROPERTIES OUTPUT_NAME "ohao_physics")
 
 target_include_directories(ohao_physics_py PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${CMAKE_SOURCE_DIR}/external/glm
 )
 
@@ -52,7 +52,7 @@ target_link_libraries(ohao_renderer_py PRIVATE
 set_target_properties(ohao_renderer_py PROPERTIES OUTPUT_NAME "ohao_renderer")
 
 target_include_directories(ohao_renderer_py PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${CMAKE_SOURCE_DIR}/external/glm
     ${Vulkan_INCLUDE_DIRS}
 )

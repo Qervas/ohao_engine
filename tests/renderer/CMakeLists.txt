@@ -5,7 +5,7 @@
 add_executable(renderer_test renderer_test.cpp)
 
 target_include_directories(renderer_test PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${Vulkan_INCLUDE_DIRS}
     ${stb_SOURCE_DIR}
 )

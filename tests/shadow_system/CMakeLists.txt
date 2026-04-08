@@ -6,7 +6,7 @@ add_executable(shadow_system_tests
 )
 
 target_include_directories(shadow_system_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/ohao
     ${Vulkan_INCLUDE_DIRS}
 )
 

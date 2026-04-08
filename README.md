@@ -31,7 +31,7 @@ Renders a path-traced scene to PNG. Edit `tests/renderer/renderer_test.cpp` to c
 ## Project Structure
 
 ```
-src/
+ohao/
   renderer/           # Vulkan rendering (deferred + RT path tracer)
   engine/             # Scene graph, actors, components, asset loading
   physics/            # Jolt Physics backend
