@@ -1,9 +1,0 @@
-Audio files in this directory are sourced from Kenney (https://kenney.nl)
-Licensed under Creative Commons CC0 1.0 Universal (Public Domain)
-
-Packs used:
-- Impact Sounds (footsteps, impacts)
-- Sci-fi Sounds (gunshots, explosions, engine hums, ambient)
-- Interface Sounds (clicks, switches, UI)
-- RPG Audio (doors, metal clicks, footsteps)
-- Digital Audio (jumps, whoosh, phasers)
