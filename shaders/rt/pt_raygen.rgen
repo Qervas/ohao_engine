@@ -254,7 +254,7 @@ void main() {
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
     // Tonemap + gamma
-    vec3 ldr = ACES(acc * 0.5);
+    vec3 ldr = ACES(acc * 1.5);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

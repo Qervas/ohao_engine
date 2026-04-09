@@ -525,8 +525,8 @@ void OffscreenRenderer::renderPathTraced() {
 
     // Sphere light: position, intensity, color, radius
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(3.0f, 2.0f, 3.0f), 15.0f,
-                         glm::vec3(1.0f, 0.95f, 0.9f), 0.8f);
+                         glm::vec3(0.0f, 4.0f, 0.0f), 120.0f,
+                         glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
 
     // Copy path tracer output to staging buffer for CPU readback
     VkImage ptOutput = m_pathTracer->getOutputImage();

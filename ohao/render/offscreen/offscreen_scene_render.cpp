@@ -1,4 +1,5 @@
 #include "offscreen_renderer_impl.hpp"
+#include <array>
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "render/components/mesh_component.hpp"
@@ -621,6 +622,23 @@ void OffscreenRenderer::buildAccelerationStructures() {
         std::vector<int> globalMatTexLayer;  // parallel to the material color buffer
         uint32_t globalMatOffset = 0;
 
+        // Generate 1x1 solid color textures for materials without real textures
+        // This ensures every material gets a valid texture layer — no special-casing in shader
+        // Reserve enough to prevent reallocation (pointers stored in CollectedTexture)
+        std::vector<std::array<uint8_t, 4>> solidColorPixels;
+        {
+            // Count materials without textures to reserve
+            size_t matCount = 0;
+            for (const auto& [id, actor] : m_scene->getAllActors()) {
+                auto mc2 = actor->getComponent<MeshComponent>();
+                if (!mc2 || !mc2->getModel()) continue;
+                auto model = mc2->getModel();
+                size_t nm = model->materialColors.empty() ? 1 : model->materialColors.size();
+                matCount += nm;
+            }
+            solidColorPixels.reserve(matCount);
+        }
+
         for (const auto& [actorId, actor] : m_scene->getAllActors()) {
             auto mc = actor->getComponent<MeshComponent>();
             if (!mc || !mc->getModel()) continue;
@@ -630,6 +648,8 @@ void OffscreenRenderer::buildAccelerationStructures() {
 
             for (size_t matIdx = 0; matIdx < numMats; matIdx++) {
                 int texLayer = -1;
+
+                // Check for real texture first
                 if (matIdx < model->materialTextureIndex.size()) {
                     int texIdx = model->materialTextureIndex[matIdx];
                     if (texIdx >= 0 && texIdx < static_cast<int>(model->albedoTextures.size())) {
@@ -644,6 +664,34 @@ void OffscreenRenderer::buildAccelerationStructures() {
                         }
                     }
                 }
+
+                // No texture — generate 1x1 solid color from material base color
+                if (texLayer < 0) {
+                    glm::vec3 col(0.8f);
+                    if (matIdx < model->materialColors.size()) {
+                        col = glm::vec3(model->materialColors[matIdx]);
+                    } else {
+                        auto matComp = actor->getComponent<MaterialComponent>();
+                        if (matComp) col = matComp->getMaterial().baseColor;
+                    }
+                    // Encode as sRGB: texture format is R8G8B8A8_SRGB, so Vulkan
+                    // converts sRGB→linear on sample. We encode linear→sRGB here so
+                    // the sampled result matches the original linear color.
+                    auto linearToSRGB = [](float v) -> uint8_t {
+                        float s = (v <= 0.0031308f) ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+                        return static_cast<uint8_t>(std::clamp(s, 0.0f, 1.0f) * 255.0f + 0.5f);
+                    };
+                    solidColorPixels.push_back({
+                        linearToSRGB(col.r), linearToSRGB(col.g), linearToSRGB(col.b), 255
+                    });
+                    texLayer = static_cast<int>(allTextures.size());
+                    CollectedTexture ct;
+                    ct.pixels = solidColorPixels.back().data();
+                    ct.width = 1;
+                    ct.height = 1;
+                    allTextures.push_back(ct);
+                }
+
                 globalMatTexLayer.push_back(texLayer);
             }
         }

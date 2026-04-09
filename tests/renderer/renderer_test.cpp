@@ -378,8 +378,8 @@ int main(int argc, char* argv[]) {
     std::string outputPath = "render_output.png";
     if (argc > 1) outputPath = argv[1];
 
-    uint32_t width = 3840;
-    uint32_t height = 2160;
+    uint32_t width = 1920;
+    uint32_t height = 1080;
 
     std::cout << "=== OHAO Standalone Renderer Test ===" << std::endl;
     std::cout << "Output: " << outputPath << " (" << width << "x" << height << ")" << std::endl;
@@ -395,10 +395,7 @@ int main(int argc, char* argv[]) {
 
     // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
-    std::string modelPath = "C:/Users/djmax/Downloads/scifi-girl-v01/girl_complete_03.obj";
-    auto scene = buildCornellWithModel(modelPath);
-    // auto scene = buildGLTFScene(modelPath);
-    // auto scene = buildTestScene();
+    auto scene = buildTestScene();  // Cornell box with spheres
     renderer.setScene(scene.get());
 
     // Update scene buffers (uploads geometry to GPU, builds RT accel structures)
@@ -422,7 +419,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 4096;  // 4K cinematic
+    int numFrames = 256;  // Quick test
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
