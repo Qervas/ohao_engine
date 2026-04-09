@@ -430,20 +430,55 @@ bool Model::loadFromGLTF(const std::string& filename) {
 
                     materialTextureIndex.push_back(static_cast<int>(albedoTextures.size()));
                     albedoTextures.push_back(std::move(td));
-                    continue;
+                    goto diffuse_done;
                 }
             }
         }
-        materialTextureIndex.push_back(-1);  // no texture for this material
-        std::cout << "  Material " << mi << " (" << gltfMat.name << "): color=("
-                  << pbr.baseColorFactor[0] << "," << pbr.baseColorFactor[1] << ","
-                  << pbr.baseColorFactor[2] << ") rough=" << pbr.roughnessFactor
-                  << " texIdx=" << pbr.baseColorTexture.index << std::endl;
+        materialTextureIndex.push_back(-1);
+        diffuse_done:
+
+        // Extract normal texture if present
+        {
+            int normalTexFound = -1;
+            if (gltfMat.normalTexture.index >= 0 &&
+                gltfMat.normalTexture.index < static_cast<int>(gltfModel.textures.size())) {
+                int texIdx = gltfModel.textures[gltfMat.normalTexture.index].source;
+                if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                    const auto& img = gltfModel.images[texIdx];
+                    if (!img.image.empty() && img.width > 0 && img.height > 0) {
+                        TextureData td;
+                        td.width = img.width;
+                        td.height = img.height;
+                        td.materialIndex = static_cast<int>(mi);
+                        if (img.component == 4) {
+                            td.pixels = img.image;
+                        } else if (img.component == 3) {
+                            td.pixels.resize(img.width * img.height * 4);
+                            for (int p = 0; p < img.width * img.height; p++) {
+                                td.pixels[p*4+0] = img.image[p*3+0];
+                                td.pixels[p*4+1] = img.image[p*3+1];
+                                td.pixels[p*4+2] = img.image[p*3+2];
+                                td.pixels[p*4+3] = 255;
+                            }
+                        }
+                        normalTexFound = static_cast<int>(normalTextures.size());
+                        normalTextures.push_back(std::move(td));
+                    }
+                }
+            }
+            materialNormalTexIndex.push_back(normalTexFound);
+        }
+
+        std::cout << "  Material " << mi << " (" << gltfMat.name << "): "
+                  << "diffuse=" << (materialTextureIndex.back() >= 0 ? "tex" : "color")
+                  << " normal=" << (materialNormalTexIndex.back() >= 0 ? "tex" : "none")
+                  << std::endl;
     }
     if (materialColors.empty()) {
         materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
         materialMetallic.push_back(0.0f);
         materialTextureIndex.push_back(-1);
+        materialNormalTexIndex.push_back(-1);
     }
 
     std::cout << "GLTF loaded: " << filename

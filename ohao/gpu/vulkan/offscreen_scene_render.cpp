@@ -626,12 +626,11 @@ void OffscreenRenderer::buildAccelerationStructures() {
         // Build mapping: global material index -> texture array layer
         // We'll update matColors[].a with the texture layer index
         // To do this we need to re-read the matColor buffer and write it back
-        std::vector<int> globalMatTexLayer;  // parallel to the material color buffer
+        std::vector<int> globalMatTexLayer;    // diffuse tex index per material
+        std::vector<int> globalNormalTexLayer;  // normal tex index per material
         uint32_t globalMatOffset = 0;
 
         // Generate 1x1 solid color textures for materials without real textures
-        // This ensures every material gets a valid texture layer — no special-casing in shader
-        // Use deque — never invalidates pointers on push_back (unlike vector)
         std::deque<std::array<uint8_t, 4>> solidColorPixels;
 
         for (const auto& [actorId, actor] : m_scene->getAllActors()) {
@@ -688,6 +687,24 @@ void OffscreenRenderer::buildAccelerationStructures() {
                 }
 
                 globalMatTexLayer.push_back(texLayer);
+
+                // Collect normal texture (goes into same allTextures array)
+                int normalTexLayer = -1;
+                if (matIdx < model->materialNormalTexIndex.size()) {
+                    int nTexIdx = model->materialNormalTexIndex[matIdx];
+                    if (nTexIdx >= 0 && nTexIdx < static_cast<int>(model->normalTextures.size())) {
+                        const auto& ntd = model->normalTextures[nTexIdx];
+                        if (!ntd.pixels.empty() && ntd.width > 0 && ntd.height > 0) {
+                            normalTexLayer = static_cast<int>(allTextures.size());
+                            CollectedTexture ct;
+                            ct.pixels = ntd.pixels.data();
+                            ct.width = ntd.width;
+                            ct.height = ntd.height;
+                            allTextures.push_back(ct);
+                        }
+                    }
+                }
+                globalNormalTexLayer.push_back(normalTexLayer);
             }
         }
 
@@ -920,11 +937,17 @@ void OffscreenRenderer::buildAccelerationStructures() {
                         float packed;
                         memcpy(&packed, &uIdx, sizeof(float));
                         matColors[i * 2 + 0].a = packed;
-                        // Normal/emissive texture indices: 0xFFFFFFFF (none for now)
+                        // Normal texture index
+                        int nTexIdx = (i < globalNormalTexLayer.size()) ? globalNormalTexLayer[i] : -1;
+                        uint32_t nIdx = (nTexIdx >= 0) ? static_cast<uint32_t>(nTexIdx) : 0xFFFFFFFFu;
+                        float nPacked;
+                        memcpy(&nPacked, &nIdx, sizeof(float));
+                        matColors[i * 2 + 1].z = nPacked;  // normalTexIdx
+
+                        // Emissive: not yet implemented
                         uint32_t noTex = 0xFFFFFFFFu;
                         float noTexF;
                         memcpy(&noTexF, &noTex, sizeof(float));
-                        matColors[i * 2 + 1].z = noTexF;  // normalTexIdx
                         matColors[i * 2 + 1].w = noTexF;  // emissiveTexIdx
                     }
                     vkUnmapMemory(m_device, m_rtMatColorMemory);

@@ -96,9 +96,11 @@ public:
         int width = 0, height = 0;
         int materialIndex = -1;       // which material this texture belongs to
     };
-    std::vector<TextureData> albedoTextures;  // one per material that has a texture
+    std::vector<TextureData> albedoTextures;
+    std::vector<TextureData> normalTextures;
     // materialTextureIndex[materialIdx] = index into albedoTextures, or -1 if no texture
     std::vector<int> materialTextureIndex;
+    std::vector<int> materialNormalTexIndex;
 
     // Animation data (populated by GLTF loader for skinned meshes)
     std::shared_ptr<Skeleton> skeleton;

@@ -97,22 +97,24 @@ void main() {
         albedo = matColor.rgb;
     }
 
-    // === Normal mapping: sample normal map, perturb via derivative TBN ===
+    // === Normal mapping via Frisvad basis (constructs TBN from normal alone) ===
     if (normalTexIdx != 0xFFFFFFFFu) {
-        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], texUV).rgb;
-        tangentNormal = tangentNormal * 2.0 - 1.0;
+        vec3 mapN = texture(textures[nonuniformEXT(normalTexIdx)], texUV).rgb;
+        mapN = mapN * 2.0 - 1.0;  // [0,1] → [-1,1]
 
-        // Compute TBN from triangle edges + UVs (no tangent attribute needed)
-        vec3 p0 = gl_ObjectToWorldEXT * vec4(normalBuf.normals[i0].xyz, 0.0); // reuse as positions...
-        // Use world-space edge derivatives for TBN
-        vec3 edge1 = (gl_ObjectToWorldEXT * vec4(0)).xyz; // placeholder — proper TBN needs vertex positions
-        // For now: use the interpolated normal directly with a simplified perturbation
-        // Full TBN requires vertex positions in a separate buffer (Module A Task 2)
-        // Simplified: treat normal map blue channel as strength
-        float strength = 0.5;
-        vec3 perturbedN = normalize(worldNormal + tangentNormal * strength);
-        if (dot(perturbedN, perturbedN) > 0.001)
-            worldNormal = perturbedN;
+        // Frisvad orthonormal basis from single normal vector
+        vec3 T, B;
+        if (worldNormal.z < -0.9999) {
+            T = vec3(0.0, -1.0, 0.0);
+            B = vec3(-1.0, 0.0, 0.0);
+        } else {
+            float a = 1.0 / (1.0 + worldNormal.z);
+            float d = -worldNormal.x * worldNormal.y * a;
+            T = vec3(1.0 - worldNormal.x * worldNormal.x * a, d, -worldNormal.x);
+            B = vec3(d, 1.0 - worldNormal.y * worldNormal.y * a, -worldNormal.y);
+        }
+
+        worldNormal = normalize(T * mapN.x + B * mapN.y + worldNormal * mapN.z);
     }
 
     payload.hitNormal = worldNormal;
