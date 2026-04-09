@@ -1,4 +1,5 @@
 #include "csm_pass.hpp"
+#include <cstring>
 #include "../../engine/scene/scene.hpp"
 #include "../../engine/actor/actor.hpp"
 #include "../../engine/component/transform_component.hpp"

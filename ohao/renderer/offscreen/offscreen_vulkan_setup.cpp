@@ -111,9 +111,17 @@ bool OffscreenRenderer::createLogicalDevice() {
         VK_KHR_SPIRV_1_4_EXTENSION_NAME,                 // required by RT pipeline
         VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,     // required by SPIR-V 1.4
         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,            // Vulkan-CUDA interop
+#ifdef _WIN32
         VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,      // Win32 shared memory handles
+#else
+        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,         // POSIX shared memory handles
+#endif
         VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,         // Vulkan-CUDA sync
+#ifdef _WIN32
         VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,   // Win32 shared semaphores
+#else
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,      // POSIX shared semaphores
+#endif
     };
 
     // Vulkan 1.2 features (buffer device address, descriptor indexing)

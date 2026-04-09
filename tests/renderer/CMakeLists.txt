@@ -11,6 +11,8 @@ target_include_directories(renderer_test PRIVATE
 )
 
 target_link_libraries(renderer_test PRIVATE
+    # Wrap in group to resolve circular deps between static libs (GCC)
+    -Wl,--start-group
     ohao_renderer
     ohao_engine
     ohao_scene
@@ -22,6 +24,7 @@ target_link_libraries(renderer_test PRIVATE
     ohao_audio
     ohao_ui
     ohao_utils
+    -Wl,--end-group
     ${Vulkan_LIBRARIES}
     glm
     VulkanMemoryAllocator
@@ -34,6 +37,8 @@ endif()
 # Allow duplicate stbi symbols (model_gltf.cpp defines STB_IMAGE_IMPLEMENTATION)
 if(MSVC)
     target_link_options(renderer_test PRIVATE /FORCE:MULTIPLE)
+else()
+    target_link_options(renderer_test PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
 # Copy shaders next to exe so renderer can find them

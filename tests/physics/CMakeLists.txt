@@ -17,6 +17,7 @@ target_link_libraries(physics_backend_tests PRIVATE
     ohao_actor
     ohao_scene
     ohao_ui
+    -Wl,--start-group
     ohao_renderer
     ohao_asset
     ${Vulkan_LIBRARIES}

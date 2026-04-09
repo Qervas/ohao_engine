@@ -1,5 +1,6 @@
 #include "deferred_lighting_pass.hpp"
 #include <array>
+#include <cstring>
 
 namespace ohao {
 

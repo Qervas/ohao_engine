@@ -18,6 +18,7 @@ target_link_libraries(engine_tests PRIVATE
     ohao_component
     ohao_actor
     ohao_ui
+    -Wl,--start-group
     ohao_renderer
     ohao_asset
     ${Vulkan_LIBRARIES}

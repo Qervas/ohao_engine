@@ -16,6 +16,7 @@ target_link_libraries(force_generator_tests PRIVATE
     ohao_actor
     ohao_scene
     ohao_ui
+    -Wl,--start-group
     ohao_renderer
     ohao_asset
     ${Vulkan_LIBRARIES}

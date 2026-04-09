@@ -1,4 +1,5 @@
 #include "event_bus.hpp"
+#include <algorithm>
 
 namespace ohao {
 
