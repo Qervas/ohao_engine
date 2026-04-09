@@ -3,8 +3,8 @@
 #include <deque>
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
-#include "render/components/mesh_component.hpp"
-#include "render/components/material_component.hpp"
+#include "scene/component/mesh_component.hpp"
+#include "scene/component/material_component.hpp"
 #include "scene/asset/model.hpp"
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>

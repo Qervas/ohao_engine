@@ -3,9 +3,9 @@
 #include "scene/actor/actor.hpp"
 #include "scene/scene.hpp"
 #include "scene/component/component.hpp"
-#include "render/components/mesh_component.hpp"
-#include "render/components/material_component.hpp"
-#include "render/components/light_component.hpp"
+#include "scene/component/mesh_component.hpp"
+#include "scene/component/material_component.hpp"
+#include "scene/component/light_component.hpp"
 #include "physics/components/physics_component.hpp"
 #include <type_traits>
 #include <tuple>

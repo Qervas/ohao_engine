@@ -1,6 +1,6 @@
 #include "offscreen_renderer_impl.hpp"
 #include "render/camera/camera.hpp"
-#include "render/components/light_component.hpp"
+#include "scene/component/light_component.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/asset/model.hpp"

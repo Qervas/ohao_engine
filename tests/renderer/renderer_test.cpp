@@ -14,9 +14,9 @@
 #include "gpu/vulkan/offscreen_renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
-#include "render/components/mesh_component.hpp"
-#include "render/components/material_component.hpp"
-#include "render/components/light_component.hpp"
+#include "scene/component/mesh_component.hpp"
+#include "scene/component/material_component.hpp"
+#include "scene/component/light_component.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "render/camera/camera.hpp"
 

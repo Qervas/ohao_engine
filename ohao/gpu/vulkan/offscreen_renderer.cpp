@@ -1,7 +1,7 @@
 #include "offscreen_renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
-#include "render/components/mesh_component.hpp"
+#include "scene/component/mesh_component.hpp"
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
