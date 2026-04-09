@@ -19,12 +19,19 @@ VkShaderModule RenderPassBase::createShaderModule(const std::vector<uint32_t>& c
 }
 
 VkShaderModule RenderPassBase::loadShaderModule(const std::string& path) {
-    // Resolve shader path - prepend base path for relative paths
-    std::string resolvedPath = s_shaderBasePath + path;
-
-    std::ifstream file(resolvedPath, std::ios::ate | std::ios::binary);
+    // Search multiple paths for shader SPVs
+    std::vector<std::string> searchPaths = {
+        s_shaderBasePath + path,
+        "build/shaders/" + path,
+        "build/Release/bin/shaders/" + path,
+    };
+    std::ifstream file;
+    for (const auto& p : searchPaths) {
+        file.open(p, std::ios::ate | std::ios::binary);
+        if (file.is_open()) break;
+    }
     if (!file.is_open()) {
-        throw std::runtime_error("Failed to open shader file: " + resolvedPath);
+        throw std::runtime_error("Failed to open shader file: " + path);
     }
 
     size_t fileSize = static_cast<size_t>(file.tellg());

@@ -4,8 +4,17 @@
 namespace ohao {
 
 VkShaderModule OffscreenRenderer::loadShaderModule(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::ate | std::ios::binary);
-
+    // Search multiple paths for shader SPVs
+    std::vector<std::string> searchPaths = {
+        filepath,
+        "build/shaders/" + filepath.substr(filepath.find_last_of("/\\") + 1),
+        "build/Release/bin/shaders/" + filepath.substr(filepath.find_last_of("/\\") + 1),
+    };
+    std::ifstream file;
+    for (const auto& p : searchPaths) {
+        file.open(p, std::ios::ate | std::ios::binary);
+        if (file.is_open()) break;
+    }
     if (!file.is_open()) {
         std::cerr << "Failed to open shader file: " << filepath << std::endl;
         return VK_NULL_HANDLE;
