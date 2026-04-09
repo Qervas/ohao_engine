@@ -85,8 +85,10 @@ public:
     // materialPerTriangle[triangleIdx] = GLTF material index
     std::vector<uint32_t> materialPerTriangle;
 
-    // Per-material base color (extracted from GLTF baseColorFactor)
+    // Per-material base color: vec4(r, g, b, roughness)
     std::vector<glm::vec4> materialColors;
+    // Per-material metallic factor (0 = dielectric, 1 = metal)
+    std::vector<float> materialMetallic;
 
     // Per-material texture data (RGBA pixels, decoded from GLTF images)
     struct TextureData {

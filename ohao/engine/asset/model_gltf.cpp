@@ -348,6 +348,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
             static_cast<float>(pbr.baseColorFactor[2]),
             static_cast<float>(pbr.roughnessFactor)
         ));
+        materialMetallic.push_back(static_cast<float>(pbr.metallicFactor));
 
         // Check for KHR_materials_pbrSpecularGlossiness extension (CC3 models)
         int diffuseTexIndex = pbr.baseColorTexture.index;
@@ -441,6 +442,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
     }
     if (materialColors.empty()) {
         materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+        materialMetallic.push_back(0.0f);
         materialTextureIndex.push_back(-1);
     }
 

@@ -69,34 +69,29 @@ void main() {
 
     payload.hitNormal = worldNormal;
 
-    // Per-triangle material lookup
-    // gl_InstanceCustomIndexEXT = global triangle offset for this instance
+    // Per-triangle material lookup — 2 vec4s per material
     uint matID = matIDBuf.matIDs[gl_InstanceCustomIndexEXT + gl_PrimitiveID];
-    vec4 matColor = matColorBuf.matColors[matID];
+    vec4 matColor  = matColorBuf.matColors[matID * 2u + 0u];  // (baseColor.rgb, diffuseTexLayer)
+    vec4 matParams = matColorBuf.matColors[matID * 2u + 1u];  // (roughness, metallic, normalTexLayer, emissiveTexLayer)
 
-    // Check if this material has a texture (layer index stored in .a, -1 = no texture)
     float texLayer = matColor.a;
     vec3 albedo;
 
     if (texLayer >= 0.0) {
-        // Interpolate UVs
         vec2 uv0 = uvBuf.uvs[i0];
         vec2 uv1 = uvBuf.uvs[i1];
         vec2 uv2 = uvBuf.uvs[i2];
         vec2 texUV = w * uv0 + u * uv1 + v * uv2;
-
-        // Sample texture array at the material's layer
         albedo = texture(textureArray, vec3(texUV, texLayer)).rgb;
-        // Convert from sRGB to linear (the texture is stored as SRGB format, Vulkan handles this)
     } else {
-        // No texture — use material base color
         albedo = matColor.rgb;
     }
 
     payload.hitAlbedo = albedo;
 
-    // Roughness: default matte for organic materials
-    // Per-instance material buffer no longer indexed by customIndex (it's now triOffset)
-    // Use a fixed roughness for now — TODO: pass roughness per material
-    payload.attenuation = vec3(0.75, 0.0, 0.0);  // matte default
+    // Per-material roughness + metallic from PBR material data
+    float roughness = matParams.x;
+    float metallic  = matParams.y;
+    // Pack: negative roughness signals metallic surface to raygen shader
+    payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, 0.0);
 }

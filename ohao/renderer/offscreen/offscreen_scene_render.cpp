@@ -516,8 +516,9 @@ void OffscreenRenderer::buildAccelerationStructures() {
             if (!mc || !mc->getModel()) continue;
             auto model = mc->getModel();
 
-            // Append per-triangle material IDs (offset by current color count)
-            uint32_t colorOffset = static_cast<uint32_t>(allMatColors.size());
+            // Append per-triangle material IDs (offset by current material count)
+            // allMatColors has 2 vec4s per material, so divide by 2 for material count
+            uint32_t colorOffset = static_cast<uint32_t>(allMatColors.size() / 2);
             if (!model->materialPerTriangle.empty()) {
                 for (uint32_t mid : model->materialPerTriangle) {
                     allMatIDs.push_back(mid + colorOffset);
@@ -530,21 +531,29 @@ void OffscreenRenderer::buildAccelerationStructures() {
                 }
             }
 
-            // Append material colors
+            // Append material colors — 2 vec4s per material:
+            //   [matID*2+0] = (baseColor.rgb, diffuseTexLayer)  ← texLayer set later
+            //   [matID*2+1] = (roughness, metallic, normalTexLayer, emissiveTexLayer)
             if (!model->materialColors.empty()) {
-                for (const auto& mc2 : model->materialColors) {
-                    allMatColors.push_back(mc2);
+                for (size_t mi = 0; mi < model->materialColors.size(); mi++) {
+                    const auto& mc2 = model->materialColors[mi];
+                    float metallic = (mi < model->materialMetallic.size()) ? model->materialMetallic[mi] : 0.0f;
+                    allMatColors.push_back(mc2);  // vec4(r, g, b, roughness) — .a overwritten with texLayer later
+                    allMatColors.push_back(glm::vec4(mc2.w, metallic, -1.0f, -1.0f));  // roughness, metallic, normal, emissive
                 }
             } else {
-                // Default material
+                // Default material — 2 vec4s
                 auto matComp = actor->getComponent<MaterialComponent>();
                 glm::vec3 col(0.8f);
                 float rough = 0.5f;
+                float metal = 0.0f;
                 if (matComp) {
                     col = matComp->getMaterial().baseColor;
                     rough = matComp->getMaterial().roughness;
+                    metal = matComp->getMaterial().metallic;
                 }
                 allMatColors.push_back(glm::vec4(col, rough));
+                allMatColors.push_back(glm::vec4(rough, metal, -1.0f, -1.0f));
             }
         }
 
@@ -587,7 +596,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
         vkUnmapMemory(m_device, m_rtMatColorMemory);
 
         std::cout << "[RT] Material buffers created: " << allMatIDs.size() << " triangles, "
-                  << allMatColors.size() << " materials" << std::endl;
+                  << (allMatColors.size() / 2) << " materials (2 vec4s each)" << std::endl;
     }
 
     // Create texture array from all actors' model textures
@@ -838,14 +847,14 @@ void OffscreenRenderer::buildAccelerationStructures() {
                 // Re-read the matColor buffer, update alpha with texture layer, write back
                 if (m_rtMatColorBuffer && m_rtMatColorMemory && !globalMatTexLayer.empty()) {
                     size_t matCount = globalMatTexLayer.size();
-                    VkDeviceSize matColorSize = matCount * sizeof(glm::vec4);
+                    // Buffer has 2 vec4s per material
+                    VkDeviceSize matColorSize = matCount * 2 * sizeof(glm::vec4);
                     void* matMapped;
                     vkMapMemory(m_device, m_rtMatColorMemory, 0, matColorSize, 0, &matMapped);
                     glm::vec4* matColors = static_cast<glm::vec4*>(matMapped);
                     for (size_t i = 0; i < matCount; i++) {
-                        // Pack: matColors[i] = vec4(baseColor.rgb, float(textureLayerIndex))
-                        // Use -1.0 for materials without textures
-                        matColors[i].a = static_cast<float>(globalMatTexLayer[i]);
+                        // Write diffuse texture layer into vec4[i*2+0].a
+                        matColors[i * 2 + 0].a = static_cast<float>(globalMatTexLayer[i]);
                     }
                     vkUnmapMemory(m_device, m_rtMatColorMemory);
                 }

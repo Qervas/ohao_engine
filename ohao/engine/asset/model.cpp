@@ -237,6 +237,7 @@ bool Model::loadFromOBJ(const std::string& filename) {
                 uint32_t idx = static_cast<uint32_t>(materialColors.size());
                 matNameToIdx[name] = idx;
                 materialColors.push_back(glm::vec4(mat.diffuse, 0.7f));
+                materialMetallic.push_back(0.0f);  // OBJ defaults to dielectric
 
                 // Auto-discover diffuse texture: look for {name}_diff_*.{jpg,jpeg,png}
                 int texLayerIdx = -1;
@@ -278,6 +279,7 @@ bool Model::loadFromOBJ(const std::string& filename) {
             }
             if (materialColors.empty()) {
                 materialColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+                materialMetallic.push_back(0.0f);
                 materialTextureIndex.push_back(-1);
             }
         }
