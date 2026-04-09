@@ -1,6 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
-#include "renderer/culling.hpp"
+#include "render/culling.hpp"
 
 namespace ohao {
 

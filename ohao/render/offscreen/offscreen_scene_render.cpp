@@ -1,12 +1,12 @@
 #include "offscreen_renderer_impl.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
-#include "renderer/components/mesh_component.hpp"
-#include "renderer/components/material_component.hpp"
+#include "render/components/mesh_component.hpp"
+#include "render/components/material_component.hpp"
 #include "scene/asset/model.hpp"
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
-#include "renderer/passes/deferred_renderer.hpp"
+#include "render/passes/deferred_renderer.hpp"
 
 namespace ohao {
 

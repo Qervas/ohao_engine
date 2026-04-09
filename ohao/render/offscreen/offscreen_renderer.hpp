@@ -8,10 +8,10 @@
 #include <unordered_map>
 #include <glm/glm.hpp>
 #include "core/common_types.hpp"
-#include "renderer/frame/frame_resources.hpp"
-#include "renderer/material/bindless_texture_manager.hpp"
-#include "renderer/rt/rt_acceleration_structure.hpp"
-#include "renderer/rt/path_tracer.hpp"
+#include "render/frame/frame_resources.hpp"
+#include "render/material/bindless_texture_manager.hpp"
+#include "render/rt/rt_acceleration_structure.hpp"
+#include "render/rt/path_tracer.hpp"
 
 namespace ohao {
 

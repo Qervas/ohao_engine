@@ -1,6 +1,6 @@
 #include "scene.hpp"
-#include "renderer/components/mesh_component.hpp"
-#include "renderer/components/material_component.hpp"
+#include "render/components/mesh_component.hpp"
+#include "render/components/material_component.hpp"
 #include "physics/components/physics_component.hpp"
 #include "physics/world/physics_world.hpp"
 #include "scene/component/component_factory.hpp"

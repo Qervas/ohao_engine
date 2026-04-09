@@ -1,8 +1,8 @@
 #pragma once
 
 #include "render_pass_base.hpp"
-#include "renderer/culling.hpp"
-#include "renderer/material/bindless_texture_manager.hpp"
+#include "render/culling.hpp"
+#include "render/material/bindless_texture_manager.hpp"
 #include "core/common_types.hpp"
 #include <array>
 #include <unordered_map>

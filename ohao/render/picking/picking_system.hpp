@@ -1,6 +1,6 @@
 #pragma once
 #include "ray.hpp"
-#include "renderer/camera/camera.hpp"
+#include "render/camera/camera.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/asset/model.hpp"

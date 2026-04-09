@@ -10,7 +10,7 @@
 #include "stb_image.h"
 #include <vulkan/vulkan_core.h>
 #include "scene/asset/model.hpp"
-#include "renderer/material/material.hpp"
+#include "render/material/material.hpp"
 
 namespace ohao {
 

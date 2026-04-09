@@ -1,10 +1,10 @@
 #pragma once
 
 #include "scene/actor/actor.hpp"
-#include "renderer/components/mesh_component.hpp"
+#include "render/components/mesh_component.hpp"
 #include "physics/components/physics_component.hpp"
-#include "renderer/components/material_component.hpp"
-#include "renderer/components/light_component.hpp"
+#include "render/components/material_component.hpp"
+#include "render/components/light_component.hpp"
 #include "scene/component/transform_component.hpp"
 #include "physics/dynamics/rigid_body.hpp"
 #include <memory>

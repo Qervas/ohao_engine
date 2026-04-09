@@ -1,6 +1,6 @@
 #include "physics_component.hpp"
 #include "scene/component/transform_component.hpp"
-#include "renderer/components/mesh_component.hpp"
+#include "render/components/mesh_component.hpp"
 #include "scene/actor/actor.hpp"
 #include "physics/world/physics_world.hpp"
 #include "physics/dynamics/rigid_body.hpp"

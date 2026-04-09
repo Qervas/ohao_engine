@@ -11,14 +11,14 @@
 #endif
 #include "stb_image_write.h"
 
-#include "renderer/offscreen/offscreen_renderer.hpp"
+#include "render/offscreen/offscreen_renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
-#include "renderer/components/mesh_component.hpp"
-#include "renderer/components/material_component.hpp"
-#include "renderer/components/light_component.hpp"
-#include "renderer/passes/deferred_renderer.hpp"
-#include "renderer/camera/camera.hpp"
+#include "render/components/mesh_component.hpp"
+#include "render/components/material_component.hpp"
+#include "render/components/light_component.hpp"
+#include "render/passes/deferred_renderer.hpp"
+#include "render/camera/camera.hpp"
 
 #include <iostream>
 #include <string>

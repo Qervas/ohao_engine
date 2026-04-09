@@ -7,10 +7,10 @@
 #include "post_processing_pipeline.hpp"
 #include "gizmo_pass.hpp"
 #include "sky_pass.hpp"
-#include "renderer/particles/particle_system.hpp"
-#include "renderer/rt/rt_shadow_technique.hpp"
-#include "renderer/rt/rt_gi_technique.hpp"
-#include "renderer/graph/render_graph.hpp"
+#include "render/particles/particle_system.hpp"
+#include "render/rt/rt_shadow_technique.hpp"
+#include "render/rt/rt_gi_technique.hpp"
+#include "render/graph/render_graph.hpp"
 #include "core/common_types.hpp"
 #include <nlohmann/json.hpp>
 #include <memory>

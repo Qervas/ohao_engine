@@ -2,8 +2,8 @@
 #include "../../scene/scene.hpp"
 #include "../../scene/actor/actor.hpp"
 #include "../../scene/component/transform_component.hpp"
-#include "../../renderer/components/mesh_component.hpp"
-#include "../../renderer/components/material_component.hpp"
+#include "../../render/components/mesh_component.hpp"
+#include "../../render/components/material_component.hpp"
 #include "../../scene/asset/model.hpp"
 #include <stdexcept>
 #include <array>

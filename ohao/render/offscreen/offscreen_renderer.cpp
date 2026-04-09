@@ -1,9 +1,9 @@
 #include "offscreen_renderer_impl.hpp"
-#include "renderer/camera/camera.hpp"
+#include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
-#include "renderer/components/mesh_component.hpp"
+#include "render/components/mesh_component.hpp"
 #include "scene/asset/model.hpp"
-#include "renderer/passes/deferred_renderer.hpp"
+#include "render/passes/deferred_renderer.hpp"
 #include "scene/scene.hpp"
 
 namespace ohao {

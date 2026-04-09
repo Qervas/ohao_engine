@@ -11,8 +11,8 @@
 // Include compile-time tests (static_asserts run at compile time)
 #include "compile_time_tests.hpp"
 
-#include "renderer/lighting/unified_light.hpp"
-#include "renderer/shader/shader_bindings.hpp"
+#include "render/lighting/unified_light.hpp"
+#include "render/shader/shader_bindings.hpp"
 #include <iostream>
 #include <vector>
 #include <bitset>

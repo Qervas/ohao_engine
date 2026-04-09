@@ -12,9 +12,9 @@
  * Include this header in at least one translation unit to run all tests.
  */
 
-#include "renderer/shader/shader_bindings.hpp"
-#include "renderer/lighting/unified_light.hpp"
-#include "renderer/rhi/vk/ohao_vk_descriptor_builder.hpp"
+#include "render/shader/shader_bindings.hpp"
+#include "render/lighting/unified_light.hpp"
+#include "render/rhi/vk/ohao_vk_descriptor_builder.hpp"
 
 namespace ohao::tests {
 
