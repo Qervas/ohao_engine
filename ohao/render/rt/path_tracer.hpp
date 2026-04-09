@@ -63,6 +63,13 @@ public:
     void setTextureArray(VkImageView view, VkSampler sampler, uint32_t count) {
         m_textureArrayView = view; m_textureSampler = sampler; m_textureArrayCount = count;
     }
+    // Bindless textures — pass individual image views + samplers
+    void setBindlessTextures(const std::vector<VkImageView>& views,
+                             const std::vector<VkSampler>& samplers) {
+        m_bindlessImageViews = views;
+        m_bindlessSamplers = samplers;
+        m_bindlessTextureCount = static_cast<uint32_t>(views.size());
+    }
 
     // Reset accumulation — call when camera moves so the buffer restarts
     void resetAccumulation();
@@ -90,11 +97,20 @@ private:
 
     // Config
     uint32_t m_maxBounces = 8;
+    static constexpr uint32_t m_maxBindlessTextures = 1024;
     VkBuffer m_normalBuffer = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
     VkBuffer m_uvBuffer = VK_NULL_HANDLE;
     VkBuffer m_matIDBuffer = VK_NULL_HANDLE;
     VkBuffer m_matColorBuffer = VK_NULL_HANDLE;
+
+    // Bindless textures — individual sampler2D entries
+    std::vector<VkImageView> m_bindlessImageViews;
+    std::vector<VkSampler> m_bindlessSamplers;
+    VkSampler m_defaultSampler = VK_NULL_HANDLE;
+    uint32_t m_bindlessTextureCount = 0;
+
+    // Legacy (kept for compatibility during migration)
     VkImageView m_textureArrayView = VK_NULL_HANDLE;
     VkSampler m_textureSampler = VK_NULL_HANDLE;
     uint32_t m_textureArrayCount = 0;

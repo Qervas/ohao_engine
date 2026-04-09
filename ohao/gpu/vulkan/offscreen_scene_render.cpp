@@ -534,17 +534,23 @@ void OffscreenRenderer::buildAccelerationStructures() {
             }
 
             // Append material colors — 2 vec4s per material:
-            //   [matID*2+0] = (baseColor.rgb, diffuseTexLayer)  ← texLayer set later
-            //   [matID*2+1] = (roughness, metallic, normalTexLayer, emissiveTexLayer)
+            //   [matID*2+0] = (baseColor.rgb, diffuseTexIdx as uint bits)
+            //   [matID*2+1] = (roughness, metallic, normalTexIdx, emissiveTexIdx)
+            // Texture indices encoded as uint bits via memcpy. 0xFFFFFFFF = no texture.
+            auto packNoTex = []() -> float {
+                uint32_t noTex = 0xFFFFFFFFu;
+                float f; memcpy(&f, &noTex, sizeof(float)); return f;
+            };
+            float noTexF = packNoTex();
+
             if (!model->materialColors.empty()) {
                 for (size_t mi = 0; mi < model->materialColors.size(); mi++) {
                     const auto& mc2 = model->materialColors[mi];
                     float metallic = (mi < model->materialMetallic.size()) ? model->materialMetallic[mi] : 0.0f;
-                    allMatColors.push_back(mc2);  // vec4(r, g, b, roughness) — .a overwritten with texLayer later
-                    allMatColors.push_back(glm::vec4(mc2.w, metallic, -1.0f, -1.0f));  // roughness, metallic, normal, emissive
+                    allMatColors.push_back(glm::vec4(mc2.x, mc2.y, mc2.z, noTexF));  // diffuseTexIdx = none (set later)
+                    allMatColors.push_back(glm::vec4(mc2.w, metallic, noTexF, noTexF));  // roughness, metallic, normalTex, emissiveTex
                 }
             } else {
-                // Default material — 2 vec4s
                 auto matComp = actor->getComponent<MaterialComponent>();
                 glm::vec3 col(0.8f);
                 float rough = 0.5f;
@@ -554,8 +560,8 @@ void OffscreenRenderer::buildAccelerationStructures() {
                     rough = matComp->getMaterial().roughness;
                     metal = matComp->getMaterial().metallic;
                 }
-                allMatColors.push_back(glm::vec4(col, rough));
-                allMatColors.push_back(glm::vec4(rough, metal, -1.0f, -1.0f));
+                allMatColors.push_back(glm::vec4(col, noTexF));  // no diffuse texture
+                allMatColors.push_back(glm::vec4(rough, metal, noTexF, noTexF));
             }
         }
 
@@ -880,24 +886,52 @@ void OffscreenRenderer::buildAccelerationStructures() {
                 vkFreeMemory(m_device, stagingMem, nullptr);
                 vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
 
-                // Now update the matColors buffer to pack texture layer index into alpha channel
-                // Re-read the matColor buffer, update alpha with texture layer, write back
+                // Create per-layer VkImageViews for bindless access
+                std::vector<VkImageView> bindlessViews(numTextures);
+                std::vector<VkSampler> bindlessSamplers(numTextures);
+                for (uint32_t layer = 0; layer < numTextures; layer++) {
+                    VkImageViewCreateInfo viewInfo{};
+                    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                    viewInfo.image = m_rtTextureArray;
+                    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;  // single layer as 2D
+                    viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+                    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    viewInfo.subresourceRange.baseMipLevel = 0;
+                    viewInfo.subresourceRange.levelCount = 1;
+                    viewInfo.subresourceRange.baseArrayLayer = layer;
+                    viewInfo.subresourceRange.layerCount = 1;
+                    vkCreateImageView(m_device, &viewInfo, nullptr, &bindlessViews[layer]);
+                    bindlessSamplers[layer] = m_rtTextureSampler;
+                }
+                m_pathTracer->setBindlessTextures(bindlessViews, bindlessSamplers);
+
+                // Update material buffer: encode texture indices as uint bits
+                // Shader uses floatBitsToUint() to decode, 0xFFFFFFFF = no texture
                 if (m_rtMatColorBuffer && m_rtMatColorMemory && !globalMatTexLayer.empty()) {
                     size_t matCount = globalMatTexLayer.size();
-                    // Buffer has 2 vec4s per material
                     VkDeviceSize matColorSize = matCount * 2 * sizeof(glm::vec4);
                     void* matMapped;
                     vkMapMemory(m_device, m_rtMatColorMemory, 0, matColorSize, 0, &matMapped);
                     glm::vec4* matColors = static_cast<glm::vec4*>(matMapped);
                     for (size_t i = 0; i < matCount; i++) {
-                        // Write diffuse texture layer into vec4[i*2+0].a
-                        matColors[i * 2 + 0].a = static_cast<float>(globalMatTexLayer[i]);
+                        // Pack diffuse texture index as uint bits in vec4[i*2+0].a
+                        int texIdx = globalMatTexLayer[i];
+                        uint32_t uIdx = (texIdx >= 0) ? static_cast<uint32_t>(texIdx) : 0xFFFFFFFFu;
+                        float packed;
+                        memcpy(&packed, &uIdx, sizeof(float));
+                        matColors[i * 2 + 0].a = packed;
+                        // Normal/emissive texture indices: 0xFFFFFFFF (none for now)
+                        uint32_t noTex = 0xFFFFFFFFu;
+                        float noTexF;
+                        memcpy(&noTexF, &noTex, sizeof(float));
+                        matColors[i * 2 + 1].z = noTexF;  // normalTexIdx
+                        matColors[i * 2 + 1].w = noTexF;  // emissiveTexIdx
                     }
                     vkUnmapMemory(m_device, m_rtMatColorMemory);
                 }
 
-                std::cout << "[RT] Texture array created: " << numTextures
-                          << " textures at " << targetW << "x" << targetH << std::endl;
+                std::cout << "[RT] Bindless textures: " << numTextures
+                          << " at " << targetW << "x" << targetH << std::endl;
             }
         } else {
             std::cout << "[RT] No textures found in scene models" << std::endl;

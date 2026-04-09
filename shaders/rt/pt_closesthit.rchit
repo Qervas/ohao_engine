@@ -2,12 +2,12 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier : require
 
-// Path Tracer Closest Hit Shader
-// Per-vertex normal + UV interpolation, per-triangle material, texture sampling
+// Path Tracer Closest Hit Shader — Bindless PBR
+// Matches the GBuffer's bindless pattern: sampler2D textures[] + material indices
 
 struct RayPayload {
-    vec3 color;
-    vec3 attenuation;
+    vec3 color;         // emissive output
+    vec3 attenuation;   // x=roughness (negative=metallic), y=unused, z=unused
     vec3 hitPos;
     vec3 hitNormal;
     vec3 hitAlbedo;
@@ -18,13 +18,20 @@ struct RayPayload {
 layout(location = 0) rayPayloadInEXT RayPayload payload;
 hitAttributeEXT vec2 baryCoord;
 
+// Geometry buffers
 layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; } materialBuf;
 layout(set = 0, binding = 4) readonly buffer NormalBuffer { vec4 normals[]; } normalBuf;
 layout(set = 0, binding = 5) readonly buffer IndexBuffer { uint indices[]; } indexBuf;
 layout(set = 0, binding = 8) readonly buffer UVBuffer { vec2 uvs[]; } uvBuf;
 layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matIDBuf;
+
+// Material buffer: 2 vec4s per material
+//   [matID*2+0] = (baseColor.rgb, diffuseTexIdx as float bits)
+//   [matID*2+1] = (roughness, metallic, normalTexIdx as float bits, emissiveTexIdx as float bits)
 layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
-layout(set = 0, binding = 11) uniform sampler2DArray textureArray;
+
+// Bindless texture array — same pattern as GBuffer
+layout(set = 0, binding = 11) uniform sampler2D textures[];
 
 void main() {
     payload.hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;
@@ -36,12 +43,18 @@ void main() {
     float v = baryCoord.y;
     float w = 1.0 - u - v;
 
-    // gl_InstanceCustomIndexEXT = global triangle offset for this instance
+    // Global triangle/vertex lookup
     uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;
     uint baseIdx = globalTriID * 3;
     uint i0 = indexBuf.indices[baseIdx + 0];
     uint i1 = indexBuf.indices[baseIdx + 1];
     uint i2 = indexBuf.indices[baseIdx + 2];
+
+    // Interpolate UVs
+    vec2 uv0 = uvBuf.uvs[i0];
+    vec2 uv1 = uvBuf.uvs[i1];
+    vec2 uv2 = uvBuf.uvs[i2];
+    vec2 texUV = w * uv0 + u * uv1 + v * uv2;
 
     // Interpolate vertex normals
     vec3 n0 = normalBuf.normals[i0].xyz;
@@ -62,36 +75,60 @@ void main() {
         worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
     }
 
-    // Only flip normals for thin geometry
     bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
-    payload.hitNormal = worldNormal;
+    // === Material lookup — 2 vec4s per material ===
+    uint matID = matIDBuf.matIDs[globalTriID];
+    vec4 matColor  = matColorBuf.matColors[matID * 2u + 0u];
+    vec4 matParams = matColorBuf.matColors[matID * 2u + 1u];
 
-    // Per-triangle material lookup — 2 vec4s per material
-    uint matID = matIDBuf.matIDs[gl_InstanceCustomIndexEXT + gl_PrimitiveID];
-    vec4 matColor  = matColorBuf.matColors[matID * 2u + 0u];  // (baseColor.rgb, diffuseTexLayer)
-    vec4 matParams = matColorBuf.matColors[matID * 2u + 1u];  // (roughness, metallic, normalTexLayer, emissiveTexLayer)
+    // Decode texture indices (stored as uint bits in float)
+    uint diffuseTexIdx  = floatBitsToUint(matColor.a);
+    uint normalTexIdx   = floatBitsToUint(matParams.z);
+    uint emissiveTexIdx = floatBitsToUint(matParams.w);
 
-    float texLayer = matColor.a;
+    // === Albedo: sample diffuse texture or use base color ===
     vec3 albedo;
-
-    if (texLayer >= 0.0) {
-        vec2 uv0 = uvBuf.uvs[i0];
-        vec2 uv1 = uvBuf.uvs[i1];
-        vec2 uv2 = uvBuf.uvs[i2];
-        vec2 texUV = w * uv0 + u * uv1 + v * uv2;
-        albedo = texture(textureArray, vec3(texUV, texLayer)).rgb;
+    if (diffuseTexIdx != 0xFFFFFFFFu) {
+        albedo = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).rgb;
     } else {
         albedo = matColor.rgb;
     }
 
+    // === Normal mapping: sample normal map, perturb via derivative TBN ===
+    if (normalTexIdx != 0xFFFFFFFFu) {
+        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], texUV).rgb;
+        tangentNormal = tangentNormal * 2.0 - 1.0;
+
+        // Compute TBN from triangle edges + UVs (no tangent attribute needed)
+        vec3 p0 = gl_ObjectToWorldEXT * vec4(normalBuf.normals[i0].xyz, 0.0); // reuse as positions...
+        // Use world-space edge derivatives for TBN
+        vec3 edge1 = (gl_ObjectToWorldEXT * vec4(0)).xyz; // placeholder — proper TBN needs vertex positions
+        // For now: use the interpolated normal directly with a simplified perturbation
+        // Full TBN requires vertex positions in a separate buffer (Module A Task 2)
+        // Simplified: treat normal map blue channel as strength
+        float strength = 0.5;
+        vec3 perturbedN = normalize(worldNormal + tangentNormal * strength);
+        if (dot(perturbedN, perturbedN) > 0.001)
+            worldNormal = perturbedN;
+    }
+
+    payload.hitNormal = worldNormal;
     payload.hitAlbedo = albedo;
 
-    // Per-material roughness + metallic from PBR material data
+    // === PBR params ===
     float roughness = matParams.x;
     float metallic  = matParams.y;
-    // Pack: negative roughness signals metallic surface to raygen shader
+
+    // === Emissive ===
+    vec3 emissive = vec3(0.0);
+    if (emissiveTexIdx != 0xFFFFFFFFu) {
+        emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], texUV).rgb;
+    }
+    payload.color = emissive;
+
+    // Pack roughness + metallic for raygen
     payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, 0.0);
 }

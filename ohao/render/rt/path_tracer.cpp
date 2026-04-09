@@ -425,30 +425,44 @@ bool PathTracer::createDescriptorResources() {
     bindings[10].descriptorCount = 1;
     bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-    // 11: Texture array (combined image sampler, 2D array)
+    // 11: Bindless textures (sampler2D textures[]) — variable count
     bindings[11].binding = 11;
     bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[11].descriptorCount = 1;
+    bindings[11].descriptorCount = m_maxBindlessTextures;  // max textures
     bindings[11].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+    // Enable bindless: variable count + update after bind
+    VkDescriptorBindingFlags bindingFlags[12] = {};
+    bindingFlags[11] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
+                     | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+                     | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
+    flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    flagsInfo.bindingCount = 12;
+    flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.pNext = &flagsInfo;
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     layoutInfo.bindingCount = 12;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
         return false;
 
-    // Pool
+    // Pool — allocate enough for bindless textures
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},  // material + normals + indices + UV + matID + matColor
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},  // texture array
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     poolInfo.maxSets = 1;
     poolInfo.poolSizeCount = 4;
     poolInfo.pPoolSizes = poolSizes;
@@ -456,9 +470,16 @@ bool PathTracer::createDescriptorResources() {
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS)
         return false;
 
-    // Allocate set
+    // Allocate set with variable descriptor count for bindless textures
+    uint32_t variableCount = m_maxBindlessTextures;
+    VkDescriptorSetVariableDescriptorCountAllocateInfo variableInfo{};
+    variableInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
+    variableInfo.descriptorSetCount = 1;
+    variableInfo.pDescriptorCounts = &variableCount;
+
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    setInfo.pNext = &variableInfo;
     setInfo.descriptorPool = m_descriptorPool;
     setInfo.descriptorSetCount = 1;
     setInfo.pSetLayouts = &m_descriptorSetLayout;
@@ -838,20 +859,32 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[10].pBufferInfo = &matColorBufInfo;
 
-    // Binding 11: Texture array (combined image sampler)
-    VkDescriptorImageInfo texArrayInfo{};
-    texArrayInfo.imageView = m_textureArrayView;
-    texArrayInfo.sampler = m_textureSampler;
-    texArrayInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
+    // Binding 11: Bindless textures (sampler2D textures[])
     uint32_t writeCount = 11;
-    if (m_textureArrayView != VK_NULL_HANDLE && m_textureSampler != VK_NULL_HANDLE) {
+    std::vector<VkDescriptorImageInfo> texInfos;
+    if (!m_bindlessImageViews.empty()) {
+        texInfos.resize(m_bindlessTextureCount);
+        for (uint32_t i = 0; i < m_bindlessTextureCount; i++) {
+            texInfos[i].imageView = m_bindlessImageViews[i];
+            texInfos[i].sampler = (i < m_bindlessSamplers.size()) ? m_bindlessSamplers[i] : m_defaultSampler;
+            texInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet = m_descriptorSet;
+        writes[11].dstBinding = 11;
+        writes[11].descriptorCount = m_bindlessTextureCount;
+        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[11].pImageInfo = texInfos.data();
+        writeCount = 12;
+    } else if (m_textureArrayView != VK_NULL_HANDLE && m_textureSampler != VK_NULL_HANDLE) {
+        // Legacy fallback: single texture array
+        texInfos.push_back({m_textureSampler, m_textureArrayView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
         writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[11].dstSet = m_descriptorSet;
         writes[11].dstBinding = 11;
         writes[11].descriptorCount = 1;
         writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[11].pImageInfo = &texArrayInfo;
+        writes[11].pImageInfo = texInfos.data();
         writeCount = 12;
     }
 
