@@ -118,8 +118,8 @@ int main(int argc, char* argv[]) {
     renderer.updateSceneBuffers();
 
     auto& camera = renderer.getCamera();
-    camera.setPosition({0, 0, 13});
-    camera.setFov(38.0f);
+    camera.setPosition({0, 0.5f, 8});  // tighter framing for detail
+    camera.setFov(45.0f);
     camera.setRotation(0.0f, -90.0f);
     renderer.setRenderMode(RenderMode::PathTraced);
 
