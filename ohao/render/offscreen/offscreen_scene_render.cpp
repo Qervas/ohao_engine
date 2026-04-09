@@ -1,5 +1,6 @@
 #include "offscreen_renderer_impl.hpp"
 #include <array>
+#include <deque>
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "render/components/mesh_component.hpp"
@@ -624,20 +625,8 @@ void OffscreenRenderer::buildAccelerationStructures() {
 
         // Generate 1x1 solid color textures for materials without real textures
         // This ensures every material gets a valid texture layer — no special-casing in shader
-        // Reserve enough to prevent reallocation (pointers stored in CollectedTexture)
-        std::vector<std::array<uint8_t, 4>> solidColorPixels;
-        {
-            // Count materials without textures to reserve
-            size_t matCount = 0;
-            for (const auto& [id, actor] : m_scene->getAllActors()) {
-                auto mc2 = actor->getComponent<MeshComponent>();
-                if (!mc2 || !mc2->getModel()) continue;
-                auto model = mc2->getModel();
-                size_t nm = model->materialColors.empty() ? 1 : model->materialColors.size();
-                matCount += nm;
-            }
-            solidColorPixels.reserve(matCount);
-        }
+        // Use deque — never invalidates pointers on push_back (unlike vector)
+        std::deque<std::array<uint8_t, 4>> solidColorPixels;
 
         for (const auto& [actorId, actor] : m_scene->getAllActors()) {
             auto mc = actor->getComponent<MeshComponent>();

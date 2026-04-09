@@ -148,40 +148,6 @@ std::unique_ptr<Scene> buildTestScene() {
         }
     }
 
-    // === Procedural wall painting on the back wall ===
-    // Checkerboard pattern made of small colored quads
-    float bz = -D + 0.02f;
-    float tileSize = 0.8f;
-    int gridW = 6, gridH = 4;
-    float startX = -(gridW * tileSize) / 2.0f;
-    float startY = -0.5f;  // center vertically
-    for (int gy = 0; gy < gridH; gy++) {
-        for (int gx = 0; gx < gridW; gx++) {
-            float x0 = startX + gx * tileSize;
-            float y0 = startY + gy * tileSize;
-            float x1 = x0 + tileSize * 0.9f;  // small gap between tiles
-            float y1 = y0 + tileSize * 0.9f;
-
-            // Procedural color: warm/cool checkerboard
-            bool checker = ((gx + gy) % 2) == 0;
-            glm::vec3 tileColor;
-            if (checker) {
-                // Warm tones
-                float t = float(gx + gy * gridW) / float(gridW * gridH);
-                tileColor = glm::vec3(0.85f - t*0.3f, 0.45f + t*0.2f, 0.25f);
-            } else {
-                float t = float(gx + gy * gridW) / float(gridW * gridH);
-                tileColor = glm::vec3(0.3f, 0.5f + t*0.3f, 0.7f - t*0.2f);
-            }
-
-            std::string tileName = "Tile_" + std::to_string(gx) + "_" + std::to_string(gy);
-            addWallQuad(scene.get(), tileName,
-                glm::vec3(x0, y0, bz), glm::vec3(x1, y0, bz),
-                glm::vec3(x1, y1, bz), glm::vec3(x0, y1, bz),
-                glm::vec3(0,0,1), tileColor);
-        }
-    }
-
     // Ceiling light — point light just below the ceiling, centered
     auto ceilingLight = scene->createActorWithComponents("CeilingLight", PrimitiveType::PointLight);
     if (ceilingLight) {
@@ -304,12 +270,15 @@ std::unique_ptr<Scene> buildCornellWithModel(const std::string& modelPath) {
     addWallQuad(scene.get(), "Floor",     LBB, LBF, RBF, RBB, glm::vec3(0,1,0), white);
     addWallQuad(scene.get(), "Ceiling",   LTB, RTB, RTF, LTF, glm::vec3(0,-1,0), white);
 
-    // Load the model (auto-detect format)
+    // Load the model (auto-detect format, skip if empty path)
     auto model = std::make_shared<Model>();
     bool loaded = false;
-    std::string ext = modelPath.substr(modelPath.find_last_of('.') + 1);
-    if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
-    else loaded = model->loadFromGLTF(modelPath);
+    if (!modelPath.empty()) {
+        auto dot = modelPath.find_last_of('.');
+        std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
+        if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
+        else loaded = model->loadFromGLTF(modelPath);
+    }
     if (loaded) {
         // Compute model bounds
         glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
@@ -395,7 +364,7 @@ int main(int argc, char* argv[]) {
 
     // 2. Build scene — load GLTF model or fall back to Cornell box
     std::cout << "\n--- Building test scene ---" << std::endl;
-    auto scene = buildTestScene();  // Cornell box with spheres
+    auto scene = buildTestScene();
     renderer.setScene(scene.get());
 
     // Update scene buffers (uploads geometry to GPU, builds RT accel structures)
@@ -406,11 +375,10 @@ int main(int argc, char* argv[]) {
     // 3. Camera at the open front of the box, looking in
     // Box is 10 units deep (z=-5 to z=+5). Camera far enough to frame the whole room.
     auto& camera = renderer.getCamera();
-    // Pull back from the Cornell box to frame the whole room + woman
-    // Box is ±5 on all axes. Woman center ~y=-1. Need to see head (y≈3) and feet (y≈-5).
-    camera.setPosition(glm::vec3(0.0f, -0.3f, 13.5f));
-    camera.setFov(30.0f);
-    camera.setRotation(0.0f, -90.0f);  // look toward -Z (into the box)
+    // Classic Cornell box view — slightly above center, looking in
+    camera.setPosition(glm::vec3(0.0f, 0.0f, 13.0f));
+    camera.setFov(38.0f);
+    camera.setRotation(0.0f, -90.0f);
 
     // 4. Path traced mode — full RT, no rasterization
     renderer.setRenderMode(RenderMode::PathTraced);
@@ -419,7 +387,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\n--- Path Tracing ---" << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
 
-    int numFrames = 256;  // Quick test
+    int numFrames = 1024;
     for (int i = 0; i < numFrames + 3; i++) {
         renderer.render();
     }
