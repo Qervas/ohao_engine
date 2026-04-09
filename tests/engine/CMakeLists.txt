@@ -11,8 +11,6 @@ target_include_directories(engine_tests PRIVATE
 )
 
 target_link_libraries(engine_tests PRIVATE
-    ohao_events
-    ohao_commands
     ohao_scene
     ohao_physics
     ohao_component
