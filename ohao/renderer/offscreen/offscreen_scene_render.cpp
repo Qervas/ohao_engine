@@ -1,9 +1,9 @@
 #include "offscreen_renderer_impl.hpp"
-#include "engine/scene/scene.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/scene.hpp"
+#include "scene/actor/actor.hpp"
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/material_component.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/asset/model.hpp"
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 #include "renderer/passes/deferred_renderer.hpp"

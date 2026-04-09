@@ -1,6 +1,6 @@
 #include "physics_world.hpp"
 #include "physics/components/physics_component.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/actor/actor.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/forces/forces.hpp"
 #include "physics/debug/force_debugger.hpp"

@@ -9,6 +9,6 @@ target_include_directories(ohao_animation PUBLIC
 )
 
 target_link_libraries(ohao_animation PUBLIC
-    ohao_component
+    ohao_scene
     glm
 )

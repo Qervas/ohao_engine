@@ -13,7 +13,6 @@ target_include_directories(shadow_system_tests PRIVATE
 target_link_libraries(shadow_system_tests PRIVATE
     ohao_renderer
     ohao_scene
-    ohao_asset
     ${Vulkan_LIBRARIES}
     glm
 )

@@ -1,5 +1,5 @@
 #include "component.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/actor/actor.hpp"
 
 namespace ohao {
 

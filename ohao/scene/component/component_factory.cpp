@@ -1,7 +1,7 @@
 #include "component_factory.hpp"
 #include "component_pack.hpp"
-#include "engine/scene/scene.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/scene.hpp"
+#include "scene/asset/model.hpp"
 #include "core/console_widget.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>

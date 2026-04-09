@@ -1,10 +1,10 @@
 #include "gbuffer_pass.hpp"
-#include "../../engine/scene/scene.hpp"
-#include "../../engine/actor/actor.hpp"
-#include "../../engine/component/transform_component.hpp"
+#include "../../scene/scene.hpp"
+#include "../../scene/actor/actor.hpp"
+#include "../../scene/component/transform_component.hpp"
 #include "../../renderer/components/mesh_component.hpp"
 #include "../../renderer/components/material_component.hpp"
-#include "../../engine/asset/model.hpp"
+#include "../../scene/asset/model.hpp"
 #include <stdexcept>
 #include <array>
 #include <iostream>

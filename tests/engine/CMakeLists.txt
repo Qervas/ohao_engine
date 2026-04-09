@@ -13,12 +13,9 @@ target_include_directories(engine_tests PRIVATE
 target_link_libraries(engine_tests PRIVATE
     ohao_scene
     ohao_physics
-    ohao_component
-    ohao_actor
     ohao_core
     -Wl,--start-group
     ohao_renderer
-    ohao_asset
     ${Vulkan_LIBRARIES}
     glm
 )

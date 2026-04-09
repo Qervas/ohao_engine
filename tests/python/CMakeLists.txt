@@ -20,8 +20,6 @@ pybind11_add_module(ohao_physics_py physics_bindings.cpp)
 
 target_link_libraries(ohao_physics_py PRIVATE
     ohao_physics
-    ohao_engine
-    ohao_component
     ohao_renderer
     ohao_core
 )
@@ -42,8 +40,6 @@ pybind11_add_module(ohao_renderer_py renderer_bindings.cpp)
 
 target_link_libraries(ohao_renderer_py PRIVATE
     ohao_renderer
-    ohao_engine
-    ohao_component
     ${Vulkan_LIBRARIES}
 )
 

@@ -16,8 +16,8 @@
 
 #include "core/event_bus.hpp"
 #include "core/command.hpp"
-#include "engine/scene/scene.hpp"
-#include "engine/scene/scene_serializer.hpp"
+#include "scene/scene.hpp"
+#include "scene/scene_serializer.hpp"
 
 using namespace ohao;
 

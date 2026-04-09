@@ -1,7 +1,7 @@
 #pragma once
-#include "engine/asset/model.hpp"
+#include "scene/asset/model.hpp"
 #include "renderer/material/material.hpp"
-#include "engine/scene/transform.hpp"
+#include "scene/transform.hpp"
 #include <string>
 #include <memory>
 #include <atomic>

@@ -3,7 +3,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "tiny_gltf.h"
 
-#include "engine/asset/model.hpp"
+#include "scene/asset/model.hpp"
 #include "animation/skeleton.hpp"
 #include "animation/animation_clip.hpp"
 #include <iostream>

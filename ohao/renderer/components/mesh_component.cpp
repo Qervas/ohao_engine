@@ -1,8 +1,8 @@
 #include "mesh_component.hpp"
-#include "engine/actor/actor.hpp"
-#include "engine/component/transform_component.hpp"
+#include "scene/actor/actor.hpp"
+#include "scene/component/transform_component.hpp"
 #include "physics/components/physics_component.hpp"
-#include "engine/scene/scene.hpp"
+#include "scene/scene.hpp"
 
 namespace ohao {
 

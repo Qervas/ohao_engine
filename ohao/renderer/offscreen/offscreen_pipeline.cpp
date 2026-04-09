@@ -1,5 +1,5 @@
 #include "offscreen_renderer_impl.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/asset/model.hpp"
 
 namespace ohao {
 

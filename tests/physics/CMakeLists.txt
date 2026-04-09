@@ -13,13 +13,10 @@ target_include_directories(physics_backend_tests PRIVATE
 # ohao_physics transitively depends on component, actor, UI, scene libs
 target_link_libraries(physics_backend_tests PRIVATE
     ohao_physics
-    ohao_component
-    ohao_actor
     ohao_scene
     ohao_core
     -Wl,--start-group
     ohao_renderer
-    ohao_asset
     ${Vulkan_LIBRARIES}
     glm
 )

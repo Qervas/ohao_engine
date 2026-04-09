@@ -1,5 +1,5 @@
 #include "light_component.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/actor/actor.hpp"
 // Registration moved to central file
 
 namespace ohao {

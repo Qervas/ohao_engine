@@ -1,6 +1,6 @@
 #include "picking_system.hpp"
 #include "renderer/components/mesh_component.hpp"
-#include "engine/component/transform_component.hpp"
+#include "scene/component/transform_component.hpp"
 #include <glm/gtc/matrix_inverse.hpp>
 #include <algorithm>
 #include <limits>

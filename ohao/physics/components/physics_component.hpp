@@ -1,6 +1,6 @@
 #pragma once
 
-#include "engine/component/component.hpp"
+#include "scene/component/component.hpp"
 #include "physics/dynamics/rigid_body.hpp"
 #include "physics/collision/shapes/shape_factory.hpp"
 #include <memory>

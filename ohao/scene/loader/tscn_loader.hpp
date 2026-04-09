@@ -6,8 +6,8 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include "engine/actor/actor.hpp"
-#include "engine/component/component_factory.hpp"
+#include "scene/actor/actor.hpp"
+#include "scene/component/component_factory.hpp"
 
 namespace ohao {
 

@@ -14,12 +14,8 @@ target_link_libraries(renderer_test PRIVATE
     # Wrap in group to resolve circular deps between static libs (GCC)
     -Wl,--start-group
     ohao_renderer
-    ohao_engine
     ohao_scene
-    ohao_actor
-    ohao_asset
     ohao_animation
-    ohao_component
     ohao_physics
     ohao_audio
     ohao_core

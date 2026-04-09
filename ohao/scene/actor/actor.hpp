@@ -9,9 +9,9 @@
 #include <typeindex>
 #include <atomic>
 #include <algorithm> // Required for std::find
-#include "engine/scene/scene_object.hpp" // Include SceneObject
-#include "engine/component/component.hpp" // Include Component
-#include "engine/component/transform_component.hpp" // Include TransformComponent directly
+#include "scene/scene_object.hpp" // Include SceneObject
+#include "scene/component/component.hpp" // Include Component
+#include "scene/component/transform_component.hpp" // Include TransformComponent directly
 
 // Forward declarations
 namespace ohao {

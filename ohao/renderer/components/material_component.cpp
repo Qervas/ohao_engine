@@ -1,5 +1,5 @@
 #include "material_component.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/actor/actor.hpp"
 #include "core/console_widget.hpp"
 // Registration moved to central file
 

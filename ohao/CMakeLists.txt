@@ -1,5 +1,5 @@
 add_subdirectory(core)
-add_subdirectory(engine)
+add_subdirectory(scene)
 add_subdirectory(animation)
 add_subdirectory(audio)
 add_subdirectory(physics)

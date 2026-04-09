@@ -1,6 +1,6 @@
 #include "scene_serializer.hpp"
 #include "scene.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/actor/actor.hpp"
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/light_component.hpp"
 #include "renderer/components/material_component.hpp"

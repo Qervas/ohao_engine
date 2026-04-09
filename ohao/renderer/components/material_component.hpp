@@ -1,6 +1,6 @@
 #pragma once
 
-#include "engine/component/component.hpp"
+#include "scene/component/component.hpp"
 #include "renderer/material/material.hpp"
 #include <memory>
 

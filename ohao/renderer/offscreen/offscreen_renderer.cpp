@@ -2,9 +2,9 @@
 #include "renderer/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "renderer/components/mesh_component.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/asset/model.hpp"
 #include "renderer/passes/deferred_renderer.hpp"
-#include "engine/scene/scene.hpp"
+#include "scene/scene.hpp"
 
 namespace ohao {
 

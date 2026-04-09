@@ -1,6 +1,6 @@
 #include "rigid_body.hpp"
 #include "physics/components/physics_component.hpp"
-#include "engine/component/transform_component.hpp"
+#include "scene/component/transform_component.hpp"
 #include "physics/collision/shapes/box_shape.hpp"
 #include "physics/collision/shapes/sphere_shape.hpp"
 #include "physics/collision/shapes/cylinder_shape.hpp"

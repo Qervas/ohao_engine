@@ -1,7 +1,7 @@
 #pragma once
 
-#include "engine/component/component.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/component/component.hpp"
+#include "scene/asset/model.hpp"
 #include <memory>
 
 namespace ohao {

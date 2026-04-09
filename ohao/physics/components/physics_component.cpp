@@ -1,7 +1,7 @@
 #include "physics_component.hpp"
-#include "engine/component/transform_component.hpp"
+#include "scene/component/transform_component.hpp"
 #include "renderer/components/mesh_component.hpp"
-#include "engine/actor/actor.hpp"
+#include "scene/actor/actor.hpp"
 #include "physics/world/physics_world.hpp"
 #include "physics/dynamics/rigid_body.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
@@ -13,7 +13,7 @@
 #include "physics/collision/shapes/plane_shape.hpp"
 #include "physics/material/physics_material.hpp"
 #include "physics/backend/physics_backend.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/asset/model.hpp"
 #include "core/console_widget.hpp"
 
 namespace ohao {

@@ -1,11 +1,11 @@
 #include "actor.hpp"
-#include "engine/component/component.hpp"
-#include "engine/component/transform_component.hpp"
+#include "scene/component/component.hpp"
+#include "scene/component/transform_component.hpp"
 #include "renderer/components/mesh_component.hpp"
 #include "renderer/components/material_component.hpp"
 #include "physics/components/physics_component.hpp"
-#include "engine/scene/scene.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/scene.hpp"
+#include "scene/asset/model.hpp"
 #include "renderer/material/material.hpp"
 #include <algorithm>
 #include <iostream>

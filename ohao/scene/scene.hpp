@@ -5,8 +5,8 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
-#include "engine/actor/actor.hpp"
-#include "engine/component/component_factory.hpp"
+#include "scene/actor/actor.hpp"
+#include "scene/component/component_factory.hpp"
 #include <glm/glm.hpp>
 
 namespace ohao {

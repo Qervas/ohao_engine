@@ -1,4 +1,4 @@
-#include "engine/scene/scene_object.hpp"
+#include "scene/scene_object.hpp"
 #include <atomic>
 
 namespace ohao {

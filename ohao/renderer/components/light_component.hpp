@@ -1,5 +1,5 @@
 #pragma once
-#include "engine/component/component.hpp"
+#include "scene/component/component.hpp"
 #include <glm/glm.hpp>
 
 namespace ohao {

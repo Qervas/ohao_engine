@@ -1,9 +1,9 @@
 #pragma once
 #include "ray.hpp"
 #include "renderer/camera/camera.hpp"
-#include "engine/scene/scene.hpp"
-#include "engine/actor/actor.hpp"
-#include "engine/asset/model.hpp"
+#include "scene/scene.hpp"
+#include "scene/actor/actor.hpp"
+#include "scene/asset/model.hpp"
 #include <vector>
 #include <unordered_set>
 

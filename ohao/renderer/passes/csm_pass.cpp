@@ -1,10 +1,10 @@
 #include "csm_pass.hpp"
 #include <cstring>
-#include "../../engine/scene/scene.hpp"
-#include "../../engine/actor/actor.hpp"
-#include "../../engine/component/transform_component.hpp"
+#include "../../scene/scene.hpp"
+#include "../../scene/actor/actor.hpp"
+#include "../../scene/component/transform_component.hpp"
 #include "../../renderer/components/mesh_component.hpp"
-#include "../../engine/asset/model.hpp"
+#include "../../scene/asset/model.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <algorithm>
