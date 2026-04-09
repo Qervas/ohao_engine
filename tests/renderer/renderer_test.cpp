@@ -11,13 +11,13 @@
 #endif
 #include "stb_image_write.h"
 
-#include "render/offscreen/offscreen_renderer.hpp"
+#include "gpu/vulkan/offscreen_renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "render/components/mesh_component.hpp"
 #include "render/components/material_component.hpp"
 #include "render/components/light_component.hpp"
-#include "render/passes/deferred_renderer.hpp"
+#include "render/deferred/deferred_renderer.hpp"
 #include "render/camera/camera.hpp"
 
 #include <iostream>

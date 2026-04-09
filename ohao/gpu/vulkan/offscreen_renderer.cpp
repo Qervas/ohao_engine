@@ -3,7 +3,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "render/components/mesh_component.hpp"
 #include "scene/asset/model.hpp"
-#include "render/passes/deferred_renderer.hpp"
+#include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
 
 namespace ohao {

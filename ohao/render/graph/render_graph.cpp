@@ -1,5 +1,5 @@
 #include "render_graph.hpp"
-#include "render/memory/gpu_allocator.hpp"
+#include "gpu/vulkan/gpu_allocator.hpp"
 #include <iostream>
 #include <algorithm>
 #include <queue>

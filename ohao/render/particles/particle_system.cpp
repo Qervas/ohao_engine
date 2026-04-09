@@ -1,5 +1,5 @@
 #include "particle_system.hpp"
-#include "../passes/render_pass_base.hpp"
+#include "../deferred/render_pass_base.hpp"
 #include <array>
 #include <iostream>
 #include <fstream>

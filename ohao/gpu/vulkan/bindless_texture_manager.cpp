@@ -1,5 +1,5 @@
 #include "bindless_texture_manager.hpp"
-#include "../memory/gpu_allocator.hpp"
+#include "../../gpu/vulkan/gpu_allocator.hpp"
 #include <iostream>
 #include <cstring>
 

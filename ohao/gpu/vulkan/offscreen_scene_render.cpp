@@ -8,7 +8,7 @@
 #include "scene/asset/model.hpp"
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
-#include "render/passes/deferred_renderer.hpp"
+#include "render/deferred/deferred_renderer.hpp"
 
 namespace ohao {
 

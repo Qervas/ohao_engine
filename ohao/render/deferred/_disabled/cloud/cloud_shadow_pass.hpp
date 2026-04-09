@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/passes/render_pass_base.hpp"
+#include "render/deferred/render_pass_base.hpp"
 #include <cstdint>
 
 namespace ohao {

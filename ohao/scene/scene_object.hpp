@@ -1,6 +1,6 @@
 #pragma once
 #include "scene/asset/model.hpp"
-#include "render/material/material.hpp"
+#include "gpu/vulkan/material.hpp"
 #include "scene/transform.hpp"
 #include <string>
 #include <memory>

@@ -1,31 +1,14 @@
-# OHAO Renderer Library
-# ======================
-#
-# Architecture:
-# - offscreen/     - OffscreenRenderer for Godot GDExtension (headless Vulkan)
-# - camera/        - Camera utilities (used by both offscreen and legacy)
-# - components/    - MeshComponent, MaterialComponent (data-only, no Vulkan handles)
-# - material/      - Material struct (PBR properties, no Vulkan dependencies)
-#
-# Legacy (not built):
-# - legacy/        - VulkanContext + GLFW standalone rendering (deprecated)
-#                   Contains: VulkanContext, Surface, SwapChain, RHI wrappers,
-#                   shader management, texture loading, scene rendering subsystems
-#
-# The legacy directory contains the full standalone GLFW-based renderer that
-# was used before Godot integration. It's preserved for reference but not compiled.
+# OHAO Render Library — rendering algorithms, passes, RT
+# GPU abstraction lives in gpu/vulkan/
 
-# Find all source files
 file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
 )
 
-# Exclude legacy and disabled directories
-list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/legacy/")
+# Exclude disabled passes
 list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/_disabled/")
 
-# Create the renderer library
 add_library(ohao_renderer ${RENDERER_SOURCES})
 
 target_include_directories(ohao_renderer PUBLIC
@@ -37,12 +20,10 @@ target_include_directories(ohao_renderer PUBLIC
 )
 
 target_link_libraries(ohao_renderer PUBLIC
-    ${Vulkan_LIBRARIES}
+    ohao_gpu_vulkan
     ohao_scene
     ohao_animation
     glm
     VulkanMemoryAllocator
+    ${Vulkan_LIBRARIES}
 )
-
-
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${RENDERER_SOURCES})

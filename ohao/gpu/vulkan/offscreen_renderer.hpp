@@ -9,7 +9,7 @@
 #include <glm/glm.hpp>
 #include "core/common_types.hpp"
 #include "render/frame/frame_resources.hpp"
-#include "render/material/bindless_texture_manager.hpp"
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
 

@@ -6,7 +6,7 @@
 #include "physics/components/physics_component.hpp"
 #include "scene/scene.hpp"
 #include "scene/asset/model.hpp"
-#include "render/material/material.hpp"
+#include "gpu/vulkan/material.hpp"
 #include <algorithm>
 #include <iostream>
 

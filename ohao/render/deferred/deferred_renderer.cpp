@@ -1,5 +1,5 @@
 #include "deferred_renderer.hpp"
-#include "render/material/bindless_texture_manager.hpp"
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <array>
