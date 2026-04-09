@@ -39,7 +39,6 @@ target_link_libraries(ohao_renderer PUBLIC
     ${Vulkan_LIBRARIES}
     ohao_engine
     ohao_animation
-    ohao_utils
     glm
     VulkanMemoryAllocator
 )

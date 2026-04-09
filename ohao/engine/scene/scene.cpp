@@ -9,7 +9,7 @@
 #include "engine/asset/model.hpp"
 #include "physics/collision/shapes/collision_shape.hpp"
 #include "physics/world/physics_settings.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <iostream>

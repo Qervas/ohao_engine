@@ -17,7 +17,7 @@ target_link_libraries(engine_tests PRIVATE
     ohao_physics
     ohao_component
     ohao_actor
-    ohao_ui
+    ohao_core
     -Wl,--start-group
     ohao_renderer
     ohao_asset

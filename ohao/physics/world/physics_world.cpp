@@ -8,7 +8,7 @@
 #include "physics/collision/shapes/sphere_shape.hpp"
 #include "physics/collision/shapes/capsule_shape.hpp"
 #include "physics/collision/shapes/cylinder_shape.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 #include <chrono>
 #include <algorithm>
 #include <iostream>

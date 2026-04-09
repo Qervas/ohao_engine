@@ -1,5 +1,5 @@
 #include "profile_manager.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 #include <algorithm>
 
 namespace ohao {

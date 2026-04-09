@@ -1,5 +1,5 @@
 #include "default_scene_factory.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 
 namespace ohao {
 

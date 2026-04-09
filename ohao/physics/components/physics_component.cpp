@@ -14,7 +14,7 @@
 #include "physics/material/physics_material.hpp"
 #include "physics/backend/physics_backend.hpp"
 #include "engine/asset/model.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 
 namespace ohao {
 

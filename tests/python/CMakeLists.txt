@@ -23,8 +23,7 @@ target_link_libraries(ohao_physics_py PRIVATE
     ohao_engine
     ohao_component
     ohao_renderer
-    ohao_utils
-    ohao_ui
+    ohao_core
 )
 
 set_target_properties(ohao_physics_py PROPERTIES OUTPUT_NAME "ohao_physics")
@@ -45,7 +44,6 @@ target_link_libraries(ohao_renderer_py PRIVATE
     ohao_renderer
     ohao_engine
     ohao_component
-    ohao_utils
     ${Vulkan_LIBRARIES}
 )
 

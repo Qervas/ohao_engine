@@ -2,7 +2,7 @@
 #include "component_pack.hpp"
 #include "engine/scene/scene.hpp"
 #include "engine/asset/model.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 

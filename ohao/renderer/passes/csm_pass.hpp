@@ -1,7 +1,7 @@
 #pragma once
 
 #include "render_pass_base.hpp"
-#include "utils/common_types.hpp"
+#include "core/common_types.hpp"
 #include <array>
 #include <unordered_map>
 

@@ -1,6 +1,6 @@
 #include "force_debugger.hpp"
 #include "physics/forces/force_registry.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 #include <fstream>
 #include <sstream>
 #include <iomanip>

@@ -22,8 +22,7 @@ target_link_libraries(renderer_test PRIVATE
     ohao_component
     ohao_physics
     ohao_audio
-    ohao_ui
-    ohao_utils
+    ohao_core
     -Wl,--end-group
     ${Vulkan_LIBRARIES}
     glm

@@ -11,7 +11,7 @@
 #include "renderer/rt/rt_shadow_technique.hpp"
 #include "renderer/rt/rt_gi_technique.hpp"
 #include "renderer/graph/render_graph.hpp"
-#include "utils/common_types.hpp"
+#include "core/common_types.hpp"
 #include <nlohmann/json.hpp>
 #include <memory>
 #include <unordered_map>

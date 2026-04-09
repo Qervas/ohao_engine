@@ -7,7 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <glm/glm.hpp>
-#include "utils/common_types.hpp"
+#include "core/common_types.hpp"
 #include "renderer/frame/frame_resources.hpp"
 #include "renderer/material/bindless_texture_manager.hpp"
 #include "renderer/rt/rt_acceleration_structure.hpp"

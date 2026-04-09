@@ -1,6 +1,6 @@
 #include "material_component.hpp"
 #include "engine/actor/actor.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 // Registration moved to central file
 
 namespace ohao {

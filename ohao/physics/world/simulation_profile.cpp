@@ -1,5 +1,5 @@
 #include "simulation_profile.hpp"
-#include "ui/components/console_widget.hpp"
+#include "core/console_widget.hpp"
 #include <sstream>
 #include <iomanip>
 
