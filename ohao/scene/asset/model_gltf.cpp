@@ -469,9 +469,42 @@ bool Model::loadFromGLTF(const std::string& filename) {
             materialNormalTexIndex.push_back(normalTexFound);
         }
 
+        // Extract metallicRoughnessTexture: GLTF packs G=roughness, B=metallic
+        {
+            int rmTexFound = -1;
+            if (pbr.metallicRoughnessTexture.index >= 0 &&
+                pbr.metallicRoughnessTexture.index < static_cast<int>(gltfModel.textures.size())) {
+                int texIdx = gltfModel.textures[pbr.metallicRoughnessTexture.index].source;
+                if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                    const auto& img = gltfModel.images[texIdx];
+                    if (!img.image.empty() && img.width > 0 && img.height > 0) {
+                        // Repack: GLTF (R=AO, G=roughness, B=metallic) → our (R=roughness, G=metallic, B=0, A=255)
+                        TextureData td;
+                        td.width = img.width;
+                        td.height = img.height;
+                        td.materialIndex = static_cast<int>(mi);
+                        td.pixels.resize(img.width * img.height * 4);
+                        int comp = img.component;
+                        for (int p = 0; p < img.width * img.height; p++) {
+                            uint8_t roughness = (comp >= 2) ? img.image[p * comp + 1] : 128;  // G channel
+                            uint8_t metallic  = (comp >= 3) ? img.image[p * comp + 2] : 0;    // B channel
+                            td.pixels[p*4+0] = roughness;
+                            td.pixels[p*4+1] = metallic;
+                            td.pixels[p*4+2] = 0;
+                            td.pixels[p*4+3] = 255;
+                        }
+                        rmTexFound = static_cast<int>(roughMetalTextures.size());
+                        roughMetalTextures.push_back(std::move(td));
+                    }
+                }
+            }
+            materialRoughMetalTexIndex.push_back(rmTexFound);
+        }
+
         std::cout << "  Material " << mi << " (" << gltfMat.name << "): "
                   << "diffuse=" << (materialTextureIndex.back() >= 0 ? "tex" : "color")
                   << " normal=" << (materialNormalTexIndex.back() >= 0 ? "tex" : "none")
+                  << " roughMetal=" << (materialRoughMetalTexIndex.back() >= 0 ? "tex" : "scalar")
                   << std::endl;
     }
     if (materialColors.empty()) {
@@ -479,6 +512,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
         materialMetallic.push_back(0.0f);
         materialTextureIndex.push_back(-1);
         materialNormalTexIndex.push_back(-1);
+        materialRoughMetalTexIndex.push_back(-1);
     }
 
     std::cout << "GLTF loaded: " << filename

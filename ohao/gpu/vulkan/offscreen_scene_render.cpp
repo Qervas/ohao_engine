@@ -520,7 +520,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
 
             // Append per-triangle material IDs (offset by current material count)
             // allMatColors has 2 vec4s per material, so divide by 2 for material count
-            uint32_t colorOffset = static_cast<uint32_t>(allMatColors.size() / 2);
+            uint32_t colorOffset = static_cast<uint32_t>(allMatColors.size() / 3);
             if (!model->materialPerTriangle.empty()) {
                 for (uint32_t mid : model->materialPerTriangle) {
                     allMatIDs.push_back(mid + colorOffset);
@@ -537,18 +537,24 @@ void OffscreenRenderer::buildAccelerationStructures() {
             //   [matID*2+0] = (baseColor.rgb, diffuseTexIdx as uint bits)
             //   [matID*2+1] = (roughness, metallic, normalTexIdx, emissiveTexIdx)
             // Texture indices encoded as uint bits via memcpy. 0xFFFFFFFF = no texture.
+            // Encode uint as float bits (0xFFFFFFFF = no texture)
             auto packNoTex = []() -> float {
                 uint32_t noTex = 0xFFFFFFFFu;
                 float f; memcpy(&f, &noTex, sizeof(float)); return f;
             };
             float noTexF = packNoTex();
 
+            // 3 vec4s per material:
+            //   [matID*3+0] = (baseColor.rgb, diffuseTexIdx)
+            //   [matID*3+1] = (roughness, metallic, normalTexIdx, emissiveTexIdx)
+            //   [matID*3+2] = (roughMetalTexIdx, unused, unused, unused)
             if (!model->materialColors.empty()) {
                 for (size_t mi = 0; mi < model->materialColors.size(); mi++) {
                     const auto& mc2 = model->materialColors[mi];
                     float metallic = (mi < model->materialMetallic.size()) ? model->materialMetallic[mi] : 0.0f;
-                    allMatColors.push_back(glm::vec4(mc2.x, mc2.y, mc2.z, noTexF));  // diffuseTexIdx = none (set later)
-                    allMatColors.push_back(glm::vec4(mc2.w, metallic, noTexF, noTexF));  // roughness, metallic, normalTex, emissiveTex
+                    allMatColors.push_back(glm::vec4(mc2.x, mc2.y, mc2.z, noTexF));
+                    allMatColors.push_back(glm::vec4(mc2.w, metallic, noTexF, noTexF));
+                    allMatColors.push_back(glm::vec4(noTexF, 0.0f, 0.0f, 0.0f));  // roughMetalTexIdx
                 }
             } else {
                 auto matComp = actor->getComponent<MaterialComponent>();
@@ -560,13 +566,21 @@ void OffscreenRenderer::buildAccelerationStructures() {
                     rough = matComp->getMaterial().roughness;
                     metal = matComp->getMaterial().metallic;
                 }
-                allMatColors.push_back(glm::vec4(col, noTexF));  // no diffuse texture
+                allMatColors.push_back(glm::vec4(col, noTexF));
                 allMatColors.push_back(glm::vec4(rough, metal, noTexF, noTexF));
+                allMatColors.push_back(glm::vec4(noTexF, 0.0f, 0.0f, 0.0f));
             }
         }
 
         if (allMatIDs.empty()) allMatIDs.push_back(0);
-        if (allMatColors.empty()) allMatColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, 0.5f));
+        if (allMatColors.empty()) {
+            float noTexF;
+            uint32_t noTex = 0xFFFFFFFFu;
+            memcpy(&noTexF, &noTex, sizeof(float));
+            allMatColors.push_back(glm::vec4(0.8f, 0.8f, 0.8f, noTexF));
+            allMatColors.push_back(glm::vec4(0.5f, 0.0f, noTexF, noTexF));
+            allMatColors.push_back(glm::vec4(noTexF, 0.0f, 0.0f, 0.0f));
+        }
 
         // Upload material ID buffer
         VkDeviceSize matIDSize = allMatIDs.size() * sizeof(uint32_t);
@@ -604,7 +618,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
         vkUnmapMemory(m_device, m_rtMatColorMemory);
 
         std::cout << "[RT] Material buffers created: " << allMatIDs.size() << " triangles, "
-                  << (allMatColors.size() / 2) << " materials (2 vec4s each)" << std::endl;
+                  << (allMatColors.size() / 3) << " materials (3 vec4s each)" << std::endl;
     }
 
     // Create texture array from all actors' model textures
@@ -626,8 +640,9 @@ void OffscreenRenderer::buildAccelerationStructures() {
         // Build mapping: global material index -> texture array layer
         // We'll update matColors[].a with the texture layer index
         // To do this we need to re-read the matColor buffer and write it back
-        std::vector<int> globalMatTexLayer;    // diffuse tex index per material
-        std::vector<int> globalNormalTexLayer;  // normal tex index per material
+        std::vector<int> globalMatTexLayer;        // diffuse tex index per material
+        std::vector<int> globalNormalTexLayer;    // normal tex index per material
+        std::vector<int> globalRoughMetalTexLayer; // roughness+metallic tex index
         uint32_t globalMatOffset = 0;
 
         // Generate 1x1 solid color textures for materials without real textures
@@ -705,6 +720,24 @@ void OffscreenRenderer::buildAccelerationStructures() {
                     }
                 }
                 globalNormalTexLayer.push_back(normalTexLayer);
+
+                // Collect roughness+metallic texture
+                int rmTexLayer = -1;
+                if (matIdx < model->materialRoughMetalTexIndex.size()) {
+                    int rmIdx = model->materialRoughMetalTexIndex[matIdx];
+                    if (rmIdx >= 0 && rmIdx < static_cast<int>(model->roughMetalTextures.size())) {
+                        const auto& rmtd = model->roughMetalTextures[rmIdx];
+                        if (!rmtd.pixels.empty() && rmtd.width > 0 && rmtd.height > 0) {
+                            rmTexLayer = static_cast<int>(allTextures.size());
+                            CollectedTexture ct;
+                            ct.pixels = rmtd.pixels.data();
+                            ct.width = rmtd.width;
+                            ct.height = rmtd.height;
+                            allTextures.push_back(ct);
+                        }
+                    }
+                }
+                globalRoughMetalTexLayer.push_back(rmTexLayer);
             }
         }
 
@@ -924,31 +957,24 @@ void OffscreenRenderer::buildAccelerationStructures() {
 
                 // Update material buffer: encode texture indices as uint bits
                 // Shader uses floatBitsToUint() to decode, 0xFFFFFFFF = no texture
+                // Encode texture indices as uint bits in material buffer (3 vec4s per material)
                 if (m_rtMatColorBuffer && m_rtMatColorMemory && !globalMatTexLayer.empty()) {
                     size_t matCount = globalMatTexLayer.size();
-                    VkDeviceSize matColorSize = matCount * 2 * sizeof(glm::vec4);
+                    VkDeviceSize matColorSize = matCount * 3 * sizeof(glm::vec4);
                     void* matMapped;
                     vkMapMemory(m_device, m_rtMatColorMemory, 0, matColorSize, 0, &matMapped);
                     glm::vec4* matColors = static_cast<glm::vec4*>(matMapped);
-                    for (size_t i = 0; i < matCount; i++) {
-                        // Pack diffuse texture index as uint bits in vec4[i*2+0].a
-                        int texIdx = globalMatTexLayer[i];
-                        uint32_t uIdx = (texIdx >= 0) ? static_cast<uint32_t>(texIdx) : 0xFFFFFFFFu;
-                        float packed;
-                        memcpy(&packed, &uIdx, sizeof(float));
-                        matColors[i * 2 + 0].a = packed;
-                        // Normal texture index
-                        int nTexIdx = (i < globalNormalTexLayer.size()) ? globalNormalTexLayer[i] : -1;
-                        uint32_t nIdx = (nTexIdx >= 0) ? static_cast<uint32_t>(nTexIdx) : 0xFFFFFFFFu;
-                        float nPacked;
-                        memcpy(&nPacked, &nIdx, sizeof(float));
-                        matColors[i * 2 + 1].z = nPacked;  // normalTexIdx
 
-                        // Emissive: not yet implemented
-                        uint32_t noTex = 0xFFFFFFFFu;
-                        float noTexF;
-                        memcpy(&noTexF, &noTex, sizeof(float));
-                        matColors[i * 2 + 1].w = noTexF;  // emissiveTexIdx
+                    auto packIdx = [](int idx) -> float {
+                        uint32_t u = (idx >= 0) ? static_cast<uint32_t>(idx) : 0xFFFFFFFFu;
+                        float f; memcpy(&f, &u, sizeof(float)); return f;
+                    };
+
+                    for (size_t i = 0; i < matCount; i++) {
+                        matColors[i * 3 + 0].a = packIdx(globalMatTexLayer[i]);           // diffuseTexIdx
+                        matColors[i * 3 + 1].z = packIdx(i < globalNormalTexLayer.size() ? globalNormalTexLayer[i] : -1);     // normalTexIdx
+                        matColors[i * 3 + 1].w = packIdx(-1);                              // emissiveTexIdx (future)
+                        matColors[i * 3 + 2].x = packIdx(i < globalRoughMetalTexLayer.size() ? globalRoughMetalTexLayer[i] : -1); // roughMetalTexIdx
                     }
                     vkUnmapMemory(m_device, m_rtMatColorMemory);
                 }

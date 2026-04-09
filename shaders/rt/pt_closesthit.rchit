@@ -79,15 +79,17 @@ void main() {
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
-    // === Material lookup — 2 vec4s per material ===
+    // === Material lookup — 3 vec4s per material ===
     uint matID = matIDBuf.matIDs[globalTriID];
-    vec4 matColor  = matColorBuf.matColors[matID * 2u + 0u];
-    vec4 matParams = matColorBuf.matColors[matID * 2u + 1u];
+    vec4 matColor   = matColorBuf.matColors[matID * 3u + 0u];  // (baseColor.rgb, diffuseTexIdx)
+    vec4 matParams  = matColorBuf.matColors[matID * 3u + 1u];  // (roughness, metallic, normalTexIdx, emissiveTexIdx)
+    vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, unused, unused, unused)
 
     // Decode texture indices (stored as uint bits in float)
-    uint diffuseTexIdx  = floatBitsToUint(matColor.a);
-    uint normalTexIdx   = floatBitsToUint(matParams.z);
-    uint emissiveTexIdx = floatBitsToUint(matParams.w);
+    uint diffuseTexIdx    = floatBitsToUint(matColor.a);
+    uint normalTexIdx     = floatBitsToUint(matParams.z);
+    uint emissiveTexIdx   = floatBitsToUint(matParams.w);
+    uint roughMetalTexIdx = floatBitsToUint(matParams2.x);
 
     // === Albedo: sample diffuse texture or use base color ===
     vec3 albedo;
@@ -120,9 +122,14 @@ void main() {
     payload.hitNormal = worldNormal;
     payload.hitAlbedo = albedo;
 
-    // === PBR params ===
+    // === PBR params: per-pixel from texture or scalar fallback ===
     float roughness = matParams.x;
     float metallic  = matParams.y;
+    if (roughMetalTexIdx != 0xFFFFFFFFu) {
+        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], texUV);
+        roughness = rm.r;  // R channel = roughness (repacked from GLTF G channel)
+        metallic  = rm.g;  // G channel = metallic (repacked from GLTF B channel)
+    }
 
     // === Emissive ===
     vec3 emissive = vec3(0.0);

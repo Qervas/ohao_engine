@@ -98,9 +98,10 @@ public:
     };
     std::vector<TextureData> albedoTextures;
     std::vector<TextureData> normalTextures;
-    // materialTextureIndex[materialIdx] = index into albedoTextures, or -1 if no texture
+    std::vector<TextureData> roughMetalTextures;  // R=roughness, G=metallic (from GLTF G/B channels)
     std::vector<int> materialTextureIndex;
     std::vector<int> materialNormalTexIndex;
+    std::vector<int> materialRoughMetalTexIndex;
 
     // Animation data (populated by GLTF loader for skinned meshes)
     std::shared_ptr<Skeleton> skeleton;
