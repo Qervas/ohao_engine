@@ -70,6 +70,7 @@ set(GLFW_LIBRARY "$ENV{USERPROFILE}/scoop/apps/glfw/current/lib-vc2022/glfw3.lib
 add_subdirectory(external)
 add_subdirectory(shaders)
 add_subdirectory(ohao)
+add_subdirectory(examples)
 
 # Python bindings for testing (optional)
 option(BUILD_PYTHON_BINDINGS "Build Python bindings for physics testing" OFF)
