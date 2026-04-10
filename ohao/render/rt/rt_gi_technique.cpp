@@ -41,13 +41,22 @@ VkDeviceAddress RTGITechnique::getBufferDeviceAddress(VkBuffer buffer) {
 }
 
 static std::vector<char> readFile(const std::string& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) return {};
-    size_t size = (size_t)file.tellg();
-    std::vector<char> buffer(size);
-    file.seekg(0);
-    file.read(buffer.data(), size);
-    return buffer;
+    std::vector<std::string> searchPaths = {
+        path,
+        "build/shaders/" + path.substr(path.find_last_of("/\\") + 1),
+        "build/Release/bin/shaders/" + path.substr(path.find_last_of("/\\") + 1),
+    };
+    for (const auto& p : searchPaths) {
+        std::ifstream file(p, std::ios::ate | std::ios::binary);
+        if (file.is_open()) {
+            size_t size = (size_t)file.tellg();
+            std::vector<char> buffer(size);
+            file.seekg(0);
+            file.read(buffer.data(), size);
+            return buffer;
+        }
+    }
+    return {};
 }
 
 bool RTGITechnique::init(VkDevice device, VkPhysicalDevice physicalDevice,
