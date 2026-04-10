@@ -329,9 +329,17 @@ void main() {
     if (lum > 10.0) radiance *= 10.0 / lum;
 
     // Progressive accumulation
-    vec4 prev = imageLoad(accumBuffer, pixel);
-    float count = prev.w + 1.0;
-    vec3 acc = (prev.rgb * prev.w + radiance) / count;
+    vec3 acc;
+    float count;
+    if (pc.params.z == 0u) {
+        // First frame after reset — discard old accumulation
+        acc = radiance;
+        count = 1.0;
+    } else {
+        vec4 prev = imageLoad(accumBuffer, pixel);
+        count = prev.w + 1.0;
+        acc = (prev.rgb * prev.w + radiance) / count;
+    }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
     // Tonemap + gamma
