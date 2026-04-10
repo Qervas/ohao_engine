@@ -5,9 +5,10 @@
 namespace ohao {
 
 enum class LightType {
-    Directional = 0,
-    Point = 1,
-    Spot = 2
+    Sphere = 0,       // point light with radius (soft shadows)
+    Directional = 1,  // sun/moon (parallel rays)
+    Spot = 2,         // cone light
+    AreaRect = 3,     // rectangular area light
 };
 
 class LightComponent : public Component {
@@ -40,26 +41,27 @@ public:
     void setOuterConeAngle(float angle) { outerConeAngle = angle; }
     float getOuterConeAngle() const { return outerConeAngle; }
 
-    // For directional lights
+    // Direction (directional + spot)
     void setDirection(const glm::vec3& direction) { lightDirection = glm::normalize(direction); }
     const glm::vec3& getDirection() const { return lightDirection; }
+
+    // Radius (sphere lights)
+    void setRadius(float r) { radius = r; }
+    float getRadius() const { return radius; }
 
     // Serialization
     void serialize(class Serializer& serializer) const override;
     void deserialize(class Deserializer& deserializer) override;
 
 private:
-    LightType lightType;
-    glm::vec3 lightColor;
-    float lightIntensity;
-    float lightRange;
-    
-    // Spot light properties
-    float innerConeAngle;
-    float outerConeAngle;
-    
-    // Directional light properties
-    glm::vec3 lightDirection;
+    LightType lightType = LightType::Sphere;
+    glm::vec3 lightColor{1.0f};
+    float lightIntensity = 10.0f;
+    float lightRange = 50.0f;
+    float radius = 0.5f;
+    float innerConeAngle = 15.0f;
+    float outerConeAngle = 30.0f;
+    glm::vec3 lightDirection{0.0f, -1.0f, 0.0f};
 };
 
 } // namespace ohao

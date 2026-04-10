@@ -11,6 +11,7 @@
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
+#include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
 
 #include <iostream>
@@ -97,6 +98,16 @@ int main(int argc, char* argv[]) {
     auto m2 = glassSphere->getComponent<MaterialComponent>();
     m2->getMaterial().baseColor = {0.9f, 0.95f, 1.0f};
     m2->getMaterial().roughness = 0.02f;
+
+    // === Scene lights ===
+    // Key light — warm white from above
+    auto keyLight = scene->createActor("KeyLight");
+    auto kl = keyLight->addComponent<LightComponent>();
+    kl->setLightType(LightType::Sphere);
+    kl->setColor({1.0f, 0.95f, 0.9f});
+    kl->setIntensity(30.0f);
+    kl->setRadius(1.0f);
+    keyLight->getTransform()->setPosition({0.0f, 4.0f, 0.0f});
 
     renderer.setScene(scene.get());
     renderer.updateSceneBuffers();

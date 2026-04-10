@@ -11,6 +11,7 @@
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
+#include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
 
 #include <iostream>
@@ -113,6 +114,24 @@ int main(int argc, char* argv[]) {
     } else {
         std::cerr << "Failed to load: " << modelPath << std::endl;
     }
+
+    // Key light
+    auto keyLight = scene->createActor("KeyLight");
+    auto kl = keyLight->addComponent<LightComponent>();
+    kl->setLightType(LightType::Sphere);
+    kl->setColor({1.0f, 0.95f, 0.9f});
+    kl->setIntensity(30.0f);
+    kl->setRadius(1.0f);
+    keyLight->getTransform()->setPosition({3.0f, 3.0f, 3.0f});
+
+    // Fill light
+    auto fillLight = scene->createActor("FillLight");
+    auto fl = fillLight->addComponent<LightComponent>();
+    fl->setLightType(LightType::Sphere);
+    fl->setColor({0.6f, 0.7f, 1.0f});
+    fl->setIntensity(10.0f);
+    fl->setRadius(0.5f);
+    fillLight->getTransform()->setPosition({-3.0f, 1.0f, 2.0f});
 
     renderer.setScene(scene.get());
     renderer.updateSceneBuffers();

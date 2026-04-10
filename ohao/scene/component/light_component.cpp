@@ -6,7 +6,7 @@ namespace ohao {
 
 LightComponent::LightComponent() 
     : Component()
-    , lightType(LightType::Point)
+    , lightType(LightType::Sphere)
     , lightColor(1.0f, 1.0f, 1.0f)
     , lightIntensity(1.0f)
     , lightRange(10.0f)

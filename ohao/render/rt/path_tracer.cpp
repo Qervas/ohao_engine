@@ -365,7 +365,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[12] = {};
+    VkDescriptorSetLayoutBinding bindings[13] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -425,28 +425,34 @@ bool PathTracer::createDescriptorResources() {
     bindings[10].descriptorCount = 1;
     bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-    // 11: Bindless textures (sampler2D textures[]) — variable count
+    // 11: Light buffer (SSBO)
     bindings[11].binding = 11;
-    bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[11].descriptorCount = m_maxBindlessTextures;  // max textures
-    bindings[11].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[11].descriptorCount = 1;
+    bindings[11].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // Enable bindless: variable count + update after bind
-    VkDescriptorBindingFlags bindingFlags[12] = {};
-    bindingFlags[11] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
+    // 12: Bindless textures (sampler2D textures[]) — MUST be last (variable count)
+    bindings[12].binding = 12;
+    bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[12].descriptorCount = m_maxBindlessTextures;
+    bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+
+    // Enable bindless: variable count on the LAST binding only
+    VkDescriptorBindingFlags bindingFlags[13] = {};
+    bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 12;
+    flagsInfo.bindingCount = 13;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 12;
+    layoutInfo.bindingCount = 13;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -456,7 +462,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +1 for light buffer
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
 
@@ -762,7 +768,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     normalAOVInfo.imageView = m_normalAOVView;
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[12] = {};
+    VkWriteDescriptorSet writes[13] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -859,8 +865,23 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[10].pBufferInfo = &matColorBufInfo;
 
-    // Binding 11: Bindless textures (sampler2D textures[])
+    // Binding 11: Light buffer (SSBO)
     uint32_t writeCount = 11;
+    VkDescriptorBufferInfo lightBufInfo{};
+    if (m_lightBuffer != VK_NULL_HANDLE) {
+        lightBufInfo.buffer = m_lightBuffer;
+        lightBufInfo.offset = 0;
+        lightBufInfo.range = VK_WHOLE_SIZE;
+        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet = m_descriptorSet;
+        writes[11].dstBinding = 11;
+        writes[11].descriptorCount = 1;
+        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[11].pBufferInfo = &lightBufInfo;
+        writeCount = 12;
+    }
+
+    // Binding 12: Bindless textures (MUST be last — variable count)
     std::vector<VkDescriptorImageInfo> texInfos;
     if (!m_bindlessImageViews.empty()) {
         texInfos.resize(m_bindlessTextureCount);
@@ -869,23 +890,13 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             texInfos[i].sampler = (i < m_bindlessSamplers.size()) ? m_bindlessSamplers[i] : m_defaultSampler;
             texInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         }
-        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[11].dstSet = m_descriptorSet;
-        writes[11].dstBinding = 11;
-        writes[11].descriptorCount = m_bindlessTextureCount;
-        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[11].pImageInfo = texInfos.data();
-        writeCount = 12;
-    } else if (m_textureArrayView != VK_NULL_HANDLE && m_textureSampler != VK_NULL_HANDLE) {
-        // Legacy fallback: single texture array
-        texInfos.push_back({m_textureSampler, m_textureArrayView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[11].dstSet = m_descriptorSet;
-        writes[11].dstBinding = 11;
-        writes[11].descriptorCount = 1;
-        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[11].pImageInfo = texInfos.data();
-        writeCount = 12;
+        writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[writeCount].dstSet = m_descriptorSet;
+        writes[writeCount].dstBinding = 12;
+        writes[writeCount].descriptorCount = m_bindlessTextureCount;
+        writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[writeCount].pImageInfo = texInfos.data();
+        writeCount++;
     }
 
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);

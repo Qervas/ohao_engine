@@ -468,7 +468,7 @@ void TscnLoader::setupLightComponent(Actor::Ptr actor, const TscnNode& node) {
         glm::vec3 forward = node.rotation * glm::vec3(0.0f, 0.0f, -1.0f);
         lightComp->setDirection(forward);
     } else if (node.type == "OmniLight3D") {
-        lightComp->setLightType(LightType::Point);
+        lightComp->setLightType(LightType::Sphere);
     } else if (node.type == "SpotLight3D") {
         lightComp->setLightType(LightType::Spot);
     }

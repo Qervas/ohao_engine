@@ -2,6 +2,8 @@
 #include <array>
 #include <deque>
 #include "scene/scene.hpp"
+#include "scene/component/light_component.hpp"
+#include "render/rt/gpu_light.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
@@ -1003,6 +1005,63 @@ void OffscreenRenderer::buildAccelerationStructures() {
             }
         } else {
             std::cout << "[RT] No textures found in scene models" << std::endl;
+        }
+    }
+
+    // Build light buffer from scene LightComponents
+    {
+        std::vector<GPULight> gpuLights;
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto lc = actor->getComponent<LightComponent>();
+            if (!lc) continue;
+
+            GPULight gl{};
+            auto pos = actor->getTransform()->getPosition();
+            gl.positionAndType = glm::vec4(pos, static_cast<float>(lc->getLightType()));
+            gl.colorAndIntensity = glm::vec4(lc->getColor(), lc->getIntensity());
+            gl.dirAndParam = glm::vec4(lc->getDirection(), lc->getRadius());
+            gl.extra = glm::vec4(0.0f, 0.0f, 0.0f, lc->getOuterConeAngle());
+            gl.extra2 = glm::vec4(0.0f);
+            gpuLights.push_back(gl);
+        }
+
+        // Destroy old buffer
+        if (m_rtLightBuffer) { vkDestroyBuffer(m_device, m_rtLightBuffer, nullptr); m_rtLightBuffer = VK_NULL_HANDLE; }
+        if (m_rtLightMemory) { vkFreeMemory(m_device, m_rtLightMemory, nullptr); m_rtLightMemory = VK_NULL_HANDLE; }
+
+        if (!gpuLights.empty()) {
+            // Buffer layout: uint32 lightCount + 12 bytes padding + GPULight[] lights
+            // GLSL std430 aligns vec4 struct members to 16 bytes
+            VkDeviceSize lightDataOffset = 16;  // align GPULight array to 16 bytes
+            VkDeviceSize bufSize = lightDataOffset + gpuLights.size() * sizeof(GPULight);
+            VkBufferCreateInfo bci{};
+            bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bci.size = bufSize;
+            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            vkCreateBuffer(m_device, &bci, nullptr, &m_rtLightBuffer);
+            VkMemoryRequirements mr;
+            vkGetBufferMemoryRequirements(m_device, m_rtLightBuffer, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(m_device, &ai, nullptr, &m_rtLightMemory);
+            vkBindBufferMemory(m_device, m_rtLightBuffer, m_rtLightMemory, 0);
+
+            void* mapped;
+            vkMapMemory(m_device, m_rtLightMemory, 0, bufSize, 0, &mapped);
+            memset(mapped, 0, bufSize);  // zero padding bytes
+            uint32_t count = static_cast<uint32_t>(gpuLights.size());
+            memcpy(mapped, &count, sizeof(uint32_t));
+            memcpy(static_cast<uint8_t*>(mapped) + lightDataOffset, gpuLights.data(), gpuLights.size() * sizeof(GPULight));
+            vkUnmapMemory(m_device, m_rtLightMemory);
+
+            if (m_pathTracer) {
+                m_pathTracer->setLightBuffer(m_rtLightBuffer, count);
+            }
+
+            std::cout << "[RT] Light buffer: " << count << " lights" << std::endl;
         }
     }
 

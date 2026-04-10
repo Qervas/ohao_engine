@@ -97,7 +97,7 @@ nlohmann::json SceneSerializer::serialize(const Scene* scene) {
             std::string lightType;
             switch (light->getLightType()) {
                 case LightType::Directional: lightType = "directional"; break;
-                case LightType::Point: lightType = "point"; break;
+                case LightType::Sphere: lightType = "point"; break;
                 case LightType::Spot: lightType = "spot"; break;
                 default: lightType = "point"; break;
             }

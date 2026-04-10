@@ -60,6 +60,9 @@ public:
     void setMaterialBuffers(VkBuffer matIDBuf, VkBuffer matColorBuf) {
         m_matIDBuffer = matIDBuf; m_matColorBuffer = matColorBuf;
     }
+    void setLightBuffer(VkBuffer lightBuf, uint32_t lightCount) {
+        m_lightBuffer = lightBuf; m_lightCount = lightCount;
+    }
     void setTextureArray(VkImageView view, VkSampler sampler, uint32_t count) {
         m_textureArrayView = view; m_textureSampler = sampler; m_textureArrayCount = count;
     }
@@ -103,6 +106,8 @@ private:
     VkBuffer m_uvBuffer = VK_NULL_HANDLE;
     VkBuffer m_matIDBuffer = VK_NULL_HANDLE;
     VkBuffer m_matColorBuffer = VK_NULL_HANDLE;
+    VkBuffer m_lightBuffer = VK_NULL_HANDLE;
+    uint32_t m_lightCount = 0;
 
     // Bindless textures — individual sampler2D entries
     std::vector<VkImageView> m_bindlessImageViews;

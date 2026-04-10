@@ -290,8 +290,10 @@ private:
     VkDeviceMemory m_rtUVMemory{VK_NULL_HANDLE};
     VkBuffer m_rtMatIDBuffer{VK_NULL_HANDLE};     // per-triangle material index
     VkDeviceMemory m_rtMatIDMemory{VK_NULL_HANDLE};
-    VkBuffer m_rtMatColorBuffer{VK_NULL_HANDLE};  // per-material base color
+    VkBuffer m_rtMatColorBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
+    VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
     VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};

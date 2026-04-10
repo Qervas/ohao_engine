@@ -48,7 +48,7 @@ struct ComponentSet {
     float metallic = 0.0f;
     
     // Light settings (if needed)
-    LightType lightType = LightType::Point;
+    LightType lightType = LightType::Sphere;
     glm::vec3 lightColor = glm::vec3(1.0f);
     float intensity = 1.0f;
 };

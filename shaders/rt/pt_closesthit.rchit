@@ -30,8 +30,8 @@ layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matI
 //   [matID*2+1] = (roughness, metallic, normalTexIdx as float bits, emissiveTexIdx as float bits)
 layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
 
-// Bindless texture array — same pattern as GBuffer
-layout(set = 0, binding = 11) uniform sampler2D textures[];
+// Bindless texture array — same pattern as GBuffer (binding 12 = last, variable count)
+layout(set = 0, binding = 12) uniform sampler2D textures[];
 
 void main() {
     payload.hitPos = gl_WorldRayOriginEXT + gl_WorldRayDirectionEXT * gl_HitTEXT;

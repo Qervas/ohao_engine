@@ -134,7 +134,7 @@ ComponentSet ComponentFactory::getComponentSet(PrimitiveType type) {
             config.needsMesh = false;     // Lights are invisible
             config.needsMaterial = false; // No material needed for lights
             config.needsPhysics = false;  // Lights don't need physics
-            config.lightType = LightType::Point;
+            config.lightType = LightType::Sphere;
             config.intensity = 1.0f;
             config.lightColor = glm::vec3(1.0f, 1.0f, 1.0f);
             break;
@@ -245,7 +245,7 @@ void ComponentFactory::setupLightComponent(LightComponent* light, const Componen
     
     // Setup type-specific properties
     switch (config.lightType) {
-        case LightType::Point:
+        case LightType::Sphere:
             light->setRange(10.0f);
             break;
             

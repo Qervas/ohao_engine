@@ -11,10 +11,23 @@ layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; 
 layout(set = 0, binding = 6, rgba32f) uniform writeonly image2D albedoAOV;
 layout(set = 0, binding = 7, rgba32f) uniform writeonly image2D normalAOV;
 
+// Light buffer — scene lights collected from LightComponents
+struct GPULight {
+    vec4 positionAndType;    // xyz=position, w=type (0=sphere,1=dir,2=spot,3=area)
+    vec4 colorAndIntensity;  // rgb=color, w=intensity
+    vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius)
+    vec4 extra;              // spot: w=outerAngle
+    vec4 extra2;             // area: xyz=edge2, w=area
+};
+layout(set = 0, binding = 11) readonly buffer LightBuffer {
+    uint lightCount;
+    GPULight lights[];
+} lightBuf;
+
 layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
-    vec4 lightPosAndIntensity;
+    vec4 lightPosAndIntensity;   // legacy, kept for push constant size compatibility
     vec4 lightColorAndRadius;
     uvec4 params;  // x=width, y=height, z=frameIndex, w=maxBounces
 } pc;
@@ -149,31 +162,52 @@ void main() {
         // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
-        // === NEE: sample light sources ===
-        // Uses push constant light: position, intensity, color, radius
-        {
-            vec3 lightCenter = pc.lightPosAndIntensity.xyz;
-            float lightIntensity = pc.lightPosAndIntensity.w;
-            vec3 lightColor = pc.lightColorAndRadius.xyz;
-            float lightRadius = pc.lightColorAndRadius.w;
+        // === NEE: multi-light sampling from light buffer ===
+        if (lightBuf.lightCount > 0u) {
+            // Pick one light randomly (uniform selection)
+            uint lightIdx = uint(rand01() * float(lightBuf.lightCount));
+            lightIdx = min(lightIdx, lightBuf.lightCount - 1u);
+            GPULight light = lightBuf.lights[lightIdx];
 
-            // Sample random point on sphere light surface
-            float u1 = rand01(), u2 = rand01();
-            float cosTheta = 1.0 - 2.0 * u1;
-            float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
-            float phi = 6.2831853 * u2;
-            vec3 sphereOffset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * lightRadius;
-            vec3 lightPoint = lightCenter + sphereOffset;
-            vec3 lightNormal = normalize(sphereOffset);  // outward normal
+            float lightType = light.positionAndType.w;
+            vec3 lightCenter = light.positionAndType.xyz;
+            vec3 lightColor = light.colorAndIntensity.rgb;
+            float lightIntensity = light.colorAndIntensity.w;
+            float lightRadius = light.dirAndParam.w;
+
+            // Sample point on light based on type
+            vec3 lightPoint, lightNormal;
+            float lightArea;
+
+            if (lightType < 0.5) {
+                // Sphere light: random point on surface
+                float u1 = rand01(), u2 = rand01();
+                float cosTheta = 1.0 - 2.0 * u1;
+                float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                float phi = 6.2831853 * u2;
+                vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * max(lightRadius, 0.01);
+                lightPoint = lightCenter + offset;
+                lightNormal = normalize(offset);
+                lightArea = 4.0 * 3.14159 * lightRadius * lightRadius;
+            } else if (lightType < 1.5) {
+                // Directional light: sample from far away along direction
+                vec3 lightDir = normalize(light.dirAndParam.xyz);
+                lightPoint = hitPos - lightDir * 10000.0;
+                lightNormal = lightDir;
+                lightArea = 1.0;  // directional uses intensity directly
+            } else {
+                // Spot/area: treat as sphere for now (Task 2/3 will add proper sampling)
+                lightPoint = lightCenter;
+                lightNormal = vec3(0, -1, 0);
+                lightArea = 1.0;
+            }
 
             vec3 toLight = lightPoint - hitPos;
             float lightDist = length(toLight);
             vec3 L = toLight / lightDist;
             float NdotL = max(dot(N, L), 0.0);
-            float lightCos = max(dot(-L, lightNormal), 0.0);  // cosine at light surface
+            float lightCos = max(dot(-L, lightNormal), 0.0);
 
-            // Sphere area = 4 * pi * r^2
-            float lightArea = 4.0 * 3.14159 * lightRadius * lightRadius;
             vec3 Le = lightColor * lightIntensity;
 
             if (NdotL > 0.0 && lightCos > 0.0) {
@@ -184,7 +218,7 @@ void main() {
                     0xFF, 0, 0, 0,
                     hitPos + N * 0.01, 0.001, L, lightDist - 0.02, 0);
 
-                if (payload.hitDist < 0.0) {  // miss = unblocked
+                if (payload.hitDist < 0.0) {
                     // Cook-Torrance BRDF
                     vec3 V = normalize(-rayDir);
                     vec3 H = normalize(L + V);
@@ -208,7 +242,8 @@ void main() {
                     vec3 diff = kD * albedo / 3.14159;
 
                     float geomTerm = NdotL * lightCos / (lightDist * lightDist);
-                    radiance += throughput * Le * (diff + spec) * geomTerm * lightArea;
+                    // Weight by number of lights (uniform selection → multiply by N)
+                    radiance += throughput * Le * (diff + spec) * geomTerm * lightArea * float(lightBuf.lightCount);
                 }
             }
         }
