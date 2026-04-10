@@ -29,3 +29,18 @@ endif()
 if(TARGET Jolt)
     target_link_libraries(model_viewer PRIVATE Jolt)
 endif()
+
+# Environment Demo
+add_executable(env_demo env_demo.cpp)
+target_include_directories(env_demo PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
+target_link_libraries(env_demo PRIVATE
+    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+if(MSVC)
+    target_link_options(env_demo PRIVATE /FORCE:MULTIPLE)
+else()
+    target_link_options(env_demo PRIVATE -Wl,--allow-multiple-definition)
+endif()
+if(TARGET Jolt)
+    target_link_libraries(env_demo PRIVATE Jolt)
+endif()
