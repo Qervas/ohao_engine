@@ -1034,6 +1034,67 @@ void OffscreenRenderer::buildAccelerationStructures() {
             gpuLights.push_back(gl);
         }
 
+        // Auto-generate lights from emissive materials
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto mc = actor->getComponent<MeshComponent>();
+            if (!mc || !mc->getModel()) continue;
+            auto model = mc->getModel();
+
+            // Check if any material has an emissive texture
+            for (size_t mi = 0; mi < model->materialEmissiveTexIndex.size(); mi++) {
+                if (model->materialEmissiveTexIndex[mi] < 0) continue;
+
+                // Compute mesh center and radius for this actor
+                glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
+                for (const auto& v : model->vertices) {
+                    bmin = glm::min(bmin, v.position);
+                    bmax = glm::max(bmax, v.position);
+                }
+                glm::mat4 worldMat = actor->getTransform()->getWorldMatrix();
+                glm::vec3 center = glm::vec3(worldMat * glm::vec4((bmin + bmax) * 0.5f, 1.0f));
+                float radius = glm::length(bmax - bmin) * 0.3f;
+
+                // Compute emissive color: use sum of bright pixels (not average of all)
+                glm::vec3 emColor(1.0f);
+                float totalPower = 0.0f;
+                int eTexIdx = model->materialEmissiveTexIndex[mi];
+                if (eTexIdx >= 0 && eTexIdx < static_cast<int>(model->emissiveTextures.size())) {
+                    const auto& etd = model->emissiveTextures[eTexIdx];
+                    double r = 0, g = 0, b = 0;
+                    int brightPixels = 0;
+                    for (int p = 0; p < etd.width * etd.height; p++) {
+                        float pr = etd.pixels[p*4+0] / 255.0f;
+                        float pg = etd.pixels[p*4+1] / 255.0f;
+                        float pb = etd.pixels[p*4+2] / 255.0f;
+                        float lum = pr * 0.2126f + pg * 0.7152f + pb * 0.0722f;
+                        if (lum > 0.05f) {  // only count bright pixels
+                            r += pr; g += pg; b += pb;
+                            brightPixels++;
+                            totalPower += lum;
+                        }
+                    }
+                    if (brightPixels > 0) {
+                        emColor = glm::vec3(r / brightPixels, g / brightPixels, b / brightPixels);
+                    }
+                }
+
+                if (totalPower > 0.1f) {
+                    float intensity = std::min(totalPower * 0.1f, 20.0f);  // scale power to reasonable intensity
+                    GPULight gl{};
+                    gl.positionAndType = glm::vec4(center, 0.0f);  // sphere type
+                    gl.colorAndIntensity = glm::vec4(emColor, intensity);
+                    gl.dirAndParam = glm::vec4(0, -1, 0, radius);
+                    gl.extra = glm::vec4(0);
+                    gl.extra2 = glm::vec4(0);
+                    gpuLights.push_back(gl);
+                    std::cout << "[RT] Emissive mesh light: " << actor->getName()
+                              << " color=(" << emColor.r << "," << emColor.g << "," << emColor.b
+                              << ") intensity=" << intensity << std::endl;
+                }
+                break;  // one light per actor
+            }
+        }
+
         // Destroy old buffer
         if (m_rtLightBuffer) { vkDestroyBuffer(m_device, m_rtLightBuffer, nullptr); m_rtLightBuffer = VK_NULL_HANDLE; }
         if (m_rtLightMemory) { vkFreeMemory(m_device, m_rtLightMemory, nullptr); m_rtLightMemory = VK_NULL_HANDLE; }
