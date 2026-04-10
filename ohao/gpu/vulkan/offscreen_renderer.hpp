@@ -113,6 +113,8 @@ public:
     void setRenderMode(RenderMode mode);
     RenderMode getRenderMode() const { return m_renderMode; }
     void setEnvironmentMap(const std::string& path) { m_envMapPath = path; }
+    void resetAccumulation() { if (m_pathTracer) m_pathTracer->resetAccumulation(); }
+    uint32_t getPathTracerFrameIndex() const { return m_pathTracer ? m_pathTracer->getFrameIndex() : 0; }
 
     // Deferred renderer access (for configuration)
     DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
