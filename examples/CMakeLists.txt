@@ -63,6 +63,21 @@ if(glfw3_FOUND)
         target_link_libraries(interactive PRIVATE Jolt)
     endif()
     message(STATUS "Interactive viewer enabled (GLFW found)")
+endif()
+
+# Turntable Recorder
+add_executable(turntable turntable.cpp)
+target_include_directories(turntable PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
+target_link_libraries(turntable PRIVATE
+    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+if(MSVC)
+    target_link_options(turntable PRIVATE /FORCE:MULTIPLE)
+else()
+    target_link_options(turntable PRIVATE -Wl,--allow-multiple-definition)
+endif()
+if(TARGET Jolt)
+    target_link_libraries(turntable PRIVATE Jolt)
 else()
     message(STATUS "Interactive viewer disabled (GLFW not found)")
 endif()
