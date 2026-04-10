@@ -247,9 +247,9 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                                0, sizeof(GBufferUBO), &ubo);
 
             // Draw indexed
-            // vertexOffset=0 because indices are already pre-adjusted in updateSceneBuffers()
             vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
                             bufferInfo.indexOffset, 0, 0);
+            }
         }
     }
 
