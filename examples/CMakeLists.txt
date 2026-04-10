@@ -50,9 +50,10 @@ find_package(glfw3 QUIET)
 if(glfw3_FOUND)
     add_executable(interactive interactive.cpp)
     target_include_directories(interactive PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
+    find_package(OpenGL REQUIRED)
     target_link_libraries(interactive PRIVATE
         -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
-        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator glfw)
+        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator glfw OpenGL::GL)
     if(MSVC)
         target_link_options(interactive PRIVATE /FORCE:MULTIPLE)
     else()

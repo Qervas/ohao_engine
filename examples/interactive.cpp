@@ -1,13 +1,14 @@
-// Interactive Path Tracer Viewer — GLFW window + Vulkan RT at 1-4 spp
+// Interactive Path Tracer Viewer — GLFW + OpenGL display + Vulkan RT
 // Usage: ./interactive [model.glb] [env.hdr]
 //
 // Controls:
 //   WASD  — move camera
 //   Mouse — look around (hold right click)
 //   +/-   — increase/decrease spp per frame
+//   F12   — save screenshot
 //   ESC   — quit
 
-#define GLFW_INCLUDE_VULKAN
+#include <GL/gl.h>
 #include <GLFW/glfw3.h>
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
@@ -30,7 +31,6 @@
 
 using namespace ohao;
 
-// Camera state
 struct CameraState {
     float yaw = -90.0f, pitch = 0.0f;
     glm::vec3 position = {0, 0, 8};
@@ -38,20 +38,20 @@ struct CameraState {
     float sensitivity = 0.15f;
     bool rightMouseDown = false;
     double lastMouseX = 0, lastMouseY = 0;
-    bool moved = false;
+    bool moved = true;  // start true to trigger initial accumulation reset
 };
 
 static CameraState g_cam;
 static int g_spp = 1;
 
-void keyCallback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/) {
+void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GLFW_TRUE);
     if (key == GLFW_KEY_EQUAL && action == GLFW_PRESS) g_spp = std::min(g_spp * 2, 64);
     if (key == GLFW_KEY_MINUS && action == GLFW_PRESS) g_spp = std::max(g_spp / 2, 1);
 }
 
-void mouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*/) {
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int) {
     if (button == GLFW_MOUSE_BUTTON_RIGHT) {
         g_cam.rightMouseDown = (action == GLFW_PRESS);
         if (g_cam.rightMouseDown) {
@@ -63,7 +63,7 @@ void mouseButtonCallback(GLFWwindow* window, int button, int action, int /*mods*
     }
 }
 
-void cursorCallback(GLFWwindow* /*window*/, double xpos, double ypos) {
+void cursorCallback(GLFWwindow*, double xpos, double ypos) {
     if (!g_cam.rightMouseDown) return;
     float dx = static_cast<float>(xpos - g_cam.lastMouseX) * g_cam.sensitivity;
     float dy = static_cast<float>(g_cam.lastMouseY - ypos) * g_cam.sensitivity;
@@ -81,7 +81,6 @@ void processInput(GLFWwindow* window, float dt) {
     front.z = sin(glm::radians(g_cam.yaw)) * cos(glm::radians(g_cam.pitch));
     front = glm::normalize(front);
     glm::vec3 right = glm::normalize(glm::cross(front, glm::vec3(0, 1, 0)));
-    glm::vec3 up = glm::vec3(0, 1, 0);
 
     float spd = g_cam.speed * dt;
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) spd *= 3.0f;
@@ -90,35 +89,42 @@ void processInput(GLFWwindow* window, float dt) {
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) { g_cam.position -= front * spd; g_cam.moved = true; }
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) { g_cam.position -= right * spd; g_cam.moved = true; }
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) { g_cam.position += right * spd; g_cam.moved = true; }
-    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) { g_cam.position -= up * spd; g_cam.moved = true; }
-    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) { g_cam.position += up * spd; g_cam.moved = true; }
-
-    // Save screenshot
-    if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS) {
-        // handled in main loop
-    }
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) { g_cam.position.y -= spd; g_cam.moved = true; }
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) { g_cam.position.y += spd; g_cam.moved = true; }
 }
 
 int main(int argc, char* argv[]) {
     std::string modelPath = argc > 1 ? argv[1] : "";
     std::string envPath = argc > 2 ? argv[2] : "";
-
     uint32_t W = 1280, H = 720;
 
-    // Init GLFW
+    // Init GLFW with OpenGL (for pixel display)
     if (!glfwInit()) { std::cerr << "GLFW init failed" << std::endl; return 1; }
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan, not OpenGL
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+
     GLFWwindow* window = glfwCreateWindow(W, H, "OHAO Interactive RT", nullptr, nullptr);
-    if (!window) { std::cerr << "Window creation failed" << std::endl; glfwTerminate(); return 1; }
+    if (!window) { std::cerr << "Window failed" << std::endl; glfwTerminate(); return 1; }
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(0);  // no vsync — show max fps
     glfwSetKeyCallback(window, keyCallback);
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     glfwSetCursorPosCallback(window, cursorCallback);
 
-    std::cout << "=== OHAO Interactive Path Tracer ===" << std::endl;
-    std::cout << "Controls: WASD=move, RightMouse=look, +/-=spp, ESC=quit" << std::endl;
+    // Create OpenGL texture for pixel display
+    GLuint displayTex;
+    glGenTextures(1, &displayTex);
+    glBindTexture(GL_TEXTURE_2D, displayTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    // Init renderer (offscreen — we'll blit to GLFW window manually)
+    std::cout << "=== OHAO Interactive Path Tracer ===" << std::endl;
+    std::cout << "WASD=move  RightMouse=look  +/-=spp  F12=screenshot  ESC=quit" << std::endl;
+
+    // Init Vulkan renderer (offscreen)
     OffscreenRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
 
@@ -127,7 +133,6 @@ int main(int argc, char* argv[]) {
     // Build scene
     auto scene = std::make_unique<Scene>("Interactive");
 
-    // Load model if provided
     if (!modelPath.empty()) {
         auto model = std::make_shared<Model>();
         bool loaded = false;
@@ -138,8 +143,10 @@ int main(int argc, char* argv[]) {
 
         if (loaded) {
             glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
-            for (const auto& v : model->vertices)
-                { bmin = glm::min(bmin, v.position); bmax = glm::max(bmax, v.position); }
+            for (const auto& v : model->vertices) {
+                bmin = glm::min(bmin, v.position);
+                bmax = glm::max(bmax, v.position);
+            }
             glm::vec3 extent = bmax - bmin;
             bool isYUp = (extent.y >= extent.z);
             float modelHeight = isYUp ? extent.y : extent.z;
@@ -160,7 +167,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Default light
     auto keyLight = scene->createActor("Key");
     auto kl = keyLight->addComponent<LightComponent>();
     kl->setLightType(LightType::Sphere);
@@ -192,19 +198,34 @@ int main(int argc, char* argv[]) {
         camera.setRotation(g_cam.pitch, g_cam.yaw);
         camera.setFov(45.0f);
 
-        // Reset accumulation when camera moves
         if (g_cam.moved) {
             renderer.resetAccumulation();
             g_cam.moved = false;
         }
 
-        // Render spp frames
+        // Path trace
         for (int i = 0; i < g_spp; i++)
             renderer.render();
 
-        // Get pixels and blit to GLFW window via...
-        // GLFW with NO_API doesn't have a built-in blit mechanism.
-        // For now: save progressive results, display via title bar FPS
+        // Blit pixels to OpenGL texture → screen
+        const uint8_t* pixels = renderer.getPixels();
+        if (pixels) {
+            glBindTexture(GL_TEXTURE_2D, displayTex);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+            // Draw fullscreen quad with the texture
+            glEnable(GL_TEXTURE_2D);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 1); glVertex2f(-1, -1);
+            glTexCoord2f(1, 1); glVertex2f( 1, -1);
+            glTexCoord2f(1, 0); glVertex2f( 1,  1);
+            glTexCoord2f(0, 0); glVertex2f(-1,  1);
+            glEnd();
+        }
+
+        glfwSwapBuffers(window);
+
+        // FPS counter
         frameCount++;
         fpsTimer += dt;
         if (fpsTimer >= 1.0f) {
@@ -218,19 +239,19 @@ int main(int argc, char* argv[]) {
             fpsTimer = 0;
         }
 
-        // Save screenshot on F12
+        // Screenshot
         static bool f12Pressed = false;
         if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_PRESS && !f12Pressed) {
             f12Pressed = true;
-            const uint8_t* px = renderer.getPixels();
-            if (px) {
-                stbi_write_png("renders/screenshot.png", W, H, 4, px, W * 4);
-                std::cout << "Screenshot saved: renders/screenshot.png" << std::endl;
+            if (pixels) {
+                stbi_write_png("renders/screenshot.png", W, H, 4, pixels, W * 4);
+                std::cout << "Screenshot: renders/screenshot.png" << std::endl;
             }
         }
         if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_RELEASE) f12Pressed = false;
     }
 
+    glDeleteTextures(1, &displayTex);
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
