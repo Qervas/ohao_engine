@@ -643,6 +643,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
         std::vector<int> globalMatTexLayer;        // diffuse tex index per material
         std::vector<int> globalNormalTexLayer;    // normal tex index per material
         std::vector<int> globalRoughMetalTexLayer; // roughness+metallic tex index
+        std::vector<int> globalEmissiveTexLayer;   // emissive tex index
         uint32_t globalMatOffset = 0;
 
         // Generate 1x1 solid color textures for materials without real textures
@@ -738,6 +739,24 @@ void OffscreenRenderer::buildAccelerationStructures() {
                     }
                 }
                 globalRoughMetalTexLayer.push_back(rmTexLayer);
+
+                // Collect emissive texture
+                int emTexLayer = -1;
+                if (matIdx < model->materialEmissiveTexIndex.size()) {
+                    int emIdx = model->materialEmissiveTexIndex[matIdx];
+                    if (emIdx >= 0 && emIdx < static_cast<int>(model->emissiveTextures.size())) {
+                        const auto& etd = model->emissiveTextures[emIdx];
+                        if (!etd.pixels.empty() && etd.width > 0 && etd.height > 0) {
+                            emTexLayer = static_cast<int>(allTextures.size());
+                            CollectedTexture ct;
+                            ct.pixels = etd.pixels.data();
+                            ct.width = etd.width;
+                            ct.height = etd.height;
+                            allTextures.push_back(ct);
+                        }
+                    }
+                }
+                globalEmissiveTexLayer.push_back(emTexLayer);
             }
         }
 
@@ -973,7 +992,7 @@ void OffscreenRenderer::buildAccelerationStructures() {
                     for (size_t i = 0; i < matCount; i++) {
                         matColors[i * 3 + 0].a = packIdx(globalMatTexLayer[i]);           // diffuseTexIdx
                         matColors[i * 3 + 1].z = packIdx(i < globalNormalTexLayer.size() ? globalNormalTexLayer[i] : -1);     // normalTexIdx
-                        matColors[i * 3 + 1].w = packIdx(-1);                              // emissiveTexIdx (future)
+                        matColors[i * 3 + 1].w = packIdx(i < globalEmissiveTexLayer.size() ? globalEmissiveTexLayer[i] : -1);
                         matColors[i * 3 + 2].x = packIdx(i < globalRoughMetalTexLayer.size() ? globalRoughMetalTexLayer[i] : -1); // roughMetalTexIdx
                     }
                     vkUnmapMemory(m_device, m_rtMatColorMemory);

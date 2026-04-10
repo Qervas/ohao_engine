@@ -501,10 +501,43 @@ bool Model::loadFromGLTF(const std::string& filename) {
             materialRoughMetalTexIndex.push_back(rmTexFound);
         }
 
+        // Extract emissive texture
+        {
+            int emTexFound = -1;
+            if (gltfMat.emissiveTexture.index >= 0 &&
+                gltfMat.emissiveTexture.index < static_cast<int>(gltfModel.textures.size())) {
+                int texIdx = gltfModel.textures[gltfMat.emissiveTexture.index].source;
+                if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
+                    const auto& img = gltfModel.images[texIdx];
+                    if (!img.image.empty() && img.width > 0 && img.height > 0) {
+                        TextureData td;
+                        td.width = img.width;
+                        td.height = img.height;
+                        td.materialIndex = static_cast<int>(mi);
+                        if (img.component == 4) {
+                            td.pixels = img.image;
+                        } else if (img.component == 3) {
+                            td.pixels.resize(img.width * img.height * 4);
+                            for (int p = 0; p < img.width * img.height; p++) {
+                                td.pixels[p*4+0] = img.image[p*3+0];
+                                td.pixels[p*4+1] = img.image[p*3+1];
+                                td.pixels[p*4+2] = img.image[p*3+2];
+                                td.pixels[p*4+3] = 255;
+                            }
+                        }
+                        emTexFound = static_cast<int>(emissiveTextures.size());
+                        emissiveTextures.push_back(std::move(td));
+                    }
+                }
+            }
+            materialEmissiveTexIndex.push_back(emTexFound);
+        }
+
         std::cout << "  Material " << mi << " (" << gltfMat.name << "): "
                   << "diffuse=" << (materialTextureIndex.back() >= 0 ? "tex" : "color")
                   << " normal=" << (materialNormalTexIndex.back() >= 0 ? "tex" : "none")
                   << " roughMetal=" << (materialRoughMetalTexIndex.back() >= 0 ? "tex" : "scalar")
+                  << " emissive=" << (materialEmissiveTexIndex.back() >= 0 ? "tex" : "none")
                   << std::endl;
     }
     if (materialColors.empty()) {
@@ -513,6 +546,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
         materialTextureIndex.push_back(-1);
         materialNormalTexIndex.push_back(-1);
         materialRoughMetalTexIndex.push_back(-1);
+        materialEmissiveTexIndex.push_back(-1);
     }
 
     std::cout << "GLTF loaded: " << filename

@@ -104,11 +104,17 @@ void main() {
         vec3 hitPos = payload.hitPos;
         vec3 N = payload.hitNormal;
         vec3 albedo = payload.hitAlbedo;
+        vec3 emissive = payload.color;  // emissive from closest-hit shader
+
+        // Add emissive contribution (self-glowing surfaces)
+        if (length(emissive) > 0.001) {
+            radiance += throughput * emissive;
+        }
 
         // Write first-hit AOVs for denoiser guide buffers
         if (bounce == 0u) {
             imageStore(albedoAOV, pixel, vec4(albedo, 1.0));
-            imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));  // remap [-1,1] to [0,1]
+            imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));
         }
 
         // === Emissive surface check ===
