@@ -99,15 +99,30 @@ int main(int argc, char* argv[]) {
     m2->getMaterial().baseColor = {0.9f, 0.95f, 1.0f};
     m2->getMaterial().roughness = 0.02f;
 
-    // === Scene lights ===
-    // Key light — warm white from above
-    auto keyLight = scene->createActor("KeyLight");
-    auto kl = keyLight->addComponent<LightComponent>();
-    kl->setLightType(LightType::Sphere);
-    kl->setColor({1.0f, 0.95f, 0.9f});
-    kl->setIntensity(30.0f);
-    kl->setRadius(1.0f);
-    keyLight->getTransform()->setPosition({0.0f, 4.0f, 0.0f});
+    // === Scene lights — 3 colored lights ===
+    auto warmLight = scene->createActor("WarmLight");
+    auto wl = warmLight->addComponent<LightComponent>();
+    wl->setLightType(LightType::Sphere);
+    wl->setColor({1.0f, 0.8f, 0.5f});
+    wl->setIntensity(25.0f);
+    wl->setRadius(0.8f);
+    warmLight->getTransform()->setPosition({-2.0f, 4.0f, 2.0f});
+
+    auto coolLight = scene->createActor("CoolLight");
+    auto cl = coolLight->addComponent<LightComponent>();
+    cl->setLightType(LightType::Sphere);
+    cl->setColor({0.5f, 0.7f, 1.0f});
+    cl->setIntensity(20.0f);
+    cl->setRadius(0.6f);
+    coolLight->getTransform()->setPosition({2.0f, 3.0f, -1.0f});
+
+    auto topLight = scene->createActor("TopLight");
+    auto tl = topLight->addComponent<LightComponent>();
+    tl->setLightType(LightType::Sphere);
+    tl->setColor({1.0f, 1.0f, 0.95f});
+    tl->setIntensity(15.0f);
+    tl->setRadius(1.2f);
+    topLight->getTransform()->setPosition({0.0f, 4.5f, 0.0f});
 
     renderer.setScene(scene.get());
     renderer.updateSceneBuffers();
