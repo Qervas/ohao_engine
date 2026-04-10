@@ -27,8 +27,7 @@ layout(set = 0, binding = 11) readonly buffer LightBuffer {
 layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
-    vec4 lightPosAndIntensity;   // legacy, kept for push constant size compatibility
-    vec4 lightColorAndRadius;
+    mat4 prevViewProj;          // for temporal reprojection
     uvec4 params;  // x=width, y=height, z=frameIndex, w=maxBounces
 } pc;
 
@@ -99,11 +98,19 @@ void main() {
     // Path trace — pure brute force
     vec3 radiance = vec3(0.0);
     vec3 throughput = vec3(1.0);
+    vec3 firstHitPos = vec3(0.0);
+    float firstHitDist = -1.0;
 
     for (uint bounce = 0u; bounce <= maxBounces; bounce++) {
         payload.hitDist = -1.0;
         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
                      rayOrigin, 0.001, rayDir, 10000.0, 0);
+
+        // Store first hit for temporal reprojection
+        if (bounce == 0u) {
+            firstHitPos = payload.hitPos;
+            firstHitDist = payload.hitDist;
+        }
 
         if (payload.hitDist < 0.0) {
             // miss — escaped scene, add environment contribution
@@ -328,17 +335,51 @@ void main() {
     float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
     if (lum > 10.0) radiance *= 10.0 / lum;
 
-    // Progressive accumulation
+    // Temporal accumulation with reprojection
     vec3 acc;
     float count;
     if (pc.params.z == 0u) {
-        // First frame after reset — discard old accumulation
+        // First frame after reset — no history
         acc = radiance;
         count = 1.0;
     } else {
         vec4 prev = imageLoad(accumBuffer, pixel);
-        count = prev.w + 1.0;
-        acc = (prev.rgb * prev.w + radiance) / count;
+
+        // Check if camera is static (prevViewProj == current viewProj approximately)
+        // by comparing the reprojected pixel position
+        bool useReprojection = false;
+        vec2 prevUV = vec2(pixel) / vec2(pc.params.xy);  // default: same pixel
+
+        if (firstHitDist > 0.0) {
+            // Reproject first hit to previous frame's screen space
+            vec4 clipPos = pc.prevViewProj * vec4(firstHitPos, 1.0);
+            if (clipPos.w > 0.0) {
+                vec3 ndc = clipPos.xyz / clipPos.w;
+                prevUV = ndc.xy * 0.5 + 0.5;
+                // Vulkan Y is flipped
+                prevUV.y = 1.0 - prevUV.y;
+                useReprojection = (prevUV.x >= 0.0 && prevUV.x < 1.0 &&
+                                   prevUV.y >= 0.0 && prevUV.y < 1.0);
+            }
+        }
+
+        if (useReprojection) {
+            // Sample history at reprojected position
+            ivec2 prevPixel = ivec2(prevUV * vec2(pc.params.xy));
+            prevPixel = clamp(prevPixel, ivec2(0), ivec2(pc.params.xy) - 1);
+            vec4 history = imageLoad(accumBuffer, prevPixel);
+
+            // Blend: exponential moving average
+            // More history weight = smoother but more ghosting
+            // Less = noisier but more responsive
+            float alpha = 0.1;  // 10% new, 90% history
+            acc = mix(history.rgb, radiance, alpha);
+            count = min(history.w + 1.0, 64.0);  // cap accumulation
+        } else {
+            // Disoccluded or first frame — use progressive accumulation
+            count = prev.w + 1.0;
+            acc = (prev.rgb * prev.w + radiance) / count;
+        }
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 

@@ -166,10 +166,11 @@ private:
     struct PTPushConstants {
         glm::mat4 invView;              // 64 bytes
         glm::mat4 invProj;              // 64 bytes
-        glm::vec4 lightPosAndIntensity;  // 16 bytes  (xyz=pos, w=intensity)
-        glm::vec4 lightColorAndRadius;   // 16 bytes  (xyz=color, w=radius)
+        glm::mat4 prevViewProj;         // 64 bytes — for temporal reprojection
         glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=frameIndex, w=maxBounces)
-    };  // total = 176 bytes
+    };  // total = 208 bytes
+
+    glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 
     // Function pointers (loaded dynamically for RT extensions)
     PFN_vkCreateRayTracingPipelinesKHR vkCreateRayTracingPipelinesKHR = nullptr;

@@ -568,7 +568,7 @@ bool PathTracer::createRTPipeline() {
 
     // Pipeline layout with push constants
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
     pushRange.offset = 0;
     pushRange.size = sizeof(PTPushConstants);
 
@@ -968,12 +968,14 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     PTPushConstants pc{};
     pc.invView = glm::inverse(view);
     pc.invProj = glm::inverse(proj);
-    pc.lightPosAndIntensity = glm::vec4(lightPos, lightIntensity);
-    pc.lightColorAndRadius = glm::vec4(lightColor, lightRadius);
+    pc.prevViewProj = m_prevViewProj;
     pc.params = glm::uvec4(m_width, m_height, m_frameIndex, m_maxBounces);
 
+    // Store current viewProj for next frame's reprojection
+    m_prevViewProj = proj * view;
+
     vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
+                       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR,
                        0, sizeof(PTPushConstants), &pc);
 
     // --- Trace rays! ---
