@@ -112,6 +112,7 @@ public:
     // Render mode
     void setRenderMode(RenderMode mode);
     RenderMode getRenderMode() const { return m_renderMode; }
+    void setEnvironmentMap(const std::string& path) { m_envMapPath = path; }
 
     // Deferred renderer access (for configuration)
     DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
@@ -294,6 +295,7 @@ private:
     VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
     VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
+    std::string m_envMapPath;
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
     VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};

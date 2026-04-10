@@ -425,17 +425,17 @@ bool PathTracer::createDescriptorResources() {
     bindings[10].descriptorCount = 1;
     bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
-    // 11: Light buffer (SSBO)
+    // 11: Light buffer (SSBO) — accessed by raygen + miss
     bindings[11].binding = 11;
     bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[11].descriptorCount = 1;
-    bindings[11].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    bindings[11].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
 
-    // 12: Bindless textures (sampler2D textures[]) — MUST be last (variable count)
+    // 12: Bindless textures — accessed by closest-hit + miss (env map)
     bindings[12].binding = 12;
     bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[12].descriptorCount = m_maxBindlessTextures;
-    bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
 
     // Enable bindless: variable count on the LAST binding only
     VkDescriptorBindingFlags bindingFlags[13] = {};

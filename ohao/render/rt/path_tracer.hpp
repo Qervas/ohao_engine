@@ -73,6 +73,8 @@ public:
         m_bindlessSamplers = samplers;
         m_bindlessTextureCount = static_cast<uint32_t>(views.size());
     }
+    std::vector<VkImageView> getBindlessImageViews() const { return m_bindlessImageViews; }
+    std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
 
     // Reset accumulation — call when camera moves so the buffer restarts
     void resetAccumulation();

@@ -106,9 +106,10 @@ void main() {
                      rayOrigin, 0.001, rayDir, 10000.0, 0);
 
         if (payload.hitDist < 0.0) {
-            // miss — escaped scene
+            // miss — escaped scene, add environment contribution
+            radiance += throughput * payload.color;  // env map sampled in miss shader
             if (bounce == 0u) {
-                imageStore(albedoAOV, pixel, vec4(0));
+                imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
                 imageStore(normalAOV, pixel, vec4(0));
             }
             break;

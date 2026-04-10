@@ -115,6 +115,9 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to load: " << modelPath << std::endl;
     }
 
+    // Environment map (HDR)
+    renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
+
     // Key light
     auto keyLight = scene->createActor("KeyLight");
     auto kl = keyLight->addComponent<LightComponent>();

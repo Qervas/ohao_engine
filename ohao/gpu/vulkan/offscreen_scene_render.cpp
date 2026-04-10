@@ -4,6 +4,7 @@
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/rt/gpu_light.hpp"
+#include "stb_image.h"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
@@ -1059,11 +1060,151 @@ void OffscreenRenderer::buildAccelerationStructures() {
 
             void* mapped;
             vkMapMemory(m_device, m_rtLightMemory, 0, bufSize, 0, &mapped);
-            memset(mapped, 0, bufSize);  // zero padding bytes
+            memset(mapped, 0xFF, 16);  // init header to 0xFFFFFFFF (no env map by default)
             uint32_t count = static_cast<uint32_t>(gpuLights.size());
             memcpy(mapped, &count, sizeof(uint32_t));
+            // envMapTexIdx at offset 4 — set by env map loader, default 0xFFFFFFFF (none)
             memcpy(static_cast<uint8_t*>(mapped) + lightDataOffset, gpuLights.data(), gpuLights.size() * sizeof(GPULight));
             vkUnmapMemory(m_device, m_rtLightMemory);
+
+            // Load environment map if set
+            if (!m_envMapPath.empty() && m_rtLightMemory) {
+                int ew, eh, ec;
+                float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
+                if (hdrPixels) {
+                    // Add HDR as a bindless texture
+                    // Create VkImage (RGBA16F for HDR)
+                    VkImageCreateInfo imgInfo{};
+                    imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                    imgInfo.imageType = VK_IMAGE_TYPE_2D;
+                    imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+                    imgInfo.extent = {static_cast<uint32_t>(ew), static_cast<uint32_t>(eh), 1};
+                    imgInfo.mipLevels = 1;
+                    imgInfo.arrayLayers = 1;
+                    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+                    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+                    imgInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+                    VkImage envImage;
+                    vkCreateImage(m_device, &imgInfo, nullptr, &envImage);
+                    VkMemoryRequirements emr;
+                    vkGetBufferMemoryRequirements(m_device, m_rtLightBuffer, &emr);  // reuse for sizing
+                    vkGetImageMemoryRequirements(m_device, envImage, &emr);
+                    VkMemoryAllocateInfo eai{};
+                    eai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    eai.allocationSize = emr.size;
+                    eai.memoryTypeIndex = findMemoryType(m_physicalDevice, emr.memoryTypeBits,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                    VkDeviceMemory envMem;
+                    vkAllocateMemory(m_device, &eai, nullptr, &envMem);
+                    vkBindImageMemory(m_device, envImage, envMem, 0);
+
+                    // Upload via staging buffer
+                    VkDeviceSize pixelSize = ew * eh * 4 * sizeof(float);
+                    VkBuffer stagingBuf;
+                    VkDeviceMemory stagingMem;
+                    VkBufferCreateInfo stagingBci{};
+                    stagingBci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                    stagingBci.size = pixelSize;
+                    stagingBci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                    vkCreateBuffer(m_device, &stagingBci, nullptr, &stagingBuf);
+                    VkMemoryRequirements smr;
+                    vkGetBufferMemoryRequirements(m_device, stagingBuf, &smr);
+                    VkMemoryAllocateInfo sai{};
+                    sai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    sai.allocationSize = smr.size;
+                    sai.memoryTypeIndex = findMemoryType(m_physicalDevice, smr.memoryTypeBits,
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                    vkAllocateMemory(m_device, &sai, nullptr, &stagingMem);
+                    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+                    void* sm;
+                    vkMapMemory(m_device, stagingMem, 0, pixelSize, 0, &sm);
+                    memcpy(sm, hdrPixels, pixelSize);
+                    vkUnmapMemory(m_device, stagingMem);
+                    stbi_image_free(hdrPixels);
+
+                    // Copy to image
+                    VkCommandBuffer uploadCmd;
+                    VkCommandBufferAllocateInfo cmdInfo{};
+                    cmdInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+                    cmdInfo.commandPool = m_commandPool;
+                    cmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                    cmdInfo.commandBufferCount = 1;
+                    vkAllocateCommandBuffers(m_device, &cmdInfo, &uploadCmd);
+                    VkCommandBufferBeginInfo beginInfo{};
+                    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                    vkBeginCommandBuffer(uploadCmd, &beginInfo);
+
+                    // Transition to TRANSFER_DST
+                    VkImageMemoryBarrier toDst{};
+                    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    toDst.image = envImage;
+                    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+                    VkBufferImageCopy region{};
+                    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.imageExtent = {static_cast<uint32_t>(ew), static_cast<uint32_t>(eh), 1};
+                    vkCmdCopyBufferToImage(uploadCmd, stagingBuf, envImage,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+                    // Transition to SHADER_READ
+                    VkImageMemoryBarrier toShader{};
+                    toShader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    toShader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    toShader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                    toShader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    toShader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    toShader.image = envImage;
+                    toShader.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    vkCmdPipelineBarrier(uploadCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, 0, 0, nullptr, 0, nullptr, 1, &toShader);
+
+                    vkEndCommandBuffer(uploadCmd);
+                    VkSubmitInfo submitInfo{};
+                    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                    submitInfo.commandBufferCount = 1;
+                    submitInfo.pCommandBuffers = &uploadCmd;
+                    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+                    vkQueueWaitIdle(m_graphicsQueue);
+                    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+                    vkFreeMemory(m_device, stagingMem, nullptr);
+                    vkFreeCommandBuffers(m_device, m_commandPool, 1, &uploadCmd);
+
+                    // Create image view
+                    VkImageViewCreateInfo viewInfo{};
+                    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                    viewInfo.image = envImage;
+                    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                    viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+                    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkImageView envView;
+                    vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
+
+                    // Add to bindless textures
+                    auto views = m_pathTracer->getBindlessImageViews();
+                    auto samplers = m_pathTracer->getBindlessSamplers();
+                    uint32_t envTexIdx = static_cast<uint32_t>(views.size());
+                    views.push_back(envView);
+                    samplers.push_back(m_rtTextureSampler);
+                    m_pathTracer->setBindlessTextures(views, samplers);
+
+                    // Write env map index to light buffer header (offset 4)
+                    void* lm;
+                    vkMapMemory(m_device, m_rtLightMemory, 0, 16, 0, &lm);
+                    memcpy(static_cast<uint8_t*>(lm) + 4, &envTexIdx, sizeof(uint32_t));
+                    vkUnmapMemory(m_device, m_rtLightMemory);
+
+                    std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
+                              << " (bindless idx=" << envTexIdx << ")" << std::endl;
+                }
+            }
 
             if (m_pathTracer) {
                 m_pathTracer->setLightBuffer(m_rtLightBuffer, count);
