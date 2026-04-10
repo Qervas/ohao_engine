@@ -145,9 +145,9 @@ int main(int argc, char* argv[]) {
     renderer.updateSceneBuffers();
     renderer.setRenderMode(RenderMode::PathTraced);
 
-    // Render turntable orbit
-    float orbitRadius = 7.0f;
-    float orbitHeight = 1.0f;
+    // Render turntable orbit — adjust radius per mode
+    float orbitRadius = (mode == "env") ? 8.0f : 3.5f;  // inside Cornell box
+    float orbitHeight = (mode == "env") ? 1.0f : 0.5f;
 
     system("mkdir -p renders/turntable");
 
