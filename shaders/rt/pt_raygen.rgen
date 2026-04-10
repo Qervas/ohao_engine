@@ -175,48 +175,78 @@ void main() {
             float lightIntensity = light.colorAndIntensity.w;
             float lightRadius = light.dirAndParam.w;
 
-            // Sample point on light based on type
-            vec3 lightPoint, lightNormal;
-            float lightArea;
+            // Sample light and compute contribution based on type
+            vec3 lightDir = normalize(light.dirAndParam.xyz);
+            float outerAngle = light.extra.w;
+            vec3 Le = lightColor * lightIntensity;
+            vec3 L;
+            float shadowDist;
+            float weight;  // geometric term * area / PDF
 
             if (lightType < 0.5) {
-                // Sphere light: random point on surface
+                // === Sphere light ===
                 float u1 = rand01(), u2 = rand01();
                 float cosTheta = 1.0 - 2.0 * u1;
                 float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
                 float phi = 6.2831853 * u2;
-                vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * max(lightRadius, 0.01);
-                lightPoint = lightCenter + offset;
-                lightNormal = normalize(offset);
-                lightArea = 4.0 * 3.14159 * lightRadius * lightRadius;
+                float r = max(lightRadius, 0.01);
+                vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * r;
+                vec3 lightPoint = lightCenter + offset;
+                vec3 lightNormal = normalize(offset);
+                vec3 toLight = lightPoint - hitPos;
+                float lightDist = length(toLight);
+                L = toLight / lightDist;
+                float lightCos = max(dot(-L, lightNormal), 0.0);
+                float lightArea = 4.0 * 3.14159 * r * r;
+                weight = lightCos * lightArea / (lightDist * lightDist);
+                shadowDist = lightDist - 0.02;
+
             } else if (lightType < 1.5) {
-                // Directional light: sample from far away along direction
-                vec3 lightDir = normalize(light.dirAndParam.xyz);
-                lightPoint = hitPos - lightDir * 10000.0;
-                lightNormal = lightDir;
-                lightArea = 1.0;  // directional uses intensity directly
+                // === Directional light === (no distance falloff)
+                L = -lightDir;
+                weight = 1.0;  // no geometric falloff for directional
+                shadowDist = 10000.0;
+
+            } else if (lightType < 2.5) {
+                // === Spot light === (sphere + cone falloff)
+                float r = max(lightRadius, 0.01);
+                float u1 = rand01(), u2 = rand01();
+                float cosTheta = 1.0 - 2.0 * u1;
+                float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                float phi = 6.2831853 * u2;
+                vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * r;
+                vec3 lightPoint = lightCenter + offset;
+                vec3 toLight = lightPoint - hitPos;
+                float lightDist = length(toLight);
+                L = toLight / lightDist;
+                shadowDist = lightDist - 0.02;
+
+                // Cone falloff: smooth between inner and outer angle
+                float cosAngle = dot(-L, lightDir);
+                float innerCos = cos(radians(light.dirAndParam.w));  // reuse radius slot for inner angle... actually use dirAndParam.w
+                float outerCos = cos(radians(outerAngle));
+                float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
+                spotFactor *= spotFactor;  // quadratic falloff
+
+                float lightArea = 4.0 * 3.14159 * r * r;
+                weight = lightArea / (lightDist * lightDist) * spotFactor;
+
             } else {
-                // Spot/area: treat as sphere for now (Task 2/3 will add proper sampling)
-                lightPoint = lightCenter;
-                lightNormal = vec3(0, -1, 0);
-                lightArea = 1.0;
+                // === Area rect === (Task 3)
+                L = normalize(lightCenter - hitPos);
+                weight = 1.0;
+                shadowDist = length(lightCenter - hitPos) - 0.02;
             }
 
-            vec3 toLight = lightPoint - hitPos;
-            float lightDist = length(toLight);
-            vec3 L = toLight / lightDist;
             float NdotL = max(dot(N, L), 0.0);
-            float lightCos = max(dot(-L, lightNormal), 0.0);
 
-            vec3 Le = lightColor * lightIntensity;
-
-            if (NdotL > 0.0 && lightCos > 0.0) {
+            if (NdotL > 0.0 && weight > 0.0) {
                 // Shadow ray
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
                     gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
                     0xFF, 0, 0, 0,
-                    hitPos + N * 0.01, 0.001, L, lightDist - 0.02, 0);
+                    hitPos + N * 0.01, 0.001, L, shadowDist, 0);
 
                 if (payload.hitDist < 0.0) {
                     // Cook-Torrance BRDF
@@ -241,9 +271,8 @@ void main() {
                     vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
                     vec3 diff = kD * albedo / 3.14159;
 
-                    float geomTerm = NdotL * lightCos / (lightDist * lightDist);
-                    // Weight by number of lights (uniform selection → multiply by N)
-                    radiance += throughput * Le * (diff + spec) * geomTerm * lightArea * float(lightBuf.lightCount);
+                    // NdotL * weight * numLights (uniform selection correction)
+                    radiance += throughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
                 }
             }
         }
