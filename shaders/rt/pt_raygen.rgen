@@ -171,60 +171,31 @@ void main() {
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
         // === NEE: ReSTIR DI — Resampled Importance Sampling ===
-        // Sample M candidate lights, keep the best one proportional to target PDF
-        // This dramatically reduces variance compared to uniform random selection
         if (lightBuf.lightCount > 0u) {
-            // Reservoir: stores the selected light and its weight
             uint selectedLightIdx = 0u;
-            float reservoirWeight = 0.0;
             float reservoirWSum = 0.0;
-            uint M = min(8u, lightBuf.lightCount);  // sample up to 8 candidates
-
+            uint M = min(8u, lightBuf.lightCount);
             vec3 V = normalize(-rayDir);
 
             for (uint candidate = 0u; candidate < M; candidate++) {
-                // Pick a random light candidate
                 uint candIdx = uint(rand01() * float(lightBuf.lightCount));
                 candIdx = min(candIdx, lightBuf.lightCount - 1u);
                 GPULight candLight = lightBuf.lights[candIdx];
 
-                // Evaluate target function p_hat: how much this light contributes
-                // p_hat ≈ |Le| * NdotL / dist^2 (approximate without shadow test)
                 vec3 candPos = candLight.positionAndType.xyz;
                 float candType = candLight.positionAndType.w;
                 vec3 candColor = candLight.colorAndIntensity.rgb;
                 float candIntensity = candLight.colorAndIntensity.w;
 
-                vec3 toLight;
-                float dist;
-                if (candType < 1.5) {  // sphere or directional
-                    if (candType < 0.5) {
-                        toLight = candPos - hitPos;
-                    } else {
-                        toLight = -normalize(candLight.dirAndParam.xyz) * 100.0;
-                    }
-                } else {
-                    toLight = candPos - hitPos;
-                }
-                dist = max(length(toLight), 0.01);
-                vec3 L = toLight / dist;
-                float NdotL = max(dot(N, L), 0.0);
-
-                // Target PDF: light power * geometric term
+                vec3 toLight = (candType < 0.5) ? (candPos - hitPos) :
+                               (candType < 1.5) ? (-normalize(candLight.dirAndParam.xyz) * 100.0) :
+                               (candPos - hitPos);
+                float dist = max(length(toLight), 0.01);
+                float NdotL = max(dot(N, toLight / dist), 0.0);
                 float pHat = length(candColor) * candIntensity * NdotL / (dist * dist + 0.1);
-
-                // Source PDF: uniform = 1/numLights
-                float pSource = 1.0 / float(lightBuf.lightCount);
-
-                // Reservoir sampling: weight = pHat / pSource
-                float w = pHat / (pSource + 0.0001);
+                float w = pHat * float(lightBuf.lightCount);
                 reservoirWSum += w;
-
-                // Accept this candidate with probability w / wSum
-                if (rand01() * reservoirWSum < w) {
-                    selectedLightIdx = candIdx;
-                    reservoirWeight = w;
-                }
+                if (rand01() * reservoirWSum < w) selectedLightIdx = candIdx;
             }
 
             GPULight light = lightBuf.lights[selectedLightIdx];

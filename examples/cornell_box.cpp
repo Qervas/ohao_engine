@@ -99,32 +99,36 @@ int main(int argc, char* argv[]) {
     m2->getMaterial().baseColor = {0.9f, 0.95f, 1.0f};
     m2->getMaterial().roughness = 0.02f;
 
-    // === Scene lights — mixed types ===
-    // Sphere light (warm key)
-    auto keyLight = scene->createActor("KeyLight");
-    auto kl = keyLight->addComponent<LightComponent>();
-    kl->setLightType(LightType::Sphere);
-    kl->setColor({1.0f, 0.9f, 0.7f});
-    kl->setIntensity(25.0f);
-    kl->setRadius(0.8f);
-    keyLight->getTransform()->setPosition({-2.0f, 4.0f, 2.0f});
-
-    // Directional light (sun through the open face)
-    auto sun = scene->createActor("Sun");
-    auto sl = sun->addComponent<LightComponent>();
-    sl->setLightType(LightType::Directional);
-    sl->setColor({1.0f, 0.95f, 0.85f});
-    sl->setIntensity(0.8f);
-    sl->setDirection({0.3f, -0.8f, -0.5f});
-
-    // Area rect light (ceiling panel — classic Cornell box light)
-    auto areaLight = scene->createActor("CeilingPanel");
-    auto al = areaLight->addComponent<LightComponent>();
-    al->setLightType(LightType::AreaRect);
-    al->setColor({1.0f, 0.98f, 0.92f});
-    al->setIntensity(15.0f);
-    al->setAreaEdges({3.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 3.0f});
-    areaLight->getTransform()->setPosition({-1.5f, 4.99f, -1.5f});  // center of ceiling
+    // === Many lights — stress test for ReSTIR ===
+    glm::vec3 lightColors[] = {
+        {1.0f, 0.3f, 0.2f},  // red
+        {0.2f, 1.0f, 0.3f},  // green
+        {0.3f, 0.4f, 1.0f},  // blue
+        {1.0f, 0.9f, 0.3f},  // yellow
+        {1.0f, 0.5f, 0.0f},  // orange
+        {0.8f, 0.2f, 1.0f},  // purple
+        {0.0f, 1.0f, 1.0f},  // cyan
+        {1.0f, 0.0f, 0.5f},  // magenta
+        {1.0f, 1.0f, 1.0f},  // white
+        {0.5f, 1.0f, 0.5f},  // light green
+        {1.0f, 0.7f, 0.5f},  // warm
+        {0.5f, 0.7f, 1.0f},  // cool
+    };
+    float lightPositions[][3] = {
+        {-3, 4, -3}, {0, 4, -3}, {3, 4, -3},
+        {-3, 4,  0}, {0, 4,  0}, {3, 4,  0},
+        {-3, 4,  3}, {0, 4,  3}, {3, 4,  3},
+        {-4, 0,  0}, {4, 0,  0}, {0, 0, -4},
+    };
+    for (int i = 0; i < 12; i++) {
+        auto l = scene->createActor("Light" + std::to_string(i));
+        auto lc = l->addComponent<LightComponent>();
+        lc->setLightType(LightType::Sphere);
+        lc->setColor(lightColors[i]);
+        lc->setIntensity(5.0f);
+        lc->setRadius(0.3f);
+        l->getTransform()->setPosition({lightPositions[i][0], lightPositions[i][1], lightPositions[i][2]});
+    }
 
     renderer.setScene(scene.get());
     renderer.updateSceneBuffers();
