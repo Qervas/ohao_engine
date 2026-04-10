@@ -117,17 +117,14 @@ int main(int argc, char* argv[]) {
     sl->setIntensity(0.8f);
     sl->setDirection({0.3f, -0.8f, -0.5f});
 
-    // Spot light (blue accent)
-    auto spot = scene->createActor("Spotlight");
-    auto spl = spot->addComponent<LightComponent>();
-    spl->setLightType(LightType::Spot);
-    spl->setColor({0.4f, 0.6f, 1.0f});
-    spl->setIntensity(40.0f);
-    spl->setRadius(0.3f);
-    spl->setDirection({-0.5f, -1.0f, -0.3f});
-    spl->setInnerConeAngle(15.0f);
-    spl->setOuterConeAngle(35.0f);
-    spot->getTransform()->setPosition({3.0f, 4.0f, 3.0f});
+    // Area rect light (ceiling panel — classic Cornell box light)
+    auto areaLight = scene->createActor("CeilingPanel");
+    auto al = areaLight->addComponent<LightComponent>();
+    al->setLightType(LightType::AreaRect);
+    al->setColor({1.0f, 0.98f, 0.92f});
+    al->setIntensity(15.0f);
+    al->setAreaEdges({3.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 3.0f});
+    areaLight->getTransform()->setPosition({-1.5f, 4.99f, -1.5f});  // center of ceiling
 
     renderer.setScene(scene.get());
     renderer.updateSceneBuffers();

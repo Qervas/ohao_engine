@@ -49,6 +49,11 @@ public:
     void setRadius(float r) { radius = r; }
     float getRadius() const { return radius; }
 
+    // Area rect lights — two edge vectors define the quad
+    void setAreaEdges(const glm::vec3& e1, const glm::vec3& e2) { edge1 = e1; edge2 = e2; }
+    const glm::vec3& getEdge1() const { return edge1; }
+    const glm::vec3& getEdge2() const { return edge2; }
+
     // Serialization
     void serialize(class Serializer& serializer) const override;
     void deserialize(class Deserializer& deserializer) override;
@@ -62,6 +67,8 @@ private:
     float innerConeAngle = 15.0f;
     float outerConeAngle = 30.0f;
     glm::vec3 lightDirection{0.0f, -1.0f, 0.0f};
+    glm::vec3 edge1{1.0f, 0.0f, 0.0f};
+    glm::vec3 edge2{0.0f, 0.0f, 1.0f};
 };
 
 } // namespace ohao

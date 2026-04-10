@@ -232,10 +232,20 @@ void main() {
                 weight = lightArea / (lightDist * lightDist) * spotFactor;
 
             } else {
-                // === Area rect === (Task 3)
-                L = normalize(lightCenter - hitPos);
-                weight = 1.0;
-                shadowDist = length(lightCenter - hitPos) - 0.02;
+                // === Area rect light ===
+                // position = corner, extra.xyz = edge1, extra2.xyz = edge2
+                vec3 edge1 = light.extra.xyz;
+                vec3 edge2 = light.extra2.xyz;
+                float area = light.extra2.w;
+                // Random point on parallelogram
+                vec3 lightPoint = lightCenter + edge1 * rand01() + edge2 * rand01();
+                vec3 lightNormal = normalize(cross(edge1, edge2));
+                vec3 toLight = lightPoint - hitPos;
+                float lightDist = length(toLight);
+                L = toLight / lightDist;
+                float lightCos = max(dot(-L, lightNormal), 0.0);
+                weight = lightCos * area / (lightDist * lightDist);
+                shadowDist = lightDist - 0.02;
             }
 
             float NdotL = max(dot(N, L), 0.0);

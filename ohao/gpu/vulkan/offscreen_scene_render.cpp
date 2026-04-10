@@ -1020,8 +1020,16 @@ void OffscreenRenderer::buildAccelerationStructures() {
             gl.positionAndType = glm::vec4(pos, static_cast<float>(lc->getLightType()));
             gl.colorAndIntensity = glm::vec4(lc->getColor(), lc->getIntensity());
             gl.dirAndParam = glm::vec4(lc->getDirection(), lc->getRadius());
-            gl.extra = glm::vec4(0.0f, 0.0f, 0.0f, lc->getOuterConeAngle());
-            gl.extra2 = glm::vec4(0.0f);
+
+            if (lc->getLightType() == LightType::AreaRect) {
+                glm::vec3 e1 = lc->getEdge1(), e2 = lc->getEdge2();
+                float area = glm::length(glm::cross(e1, e2));
+                gl.extra = glm::vec4(e1, 0.0f);
+                gl.extra2 = glm::vec4(e2, area);
+            } else {
+                gl.extra = glm::vec4(0.0f, 0.0f, 0.0f, lc->getOuterConeAngle());
+                gl.extra2 = glm::vec4(0.0f);
+            }
             gpuLights.push_back(gl);
         }
 
