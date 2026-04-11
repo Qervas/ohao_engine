@@ -254,6 +254,27 @@ void main() {
         ambient += ssgiColor * albedo * ao;
     }
 
+    // Simple environment reflection approximation
+    vec3 viewDir = normalize(pc.cameraPos - fragPos);
+    vec3 R = reflect(-viewDir, N);
+
+    // Approximate sky color from reflection direction
+    float upness = R.y * 0.5 + 0.5;  // 0=ground, 1=sky
+    vec3 skyColor = mix(
+        vec3(0.4, 0.35, 0.3),   // ground (warm gray)
+        vec3(0.6, 0.7, 0.85),   // sky (blue)
+        clamp(upness, 0.0, 1.0)
+    );
+
+    // Fresnel for reflection intensity
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    float NdotV = max(dot(N, viewDir), 0.0);
+    vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
+
+    // Reflection contribution: strong on metallic + glossy, weak on matte
+    vec3 envReflection = skyColor * F * (1.0 - roughness * roughness);
+    ambient += envReflection;
+
     // Final color
     vec3 color = ambient + Lo;
 
