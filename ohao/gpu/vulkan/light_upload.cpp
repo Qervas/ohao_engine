@@ -344,6 +344,7 @@ void VulkanRenderer::uploadLightBuffer() {
                     viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                     VkImageView envView;
                     vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
+                    m_envMapImageView = envView;  // store for deferred pipeline
 
                     // Add to bindless textures
                     auto views = m_pathTracer->getBindlessImageViews();

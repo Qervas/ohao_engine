@@ -86,6 +86,7 @@ public:
     void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
     bool getRTShadowsEnabled() const { return m_useRTShadows; }
     void setAccelerationStructure(RTAccelerationStructure* accel) { m_rtAccel = accel; }
+    void setEnvMap(VkImageView view, VkSampler sampler);
 
 private:
     // stored here for RT passes to access

@@ -641,6 +641,13 @@ void DeferredRenderer::setTextureManager(BindlessTextureManager* texManager) {
     }
 }
 
+void DeferredRenderer::setEnvMap(VkImageView view, VkSampler sampler) {
+    if (m_lightingPass) {
+        m_lightingPass->setEnvMap(view, sampler);
+        m_lightingPass->updateDescriptorSets();
+    }
+}
+
 void DeferredRenderer::setScene(Scene* scene) {
     m_scene = scene;
 }

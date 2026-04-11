@@ -27,6 +27,7 @@ public:
     void setCloudShadow(VkImageView view, VkSampler sampler,
                         const glm::vec2& center, const glm::vec2& extent);
     void setRTShadowMask(VkImageView view, VkSampler sampler);
+    void setEnvMap(VkImageView view, VkSampler sampler);
 
     // Update descriptors when resources change
     void updateDescriptorSets();
@@ -98,6 +99,8 @@ private:
     VkSampler m_cloudShadowSampler{VK_NULL_HANDLE};
     VkImageView m_rtShadowView{VK_NULL_HANDLE};
     VkSampler m_rtShadowSampler{VK_NULL_HANDLE};
+    VkImageView m_envMapView{VK_NULL_HANDLE};
+    VkSampler m_envMapSampler{VK_NULL_HANDLE};
 
     // Dummy resources for unbound descriptor bindings (prevents Vulkan UB)
     VkImage m_dummyImage{VK_NULL_HANDLE};

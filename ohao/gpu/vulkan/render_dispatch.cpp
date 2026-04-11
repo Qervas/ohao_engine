@@ -39,6 +39,11 @@ void VulkanRenderer::renderDeferred() {
         m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
     }
 
+    // Pass env map to deferred renderer for reflections
+    if (m_envMapImageView) {
+        m_deferredRenderer->setEnvMap(m_envMapImageView, m_rtTextureSampler);
+    }
+
     // Pass geometry buffers to deferred renderer
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         m_deferredRenderer->setGeometryBuffers(m_vertexBuffer, m_indexBuffer, &m_meshBufferMap);

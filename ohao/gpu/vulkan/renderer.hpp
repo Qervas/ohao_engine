@@ -309,6 +309,7 @@ private:
     VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
+    VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
     VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};

@@ -55,8 +55,11 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
 // Cloud shadow map (binding 13) — R16F, [0..1], 0=shadowed, 1=clear
 layout(set = 0, binding = 13) uniform sampler2D cloudShadowMap;
 
-// RT shadow mask (binding 14) — R8, 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR.
+// RT shadow mask (binding 14)
 layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
+
+// HDR environment map (binding 15) — equirectangular
+layout(set = 0, binding = 15) uniform sampler2D envMap;
 
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
 layout(push_constant) uniform PushConstants {
@@ -254,26 +257,35 @@ void main() {
         ambient += ssgiColor * albedo * ao;
     }
 
-    // Simple environment reflection approximation
+    // Environment reflection — sample HDR env map in reflection direction
     vec3 viewDir = normalize(pc.cameraPos - fragPos);
     vec3 R = reflect(-viewDir, N);
 
-    // Approximate sky color from reflection direction
-    float upness = R.y * 0.5 + 0.5;  // 0=ground, 1=sky
-    vec3 skyColor = mix(
-        vec3(0.4, 0.35, 0.3),   // ground (warm gray)
-        vec3(0.6, 0.7, 0.85),   // sky (blue)
-        clamp(upness, 0.0, 1.0)
-    );
+    // Convert reflection direction to equirectangular UV
+    float phi = atan(R.z, R.x);
+    float theta = asin(clamp(R.y, -1.0, 1.0));
+    vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
+
+    // Sample env map — blur based on roughness (mip-like approximation)
+    vec3 envColor = texture(envMap, envUV).rgb;
+
+    // For rough surfaces, blend toward average env color (fake blur)
+    vec3 avgEnv = vec3(0.3, 0.35, 0.4);  // approximate average sky
+    envColor = mix(envColor, avgEnv, roughness * roughness);
 
     // Fresnel for reflection intensity
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     float NdotV = max(dot(N, viewDir), 0.0);
     vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
 
-    // Reflection contribution: strong on metallic + glossy, weak on matte
-    vec3 envReflection = skyColor * F * (1.0 - roughness * roughness);
-    ambient += envReflection;
+    // Reflection: strong on metallic + glossy, subtle on dielectric
+    vec3 envReflection = envColor * F * (1.0 - roughness * roughness);
+
+    // Diffuse ambient from env map (irradiance approximation)
+    vec2 diffEnvUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
+    vec3 irradiance = texture(envMap, diffEnvUV).rgb * 0.3;  // rough approximation
+    vec3 kD = (1.0 - F) * (1.0 - metallic);
+    ambient += envReflection + kD * irradiance * albedo;
 
     // Final color
     vec3 color = ambient + Lo;

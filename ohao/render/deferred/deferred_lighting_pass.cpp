@@ -227,6 +227,11 @@ void DeferredLightingPass::setCloudShadow(VkImageView view, VkSampler sampler,
     m_params.cloudShadowExtent = extent;
 }
 
+void DeferredLightingPass::setEnvMap(VkImageView view, VkSampler sampler) {
+    m_envMapView = view;
+    m_envMapSampler = sampler;
+}
+
 void DeferredLightingPass::setRTShadowMask(VkImageView view, VkSampler sampler) {
     m_rtShadowView = view;
     m_rtShadowSampler = sampler;
@@ -259,8 +264,8 @@ void DeferredLightingPass::updateDescriptorSets() {
     VkImageView fallbackView = m_dummyView;
     VkSampler fallbackSampler = m_gbufferSampler;
 
-    std::array<VkDescriptorImageInfo, 14> imageInfos{};
-    std::array<VkWriteDescriptorSet, 15> writes{};
+    std::array<VkDescriptorImageInfo, 15> imageInfos{};
+    std::array<VkWriteDescriptorSet, 16> writes{};
     VkDescriptorBufferInfo bufferInfo{};
     VkDescriptorBufferInfo cascadeBufferInfo{};
 
@@ -411,7 +416,20 @@ void DeferredLightingPass::updateDescriptorSets() {
     writes[14].descriptorCount = 1;
     writes[14].pImageInfo = &imageInfos[12];
 
-    vkUpdateDescriptorSets(m_device, 15, writes.data(), 0, nullptr);
+    // Binding 15: HDR environment map
+    imageInfos[13].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    // Use env map if available, else RT shadow view (or any valid view) as dummy
+    imageInfos[13].imageView = m_envMapView ? m_envMapView : (m_rtShadowView ? m_rtShadowView : imageInfos[0].imageView);
+    imageInfos[13].sampler = m_envMapSampler ? m_envMapSampler : m_gbufferSampler;
+
+    writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[15].dstSet = m_descriptorSet;
+    writes[15].dstBinding = 15;
+    writes[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[15].descriptorCount = 1;
+    writes[15].pImageInfo = &imageInfos[13];
+
+    vkUpdateDescriptorSets(m_device, 16, writes.data(), 0, nullptr);
 }
 
 bool DeferredLightingPass::createOutputImage() {
@@ -531,7 +549,7 @@ bool DeferredLightingPass::createDescriptors() {
     // 12: CascadeData UBO
     // 13: Cloud shadow map
 
-    std::array<VkDescriptorSetLayoutBinding, 15> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 16> bindings{};
 
     // G-Buffer samplers (0-4)
     for (uint32_t i = 0; i < 5; ++i) {
@@ -591,6 +609,12 @@ bool DeferredLightingPass::createDescriptors() {
     bindings[14].descriptorCount = 1;
     bindings[14].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // HDR environment map (15)
+    bindings[15].binding = 15;
+    bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[15].descriptorCount = 1;
+    bindings[15].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -603,7 +627,7 @@ bool DeferredLightingPass::createDescriptors() {
     // Descriptor pool — 12 image samplers + 2 UBOs (light buffer + cascade data)
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 13;
+    poolSizes[0].descriptorCount = 14;  // +1 for env map
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[1].descriptorCount = 2;
 

@@ -151,8 +151,8 @@ int main(int argc, char* argv[]) {
     renderer.updateSceneBuffers();
 
     auto& camera = renderer.getCamera();
-    camera.setPosition({0, 0, 10});
-    camera.setFov(40.0f);
+    camera.setPosition({0, 0, 13});
+    camera.setFov(35.0f);
     camera.setRotation(0.0f, -90.0f);
     // Mode: "deferred" for hybrid RT, anything else for path traced
     bool useDeferred = (argc > 4 && std::string(argv[4]) == "deferred");
