@@ -395,7 +395,7 @@ bool PathTracer::createDescriptorResources() {
     bindings[5].binding = 5;
     bindings[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[5].descriptorCount = 1;
-    bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
     bindings[6].binding = 6;
     bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -411,19 +411,19 @@ bool PathTracer::createDescriptorResources() {
     bindings[8].binding = 8;
     bindings[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[8].descriptorCount = 1;
-    bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[8].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
     // 9: Material ID buffer (per-triangle)
     bindings[9].binding = 9;
     bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[9].descriptorCount = 1;
-    bindings[9].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[9].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
     // 10: Material color buffer (per-material)
     bindings[10].binding = 10;
     bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     bindings[10].descriptorCount = 1;
-    bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    bindings[10].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
     // 11: Light buffer (SSBO) — accessed by raygen + miss
     bindings[11].binding = 11;
@@ -435,7 +435,7 @@ bool PathTracer::createDescriptorResources() {
     bindings[12].binding = 12;
     bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[12].descriptorCount = m_maxBindlessTextures;
-    bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+    bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
     // Enable bindless: variable count on the LAST binding only
     VkDescriptorBindingFlags bindingFlags[13] = {};
@@ -500,13 +500,14 @@ bool PathTracer::createRTPipeline() {
     auto rgenCode = readFile("bin/shaders/rt_pt_raygen.rgen.spv");
     auto rmissCode = readFile("bin/shaders/rt_pt_miss.rmiss.spv");
     auto rchitCode = readFile("bin/shaders/rt_pt_closesthit.rchit.spv");
+    auto rahitCode = readFile("bin/shaders/rt_pt_anyhit.rahit.spv");
 
     if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty()) {
         std::cerr << "[PathTracer] Failed to load RT shader SPVs" << std::endl;
         return false;
     }
+    bool hasAnyHit = !rahitCode.empty();
 
-    // Create shader modules
     auto createModule = [&](const std::vector<char>& code) -> VkShaderModule {
         VkShaderModuleCreateInfo ci{};
         ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -520,9 +521,11 @@ bool PathTracer::createRTPipeline() {
     VkShaderModule rgenModule = createModule(rgenCode);
     VkShaderModule rmissModule = createModule(rmissCode);
     VkShaderModule rchitModule = createModule(rchitCode);
+    VkShaderModule rahitModule = hasAnyHit ? createModule(rahitCode) : VK_NULL_HANDLE;
 
-    // Shader stages: 0=raygen, 1=miss, 2=closest-hit
-    VkPipelineShaderStageCreateInfo stages[3] = {};
+    // Shader stages: 0=raygen, 1=miss, 2=closest-hit, 3=any-hit (optional)
+    uint32_t stageCount = hasAnyHit ? 4 : 3;
+    VkPipelineShaderStageCreateInfo stages[4] = {};
 
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
@@ -539,10 +542,16 @@ bool PathTracer::createRTPipeline() {
     stages[2].module = rchitModule;
     stages[2].pName = "main";
 
-    // Shader groups: 3 groups
+    if (hasAnyHit) {
+        stages[3].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[3].stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+        stages[3].module = rahitModule;
+        stages[3].pName = "main";
+    }
+
+    // Shader groups: 3 groups (any-hit is part of the hit group, not a separate group)
     VkRayTracingShaderGroupCreateInfoKHR groups[3] = {};
 
-    // Group 0: Ray generation (GENERAL, shader index 0)
     groups[0].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     groups[0].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
     groups[0].generalShader = 0;
@@ -550,7 +559,6 @@ bool PathTracer::createRTPipeline() {
     groups[0].anyHitShader = VK_SHADER_UNUSED_KHR;
     groups[0].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-    // Group 1: Miss (GENERAL, shader index 1)
     groups[1].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     groups[1].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
     groups[1].generalShader = 1;
@@ -558,17 +566,16 @@ bool PathTracer::createRTPipeline() {
     groups[1].anyHitShader = VK_SHADER_UNUSED_KHR;
     groups[1].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-    // Group 2: Closest-hit (TRIANGLES_HIT_GROUP, closestHitShader index 2)
+    // Group 2: Hit group — closest-hit + any-hit
     groups[2].sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR;
     groups[2].type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
     groups[2].generalShader = VK_SHADER_UNUSED_KHR;
     groups[2].closestHitShader = 2;
-    groups[2].anyHitShader = VK_SHADER_UNUSED_KHR;
+    groups[2].anyHitShader = hasAnyHit ? 3 : VK_SHADER_UNUSED_KHR;
     groups[2].intersectionShader = VK_SHADER_UNUSED_KHR;
 
-    // Pipeline layout with push constants
     VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+    pushRange.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
     pushRange.offset = 0;
     pushRange.size = sizeof(PTPushConstants);
 
@@ -584,13 +591,14 @@ bool PathTracer::createRTPipeline() {
         vkDestroyShaderModule(m_device, rgenModule, nullptr);
         vkDestroyShaderModule(m_device, rmissModule, nullptr);
         vkDestroyShaderModule(m_device, rchitModule, nullptr);
+        if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
         return false;
     }
 
     // Create RT pipeline
     VkRayTracingPipelineCreateInfoKHR pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
-    pipelineInfo.stageCount = 3;
+    pipelineInfo.stageCount = stageCount;
     pipelineInfo.pStages = stages;
     pipelineInfo.groupCount = 3;
     pipelineInfo.pGroups = groups;
@@ -604,6 +612,7 @@ bool PathTracer::createRTPipeline() {
     vkDestroyShaderModule(m_device, rgenModule, nullptr);
     vkDestroyShaderModule(m_device, rmissModule, nullptr);
     vkDestroyShaderModule(m_device, rchitModule, nullptr);
+    if (rahitModule) vkDestroyShaderModule(m_device, rahitModule, nullptr);
 
     if (result != VK_SUCCESS) {
         std::cerr << "[PathTracer] Failed to create RT pipeline (err=" << result << ")" << std::endl;
@@ -975,7 +984,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     m_prevViewProj = proj * view;
 
     vkCmdPushConstants(cmd, m_pipelineLayout,
-                       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR,
+                       VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR,
                        0, sizeof(PTPushConstants), &pc);
 
     // --- Trace rays! ---

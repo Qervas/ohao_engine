@@ -103,7 +103,7 @@ void main() {
 
     for (uint bounce = 0u; bounce <= maxBounces; bounce++) {
         payload.hitDist = -1.0;
-        traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+        traceRayEXT(topLevelAS, 0, 0xFF, 0, 0, 0,  // no opaque flag — run any-hit for alpha test
                      rayOrigin, 0.001, rayDir, 10000.0, 0);
 
         // Store first hit for temporal reprojection
