@@ -4,6 +4,7 @@
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/rt/gpu_light.hpp"
+#include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "stb_image.h"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -1006,6 +1007,59 @@ void OffscreenRenderer::buildAccelerationStructures() {
             }
         } else {
             std::cout << "[RT] No textures found in scene models" << std::endl;
+        }
+    }
+
+    // Load model textures into BindlessTextureManager for deferred pipeline
+    if (m_textureManager && m_scene) {
+        int deferredTexCount = 0;
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto mc = actor->getComponent<MeshComponent>();
+            if (!mc || !mc->getModel()) continue;
+            auto model = mc->getModel();
+            auto matComp = actor->getComponent<MaterialComponent>();
+            if (!matComp) continue;
+
+            // Load albedo textures
+            for (size_t mi = 0; mi < model->materialTextureIndex.size(); mi++) {
+                int texIdx = model->materialTextureIndex[mi];
+                if (texIdx < 0 || texIdx >= static_cast<int>(model->albedoTextures.size())) continue;
+                const auto& td = model->albedoTextures[texIdx];
+                if (td.pixels.empty() || td.width <= 0 || td.height <= 0) continue;
+
+                std::string texName = actor->getName() + "_albedo_" + std::to_string(mi);
+                auto handle = m_textureManager->loadTextureFromMemory(
+                    td.pixels.data(), td.width, td.height, VK_FORMAT_R8G8B8A8_SRGB,
+                    BindlessTextureType::Albedo);
+                if (handle.valid()) {
+                    m_textureManager->registerName(handle, texName);
+                    matComp->getMaterial().useAlbedoTexture = true;
+                    matComp->getMaterial().albedoTexture = texName;
+                    deferredTexCount++;
+                }
+            }
+
+            // Load normal textures
+            for (size_t mi = 0; mi < model->materialNormalTexIndex.size(); mi++) {
+                int nTexIdx = model->materialNormalTexIndex[mi];
+                if (nTexIdx < 0 || nTexIdx >= static_cast<int>(model->normalTextures.size())) continue;
+                const auto& ntd = model->normalTextures[nTexIdx];
+                if (ntd.pixels.empty()) continue;
+
+                std::string texName = actor->getName() + "_normal_" + std::to_string(mi);
+                auto handle = m_textureManager->loadTextureFromMemory(
+                    ntd.pixels.data(), ntd.width, ntd.height, VK_FORMAT_R8G8B8A8_UNORM,
+                    BindlessTextureType::Normal);
+                if (handle.valid()) {
+                    m_textureManager->registerName(handle, texName);
+                    matComp->getMaterial().useNormalTexture = true;
+                    matComp->getMaterial().normalTexture = texName;
+                }
+            }
+        }
+        if (deferredTexCount > 0) {
+            m_textureManager->updateDescriptorSet();
+            std::cout << "[Deferred] Loaded " << deferredTexCount << " textures into BindlessTextureManager" << std::endl;
         }
     }
 

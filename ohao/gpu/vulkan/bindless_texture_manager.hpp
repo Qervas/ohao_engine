@@ -86,6 +86,11 @@ public:
     BindlessTextureHandle getTextureByName(const std::string& name) const;
     BindlessTextureHandle getTextureByPath(const std::string& path) const;
 
+    // Register a name/path for an existing handle (so getTextureByPath finds it)
+    void registerName(BindlessTextureHandle handle, const std::string& name) {
+        if (handle.valid()) { m_pathToHandle[name] = handle; m_nameToHandle[name] = handle; }
+    }
+
     // Mark texture as persistent (won't be unloaded during streaming)
     void setTexturePersistent(BindlessTextureHandle handle, bool persistent);
 
