@@ -170,33 +170,10 @@ void main() {
         // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
-        // === NEE: ReSTIR DI — Resampled Importance Sampling ===
+        // === NEE: uniform random light selection ===
         if (lightBuf.lightCount > 0u) {
-            uint selectedLightIdx = 0u;
-            float reservoirWSum = 0.0;
-            uint M = min(8u, lightBuf.lightCount);
-            vec3 V = normalize(-rayDir);
-
-            for (uint candidate = 0u; candidate < M; candidate++) {
-                uint candIdx = uint(rand01() * float(lightBuf.lightCount));
-                candIdx = min(candIdx, lightBuf.lightCount - 1u);
-                GPULight candLight = lightBuf.lights[candIdx];
-
-                vec3 candPos = candLight.positionAndType.xyz;
-                float candType = candLight.positionAndType.w;
-                vec3 candColor = candLight.colorAndIntensity.rgb;
-                float candIntensity = candLight.colorAndIntensity.w;
-
-                vec3 toLight = (candType < 0.5) ? (candPos - hitPos) :
-                               (candType < 1.5) ? (-normalize(candLight.dirAndParam.xyz) * 100.0) :
-                               (candPos - hitPos);
-                float dist = max(length(toLight), 0.01);
-                float NdotL = max(dot(N, toLight / dist), 0.0);
-                float pHat = length(candColor) * candIntensity * NdotL / (dist * dist + 0.1);
-                float w = pHat * float(lightBuf.lightCount);
-                reservoirWSum += w;
-                if (rand01() * reservoirWSum < w) selectedLightIdx = candIdx;
-            }
+            uint selectedLightIdx = uint(rand01() * float(lightBuf.lightCount));
+            selectedLightIdx = min(selectedLightIdx, lightBuf.lightCount - 1u);
 
             GPULight light = lightBuf.lights[selectedLightIdx];
 
@@ -313,10 +290,7 @@ void main() {
                     vec3 diff = kD * albedo / 3.14159;
 
                     // NdotL * weight * numLights (uniform selection correction)
-                    // ReSTIR weight: (1/M) * (wSum / p_hat_selected) * p_hat_selected = wSum / M
-                    // The target PDF cancels, leaving the reservoir weight correction
-                    float risWeight = reservoirWSum / (float(M) + 0.0001);
-                    radiance += throughput * Le * (diff + spec) * NdotL * weight * risWeight;
+                    radiance += throughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
                 }
             }
         }
