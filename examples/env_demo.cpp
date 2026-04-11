@@ -63,10 +63,13 @@ int main(int argc, char* argv[]) {
         float scale = 4.0f / modelHeight;  // normalize to ~4 units tall
 
         auto actor = scene->createActor("Model");
-        if (isYUp)
+        if (isYUp) {
             actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
-        else
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(-90, 0, 0))));
+        } else {
+            float zCenter = (bmin.z + bmax.z) * 0.5f;
+            float rotX = (zCenter < 0.0f) ? 90.0f : -90.0f;
+            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
+        }
         actor->getTransform()->setScale(glm::vec3(scale));
 
         glm::vec3 center = (bmin + bmax) * 0.5f;

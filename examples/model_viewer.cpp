@@ -85,16 +85,26 @@ int main(int argc, char* argv[]) {
             bmin = glm::min(bmin, v.position);
             bmax = glm::max(bmax, v.position);
         }
+        {
+            glm::vec3 ext = bmax - bmin;
+            std::cout << "Model bounds: (" << bmin.x << "," << bmin.y << "," << bmin.z
+                      << ") - (" << bmax.x << "," << bmax.y << "," << bmax.z
+                      << ") extent=(" << ext.x << "," << ext.y << "," << ext.z << ")" << std::endl;
+        }
         glm::vec3 extent = bmax - bmin;
         bool isYUp = (extent.y >= extent.z);
         float modelHeight = isYUp ? extent.y : extent.z;
         float scale = (S * 1.6f) / modelHeight;
 
         auto actor = scene->createActor("Model");
-        if (isYUp)
+        if (isYUp) {
             actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
-        else
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(-90, 0, 0))));
+        } else {
+            // Z-up: check if Z is positive-up or negative-up
+            float zCenter = (bmin.z + bmax.z) * 0.5f;
+            float rotX = (zCenter < 0.0f) ? 90.0f : -90.0f;  // flip if Z goes negative
+            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
+        }
         actor->getTransform()->setScale(glm::vec3(scale));
 
         glm::vec3 center = (bmin + bmax) * 0.5f;
