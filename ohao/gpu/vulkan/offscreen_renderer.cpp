@@ -206,6 +206,16 @@ void OffscreenRenderer::shutdown() {
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
 
+        // Cleanup RT resources BEFORE device destruction
+        if (m_pathTracer) {
+            m_pathTracer->destroy();
+            m_pathTracer.reset();
+        }
+        if (m_rtAccel) {
+            m_rtAccel->destroy();
+            m_rtAccel.reset();
+        }
+
         // Cleanup deferred renderer
         if (m_deferredRenderer) {
             m_deferredRenderer->cleanup();
