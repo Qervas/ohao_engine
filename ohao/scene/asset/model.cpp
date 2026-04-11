@@ -200,11 +200,11 @@ bool Model::loadFromOBJ(const std::string& filename) {
 
         assignMaterialColors();
 
-        // Filter out tiny alpha-card geometry (fur, eyelash, tear)
-        // Keep hair meshes — they're major geometry, just without alpha
+        // Alpha-card geometry (fur, eyelash, tear) now handled by any-hit shader
+        // Only filter "tear" (invisible geometry, not actual transparency)
         {
             std::unordered_map<std::string, bool> skipMats = {
-                {"fur", true}, {"eyelash", true}, {"tear", true}
+                {"tear", true}
             };
             std::vector<uint32_t> newIndices;
             std::vector<std::string> newAssignments;
