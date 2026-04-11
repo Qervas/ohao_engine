@@ -56,6 +56,8 @@ int main(int argc, char* argv[]) {
     std::cout << "OHAO Model Viewer — " << modelPath << std::endl;
     std::cout << W << "x" << H << " @ " << samples << " spp" << std::endl;
 
+    bool useDeferred = (argc > 4 && std::string(argv[4]) == "deferred");
+
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
 
@@ -126,7 +128,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to load: " << modelPath << std::endl;
     }
 
-    // Environment map (HDR)
+    // Environment map
     renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
 
     // Key light
@@ -155,7 +157,6 @@ int main(int argc, char* argv[]) {
     camera.setFov(35.0f);
     camera.setRotation(0.0f, -90.0f);
     // Mode: "deferred" for hybrid RT, anything else for path traced
-    bool useDeferred = (argc > 4 && std::string(argv[4]) == "deferred");
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
 
     std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : "PathTraced") << ")..." << std::endl;

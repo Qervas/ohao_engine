@@ -252,8 +252,8 @@ void main() {
     // Ambient lighting with GI color bleeding approximation
     // Tint ambient based on position relative to colored walls (Cornell box hack)
     vec3 ambientColor = vec3(1.0);
-    float redInfluence = max(0.0, 1.0 - (fragPos.x + 5.0) / 5.0) * 0.3;  // left wall = red
-    float greenInfluence = max(0.0, (fragPos.x - 0.0) / 5.0) * 0.3;       // right wall = green
+    float redInfluence = max(0.0, 1.0 - (fragPos.x + 5.0) / 5.0) * 0.12;  // subtle red from left wall
+    float greenInfluence = max(0.0, (fragPos.x - 0.0) / 5.0) * 0.12;      // subtle green from right wall
     ambientColor += vec3(redInfluence, -redInfluence*0.5, -redInfluence*0.5);
     ambientColor += vec3(-greenInfluence*0.5, greenInfluence, -greenInfluence*0.3);
     vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor;
