@@ -138,11 +138,14 @@ int main(int argc, char* argv[]) {
     camera.setFov(38.0f);
     camera.setRotation(0.0f, -90.0f);
 
-    renderer.setRenderMode(RenderMode::PathTraced);
+    // Mode: "deferred" for hybrid RT, anything else for path traced
+    bool useDeferred = (argc > 3 && std::string(argv[3]) == "deferred");
+    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
 
-    std::cout << "Rendering..." << std::endl;
+    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : "PathTraced") << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < samples + 3; i++) renderer.render();
+    int frames = useDeferred ? 10 : (samples + 3);
+    for (int i = 0; i < frames; i++) renderer.render();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;

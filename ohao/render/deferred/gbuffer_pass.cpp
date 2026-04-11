@@ -249,7 +249,6 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             // Draw indexed
             vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
                             bufferInfo.indexOffset, 0, 0);
-            }
         }
     }
 
