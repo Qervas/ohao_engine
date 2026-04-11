@@ -154,19 +154,22 @@ int main(int argc, char* argv[]) {
     camera.setPosition({0, 0, 10});
     camera.setFov(40.0f);
     camera.setRotation(0.0f, -90.0f);
-    renderer.setRenderMode(RenderMode::PathTraced);
+    // Mode: "deferred" for hybrid RT, anything else for path traced
+    bool useDeferred = (argc > 4 && std::string(argv[4]) == "deferred");
+    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
 
-    std::cout << "Rendering..." << std::endl;
+    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : "PathTraced") << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < samples + 3; i++) renderer.render();
+    int frames = useDeferred ? 10 : (samples + 3);
+    for (int i = 0; i < frames; i++) renderer.render();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
-    // OIDN denoising — read back HDR buffers, denoise, tonemap, save
+    // OIDN denoising — only for path traced mode (deferred doesn't use accumulation buffer)
     std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
     uint32_t rw, rh;
-    if (renderer.readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+    if (!useDeferred && renderer.readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
         // Convert RGBA32F → float3 (OIDN needs float3)
         auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
         auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);

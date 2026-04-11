@@ -118,17 +118,30 @@ int main(int argc, char* argv[]) {
             bmax = glm::max(bmax, v.position);
         }
         float modelHeight = std::max(bmax.y - bmin.y, bmax.z - bmin.z);
-        float scale = 4.0f / modelHeight;
+        float targetHeight = (mode == "mirror") ? 5.5f : 4.0f;
+        float scale = targetHeight / modelHeight;
 
         auto actor = scene->createActor("Model");
         bool isYUp = ((bmax.y - bmin.y) >= (bmax.z - bmin.z));
-        if (isYUp)
+        if (isYUp) {
             actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
-        else
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(-90, 0, 0))));
+        } else {
+            float zCenter = (bmin.z + bmax.z) * 0.5f;
+            float rotX = (zCenter < 0.0f) ? 90.0f : -90.0f;
+            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
+        }
         actor->getTransform()->setScale(glm::vec3(scale));
+
+        // Center model at origin, feet on floor (Y = -5 for Cornell, Y = 0 for env)
         glm::vec3 center = (bmin + bmax) * 0.5f;
-        actor->getTransform()->setPosition({-center.x*scale, -center.y*scale, -center.z*scale});
+        float floorY = (mode == "env") ? 0.0f : -5.0f;
+        if (isYUp) {
+            actor->getTransform()->setPosition({-center.x*scale, floorY - bmin.y*scale, -center.z*scale});
+        } else {
+            // Z-up model: after rotation, Z maps to Y
+            float footZ = (bmin.z + bmax.z > 0) ? bmin.z : bmax.z;  // whichever is the "bottom"
+            actor->getTransform()->setPosition({-center.x*scale, floorY + std::abs(footZ)*scale, -center.y*scale});
+        }
 
         auto mesh = actor->addComponent<MeshComponent>();
         mesh->setModel(model); mesh->setVisible(true);
@@ -171,8 +184,8 @@ int main(int argc, char* argv[]) {
     renderer.setRenderMode(RenderMode::PathTraced);
 
     // Render turntable orbit — adjust radius per mode
-    float orbitRadius = (mode == "env") ? 8.0f : 3.8f;
-    float orbitHeight = (mode == "env") ? 1.0f : 0.3f;
+    float orbitRadius = (mode == "env") ? 8.0f : (mode == "mirror") ? 4.5f : 4.2f;
+    float orbitHeight = (mode == "env") ? 1.0f : -3.5f;
 
     system("mkdir -p renders/turntable");
 
@@ -187,8 +200,8 @@ int main(int argc, char* argv[]) {
         camera.setPosition({cx, orbitHeight, cz});
         // Look at origin
         float yaw = glm::degrees(atan2(-cz, -cx));
-        camera.setRotation(-8.0f, yaw);  // slight downward tilt
-        camera.setFov(45.0f);
+        camera.setRotation(15.0f, yaw);  // tilt up from floor level
+        camera.setFov(70.0f);
 
         renderer.resetAccumulation();
 
