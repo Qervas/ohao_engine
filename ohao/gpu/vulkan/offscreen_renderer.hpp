@@ -286,7 +286,14 @@ private:
     std::unique_ptr<RTAccelerationStructure> m_rtAccel;
     std::unique_ptr<PathTracer> m_pathTracer;
     bool m_rtAccelDirty{true};
-    void buildAccelerationStructures();
+    void buildAccelerationStructures();  // orchestrator — calls sub-functions below
+    void createRTVertexIndexBuffers();    // copy raster buffers to device-local RT buffers
+    void createRTNormalUVBuffers();       // extract normals + UVs from vertex data
+    void uploadRTMaterialBuffers();       // per-triangle material IDs + per-material colors
+    void uploadRTTextureArray();          // build bindless texture array for path tracer
+    void uploadDeferredTextures();        // bridge model textures to deferred BindlessTextureManager
+    void uploadLightBuffer();             // collect scene LightComponents → GPU SSBO + env map
+    void buildBLASTLAS();                 // build BLAS per actor, TLAS with instance transforms
     // Separate RT-flagged copies of vertex/index data (device-local + device address)
     VkBuffer m_rtVertexBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtVertexMemory{VK_NULL_HANDLE};
