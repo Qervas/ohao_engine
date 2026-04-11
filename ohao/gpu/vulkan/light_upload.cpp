@@ -69,6 +69,14 @@ void VulkanRenderer::uploadDeferredTextures() {
                     matComp->getMaterial().normalTexture = texName;
                 }
             }
+
+            // Set roughness/metallic from model data (even without textures)
+            if (!model->materialColors.empty()) {
+                float roughness = model->materialColors[0].w;  // stored in alpha
+                float metallic = !model->materialMetallic.empty() ? model->materialMetallic[0] : 0.0f;
+                matComp->getMaterial().roughness = roughness;
+                matComp->getMaterial().metallic = metallic;
+            }
         }
         if (deferredTexCount > 0) {
             m_textureManager->updateDescriptorSet();

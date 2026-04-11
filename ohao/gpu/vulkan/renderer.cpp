@@ -393,6 +393,8 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     }
     std::cout << "VulkanRenderer: DeferredRenderer initialized, resizing to " << m_width << "x" << m_height << std::endl;
     m_deferredRenderer->onResize(m_width, m_height);
+    if (m_deferredRenderer->getPostProcessing())
+        m_deferredRenderer->getPostProcessing()->setExposure(0.6f);
     return true;
 }
 
