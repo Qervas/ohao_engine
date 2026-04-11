@@ -200,11 +200,11 @@ bool Model::loadFromOBJ(const std::string& filename) {
 
         assignMaterialColors();
 
-        // Alpha-card geometry (fur, eyelash, tear) now handled by any-hit shader
-        // Only filter "tear" (invisible geometry, not actual transparency)
+        // Filter alpha-card geometry that lacks proper alpha textures
+        // OBJ models don't embed alpha in diffuse — fur/eyelash render as opaque noise
         {
             std::unordered_map<std::string, bool> skipMats = {
-                {"tear", true}
+                {"fur", true}, {"eyelash", true}, {"tear", true}
             };
             std::vector<uint32_t> newIndices;
             std::vector<std::string> newAssignments;
