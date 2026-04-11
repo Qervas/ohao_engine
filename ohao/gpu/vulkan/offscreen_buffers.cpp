@@ -263,7 +263,9 @@ void OffscreenRenderer::updateLightBuffer() {
             glm::vec3 worldPos = actor->getTransform()->getPosition();
             glm::vec3 worldDir = lightComp->getDirection();
 
-            light.position = glm::vec4(worldPos, static_cast<float>(lightComp->getLightType()));
+            // Map: Sphere=0→Point=1, Directional=1→Dir=0, Spot=2→Spot=2
+            int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 : (lightComp->getLightType() == LightType::Directional) ? 0 : 2;
+            light.position = glm::vec4(worldPos, static_cast<float>(deferredType));
             light.direction = glm::vec4(worldDir, lightComp->getRange());
             light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
 
@@ -343,7 +345,9 @@ void OffscreenRenderer::updateLightBuffer(uint32_t frameIndex) {
             glm::vec3 worldPos = actor->getTransform()->getPosition();
             glm::vec3 worldDir = lightComp->getDirection();
 
-            light.position = glm::vec4(worldPos, static_cast<float>(lightComp->getLightType()));
+            // Map: Sphere=0→Point=1, Directional=1→Dir=0, Spot=2→Spot=2
+            int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 : (lightComp->getLightType() == LightType::Directional) ? 0 : 2;
+            light.position = glm::vec4(worldPos, static_cast<float>(deferredType));
             light.direction = glm::vec4(worldDir, lightComp->getRange());
             light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
 
