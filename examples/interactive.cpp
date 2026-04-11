@@ -251,6 +251,7 @@ int main(int argc, char* argv[]) {
         if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_RELEASE) f12Pressed = false;
     }
 
+    scene.reset();  // destroy scene before renderer to avoid cleanup crash
     glDeleteTextures(1, &displayTex);
     glfwDestroyWindow(window);
     glfwTerminate();

@@ -155,4 +155,7 @@ int main(int argc, char* argv[]) {
         stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
         std::cout << "Saved: " << output << std::endl;
     }
+
+    // Destroy scene before renderer to avoid Vulkan/Jolt cleanup order crash
+    scene.reset();
 }
