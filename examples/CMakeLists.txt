@@ -65,12 +65,12 @@ if(glfw3_FOUND)
     message(STATUS "Interactive viewer enabled (GLFW found)")
 endif()
 
-# Turntable Recorder
-add_executable(turntable turntable.cpp)
+# Turntable Recorder (with OIDN)
+add_executable(turntable turntable.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/oidn_denoise.cpp)
 target_include_directories(turntable PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(turntable PRIVATE
     -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator OpenImageDenoise)
 if(MSVC)
     target_link_options(turntable PRIVATE /FORCE:MULTIPLE)
 else()

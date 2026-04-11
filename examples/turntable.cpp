@@ -9,6 +9,7 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/offscreen_renderer.hpp"
+#include "render/rt/oidn_denoise.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -67,8 +68,32 @@ int main(int argc, char* argv[]) {
     // Set up environment based on mode
     if (mode == "env") {
         renderer.setEnvironmentMap("assets/test_models/env_outdoor.hdr");
+    } else if (mode == "mirror") {
+        // Mirror room — closed box with mirror front + back walls
+        const float S = 5.0f;
+        const glm::vec3 white(0.73f), red(0.65f, 0.05f, 0.05f), green(0.12f, 0.45f, 0.15f);
+        const glm::vec3 mirror(0.95f, 0.95f, 0.95f);
+        glm::vec3 LBB(-S,-S,-S), RBB(S,-S,-S), LTB(-S,S,-S), RTB(S,S,-S);
+        glm::vec3 LBF(-S,-S,S), RBF(S,-S,S), LTF(-S,S,S), RTF(S,S,S);
+        // Side walls — red/green
+        addWall(scene.get(), "Left",    LBB, LTB, LTF, LBF, {1,0,0},  red);
+        addWall(scene.get(), "Right",   RBB, RBF, RTF, RTB, {-1,0,0}, green);
+        addWall(scene.get(), "Floor",   LBB, LBF, RBF, RBB, {0,1,0},  white);
+        addWall(scene.get(), "Ceiling", LTB, RTB, RTF, LTF, {0,-1,0}, white);
+        // Front + back walls — MIRROR (low roughness, high metallic)
+        addWall(scene.get(), "BackMirror",  LBB, RBB, RTB, LTB, {0,0,1},  mirror);
+        addWall(scene.get(), "FrontMirror", LBF, RBF, RTF, LTF, {0,0,-1}, mirror);
+        // Override material to mirror
+        for (auto name : {"BackMirror", "FrontMirror"}) {
+            for (auto& [id, actor] : scene->getAllActors()) {
+                if (actor->getName() == name) {
+                    auto mat = actor->getComponent<MaterialComponent>();
+                    if (mat) { mat->getMaterial().roughness = 0.02f; mat->getMaterial().metallic = 1.0f; }
+                }
+            }
+        }
     } else {
-        // Cornell box or dark room — add walls
+        // Cornell box or dark room — add walls (open front)
         const float S = 5.0f;
         const glm::vec3 white(0.73f), red(0.65f, 0.05f, 0.05f), green(0.12f, 0.45f, 0.15f);
         glm::vec3 LBB(-S,-S,-S), RBB(S,-S,-S), LTB(-S,S,-S), RTB(S,S,-S);
@@ -126,7 +151,7 @@ int main(int argc, char* argv[]) {
         auto kl = key->addComponent<LightComponent>();
         kl->setLightType(LightType::Sphere);
         kl->setColor({1, 0.95f, 0.9f});
-        kl->setIntensity(mode == "env" ? 8.0f : 25.0f);
+        kl->setIntensity((mode == "env") ? 8.0f : (mode == "mirror") ? 20.0f : 25.0f);
         kl->setRadius(1.0f);
         key->getTransform()->setPosition({3, 4, 3});
 
@@ -146,7 +171,7 @@ int main(int argc, char* argv[]) {
     renderer.setRenderMode(RenderMode::PathTraced);
 
     // Render turntable orbit — adjust radius per mode
-    float orbitRadius = (mode == "env") ? 8.0f : 4.2f;  // inside Cornell box
+    float orbitRadius = (mode == "env") ? 8.0f : 3.8f;
     float orbitHeight = (mode == "env") ? 1.0f : 0.3f;
 
     system("mkdir -p renders/turntable");
@@ -170,11 +195,22 @@ int main(int argc, char* argv[]) {
         for (int s = 0; s < spp + 3; s++)
             renderer.render();
 
-        const uint8_t* pixels = renderer.getPixels();
-        if (pixels) {
-            char filename[256];
-            snprintf(filename, sizeof(filename), "renders/turntable/%s_%04d.png", mode.c_str(), frame);
-            stbi_write_png(filename, W, H, 4, pixels, W * 4);
+        // OIDN denoise per frame
+        std::vector<float> beautyBuf, albedoBuf, normalBuf;
+        uint32_t rw, rh;
+        char filename[256];
+        snprintf(filename, sizeof(filename), "renders/turntable/%s_%04d.png", mode.c_str(), frame);
+
+        if (renderer.readbackHDRBuffers(beautyBuf, albedoBuf, normalBuf, rw, rh)) {
+            auto beauty3 = ohao::rgba32fToFloat3(beautyBuf.data(), rw, rh);
+            auto albedo3 = ohao::rgba32fToFloat3(albedoBuf.data(), rw, rh);
+            auto normal3 = ohao::rgba32fToFloat3(normalBuf.data(), rw, rh);
+            ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(), rw, rh, true);
+            auto rgba8 = ohao::float3ToRGBA8(beauty3.data(), rw, rh, 0.5f);
+            stbi_write_png(filename, rw, rh, 4, rgba8.data(), rw * 4);
+        } else {
+            const uint8_t* pixels = renderer.getPixels();
+            if (pixels) stbi_write_png(filename, W, H, 4, pixels, W * 4);
         }
 
         printf("\rFrame %d/%d (%.0f%%)", frame + 1, totalFrames, (frame + 1) * 100.0f / totalFrames);
