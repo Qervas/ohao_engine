@@ -383,41 +383,68 @@ void main() {
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    // Edge-aware spatial denoise (bilateral filter on accumulation buffer)
-    // Only apply when accumulation count is low (interactive mode)
+    // Multi-scale edge-aware spatial denoise (A-Trous-like bilateral filter)
+    // Runs at ALL sample counts — adaptive strength based on local variance
     vec3 denoised = acc;
-    if (count < 32.0) {
+    {
         vec3 centerNormal = imageLoad(normalAOV, pixel).rgb;
-        vec3 sum = vec3(0.0);
-        float wSum = 0.0;
-        int radius = (count < 4.0) ? 3 : 2;  // larger kernel at fewer samples
 
-        for (int dy = -radius; dy <= radius; dy++) {
-            for (int dx = -radius; dx <= radius; dx++) {
-                ivec2 sp = pixel + ivec2(dx, dy);
-                if (sp.x < 0 || sp.y < 0 || sp.x >= int(pc.params.x) || sp.y >= int(pc.params.y)) continue;
-
-                vec4 neighbor = imageLoad(accumBuffer, sp);
-                vec3 neighborNormal = imageLoad(normalAOV, sp).rgb;
-
-                // Spatial weight (gaussian)
-                float dist2 = float(dx*dx + dy*dy);
-                float ws = exp(-dist2 / 4.0);
-
-                // Normal weight — preserve edges
-                float normalSim = max(dot(centerNormal, neighborNormal), 0.0);
-                float wn = pow(normalSim, 32.0);  // sharp cutoff at normal discontinuities
-
-                // Color weight — reject outliers
-                vec3 colorDiff = acc - neighbor.rgb;
-                float wc = exp(-dot(colorDiff, colorDiff) * 4.0);
-
-                float w = ws * wn * wc;
-                sum += neighbor.rgb * w;
-                wSum += w;
+        // Estimate local variance from 3x3 neighborhood
+        vec3 mean = vec3(0.0);
+        vec3 meanSq = vec3(0.0);
+        int varSamples = 0;
+        for (int vy = -1; vy <= 1; vy++) {
+            for (int vx = -1; vx <= 1; vx++) {
+                ivec2 vp = pixel + ivec2(vx, vy);
+                if (vp.x >= 0 && vp.y >= 0 && vp.x < int(pc.params.x) && vp.y < int(pc.params.y)) {
+                    vec3 s = imageLoad(accumBuffer, vp).rgb;
+                    mean += s;
+                    meanSq += s * s;
+                    varSamples++;
+                }
             }
         }
-        if (wSum > 0.001) denoised = sum / wSum;
+        mean /= float(varSamples);
+        vec3 variance = max(meanSq / float(varSamples) - mean * mean, vec3(0.0));
+        float noiseLevel = dot(variance, vec3(0.333));
+
+        // Skip denoising if noise is negligible
+        if (noiseLevel > 0.0001) {
+            // Two-pass A-Trous: step sizes 1 and 3
+            for (int pass = 0; pass < 2; pass++) {
+                int step = (pass == 0) ? 1 : 3;
+                vec3 sum = vec3(0.0);
+                float wSum = 0.0;
+
+                for (int dy = -2; dy <= 2; dy++) {
+                    for (int dx = -2; dx <= 2; dx++) {
+                        ivec2 sp = pixel + ivec2(dx, dy) * step;
+                        if (sp.x < 0 || sp.y < 0 || sp.x >= int(pc.params.x) || sp.y >= int(pc.params.y)) continue;
+
+                        vec3 sampleColor = (pass == 0) ? imageLoad(accumBuffer, sp).rgb : denoised;
+                        vec3 sampleNormal = imageLoad(normalAOV, sp).rgb;
+
+                        // Spatial weight
+                        float dist2 = float(dx*dx + dy*dy);
+                        float ws = exp(-dist2 / 3.0);
+
+                        // Normal weight — preserve edges sharply
+                        float normalSim = max(dot(centerNormal, sampleNormal), 0.0);
+                        float wn = pow(normalSim, 64.0);
+
+                        // Color weight — adaptive to noise level
+                        vec3 colorDiff = denoised - sampleColor;
+                        float sigmaC = max(noiseLevel * 2.0, 0.001);
+                        float wc = exp(-dot(colorDiff, colorDiff) / (sigmaC + 0.0001));
+
+                        float w = ws * wn * wc;
+                        sum += sampleColor * w;
+                        wSum += w;
+                    }
+                }
+                if (wSum > 0.001) denoised = sum / wSum;
+            }
+        }
     }
 
     // Tonemap + gamma
