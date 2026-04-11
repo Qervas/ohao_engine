@@ -31,10 +31,11 @@ layout(set = 0, binding = 0) uniform sampler2D textures[];
 // Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    mat4 viewProj;        // precomputed projection * view
+    mat4 viewProj;
     mat4 prevMVP;
-    vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=albedoTexIdx (uint bits)
-    vec4 albedoColor;     // rgb=albedo, a=normalTexIdx (uint bits)
+    vec4 materialParams;  // x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
+    vec4 albedoColor;     // rgb=albedo, a=normalTexIdx
+    vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
 } pc;
 
 // Normal encoding using octahedron mapping for better precision
@@ -101,9 +102,17 @@ void main() {
     // GBuffer0: World Position + Metallic
     outGBuffer0 = vec4(fragWorldPos, metallic);
 
-    // GBuffer1: Encoded Normal + Roughness
+    // Sample emissive texture if available
+    float emissiveLuminance = 0.0;
+    uint emissiveTexIdx = floatBitsToUint(pc.emissiveParams.x);
+    if (emissiveTexIdx < 4096u) {
+        vec3 emissiveColor = texture(textures[nonuniformEXT(emissiveTexIdx)], fragTexCoord).rgb;
+        emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * pc.emissiveParams.y;
+    }
+
+    // GBuffer1: Encoded Normal + Roughness + Emissive luminance
     vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;
-    outGBuffer1 = vec4(encodedNormal, roughness, 0.0);
+    outGBuffer1 = vec4(encodedNormal, roughness, emissiveLuminance);
 
     // GBuffer2: Albedo + AO
     outGBuffer2 = vec4(albedo, ao);

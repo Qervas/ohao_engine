@@ -135,11 +135,12 @@ private:
     // Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
     struct GBufferUBO {
         glm::mat4 model;
-        glm::mat4 viewProj;       // precomputed projection * view
+        glm::mat4 viewProj;
         glm::mat4 prevMVP;
-        glm::vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=albedoTexIdx (uint bits)
-        glm::vec4 albedoColor;     // rgb=albedo, a=normalTexIdx (uint bits)
-    };
+        glm::vec4 materialParams;  // x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
+        glm::vec4 albedoColor;     // rgb=albedo, a=normalTexIdx
+        glm::vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
+    };  // 240 bytes — fits in 256-byte push constant limit
 
     glm::mat4 m_view;
     glm::mat4 m_projection;

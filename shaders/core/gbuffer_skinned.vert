@@ -25,7 +25,8 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProj;        // precomputed projection * view
     mat4 prevMVP;
     vec4 materialParams;  // x=metallic, y=roughness, z=ao, w=albedoTexIdx (uint bits)
-    vec4 albedoColor;     // rgb=albedo, a=normalTexIdx (uint bits)
+    vec4 albedoColor;
+    vec4 emissiveParams;
 } pc;
 
 // Bone matrices UBO

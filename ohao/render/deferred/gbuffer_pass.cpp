@@ -248,8 +248,21 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             ubo.model = modelMatrix;
             ubo.viewProj = m_projection * m_view;
             ubo.prevMVP = m_prevViewProj * modelMatrix;
+            // Emissive texture index
+            uint32_t emissiveTexIdx = UINT32_MAX;
+            if (m_textureManager && materialComp) {
+                const auto& mat = materialComp->getMaterial();
+                if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
+                    auto handle = m_textureManager->getTextureByPath(mat.emissiveTexture);
+                    if (handle.valid()) emissiveTexIdx = handle.index;
+                }
+            }
+            float packedEmissiveIdx;
+            memcpy(&packedEmissiveIdx, &emissiveTexIdx, sizeof(float));
+
             ubo.materialParams = glm::vec4(metallic, roughness, aoOrRoughMetal, packedAlbedoIdx);
             ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
+            ubo.emissiveParams = glm::vec4(packedEmissiveIdx, 3.0f, 0, 0);  // strength = 3.0
 
             vkCmdPushConstants(cmd, m_pipelineLayout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

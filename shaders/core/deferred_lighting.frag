@@ -156,7 +156,8 @@ void main() {
     float metallic = gBuffer0Sample.a;
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
-    float roughness = gBuffer1Sample.b; // B channel = 10 bits in A2R10G10B10
+    float roughness = gBuffer1Sample.b;
+    float emissiveLuminance = gBuffer1Sample.a;  // from GBuffer, emissive texture sampled there
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -248,8 +249,14 @@ void main() {
         Lo += evaluateBRDF(surface, L, radiance) * shadow;
     }
 
-    // Ambient lighting
-    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;
+    // Ambient lighting with GI color bleeding approximation
+    // Tint ambient based on position relative to colored walls (Cornell box hack)
+    vec3 ambientColor = vec3(1.0);
+    float redInfluence = max(0.0, 1.0 - (fragPos.x + 5.0) / 5.0) * 0.3;  // left wall = red
+    float greenInfluence = max(0.0, (fragPos.x - 0.0) / 5.0) * 0.3;       // right wall = green
+    ambientColor += vec3(redInfluence, -redInfluence*0.5, -redInfluence*0.5);
+    ambientColor += vec3(-greenInfluence*0.5, greenInfluence, -greenInfluence*0.3);
+    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor;
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
     if ((pc.flags & 8u) != 0u) {
@@ -287,8 +294,11 @@ void main() {
     vec3 kD = (1.0 - F) * (1.0 - metallic);
     ambient += envReflection + kD * irradiance * albedo;
 
+    // Emissive contribution — self-illuminating surfaces
+    vec3 emissive = albedo * emissiveLuminance;
+
     // Final color
-    vec3 color = ambient + Lo;
+    vec3 color = ambient + Lo + emissive;
 
     // Cloud shadows — applied to final color (not per-light) with 0.3 floor
     if ((pc.flags & 16u) != 0u) {

@@ -96,6 +96,25 @@ void VulkanRenderer::uploadDeferredTextures() {
                     deferredTexCount++;
                 }
             }
+
+            // Load emissive textures
+            for (size_t mi = 0; mi < model->materialEmissiveTexIndex.size(); mi++) {
+                int emIdx = model->materialEmissiveTexIndex[mi];
+                if (emIdx < 0 || emIdx >= static_cast<int>(model->emissiveTextures.size())) continue;
+                const auto& etd = model->emissiveTextures[emIdx];
+                if (etd.pixels.empty()) continue;
+
+                std::string texName = actor->getName() + "_emissive_" + std::to_string(mi);
+                auto handle = m_textureManager->loadTextureFromMemory(
+                    etd.pixels.data(), etd.width, etd.height, VK_FORMAT_R8G8B8A8_SRGB,
+                    BindlessTextureType::Custom);
+                if (handle.valid()) {
+                    m_textureManager->registerName(handle, texName);
+                    matComp->getMaterial().useEmissiveTexture = true;
+                    matComp->getMaterial().emissiveTexture = texName;
+                    deferredTexCount++;
+                }
+            }
         }
         if (deferredTexCount > 0) {
             m_textureManager->updateDescriptorSet();
