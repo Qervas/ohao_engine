@@ -217,6 +217,7 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             // Look up texture indices for bindless rendering
             uint32_t albedoTexIdx = UINT32_MAX;
             uint32_t normalTexIdx = UINT32_MAX;
+            uint32_t roughMetalTexIdx = UINT32_MAX;
             if (m_textureManager && materialComp) {
                 const auto& mat = materialComp->getMaterial();
                 if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
@@ -227,19 +228,27 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                     auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
                     if (handle.valid()) normalTexIdx = handle.index;
                 }
+                if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
+                    auto handle = m_textureManager->getTextureByPath(mat.roughnessTexture);
+                    if (handle.valid()) roughMetalTexIdx = handle.index;
+                }
             }
 
-            // Pack texture indices into unused push constant fields via bit reinterpret
-            float packedAlbedoIdx, packedNormalIdx;
+            // Pack texture indices as uint bits
+            float packedAlbedoIdx, packedNormalIdx, packedRoughMetalIdx;
             memcpy(&packedAlbedoIdx, &albedoTexIdx, sizeof(float));
             memcpy(&packedNormalIdx, &normalTexIdx, sizeof(float));
+            memcpy(&packedRoughMetalIdx, &roughMetalTexIdx, sizeof(float));
 
-            // Set push constants with transform and material data
+            // materialParams.z = roughMetalTexIdx (overloads AO slot)
+            // If no roughMetal texture, pack AO value instead (shader checks for 0xFFFFFFFF)
+            float aoOrRoughMetal = (roughMetalTexIdx != UINT32_MAX) ? packedRoughMetalIdx : ao;
+
             GBufferUBO ubo{};
             ubo.model = modelMatrix;
             ubo.viewProj = m_projection * m_view;
             ubo.prevMVP = m_prevViewProj * modelMatrix;
-            ubo.materialParams = glm::vec4(metallic, roughness, ao, packedAlbedoIdx);
+            ubo.materialParams = glm::vec4(metallic, roughness, aoOrRoughMetal, packedAlbedoIdx);
             ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
 
             vkCmdPushConstants(cmd, m_pipelineLayout,

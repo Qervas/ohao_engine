@@ -84,17 +84,29 @@ void main() {
         N = normalize(TBN * tangentNormal);
     }
 
+    // Per-pixel roughness/metallic from texture (if available)
+    float metallic = pc.materialParams.x;
+    float roughness = pc.materialParams.y;
+    float ao = pc.materialParams.z;
+
+    uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
+    if (roughMetalTexIdx < 4096u) {  // valid bindless index (not AO float or 0xFFFFFFFF)
+        // GLTF convention: G=roughness, B=metallic (already repacked to R=rough, G=metal)
+        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
+        roughness = rm.r;
+        metallic = rm.g;
+        ao = 1.0;  // no AO texture — default to 1.0
+    }
+
     // GBuffer0: World Position + Metallic
-    outGBuffer0 = vec4(fragWorldPos, pc.materialParams.x);
+    outGBuffer0 = vec4(fragWorldPos, metallic);
 
     // GBuffer1: Encoded Normal + Roughness
-    // Using octahedron encoding for normal, stored in xy
-    // Roughness in B (10 bits in A2R10G10B10 format), NOT A (only 2 bits)
-    vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5; // Map to [0,1]
-    outGBuffer1 = vec4(encodedNormal, pc.materialParams.y, 0.0);
+    vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;
+    outGBuffer1 = vec4(encodedNormal, roughness, 0.0);
 
     // GBuffer2: Albedo + AO
-    outGBuffer2 = vec4(albedo, pc.materialParams.z);
+    outGBuffer2 = vec4(albedo, ao);
 
     // Velocity: Current - Previous screen position
     // Convert from clip space to NDC ([-1,1])

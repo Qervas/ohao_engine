@@ -70,12 +70,31 @@ void VulkanRenderer::uploadDeferredTextures() {
                 }
             }
 
-            // Set roughness/metallic from model data (even without textures)
+            // Set roughness/metallic from model data
             if (!model->materialColors.empty()) {
-                float roughness = model->materialColors[0].w;  // stored in alpha
+                float roughness = model->materialColors[0].w;
                 float metallic = !model->materialMetallic.empty() ? model->materialMetallic[0] : 0.0f;
                 matComp->getMaterial().roughness = roughness;
                 matComp->getMaterial().metallic = metallic;
+            }
+
+            // Load roughness/metallic texture
+            for (size_t mi = 0; mi < model->materialRoughMetalTexIndex.size(); mi++) {
+                int rmIdx = model->materialRoughMetalTexIndex[mi];
+                if (rmIdx < 0 || rmIdx >= static_cast<int>(model->roughMetalTextures.size())) continue;
+                const auto& rmtd = model->roughMetalTextures[rmIdx];
+                if (rmtd.pixels.empty()) continue;
+
+                std::string texName = actor->getName() + "_roughmetal_" + std::to_string(mi);
+                auto handle = m_textureManager->loadTextureFromMemory(
+                    rmtd.pixels.data(), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
+                    BindlessTextureType::Roughness);
+                if (handle.valid()) {
+                    m_textureManager->registerName(handle, texName);
+                    matComp->getMaterial().useRoughnessTexture = true;
+                    matComp->getMaterial().roughnessTexture = texName;
+                    deferredTexCount++;
+                }
             }
         }
         if (deferredTexCount > 0) {
