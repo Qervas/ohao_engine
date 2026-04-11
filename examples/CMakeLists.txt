@@ -15,12 +15,12 @@ if(TARGET Jolt)
     target_link_libraries(cornell_box PRIVATE Jolt)
 endif()
 
-# Model Viewer
-add_executable(model_viewer model_viewer.cpp)
+# Model Viewer (with OIDN denoising)
+add_executable(model_viewer model_viewer.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/oidn_denoise.cpp)
 target_include_directories(model_viewer PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(model_viewer PRIVATE
     -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator OpenImageDenoise)
 if(MSVC)
     target_link_options(model_viewer PRIVATE /FORCE:MULTIPLE)
 else()

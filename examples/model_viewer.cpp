@@ -13,6 +13,7 @@
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
+#include "render/rt/oidn_denoise.hpp"
 
 #include <iostream>
 #include <string>
@@ -162,9 +163,30 @@ int main(int argc, char* argv[]) {
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
-    const uint8_t* pixels = renderer.getPixels();
-    if (pixels) {
-        stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
-        std::cout << "Saved: " << output << std::endl;
+    // OIDN denoising — read back HDR buffers, denoise, tonemap, save
+    std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
+    uint32_t rw, rh;
+    if (renderer.readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+        // Convert RGBA32F → float3 (OIDN needs float3)
+        auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
+        auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
+        auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
+
+        // Denoise
+        ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(), rw, rh, true);
+
+        // Tonemap + save
+        auto rgba8 = ohao::float3ToRGBA8(beauty3.data(), rw, rh, 0.5f);
+        stbi_write_png(output.c_str(), rw, rh, 4, rgba8.data(), rw * 4);
+        std::cout << "Saved (OIDN denoised): " << output << std::endl;
+    } else {
+        // Fallback: save without denoising
+        const uint8_t* pixels = renderer.getPixels();
+        if (pixels) {
+            stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
+            std::cout << "Saved: " << output << std::endl;
+        }
     }
+
+    scene.reset();
 }

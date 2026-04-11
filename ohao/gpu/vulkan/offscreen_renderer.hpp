@@ -116,6 +116,10 @@ public:
     void resetAccumulation() { if (m_pathTracer) m_pathTracer->resetAccumulation(); }
     uint32_t getPathTracerFrameIndex() const { return m_pathTracer ? m_pathTracer->getFrameIndex() : 0; }
 
+    // Read back HDR buffers for OIDN denoising
+    bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
+                            std::vector<float>& normal, uint32_t& w, uint32_t& h);
+
     // Deferred renderer access (for configuration)
     DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
 
