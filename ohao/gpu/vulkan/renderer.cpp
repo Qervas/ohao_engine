@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
@@ -22,7 +22,7 @@ uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, Vk
     throw std::runtime_error("Failed to find suitable memory type!");
 }
 
-OffscreenRenderer::OffscreenRenderer(uint32_t width, uint32_t height)
+VulkanRenderer::VulkanRenderer(uint32_t width, uint32_t height)
     : m_width(width), m_height(height)
 {
     m_pixelBuffer.resize(width * height * 4); // RGBA
@@ -50,11 +50,11 @@ OffscreenRenderer::OffscreenRenderer(uint32_t width, uint32_t height)
     }
 }
 
-OffscreenRenderer::~OffscreenRenderer() {
+VulkanRenderer::~VulkanRenderer() {
     shutdown();
 }
 
-bool OffscreenRenderer::initialize() {
+bool VulkanRenderer::initialize() {
     if (m_initialized) return true;
 
     try {
@@ -187,7 +187,7 @@ bool OffscreenRenderer::initialize() {
         }
 
         m_initialized = true;
-        std::cout << "OffscreenRenderer initialized: " << m_width << "x" << m_height << std::endl;
+        std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Multi-frame rendering: " << (m_frameResources.isInitialized() ? "enabled" : "disabled") << std::endl;
         std::cout << "Deferred rendering: " << (m_deferredRenderer ? "available" : "unavailable") << std::endl;
@@ -195,12 +195,12 @@ bool OffscreenRenderer::initialize() {
         return true;
 
     } catch (const std::exception& e) {
-        std::cerr << "OffscreenRenderer initialization failed: " << e.what() << std::endl;
+        std::cerr << "VulkanRenderer initialization failed: " << e.what() << std::endl;
         return false;
     }
 }
 
-void OffscreenRenderer::shutdown() {
+void VulkanRenderer::shutdown() {
     if (!m_initialized) return;
 
     if (m_device != VK_NULL_HANDLE) {
@@ -330,7 +330,7 @@ void OffscreenRenderer::shutdown() {
     m_initialized = false;
 }
 
-void OffscreenRenderer::setScene(Scene* scene) {
+void VulkanRenderer::setScene(Scene* scene) {
     m_scene = scene;
     // Update scene buffers when scene is set
     if (m_initialized && m_scene) {
@@ -338,13 +338,13 @@ void OffscreenRenderer::setScene(Scene* scene) {
     }
 }
 
-void OffscreenRenderer::updatePhysics(float deltaTime) {
+void VulkanRenderer::updatePhysics(float deltaTime) {
     if (m_scene) {
         m_scene->updatePhysics(deltaTime);
     }
 }
 
-void OffscreenRenderer::render() {
+void VulkanRenderer::render() {
     if (!m_initialized) return;
 
     // Check render mode
@@ -366,7 +366,7 @@ void OffscreenRenderer::render() {
     }
 }
 
-void OffscreenRenderer::setRenderMode(RenderMode mode) {
+void VulkanRenderer::setRenderMode(RenderMode mode) {
     if (mode == RenderMode::Deferred && !m_deferredRenderer) {
         std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
         return;
@@ -380,18 +380,18 @@ void OffscreenRenderer::setRenderMode(RenderMode mode) {
     std::cout << "Render mode set to: " << names[static_cast<int>(mode)] << std::endl;
 }
 
-bool OffscreenRenderer::initializeDeferredRenderer() {
-    std::cout << "OffscreenRenderer: Creating DeferredRenderer..." << std::endl;
+bool VulkanRenderer::initializeDeferredRenderer() {
+    std::cout << "VulkanRenderer: Creating DeferredRenderer..." << std::endl;
     if (!m_deferredRenderer) {
         m_deferredRenderer = std::make_unique<DeferredRenderer>();
     }
-    std::cout << "OffscreenRenderer: Calling DeferredRenderer::initialize()..." << std::endl;
+    std::cout << "VulkanRenderer: Calling DeferredRenderer::initialize()..." << std::endl;
     if (!m_deferredRenderer->initialize(m_device, m_physicalDevice)) {
-        std::cerr << "OffscreenRenderer: DeferredRenderer::initialize() failed!" << std::endl;
+        std::cerr << "VulkanRenderer: DeferredRenderer::initialize() failed!" << std::endl;
         m_deferredRenderer.reset();
         return false;
     }
-    std::cout << "OffscreenRenderer: DeferredRenderer initialized, resizing to " << m_width << "x" << m_height << std::endl;
+    std::cout << "VulkanRenderer: DeferredRenderer initialized, resizing to " << m_width << "x" << m_height << std::endl;
     m_deferredRenderer->onResize(m_width, m_height);
     return true;
 }

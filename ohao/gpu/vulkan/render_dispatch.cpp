@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
@@ -11,7 +11,7 @@ namespace ohao {
 // Render mode implementations
 // Split from offscreen_renderer.cpp
 
-void OffscreenRenderer::renderDeferred() {
+void VulkanRenderer::renderDeferred() {
     if (!m_deferredRenderer) return;
 
     // Get command buffer
@@ -119,7 +119,7 @@ void OffscreenRenderer::renderDeferred() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void OffscreenRenderer::renderPathTraced() {
+void VulkanRenderer::renderPathTraced() {
     if (!m_pathTracer || !m_rtAccel) return;
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
@@ -182,7 +182,7 @@ void OffscreenRenderer::renderPathTraced() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void OffscreenRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
+void VulkanRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
     if (!m_deferredRenderer) return;
 
     VkImage finalImage = m_deferredRenderer->getFinalOutputImage();
@@ -228,7 +228,7 @@ void OffscreenRenderer::copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd) {
                            frame.stagingBuffer, 1, &region);
 }
 
-void OffscreenRenderer::renderMultiFrame() {
+void VulkanRenderer::renderMultiFrame() {
     // Get current frame resources
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
 
@@ -356,7 +356,7 @@ void OffscreenRenderer::renderMultiFrame() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void OffscreenRenderer::renderLegacy() {
+void VulkanRenderer::renderLegacy() {
     // Legacy single-frame rendering (kept for compatibility)
     updateUniformBuffer();
     updateLightBuffer();
@@ -475,7 +475,7 @@ void OffscreenRenderer::renderLegacy() {
     vkUnmapMemory(m_device, m_stagingBufferMemory);
 }
 
-void OffscreenRenderer::resize(uint32_t width, uint32_t height) {
+void VulkanRenderer::resize(uint32_t width, uint32_t height) {
     if (width == m_width && height == m_height) return;
 
     m_width = width;
@@ -512,11 +512,11 @@ void OffscreenRenderer::resize(uint32_t width, uint32_t height) {
     }
 }
 
-bool OffscreenRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& outRes) {
+bool VulkanRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& outRes) {
     return false; // Terrain pass disabled
 }
 
-bool OffscreenRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
+bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
                                             std::vector<float>& normal, uint32_t& w, uint32_t& h) {
     if (!m_pathTracer) return false;
     w = m_width; h = m_height;

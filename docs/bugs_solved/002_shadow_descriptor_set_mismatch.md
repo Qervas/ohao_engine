@@ -51,9 +51,9 @@ renderShadowPass(m_commandBuffer, m_descriptorSet);
 
 ## Files Modified
 
-- `src/renderer/offscreen/offscreen_renderer.hpp` - Updated function signature
+- `src/renderer/offscreen/renderer.hpp` - Updated function signature
 - `src/renderer/offscreen/offscreen_scene_render.cpp` - Accept and use descriptor set parameter
-- `src/renderer/offscreen/offscreen_renderer.cpp` - Pass correct descriptor set from both render paths
+- `src/renderer/offscreen/renderer.cpp` - Pass correct descriptor set from both render paths
 
 ## Key Insight
 

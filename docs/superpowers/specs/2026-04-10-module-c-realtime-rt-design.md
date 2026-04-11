@@ -87,7 +87,7 @@ Tasks 1-3 upgrade the existing path tracer to interactive quality. Task 4 is a f
 | `shaders/rt/pt_raygen.rgen` | Temporal reprojection, motion vectors |
 | `shaders/compute/denoise_atrous.comp` | A-Trous wavelet denoiser (new) |
 | `ohao/render/deferred/denoiser_pass.hpp/cpp` | Denoiser compute pass (new) |
-| `ohao/gpu/vulkan/offscreen_renderer.cpp` | Mode switch, frame timing |
+| `ohao/gpu/vulkan/renderer.cpp` | Mode switch, frame timing |
 | `examples/interactive.cpp` | Interactive viewer with camera controls (new) |
 
 ## Performance Budget (target)

@@ -1,8 +1,8 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 
 namespace ohao {
 
-bool OffscreenRenderer::createRenderPass() {
+bool VulkanRenderer::createRenderPass() {
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -53,7 +53,7 @@ bool OffscreenRenderer::createRenderPass() {
     return true;
 }
 
-bool OffscreenRenderer::createOffscreenFramebuffer() {
+bool VulkanRenderer::createOffscreenFramebuffer() {
     // Create color image
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -174,7 +174,7 @@ bool OffscreenRenderer::createOffscreenFramebuffer() {
     return true;
 }
 
-void OffscreenRenderer::cleanupFramebuffer() {
+void VulkanRenderer::cleanupFramebuffer() {
     if (m_framebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(m_device, m_framebuffer, nullptr);
         m_framebuffer = VK_NULL_HANDLE;
@@ -209,7 +209,7 @@ void OffscreenRenderer::cleanupFramebuffer() {
 // Shadow Mapping Resources
 // ============================================================================
 
-bool OffscreenRenderer::createShadowRenderPass() {
+bool VulkanRenderer::createShadowRenderPass() {
     // Depth-only render pass for shadow map generation
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = VK_FORMAT_D32_SFLOAT;
@@ -267,7 +267,7 @@ bool OffscreenRenderer::createShadowRenderPass() {
     return true;
 }
 
-bool OffscreenRenderer::createShadowResources() {
+bool VulkanRenderer::createShadowResources() {
     // Create shadow depth image
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -362,7 +362,7 @@ bool OffscreenRenderer::createShadowResources() {
     return true;
 }
 
-void OffscreenRenderer::cleanupShadowResources() {
+void VulkanRenderer::cleanupShadowResources() {
     if (m_shadowFramebuffer != VK_NULL_HANDLE) {
         vkDestroyFramebuffer(m_device, m_shadowFramebuffer, nullptr);
         m_shadowFramebuffer = VK_NULL_HANDLE;

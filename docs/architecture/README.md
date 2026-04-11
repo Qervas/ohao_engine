@@ -39,7 +39,7 @@ digraph OHAO_Architecture {
         style=filled;
         color=lightgreen;
 
-        OffscreenRenderer [label="OffscreenRenderer\n(Vulkan Pipeline)", fillcolor=seagreen, fontcolor=white];
+        VulkanRenderer [label="VulkanRenderer\n(Vulkan Pipeline)", fillcolor=seagreen, fontcolor=white];
         Scene [label="Scene\n(Actor/Component ECS)", fillcolor=mediumseagreen];
         PhysicsWorld [label="PhysicsWorld\n(Custom Physics)", fillcolor=mediumseagreen];
         DeferredRenderer [label="DeferredRenderer\n(AAA Quality)", fillcolor=seagreen, fontcolor=white];
@@ -59,15 +59,15 @@ digraph OHAO_Architecture {
     // Connections
     GodotUI -> OhaoViewport [label="embeds"];
     GodotScene -> OhaoViewport [label="sync_from_godot()"];
-    OhaoViewport -> OffscreenRenderer [label="render()"];
+    OhaoViewport -> VulkanRenderer [label="render()"];
     OhaoViewport -> Scene [label="scene management"];
 
-    OffscreenRenderer -> Framebuffer [label="render to"];
-    OffscreenRenderer -> ShadowMap [label="shadow pass"];
-    OffscreenRenderer -> DeferredRenderer [label="deferred mode"];
+    VulkanRenderer -> Framebuffer [label="render to"];
+    VulkanRenderer -> ShadowMap [label="shadow pass"];
+    VulkanRenderer -> DeferredRenderer [label="deferred mode"];
     DeferredRenderer -> GBuffer [label="G-Buffer pass"];
 
-    Scene -> OffscreenRenderer [label="mesh/light data"];
+    Scene -> VulkanRenderer [label="mesh/light data"];
     Scene -> PhysicsWorld [label="physics sync"];
 
     Framebuffer -> PixelBuffer [label="copy"];

@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include "scene/component/light_component.hpp"
 #include "scene/scene.hpp"
@@ -8,7 +8,7 @@
 
 namespace ohao {
 
-bool OffscreenRenderer::createUniformBuffer() {
+bool VulkanRenderer::createUniformBuffer() {
     VkDeviceSize bufferSize = sizeof(CameraUniformBuffer);
 
     VkBufferCreateInfo bufferInfo{};
@@ -42,7 +42,7 @@ bool OffscreenRenderer::createUniformBuffer() {
     return true;
 }
 
-bool OffscreenRenderer::createVertexBuffer() {
+bool VulkanRenderer::createVertexBuffer() {
     // Create a demo triangle using full Vertex struct
     std::vector<Vertex> vertices = {
         // Bottom vertex - Red
@@ -91,7 +91,7 @@ bool OffscreenRenderer::createVertexBuffer() {
     return true;
 }
 
-void OffscreenRenderer::updateUniformBuffer() {
+void VulkanRenderer::updateUniformBuffer() {
     CameraUniformBuffer ubo{};
     ubo.view = m_camera->getViewMatrix();
     ubo.proj = glm::perspective(glm::radians(45.0f),
@@ -104,7 +104,7 @@ void OffscreenRenderer::updateUniformBuffer() {
     memcpy(m_uniformBufferMapped, &ubo, sizeof(ubo));
 }
 
-void OffscreenRenderer::updateUniformBuffer(uint32_t frameIndex) {
+void VulkanRenderer::updateUniformBuffer(uint32_t frameIndex) {
     if (!m_frameResources.isInitialized()) {
         updateUniformBuffer();
         return;
@@ -125,7 +125,7 @@ void OffscreenRenderer::updateUniformBuffer(uint32_t frameIndex) {
     memcpy(frame.cameraBufferMapped, &ubo, sizeof(ubo));
 }
 
-bool OffscreenRenderer::createLightBuffer() {
+bool VulkanRenderer::createLightBuffer() {
     VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
 
     VkBufferCreateInfo bufferInfo{};
@@ -162,7 +162,7 @@ bool OffscreenRenderer::createLightBuffer() {
     return true;
 }
 
-glm::mat4 OffscreenRenderer::calculateLightSpaceMatrix(const LightData& light) {
+glm::mat4 VulkanRenderer::calculateLightSpaceMatrix(const LightData& light) {
     // For directional lights, use orthographic projection
     int lightType = static_cast<int>(light.position.w);
 
@@ -241,7 +241,7 @@ glm::mat4 OffscreenRenderer::calculateLightSpaceMatrix(const LightData& light) {
     return glm::mat4(1.0f);
 }
 
-void OffscreenRenderer::updateLightBuffer() {
+void VulkanRenderer::updateLightBuffer() {
     LightUniformBuffer lightUbo{};
     lightUbo.numLights = 0;
     lightUbo.ambientIntensity = 0.15f;
@@ -316,7 +316,7 @@ void OffscreenRenderer::updateLightBuffer() {
     memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));
 }
 
-void OffscreenRenderer::updateLightBuffer(uint32_t frameIndex) {
+void VulkanRenderer::updateLightBuffer(uint32_t frameIndex) {
     if (!m_frameResources.isInitialized()) {
         updateLightBuffer();
         return;

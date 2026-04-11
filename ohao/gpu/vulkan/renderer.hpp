@@ -77,21 +77,21 @@ struct LightUniformBuffer {
 };
 
 /**
- * OffscreenRenderer - Renders OHAO scenes to a pixel buffer without a window
+ * VulkanRenderer - Renders OHAO scenes to a pixel buffer without a window
  *
  * Used for embedding OHAO rendering in external applications (like Godot)
  *
  * Usage:
- *   OffscreenRenderer renderer(800, 600);
+ *   VulkanRenderer renderer(800, 600);
  *   renderer.initialize();
  *   renderer.setScene(scene);
  *   renderer.render();
  *   const uint8_t* pixels = renderer.getPixels(); // RGBA format
  */
-class OffscreenRenderer {
+class VulkanRenderer {
 public:
-    OffscreenRenderer(uint32_t width, uint32_t height);
-    ~OffscreenRenderer();
+    VulkanRenderer(uint32_t width, uint32_t height);
+    ~VulkanRenderer();
 
     // Lifecycle
     bool initialize();

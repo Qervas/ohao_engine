@@ -22,7 +22,7 @@ The ring buffer architecture has 3 frames in flight, each with its own staging b
 
 ## Root Cause
 
-`OffscreenRenderer::resize()` did not call any method to resize the per-frame staging buffers in `FrameResourceManager`.
+`VulkanRenderer::resize()` did not call any method to resize the per-frame staging buffers in `FrameResourceManager`.
 
 ## Solution
 
@@ -32,7 +32,7 @@ The ring buffer architecture has 3 frames in flight, each with its own staging b
    - Creates new staging buffers with correct size
    - Initializes to black (prevents garbage on first frames)
 
-2. Updated `OffscreenRenderer::resize()` to call:
+2. Updated `VulkanRenderer::resize()` to call:
    ```cpp
    if (m_frameResources.isInitialized()) {
        m_frameResources.resizeStagingBuffers(width * height * 4);
@@ -44,7 +44,7 @@ The ring buffer architecture has 3 frames in flight, each with its own staging b
 
 - `src/renderer/frame/frame_resources.hpp` - Added `resizeStagingBuffers()` declaration
 - `src/renderer/frame/frame_resources.cpp` - Added `resizeStagingBuffers()` implementation
-- `src/renderer/offscreen/offscreen_renderer.cpp` - Call resize in `resize()` method
+- `src/renderer/offscreen/renderer.cpp` - Call resize in `resize()` method
 
 ## Verification
 

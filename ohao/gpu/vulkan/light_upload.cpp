@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include <array>
 #include <deque>
 #include "scene/scene.hpp"
@@ -22,7 +22,7 @@ namespace ohao {
 
 
 
-void OffscreenRenderer::uploadDeferredTextures() {
+void VulkanRenderer::uploadDeferredTextures() {
     // Load model textures into BindlessTextureManager for deferred pipeline
     if (m_textureManager && m_scene) {
         int deferredTexCount = 0;
@@ -78,7 +78,7 @@ void OffscreenRenderer::uploadDeferredTextures() {
 
 }
 
-void OffscreenRenderer::uploadLightBuffer() {
+void VulkanRenderer::uploadLightBuffer() {
     // Build light buffer from scene LightComponents
     {
         std::vector<GPULight> gpuLights;

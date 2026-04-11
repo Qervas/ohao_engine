@@ -1,6 +1,6 @@
 #pragma once
 
-#include "offscreen_renderer.hpp"
+#include "renderer.hpp"
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>

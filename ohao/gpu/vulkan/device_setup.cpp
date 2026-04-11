@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -7,7 +7,7 @@
 
 namespace ohao {
 
-bool OffscreenRenderer::createInstance() {
+bool VulkanRenderer::createInstance() {
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "OHAO Offscreen Renderer";
@@ -38,7 +38,7 @@ bool OffscreenRenderer::createInstance() {
     return true;
 }
 
-bool OffscreenRenderer::pickPhysicalDevice() {
+bool VulkanRenderer::pickPhysicalDevice() {
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(m_instance, &deviceCount, nullptr);
 
@@ -93,7 +93,7 @@ bool OffscreenRenderer::pickPhysicalDevice() {
     return false;
 }
 
-bool OffscreenRenderer::createLogicalDevice() {
+bool VulkanRenderer::createLogicalDevice() {
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo{};
     queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -188,7 +188,7 @@ bool OffscreenRenderer::createLogicalDevice() {
     return true;
 }
 
-bool OffscreenRenderer::createCommandPool() {
+bool VulkanRenderer::createCommandPool() {
     VkCommandPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.queueFamilyIndex = m_graphicsQueueFamily;
@@ -212,7 +212,7 @@ bool OffscreenRenderer::createCommandPool() {
     return true;
 }
 
-bool OffscreenRenderer::createSyncObjects() {
+bool VulkanRenderer::createSyncObjects() {
     // Legacy single fence (kept for compatibility during transition)
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -225,7 +225,7 @@ bool OffscreenRenderer::createSyncObjects() {
     return true;
 }
 
-bool OffscreenRenderer::initializeFrameResources() {
+bool VulkanRenderer::initializeFrameResources() {
     // Calculate buffer sizes
     size_t cameraBufferSize = sizeof(CameraUniformBuffer);
     size_t lightBufferSize = sizeof(LightUniformBuffer);

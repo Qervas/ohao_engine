@@ -1,9 +1,9 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include "scene/asset/model.hpp"
 
 namespace ohao {
 
-VkShaderModule OffscreenRenderer::loadShaderModule(const std::string& filepath) {
+VkShaderModule VulkanRenderer::loadShaderModule(const std::string& filepath) {
     // Search multiple paths for shader SPVs
     std::vector<std::string> searchPaths = {
         filepath,
@@ -42,7 +42,7 @@ VkShaderModule OffscreenRenderer::loadShaderModule(const std::string& filepath) 
     return shaderModule;
 }
 
-bool OffscreenRenderer::createDescriptorSetLayout() {
+bool VulkanRenderer::createDescriptorSetLayout() {
     std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
 
     // Binding 0: Camera uniform buffer
@@ -78,7 +78,7 @@ bool OffscreenRenderer::createDescriptorSetLayout() {
     return true;
 }
 
-bool OffscreenRenderer::createDescriptorPool() {
+bool VulkanRenderer::createDescriptorPool() {
     // Calculate descriptor counts for multi-frame rendering
     // Each frame needs: 1 camera UBO + 1 light UBO + 1 shadow sampler
     // Plus 1 legacy set for compatibility during transition
@@ -108,7 +108,7 @@ bool OffscreenRenderer::createDescriptorPool() {
     return true;
 }
 
-bool OffscreenRenderer::createDescriptorSets() {
+bool VulkanRenderer::createDescriptorSets() {
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
@@ -172,7 +172,7 @@ bool OffscreenRenderer::createDescriptorSets() {
     return true;
 }
 
-bool OffscreenRenderer::createPipeline() {
+bool VulkanRenderer::createPipeline() {
     // Load shaders (new AAA directory structure: core/forward.vert/frag)
     std::string vertPath = m_shaderBasePath + "core_forward.vert.spv";
     std::string fragPath = m_shaderBasePath + "core_forward.frag.spv";
@@ -322,7 +322,7 @@ bool OffscreenRenderer::createPipeline() {
     return true;
 }
 
-bool OffscreenRenderer::createShadowPipeline() {
+bool VulkanRenderer::createShadowPipeline() {
     // Load shadow shaders (new AAA directory structure: shadow/shadow_depth.vert/frag)
     std::string vertPath = m_shaderBasePath + "shadow_shadow_depth.vert.spv";
     std::string fragPath = m_shaderBasePath + "shadow_shadow_depth.frag.spv";

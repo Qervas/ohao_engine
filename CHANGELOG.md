@@ -11,7 +11,7 @@ OHAO Engine has transitioned from a standalone GLFW/ImGui application to a **GDE
 ### Added
 - **GDExtension Integration**: OHAO now runs as a Godot 4.x plugin
 - **OhaoViewport**: Custom viewport panel in Godot Editor displaying OHAO's Vulkan renderer
-- **OffscreenRenderer**: Headless Vulkan rendering pipeline that outputs to a CPU-readable pixel buffer
+- **VulkanRenderer**: Headless Vulkan rendering pipeline that outputs to a CPU-readable pixel buffer
 - **macOS Support**: Full support for macOS via MoltenVK
 - **Camera Controls**: Orbit, pan, and zoom controls in the OHAO viewport
 
@@ -31,7 +31,7 @@ OHAO Engine has transitioned from a standalone GLFW/ImGui application to a **GDE
 
 ### Changed
 - **Build System**: Now uses SCons for GDExtension alongside CMake for engine libraries
-- **Rendering**: OffscreenRenderer replaces VulkanContext for Godot integration
+- **Rendering**: VulkanRenderer replaces VulkanContext for Godot integration
 - **Scene Management**: Scene system retained but serialization handled by Godot
 
 ### Migration Notes

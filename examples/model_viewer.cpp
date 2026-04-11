@@ -6,7 +6,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/offscreen_renderer.hpp"
+#include "gpu/vulkan/renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
     std::cout << "OHAO Model Viewer — " << modelPath << std::endl;
     std::cout << W << "x" << H << " @ " << samples << " spp" << std::endl;
 
-    OffscreenRenderer renderer(W, H);
+    VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
 
     // Cornell box backdrop

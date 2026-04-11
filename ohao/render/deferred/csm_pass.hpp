@@ -84,7 +84,7 @@ private:
     // Scene reference
     Scene* m_scene{nullptr};
 
-    // Geometry buffers (from OffscreenRenderer)
+    // Geometry buffers (from VulkanRenderer)
     VkBuffer m_vertexBuffer{VK_NULL_HANDLE};
     VkBuffer m_indexBuffer{VK_NULL_HANDLE};
     const std::unordered_map<uint64_t, MeshBufferInfo>* m_meshBufferMap{nullptr};

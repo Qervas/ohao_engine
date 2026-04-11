@@ -16,7 +16,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/offscreen_renderer.hpp"
+#include "gpu/vulkan/renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -125,7 +125,7 @@ int main(int argc, char* argv[]) {
     std::cout << "WASD=move  RightMouse=look  +/-=spp  F12=screenshot  ESC=quit" << std::endl;
 
     // Init Vulkan renderer (offscreen)
-    OffscreenRenderer renderer(W, H);
+    VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
 
     if (!envPath.empty()) renderer.setEnvironmentMap(envPath);

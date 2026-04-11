@@ -6,7 +6,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/offscreen_renderer.hpp"
+#include "gpu/vulkan/renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "OHAO Env Demo — " << modelPath << " + " << envPath << std::endl;
 
-    OffscreenRenderer renderer(W, H);
+    VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL" << std::endl; return 1; }
 
     // Set HDR environment

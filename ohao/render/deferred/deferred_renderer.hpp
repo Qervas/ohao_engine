@@ -42,7 +42,7 @@ public:
     // Scene configuration
     void setScene(Scene* scene);
 
-    // Geometry buffers (from OffscreenRenderer)
+    // Geometry buffers (from VulkanRenderer)
     void setGeometryBuffers(VkBuffer vertexBuffer, VkBuffer indexBuffer,
                             const std::unordered_map<uint64_t, MeshBufferInfo>* bufferMap);
 

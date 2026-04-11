@@ -7,7 +7,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/offscreen_renderer.hpp"
+#include "gpu/vulkan/renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
     std::cout << "=== OHAO Renderer Smoke Test ===" << std::endl;
 
     // 1. Initialize renderer
-    OffscreenRenderer renderer(W, H);
+    VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) {
         std::cerr << "FAIL: renderer init" << std::endl;
         return 1;

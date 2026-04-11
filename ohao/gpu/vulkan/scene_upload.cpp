@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include <array>
 #include <deque>
 #include "scene/scene.hpp"
@@ -16,7 +16,7 @@
 
 namespace ohao {
 
-bool OffscreenRenderer::updateSceneBuffers() {
+bool VulkanRenderer::updateSceneBuffers() {
     if (!m_scene) {
         std::cout << "Cannot update buffers - no scene exists" << std::endl;
         m_hasSceneMeshes = false;
@@ -184,7 +184,7 @@ bool OffscreenRenderer::updateSceneBuffers() {
     return true;
 }
 
-void OffscreenRenderer::renderSceneObjects(VkCommandBuffer cmd) {
+void VulkanRenderer::renderSceneObjects(VkCommandBuffer cmd) {
     if (!m_hasSceneMeshes || !m_scene || !m_pipeline) {
         return;
     }
@@ -253,7 +253,7 @@ void OffscreenRenderer::renderSceneObjects(VkCommandBuffer cmd) {
     }
 }
 
-void OffscreenRenderer::renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descriptorSet) {
+void VulkanRenderer::renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descriptorSet) {
     static int shadowDebugCounter = 0;
     bool shouldPrintShadowDebug = (shadowDebugCounter++ % 120 == 0);
 
@@ -347,7 +347,7 @@ void OffscreenRenderer::renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet de
     // Render pass finalLayout transitions shadow image to SHADER_READ_ONLY_OPTIMAL
 }
 
-void OffscreenRenderer::buildAccelerationStructures() {
+void VulkanRenderer::buildAccelerationStructures() {
     if (!m_rtAccel || !m_rtAccel->isSupported()) return;
     if (!m_hasSceneMeshes || !m_scene) return;
     if (m_vertexCount == 0 || m_indexCount == 0) return;

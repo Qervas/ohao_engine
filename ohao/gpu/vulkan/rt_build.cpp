@@ -1,4 +1,4 @@
-#include "offscreen_renderer_impl.hpp"
+#include "renderer_impl.hpp"
 #include <array>
 #include <deque>
 #include "scene/scene.hpp"
@@ -22,7 +22,7 @@ namespace ohao {
 
 
 
-void OffscreenRenderer::createRTVertexIndexBuffers() {
+void VulkanRenderer::createRTVertexIndexBuffers() {
     // Destroy old RT buffers
     if (m_rtVertexBuffer) { vkDestroyBuffer(m_device, m_rtVertexBuffer, nullptr); m_rtVertexBuffer = VK_NULL_HANDLE; }
     if (m_rtVertexMemory) { vkFreeMemory(m_device, m_rtVertexMemory, nullptr); m_rtVertexMemory = VK_NULL_HANDLE; }
@@ -100,7 +100,7 @@ void OffscreenRenderer::createRTVertexIndexBuffers() {
 
 }
 
-void OffscreenRenderer::createRTNormalUVBuffers() {
+void VulkanRenderer::createRTNormalUVBuffers() {
     VkDeviceSize vertexSize = m_vertexCount * sizeof(Vertex);
     // Create normal buffer — extract normals from host-visible vertex buffer
     {
@@ -182,7 +182,7 @@ void OffscreenRenderer::createRTNormalUVBuffers() {
 
 }
 
-void OffscreenRenderer::uploadRTMaterialBuffers() {
+void VulkanRenderer::uploadRTMaterialBuffers() {
     // Create material-ID buffer — per-triangle material index from loaded model
     // And per-material color buffer
     {
@@ -305,7 +305,7 @@ void OffscreenRenderer::uploadRTMaterialBuffers() {
 
 }
 
-void OffscreenRenderer::uploadRTTextureArray() {
+void VulkanRenderer::uploadRTTextureArray() {
     // Create texture array from all actors' model textures
     {
         // Cleanup previous texture array resources
@@ -693,7 +693,7 @@ void OffscreenRenderer::uploadRTTextureArray() {
 
 }
 
-void OffscreenRenderer::buildBLASTLAS() {
+void VulkanRenderer::buildBLASTLAS() {
     // Rebuild acceleration structures using the RT buffers
     m_rtAccel->destroy();
     m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool);

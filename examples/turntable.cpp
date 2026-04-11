@@ -8,7 +8,7 @@
 #endif
 #include "stb_image_write.h"
 
-#include "gpu/vulkan/offscreen_renderer.hpp"
+#include "gpu/vulkan/renderer.hpp"
 #include "render/rt/oidn_denoise.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
@@ -60,7 +60,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "OHAO Turntable — " << mode << " mode, " << spp << " spp, " << totalFrames << " frames" << std::endl;
 
-    OffscreenRenderer renderer(W, H);
+    VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) return 1;
 
     auto scene = std::make_unique<Scene>("Turntable");

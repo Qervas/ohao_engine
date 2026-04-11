@@ -388,7 +388,7 @@ bool Scene::updateSceneBuffers() {
     // Mark as up-to-date
     needsBufferUpdate = false;
 
-    // GPU buffer updates are handled by OffscreenRenderer::updateSceneBuffers()
+    // GPU buffer updates are handled by VulkanRenderer::updateSceneBuffers()
     return true;
 }
 

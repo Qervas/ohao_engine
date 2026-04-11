@@ -167,7 +167,7 @@ for each actor's model:
 // Create VkBuffer, upload
 ```
 
-Add `m_rtTangentBuffer` to offscreen_renderer.hpp.
+Add `m_rtTangentBuffer` to renderer.hpp.
 
 - [ ] **Step 5: Build normal texture array (binding 12)**
 
@@ -179,7 +179,7 @@ In `offscreen_scene_render.cpp`, create a second texture array for normals:
 // - Source: model.normalTextures
 ```
 
-Add `m_rtNormalTextureArray`, `m_rtNormalTextureArrayView` to offscreen_renderer.hpp.
+Add `m_rtNormalTextureArray`, `m_rtNormalTextureArrayView` to renderer.hpp.
 
 - [ ] **Step 6: Add descriptors for binding 12 + 15 in path_tracer.cpp**
 

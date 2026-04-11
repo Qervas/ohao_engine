@@ -131,7 +131,7 @@ scene->setEnvironmentMap("studio_hdr.hdr");
 - LightComponent: add LightType enum, radius, direction, cone angles, range
 - Collect all LightComponent actors → GPU SSBO at scene buffer upload
 - Path tracer descriptor: add binding 12 (light buffer)
-- Remove hardcoded light from offscreen_renderer.cpp render() call
+- Remove hardcoded light from renderer.cpp render() call
 - Update examples to create lights via scene graph
 - **Test**: Cornell box with 3 colored sphere lights (red, green, blue)
 
@@ -173,7 +173,7 @@ scene->setEnvironmentMap("studio_hdr.hdr");
 | `shaders/rt/pt_miss.rmiss` | Return environment color instead of black |
 | `ohao/render/rt/path_tracer.hpp/cpp` | Light buffer descriptor (binding 12), env map descriptor, remove push constant light |
 | `ohao/gpu/vulkan/offscreen_scene_render.cpp` | Collect LightComponents → GPU light buffer, emissive triangle scan |
-| `ohao/gpu/vulkan/offscreen_renderer.cpp` | Remove hardcoded light, pass scene lights |
+| `ohao/gpu/vulkan/renderer.cpp` | Remove hardcoded light, pass scene lights |
 | `ohao/scene/component/light_component.hpp/cpp` | LightType enum, direction, cone angles, range |
 | `examples/cornell_box.cpp` | Create lights via scene graph |
 | `examples/model_viewer.cpp` | Auto-create key/fill/rim lights |
