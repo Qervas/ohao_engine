@@ -319,6 +319,62 @@ void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
     entry.deviceAddress = 0;
 }
 
+void RTAccelerationStructure::rebuildBLAS(BlasHandle handle, VkBuffer skinnedPositions,
+                                            uint32_t vertexCount, VkBuffer indexBuffer,
+                                            uint32_t indexCount, VkDeviceSize indexByteOffset,
+                                            VkCommandBuffer cmd) {
+    if (handle >= m_blasEntries.size() || m_blasEntries[handle].handle == VK_NULL_HANDLE) return;
+    auto& entry = m_blasEntries[handle];
+
+    uint32_t primitiveCount = indexCount / 3;
+
+    // Geometry: skinned positions (tightly packed vec3, stride=12)
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+
+    auto& triangles = geometry.geometry.triangles;
+    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.vertexData.deviceAddress = getBufferDeviceAddress(skinnedPositions);
+    triangles.vertexStride = 12;  // tightly packed vec3 (3 floats × 4 bytes)
+    triangles.maxVertex = vertexCount - 1;
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer);
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
+    buildInfo.dstAccelerationStructure = entry.handle;
+
+    // Query actual scratch buffer size needed
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
+    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    vkGetAccelerationStructureBuildSizesKHR(m_device,
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &buildInfo, &primitiveCount, &sizeInfo);
+    ensureScratchBuffer(sizeInfo.buildScratchSize);
+    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+    rangeInfo.primitiveCount = primitiveCount;
+    rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);
+    rangeInfo.firstVertex = 0;
+    rangeInfo.transformOffset = 0;
+
+    const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
+
+    bool ownCmd = (cmd == VK_NULL_HANDLE);
+    if (ownCmd) cmd = beginSingleTimeCommands();
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
+    if (ownCmd) endSingleTimeCommands(cmd);
+}
+
 // === TLAS ===
 
 void RTAccelerationStructure::clearInstances() {

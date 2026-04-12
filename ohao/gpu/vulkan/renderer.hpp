@@ -12,6 +12,7 @@
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
+#include "render/rt/gpu_skinning.hpp"
 
 namespace ohao {
 
@@ -320,6 +321,16 @@ private:
 
     // Cached emissive mesh lights (computed once during updateSceneBuffers, used per-frame)
     std::vector<LightData> m_cachedEmissiveLights;
+
+    // GPU compute skinning for animated BLAS rebuild
+    std::unique_ptr<GPUSkinning> m_gpuSkinning;
+    struct AnimatedMeshInfo {
+        uint32_t skinHandle;     // GPUSkinning mesh handle
+        uint64_t actorId;        // scene actor ID
+        uint32_t blasIndex;      // which BLAS to rebuild
+    };
+    std::vector<AnimatedMeshInfo> m_animatedMeshes;
+    void updateAnimatedBLAS(VkCommandBuffer cmd); // per-frame: skin + BLAS rebuild
 
     // Sync
     VkFence m_renderFence{VK_NULL_HANDLE};

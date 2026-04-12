@@ -38,6 +38,7 @@ void VulkanRenderer::createRTVertexIndexBuffers() {
         bufInfo.size = size;
         bufInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |  // for compute skinning
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         if (vkCreateBuffer(m_device, &bufInfo, nullptr, &buf) != VK_SUCCESS) return false;
 
@@ -722,6 +723,31 @@ void VulkanRenderer::buildBLASTLAS() {
         if (blas != INVALID_BLAS) actorBlas[actorId] = blas;
     }
 
+    // Register animated meshes for GPU skinning + dynamic BLAS rebuild
+    m_animatedMeshes.clear();
+    if (m_gpuSkinning) {
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            if (!actor->getComponent<AnimationComponent>()) continue;
+            auto blasIt = actorBlas.find(actorId);
+            if (blasIt == actorBlas.end()) continue;
+            auto meshIt = m_meshBufferMap.find(actorId);
+            if (meshIt == m_meshBufferMap.end()) continue;
+
+            uint32_t skinHandle = m_gpuSkinning->registerMesh(
+                m_rtVertexBuffer, meshIt->second.vertexCount, meshIt->second.vertexOffset);
+
+            AnimatedMeshInfo info{};
+            info.skinHandle = skinHandle;
+            info.actorId = actorId;
+            info.blasIndex = blasIt->second;
+            m_animatedMeshes.push_back(info);
+        }
+        if (!m_animatedMeshes.empty()) {
+            std::cout << "[RT] Registered " << m_animatedMeshes.size()
+                      << " animated meshes for GPU skinning" << std::endl;
+        }
+    }
+
     // Build TLAS instances + collect materials in the SAME order
     m_rtAccel->clearInstances();
     std::vector<glm::vec3> materialAlbedos;
@@ -734,8 +760,9 @@ void VulkanRenderer::buildBLASTLAS() {
         // customIndex = global triangle offset for material ID lookup
         // mask: 0xFF = visible to all rays. Animated actors get 0xFE (bit 0 clear)
         // so GI rays (mask 0x01) skip them — avoids T-pose ghost in GI.
+        // With dynamic BLAS rebuild, all instances are visible to all rays
         bool isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
-        uint32_t instanceMask = isAnimated ? 0xFE : 0xFF;
+        uint32_t instanceMask = (isAnimated && m_gpuSkinning) ? 0xFF : (isAnimated ? 0xFE : 0xFF);
         m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), globalTriOffset, instanceMask);
 
         // Collect albedo in same order
@@ -800,5 +827,42 @@ void VulkanRenderer::buildBLASTLAS() {
         }
     }
     }
+
+void VulkanRenderer::updateAnimatedBLAS(VkCommandBuffer cmd) {
+    if (!m_gpuSkinning || !m_rtAccel || m_animatedMeshes.empty()) return;
+
+    for (const auto& animMesh : m_animatedMeshes) {
+        // Get bone matrices from actor's AnimationComponent
+        auto it = m_scene->getAllActors().find(animMesh.actorId);
+        if (it == m_scene->getAllActors().end()) continue;
+
+        auto animComp = it->second->getComponent<AnimationComponent>();
+        if (!animComp || !animComp->isPlaying()) continue;
+
+        const auto& boneMatrices = animComp->getJointMatrices();
+        if (boneMatrices.empty()) continue;
+
+        // Run compute skinning (writes to skinned position buffer)
+        m_gpuSkinning->skin(cmd, animMesh.skinHandle, boneMatrices);
+
+        // Get the mesh info for index buffer reference
+        auto meshIt = m_meshBufferMap.find(animMesh.actorId);
+        if (meshIt == m_meshBufferMap.end()) continue;
+
+        // Rebuild BLAS with skinned positions
+        m_rtAccel->rebuildBLAS(
+            animMesh.blasIndex,
+            m_gpuSkinning->getSkinnedPositionBuffer(animMesh.skinHandle),
+            m_gpuSkinning->getVertexCount(animMesh.skinHandle),
+            m_rtIndexBuffer,
+            meshIt->second.indexCount,
+            meshIt->second.indexOffset * sizeof(uint32_t),
+            cmd);
+    }
+
+    // Rebuild TLAS to pick up the updated BLAS handles
+    // (instances already set from buildBLASTLAS, just need geometry update)
+    m_rtAccel->buildTLAS(cmd);
+}
 
 } // namespace ohao

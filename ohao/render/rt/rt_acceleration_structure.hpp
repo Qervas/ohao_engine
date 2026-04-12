@@ -78,6 +78,14 @@ public:
     // Destroy a specific BLAS
     void destroyBLAS(BlasHandle handle);
 
+    // Rebuild an existing BLAS with new vertex positions (same topology).
+    // Used for animated meshes: skinned positions in a separate buffer,
+    // original index buffer unchanged. Positions must be tightly packed vec3 (stride=12).
+    void rebuildBLAS(BlasHandle handle, VkBuffer skinnedPositions,
+                     uint32_t vertexCount, VkBuffer indexBuffer,
+                     uint32_t indexCount, VkDeviceSize indexByteOffset,
+                     VkCommandBuffer cmd);
+
     // === TLAS management ===
 
     // Clear all instances (call before re-adding for a new frame)

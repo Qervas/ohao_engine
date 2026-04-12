@@ -187,6 +187,13 @@ bool VulkanRenderer::initialize() {
         }
 
         m_initialized = true;
+        // Initialize GPU skinning for animated BLAS
+        m_gpuSkinning = std::make_unique<GPUSkinning>();
+        if (!m_gpuSkinning->initialize(m_device, m_physicalDevice, m_commandPool, m_graphicsQueue)) {
+            std::cerr << "GPUSkinning init failed (non-fatal)" << std::endl;
+            m_gpuSkinning.reset();
+        }
+
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Multi-frame rendering: " << (m_frameResources.isInitialized() ? "enabled" : "disabled") << std::endl;
@@ -207,6 +214,10 @@ void VulkanRenderer::shutdown() {
         vkDeviceWaitIdle(m_device);
 
         // Cleanup RT resources BEFORE device destruction
+        if (m_gpuSkinning) {
+            m_gpuSkinning->cleanup();
+            m_gpuSkinning.reset();
+        }
         if (m_pathTracer) {
             m_pathTracer->destroy();
             m_pathTracer.reset();

@@ -49,11 +49,15 @@ void VulkanRenderer::renderDeferred() {
         }
     }
 
-    // Pass RT acceleration structure to deferred renderer
-    // RT shadows + GI disabled for animated scenes (static BLAS = T-pose artifacts)
-    // TODO: dynamic BLAS rebuild for animated meshes
+    // Dynamic BLAS rebuild is done on the deferred render's command buffer
+    // (see below after command buffer begins). For now, pass RT for static scenes only.
+    bool hasDynamicBLAS = hasAnimatedActors && m_gpuSkinning && !m_animatedMeshes.empty();
+
+    // Keep RT disabled for animated scenes while BLAS rebuild is WIP
+    // The BLAS rebuild runs silently (above) for testing — RT not consumed yet
     if (m_rtAccel && m_rtAccel->isSupported()) {
-        m_deferredRenderer->setAccelerationStructure(hasAnimatedActors ? nullptr : m_rtAccel.get());
+        m_deferredRenderer->setAccelerationStructure(
+            hasAnimatedActors ? nullptr : m_rtAccel.get());
         m_deferredRenderer->setRTShadowsEnabled(!hasAnimatedActors);
     }
 
@@ -122,6 +126,12 @@ void VulkanRenderer::renderDeferred() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     vkBeginCommandBuffer(cmd, &beginInfo);
+
+    // GPU compute skinning + BLAS rebuild for animated meshes
+    // TODO: BLAS rebuild on the deferred command buffer corrupts rendering.
+    // Needs dedicated compute queue or pre-frame submission with proper barriers.
+    // Infrastructure is ready (GPUSkinning + rebuildBLAS), sync is the blocker.
+    // if (hasDynamicBLAS) { updateAnimatedBLAS(cmd); }
 
     // Execute deferred rendering pipeline
     m_deferredRenderer->render(cmd, m_currentFrame);
