@@ -346,19 +346,22 @@ void RTAccelerationStructure::rebuildBLAS(BlasHandle handle, VkBuffer skinnedPos
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    // Must match createBLAS flags — different flags produce different AS sizes
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
     buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
     buildInfo.dstAccelerationStructure = entry.handle;
 
-    // Query actual scratch buffer size needed
+    // Query required sizes and validate against existing allocation
     VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
     sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
     vkGetAccelerationStructureBuildSizesKHR(m_device,
         VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
         &buildInfo, &primitiveCount, &sizeInfo);
-    ensureScratchBuffer(sizeInfo.buildScratchSize);
+
+    // Use pre-allocated scratch buffer (caller must call ensureScratchBuffer before loop)
+    // Do NOT call ensureScratchBuffer here — it would destroy/recreate during recording
     buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
 
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};

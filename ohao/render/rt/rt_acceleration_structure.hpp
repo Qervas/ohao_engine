@@ -99,6 +99,9 @@ public:
     // Call once per frame after addInstance() calls.
     void buildTLAS(VkCommandBuffer cmd);
 
+    // Pre-allocate scratch buffer (call before multi-BLAS rebuilds to avoid mid-recording realloc)
+    void ensureScratchBuffer(VkDeviceSize requiredSize);
+
     // === Getters ===
 
     VkAccelerationStructureKHR getTLAS() const { return m_tlas; }
@@ -158,7 +161,6 @@ private:
                       VkBuffer& buffer, VkDeviceMemory& memory);
     void destroyBuffer(VkBuffer& buffer, VkDeviceMemory& memory);
     VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer);
-    void ensureScratchBuffer(VkDeviceSize requiredSize);
     void ensureInstanceBuffer(uint32_t requiredCount);
 
     // One-shot command helpers

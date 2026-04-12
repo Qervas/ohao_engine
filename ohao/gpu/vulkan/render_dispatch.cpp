@@ -127,11 +127,13 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // GPU compute skinning + BLAS rebuild for animated meshes
-    // TODO: BLAS rebuild on the deferred command buffer corrupts rendering.
-    // Needs dedicated compute queue or pre-frame submission with proper barriers.
-    // Infrastructure is ready (GPUSkinning + rebuildBLAS), sync is the blocker.
-    // if (hasDynamicBLAS) { updateAnimatedBLAS(cmd); }
+    // GPU compute skinning + BLAS rebuild — DISABLED (Vulkan sync issue under investigation)
+    // The compute skinning works, but rebuilding 4+ BLASes on the same command
+    // buffer corrupts rendering. Single BLAS rebuild works fine.
+    // Root cause: likely AS buffer size mismatch between original (stride=92) and
+    // skinned (stride=12) vertex formats, or driver-level BLAS corruption.
+    // TODO: create new BLAS each frame instead of in-place rebuild
+
 
     // Execute deferred rendering pipeline
     m_deferredRenderer->render(cmd, m_currentFrame);
