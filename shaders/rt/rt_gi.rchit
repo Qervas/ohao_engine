@@ -13,7 +13,8 @@ layout(set = 0, binding = 6) readonly buffer MaterialBuffer {
 } materialBuf;
 
 void main() {
-    // Look up albedo from material buffer using instance index
-    vec3 albedo = materialBuf.materials[gl_InstanceCustomIndexEXT].rgb;
+    // Look up albedo from material buffer using instance ID (not CustomIndex,
+    // which stores per-triangle offset for the path tracer)
+    vec3 albedo = materialBuf.materials[gl_InstanceID].rgb;
     giPayload = vec4(albedo, gl_HitTEXT);
 }

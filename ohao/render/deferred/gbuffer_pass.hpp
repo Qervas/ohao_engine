@@ -78,6 +78,10 @@ public:
     // Upload bone matrices for a specific animated actor
     void uploadBoneMatrices(const std::vector<glm::mat4>& matrices);
 
+    // Expose bone resources for sharing with CSM pass
+    VkDescriptorSet getBoneDescriptorSet() const { return m_boneDescriptorSet; }
+    VkDescriptorSetLayout getBoneDescriptorLayout() const { return m_boneDescriptorLayout; }
+
 private:
     bool createRenderPass();
     bool createFramebuffer();

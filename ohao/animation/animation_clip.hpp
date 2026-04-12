@@ -22,7 +22,8 @@ enum class InterpolationType {
 };
 
 struct AnimationChannel {
-    int targetJoint{-1};
+    int targetJoint{-1};              // Index into Skeleton::joints (legacy/GLTF path)
+    int targetNode{-1};               // Index into Skeleton::nodeTree (FBX/Assimp path)
     AnimationProperty property{AnimationProperty::TRANSLATION};
     InterpolationType interpolation{InterpolationType::LINEAR};
     std::vector<float> timestamps;

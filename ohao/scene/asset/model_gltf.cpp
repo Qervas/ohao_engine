@@ -644,6 +644,61 @@ bool Model::loadFromGLTF(const std::string& filename) {
             }
         }
 
+        // Compute skeleton root transform: walk non-joint ancestors of the root joint.
+        // GLTF inverseBindMatrices are relative to scene root, so we need the full
+        // ancestor chain above the first joint (e.g., Armature node transform).
+        {
+            // Find a root joint (parentIndex == -1) and trace its node ancestry
+            int rootJointNodeIdx = -1;
+            for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
+                if (skeleton->joints[i].parentIndex < 0) {
+                    rootJointNodeIdx = gltfSkin.joints[i];
+                    break;
+                }
+            }
+
+            if (rootJointNodeIdx >= 0) {
+                // Build child→parent map for the full node tree
+                std::unordered_map<int, int> nodeParent;
+                for (size_t n = 0; n < gltfModel.nodes.size(); ++n) {
+                    for (int child : gltfModel.nodes[n].children) {
+                        nodeParent[child] = static_cast<int>(n);
+                    }
+                }
+
+                // Walk up from root joint's parent, accumulating non-joint transforms
+                std::vector<glm::mat4> ancestorStack;
+                int cur = rootJointNodeIdx;
+                while (nodeParent.count(cur)) {
+                    int parentIdx = nodeParent[cur];
+                    if (nodeToJoint.count(parentIdx)) break; // stop at another joint
+
+                    const auto& pnode = gltfModel.nodes[parentIdx];
+                    glm::mat4 parentLocal(1.0f);
+                    if (pnode.matrix.size() == 16) {
+                        for (int r = 0; r < 4; ++r)
+                            for (int c = 0; c < 4; ++c)
+                                parentLocal[c][r] = static_cast<float>(pnode.matrix[c * 4 + r]);
+                    } else {
+                        glm::vec3 t(0.0f); glm::quat rot(1,0,0,0); glm::vec3 s(1.0f);
+                        if (pnode.translation.size() == 3) t = glm::vec3(pnode.translation[0], pnode.translation[1], pnode.translation[2]);
+                        if (pnode.rotation.size() == 4) rot = glm::quat(float(pnode.rotation[3]), float(pnode.rotation[0]), float(pnode.rotation[1]), float(pnode.rotation[2]));
+                        if (pnode.scale.size() == 3) s = glm::vec3(pnode.scale[0], pnode.scale[1], pnode.scale[2]);
+                        parentLocal = glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(rot) * glm::scale(glm::mat4(1.0f), s);
+                    }
+                    ancestorStack.push_back(parentLocal);
+                    cur = parentIdx;
+                }
+
+                // Multiply in reverse order (outermost ancestor first)
+                glm::mat4 rootXform(1.0f);
+                for (int i = static_cast<int>(ancestorStack.size()) - 1; i >= 0; --i) {
+                    rootXform = rootXform * ancestorStack[i];
+                }
+                skeleton->rootTransform = rootXform;
+            }
+        }
+
         // Compute initial joint matrices
         skeleton->computeJointMatrices();
 

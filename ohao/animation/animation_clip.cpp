@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <algorithm>
+#include <unordered_map>
 
 namespace ohao {
 
@@ -14,21 +15,26 @@ void AnimationClip::sample(float time, Skeleton& skeleton) const {
         if (time < 0.0f) time += duration;
     }
 
-    for (const auto& channel : channels) {
-        if (channel.targetJoint < 0 ||
-            channel.targetJoint >= static_cast<int>(skeleton.joints.size())) {
-            continue;
-        }
-        if (channel.timestamps.empty() || channel.values.empty()) {
-            continue;
-        }
+    // Collect per-target TRS updates
+    struct TRS {
+        glm::vec3 translation{0.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec3 scale{1.0f};
+        bool hasT{false}, hasR{false}, hasS{false};
+        int jointIdx{-1};
+        int nodeIdx{-1};
+    };
 
-        Joint& joint = skeleton.joints[channel.targetJoint];
+    std::unordered_map<int, TRS> nodeUpdates;   // keyed by nodeTree index
+    std::unordered_map<int, TRS> jointUpdates;   // keyed by joint index (legacy path)
+    bool useNodes = skeleton.useNodeTree;
+
+    for (const auto& channel : channels) {
+        if (channel.timestamps.empty() || channel.values.empty()) continue;
 
         int keyA = findKeyframe(channel.timestamps, time);
         int keyB = std::min(keyA + 1, static_cast<int>(channel.timestamps.size()) - 1);
 
-        // Compute interpolation factor
         float t = 0.0f;
         if (keyA != keyB) {
             float tA = channel.timestamps[keyA];
@@ -40,34 +46,72 @@ void AnimationClip::sample(float time, Skeleton& skeleton) const {
             }
         }
 
-        // Decompose current local transform to apply channel updates
-        // We build the transform from T, R, S components
-        glm::vec3 translation(0.0f);
-        glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
-        glm::vec3 scale(1.0f);
+        // Route to node or joint update map
+        TRS* update = nullptr;
+        if (useNodes && channel.targetNode >= 0) {
+            update = &nodeUpdates[channel.targetNode];
+            update->nodeIdx = channel.targetNode;
+        } else if (channel.targetJoint >= 0 &&
+                   channel.targetJoint < static_cast<int>(skeleton.joints.size())) {
+            update = &jointUpdates[channel.targetJoint];
+            update->jointIdx = channel.targetJoint;
+        }
+        if (!update) continue;
 
         switch (channel.property) {
-            case AnimationProperty::TRANSLATION: {
-                translation = interpolateVec3(channel, keyA, keyB, t);
-                joint.localTransform = glm::translate(glm::mat4(1.0f), translation) *
-                                       glm::mat4_cast(glm::quat_cast(joint.localTransform));
-                // Preserve existing scale
+            case AnimationProperty::TRANSLATION:
+                update->translation = interpolateVec3(channel, keyA, keyB, t);
+                update->hasT = true;
                 break;
-            }
-            case AnimationProperty::ROTATION: {
-                rotation = interpolateQuat(channel, keyA, keyB, t);
-                // Extract existing translation
-                glm::vec3 existingTranslation(joint.localTransform[3]);
-                joint.localTransform = glm::translate(glm::mat4(1.0f), existingTranslation) *
-                                       glm::mat4_cast(rotation);
+            case AnimationProperty::ROTATION:
+                update->rotation = interpolateQuat(channel, keyA, keyB, t);
+                update->hasR = true;
                 break;
-            }
-            case AnimationProperty::SCALE: {
-                scale = interpolateVec3(channel, keyA, keyB, t);
-                joint.localTransform = joint.localTransform * glm::scale(glm::mat4(1.0f), scale);
+            case AnimationProperty::SCALE:
+                update->scale = interpolateVec3(channel, keyA, keyB, t);
+                update->hasS = true;
                 break;
-            }
         }
+    }
+
+    // Apply node updates (FBX/Assimp path)
+    for (auto& [nodeIdx, trs] : nodeUpdates) {
+        auto& node = skeleton.nodeTree[nodeIdx];
+
+        // Fill missing channels from the node's default transform
+        if (!trs.hasT) trs.translation = glm::vec3(node.defaultTransform[3]);
+        if (!trs.hasR) trs.rotation = glm::quat_cast(node.defaultTransform);
+        if (!trs.hasS) trs.scale = glm::vec3(
+            glm::length(glm::vec3(node.defaultTransform[0])),
+            glm::length(glm::vec3(node.defaultTransform[1])),
+            glm::length(glm::vec3(node.defaultTransform[2])));
+
+        // Apply bind-pose rotation offset (FBX pre-rotation recovery).
+        // Without this, animation replaces the full rotation and loses pre-rotation.
+        if (trs.hasR && node.hasRotationOffset) {
+            trs.rotation = trs.rotation * node.bindRotationOffset;
+        }
+
+        node.animatedTransform = glm::translate(glm::mat4(1.0f), trs.translation) *
+                                 glm::mat4_cast(trs.rotation) *
+                                 glm::scale(glm::mat4(1.0f), trs.scale);
+        node.hasAnimation = true;
+    }
+
+    // Apply joint updates (legacy GLTF path)
+    for (auto& [jointIdx, trs] : jointUpdates) {
+        Joint& joint = skeleton.joints[jointIdx];
+
+        if (!trs.hasT) trs.translation = glm::vec3(joint.localTransform[3]);
+        if (!trs.hasR) trs.rotation = glm::quat_cast(joint.localTransform);
+        if (!trs.hasS) trs.scale = glm::vec3(
+            glm::length(glm::vec3(joint.localTransform[0])),
+            glm::length(glm::vec3(joint.localTransform[1])),
+            glm::length(glm::vec3(joint.localTransform[2])));
+
+        joint.localTransform = glm::translate(glm::mat4(1.0f), trs.translation) *
+                               glm::mat4_cast(trs.rotation) *
+                               glm::scale(glm::mat4(1.0f), trs.scale);
     }
 }
 

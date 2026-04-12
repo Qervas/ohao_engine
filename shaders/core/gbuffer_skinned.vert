@@ -29,8 +29,8 @@ layout(push_constant) uniform PushConstants {
     vec4 emissiveParams;
 } pc;
 
-// Bone matrices UBO
-layout(set = 0, binding = 0) uniform BoneMatrices {
+// Bone matrices UBO (set 1 so textures stay at set 0 — same fragment shader for all pipelines)
+layout(set = 1, binding = 0) uniform BoneMatrices {
     mat4 bones[128];
     int boneCount;
 } boneUBO;

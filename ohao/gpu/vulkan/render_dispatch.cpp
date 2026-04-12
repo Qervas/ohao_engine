@@ -5,6 +5,8 @@
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
+#include "scene/actor/actor.hpp"
+#include "animation/animation_component.hpp"
 
 namespace ohao {
 
@@ -34,9 +36,25 @@ void VulkanRenderer::renderDeferred() {
     m_deferredRenderer->setScene(m_scene);
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
 
-    // Pass RT acceleration structure to deferred renderer for RT shadows
+    // Update animation components (skeleton pose → joint matrices)
+    bool hasAnimatedActors = false;
+    if (m_scene) {
+        const float dt = 1.0f / 60.0f;
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto animComp = actor->getComponent<AnimationComponent>();
+            if (animComp && animComp->isPlaying()) {
+                animComp->update(dt);
+                hasAnimatedActors = true;
+            }
+        }
+    }
+
+    // Pass RT acceleration structure to deferred renderer
+    // RT shadows + GI disabled for animated scenes (static BLAS = T-pose artifacts)
+    // TODO: dynamic BLAS rebuild for animated meshes
     if (m_rtAccel && m_rtAccel->isSupported()) {
-        m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
+        m_deferredRenderer->setAccelerationStructure(hasAnimatedActors ? nullptr : m_rtAccel.get());
+        m_deferredRenderer->setRTShadowsEnabled(!hasAnimatedActors);
     }
 
     // Pass env map to deferred renderer for reflections

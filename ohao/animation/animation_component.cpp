@@ -7,13 +7,29 @@ const std::vector<glm::mat4> AnimationComponent::s_emptyMatrices;
 
 void AnimationComponent::initialize() {
     if (m_skeleton) {
-        m_skeleton->computeJointMatrices();
+        if (m_skeleton->ufbxScene) {
+            // ufbx path: evaluate at t=0 for bind pose
+            m_skeleton->evaluateUfbx(0.0f);
+        } else {
+            m_skeleton->computeJointMatrices();
+        }
     }
 }
 
 void AnimationComponent::update(float deltaTime) {
     if (!m_playing || !m_skeleton) return;
-    m_controller.update(deltaTime, *m_skeleton);
+
+    if (m_skeleton->ufbxScene) {
+        // ufbx path: evaluate scene at current time (handles all FBX complexity)
+        m_animTime += deltaTime;
+        if (m_skeleton->ufbxAnimDuration > 0.0f) {
+            m_animTime = std::fmod(m_animTime, m_skeleton->ufbxAnimDuration);
+        }
+        m_skeleton->evaluateUfbx(m_animTime);
+    } else {
+        // Legacy path: animation controller + clip sampling
+        m_controller.update(deltaTime, *m_skeleton);
+    }
 }
 
 void AnimationComponent::addAnimation(const std::string& name, std::shared_ptr<AnimationClip> clip,

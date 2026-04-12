@@ -8,6 +8,7 @@
 #include "stb_image.h"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
+#include "animation/animation_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/asset/model.hpp"
 #include <cstring>
@@ -731,7 +732,11 @@ void VulkanRenderer::buildBLASTLAS() {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
         // customIndex = global triangle offset for material ID lookup
-        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), globalTriOffset);
+        // mask: 0xFF = visible to all rays. Animated actors get 0xFE (bit 0 clear)
+        // so GI rays (mask 0x01) skip them — avoids T-pose ghost in GI.
+        bool isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
+        uint32_t instanceMask = isAnimated ? 0xFE : 0xFF;
+        m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), globalTriOffset, instanceMask);
 
         // Collect albedo in same order
         auto matComp = actor->getComponent<MaterialComponent>();

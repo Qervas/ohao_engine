@@ -622,9 +622,7 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     GIPushConstants pc{};
     pc.invView = glm::inverse(input.view);
     pc.invProj = glm::inverse(input.proj);
-    // TODO: pass actual light position through GIInput
-    // For now use a default ceiling light position
-    pc.lightPosAndIntensity = glm::vec4(-3.0f, 4.5f, -2.0f, 8.0f);
+    pc.lightPosAndIntensity = glm::vec4(input.lightPos, input.lightIntensity);
     pc.params = glm::uvec4(input.width, input.height, m_sampleCount, m_frameIndex);
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,

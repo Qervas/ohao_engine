@@ -181,6 +181,9 @@ bool VulkanRenderer::updateSceneBuffers() {
     m_rtAccelDirty = true;
     buildAccelerationStructures();
 
+    // Cache emissive mesh lights for deferred pipeline (avoids per-frame texture scan)
+    cacheEmissiveLights();
+
     return true;
 }
 

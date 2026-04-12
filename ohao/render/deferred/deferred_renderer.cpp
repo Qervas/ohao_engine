@@ -1,5 +1,8 @@
 #include "deferred_renderer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "scene/scene.hpp"
+#include "scene/component/light_component.hpp"
+#include "scene/actor/actor.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <array>
@@ -280,6 +283,13 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_csmPass->setScene(m_scene);
         m_csmPass->setLightDirection(m_lightDirection);
         m_csmPass->setCameraData(m_view, m_proj, m_nearPlane, m_farPlane);
+
+        // Share bone resources from GBuffer for skinned shadow rendering
+        if (m_gbufferPass) {
+            m_csmPass->setBoneDescriptor(
+                m_gbufferPass->getBoneDescriptorSet(),
+                m_gbufferPass->getBoneDescriptorLayout());
+        }
     }
 
     // Update lighting pass
@@ -409,7 +419,34 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.height = m_height;
                 gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
                 gi.accel = m_rtAccel;
-                m_rtGI->setSampleCount(4);
+
+                // Pass per-instance albedos to RTGI material buffer
+                if (m_scene) {
+                    std::vector<glm::vec3> albedos;
+                    for (const auto& [id, actor] : m_scene->getAllActors()) {
+                        auto mc = actor->getComponent<MeshComponent>();
+                        if (!mc || !mc->isVisible()) continue;
+                        auto matComp = actor->getComponent<MaterialComponent>();
+                        glm::vec3 color = matComp ? matComp->getMaterial().baseColor : glm::vec3(0.8f);
+                        albedos.push_back(color);
+                    }
+                    m_rtGI->setMaterialAlbedos(albedos);
+                }
+
+                // Find brightest scene light for GI bounce
+                if (m_scene) {
+                    float bestIntensity = 0.0f;
+                    for (const auto& [id, actor] : m_scene->getAllActors()) {
+                        auto lc = actor->getComponent<LightComponent>();
+                        if (!lc) continue;
+                        if (lc->getIntensity() > bestIntensity) {
+                            gi.lightPos = actor->getTransform()->getPosition();
+                            gi.lightIntensity = lc->getIntensity();
+                            bestIntensity = lc->getIntensity();
+                        }
+                    }
+                }
+                m_rtGI->setSampleCount(32); // quality over speed
                 m_rtGI->render(c, gi);
 
                 // Feed GI output to lighting pass via SSGI binding (11)

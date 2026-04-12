@@ -4,6 +4,7 @@
 #include "../../scene/component/transform_component.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
+#include "animation/animation_component.hpp"
 #include "../../scene/asset/model.hpp"
 #include <stdexcept>
 #include <array>
@@ -143,20 +144,6 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     scissor.extent = {m_width, m_height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Bind pipeline (wireframe or fill)
-    VkPipeline activePipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
-                                    ? m_wireframePipeline : m_pipeline;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
-
-    // Bind bindless texture descriptor set (set 0) if available
-    if (m_textureManager) {
-        VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
-        if (texSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
-        }
-    }
-
     // Bind vertex and index buffers if available
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         VkBuffer vertexBuffers[] = {m_vertexBuffer};
@@ -168,6 +155,11 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     // Build view frustum for culling
     Frustum frustum;
     frustum.extractFromViewProj(m_projection * m_view);
+
+    // Track which pipeline is currently bound to avoid redundant switches
+    VkPipeline currentPipeline = VK_NULL_HANDLE;
+    VkPipeline staticPipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
+                                    ? m_wireframePipeline : m_pipeline;
 
     // Iterate through scene actors and render meshes
     if (m_meshBufferMap) {
@@ -196,6 +188,48 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 AABB worldAABB = localAABB.transformed(modelMatrix);
                 if (!frustum.isAABBVisible(worldAABB)) {
                     continue; // Culled - skip this actor
+                }
+            }
+
+            // Check if this actor has an animated skeleton
+            auto animComp = actor->getComponent<AnimationComponent>();
+            bool useSkinning = animComp && animComp->hasAnimations()
+                            && m_skinnedPipeline != VK_NULL_HANDLE;
+
+            // Switch pipeline if needed
+            if (useSkinning) {
+                if (currentPipeline != m_skinnedPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skinnedPipeline);
+                    currentPipeline = m_skinnedPipeline;
+                }
+
+                // Upload bone matrices and bind descriptors for skinned pipeline
+                // Set 0 = bindless textures, Set 1 = bone matrices
+                const auto& jointMatrices = animComp->getJointMatrices();
+                uploadBoneMatrices(jointMatrices);
+
+                if (m_textureManager) {
+                    VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
+                    if (texSet != VK_NULL_HANDLE) {
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                m_skinnedPipelineLayout, 0, 1, &texSet, 0, nullptr);
+                    }
+                }
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        m_skinnedPipelineLayout, 1, 1, &m_boneDescriptorSet, 0, nullptr);
+            } else {
+                if (currentPipeline != staticPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, staticPipeline);
+                    currentPipeline = staticPipeline;
+
+                    // Bind bindless textures for static pipeline (set 0)
+                    if (m_textureManager) {
+                        VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
+                        if (texSet != VK_NULL_HANDLE) {
+                            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                    m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
+                        }
+                    }
                 }
             }
 
@@ -264,7 +298,8 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
             ubo.emissiveParams = glm::vec4(packedEmissiveIdx, 3.0f, 0, 0);  // strength = 3.0
 
-            vkCmdPushConstants(cmd, m_pipelineLayout,
+            VkPipelineLayout activeLayout = useSkinning ? m_skinnedPipelineLayout : m_pipelineLayout;
+            vkCmdPushConstants(cmd, activeLayout,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(GBufferUBO), &ubo);
 
@@ -962,12 +997,13 @@ bool GBufferPass::createSkinnedPipeline() {
     pushConstant.offset = 0;
     pushConstant.size = sizeof(GBufferUBO);
 
-    // Skinned pipeline layout includes bone descriptor (set 0) + bindless textures (set 1)
+    // Skinned pipeline layout: bindless textures (set 0) + bone descriptor (set 1)
+    // Textures stay at set 0 so the same fragment shader works for both pipelines.
     std::vector<VkDescriptorSetLayout> skinnedLayouts;
-    skinnedLayouts.push_back(m_boneDescriptorLayout);
     if (m_textureManager && m_textureManager->getDescriptorSetLayout() != VK_NULL_HANDLE) {
         skinnedLayouts.push_back(m_textureManager->getDescriptorSetLayout());
     }
+    skinnedLayouts.push_back(m_boneDescriptorLayout);
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

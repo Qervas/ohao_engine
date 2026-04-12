@@ -250,18 +250,27 @@ void main() {
     }
 
     // Ambient lighting with GI color bleeding approximation
-    // Tint ambient based on position relative to colored walls (Cornell box hack)
+    // Position-based tint simulates 1-bounce indirect from Cornell box walls
     vec3 ambientColor = vec3(1.0);
-    float redInfluence = max(0.0, 1.0 - (fragPos.x + 5.0) / 5.0) * 0.12;  // subtle red from left wall
-    float greenInfluence = max(0.0, (fragPos.x - 0.0) / 5.0) * 0.12;      // subtle green from right wall
-    ambientColor += vec3(redInfluence, -redInfluence*0.5, -redInfluence*0.5);
-    ambientColor += vec3(-greenInfluence*0.5, greenInfluence, -greenInfluence*0.3);
+    float boxSize = 5.0;
+    // Proximity to colored walls: stronger when closer, facing toward the wall
+    float leftProx = max(0.0, 1.0 - (fragPos.x + boxSize) / boxSize);  // 1.0 at left wall, 0 at center
+    float rightProx = max(0.0, (fragPos.x) / boxSize);                  // 1.0 at right wall, 0 at center
+    // Normal-weighted: surfaces facing the wall receive more indirect light
+    float leftFacing = max(0.0, -N.x) * 0.5 + 0.5;  // bias so even parallel surfaces get some
+    float rightFacing = max(0.0, N.x) * 0.5 + 0.5;
+    float giStrength = 0.25;
+    float redGI = leftProx * leftFacing * giStrength;
+    float greenGI = rightProx * rightFacing * giStrength;
+    ambientColor += vec3(redGI, -redGI*0.3, -redGI*0.3);        // red wall bleeds warm
+    ambientColor += vec3(-greenGI*0.3, greenGI, -greenGI*0.2);  // green wall bleeds cool
     vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor;
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
+    // RTGI output already includes albedo modulation — don't multiply again
     if ((pc.flags & 8u) != 0u) {
         vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
-        ambient += ssgiColor * albedo * ao;
+        ambient += ssgiColor * ao;
     }
 
     // Environment reflection — sample HDR env map in reflection direction

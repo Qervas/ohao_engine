@@ -79,15 +79,19 @@ void main() {
     vec3 indirectLight = vec3(0.0);
     uint rayFlags = gl_RayFlagsOpaqueEXT;
 
+    // Trace only against static geometry (mask 0x01).
+    // Animated actors have mask 0xFE (bit 0 clear) to avoid T-pose ghost.
+    uint rayMask = 0x01;
+
     for (uint s = 0u; s < sampleCount; s++) {
         // Per-sample random direction (cosine-weighted around normal)
         vec2 rng = hash2(vec2(pixel) + vec2(float(s) * 7.13 + float(frameIndex) * 1.618, float(s) * 13.37));
         vec3 dir = cosineSampleHemisphere(rng, N);
 
-        // Trace indirect ray
+        // Trace indirect ray against static geometry only
         giPayload = vec4(0.0, 0.0, 0.0, -1.0);  // miss = black
 
-        traceRayEXT(topLevelAS, rayFlags, 0xFF,
+        traceRayEXT(topLevelAS, rayFlags, rayMask,
                      0,     // SBT offset (uses hit group 0 — closest hit)
                      0,     // SBT stride
                      0,     // miss index
@@ -116,6 +120,9 @@ void main() {
     }
 
     indirectLight /= float(sampleCount);
+
+    // Boost to compensate for 1-bounce only (multi-bounce naturally amplifies ~3x)
+    indirectLight *= 3.5;
 
     // Modulate by the receiving surface's albedo (diffuse reflection)
     indirectLight *= albedo;

@@ -39,6 +39,12 @@ public:
     // Split scheme: 0.0 = linear, 1.0 = logarithmic
     void setSplitLambda(float lambda) { m_splitLambda = lambda; }
 
+    // Skinned rendering: share bone descriptor from GBufferPass
+    void setBoneDescriptor(VkDescriptorSet set, VkDescriptorSetLayout layout) {
+        m_boneDescriptorSet = set;
+        m_boneDescriptorLayout = layout;
+    }
+
     // Get shadow map for sampling
     VkImageView getShadowMapArrayView() const { return m_shadowMapArrayView; }
     VkSampler getShadowSampler() const { return m_shadowSampler; }
@@ -56,6 +62,7 @@ private:
     bool createFramebuffers();
     bool createPipeline();
     bool createCascadeBuffer();
+    bool createSkinnedPipeline();
 
     void calculateCascadeSplits();
     void updateCascadeMatrices();
@@ -102,6 +109,12 @@ private:
 
     // Cascade data for shader
     CascadeData m_cascadeData{};
+
+    // Skinned pipeline
+    VkPipeline m_skinnedPipeline{VK_NULL_HANDLE};
+    VkPipelineLayout m_skinnedPipelineLayout{VK_NULL_HANDLE};
+    VkDescriptorSet m_boneDescriptorSet{VK_NULL_HANDLE};
+    VkDescriptorSetLayout m_boneDescriptorLayout{VK_NULL_HANDLE};
 
     // Push constant for shadow rendering
     struct ShadowPushConstant {

@@ -7,17 +7,21 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
+#include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
+#include "animation/animation_component.hpp"
+#include "animation/animation_clip.hpp"
 #include "render/camera/camera.hpp"
 #include "render/rt/oidn_denoise.hpp"
 
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <filesystem>
 
 using namespace ohao;
 
@@ -78,8 +82,23 @@ int main(int argc, char* argv[]) {
     bool loaded = false;
     auto dot = modelPath.find_last_of('.');
     std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-    if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
-    else loaded = model->loadFromGLTF(modelPath);
+    // Use Assimp loader for formats with animation (FBX, GLTF with skeleton)
+    // Fall back to native GLTF/OBJ loaders for static models
+    if (ext == "obj") {
+        loaded = model->loadFromOBJ(modelPath);
+    } else if (ext == "fbx" || ext == "FBX" || ext == "dae" || ext == "DAE") {
+        loaded = model->loadFromFBX(modelPath);
+    } else {
+        // Try GLTF first, then fall back to Assimp if it has a skeleton
+        loaded = model->loadFromGLTF(modelPath);
+        if (loaded && model->hasSkeleton()) {
+            // Re-load through Assimp for correct animation node tree
+            auto assimpModel = std::make_shared<Model>();
+            if (assimpModel->loadFromFBX(modelPath)) {
+                model = assimpModel;
+            }
+        }
+    }
 
     if (loaded) {
         // Auto-frame: compute bounds, scale to fit box
@@ -99,29 +118,122 @@ int main(int argc, char* argv[]) {
         float modelHeight = isYUp ? extent.y : extent.z;
         float scale = (S * 1.6f) / modelHeight;
 
-        auto actor = scene->createActor("Model");
-        if (isYUp) {
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
-        } else {
-            // Z-up: check if Z is positive-up or negative-up
-            float zCenter = (bmin.z + bmax.z) * 0.5f;
-            float rotX = (zCenter < 0.0f) ? 90.0f : -90.0f;  // flip if Z goes negative
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
-        }
-        actor->getTransform()->setScale(glm::vec3(scale));
-
+        // Compute shared transform
+        glm::quat rotation = isYUp
+            ? glm::quat(glm::radians(glm::vec3(0, 180, 0)))
+            : glm::quat(glm::radians(glm::vec3(((bmin.z + bmax.z) * 0.5f < 0.0f) ? 90.0f : -90.0f, 0, 0)));
         glm::vec3 center = (bmin + bmax) * 0.5f;
         float feetOffset = isYUp ? -bmin.y * scale : 0.0f;
-        actor->getTransform()->setPosition({
-            -center.x * scale, -S + feetOffset,
-            isYUp ? -center.z * scale : 0.0f
-        });
+        glm::vec3 position = {-center.x * scale, -S + feetOffset, isYUp ? -center.z * scale : 0.0f};
 
-        auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(model); mesh->setVisible(true);
-        auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
-        mat->getMaterial().roughness = 0.7f;
+        // Split model into per-material sub-models for correct multi-material rendering
+        bool hasMultipleMaterials = model->materialPerTriangle.size() > 0 &&
+            *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end()) > 0;
+
+        // Create shared animation component (if skeleton exists)
+        std::shared_ptr<AnimationComponent> sharedAnimComp;
+
+        if (hasMultipleMaterials) {
+            // Group triangles by material
+            uint32_t maxMat = *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end());
+            for (uint32_t matIdx = 0; matIdx <= maxMat; matIdx++) {
+                auto subModel = std::make_shared<Model>();
+                subModel->skeleton = model->skeleton;
+
+                // Collect triangles for this material
+                for (size_t tri = 0; tri < model->materialPerTriangle.size(); tri++) {
+                    if (model->materialPerTriangle[tri] != matIdx) continue;
+                    for (int k = 0; k < 3; k++) {
+                        uint32_t oldIdx = model->indices[tri * 3 + k];
+                        uint32_t newIdx = static_cast<uint32_t>(subModel->vertices.size());
+                        subModel->vertices.push_back(model->vertices[oldIdx]);
+                        subModel->indices.push_back(newIdx);
+                    }
+                    subModel->materialPerTriangle.push_back(matIdx);
+                }
+                if (subModel->vertices.empty()) continue;
+
+                // Copy material data for this material index
+                if (matIdx < model->materialColors.size())
+                    subModel->materialColors.push_back(model->materialColors[matIdx]);
+                if (matIdx < model->materialMetallic.size())
+                    subModel->materialMetallic.push_back(model->materialMetallic[matIdx]);
+
+                // Copy only THIS material's textures
+                int albedoIdx = (matIdx < model->materialTextureIndex.size()) ? model->materialTextureIndex[matIdx] : -1;
+                int normalIdx = (matIdx < model->materialNormalTexIndex.size()) ? model->materialNormalTexIndex[matIdx] : -1;
+                if (albedoIdx >= 0 && albedoIdx < static_cast<int>(model->albedoTextures.size())) {
+                    subModel->albedoTextures.push_back(model->albedoTextures[albedoIdx]);
+                    subModel->materialTextureIndex.push_back(0);
+                } else {
+                    subModel->materialTextureIndex.push_back(-1);
+                }
+                if (normalIdx >= 0 && normalIdx < static_cast<int>(model->normalTextures.size())) {
+                    subModel->normalTextures.push_back(model->normalTextures[normalIdx]);
+                    subModel->materialNormalTexIndex.push_back(0);
+                } else {
+                    subModel->materialNormalTexIndex.push_back(-1);
+                }
+
+                auto actor = scene->createActor("Mesh_" + std::to_string(matIdx));
+                actor->getTransform()->setRotation(rotation);
+                actor->getTransform()->setScale(glm::vec3(scale));
+                actor->getTransform()->setPosition(position);
+
+                auto mesh = actor->addComponent<MeshComponent>();
+                mesh->setModel(subModel); mesh->setVisible(true);
+
+                auto mat = actor->addComponent<MaterialComponent>();
+                glm::vec3 baseColor = matIdx < model->materialColors.size()
+                    ? glm::vec3(model->materialColors[matIdx]) : glm::vec3(0.8f);
+                float roughness = matIdx < model->materialColors.size()
+                    ? model->materialColors[matIdx].w : 0.5f;
+                float metallic = matIdx < model->materialMetallic.size()
+                    ? model->materialMetallic[matIdx] : 0.0f;
+                mat->getMaterial().baseColor = baseColor;
+                mat->getMaterial().roughness = roughness;
+                mat->getMaterial().metallic = metallic;
+
+                // Attach animation to each sub-actor
+                if (model->hasSkeleton()) {
+                    auto animComp = actor->addComponent<AnimationComponent>();
+                    animComp->setSkeleton(model->skeleton);
+                    if (model->skeleton->ufbxScene) {
+                        animComp->initialize();
+                        animComp->play("ufbx");
+                    }
+                }
+            }
+            std::cout << "Split into " << (maxMat + 1) << " material groups" << std::endl;
+        } else {
+            // Single-material model
+            auto actor = scene->createActor("Model");
+            actor->getTransform()->setRotation(rotation);
+            actor->getTransform()->setScale(glm::vec3(scale));
+            actor->getTransform()->setPosition(position);
+
+            auto mesh = actor->addComponent<MeshComponent>();
+            mesh->setModel(model); mesh->setVisible(true);
+            auto mat = actor->addComponent<MaterialComponent>();
+            mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
+            mat->getMaterial().roughness = 0.5f;
+
+            if (model->hasSkeleton()) {
+                auto animComp = actor->addComponent<AnimationComponent>();
+                animComp->setSkeleton(model->skeleton);
+                if (model->skeleton->ufbxScene) {
+                    animComp->initialize();
+                    animComp->play("ufbx");
+                    std::cout << "Animation: ufbx (" << model->skeleton->joints.size()
+                              << " joints, " << model->skeleton->ufbxAnimDuration << "s)" << std::endl;
+                } else if (!model->animations.empty()) {
+                    for (const auto& clip : model->animations)
+                        animComp->addAnimation(clip->name, clip);
+                    animComp->initialize();
+                    animComp->play(model->animations[0]->name);
+                }
+            }
+        }
 
         std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << scale << std::endl;
     } else {
@@ -159,9 +271,57 @@ int main(int argc, char* argv[]) {
     // Mode: "deferred" for hybrid RT, anything else for path traced
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
 
+    // Enable all deferred quality features
+    if (useDeferred && renderer.getDeferredRenderer()) {
+        auto* pp = renderer.getDeferredRenderer()->getPostProcessing();
+        if (pp) {
+            pp->setBloomEnabled(true);
+            pp->setTAAEnabled(true);
+            pp->setSSAOEnabled(true);
+            pp->setExposure(1.2f);   // slightly brighter than default
+        }
+    }
+
     std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : "PathTraced") << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
-    int frames = useDeferred ? 10 : (samples + 3);
+    int frames = useDeferred ? 30 : (samples + 3);
+
+    // If 5th arg is "video", render a frame sequence for ffmpeg
+    bool renderVideo = (argc > 5 && std::string(argv[5]) == "video");
+    if (renderVideo && useDeferred) {
+        int fps = 30;
+        int seconds = 3;
+        int totalFrames = fps * seconds;
+        std::string videoDir = output.substr(0, output.find_last_of('.'));
+        std::filesystem::create_directories(videoDir);
+
+        // Warm up the pipeline (triple-buffer flush)
+        for (int i = 0; i < 5; i++) renderer.render();
+
+        std::cout << "Recording " << totalFrames << " frames to " << videoDir << "/" << std::endl;
+        for (int i = 0; i < totalFrames; i++) {
+            renderer.render();
+            const uint8_t* px = renderer.getPixels();
+            if (px) {
+                char fname[256];
+                snprintf(fname, sizeof(fname), "%s/frame_%04d.png", videoDir.c_str(), i);
+                stbi_write_png(fname, W, H, 4, px, W * 4);
+            }
+            if (i % 30 == 0) std::cout << "  frame " << i << "/" << totalFrames << std::endl;
+        }
+
+        // Encode with ffmpeg
+        std::string mp4 = videoDir + ".mp4";
+        std::string cmd = "ffmpeg -y -framerate " + std::to_string(fps)
+            + " -i " + videoDir + "/frame_%04d.png"
+            + " -c:v libx264 -pix_fmt yuv420p -crf 18 " + mp4 + " 2>/dev/null";
+        std::cout << "Encoding: " << mp4 << std::endl;
+        system(cmd.c_str());
+        std::cout << "Video saved: " << mp4 << std::endl;
+        scene.reset();
+        return 0;
+    }
+
     for (int i = 0; i < frames; i++) renderer.render();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();

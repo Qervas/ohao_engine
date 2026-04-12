@@ -50,6 +50,7 @@ private:
     std::shared_ptr<Skeleton> m_skeleton;
     AnimationController m_controller;
     bool m_playing{false};
+    float m_animTime{0.0f};
 
     // Empty matrix vector returned when no skeleton exists
     static const std::vector<glm::mat4> s_emptyMatrices;

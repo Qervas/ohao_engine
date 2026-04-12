@@ -41,6 +41,14 @@ void AnimationController::play(const std::string& stateName) {
         return;
     }
 
+    // First play — no current state to blend from, just start directly
+    if (m_currentStateName.empty()) {
+        m_currentStateName = stateName;
+        m_currentTime = 0.0f;
+        m_blending = false;
+        return;
+    }
+
     // Check if there's a transition defined
     float blendDuration = 0.2f; // default
     auto transIt = m_transitions.find(m_currentStateName);

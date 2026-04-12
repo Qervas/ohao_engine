@@ -126,6 +126,7 @@ public:
 
     bool loadFromOBJ(const std::string& filename);
     bool loadFromGLTF(const std::string& filename);
+    bool loadFromFBX(const std::string& filename);  // Assimp-based (FBX, Collada, etc.)
     bool loadMTL(const std::string& filename);
     void setupDefaultMaterial();
 

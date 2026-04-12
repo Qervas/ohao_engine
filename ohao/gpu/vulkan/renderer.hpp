@@ -181,6 +181,7 @@ private:
     void updateUniformBuffer(uint32_t frameIndex);  // Per-frame version
     void updateLightBuffer();   // Phase 3: Collect and update lights
     void updateLightBuffer(uint32_t frameIndex);    // Per-frame version
+    void cacheEmissiveLights(); // Scan emissive materials → cached LightData (called once per scene change)
 
     // Phase 2: Scene mesh rendering
     void renderSceneObjects(VkCommandBuffer cmd);  // Draw all scene meshes with push constants
@@ -316,6 +317,9 @@ private:
     VkSampler m_rtTextureSampler{VK_NULL_HANDLE};
     uint32_t m_rtTextureCount{0};
     VkDeviceMemory m_rtIndexMemory{VK_NULL_HANDLE};
+
+    // Cached emissive mesh lights (computed once during updateSceneBuffers, used per-frame)
+    std::vector<LightData> m_cachedEmissiveLights;
 
     // Sync
     VkFence m_renderFence{VK_NULL_HANDLE};
