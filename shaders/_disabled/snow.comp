@@ -1,0 +1,153 @@
+// snow.comp — Procedural snowflakes + blizzard streaks.
+//
+// Reads the existing HDR framebuffer (in GENERAL layout), additively composites
+// animated snowflakes over it, and writes back.  No input textures.
+//
+// Three depth layers of circular flakes (large near, small far) with
+// per-flake sinusoidal sway.  At intensity > 0.7 a fourth blizzard-streak
+// layer adds horizontal wind-blown snow.
+//
+// Push constants:  time (float), intensity (float), wind_x (float), aspect (float)
+// Binding 0:       rgba16f storage image — HDR framebuffer (read/write)
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// HDR framebuffer: read existing colour, add snow, write back.
+layout(rgba16f, set = 0, binding = 0) uniform image2D hdrImage;
+
+layout(push_constant) uniform PushConstants {
+    float time;       // animation clock (seconds, unbounded)
+    float intensity;  // snow density [0, 1]
+    float wind_x;     // horizontal drift (negative = left)
+    float aspect;     // viewport width / height
+} pc;
+
+// ---------------------------------------------------------------------------
+// Hash helpers (same polynomial basis as rain.comp)
+// ---------------------------------------------------------------------------
+
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash22(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract(vec2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
+}
+
+// ---------------------------------------------------------------------------
+// Snowflake layer
+//
+//   cellsX   : horizontal cell count (density)
+//   speed    : fall speed multiplier (0.3–1.0 for natural snow)
+//   timeOff  : per-layer phase offset
+//   windMul  : wind drift multiplier relative to pc.wind_x
+// ---------------------------------------------------------------------------
+float snowLayer(vec2 uv, float cellsX, float speed, float timeOff, float windMul) {
+    // Horizontal wind drift (much slower than rain)
+    float drift = pc.wind_x * windMul * (pc.time + timeOff) * 0.012;
+    vec2 uvW = uv + vec2(drift, 0.0);
+
+    // Square-ish cells (aspect-corrected, less tall than rain)
+    float cellsY = cellsX * 1.1 / pc.aspect;
+    vec2 scaled  = uvW * vec2(cellsX, cellsY);
+    vec2 cellId  = floor(scaled);
+    vec2 cellUV  = fract(scaled) - 0.5;   // centered [-0.5, 0.5]
+
+    // Per-flake random parameters
+    float r1 = hash12(cellId);
+    float r2 = hash12(cellId + vec2(7.31, 41.17));
+    float r3 = hash12(cellId + vec2(53.73, 19.31));
+
+    // Fall animation: t in [0,1) wraps continuously
+    float fallSpeed = (0.4 + r3 * 0.6) * speed;
+    float t = fract((pc.time + timeOff) * fallSpeed * 0.022 + r1);
+
+    // Flake position in cell: horizontal random offset + sinusoidal sway
+    float cx = (r2 - 0.5) * 0.55;
+    float cy = t - 0.5;   // falls top→bottom across cell
+
+    // Sway (unique frequency + phase per flake)
+    float swayFreq = 0.7 + r2 * 0.6;
+    float swayAmp  = 0.04 + r1 * 0.04;
+    cx += sin((pc.time + timeOff) * swayFreq + r3 * 6.2832) * swayAmp;
+
+    // Soft circular flake; size varies per flake
+    float dist = length(cellUV - vec2(cx, cy)) * cellsX;
+    float size = 0.22 + r1 * 0.28;
+    return smoothstep(size, size * 0.25, dist);
+}
+
+// ---------------------------------------------------------------------------
+// Blizzard streaks — horizontal wind-blown snow at high intensity.
+// Uses a very fast horizontal layer to simulate driven snow.
+// ---------------------------------------------------------------------------
+float blizzardLayer(vec2 uv, float timeOff) {
+    // Strongly driven horizontally; minimal fall
+    float drift = pc.wind_x * (pc.time + timeOff) * 0.08;
+    vec2 uvW    = uv + vec2(drift, 0.0);
+
+    float cellsX = 60.0;
+    float cellsY = cellsX * 0.25 / pc.aspect;
+    vec2 scaled  = uvW * vec2(cellsX, cellsY);
+    vec2 cellId  = floor(scaled);
+    vec2 cellUV  = fract(scaled);
+
+    float r1 = hash12(cellId);
+    float r2 = hash12(cellId + vec2(17.5, 83.1));
+
+    float streakX = r1;
+    float speed   = 0.6 + r2 * 0.8;
+    float phase   = r2;
+
+    float headX = fract((pc.time + timeOff) * speed * 0.28 + phase);
+    float dy    = abs(cellUV.y - 0.5);
+    float dx    = cellUV.x - headX;
+
+    float h = smoothstep(0.40, 0.0, abs(dy) * cellsY);
+    float v = smoothstep(0.0, 0.04, -dx) * smoothstep(0.18, 0.0, -dx);
+
+    return clamp(h * v * (0.4 + r1 * 0.4), 0.0, 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(hdrImage);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+
+    // Three depth layers — large/slow background → small/fast foreground
+    // Foreground flakes are brightest to give depth cue.
+    float l1 = snowLayer(uv,  8.0, 0.28, 0.00, 0.55);  // large, very slow
+    float l2 = snowLayer(uv, 18.0, 0.40, 3.71, 0.80);  // medium
+    float l3 = snowLayer(uv, 38.0, 0.58, 7.43, 1.00);  // small, faster
+
+    float flakes = l1 * 0.60 + l2 * 0.45 + l3 * 0.32;
+
+    // Blizzard horizontal streaks only at high intensity
+    float blizzard = 0.0;
+    if (pc.intensity > 0.65) {
+        float bFactor = smoothstep(0.65, 1.0, pc.intensity);
+        float b1 = blizzardLayer(uv, 0.00);
+        float b2 = blizzardLayer(uv, 5.17);
+        blizzard = (b1 * 0.6 + b2 * 0.4) * bFactor;
+    }
+
+    // White-blue snow colour — slightly cooler than lightning flash
+    vec3 snowColor    = vec3(0.82, 0.88, 1.00) * flakes   * pc.intensity * 1.8;
+    vec3 blizzardColor= vec3(0.75, 0.82, 0.95) * blizzard * pc.intensity * 1.4;
+
+    // Additive blend into existing HDR
+    vec4 hdr = imageLoad(hdrImage, coord);
+    hdr.rgb += snowColor + blizzardColor;
+    imageStore(hdrImage, coord, hdr);
+}

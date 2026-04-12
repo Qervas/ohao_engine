@@ -1,0 +1,124 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Ray Generation Shader — RT Global Illumination (1-bounce indirect)
+// For each pixel, fires cosine-weighted rays from the surface to gather
+// indirect illumination. This creates color bleeding (red/green walls
+// tinting nearby white surfaces in a Cornell box).
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, rgba16f) uniform image2D giOutput;       // indirect light output
+layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;
+layout(set = 0, binding = 3) uniform sampler2D gBufferNormal;
+layout(set = 0, binding = 4) uniform sampler2D gBufferAlbedo;
+layout(set = 0, binding = 5) uniform sampler2D directLighting;        // current frame's direct light
+
+layout(push_constant) uniform PushConstants {
+    mat4 invView;
+    mat4 invProj;
+    vec4 lightPosAndIntensity;  // xyz=light pos, w=intensity
+    uvec4 params;               // x=width, y=height, z=sampleCount, w=frameIndex
+} pc;
+
+// GI ray payload: hit color + distance
+layout(location = 0) rayPayloadEXT vec4 giPayload;  // rgb=color, a=hitDist (-1 = miss)
+
+#include "includes/common/encoding.glsl"
+
+// Hash functions for random ray directions
+float hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+vec2 hash2(vec2 p) {
+    return vec2(hash(p), hash(p + vec2(127.1, 311.7)));
+}
+
+// Cosine-weighted hemisphere sampling
+vec3 cosineSampleHemisphere(vec2 u, vec3 N) {
+    // Build tangent frame
+    vec3 up = abs(N.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 T = normalize(cross(up, N));
+    vec3 B = cross(N, T);
+
+    // Cosine-weighted sampling on hemisphere
+    float r = sqrt(u.x);
+    float phi = 6.2831853 * u.y;
+    float x = r * cos(phi);
+    float y = r * sin(phi);
+    float z = sqrt(max(0.0, 1.0 - u.x));
+
+    return normalize(T * x + B * y + N * z);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(pc.params.x, pc.params.y);
+
+    // Read GBuffer
+    vec4 posSample = texture(gBufferPosition, uv);
+    vec3 worldPos = posSample.rgb;
+
+    // Skip sky pixels
+    if (worldPos == vec3(0.0) && posSample.a == 0.0) {
+        imageStore(giOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    vec4 normalSample = texture(gBufferNormal, uv);
+    vec3 N = decodeNormalOctahedron(normalSample.xy);
+    vec3 albedo = texture(gBufferAlbedo, uv).rgb;
+
+    vec3 origin = worldPos + N * 0.05;  // bias to avoid self-intersection
+
+    uint sampleCount = max(pc.params.z, 1u);
+    uint frameIndex = pc.params.w;
+
+    vec3 indirectLight = vec3(0.0);
+    uint rayFlags = gl_RayFlagsOpaqueEXT;
+
+    for (uint s = 0u; s < sampleCount; s++) {
+        // Per-sample random direction (cosine-weighted around normal)
+        vec2 rng = hash2(vec2(pixel) + vec2(float(s) * 7.13 + float(frameIndex) * 1.618, float(s) * 13.37));
+        vec3 dir = cosineSampleHemisphere(rng, N);
+
+        // Trace indirect ray
+        giPayload = vec4(0.0, 0.0, 0.0, -1.0);  // miss = black
+
+        traceRayEXT(topLevelAS, rayFlags, 0xFF,
+                     0,     // SBT offset (uses hit group 0 — closest hit)
+                     0,     // SBT stride
+                     0,     // miss index
+                     origin, 0.01, dir, 100.0, 0);
+
+        if (giPayload.a >= 0.0) {
+            // Hit a surface — giPayload.rgb contains the hit surface's albedo
+            // Approximate the indirect contribution:
+            // The hit surface reflects light proportional to its albedo and
+            // the direct illumination it receives from the light source.
+            vec3 hitAlbedo = giPayload.rgb;
+
+            // Simple diffuse indirect: hitAlbedo * light contribution at hit point
+            // For a proper path tracer we'd recursively trace, but for 1-bounce
+            // we estimate direct light at the hit point using distance falloff
+            vec3 hitPos = origin + dir * giPayload.a;
+            vec3 toLightFromHit = pc.lightPosAndIntensity.xyz - hitPos;
+            float lightDist = length(toLightFromHit);
+            float falloff = pc.lightPosAndIntensity.w / (1.0 + lightDist * lightDist);
+
+            // NdotL at hit point (approximate — use surface normal ≈ -dir)
+            float hitNdotL = max(dot(normalize(toLightFromHit), -dir), 0.0);
+
+            indirectLight += hitAlbedo * falloff * hitNdotL;
+        }
+    }
+
+    indirectLight /= float(sampleCount);
+
+    // Modulate by the receiving surface's albedo (diffuse reflection)
+    indirectLight *= albedo;
+
+    imageStore(giOutput, pixel, vec4(indirectLight, 1.0));
+}

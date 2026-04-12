@@ -1,0 +1,52 @@
+#version 450
+// Derives a surface normal and foam factor from the post-IFFT displacement map.
+// Input  (binding 0): dispTex   — hktImg after IFFT; .r = height Y, .b = choppiness Dx
+// Output (binding 1): normalImg — .rgb = packed normal [0,1],  .a = foam factor
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D dispTex;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D normalImg;
+
+layout(push_constant) uniform NormalPC {
+    float patchSize;       //  4
+    int   N;               //  8
+    float normalStrength;  // 12
+    float foamThreshold;   // 16
+} pc;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int N = pc.N;
+    if (coord.x >= N || coord.y >= N) return;
+
+    vec2 texelSize = vec2(1.0 / float(N));
+    vec2 uv        = (vec2(coord) + 0.5) * texelSize;
+
+    // ── Central differences for height Y ────────────────────────────────────
+    float hL = texture(dispTex, uv + vec2(-texelSize.x, 0.0)).r;
+    float hR = texture(dispTex, uv + vec2( texelSize.x, 0.0)).r;
+    float hB = texture(dispTex, uv + vec2(0.0, -texelSize.y)).r;
+    float hT = texture(dispTex, uv + vec2(0.0,  texelSize.y)).r;
+
+    // Physical gradient: dH/dx ≈ (hR - hL) * (N / patchSize)
+    float invDx = float(N) / pc.patchSize;
+    vec3 normal = normalize(vec3(
+        -(hR - hL) * invDx * pc.normalStrength,
+         2.0,
+        -(hT - hB) * invDx * pc.normalStrength
+    ));
+
+    // ── Foam from choppiness gradient (proxy for Jacobian) ───────────────────
+    float dxL = texture(dispTex, uv + vec2(-texelSize.x, 0.0)).b;
+    float dxR = texture(dispTex, uv + vec2( texelSize.x, 0.0)).b;
+    float dzB = texture(dispTex, uv + vec2(0.0, -texelSize.y)).b;
+    float dzT = texture(dispTex, uv + vec2(0.0,  texelSize.y)).b;
+
+    // Jacobian < 0 indicates wave folding (whitecaps)
+    float jacobian = (dxR - dxL) * invDx + (dzT - dzB) * invDx;
+    float foam = clamp(-jacobian - pc.foamThreshold, 0.0, 1.0);
+
+    // Pack normal to [0, 1] for RGBA16F storage
+    imageStore(normalImg, coord, vec4(normal * 0.5 + 0.5, foam));
+}

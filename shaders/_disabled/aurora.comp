@@ -1,0 +1,79 @@
+#version 450
+
+// Aurora Borealis — animated ribbon effect on sky pixels.
+// Three ribbon layers using sine waves create green-to-purple dancing lights.
+// Additively blends onto the HDR storage image.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2D   hdrOutput;
+layout(set = 0, binding = 1)          uniform sampler2D depthTex;
+
+layout(push_constant) uniform AuroraParams {
+    float time;       //  0 (4)
+    float intensity;  //  4 (4)
+    float hue;        //  8 (4)  — 0=green/teal, 1=purple/pink
+    float height;     // 12 (4)  — lower UV threshold for ribbons (0.3-0.7)
+} pc;
+
+// Map hue [0,1] to aurora colour
+vec3 auroraColor(float h, float ribbonPos) {
+    // Green-cyan at low hue, purple-pink at high hue, teal in between
+    vec3 green  = vec3(0.10, 0.90, 0.40);
+    vec3 cyan   = vec3(0.05, 0.70, 0.80);
+    vec3 purple = vec3(0.60, 0.10, 0.90);
+    vec3 pink   = vec3(0.90, 0.20, 0.70);
+
+    vec3 a = mix(green, cyan, ribbonPos);
+    vec3 b = mix(purple, pink, ribbonPos);
+    return mix(a, b, h);
+}
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(hdrOutput);
+    if (coord.x >= size.x || coord.y >= size.y) return;
+
+    vec2 uv = (vec2(coord) + 0.5) / vec2(size);
+
+    // Only affect sky pixels (depth >= 0.99) in the upper portion of the screen
+    float depth = texture(depthTex, uv).r;
+    if (depth < 0.99) return;
+    // Ribbons appear above pc.height (upper fraction of screen)
+    if (uv.y > pc.height) return;
+
+    float skyFrac = 1.0 - (uv.y / pc.height);  // 0 at bottom of aurora zone, 1 at top
+
+    vec3 totalColor = vec3(0.0);
+
+    // Three ribbon layers
+    const int NUM_RIBBONS = 3;
+    const float freqs[3]   = float[](4.0,  7.0,  11.0);
+    const float speeds[3]  = float[](0.4,  0.6,   0.25);
+    const float phases[3]  = float[](0.0,  2.09,  4.19); // 120° apart
+    const float heights[3] = float[](0.55, 0.35,  0.70); // relative heights [0,1]
+    const float widths[3]  = float[](0.12, 0.08,  0.15); // ribbon half-width
+
+    for (int i = 0; i < NUM_RIBBONS; i++) {
+        // Ribbon centre in sky-fraction space
+        float centre = heights[i] + 0.07 * sin(uv.x * freqs[i] + pc.time * speeds[i] + phases[i]);
+        float dist   = abs(skyFrac - centre);
+        float mask   = clamp(1.0 - dist / widths[i], 0.0, 1.0);
+        mask = pow(mask, 2.0);
+
+        // Add ripple shimmer
+        float shimmer = 0.5 + 0.5 * sin(uv.x * 20.0 + pc.time * 2.0 + phases[i]);
+        mask *= 0.7 + 0.3 * shimmer;
+
+        float ribbonPos = float(i) / float(NUM_RIBBONS - 1);
+        vec3 col = auroraColor(pc.hue, ribbonPos);
+        totalColor += col * mask;
+    }
+
+    // Fade out toward the horizon
+    totalColor *= skyFrac;
+    totalColor *= pc.intensity;
+
+    vec4 existing = imageLoad(hdrOutput, coord);
+    imageStore(hdrOutput, coord, existing + vec4(totalColor, 0.0));
+}

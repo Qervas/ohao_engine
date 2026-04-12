@@ -1,0 +1,113 @@
+# Simple House Model
+# Created for OHAO Engine testing
+# House with walls, roof, door, and windows
+
+mtllib simple_house.mtl
+
+# House base vertices
+v -3.0  0.0 -3.0
+v  3.0  0.0 -3.0
+v  3.0  0.0  3.0
+v -3.0  0.0  3.0
+
+# House wall vertices
+v -3.0  4.0 -3.0
+v  3.0  4.0 -3.0
+v  3.0  4.0  3.0
+v -3.0  4.0  3.0
+
+# Roof vertices
+v -3.5  4.0 -3.5
+v  3.5  4.0 -3.5
+v  3.5  4.0  3.5
+v -3.5  4.0  3.5
+v  0.0  6.0 -3.5
+v  0.0  6.0  3.5
+
+# Door vertices
+v -0.5  0.0  3.0
+v  0.5  0.0  3.0
+v  0.5  2.5  3.0
+v -0.5  2.5  3.0
+
+# Left window vertices
+v -3.0  1.5 -1.0
+v -3.0  1.5  1.0
+v -3.0  2.5  1.0
+v -3.0  2.5 -1.0
+
+# Right window vertices
+v  3.0  1.5 -1.0
+v  3.0  1.5  1.0
+v  3.0  2.5  1.0
+v  3.0  2.5 -1.0
+
+# Texture coordinates
+vt 0.0 0.0
+vt 1.0 0.0
+vt 1.0 1.0
+vt 0.0 1.0
+vt 0.5 0.0
+vt 0.5 1.0
+
+# Normals
+vn  0.0 -1.0  0.0
+vn  0.0  1.0  0.0
+vn  0.0  0.0 -1.0
+vn  0.0  0.0  1.0
+vn -1.0  0.0  0.0
+vn  1.0  0.0  0.0
+vn -0.707  0.707  0.0
+vn  0.707  0.707  0.0
+
+# Floor
+usemtl floor_material
+f 1/1/1 4/4/1 3/3/1 2/2/1
+
+# Ceiling
+usemtl ceiling_material
+f 5/1/2 6/2/2 7/3/2 8/4/2
+
+# Back wall
+usemtl wall_material
+f 1/1/3 2/2/3 6/3/3 5/4/3
+
+# Front wall with door
+usemtl wall_material
+f 4/1/4 8/4/4 18/2/4 15/1/4
+f 16/1/4 17/2/4 7/4/4 3/3/4
+f 18/1/4 8/2/4 7/3/4 17/4/4
+
+# Door
+usemtl door_material
+f 15/1/4 16/2/4 17/3/4 18/4/4
+
+# Left wall with window
+usemtl wall_material
+f 1/1/5 5/4/5 22/2/5 19/1/5
+f 20/1/5 21/2/5 8/4/5 4/3/5
+f 22/1/5 5/2/5 8/3/5 21/4/5
+f 1/1/5 19/2/5 20/3/5 4/4/5
+
+# Left window
+usemtl window_material
+f 19/1/5 22/4/5 21/3/5 20/2/5
+
+# Right wall with window
+usemtl wall_material
+f 2/1/6 3/2/6 24/3/6 23/4/6
+f 26/1/6 25/2/6 7/3/6 6/4/6
+f 6/1/6 7/2/6 25/3/6 26/4/6
+f 23/1/6 24/2/6 3/3/6 2/4/6
+
+# Right window
+usemtl window_material
+f 23/1/6 24/2/6 25/3/6 26/4/6
+
+# Roof back
+usemtl roof_material
+f 9/1/7 13/3/7 14/4/7 12/2/7
+
+# Roof front
+usemtl roof_material
+f 10/1/8 11/2/8 14/4/8 13/3/8

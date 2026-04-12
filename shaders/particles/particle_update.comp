@@ -1,0 +1,83 @@
+#version 450
+
+// Particle Update Compute Shader
+// Integrates velocity, applies forces, decrements lifetime
+
+layout(local_size_x = 256) in;
+
+struct Particle {
+    vec4 position;  // xyz = position, w = current lifetime
+    vec4 velocity;  // xyz = velocity, w = maxLifetime
+    vec4 color;     // rgba
+    vec4 params;    // x = size, y = rotation, z = type, w = alive
+};
+
+layout(std430, set = 0, binding = 0) buffer ParticleBuffer {
+    Particle particles[];
+};
+
+layout(std430, set = 0, binding = 1) buffer CounterBuffer {
+    uint aliveCount;
+    uint deadCount;
+    uint emitCount;
+    uint maxParticles;
+};
+
+layout(std430, set = 0, binding = 2) buffer IndirectBuffer {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+};
+
+layout(push_constant) uniform UpdateParams {
+    float deltaTime;
+    float gravity;
+    float drag;
+    float pad;
+} update;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= maxParticles) return;
+
+    Particle p = particles[idx];
+
+    // Skip dead particles
+    if (p.params.w < 0.5) return;
+
+    // Update lifetime
+    p.position.w += update.deltaTime;
+
+    // Check if expired
+    if (p.position.w >= p.velocity.w) {
+        p.params.w = 0.0; // Kill
+        particles[idx] = p;
+        atomicAdd(deadCount, 1);
+        return;
+    }
+
+    // Life ratio (0 to 1)
+    float lifeRatio = p.position.w / p.velocity.w;
+
+    // Apply gravity
+    p.velocity.y -= update.gravity * update.deltaTime;
+
+    // Apply drag
+    p.velocity.xyz *= (1.0 - update.drag * update.deltaTime);
+
+    // Integrate position
+    p.position.xyz += p.velocity.xyz * update.deltaTime;
+
+    // Fade alpha over lifetime
+    p.color.a = 1.0 - lifeRatio;
+
+    // Shrink over lifetime
+    float startSize = p.params.x;
+    p.params.x = startSize * (1.0 - lifeRatio * 0.5);
+
+    particles[idx] = p;
+
+    // Count alive particles for indirect draw
+    atomicAdd(instanceCount, 1);
+}

@@ -1,0 +1,134 @@
+#version 450
+#extension GL_GOOGLE_include_directive : enable
+
+#include "../includes/noise.glsl"
+
+// ─── Terrain Generation Compute Shader ────────────────────────────────────────
+// Generates a heightmap (R32F) from procedural noise.
+// dispatch: (ceil(res/16), ceil(res/16), 1)
+// local_size: 16 × 16
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Output: R32F heightmap storage image
+layout(set = 0, binding = 0, r32f) uniform writeonly image2D outHeightmap;
+
+// Generation parameters (push constants)
+layout(push_constant) uniform GenParams {
+    vec2    offset;         //  8 — world offset / seed displacement
+    float   frequency;      //  4 — base noise frequency
+    float   amplitude;      //  4 — global height amplitude [0, 1]   -> 16
+    int     octaves;        //  4 — fBm octave count
+    int     type;           //  4 — terrain type (see defines below) -> 24
+    float   persistence;    //  4 — fBm amplitude falloff per octave
+    float   lacunarity;     //  4 — fBm frequency scale per octave   -> 32
+    float   ridgeOffset;    //  4 — ridge fold point for mountains
+    float   domainStrength; //  4 — warp strength for canyons        -> 40
+    int     resolution;     //  4 — image resolution (square)
+    float   pad;            //  4                                     -> 48
+} pc;
+
+// ─── Terrain type constants ───────────────────────────────────────────────────
+#define TERRAIN_FLAT      1
+#define TERRAIN_HILLS     2
+#define TERRAIN_MOUNTAINS 3
+#define TERRAIN_CANYON    4
+#define TERRAIN_DESERT    5
+#define TERRAIN_ARCTIC    6
+
+// ─── Per-type height generation ───────────────────────────────────────────────
+
+float generateHeight(vec2 uv) {
+    vec2  p = uv * pc.frequency + pc.offset;
+    float h = 0.0;
+
+    switch (pc.type) {
+
+        // ── Flat ──────────────────────────────────────────────────────────────
+        // Essentially featureless; tiny noise for surface micro-variation.
+        case TERRAIN_FLAT:
+            h = gradientNoise2D(p * 8.0) * 0.02
+              + gradientNoise2D(p * 24.0) * 0.005;
+            h = h * 0.5 + 0.015;   // lift just above 0
+            break;
+
+        // ── Hills ────────────────────────────────────────────────────────────
+        // Smooth rolling countryside — fBm with rotation.
+        case TERRAIN_HILLS:
+            h = fbm2DRotated(p, pc.octaves, pc.persistence, pc.lacunarity);
+            h = h * 0.5 + 0.5;             // [-1,1] → [0,1]
+            h = smoothstep(0.05, 0.95, h);  // reduce extreme flat/peak areas
+            break;
+
+        // ── Mountains ────────────────────────────────────────────────────────
+        // Ridged multifractal for sharp peaks + fBm for base undulation.
+        case TERRAIN_MOUNTAINS: {
+            float ridge = ridgedNoise2D(p, pc.octaves, pc.persistence,
+                                        pc.lacunarity, pc.ridgeOffset);
+            float base  = fbm2DRotated(p * 0.5, 4, 0.5, 2.0) * 0.5 + 0.5;
+            h = ridge * 0.65 + base * 0.35;
+            h = pow(max(h, 0.0), 1.3);     // sharpen peaks, flatten valleys
+            break;
+        }
+
+        // ── Canyon ───────────────────────────────────────────────────────────
+        // Double domain-warped fBm → complex plateaus, mesas, river channels.
+        case TERRAIN_CANYON: {
+            float w = warpedNoise2D(p, pc.octaves, pc.persistence,
+                                    pc.lacunarity, pc.domainStrength);
+            w = w * 0.5 + 0.5;
+            // Mesa profile: sharpen the transition between lowlands and plateaus
+            w = smoothstep(0.25, 0.65, w);
+            // Add Voronoi cracks (dried river beds / erosion channels)
+            float edge = voronoiEdge2D(p * 2.5);
+            float crack = 1.0 - smoothstep(0.0, 0.12, edge);
+            h = clamp(w - crack * 0.15, 0.0, 1.0);
+            break;
+        }
+
+        // ── Desert ───────────────────────────────────────────────────────────
+        // Directional dune ridges + gentle low-frequency base.
+        case TERRAIN_DESERT: {
+            float dunes = duneNoise2D(p, vec2(0.8, 0.6), 1.0, min(pc.octaves, 5));
+            float base  = fbm2D(p * 0.25, 3, 0.55, 2.0) * 0.5 + 0.5;
+            // Small interdune flats
+            float flatBase = smoothstep(0.3, 0.55, dunes);
+            h = flatBase * 0.65 + dunes * 0.20 + base * 0.15;
+            h = clamp(h, 0.0, 1.0);
+            break;
+        }
+
+        // ── Arctic ───────────────────────────────────────────────────────────
+        // Very low overall height; slight undulation + pressure ridges.
+        case TERRAIN_ARCTIC: {
+            float base   = fbm2D(p * 0.4, 4, 0.55, 2.1) * 0.5 + 0.5;
+            float ridges = ridgedNoise2D(p * 0.7, 3, 0.5, 2.0, 0.95);
+            // Pressure ridges are subtle linear features
+            float polar  = fbm2D(p * 0.08, 2, 0.6, 2.0) * 0.5 + 0.5;
+            h = base * 0.5 + ridges * 0.25 + polar * 0.25;
+            // Compress to low range; arctic terrain is relatively flat
+            h = h * 0.35 + 0.05;
+            break;
+        }
+
+        // Fallthrough / external heightmap — generate flat
+        default:
+            h = 0.0;
+            break;
+    }
+
+    return clamp(h * pc.amplitude, 0.0, 1.0);
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int   res   = pc.resolution;
+    if (coord.x >= res || coord.y >= res) return;
+
+    // UV in [0, 1] — sample at pixel center
+    vec2 uv = (vec2(coord) + 0.5) / float(res);
+
+    float height = generateHeight(uv);
+    imageStore(outHeightmap, coord, vec4(height, 0.0, 0.0, 1.0));
+}

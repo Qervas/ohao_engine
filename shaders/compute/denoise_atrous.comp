@@ -1,0 +1,71 @@
+#version 460
+
+// A-Trous Wavelet Denoiser
+// Edge-aware spatial filter using GBuffer normals and depth
+// Run multiple iterations with increasing step size (1, 2, 4, 8, 16)
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba8) uniform image2D inputImage;
+layout(set = 0, binding = 1, rgba8) uniform image2D outputImage;
+layout(set = 0, binding = 2, rgba32f) uniform readonly image2D normalAOV;   // world normal (remapped to [0,1])
+layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumBuffer; // has depth/position info
+
+layout(push_constant) uniform PushConstants {
+    int stepSize;    // 1, 2, 4, 8, 16 for each iteration
+    float sigmaColor;   // color weight sensitivity
+    float sigmaNormal;  // normal weight sensitivity
+    float sigmaDepth;   // depth weight sensitivity
+} pc;
+
+// 5x5 B3-spline kernel weights (normalized)
+const float kernel[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(inputImage);
+    if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+    vec3 centerColor = imageLoad(inputImage, pixel).rgb;
+    vec3 centerNormal = imageLoad(normalAOV, pixel).rgb * 2.0 - 1.0;  // [0,1] → [-1,1]
+    float centerDepth = imageLoad(accumBuffer, pixel).w;  // use accumulation count as proxy for depth
+
+    vec3 sum = vec3(0.0);
+    float weightSum = 0.0;
+
+    // 5x5 filter with step size
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            ivec2 samplePos = pixel + ivec2(dx, dy) * pc.stepSize;
+
+            // Clamp to image bounds
+            samplePos = clamp(samplePos, ivec2(0), size - 1);
+
+            vec3 sampleColor = imageLoad(inputImage, samplePos).rgb;
+            vec3 sampleNormal = imageLoad(normalAOV, samplePos).rgb * 2.0 - 1.0;
+            float sampleDepth = imageLoad(accumBuffer, samplePos).w;
+
+            // Kernel weight
+            float w = kernel[dx + 2] * kernel[dy + 2];
+
+            // Color weight — reject samples with very different color
+            vec3 colorDiff = centerColor - sampleColor;
+            float colorDist = dot(colorDiff, colorDiff);
+            w *= exp(-colorDist / (pc.sigmaColor * pc.sigmaColor + 0.0001));
+
+            // Normal weight — reject across normal discontinuities (edges)
+            float normalDist = max(1.0 - dot(centerNormal, sampleNormal), 0.0);
+            w *= exp(-normalDist / (pc.sigmaNormal * pc.sigmaNormal + 0.0001));
+
+            // Depth weight — reject across depth discontinuities
+            float depthDist = abs(centerDepth - sampleDepth);
+            w *= exp(-depthDist / (pc.sigmaDepth * pc.sigmaDepth + 0.0001));
+
+            sum += sampleColor * w;
+            weightSum += w;
+        }
+    }
+
+    vec3 result = (weightSum > 0.0001) ? sum / weightSum : centerColor;
+    imageStore(outputImage, pixel, vec4(result, 1.0));
+}

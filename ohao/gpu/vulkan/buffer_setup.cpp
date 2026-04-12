@@ -1,0 +1,400 @@
+#include "renderer_impl.hpp"
+#include "render/camera/camera.hpp"
+#include "scene/component/light_component.hpp"
+#include "scene/scene.hpp"
+#include "scene/actor/actor.hpp"
+#include "scene/asset/model.hpp"
+#include <glm/gtc/matrix_transform.hpp>
+
+namespace ohao {
+
+bool VulkanRenderer::createUniformBuffer() {
+    VkDeviceSize bufferSize = sizeof(CameraUniformBuffer);
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_uniformBuffer) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_device, m_uniformBuffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memRequirements.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_uniformBufferMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindBufferMemory(m_device, m_uniformBuffer, m_uniformBufferMemory, 0);
+
+    // Keep buffer mapped for easy updates
+    vkMapMemory(m_device, m_uniformBufferMemory, 0, bufferSize, 0, &m_uniformBufferMapped);
+
+    return true;
+}
+
+bool VulkanRenderer::createVertexBuffer() {
+    // Create a demo triangle using full Vertex struct
+    std::vector<Vertex> vertices = {
+        // Bottom vertex - Red
+        {{0.0f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.5f, 1.0f}},
+        // Top right - Green
+        {{0.5f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        // Top left - Blue
+        {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}}
+    };
+
+    m_vertexCount = static_cast<uint32_t>(vertices.size());
+    VkDeviceSize bufferSize = sizeof(Vertex) * vertices.size();
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_vertexBuffer) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_device, m_vertexBuffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memRequirements.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_vertexBufferMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindBufferMemory(m_device, m_vertexBuffer, m_vertexBufferMemory, 0);
+
+    // Copy vertex data
+    void* data;
+    vkMapMemory(m_device, m_vertexBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, vertices.data(), bufferSize);
+    vkUnmapMemory(m_device, m_vertexBufferMemory);
+
+    std::cout << "Created vertex buffer with " << m_vertexCount << " vertices" << std::endl;
+    return true;
+}
+
+void VulkanRenderer::updateUniformBuffer() {
+    CameraUniformBuffer ubo{};
+    ubo.view = m_camera->getViewMatrix();
+    ubo.proj = glm::perspective(glm::radians(45.0f),
+                                static_cast<float>(m_width) / static_cast<float>(m_height),
+                                0.1f, 100.0f);
+    // Flip Y for Vulkan
+    ubo.proj[1][1] *= -1;
+    ubo.viewPos = m_camera->getPosition();
+
+    memcpy(m_uniformBufferMapped, &ubo, sizeof(ubo));
+}
+
+void VulkanRenderer::updateUniformBuffer(uint32_t frameIndex) {
+    if (!m_frameResources.isInitialized()) {
+        updateUniformBuffer();
+        return;
+    }
+
+    FrameResources& frame = m_frameResources.getFrame(frameIndex);
+    if (!frame.cameraBufferMapped) return;
+
+    CameraUniformBuffer ubo{};
+    ubo.view = m_camera->getViewMatrix();
+    ubo.proj = glm::perspective(glm::radians(45.0f),
+                                static_cast<float>(m_width) / static_cast<float>(m_height),
+                                0.1f, 100.0f);
+    // Flip Y for Vulkan
+    ubo.proj[1][1] *= -1;
+    ubo.viewPos = m_camera->getPosition();
+
+    memcpy(frame.cameraBufferMapped, &ubo, sizeof(ubo));
+}
+
+bool VulkanRenderer::createLightBuffer() {
+    VkDeviceSize bufferSize = sizeof(LightUniformBuffer);
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_lightBuffer) != VK_SUCCESS) {
+        return false;
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(m_device, m_lightBuffer, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memRequirements.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_lightBufferMemory) != VK_SUCCESS) {
+        return false;
+    }
+
+    vkBindBufferMemory(m_device, m_lightBuffer, m_lightBufferMemory, 0);
+
+    // Keep buffer mapped for easy updates
+    vkMapMemory(m_device, m_lightBufferMemory, 0, bufferSize, 0, &m_lightBufferMapped);
+
+    // Initialize with default light
+    updateLightBuffer();
+
+    return true;
+}
+
+glm::mat4 VulkanRenderer::calculateLightSpaceMatrix(const LightData& light) {
+    // For directional lights, use orthographic projection
+    int lightType = static_cast<int>(light.position.w);
+
+    if (lightType == 0) {  // Directional light
+        glm::vec3 lightDir = glm::normalize(glm::vec3(light.direction));
+
+        // Calculate scene bounds - use larger frustum to encompass typical scenes
+        float orthoSize = 50.0f;  // Covers -50 to 50 units (increased from 25)
+        float nearPlane = 0.1f;   // Closer near plane
+        float farPlane = 200.0f;  // Further far plane
+
+        // Light view matrix: looking from "infinity" in light direction toward scene center
+        glm::vec3 sceneCenter = glm::vec3(0.0f, 0.0f, 0.0f);
+        glm::vec3 lightPos = sceneCenter - lightDir * 100.0f;  // Position light further away
+
+        // Calculate up vector (avoid parallel with light direction)
+        glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+        if (std::abs(glm::dot(lightDir, up)) > 0.99f) {
+            up = glm::vec3(1.0f, 0.0f, 0.0f);
+        }
+
+        glm::mat4 lightView = glm::lookAt(lightPos, sceneCenter, up);
+        glm::mat4 lightProj = glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, nearPlane, farPlane);
+
+        // Flip Y for Vulkan coordinate system (do this BEFORE combining)
+        lightProj[1][1] *= -1.0f;
+
+        // Combine view and projection
+        glm::mat4 lightSpaceMatrix = lightProj * lightView;
+
+        // Convert Z from OpenGL NDC [-1,1] to Vulkan [0,1] range
+        // Formula: z_vulkan = z_ndc * 0.5 + 0.5
+        // This scales the Z output and adds a bias
+        // In GLM column-major: matrix[col][row], so row 2 is the Z output
+        for (int i = 0; i < 4; i++) {
+            lightSpaceMatrix[i][2] *= 0.5f;  // Scale Z coefficients
+        }
+        lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w=1)
+
+        return lightSpaceMatrix;
+    }
+    else if (lightType == 2) {  // Spot light - use perspective projection
+        glm::vec3 lightPos = glm::vec3(light.position);
+        glm::vec3 lightDir = glm::normalize(glm::vec3(light.direction));
+
+        glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+        if (std::abs(glm::dot(lightDir, up)) > 0.99f) {
+            up = glm::vec3(1.0f, 0.0f, 0.0f);
+        }
+
+        float outerCone = glm::acos(light.params.y);  // Convert from cosine to angle
+        float fov = outerCone * 2.0f;
+        float range = light.direction.w;
+
+        glm::mat4 lightView = glm::lookAt(lightPos, lightPos + lightDir, up);
+        float near = 0.1f;
+        float far = range;
+        glm::mat4 lightProj = glm::perspective(fov, 1.0f, near, far);
+
+        // Flip Y for Vulkan coordinate system
+        lightProj[1][1] *= -1.0f;
+
+        // Combine view and projection
+        glm::mat4 lightSpaceMatrix = lightProj * lightView;
+
+        // Convert Z from OpenGL NDC [-1,1] to Vulkan [0,1] range
+        for (int i = 0; i < 4; i++) {
+            lightSpaceMatrix[i][2] *= 0.5f;  // Scale Z coefficients
+        }
+        lightSpaceMatrix[3][2] += 0.5f;  // Add bias (multiplied by w)
+
+        return lightSpaceMatrix;
+    }
+
+    // Point lights don't use a single matrix (need cube maps)
+    return glm::mat4(1.0f);
+}
+
+void VulkanRenderer::updateLightBuffer() {
+    LightUniformBuffer lightUbo{};
+    lightUbo.numLights = 0;
+    lightUbo.ambientIntensity = 0.15f;
+    lightUbo.shadowBias = 0.005f;
+    lightUbo.shadowStrength = 0.7f;
+
+    int shadowCasterIndex = -1;  // Index of first shadow-casting light
+
+    // Collect lights from scene
+    if (m_scene) {
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto lightComp = actor->getComponent<LightComponent>();
+            if (!lightComp) continue;
+
+            if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
+
+            LightData& light = lightUbo.lights[lightUbo.numLights];
+
+            glm::vec3 worldPos = actor->getTransform()->getPosition();
+            glm::vec3 worldDir = lightComp->getDirection();
+
+            // Map: Sphere=0→Point=1, Directional=1→Dir=0, Spot=2→Spot=2
+            int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 : (lightComp->getLightType() == LightType::Directional) ? 0 : 2;
+            light.position = glm::vec4(worldPos, static_cast<float>(deferredType));
+            light.direction = glm::vec4(worldDir, lightComp->getRange());
+            light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
+
+            float shadowMapIndex = -1.0f;
+            if (m_shadowsEnabled && shadowCasterIndex < 0) {
+                int lightType = static_cast<int>(lightComp->getLightType());
+                if (lightType == 0 || lightType == 2) {
+                    shadowMapIndex = 0.0f;
+                    shadowCasterIndex = lightUbo.numLights;
+                }
+            }
+
+            light.params = glm::vec4(
+                glm::cos(glm::radians(lightComp->getInnerConeAngle())),
+                glm::cos(glm::radians(lightComp->getOuterConeAngle())),
+                shadowMapIndex,
+                0.0f
+            );
+
+            if (shadowMapIndex >= 0.0f) {
+                light.lightSpaceMatrix = calculateLightSpaceMatrix(light);
+            } else {
+                light.lightSpaceMatrix = glm::mat4(1.0f);
+            }
+
+            lightUbo.numLights++;
+        }
+    }
+
+    // If no lights in scene, add a default directional light (direction synced by renderDeferred)
+    if (lightUbo.numLights == 0) {
+        LightData& defaultLight = lightUbo.lights[0];
+        defaultLight.position = glm::vec4(0.0f, 5.0f, 5.0f, 0.0f);  // type 0 = directional
+        defaultLight.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
+        // Intensity = PI compensates for PBR energy-conserving divide-by-PI in diffuse BRDF
+        defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi<float>());
+        defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f, 0.0f);
+
+        if (m_shadowsEnabled) {
+            defaultLight.lightSpaceMatrix = calculateLightSpaceMatrix(defaultLight);
+        } else {
+            defaultLight.lightSpaceMatrix = glm::mat4(1.0f);
+        }
+
+        lightUbo.numLights = 1;
+    }
+
+    memcpy(m_lightBufferMapped, &lightUbo, sizeof(lightUbo));
+}
+
+void VulkanRenderer::updateLightBuffer(uint32_t frameIndex) {
+    if (!m_frameResources.isInitialized()) {
+        updateLightBuffer();
+        return;
+    }
+
+    FrameResources& frame = m_frameResources.getFrame(frameIndex);
+    if (!frame.lightBufferMapped) return;
+
+    LightUniformBuffer lightUbo{};
+    lightUbo.numLights = 0;
+    lightUbo.ambientIntensity = 0.15f;
+    lightUbo.shadowBias = 0.005f;
+    lightUbo.shadowStrength = 0.7f;
+
+    int shadowCasterIndex = -1;
+
+    // Collect lights from scene
+    if (m_scene) {
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto lightComp = actor->getComponent<LightComponent>();
+            if (!lightComp) continue;
+            if (lightUbo.numLights >= static_cast<int>(MAX_LIGHTS)) break;
+
+            LightData& light = lightUbo.lights[lightUbo.numLights];
+
+            glm::vec3 worldPos = actor->getTransform()->getPosition();
+            glm::vec3 worldDir = lightComp->getDirection();
+
+            // Map: Sphere=0→Point=1, Directional=1→Dir=0, Spot=2→Spot=2
+            int deferredType = (lightComp->getLightType() == LightType::Sphere) ? 1 : (lightComp->getLightType() == LightType::Directional) ? 0 : 2;
+            light.position = glm::vec4(worldPos, static_cast<float>(deferredType));
+            light.direction = glm::vec4(worldDir, lightComp->getRange());
+            light.color = glm::vec4(lightComp->getColor(), lightComp->getIntensity());
+
+            float shadowMapIndex = -1.0f;
+            if (m_shadowsEnabled && shadowCasterIndex < 0) {
+                int lightType = static_cast<int>(lightComp->getLightType());
+                if (lightType == 0 || lightType == 2) {
+                    shadowMapIndex = 0.0f;
+                    shadowCasterIndex = lightUbo.numLights;
+                }
+            }
+
+            light.params = glm::vec4(
+                glm::cos(glm::radians(lightComp->getInnerConeAngle())),
+                glm::cos(glm::radians(lightComp->getOuterConeAngle())),
+                shadowMapIndex,
+                0.0f
+            );
+
+            if (shadowMapIndex >= 0.0f) {
+                light.lightSpaceMatrix = calculateLightSpaceMatrix(light);
+            } else {
+                light.lightSpaceMatrix = glm::mat4(1.0f);
+            }
+
+            lightUbo.numLights++;
+        }
+    }
+
+    // If no lights in scene, add a default directional light
+    if (lightUbo.numLights == 0) {
+        LightData& defaultLight = lightUbo.lights[0];
+        defaultLight.position = glm::vec4(0.0f, 5.0f, 5.0f, 0.0f);
+        defaultLight.direction = glm::vec4(glm::normalize(glm::vec3(0.5f, -1.0f, -0.5f)), 100.0f);
+        defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        defaultLight.params = glm::vec4(0.0f, 0.0f, m_shadowsEnabled ? 0.0f : -1.0f, 0.0f);
+
+        if (m_shadowsEnabled) {
+            defaultLight.lightSpaceMatrix = calculateLightSpaceMatrix(defaultLight);
+        } else {
+            defaultLight.lightSpaceMatrix = glm::mat4(1.0f);
+        }
+
+        lightUbo.numLights = 1;
+    }
+
+    memcpy(frame.lightBufferMapped, &lightUbo, sizeof(lightUbo));
+}
+
+} // namespace ohao

@@ -1,0 +1,47 @@
+#version 450
+
+// Composite Compute Shader
+// Merges SSR reflections and volumetric fog into the HDR scene buffer.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Input: HDR scene color
+layout(set = 0, binding = 0) uniform sampler2D hdrScene;
+// Input: SSR reflection (RGB = reflected color, A = confidence/blend factor)
+layout(set = 0, binding = 1) uniform sampler2D ssrReflection;
+// Input: Volumetric scattering (RGB = in-scattered light, A = transmittance)
+layout(set = 0, binding = 2) uniform sampler2D volumetricScatter;
+// Output: Composited HDR
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform CompositeParams {
+    vec2 screenSize;
+    uint flags;     // bit 0 = SSR enabled, bit 1 = volumetric enabled
+    uint padding;
+} params;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(params.screenSize.x) || pixel.y >= int(params.screenSize.y)) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel) + 0.5) / params.screenSize;
+
+    vec3 color = texture(hdrScene, uv).rgb;
+
+    // SSR: blend reflected color by confidence
+    if ((params.flags & 1u) != 0u) {
+        vec4 ssr = texture(ssrReflection, uv);
+        color = mix(color, ssr.rgb, ssr.a);
+    }
+
+    // Volumetric fog: Beer-Lambert compositing
+    // transmittance in alpha, in-scattered light in RGB
+    if ((params.flags & 2u) != 0u) {
+        vec4 vol = texture(volumetricScatter, uv);
+        color = color * vol.a + vol.rgb;
+    }
+
+    imageStore(outputImage, pixel, vec4(color, 1.0));
+}

@@ -1,0 +1,156 @@
+#version 450
+
+// GPU Frustum Culling
+// Culls objects against view frustum and outputs visible draw commands
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Mesh descriptor (bounding volume + draw info)
+struct MeshDescriptor {
+    vec4 boundingSphere;  // xyz = center, w = radius
+    vec4 aabbMin;         // xyz = min
+    vec4 aabbMax;         // xyz = max
+    uint indexOffset;
+    uint indexCount;
+    uint vertexOffset;
+    uint materialIndex;
+};
+
+// Per-instance draw data
+struct DrawInstance {
+    mat4 modelMatrix;
+    mat4 normalMatrix;
+    uint materialIndex;
+    uint meshIndex;
+    uint flags;
+    uint padding;
+};
+
+// Indirect draw command
+struct IndirectDrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+
+// Input: all mesh descriptors
+layout(std430, set = 0, binding = 0) readonly buffer MeshDescriptorBuffer {
+    MeshDescriptor meshDescriptors[];
+};
+
+// Input: all instances (transforms)
+layout(std430, set = 0, binding = 1) readonly buffer InstanceBuffer {
+    DrawInstance instances[];
+};
+
+// Output: visible draw commands
+layout(std430, set = 0, binding = 2) writeonly buffer DrawCommandBuffer {
+    IndirectDrawCommand drawCommands[];
+};
+
+// Output: draw count (atomic)
+layout(std430, set = 0, binding = 3) buffer DrawCountBuffer {
+    uint drawCount;
+};
+
+// Push constants
+layout(push_constant) uniform CullParams {
+    mat4 viewProj;
+    vec4 cameraPos;       // xyz = position, w = maxDistance
+    vec4 frustumPlanes[6];
+    uint meshCount;
+    uint flags;           // Bit 0: frustum, Bit 1: occlusion, Bit 2: distance
+    uint padding[2];
+} params;
+
+// Test sphere against frustum planes
+bool sphereInFrustum(vec3 center, float radius) {
+    for (int i = 0; i < 6; ++i) {
+        float dist = dot(params.frustumPlanes[i].xyz, center) + params.frustumPlanes[i].w;
+        if (dist < -radius) {
+            return false;  // Outside this plane
+        }
+    }
+    return true;
+}
+
+// Test AABB against frustum (more accurate but slower)
+bool aabbInFrustum(vec3 aabbMin, vec3 aabbMax) {
+    for (int i = 0; i < 6; ++i) {
+        vec3 planeNormal = params.frustumPlanes[i].xyz;
+
+        // Find the corner that is most in the direction of the plane normal
+        vec3 pVertex = vec3(
+            planeNormal.x > 0 ? aabbMax.x : aabbMin.x,
+            planeNormal.y > 0 ? aabbMax.y : aabbMin.y,
+            planeNormal.z > 0 ? aabbMax.z : aabbMin.z
+        );
+
+        float dist = dot(planeNormal, pVertex) + params.frustumPlanes[i].w;
+        if (dist < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    uint meshIdx = gl_GlobalInvocationID.x;
+
+    if (meshIdx >= params.meshCount) {
+        return;
+    }
+
+    MeshDescriptor mesh = meshDescriptors[meshIdx];
+    DrawInstance instance = instances[meshIdx];
+
+    // Transform bounding sphere to world space
+    vec3 worldCenter = (instance.modelMatrix * vec4(mesh.boundingSphere.xyz, 1.0)).xyz;
+
+    // Approximate radius scaling (use max scale component)
+    float scaleX = length(instance.modelMatrix[0].xyz);
+    float scaleY = length(instance.modelMatrix[1].xyz);
+    float scaleZ = length(instance.modelMatrix[2].xyz);
+    float maxScale = max(max(scaleX, scaleY), scaleZ);
+    float worldRadius = mesh.boundingSphere.w * maxScale;
+
+    bool visible = true;
+
+    // Distance culling
+    if ((params.flags & 4u) != 0) {
+        float dist = distance(worldCenter, params.cameraPos.xyz);
+        if (dist - worldRadius > params.cameraPos.w) {
+            visible = false;
+        }
+    }
+
+    // Frustum culling
+    if (visible && (params.flags & 1u) != 0) {
+        // First do sphere test (fast)
+        if (!sphereInFrustum(worldCenter, worldRadius)) {
+            visible = false;
+        }
+        // Could do AABB test for more accuracy on large objects
+    }
+
+    // Occlusion culling (requires Hi-Z buffer - not implemented here)
+    // if (visible && (params.flags & 2u) != 0) {
+    //     visible = !isOccluded(worldCenter, worldRadius);
+    // }
+
+    if (visible) {
+        // Atomically add draw command
+        uint drawIdx = atomicAdd(drawCount, 1);
+
+        IndirectDrawCommand cmd;
+        cmd.indexCount = mesh.indexCount;
+        cmd.instanceCount = 1;
+        cmd.firstIndex = mesh.indexOffset;
+        cmd.vertexOffset = int(mesh.vertexOffset);
+        cmd.firstInstance = meshIdx;  // Use mesh index to look up instance data
+
+        drawCommands[drawIdx] = cmd;
+    }
+}

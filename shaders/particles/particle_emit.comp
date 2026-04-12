@@ -1,0 +1,93 @@
+#version 450
+
+// Particle Emit Compute Shader
+// Spawns new particles at emitter positions with randomized properties
+
+layout(local_size_x = 64) in;
+
+struct Particle {
+    vec4 position;  // xyz = position, w = lifetime
+    vec4 velocity;  // xyz = velocity, w = maxLifetime
+    vec4 color;     // rgba
+    vec4 params;    // x = size, y = rotation, z = type, w = alive (1.0 = alive)
+};
+
+layout(std430, set = 0, binding = 0) buffer ParticleBuffer {
+    Particle particles[];
+};
+
+layout(std430, set = 0, binding = 1) buffer CounterBuffer {
+    uint aliveCount;
+    uint deadCount;
+    uint emitCount;
+    uint maxParticles;
+};
+
+layout(push_constant) uniform EmitParams {
+    vec4 emitPosition;    // xyz = position, w = emitRate
+    vec4 emitDirection;   // xyz = direction, w = spread angle
+    vec4 velocityRange;   // xy = min/max speed, zw = unused
+    vec4 lifetimeRange;   // x = min, y = max, z = startSize, w = endSize
+    vec4 colorStart;
+    vec4 colorEnd;
+    float time;
+    uint emitCountThisFrame;
+    uint particleType;
+    uint pad;
+} emit;
+
+// Simple hash for pseudo-random
+uint hash(uint x) {
+    x += (x << 10u);
+    x ^= (x >> 6u);
+    x += (x << 3u);
+    x ^= (x >> 11u);
+    x += (x << 15u);
+    return x;
+}
+
+float random(uint seed) {
+    return float(hash(seed)) / 4294967295.0;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= emit.emitCountThisFrame) return;
+
+    // Find a dead particle slot
+    uint slot = atomicAdd(aliveCount, 1);
+    if (slot >= maxParticles) {
+        atomicAdd(aliveCount, -1u); // Undo
+        return;
+    }
+
+    // Seed based on time and index
+    uint seed = hash(uint(emit.time * 1000.0) + idx * 7919u);
+
+    // Random direction within cone
+    float r1 = random(seed);
+    float r2 = random(seed + 1u);
+    float r3 = random(seed + 2u);
+    float r4 = random(seed + 3u);
+    float r5 = random(seed + 4u);
+
+    float spread = emit.emitDirection.w;
+    float theta = r1 * 2.0 * 3.14159265;
+    float phi = r2 * spread;
+
+    vec3 dir = normalize(emit.emitDirection.xyz);
+    // Build orthonormal basis around direction
+    vec3 up = abs(dir.y) < 0.99 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 right = normalize(cross(up, dir));
+    up = cross(dir, right);
+
+    vec3 randomDir = dir * cos(phi) + (right * cos(theta) + up * sin(theta)) * sin(phi);
+
+    float speed = mix(emit.velocityRange.x, emit.velocityRange.y, r3);
+    float lifetime = mix(emit.lifetimeRange.x, emit.lifetimeRange.y, r4);
+
+    particles[slot].position = vec4(emit.emitPosition.xyz, 0.0); // w = current lifetime
+    particles[slot].velocity = vec4(randomDir * speed, lifetime);
+    particles[slot].color = emit.colorStart;
+    particles[slot].params = vec4(emit.lifetimeRange.z, 0.0, float(emit.particleType), 1.0);
+}

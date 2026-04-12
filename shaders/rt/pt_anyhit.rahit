@@ -1,0 +1,51 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+// Path Tracer Any-Hit Shader — Alpha Testing
+// Runs for every intersection. If the diffuse texture alpha < 0.5,
+// the hit is ignored and the ray continues through (transparency).
+
+hitAttributeEXT vec2 baryCoord;
+
+layout(set = 0, binding = 5) readonly buffer IndexBuffer { uint indices[]; } indexBuf;
+layout(set = 0, binding = 8) readonly buffer UVBuffer { vec2 uvs[]; } uvBuf;
+layout(set = 0, binding = 9) readonly buffer MatIDBuffer { uint matIDs[]; } matIDBuf;
+layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;
+layout(set = 0, binding = 12) uniform sampler2D textures[];
+
+void main() {
+    // Barycentric interpolation
+    float u = baryCoord.x;
+    float v = baryCoord.y;
+    float w = 1.0 - u - v;
+
+    // Get triangle vertices
+    uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;
+    uint baseIdx = globalTriID * 3;
+    uint i0 = indexBuf.indices[baseIdx + 0];
+    uint i1 = indexBuf.indices[baseIdx + 1];
+    uint i2 = indexBuf.indices[baseIdx + 2];
+
+    // Get material
+    uint matID = matIDBuf.matIDs[globalTriID];
+    vec4 matColor = matColorBuf.matColors[matID * 3u + 0u];
+    uint diffuseTexIdx = floatBitsToUint(matColor.a);
+
+    // If no texture, accept hit (opaque)
+    if (diffuseTexIdx == 0xFFFFFFFFu) return;
+
+    // Interpolate UVs
+    vec2 uv0 = uvBuf.uvs[i0];
+    vec2 uv1 = uvBuf.uvs[i1];
+    vec2 uv2 = uvBuf.uvs[i2];
+    vec2 texUV = w * uv0 + u * uv1 + v * uv2;
+
+    // Sample alpha
+    float alpha = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).a;
+
+    // Alpha test — discard if transparent
+    if (alpha < 0.5) {
+        ignoreIntersectionEXT;
+    }
+}

@@ -1,0 +1,111 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Ray Generation Shader — RT Soft Shadow Pass
+// Traces multiple shadow rays with jittered light position for penumbra.
+// Outputs shadow mask: 0.0 = fully shadowed, 1.0 = fully lit.
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, r8) uniform image2D shadowMask;
+layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;
+layout(set = 0, binding = 3) uniform sampler2D gBufferNormal;
+
+layout(push_constant) uniform PushConstants {
+    mat4 invView;
+    mat4 invProj;
+    vec4 lightDirAndRadius;    // xyz=direction (toward light), w=angular radius (radians)
+    vec4 lightPosAndRange;     // xyz=position, w=range (0=directional)
+    uvec4 params;              // x=width, y=height, z=lightType (0=dir,1=point), w=sampleCount
+} pc;
+
+layout(location = 0) rayPayloadEXT float shadowPayload;
+
+#include "includes/common/encoding.glsl"
+
+// Simple hash for per-pixel randomization
+float hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Tangent/bitangent from a direction vector
+void buildBasis(vec3 N, out vec3 T, out vec3 B) {
+    vec3 up = abs(N.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    T = normalize(cross(up, N));
+    B = cross(N, T);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(pc.params.x, pc.params.y);
+
+    // Read world position from GBuffer
+    vec4 posSample = texture(gBufferPosition, uv);
+    vec3 worldPos = posSample.rgb;
+
+    // Skip sky pixels
+    if (worldPos == vec3(0.0) && posSample.a == 0.0) {
+        imageStore(shadowMask, pixel, vec4(1.0));
+        return;
+    }
+
+    // Read and decode normal
+    vec4 normalSample = texture(gBufferNormal, uv);
+    vec3 N = decodeNormalOctahedron(normalSample.xy);
+
+    // Bias the ray origin along normal
+    vec3 origin = worldPos + N * 0.05;
+
+    uint lightType = pc.params.z;
+    uint sampleCount = max(pc.params.w, 1u);
+    float lightRadius = pc.lightDirAndRadius.w;
+
+    float visibility = 0.0;
+    uint rayFlags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT;
+
+    for (uint s = 0u; s < sampleCount; s++) {
+        // Per-sample random offset for soft shadow penumbra
+        float r1 = hash(vec2(pixel) + vec2(float(s) * 7.13, float(s) * 13.37));
+        float r2 = hash(vec2(pixel) + vec2(float(s) * 31.17, float(s) * 47.53));
+
+        vec3 L;
+        float tMax;
+
+        if (lightType == 0u) {
+            // Directional light — jitter around light direction for soft shadow
+            vec3 lightDir = normalize(-pc.lightDirAndRadius.xyz);
+            vec3 T, B;
+            buildBasis(lightDir, T, B);
+            float angle = lightRadius * sqrt(r1);
+            float phi = 6.2831853 * r2;
+            L = normalize(lightDir + T * (angle * cos(phi)) + B * (angle * sin(phi)));
+            tMax = 10000.0;
+        } else {
+            // Point/spot light — jitter the light position within a sphere
+            vec3 lightPos = pc.lightPosAndRange.xyz;
+            // Random point on sphere of radius lightRadius
+            float theta = 6.2831853 * r1;
+            float phi = acos(1.0 - 2.0 * r2);
+            vec3 offset = lightRadius * vec3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
+            vec3 jitteredPos = lightPos + offset;
+
+            vec3 toLight = jitteredPos - worldPos;
+            float dist = length(toLight);
+            L = toLight / dist;
+            tMax = dist;
+        }
+
+        // Skip surfaces facing away from light
+        if (dot(N, L) <= 0.0) continue;
+
+        shadowPayload = 0.0;
+        traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 0,
+                     origin, 0.001, L, tMax, 0);
+
+        visibility += shadowPayload;
+    }
+
+    visibility /= float(sampleCount);
+    imageStore(shadowMask, pixel, vec4(visibility));
+}

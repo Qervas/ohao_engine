@@ -1,110 +1,51 @@
 # OHAO Engine
 
-OHAO Engine is my physics engine developing on Linux platforms(Fedora Linux), focusing on advanced rendering techniques, procedural generation, and physics simulation.
+A Vulkan 1.3 rendering engine with hardware ray tracing and Jolt Physics. Pure C++, no editor dependency.
 
+## Features
 
-<div style="display: flex;">
-  <div style="flex: 1;">
-    <img src="image/README/1733708535551.png" alt="Image 1" style="width: 50%;">
-  </div>
-  <div style="flex: 1;">
-    <img src="image/README/1734118037401.png" alt="Image 2" style="width: 50%;">
-  </div>
-</div>
+- **Path Tracer** — Vulkan RT pipeline with NEE, Cook-Torrance GGX BRDF, progressive accumulation
+- **Deferred Renderer** — GBuffer, CSM shadows, SSAO, bloom, TAA, ACES tonemapping
+- **PBR Materials** — Per-pixel textures from GLTF/OBJ, specular-glossiness support
+- **Jolt Physics** — AAA-grade physics with plugin architecture
+- **3D Audio** — Positional audio via miniaudio
+- **Model Loading** — GLTF/GLB (tinygltf), OBJ with auto-discovered textures
 
+## Build
 
-
-## Building
-
-### Required Dependencies
-
-- CMake 3.20+
-- Vulkan SDK
-- GLFW3
-
-### Installation on Fedora Linux
+Requires: CMake 3.20+, Vulkan SDK, C++17 compiler (MSVC/GCC/Clang)
 
 ```bash
-sudo dnf install cmake vulkan-devel glfw-devel git gcc-c++
+cmake -B build -S .
+cmake --build build --config Release -j8
 ```
 
-### Clone the Repository
+## Run
 
 ```bash
-# Clone the repository with submodules
-git clone --recursive https://github.com/Qervas/ohao-engine.git
-
-# Or if you already cloned without --recursive:
-git clone https://github.com/Qervas/ohao-engine.git
-cd ohao-engine
-git submodule update --init --recursive
+./build/Release/renderer_test output.png
 ```
 
-### Build Steps
-
-```bash
-mkdir build
-cd build
-cmake ..
-make -j$(nproc)  # Use multiple cores for faster building
-```
-
-### Running
-
-```bash
-./ohao_engine
-```
-
-### Controls
-
-- **WASD**: Camera movement
-- **Mouse**: Look around
-- **Space/Ctrl**: Up/Down
-- **Shift**: Speed up movement
-- **Esc**: Exit
-
-## Development Status
-
-Currently in early development. Features being implemented:
-
-- [X] Basic window creation
-- [X] Vulkan initialization, validation layer, pipeline, rasterization
-- [X] Load scene from obj file, including lighting and materials
-- [X] Friendly camera control
-- [X] User interface
-- [ ] BRDF and illumination model switch
-
-## Documentation
-
-- [Technical Specification](docs/TECHNICAL_SPEC.md)
-- More documentation will be added as the project develops
+Renders a path-traced scene to PNG. Edit `tests/renderer/renderer_test.cpp` to change scene/model/resolution/samples.
 
 ## Project Structure
 
 ```
-ohao-engine/
-├── src/             # Source files
-├── shaders/         # GLSL shaders
-├── external/        # External dependencies
-│   └── imgui/      # Dear ImGui (docking branch)
-├── docs/           # Documentation
-└── assets/         # 3D models and textures
+ohao/
+  renderer/           # Vulkan rendering (deferred + RT path tracer)
+  engine/             # Scene graph, actors, components, asset loading
+  physics/            # Jolt Physics backend
+  audio/              # miniaudio backend
+shaders/
+  rt/                 # Path tracer shaders (raygen, closesthit, miss)
+  gbuffer/            # Deferred GBuffer
+  lighting/           # Deferred lighting
+  post/               # Post-processing
+tests/
+  renderer/           # Standalone render test
+external/             # Dependencies (Jolt, VMA, tinygltf, miniaudio, stb)
 ```
 
 ## License
 
 [MIT License](LICENSE)
-
-## Contributing
-
-This project is currently in early development. Contribution guidelines will be added soon.
-
-## Author
-
-[Qervas](mailto:djmax96945147@outlook.com)
-
-## Acknowledgments
-
-- [Dear ImGui](https://github.com/ocornut/imgui) - Immediate mode GUI
-- [Vulkan](https://www.vulkan.org/) - Graphics API
-- [GLFW](https://www.glfw.org/) - Window creation and input
