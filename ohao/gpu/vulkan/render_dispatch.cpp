@@ -53,12 +53,13 @@ void VulkanRenderer::renderDeferred() {
     // (see below after command buffer begins). For now, pass RT for static scenes only.
     bool hasDynamicBLAS = hasAnimatedActors && m_gpuSkinning && !m_animatedMeshes.empty();
 
-    // RT for animated scenes: BLAS pipeline built but coordinate space needs debugging.
-    // Disable RT when dynamic BLAS is active to avoid white frame.
+    // Dynamic BLAS: compute skinning works, BLAS creation works, but RT renders
+    // black due to coordinate space mismatch (ufbx bone matrices in meters,
+    // vertex positions in centimeters). Disable RT for animated scenes until fixed.
     if (m_rtAccel && m_rtAccel->isSupported()) {
-        bool rtReady = !hasDynamicBLAS; // TODO: enable once coordinate space is fixed
-        m_deferredRenderer->setAccelerationStructure(rtReady ? m_rtAccel.get() : nullptr);
-        m_deferredRenderer->setRTShadowsEnabled(rtReady);
+        m_deferredRenderer->setAccelerationStructure(
+            hasDynamicBLAS ? nullptr : m_rtAccel.get());
+        m_deferredRenderer->setRTShadowsEnabled(!hasDynamicBLAS);
     }
 
     // Pass env map to deferred renderer for reflections
@@ -156,19 +157,8 @@ void VulkanRenderer::renderDeferred() {
             if (!bones.empty())
                 m_gpuSkinning->skin(skinCmd, am.skinHandle, bones);
         }
-        vkEndCommandBuffer(skinCmd);
-        VkSubmitInfo skinSubmit{};
-        skinSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        skinSubmit.commandBufferCount = 1;
-        skinSubmit.pCommandBuffers = &skinCmd;
-        vkQueueSubmit(m_graphicsQueue, 1, &skinSubmit, VK_NULL_HANDLE);
-        vkQueueWaitIdle(m_graphicsQueue);
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &skinCmd);
-
-        // 3. Create fresh BLASes — DISABLED while debugging coordinate space
-        //    The compute skinning above produces valid positions (verified via readback).
-        //    BLAS creation causes white/black frames — coordinate space mismatch.
-        if (false) {
+        // 3. BLAS builds — batch all on the SAME command buffer (no separate submits)
+        m_rtAccel->ensureScratchBuffer(64 * 1024 * 1024);
         std::unordered_map<uint64_t, BlasHandle> animatedBlasMap;
         size_t animIdx = 0;
         for (const auto& abi : m_actorBlasList) {
@@ -178,31 +168,48 @@ void VulkanRenderer::renderDeferred() {
                 m_gpuSkinning->getSkinnedPositionBuffer(am.skinHandle),
                 m_gpuSkinning->getVertexCount(am.skinHandle),
                 m_rtIndexBuffer, abi.indexCount,
-                abi.indexOffset * sizeof(uint32_t));
+                abi.indexOffset * sizeof(uint32_t),
+                skinCmd);  // record on same cmd buffer
             if (newBlas != INVALID_BLAS) {
                 animatedBlasMap[abi.actorId] = newBlas;
                 m_oldAnimatedBLAS.push_back(newBlas);
             }
+            // Barrier between BLAS builds (shared scratch buffer)
+            VkMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+            vkCmdPipelineBarrier(skinCmd,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                0, 1, &barrier, 0, nullptr, 0, nullptr);
         }
 
-        // 4. Rebuild TLAS: animated actors use new BLAS, static use original
+        // 4. Rebuild TLAS on same command buffer
         m_rtAccel->clearInstances();
         uint32_t triOffset = 0;
         for (const auto& abi : m_actorBlasList) {
             auto actorIt = m_scene->getAllActors().find(abi.actorId);
             if (actorIt == m_scene->getAllActors().end()) continue;
-
             BlasHandle blas = abi.originalBlas;
             auto animIt = animatedBlasMap.find(abi.actorId);
             if (animIt != animatedBlasMap.end())
                 blas = animIt->second;
-
             m_rtAccel->addInstance(blas, actorIt->second->getTransform()->getWorldMatrix(),
                                    triOffset, 0xFF);
             triOffset += abi.indexCount / 3;
         }
-        m_rtAccel->buildTLAS(VK_NULL_HANDLE);
-        } // end disabled BLAS block
+        m_rtAccel->buildTLAS(skinCmd);
+
+        // Submit everything as ONE batch: compute + BLAS builds + TLAS
+        vkEndCommandBuffer(skinCmd);
+        VkSubmitInfo skinSubmit{};
+        skinSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        skinSubmit.commandBufferCount = 1;
+        skinSubmit.pCommandBuffers = &skinCmd;
+        vkQueueSubmit(m_graphicsQueue, 1, &skinSubmit, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_graphicsQueue);
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &skinCmd);
     }
 
 

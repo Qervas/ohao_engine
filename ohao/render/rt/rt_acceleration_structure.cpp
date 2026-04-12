@@ -322,7 +322,7 @@ void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
 BlasHandle RTAccelerationStructure::createBLASFromPositions(
         VkBuffer positionBuffer, uint32_t vertexCount,
         VkBuffer indexBuffer, uint32_t indexCount,
-        VkDeviceSize indexByteOffset) {
+        VkDeviceSize indexByteOffset, VkCommandBuffer cmd) {
     if (!m_supported) return INVALID_BLAS;
 
     uint32_t primitiveCount = indexCount / 3;
@@ -394,10 +394,10 @@ BlasHandle RTAccelerationStructure::createBLASFromPositions(
 
     const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
 
-    // Use single-time command buffer (safe, no sync issues)
-    VkCommandBuffer buildCmd = beginSingleTimeCommands();
-    vkCmdBuildAccelerationStructuresKHR(buildCmd, 1, &buildInfo, &pRangeInfo);
-    endSingleTimeCommands(buildCmd);
+    bool ownCmd = (cmd == VK_NULL_HANDLE);
+    if (ownCmd) cmd = beginSingleTimeCommands();
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
+    if (ownCmd) endSingleTimeCommands(cmd);
 
     BlasHandle handle = static_cast<BlasHandle>(m_blasEntries.size());
     m_blasEntries.push_back(entry);

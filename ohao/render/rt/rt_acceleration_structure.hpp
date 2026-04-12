@@ -80,9 +80,12 @@ public:
 
     // Create a new BLAS from tightly-packed vec3 positions (stride=12).
     // For per-frame animated mesh BLAS — uses PREFER_FAST_BUILD.
+    // If cmd is provided, records the build on that command buffer (caller submits).
+    // If cmd is VK_NULL_HANDLE, uses single-time commands (submit + wait internally).
     BlasHandle createBLASFromPositions(VkBuffer positionBuffer, uint32_t vertexCount,
                                        VkBuffer indexBuffer, uint32_t indexCount,
-                                       VkDeviceSize indexByteOffset);
+                                       VkDeviceSize indexByteOffset,
+                                       VkCommandBuffer cmd = VK_NULL_HANDLE);
 
     // === TLAS management ===
 
