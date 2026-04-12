@@ -103,6 +103,9 @@ public:
     // Pre-allocate scratch buffer (call before multi-BLAS rebuilds to avoid mid-recording realloc)
     void ensureScratchBuffer(VkDeviceSize requiredSize);
 
+    // Force full TLAS rebuild (not update) on next buildTLAS call
+    void forceTlasRebuild() { m_forceTlasRebuild = true; }
+
     // === Getters ===
 
     VkAccelerationStructureKHR getTLAS() const { return m_tlas; }
@@ -142,6 +145,7 @@ private:
 
     // TLAS
     VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
+    bool m_forceTlasRebuild{false};
     VkBuffer m_tlasBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_tlasMemory = VK_NULL_HANDLE;
 

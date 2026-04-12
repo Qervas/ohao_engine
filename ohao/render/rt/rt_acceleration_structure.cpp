@@ -473,8 +473,9 @@ void RTAccelerationStructure::buildTLAS(VkCommandBuffer cmd) {
     vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                              &buildInfo, &instanceCount, &sizeInfo);
 
-    // Recreate TLAS if needed
-    bool needsRebuild = (m_tlas == VK_NULL_HANDLE);
+    // Force full rebuild when BLAS references change (e.g., animated BLAS replaced)
+    bool needsRebuild = (m_tlas == VK_NULL_HANDLE) || m_forceTlasRebuild;
+    m_forceTlasRebuild = false;
     if (needsRebuild) {
         // Destroy old
         if (m_tlas != VK_NULL_HANDLE) {
