@@ -319,63 +319,89 @@ void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
     entry.deviceAddress = 0;
 }
 
-void RTAccelerationStructure::rebuildBLAS(BlasHandle handle, VkBuffer skinnedPositions,
-                                            uint32_t vertexCount, VkBuffer indexBuffer,
-                                            uint32_t indexCount, VkDeviceSize indexByteOffset,
-                                            VkCommandBuffer cmd) {
-    if (handle >= m_blasEntries.size() || m_blasEntries[handle].handle == VK_NULL_HANDLE) return;
-    auto& entry = m_blasEntries[handle];
+BlasHandle RTAccelerationStructure::createBLASFromPositions(
+        VkBuffer positionBuffer, uint32_t vertexCount,
+        VkBuffer indexBuffer, uint32_t indexCount,
+        VkDeviceSize indexByteOffset) {
+    if (!m_supported) return INVALID_BLAS;
 
     uint32_t primitiveCount = indexCount / 3;
 
-    // Geometry: skinned positions (tightly packed vec3, stride=12)
-    VkAccelerationStructureGeometryKHR geometry{};
-    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-
-    auto& triangles = geometry.geometry.triangles;
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
     triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
     triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-    triangles.vertexData.deviceAddress = getBufferDeviceAddress(skinnedPositions);
-    triangles.vertexStride = 12;  // tightly packed vec3 (3 floats × 4 bytes)
+    triangles.vertexData.deviceAddress = getBufferDeviceAddress(positionBuffer);
+    triangles.vertexStride = 12;
     triangles.maxVertex = vertexCount - 1;
     triangles.indexType = VK_INDEX_TYPE_UINT32;
     triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer);
 
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geometry.geometry.triangles = triangles;
+
     VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
     buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
     buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-    // Must match createBLAS flags — different flags produce different AS sizes
-    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
     buildInfo.geometryCount = 1;
     buildInfo.pGeometries = &geometry;
-    buildInfo.dstAccelerationStructure = entry.handle;
 
-    // Query required sizes and validate against existing allocation
     VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
     sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-    vkGetAccelerationStructureBuildSizesKHR(m_device,
-        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-        &buildInfo, &primitiveCount, &sizeInfo);
+    vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                             &buildInfo, &primitiveCount, &sizeInfo);
 
-    // Use pre-allocated scratch buffer (caller must call ensureScratchBuffer before loop)
-    // Do NOT call ensureScratchBuffer here — it would destroy/recreate during recording
+    BlasEntry entry{};
+    entry.vertexCount = vertexCount;
+    entry.indexCount = indexCount;
+
+    if (!createBuffer(sizeInfo.accelerationStructureSize,
+                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      entry.buffer, entry.memory)) {
+        return INVALID_BLAS;
+    }
+
+    VkAccelerationStructureCreateInfoKHR createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+    createInfo.buffer = entry.buffer;
+    createInfo.size = sizeInfo.accelerationStructureSize;
+    createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+    if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &entry.handle) != VK_SUCCESS) {
+        destroyBuffer(entry.buffer, entry.memory);
+        return INVALID_BLAS;
+    }
+
+    VkAccelerationStructureDeviceAddressInfoKHR addressInfo{};
+    addressInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    addressInfo.accelerationStructure = entry.handle;
+    entry.deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(m_device, &addressInfo);
+
+    ensureScratchBuffer(sizeInfo.buildScratchSize);
+
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.dstAccelerationStructure = entry.handle;
     buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
 
     VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
     rangeInfo.primitiveCount = primitiveCount;
     rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);
-    rangeInfo.firstVertex = 0;
-    rangeInfo.transformOffset = 0;
 
     const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
 
-    bool ownCmd = (cmd == VK_NULL_HANDLE);
-    if (ownCmd) cmd = beginSingleTimeCommands();
-    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
-    if (ownCmd) endSingleTimeCommands(cmd);
+    // Use single-time command buffer (safe, no sync issues)
+    VkCommandBuffer buildCmd = beginSingleTimeCommands();
+    vkCmdBuildAccelerationStructuresKHR(buildCmd, 1, &buildInfo, &pRangeInfo);
+    endSingleTimeCommands(buildCmd);
+
+    BlasHandle handle = static_cast<BlasHandle>(m_blasEntries.size());
+    m_blasEntries.push_back(entry);
+    return handle;
 }
 
 // === TLAS ===

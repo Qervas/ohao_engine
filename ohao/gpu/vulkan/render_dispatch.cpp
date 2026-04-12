@@ -53,12 +53,12 @@ void VulkanRenderer::renderDeferred() {
     // (see below after command buffer begins). For now, pass RT for static scenes only.
     bool hasDynamicBLAS = hasAnimatedActors && m_gpuSkinning && !m_animatedMeshes.empty();
 
-    // Keep RT disabled for animated scenes while BLAS rebuild is WIP
-    // The BLAS rebuild runs silently (above) for testing — RT not consumed yet
+    // RT for animated scenes: BLAS pipeline built but coordinate space needs debugging.
+    // Disable RT when dynamic BLAS is active to avoid white frame.
     if (m_rtAccel && m_rtAccel->isSupported()) {
-        m_deferredRenderer->setAccelerationStructure(
-            hasAnimatedActors ? nullptr : m_rtAccel.get());
-        m_deferredRenderer->setRTShadowsEnabled(!hasAnimatedActors);
+        bool rtReady = !hasDynamicBLAS; // TODO: enable once coordinate space is fixed
+        m_deferredRenderer->setAccelerationStructure(rtReady ? m_rtAccel.get() : nullptr);
+        m_deferredRenderer->setRTShadowsEnabled(rtReady);
     }
 
     // Pass env map to deferred renderer for reflections
@@ -127,32 +127,35 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // GPU compute skinning — run dispatches and verify output
-    static bool debugSkinOnce = true;
-    if (hasDynamicBLAS && !m_animatedMeshes.empty()) {
-        // Run compute skinning on a one-shot command buffer
-        VkCommandBuffer skinCmd;
-        VkCommandBufferAllocateInfo skinCmdInfo{};
-        skinCmdInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        skinCmdInfo.commandPool = m_commandPool;
-        skinCmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        skinCmdInfo.commandBufferCount = 1;
-        vkAllocateCommandBuffers(m_device, &skinCmdInfo, &skinCmd);
-        VkCommandBufferBeginInfo skinBegin{};
-        skinBegin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        skinBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(skinCmd, &skinBegin);
+    // ── Dynamic BLAS: compute skinning → fresh BLAS → TLAS rebuild ──
+    if (hasDynamicBLAS) {
+        // 1. Destroy previous frame's animated BLASes
+        for (auto blas : m_oldAnimatedBLAS)
+            m_rtAccel->destroyBLAS(blas);
+        m_oldAnimatedBLAS.clear();
 
-        for (const auto& animMesh : m_animatedMeshes) {
-            auto it = m_scene->getAllActors().find(animMesh.actorId);
-            if (it == m_scene->getAllActors().end()) continue;
-            auto animComp = it->second->getComponent<AnimationComponent>();
+        // 2. Compute skinning (separate command buffer + submit-and-wait)
+        VkCommandBuffer skinCmd;
+        VkCommandBufferAllocateInfo cmdAlloc{};
+        cmdAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmdAlloc.commandPool = m_commandPool;
+        cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmdAlloc.commandBufferCount = 1;
+        vkAllocateCommandBuffers(m_device, &cmdAlloc, &skinCmd);
+        VkCommandBufferBeginInfo oneShot{};
+        oneShot.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        oneShot.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(skinCmd, &oneShot);
+
+        for (const auto& am : m_animatedMeshes) {
+            auto actorIt = m_scene->getAllActors().find(am.actorId);
+            if (actorIt == m_scene->getAllActors().end()) continue;
+            auto animComp = actorIt->second->getComponent<AnimationComponent>();
             if (!animComp || !animComp->isPlaying()) continue;
             const auto& bones = animComp->getJointMatrices();
             if (!bones.empty())
-                m_gpuSkinning->skin(skinCmd, animMesh.skinHandle, bones);
+                m_gpuSkinning->skin(skinCmd, am.skinHandle, bones);
         }
-
         vkEndCommandBuffer(skinCmd);
         VkSubmitInfo skinSubmit{};
         skinSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -162,55 +165,44 @@ void VulkanRenderer::renderDeferred() {
         vkQueueWaitIdle(m_graphicsQueue);
         vkFreeCommandBuffers(m_device, m_commandPool, 1, &skinCmd);
 
-        // Debug: readback first mesh's skinned positions
-        if (debugSkinOnce) {
-            debugSkinOnce = false;
-            VkBuffer posBuf = m_gpuSkinning->getSkinnedPositionBuffer(m_animatedMeshes[0].skinHandle);
-            uint32_t vertCount = m_gpuSkinning->getVertexCount(m_animatedMeshes[0].skinHandle);
-            VkDeviceSize readSize = std::min(vertCount, 10u) * 3 * sizeof(float);
-
-            // Create staging buffer for readback
-            VkBuffer staging; VkDeviceMemory stagingMem;
-            VkBufferCreateInfo stagingInfo{};
-            stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            stagingInfo.size = readSize;
-            stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            vkCreateBuffer(m_device, &stagingInfo, nullptr, &staging);
-            VkMemoryRequirements mr;
-            vkGetBufferMemoryRequirements(m_device, staging, &mr);
-            VkMemoryAllocateInfo ai{};
-            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            ai.allocationSize = mr.size;
-            ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            vkAllocateMemory(m_device, &ai, nullptr, &stagingMem);
-            vkBindBufferMemory(m_device, staging, stagingMem, 0);
-
-            // Copy
-            VkCommandBuffer copyCmd;
-            vkAllocateCommandBuffers(m_device, &skinCmdInfo, &copyCmd);
-            vkBeginCommandBuffer(copyCmd, &skinBegin);
-            VkBufferCopy region{0, 0, readSize};
-            vkCmdCopyBuffer(copyCmd, posBuf, staging, 1, &region);
-            vkEndCommandBuffer(copyCmd);
-            VkSubmitInfo copySubmit{};
-            copySubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            copySubmit.commandBufferCount = 1;
-            copySubmit.pCommandBuffers = &copyCmd;
-            vkQueueSubmit(m_graphicsQueue, 1, &copySubmit, VK_NULL_HANDLE);
-            vkQueueWaitIdle(m_graphicsQueue);
-
-            // Read
-            float* data;
-            vkMapMemory(m_device, stagingMem, 0, readSize, 0, (void**)&data);
-            std::cout << "[SkinDebug] readback vertCount=" << vertCount << " readSize=" << readSize << " data=" << (data ? "valid" : "NULL") << std::endl;
-            std::cout << "[SkinDebug] v0=(" << data[0] << "," << data[1] << "," << data[2] << ") v1=(" << data[3] << "," << data[4] << "," << data[5] << ")" << std::endl;
-
-            vkUnmapMemory(m_device, stagingMem);
-            vkFreeCommandBuffers(m_device, m_commandPool, 1, &copyCmd);
-            vkDestroyBuffer(m_device, staging, nullptr);
-            vkFreeMemory(m_device, stagingMem, nullptr);
+        // 3. Create fresh BLASes — DISABLED while debugging coordinate space
+        //    The compute skinning above produces valid positions (verified via readback).
+        //    BLAS creation causes white/black frames — coordinate space mismatch.
+        if (false) {
+        std::unordered_map<uint64_t, BlasHandle> animatedBlasMap;
+        size_t animIdx = 0;
+        for (const auto& abi : m_actorBlasList) {
+            if (!abi.isAnimated || animIdx >= m_animatedMeshes.size()) continue;
+            const auto& am = m_animatedMeshes[animIdx++];
+            BlasHandle newBlas = m_rtAccel->createBLASFromPositions(
+                m_gpuSkinning->getSkinnedPositionBuffer(am.skinHandle),
+                m_gpuSkinning->getVertexCount(am.skinHandle),
+                m_rtIndexBuffer, abi.indexCount,
+                abi.indexOffset * sizeof(uint32_t));
+            if (newBlas != INVALID_BLAS) {
+                animatedBlasMap[abi.actorId] = newBlas;
+                m_oldAnimatedBLAS.push_back(newBlas);
+            }
         }
+
+        // 4. Rebuild TLAS: animated actors use new BLAS, static use original
+        m_rtAccel->clearInstances();
+        uint32_t triOffset = 0;
+        for (const auto& abi : m_actorBlasList) {
+            auto actorIt = m_scene->getAllActors().find(abi.actorId);
+            if (actorIt == m_scene->getAllActors().end()) continue;
+
+            BlasHandle blas = abi.originalBlas;
+            auto animIt = animatedBlasMap.find(abi.actorId);
+            if (animIt != animatedBlasMap.end())
+                blas = animIt->second;
+
+            m_rtAccel->addInstance(blas, actorIt->second->getTransform()->getWorldMatrix(),
+                                   triOffset, 0xFF);
+            triOffset += abi.indexCount / 3;
+        }
+        m_rtAccel->buildTLAS(VK_NULL_HANDLE);
+        } // end disabled BLAS block
     }
 
 

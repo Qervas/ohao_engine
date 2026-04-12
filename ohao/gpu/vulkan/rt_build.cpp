@@ -739,13 +739,29 @@ void VulkanRenderer::buildBLASTLAS() {
             AnimatedMeshInfo info{};
             info.skinHandle = skinHandle;
             info.actorId = actorId;
-            info.blasIndex = blasIt->second;
             m_animatedMeshes.push_back(info);
         }
         if (!m_animatedMeshes.empty()) {
             std::cout << "[RT] Registered " << m_animatedMeshes.size()
                       << " animated meshes for GPU skinning" << std::endl;
         }
+    }
+
+    // Build per-actor BLAS info list for dynamic TLAS rebuild
+    m_actorBlasList.clear();
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto blasIt = actorBlas.find(actorId);
+        if (blasIt == actorBlas.end()) continue;
+        auto meshIt = m_meshBufferMap.find(actorId);
+        if (meshIt == m_meshBufferMap.end()) continue;
+
+        ActorBlasInfo abi{};
+        abi.actorId = actorId;
+        abi.originalBlas = blasIt->second;
+        abi.isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
+        abi.indexCount = meshIt->second.indexCount;
+        abi.indexOffset = meshIt->second.indexOffset;
+        m_actorBlasList.push_back(abi);
     }
 
     // Build TLAS instances + collect materials in the SAME order
@@ -827,42 +843,5 @@ void VulkanRenderer::buildBLASTLAS() {
         }
     }
     }
-
-void VulkanRenderer::updateAnimatedBLAS(VkCommandBuffer cmd) {
-    if (!m_gpuSkinning || !m_rtAccel || m_animatedMeshes.empty()) return;
-
-    for (const auto& animMesh : m_animatedMeshes) {
-        // Get bone matrices from actor's AnimationComponent
-        auto it = m_scene->getAllActors().find(animMesh.actorId);
-        if (it == m_scene->getAllActors().end()) continue;
-
-        auto animComp = it->second->getComponent<AnimationComponent>();
-        if (!animComp || !animComp->isPlaying()) continue;
-
-        const auto& boneMatrices = animComp->getJointMatrices();
-        if (boneMatrices.empty()) continue;
-
-        // Run compute skinning (writes to skinned position buffer)
-        m_gpuSkinning->skin(cmd, animMesh.skinHandle, boneMatrices);
-
-        // Get the mesh info for index buffer reference
-        auto meshIt = m_meshBufferMap.find(animMesh.actorId);
-        if (meshIt == m_meshBufferMap.end()) continue;
-
-        // Rebuild BLAS with skinned positions
-        m_rtAccel->rebuildBLAS(
-            animMesh.blasIndex,
-            m_gpuSkinning->getSkinnedPositionBuffer(animMesh.skinHandle),
-            m_gpuSkinning->getVertexCount(animMesh.skinHandle),
-            m_rtIndexBuffer,
-            meshIt->second.indexCount,
-            meshIt->second.indexOffset * sizeof(uint32_t),
-            cmd);
-    }
-
-    // Rebuild TLAS to pick up the updated BLAS handles
-    // (instances already set from buildBLASTLAS, just need geometry update)
-    m_rtAccel->buildTLAS(cmd);
-}
 
 } // namespace ohao

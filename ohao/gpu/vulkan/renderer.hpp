@@ -327,10 +327,20 @@ private:
     struct AnimatedMeshInfo {
         uint32_t skinHandle;     // GPUSkinning mesh handle
         uint64_t actorId;        // scene actor ID
-        uint32_t blasIndex;      // which BLAS to rebuild
     };
     std::vector<AnimatedMeshInfo> m_animatedMeshes;
-    void updateAnimatedBLAS(VkCommandBuffer cmd); // per-frame: skin + BLAS rebuild
+    std::vector<BlasHandle> m_oldAnimatedBLAS;
+
+    // Per-actor BLAS info for TLAS rebuild (built once, used every frame)
+    struct ActorBlasInfo {
+        uint64_t actorId;
+        BlasHandle originalBlas;
+        bool isAnimated;
+        uint32_t triOffset;
+        uint32_t indexCount;
+        uint32_t indexOffset;
+    };
+    std::vector<ActorBlasInfo> m_actorBlasList;
 
     // Sync
     VkFence m_renderFence{VK_NULL_HANDLE};

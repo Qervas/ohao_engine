@@ -274,20 +274,6 @@ void GPUSkinning::skin(VkCommandBuffer cmd, uint32_t meshHandle,
                &boneCount, sizeof(int));
     }
 
-    // Debug first call
-    static bool debugOnce = true;
-    if (debugOnce) {
-        debugOnce = false;
-        std::cout << "[SkinDebug] mesh=" << meshHandle
-                  << " vCount=" << entry.vertexCount
-                  << " vOffset=" << entry.vertexOffset
-                  << " bones=" << boneMatrices.size()
-                  << " bone0[0]=" << boneMatrices[0][0][0]
-                  << "," << boneMatrices[0][1][1]
-                  << "," << boneMatrices[0][2][2]
-                  << "," << boneMatrices[0][3][3] << std::endl;
-    }
-
     // Bind compute pipeline
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
