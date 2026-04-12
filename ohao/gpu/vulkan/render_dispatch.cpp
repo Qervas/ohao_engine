@@ -127,12 +127,91 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // GPU compute skinning + BLAS rebuild — DISABLED (Vulkan sync issue under investigation)
-    // The compute skinning works, but rebuilding 4+ BLASes on the same command
-    // buffer corrupts rendering. Single BLAS rebuild works fine.
-    // Root cause: likely AS buffer size mismatch between original (stride=92) and
-    // skinned (stride=12) vertex formats, or driver-level BLAS corruption.
-    // TODO: create new BLAS each frame instead of in-place rebuild
+    // GPU compute skinning — run dispatches and verify output
+    static bool debugSkinOnce = true;
+    if (hasDynamicBLAS && !m_animatedMeshes.empty()) {
+        // Run compute skinning on a one-shot command buffer
+        VkCommandBuffer skinCmd;
+        VkCommandBufferAllocateInfo skinCmdInfo{};
+        skinCmdInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        skinCmdInfo.commandPool = m_commandPool;
+        skinCmdInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        skinCmdInfo.commandBufferCount = 1;
+        vkAllocateCommandBuffers(m_device, &skinCmdInfo, &skinCmd);
+        VkCommandBufferBeginInfo skinBegin{};
+        skinBegin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        skinBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(skinCmd, &skinBegin);
+
+        for (const auto& animMesh : m_animatedMeshes) {
+            auto it = m_scene->getAllActors().find(animMesh.actorId);
+            if (it == m_scene->getAllActors().end()) continue;
+            auto animComp = it->second->getComponent<AnimationComponent>();
+            if (!animComp || !animComp->isPlaying()) continue;
+            const auto& bones = animComp->getJointMatrices();
+            if (!bones.empty())
+                m_gpuSkinning->skin(skinCmd, animMesh.skinHandle, bones);
+        }
+
+        vkEndCommandBuffer(skinCmd);
+        VkSubmitInfo skinSubmit{};
+        skinSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        skinSubmit.commandBufferCount = 1;
+        skinSubmit.pCommandBuffers = &skinCmd;
+        vkQueueSubmit(m_graphicsQueue, 1, &skinSubmit, VK_NULL_HANDLE);
+        vkQueueWaitIdle(m_graphicsQueue);
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &skinCmd);
+
+        // Debug: readback first mesh's skinned positions
+        if (debugSkinOnce) {
+            debugSkinOnce = false;
+            VkBuffer posBuf = m_gpuSkinning->getSkinnedPositionBuffer(m_animatedMeshes[0].skinHandle);
+            uint32_t vertCount = m_gpuSkinning->getVertexCount(m_animatedMeshes[0].skinHandle);
+            VkDeviceSize readSize = std::min(vertCount, 10u) * 3 * sizeof(float);
+
+            // Create staging buffer for readback
+            VkBuffer staging; VkDeviceMemory stagingMem;
+            VkBufferCreateInfo stagingInfo{};
+            stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            stagingInfo.size = readSize;
+            stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            vkCreateBuffer(m_device, &stagingInfo, nullptr, &staging);
+            VkMemoryRequirements mr;
+            vkGetBufferMemoryRequirements(m_device, staging, &mr);
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = mr.size;
+            ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(m_device, &ai, nullptr, &stagingMem);
+            vkBindBufferMemory(m_device, staging, stagingMem, 0);
+
+            // Copy
+            VkCommandBuffer copyCmd;
+            vkAllocateCommandBuffers(m_device, &skinCmdInfo, &copyCmd);
+            vkBeginCommandBuffer(copyCmd, &skinBegin);
+            VkBufferCopy region{0, 0, readSize};
+            vkCmdCopyBuffer(copyCmd, posBuf, staging, 1, &region);
+            vkEndCommandBuffer(copyCmd);
+            VkSubmitInfo copySubmit{};
+            copySubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            copySubmit.commandBufferCount = 1;
+            copySubmit.pCommandBuffers = &copyCmd;
+            vkQueueSubmit(m_graphicsQueue, 1, &copySubmit, VK_NULL_HANDLE);
+            vkQueueWaitIdle(m_graphicsQueue);
+
+            // Read
+            float* data;
+            vkMapMemory(m_device, stagingMem, 0, readSize, 0, (void**)&data);
+            std::cout << "[SkinDebug] readback vertCount=" << vertCount << " readSize=" << readSize << " data=" << (data ? "valid" : "NULL") << std::endl;
+            std::cout << "[SkinDebug] v0=(" << data[0] << "," << data[1] << "," << data[2] << ") v1=(" << data[3] << "," << data[4] << "," << data[5] << ")" << std::endl;
+
+            vkUnmapMemory(m_device, stagingMem);
+            vkFreeCommandBuffers(m_device, m_commandPool, 1, &copyCmd);
+            vkDestroyBuffer(m_device, staging, nullptr);
+            vkFreeMemory(m_device, stagingMem, nullptr);
+        }
+    }
 
 
     // Execute deferred rendering pipeline
