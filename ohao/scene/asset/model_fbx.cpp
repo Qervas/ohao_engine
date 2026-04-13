@@ -56,6 +56,37 @@ static bool loadTextureFile(const std::string& path, const std::string& modelDir
     return false;
 }
 
+// Load a ufbx texture (embedded or file) into a TextureData vector.
+// Returns the index into the vector, or -1 if not found.
+static int loadUfbxTexture(const ufbx_material_map& map, const std::string& modelDir,
+                            std::vector<Model::TextureData>& textures) {
+    if (!map.texture) return -1;
+    const ufbx_texture* tex = map.texture;
+    Model::TextureData td;
+
+    if (tex->content.size > 0) {
+        int w, h, ch;
+        uint8_t* px = stbi_load_from_memory(
+            static_cast<const uint8_t*>(tex->content.data),
+            static_cast<int>(tex->content.size), &w, &h, &ch, 4);
+        if (px) {
+            td.width = w; td.height = h;
+            td.pixels.assign(px, px + w * h * 4);
+            stbi_image_free(px);
+            int idx = static_cast<int>(textures.size());
+            textures.push_back(std::move(td));
+            return idx;
+        }
+    } else if (tex->filename.length > 0) {
+        if (loadTextureFile(tex->filename.data, modelDir, td)) {
+            int idx = static_cast<int>(textures.size());
+            textures.push_back(std::move(td));
+            return idx;
+        }
+    }
+    return -1;
+}
+
 bool Model::loadFromFBX(const std::string& filename) {
     ufbx_load_opts opts = {};
     opts.target_axes = ufbx_axes_right_handed_y_up;    // Convert to Y-up
@@ -125,52 +156,23 @@ bool Model::loadFromFBX(const std::string& filename) {
         materialMetallic[mi] = metallic;
 
         // Diffuse/albedo texture
-        if (mat->pbr.base_color.texture) {
-            const ufbx_texture* tex = mat->pbr.base_color.texture;
-            TextureData td;
-            if (tex->content.size > 0) {
-                // Embedded texture
-                int w, h, ch;
-                uint8_t* px = stbi_load_from_memory(
-                    static_cast<const uint8_t*>(tex->content.data),
-                    static_cast<int>(tex->content.size), &w, &h, &ch, 4);
-                if (px) {
-                    td.width = w; td.height = h;
-                    td.pixels.assign(px, px + w * h * 4);
-                    stbi_image_free(px);
-                    materialTextureIndex[mi] = static_cast<int>(albedoTextures.size());
-                    albedoTextures.push_back(std::move(td));
-                }
-            } else if (tex->filename.length > 0) {
-                if (loadTextureFile(tex->filename.data, modelDir, td)) {
-                    materialTextureIndex[mi] = static_cast<int>(albedoTextures.size());
-                    albedoTextures.push_back(std::move(td));
-                }
-            }
-        }
+        // Load all PBR texture maps
+        materialTextureIndex[mi] = loadUfbxTexture(mat->pbr.base_color, modelDir, albedoTextures);
+        materialNormalTexIndex[mi] = loadUfbxTexture(mat->pbr.normal_map, modelDir, normalTextures);
+        materialEmissiveTexIndex[mi] = loadUfbxTexture(mat->pbr.emission_color, modelDir, emissiveTextures);
 
-        // Normal texture
-        if (mat->pbr.normal_map.texture) {
-            const ufbx_texture* tex = mat->pbr.normal_map.texture;
-            TextureData td;
-            if (tex->content.size > 0) {
-                int w, h, ch;
-                uint8_t* px = stbi_load_from_memory(
-                    static_cast<const uint8_t*>(tex->content.data),
-                    static_cast<int>(tex->content.size), &w, &h, &ch, 4);
-                if (px) {
-                    td.width = w; td.height = h;
-                    td.pixels.assign(px, px + w * h * 4);
-                    stbi_image_free(px);
-                    materialNormalTexIndex[mi] = static_cast<int>(normalTextures.size());
-                    normalTextures.push_back(std::move(td));
-                }
-            } else if (tex->filename.length > 0) {
-                if (loadTextureFile(tex->filename.data, modelDir, td)) {
-                    materialNormalTexIndex[mi] = static_cast<int>(normalTextures.size());
-                    normalTextures.push_back(std::move(td));
-                }
-            }
+        // Roughness/metallic — try dedicated maps, then combined ORM
+        int roughTexIdx = loadUfbxTexture(mat->pbr.roughness, modelDir, roughMetalTextures);
+        if (roughTexIdx < 0) {
+            // Try glossiness (inverted roughness)
+            roughTexIdx = loadUfbxTexture(mat->pbr.glossiness, modelDir, roughMetalTextures);
+        }
+        materialRoughMetalTexIndex[mi] = roughTexIdx;
+
+        // Also try metalness as a separate texture
+        if (roughTexIdx < 0) {
+            roughTexIdx = loadUfbxTexture(mat->pbr.metalness, modelDir, roughMetalTextures);
+            materialRoughMetalTexIndex[mi] = roughTexIdx;
         }
 
         // Check all available PBR texture maps
