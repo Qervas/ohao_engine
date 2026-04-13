@@ -189,10 +189,15 @@ void VulkanRenderer::renderDeferred() {
         for (const auto& abi : m_actorBlasList) {
             auto actorIt = m_scene->getAllActors().find(abi.actorId);
             if (actorIt == m_scene->getAllActors().end()) continue;
-            BlasHandle blas = abi.originalBlas;
             auto animIt = animatedBlasMap.find(abi.actorId);
-            if (animIt != animatedBlasMap.end())
-                blas = animIt->second;
+            BlasHandle blas;
+            if (animIt != animatedBlasMap.end()) {
+                blas = animIt->second;  // use skinned BLAS
+            } else if (abi.isAnimated) {
+                continue;  // skip T-pose — no skinned BLAS available this frame
+            } else {
+                blas = abi.originalBlas;  // static geometry — use original
+            }
             m_rtAccel->addInstance(blas, actorIt->second->getTransform()->getWorldMatrix(),
                                    triOffset, 0xFF);
             triOffset += abi.indexCount / 3;

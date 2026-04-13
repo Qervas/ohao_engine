@@ -121,8 +121,8 @@ void main() {
 
     indirectLight /= float(sampleCount);
 
-    // Boost to compensate for 1-bounce only (multi-bounce naturally amplifies ~3x)
-    indirectLight *= 3.5;
+    // Compensate for 1-bounce (multi-bounce amplifies ~2x)
+    indirectLight *= 2.0;
 
     // Modulate by the receiving surface's albedo (diffuse reflection)
     indirectLight *= albedo;
