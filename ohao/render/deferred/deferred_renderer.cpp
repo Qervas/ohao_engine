@@ -59,6 +59,16 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
                                   m_csmPass->getShadowSampler());
     m_lightingPass->setCascadeBuffer(m_csmPass->getCascadeBuffer());
 
+    // Initialize SSR pass
+    m_ssrPass = std::make_unique<SSRPass>();
+    if (m_ssrPass->initialize(device, physicalDevice)) {
+        m_ssrPass->setGBufferPass(m_gbufferPass.get());
+        std::cout << "DeferredRenderer: SSRPass OK" << std::endl;
+    } else {
+        std::cerr << "DeferredRenderer: SSRPass failed (non-fatal)" << std::endl;
+        m_ssrPass.reset();
+    }
+
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
     if (!m_postProcessing->initialize(device, physicalDevice)) {
@@ -520,6 +530,15 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
             m_passTimingCount++;
         }
     };
+
+    // 4.5. SSR — screen-space reflections on glossy surfaces
+    if (m_ssrPass && m_lightingPass) {
+        timerBegin("SSR");
+        m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
+        m_ssrPass->setLitSceneView(m_lightingPass->getOutputView());
+        m_ssrPass->execute(cmd, frameIndex);
+        timerEnd();
+    }
 
     // 4.6. Sky pass — fills sky pixels with Preetham sky
     if (m_skyPass && m_skyEnabled) {
