@@ -121,8 +121,9 @@ void main() {
 
     indirectLight /= float(sampleCount);
 
-    // Compensate for 1-bounce (multi-bounce amplifies ~2x)
-    indirectLight *= 2.0;
+    // No amplification — physically correct 1-bounce intensity.
+    // Temporal accumulation (TODO) will build up the GI over frames.
+    indirectLight *= 1.0;
 
     // Modulate by the receiving surface's albedo (diffuse reflection)
     indirectLight *= albedo;
