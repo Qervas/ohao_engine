@@ -8,6 +8,7 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D hdrInput;
 layout(set = 0, binding = 1) uniform sampler2D bloomInput;
+layout(set = 0, binding = 2) uniform sampler2D ssrInput;  // screen-space reflections
 
 layout(push_constant) uniform TonemapParams {
     float exposure;
@@ -77,6 +78,10 @@ void main() {
     // Add bloom
     vec3 bloom = texture(bloomInput, inTexCoord).rgb;
     hdrColor += bloom * params.bloomStrength;
+
+    // Add screen-space reflections
+    vec4 ssr = texture(ssrInput, inTexCoord);
+    hdrColor += ssr.rgb;
 
     // Lightning flash — warm-white additive HDR brightening (tonemapper compresses it naturally)
     if (params.flashIntensity > 0.001) {

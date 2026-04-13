@@ -537,6 +537,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
         m_ssrPass->setLitSceneView(m_lightingPass->getOutputView());
         m_ssrPass->execute(cmd, frameIndex);
+        // Feed SSR output to tonemapping
+        if (m_postProcessing) {
+            m_postProcessing->setSSRView(m_ssrPass->getOutputView());
+        }
         timerEnd();
     }
 
