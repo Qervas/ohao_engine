@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
                         subModel->vertices.push_back(model->vertices[oldIdx]);
                         subModel->indices.push_back(newIdx);
                     }
-                    subModel->materialPerTriangle.push_back(matIdx);
+                    subModel->materialPerTriangle.push_back(0);  // local: sub-model has 1 material at index 0
                 }
                 if (subModel->vertices.empty()) continue;
 
