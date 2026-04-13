@@ -742,6 +742,8 @@ void VulkanRenderer::buildBLASTLAS() {
             m_animatedMeshes.push_back(info);
         }
         if (!m_animatedMeshes.empty()) {
+            // Create global skinned position buffer (all vertices packed together)
+            m_gpuSkinning->createGlobalBuffer(m_vertexCount);
             std::cout << "[RT] Registered " << m_animatedMeshes.size()
                       << " animated meshes for GPU skinning" << std::endl;
         }

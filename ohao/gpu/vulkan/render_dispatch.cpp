@@ -131,7 +131,7 @@ void VulkanRenderer::renderDeferred() {
             m_rtAccel->destroyBLAS(blas);
         m_oldAnimatedBLAS.clear();
 
-        // 2. Compute skinning (separate command buffer + submit-and-wait)
+        // 2. Compute skinning → global position buffer
         VkCommandBuffer skinCmd;
         VkCommandBufferAllocateInfo cmdAlloc{};
         cmdAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -153,86 +153,26 @@ void VulkanRenderer::renderDeferred() {
             if (!bones.empty())
                 m_gpuSkinning->skin(skinCmd, am.skinHandle, bones);
         }
-        // Debug: compare input vs output positions (one-time)
-        static bool debugCompare = true;
-        if (debugCompare && !m_animatedMeshes.empty()) {
-            debugCompare = false;
-            // Submit compute, wait, then readback
-            vkEndCommandBuffer(skinCmd);
-            VkSubmitInfo dbgSubmit{}; dbgSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            dbgSubmit.commandBufferCount = 1; dbgSubmit.pCommandBuffers = &skinCmd;
-            vkQueueSubmit(m_graphicsQueue, 1, &dbgSubmit, VK_NULL_HANDLE);
-            vkQueueWaitIdle(m_graphicsQueue);
 
-            auto& am0 = m_animatedMeshes[0];
-            uint32_t vc = m_gpuSkinning->getVertexCount(am0.skinHandle);
-            // Readback skinned output
-            VkDeviceSize sz = 6 * sizeof(float); // 2 vertices
-            VkBuffer stg; VkDeviceMemory stgMem;
-            VkBufferCreateInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bi.size = sz; bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            vkCreateBuffer(m_device, &bi, nullptr, &stg);
-            VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, stg, &mr);
-            VkMemoryAllocateInfo ma{}; ma.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            ma.allocationSize = mr.size;
-            ma.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            vkAllocateMemory(m_device, &ma, nullptr, &stgMem);
-            vkBindBufferMemory(m_device, stg, stgMem, 0);
-
-            VkCommandBuffer cpCmd; vkAllocateCommandBuffers(m_device, &cmdAlloc, &cpCmd);
-            VkCommandBufferBeginInfo cpBi{}; cpBi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            cpBi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vkBeginCommandBuffer(cpCmd, &cpBi);
-            VkBufferCopy rg{0, 0, sz};
-            vkCmdCopyBuffer(cpCmd, m_gpuSkinning->getSkinnedPositionBuffer(am0.skinHandle), stg, 1, &rg);
-            vkEndCommandBuffer(cpCmd);
-            VkSubmitInfo cpSub{}; cpSub.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            cpSub.commandBufferCount = 1; cpSub.pCommandBuffers = &cpCmd;
-            vkQueueSubmit(m_graphicsQueue, 1, &cpSub, VK_NULL_HANDLE);
-            vkQueueWaitIdle(m_graphicsQueue);
-            float* d; vkMapMemory(m_device, stgMem, 0, sz, 0, (void**)&d);
-            std::cout << "[BLAS] Skinned v0=(" << d[0] << "," << d[1] << "," << d[2] << ")" << std::endl;
-            vkUnmapMemory(m_device, stgMem);
-
-            // Readback raw input (first 3 floats = position)
-            vkBeginCommandBuffer(cpCmd, &cpBi);
-            VkBufferCopy rg2{0, 0, sz};
-            vkCmdCopyBuffer(cpCmd, m_rtVertexBuffer, stg, 1, &rg2);
-            vkEndCommandBuffer(cpCmd);
-            vkQueueSubmit(m_graphicsQueue, 1, &cpSub, VK_NULL_HANDLE);
-            vkQueueWaitIdle(m_graphicsQueue);
-            vkMapMemory(m_device, stgMem, 0, sz, 0, (void**)&d);
-            std::cout << "[BLAS] Raw input v0=(" << d[0] << "," << d[1] << "," << d[2] << ")" << std::endl;
-            vkUnmapMemory(m_device, stgMem);
-
-            vkFreeCommandBuffers(m_device, m_commandPool, 1, &cpCmd);
-            vkDestroyBuffer(m_device, stg, nullptr);
-            vkFreeMemory(m_device, stgMem, nullptr);
-
-            // Re-record the skinCmd for BLAS builds
-            vkAllocateCommandBuffers(m_device, &cmdAlloc, &skinCmd);
-            vkBeginCommandBuffer(skinCmd, &oneShot);
-        }
-
-        // 3. BLAS builds — batch all on the SAME command buffer (no separate submits)
+        // 3. BLAS builds from GLOBAL skinned buffer (stride=12, correct offsets)
         m_rtAccel->ensureScratchBuffer(64 * 1024 * 1024);
+        VkBuffer globalPosBuf = m_gpuSkinning->getGlobalSkinnedPositionBuffer();
         std::unordered_map<uint64_t, BlasHandle> animatedBlasMap;
-        size_t animIdx = 0;
         for (const auto& abi : m_actorBlasList) {
-            if (!abi.isAnimated || animIdx >= m_animatedMeshes.size()) continue;
-            const auto& am = m_animatedMeshes[animIdx++];
+            if (!abi.isAnimated) continue;
+
+            // Use global buffer with vertex byte offset (stride=12 for packed vec3)
+            VkDeviceSize vertexByteOffset = abi.indexOffset * 0; // not needed — indices are global
             BlasHandle newBlas = m_rtAccel->createBLASFromPositions(
-                m_gpuSkinning->getSkinnedPositionBuffer(am.skinHandle),
-                m_gpuSkinning->getVertexCount(am.skinHandle),
+                globalPosBuf,              // global skinned position buffer
+                m_vertexCount,             // total vertices in global buffer
                 m_rtIndexBuffer, abi.indexCount,
                 abi.indexOffset * sizeof(uint32_t),
-                skinCmd);  // record on same cmd buffer
+                skinCmd);
             if (newBlas != INVALID_BLAS) {
                 animatedBlasMap[abi.actorId] = newBlas;
                 m_oldAnimatedBLAS.push_back(newBlas);
             }
-            // Barrier between BLAS builds (shared scratch buffer)
             VkMemoryBarrier barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
             barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
@@ -243,7 +183,7 @@ void VulkanRenderer::renderDeferred() {
                 0, 1, &barrier, 0, nullptr, 0, nullptr);
         }
 
-        // 4. Rebuild TLAS on same command buffer
+        // 4. Rebuild TLAS — animated use new BLAS, static use original
         m_rtAccel->clearInstances();
         uint32_t triOffset = 0;
         for (const auto& abi : m_actorBlasList) {
@@ -260,7 +200,7 @@ void VulkanRenderer::renderDeferred() {
         m_rtAccel->forceTlasRebuild();
         m_rtAccel->buildTLAS(skinCmd);
 
-        // Submit everything as ONE batch: compute + BLAS builds + TLAS
+        // Single submit: compute + all BLAS + TLAS
         vkEndCommandBuffer(skinCmd);
         VkSubmitInfo skinSubmit{};
         skinSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;

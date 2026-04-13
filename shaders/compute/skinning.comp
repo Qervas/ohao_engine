@@ -39,6 +39,7 @@ layout(push_constant) uniform PushConstants {
     uint vertexCount;
     uint vertexStride;  // in floats (23 for our Vertex struct = 92 bytes / 4)
     uint vertexOffset;  // offset in vertices into source buffer
+    uint outputOffset;  // offset in vertices into output buffer (for global buffer)
 };
 
 void main() {
@@ -75,16 +76,17 @@ void main() {
         bones[clampedIdx.z] * weights.z +
         bones[clampedIdx.w] * weights.w;
 
-    // Transform position
-    vec4 skinnedPos = skinMatrix * vec4(pos, 1.0);
-    outPos[idx * 3 + 0] = skinnedPos.x;
-    outPos[idx * 3 + 1] = skinnedPos.y;
-    outPos[idx * 3 + 2] = skinnedPos.z;
+    // Write to global buffer at correct offset (matches global index buffer)
+    uint outIdx = outputOffset + idx;
 
-    // Transform normal (using inverse-transpose approximation: just the 3x3 rotation part)
+    vec4 skinnedPos = skinMatrix * vec4(pos, 1.0);
+    outPos[outIdx * 3 + 0] = skinnedPos.x;
+    outPos[outIdx * 3 + 1] = skinnedPos.y;
+    outPos[outIdx * 3 + 2] = skinnedPos.z;
+
     mat3 normalMatrix = mat3(skinMatrix);
     vec3 skinnedNorm = normalize(normalMatrix * norm);
-    outNorm[idx * 3 + 0] = skinnedNorm.x;
-    outNorm[idx * 3 + 1] = skinnedNorm.y;
-    outNorm[idx * 3 + 2] = skinnedNorm.z;
+    outNorm[outIdx * 3 + 0] = skinnedNorm.x;
+    outNorm[outIdx * 3 + 1] = skinnedNorm.y;
+    outNorm[outIdx * 3 + 2] = skinnedNorm.z;
 }

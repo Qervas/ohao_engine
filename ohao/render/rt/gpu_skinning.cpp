@@ -79,6 +79,9 @@ void GPUSkinning::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
     vkDeviceWaitIdle(m_device);
 
+    if (m_globalPosBuffer) { vkDestroyBuffer(m_device, m_globalPosBuffer, nullptr); m_globalPosBuffer = VK_NULL_HANDLE; }
+    if (m_globalPosMem) { vkFreeMemory(m_device, m_globalPosMem, nullptr); m_globalPosMem = VK_NULL_HANDLE; }
+
     for (auto& entry : m_entries) {
         if (entry.skinnedPosBuffer) vkDestroyBuffer(m_device, entry.skinnedPosBuffer, nullptr);
         if (entry.skinnedPosMem) vkFreeMemory(m_device, entry.skinnedPosMem, nullptr);
@@ -260,6 +263,59 @@ uint32_t GPUSkinning::registerMesh(VkBuffer srcVertexBuffer, uint32_t vertexCoun
     return handle;
 }
 
+void GPUSkinning::createGlobalBuffer(uint32_t totalVertexCount) {
+    m_totalVertexCount = totalVertexCount;
+    VkDeviceSize posSize = totalVertexCount * 3 * sizeof(float);
+
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = posSize;
+    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT;  // for readback
+    vkCreateBuffer(m_device, &bufInfo, nullptr, &m_globalPosBuffer);
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(m_device, m_globalPosBuffer, &memReqs);
+
+    VkMemoryAllocateFlagsInfo flagsInfo{};
+    flagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+    flagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    allocInfo.pNext = &flagsInfo;
+    vkAllocateMemory(m_device, &allocInfo, nullptr, &m_globalPosMem);
+    vkBindBufferMemory(m_device, m_globalPosBuffer, m_globalPosMem, 0);
+
+    // Re-bind output descriptors to the global buffer for each entry
+    for (auto& entry : m_entries) {
+        if (entry.descriptorSet == VK_NULL_HANDLE) continue;
+
+        VkDescriptorBufferInfo globalBufInfo{};
+        globalBufInfo.buffer = m_globalPosBuffer;
+        globalBufInfo.offset = 0;
+        globalBufInfo.range = posSize;
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = entry.descriptorSet;
+        write.dstBinding = 1;  // output positions
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &globalBufInfo;
+
+        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+    }
+
+    std::cout << "[GPUSkinning] Global position buffer: " << totalVertexCount
+              << " vertices (" << posSize << " bytes)" << std::endl;
+}
+
 void GPUSkinning::skin(VkCommandBuffer cmd, uint32_t meshHandle,
                         const std::vector<glm::mat4>& boneMatrices) {
     if (meshHandle >= m_entries.size()) return;
@@ -282,8 +338,9 @@ void GPUSkinning::skin(VkCommandBuffer cmd, uint32_t meshHandle,
     // Push constants
     SkinPushConstants pc{};
     pc.vertexCount = entry.vertexCount;
-    pc.vertexStride = 23; // 92 bytes / 4 = 23 floats
+    pc.vertexStride = 23;
     pc.vertexOffset = entry.vertexOffset;
+    pc.outputOffset = entry.vertexOffset; // write to same offset in global buffer
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(SkinPushConstants), &pc);
 
@@ -301,16 +358,12 @@ void GPUSkinning::skin(VkCommandBuffer cmd, uint32_t meshHandle,
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
 }
 
-VkBuffer GPUSkinning::getSkinnedPositionBuffer(uint32_t meshHandle) const {
-    return meshHandle < m_entries.size() ? m_entries[meshHandle].skinnedPosBuffer : VK_NULL_HANDLE;
-}
-
-VkBuffer GPUSkinning::getSkinnedNormalBuffer(uint32_t meshHandle) const {
-    return meshHandle < m_entries.size() ? m_entries[meshHandle].skinnedNormBuffer : VK_NULL_HANDLE;
-}
-
 uint32_t GPUSkinning::getVertexCount(uint32_t meshHandle) const {
     return meshHandle < m_entries.size() ? m_entries[meshHandle].vertexCount : 0;
+}
+
+uint32_t GPUSkinning::getVertexOffset(uint32_t meshHandle) const {
+    return meshHandle < m_entries.size() ? m_entries[meshHandle].vertexOffset : 0;
 }
 
 } // namespace ohao
