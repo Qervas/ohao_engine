@@ -137,7 +137,21 @@ bool RTGITechnique::createOutputImage() {
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
 
-    return vkCreateImageView(m_device, &viewInfo, nullptr, &m_giOutputView) == VK_SUCCESS;
+    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_giOutputView) != VK_SUCCESS)
+        return false;
+
+    // History buffer (same format, used as sampler for temporal blend)
+    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &m_giHistory) != VK_SUCCESS) return false;
+    vkGetImageMemoryRequirements(m_device, m_giHistory, &memReqs);
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_giHistoryMemory) != VK_SUCCESS) return false;
+    vkBindImageMemory(m_device, m_giHistory, m_giHistoryMemory, 0);
+    viewInfo.image = m_giHistory;
+    if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_giHistoryView) != VK_SUCCESS) return false;
+
+    return true;
 }
 
 bool RTGITechnique::createMaterialBuffer() {
@@ -191,7 +205,7 @@ void RTGITechnique::setMaterialAlbedos(const std::vector<glm::vec3>& albedos) {
 }
 
 bool RTGITechnique::createDescriptorResources() {
-    // Layout: 7 bindings
+    // Layout: 8 bindings
     //   0: TLAS (acceleration structure) — RAYGEN
     //   1: GI output (storage image) — RAYGEN
     //   2: GBuffer position (sampled image) — RAYGEN
@@ -199,7 +213,8 @@ bool RTGITechnique::createDescriptorResources() {
     //   4: GBuffer albedo (sampled image) — RAYGEN
     //   5: Direct lighting (sampled image) — RAYGEN
     //   6: Material buffer SSBO — CLOSEST_HIT
-    VkDescriptorSetLayoutBinding bindings[7] = {};
+    //   7: GI history (sampled image) — RAYGEN (temporal blend)
+    VkDescriptorSetLayoutBinding bindings[8] = {};
 
     // 0: Acceleration structure
     bindings[0].binding = 0;
@@ -243,9 +258,15 @@ bool RTGITechnique::createDescriptorResources() {
     bindings[6].descriptorCount = 1;
     bindings[6].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
+    // 7: GI history (sampled image for temporal accumulation)
+    bindings[7].binding = 7;
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 7;
+    layoutInfo.bindingCount = 8;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -255,7 +276,7 @@ bool RTGITechnique::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5},  // 4 gbuffer + 1 history
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
     };
 
@@ -540,7 +561,12 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     materialBufInfo.offset = 0;
     materialBufInfo.range = m_materialData.size() * sizeof(glm::vec4);
 
-    VkWriteDescriptorSet writes[7] = {};
+    VkDescriptorImageInfo historyInfo{};
+    historyInfo.imageView = m_giHistoryView;
+    historyInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    historyInfo.sampler = sampler;
+
+    VkWriteDescriptorSet writes[8] = {};
 
     // 0: Acceleration structure
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -598,20 +624,38 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[6].pBufferInfo = &materialBufInfo;
 
-    vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
+    // 7: GI history (sampled image for temporal blend)
+    writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[7].dstSet = m_descriptorSet;
+    writes[7].dstBinding = 7;
+    writes[7].descriptorCount = 1;
+    writes[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[7].pImageInfo = &historyInfo;
 
-    // Transition GI output to GENERAL for storage image write
-    VkImageMemoryBarrier toGeneral{};
-    toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toGeneral.srcAccessMask = 0;
-    toGeneral.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    toGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toGeneral.image = m_giOutput;
-    toGeneral.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkUpdateDescriptorSets(m_device, 8, writes, 0, nullptr);
+
+    // Transition GI output to GENERAL, history to SHADER_READ_ONLY
+    VkImageMemoryBarrier barriers[2] = {};
+    barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[0].srcAccessMask = 0;
+    barriers[0].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    barriers[0].image = m_giOutput;
+    barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barriers[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barriers[1].oldLayout = (m_frameIndex == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barriers[1].image = m_giHistory;
+    barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
     vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-        0, 0, nullptr, 0, nullptr, 1, &toGeneral);
+        VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+        0, 0, nullptr, 0, nullptr, 2, barriers);
 
     // Bind RT pipeline and descriptors
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
@@ -632,17 +676,47 @@ void RTGITechnique::render(VkCommandBuffer cmd, const GIInput& input) {
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       input.width, input.height, 1);
 
-    // Transition GI output to SHADER_READ_ONLY for the lighting pass to sample
+    // Copy output → history for next frame's temporal blend
+    // Transition output: GENERAL → TRANSFER_SRC, history: SHADER_READ → TRANSFER_DST
+    VkImageMemoryBarrier copyBarriers[2] = {};
+    copyBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    copyBarriers[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    copyBarriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    copyBarriers[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    copyBarriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    copyBarriers[0].image = m_giOutput;
+    copyBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    copyBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    copyBarriers[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    copyBarriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    copyBarriers[1].oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    copyBarriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    copyBarriers[1].image = m_giHistory;
+    copyBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+
+    VkImageCopy copyRegion{};
+    copyRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copyRegion.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copyRegion.extent = {input.width, input.height, 1};
+    vkCmdCopyImage(cmd, m_giOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   m_giHistory, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+    // Transition output: TRANSFER_SRC → SHADER_READ (for lighting pass)
     VkImageMemoryBarrier toRead{};
     toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     toRead.image = m_giOutput;
     toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &toRead);
 
     // Cleanup temp sampler
@@ -681,6 +755,9 @@ void RTGITechnique::destroy() {
     if (m_giOutputView) { vkDestroyImageView(m_device, m_giOutputView, nullptr); m_giOutputView = VK_NULL_HANDLE; }
     if (m_giOutput) { vkDestroyImage(m_device, m_giOutput, nullptr); m_giOutput = VK_NULL_HANDLE; }
     if (m_giOutputMemory) { vkFreeMemory(m_device, m_giOutputMemory, nullptr); m_giOutputMemory = VK_NULL_HANDLE; }
+    if (m_giHistoryView) { vkDestroyImageView(m_device, m_giHistoryView, nullptr); m_giHistoryView = VK_NULL_HANDLE; }
+    if (m_giHistory) { vkDestroyImage(m_device, m_giHistory, nullptr); m_giHistory = VK_NULL_HANDLE; }
+    if (m_giHistoryMemory) { vkFreeMemory(m_device, m_giHistoryMemory, nullptr); m_giHistoryMemory = VK_NULL_HANDLE; }
     if (m_materialBuffer) { vkDestroyBuffer(m_device, m_materialBuffer, nullptr); m_materialBuffer = VK_NULL_HANDLE; }
     if (m_materialMemory) { vkFreeMemory(m_device, m_materialMemory, nullptr); m_materialMemory = VK_NULL_HANDLE; }
 
