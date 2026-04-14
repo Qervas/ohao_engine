@@ -100,10 +100,8 @@ void main() {
         if (dot(N, L) <= 0.0) continue;
 
         shadowPayload = 0.0;
-        // Mask 0x01: trace only against static geometry (walls, floor, ceiling).
-        // Animated instances use mask 0xFE (bit 0 clear) so 0x01 & 0xFE = 0 → excluded.
-        // This prevents animated models from casting shadow silhouettes onto walls.
-        traceRayEXT(topLevelAS, rayFlags, 0x01, 0, 0, 0,
+        // Only trace against static geometry (RT_RAY_MASK_STATIC, see rt_visibility.hpp)
+        traceRayEXT(topLevelAS, rayFlags, 0x01 /*RT_RAY_MASK_STATIC*/, 0, 0, 0,
                      origin, 0.001, L, tMax, 0);
 
         visibility += shadowPayload;

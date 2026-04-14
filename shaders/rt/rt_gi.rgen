@@ -80,9 +80,8 @@ void main() {
     vec3 indirectLight = vec3(0.0);
     uint rayFlags = gl_RayFlagsOpaqueEXT;
 
-    // Trace only against static geometry (mask 0x01).
-    // Animated actors have mask 0xFE (bit 0 clear) to avoid T-pose ghost.
-    uint rayMask = 0x01;
+    // Only hit static geometry — animated instances have bit 0 clear
+    uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)
 
     for (uint s = 0u; s < sampleCount; s++) {
         // Per-sample random direction (cosine-weighted around normal)
