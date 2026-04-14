@@ -441,6 +441,12 @@ void RTAccelerationStructure::buildTLAS(VkCommandBuffer cmd) {
 
         vkInst.instanceCustomIndex = inst.customIndex;
         vkInst.mask = inst.mask;
+        // Debug: log ALL mask writes
+        static int buildCount = 0;
+        if (i == 0) buildCount++;
+        if (i < 3 || (inst.mask != 0xFF && i < 30)) {
+            std::cout << "[TLAS build#" << buildCount << "] Instance " << i << " mask=0x" << std::hex << (int)inst.mask << std::dec << std::endl;
+        }
         vkInst.instanceShaderBindingTableRecordOffset = inst.sbtOffset;
         vkInst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         vkInst.accelerationStructureReference = blas.deviceAddress;

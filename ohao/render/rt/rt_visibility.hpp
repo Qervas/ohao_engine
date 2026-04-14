@@ -13,7 +13,7 @@ namespace ohao::rt {
 // Instance masks (set per TLAS instance)
 constexpr uint32_t MASK_VISIBLE_ALL    = 0xFF;  // visible to all ray types
 constexpr uint32_t MASK_STATIC_ONLY    = 0xFF;  // static geometry — visible to everything
-constexpr uint32_t MASK_ANIMATED       = 0xFE;  // animated geometry — invisible to GI/shadow (bit 0 clear)
+constexpr uint32_t MASK_ANIMATED       = 0x00;  // TEST: completely invisible to ALL rays
 
 // Ray masks (used in traceRayEXT calls)
 constexpr uint32_t RAY_MASK_ALL        = 0xFF;  // hits everything

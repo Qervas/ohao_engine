@@ -13,8 +13,16 @@ layout(set = 0, binding = 6) readonly buffer MaterialBuffer {
 } materialBuf;
 
 void main() {
-    // Look up albedo from material buffer using instance ID (not CustomIndex,
-    // which stores per-triangle offset for the path tracer)
     vec3 albedo = materialBuf.materials[gl_InstanceID].rgb;
+
+    // Workaround for RTX 5070 driver bug: traceRayEXT cull mask is ignored.
+    // Detect animated instances by checking material alpha channel.
+    // Static walls have alpha=1.0, animated instances have alpha=0.0.
+    float isStatic = materialBuf.materials[gl_InstanceID].a;
+    if (isStatic < 0.5) {
+        giPayload = vec4(0.0, 0.0, 0.0, -1.0);  // treat animated as miss
+        return;
+    }
+
     giPayload = vec4(albedo, gl_HitTEXT);
 }

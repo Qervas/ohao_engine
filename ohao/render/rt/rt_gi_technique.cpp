@@ -190,10 +190,11 @@ bool RTGITechnique::createMaterialBuffer() {
     return true;
 }
 
-void RTGITechnique::setMaterialAlbedos(const std::vector<glm::vec3>& albedos) {
-    // Update material data (vec3 -> vec4 with w=1)
+void RTGITechnique::setMaterialAlbedos(const std::vector<glm::vec3>& albedos,
+                                        const std::vector<float>& flags) {
     for (size_t i = 0; i < albedos.size() && i < m_materialData.size(); i++) {
-        m_materialData[i] = glm::vec4(albedos[i], 1.0f);
+        float alpha = (i < flags.size()) ? flags[i] : 1.0f;
+        m_materialData[i] = glm::vec4(albedos[i], alpha);
     }
 
     // Upload to GPU

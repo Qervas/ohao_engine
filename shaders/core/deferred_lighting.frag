@@ -301,7 +301,7 @@ void main() {
     }
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
-    // RTGI output already includes albedo modulation — don't multiply again
+    // RTGI indirect lighting
     if ((pc.flags & 8u) != 0u) {
         vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
         ambient += ssgiColor * ao;

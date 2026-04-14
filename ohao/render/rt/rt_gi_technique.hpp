@@ -28,7 +28,8 @@ public:
     void setSampleCount(int samples) { m_sampleCount = samples; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
-    void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
+    void setMaterialAlbedos(const std::vector<glm::vec3>& albedos,
+                            const std::vector<float>& flags = {});
 
 private:
     bool createOutputImage();

@@ -187,6 +187,7 @@ void VulkanRenderer::renderDeferred() {
         // 4. Rebuild TLAS + update GI material albedos in same instance order
         m_rtAccel->clearInstances();
         std::vector<glm::vec3> giAlbedos;
+        std::vector<float> giFlags;
         uint32_t triOffset = 0;
         for (const auto& abi : m_actorBlasList) {
             auto actorIt = m_scene->getAllActors().find(abi.actorId);
@@ -205,16 +206,19 @@ void VulkanRenderer::renderDeferred() {
                                    triOffset, mask);
             triOffset += abi.indexCount / 3;
 
-            // Collect albedo in SAME order as TLAS instances (for GI material buffer)
+            // Collect albedo + static flag (alpha: 1.0=static, 0.0=animated)
             auto matComp = actorIt->second->getComponent<MaterialComponent>();
-            giAlbedos.push_back(matComp ? matComp->getMaterial().baseColor : glm::vec3(0.73f));
+            glm::vec3 color = matComp ? matComp->getMaterial().baseColor : glm::vec3(0.73f);
+            float isStatic = (animIt == animatedBlasMap.end()) ? 1.0f : 0.0f;
+            giAlbedos.push_back(color);
+            giFlags.push_back(isStatic);
         }
         m_rtAccel->forceTlasRebuild();
         m_rtAccel->buildTLAS(skinCmd);
 
-        // Update GI material buffer to match new TLAS instance order
+        // Update GI material buffer — albedos + static/animated flags
         if (m_deferredRenderer && m_deferredRenderer->getRT_GI()) {
-            m_deferredRenderer->getRT_GI()->setMaterialAlbedos(giAlbedos);
+            m_deferredRenderer->getRT_GI()->setMaterialAlbedos(giAlbedos, giFlags);
         }
 
         // Single submit: compute + all BLAS + TLAS
