@@ -247,6 +247,28 @@ void main() {
 
         // Cook-Torrance BRDF via include (height-correlated Smith-GGX)
         Lo += evaluateBRDF(surface, L, radiance) * shadow;
+
+        // Subsurface scattering approximation for skin-like materials.
+        // Skin: non-metallic, moderate roughness, warm-toned albedo.
+        // Wrap lighting simulates light transmitting through thin geometry.
+        float isSkin = (1.0 - metallic) *                              // non-metallic
+                       smoothstep(0.55, 0.85, roughness) *              // rough range
+                       smoothstep(0.15, 0.4, albedo.r) *               // has red component
+                       (1.0 - smoothstep(0.0, 0.3, abs(albedo.r - albedo.g - 0.05))); // warm tone
+
+        if (isSkin > 0.01) {
+            float NdotL = dot(N, L);
+            float wrap = 0.5;
+            float wrapDiffuse = max(0.0, (NdotL + wrap) / (1.0 + wrap));
+            // Standard diffuse for comparison
+            float stdDiffuse = max(0.0, NdotL);
+            // Subsurface contribution = wrapped light minus standard (the extra light)
+            float sssContrib = max(0.0, wrapDiffuse - stdDiffuse);
+
+            // Subsurface color: warm red-orange tint (blood under skin)
+            vec3 sssColor = vec3(1.0, 0.35, 0.15) * albedo;
+            Lo += sssColor * sssContrib * radiance.rgb * shadow * isSkin * 0.6;
+        }
     }
 
     // Ambient lighting with GI color bleeding approximation
@@ -265,6 +287,18 @@ void main() {
     ambientColor += vec3(redGI, -redGI*0.3, -redGI*0.3);        // red wall bleeds warm
     ambientColor += vec3(-greenGI*0.3, greenGI, -greenGI*0.2);  // green wall bleeds cool
     vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor;
+
+    // Subsurface ambient: skin has a warm internal glow even in shadow
+    {
+        float isSkin = (1.0 - metallic) *
+                       smoothstep(0.55, 0.85, roughness) *
+                       smoothstep(0.15, 0.4, albedo.r) *
+                       (1.0 - smoothstep(0.0, 0.3, abs(albedo.r - albedo.g - 0.05)));
+        if (isSkin > 0.01) {
+            vec3 sssAmbient = vec3(0.8, 0.3, 0.15) * albedo * lighting.ambientIntensity * 0.4;
+            ambient += sssAmbient * isSkin;
+        }
+    }
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
     // RTGI output already includes albedo modulation — don't multiply again
