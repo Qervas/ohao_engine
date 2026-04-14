@@ -59,6 +59,16 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
                                   m_csmPass->getShadowSampler());
     m_lightingPass->setCascadeBuffer(m_csmPass->getCascadeBuffer());
 
+    // Initialize SSS pass (separable subsurface scattering blur)
+    m_sssPass = std::make_unique<SSSPass>();
+    if (m_sssPass->initialize(device, physicalDevice)) {
+        m_sssPass->setGBufferPass(m_gbufferPass.get());
+        std::cout << "DeferredRenderer: SSSPass OK" << std::endl;
+    } else {
+        std::cerr << "DeferredRenderer: SSSPass failed (non-fatal)" << std::endl;
+        m_sssPass.reset();
+    }
+
     // Initialize SSR pass
     m_ssrPass = std::make_unique<SSRPass>();
     if (m_ssrPass->initialize(device, physicalDevice)) {
@@ -531,13 +541,22 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     };
 
-    // 4.5. SSR — screen-space reflections on glossy surfaces
-    if (m_ssrPass && m_lightingPass) {
+    // 4.5. SSS — separable subsurface scattering blur on skin
+    VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
+    if (m_sssPass && litOutput) {
+        timerBegin("SSS");
+        m_sssPass->setLitSceneView(litOutput);
+        m_sssPass->execute(cmd, frameIndex);
+        litOutput = m_sssPass->getOutputView();  // downstream uses blurred output
+        timerEnd();
+    }
+
+    // 4.6. SSR — screen-space reflections on glossy surfaces
+    if (m_ssrPass && litOutput) {
         timerBegin("SSR");
         m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
-        m_ssrPass->setLitSceneView(m_lightingPass->getOutputView());
+        m_ssrPass->setLitSceneView(litOutput);
         m_ssrPass->execute(cmd, frameIndex);
-        // Feed SSR output to tonemapping
         if (m_postProcessing) {
             m_postProcessing->setSSRView(m_ssrPass->getOutputView());
         }
@@ -615,8 +634,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 5. Post-processing (bloom, TAA, SSAO, tonemapping)
     timerBegin("PostProcessing");
     if (m_postProcessing && m_lightingPass) {
-        m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(),
-                                               m_lightingPass->getOutputImage());
+        // Use SSS output if available (blurred skin), otherwise raw lighting
+        VkImageView hdrView = (m_sssPass && m_sssPass->getOutputView()) ?
+            m_sssPass->getOutputView() : m_lightingPass->getOutputView();
+        VkImage hdrImage = (m_sssPass && m_sssPass->getOutputImage()) ?
+            m_sssPass->getOutputImage() : m_lightingPass->getOutputImage();
+        m_postProcessing->setHDRInputWithImage(hdrView, hdrImage);
         m_postProcessing->setDeltaTime(m_deltaTime);
         m_postProcessing->execute(cmd, frameIndex);
     }
