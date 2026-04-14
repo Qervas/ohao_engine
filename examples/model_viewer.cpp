@@ -140,6 +140,7 @@ int main(int argc, char* argv[]) {
                 auto subModel = std::make_shared<Model>();
                 subModel->skeleton = model->skeleton;
 
+
                 // Collect triangles for this material
                 for (size_t tri = 0; tri < model->materialPerTriangle.size(); tri++) {
                     if (model->materialPerTriangle[tri] != matIdx) continue;

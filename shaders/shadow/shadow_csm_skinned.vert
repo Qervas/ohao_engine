@@ -27,12 +27,13 @@ layout(set = 0, binding = 0) uniform BoneMatrices {
 } boneUBO;
 
 void main() {
-    // Compute skin matrix
+    // Compute skin matrix (clamp indices to valid range)
+    ivec4 bi = clamp(inBoneIndices, ivec4(0), ivec4(127));
     mat4 skinMatrix =
-        boneUBO.bones[inBoneIndices.x] * inBoneWeights.x +
-        boneUBO.bones[inBoneIndices.y] * inBoneWeights.y +
-        boneUBO.bones[inBoneIndices.z] * inBoneWeights.z +
-        boneUBO.bones[inBoneIndices.w] * inBoneWeights.w;
+        boneUBO.bones[bi.x] * inBoneWeights.x +
+        boneUBO.bones[bi.y] * inBoneWeights.y +
+        boneUBO.bones[bi.z] * inBoneWeights.z +
+        boneUBO.bones[bi.w] * inBoneWeights.w;
 
     vec4 skinnedPos = skinMatrix * vec4(inPosition, 1.0);
     outWorldPos = (object.model * skinnedPos).xyz;
