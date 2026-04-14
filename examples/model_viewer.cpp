@@ -7,6 +7,7 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
@@ -117,23 +118,9 @@ int main(int argc, char* argv[]) {
     bool loaded = false;
     auto dot = modelPath.find_last_of('.');
     std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-    // Use Assimp loader for formats with animation (FBX, GLTF with skeleton)
-    // Fall back to native GLTF/OBJ loaders for static models
-    if (ext == "obj") {
-        loaded = model->loadFromOBJ(modelPath);
-    } else if (ext == "fbx" || ext == "FBX" || ext == "dae" || ext == "DAE") {
-        loaded = model->loadFromFBX(modelPath);
-    } else {
-        // Try GLTF first, then fall back to Assimp if it has a skeleton
-        loaded = model->loadFromGLTF(modelPath);
-        if (loaded && model->hasSkeleton()) {
-            // Re-load through Assimp for correct animation node tree
-            auto assimpModel = std::make_shared<Model>();
-            if (assimpModel->loadFromFBX(modelPath)) {
-                model = assimpModel;
-            }
-        }
-    }
+    // Unified loader: FBX → ufbx, GLB/GLTF → Assimp, OBJ → native
+    model = ModelLoader::load(modelPath);
+    loaded = (model != nullptr);
 
     if (loaded) {
         // Auto-frame: compute bounds, scale to fit box
@@ -237,6 +224,11 @@ int main(int argc, char* argv[]) {
                     if (model->skeleton->ufbxScene) {
                         animComp->initialize();
                         animComp->play("ufbx");
+                    } else if (!model->animations.empty()) {
+                        for (const auto& clip : model->animations)
+                            animComp->addAnimation(clip->name, clip);
+                        animComp->initialize();
+                        animComp->play(model->animations[0]->name);
                     }
                 }
             }
