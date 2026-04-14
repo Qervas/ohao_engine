@@ -125,10 +125,11 @@ void main() {
     // Modulate by the receiving surface's albedo (diffuse reflection)
     indirectLight *= albedo;
 
-    // Temporal accumulation: blend with previous frame's GI
-    // This smooths noise over time and builds up soft color bleeding.
+    // Temporal accumulation: blend with previous frame's GI.
+    // Higher blend factor = less history = noisier but no ghosting.
+    // 0.3 balances smoothing vs ghosting for animated scenes.
     vec3 history = texture(giHistory, uv).rgb;
-    float blendFactor = (frameIndex == 0u) ? 1.0 : 0.1;  // 10% new, 90% history
+    float blendFactor = (frameIndex == 0u) ? 1.0 : 0.3;
     vec3 accumulated = mix(history, indirectLight, blendFactor);
 
     imageStore(giOutput, pixel, vec4(accumulated, 1.0));

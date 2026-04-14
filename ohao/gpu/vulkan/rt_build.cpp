@@ -780,7 +780,7 @@ void VulkanRenderer::buildBLASTLAS() {
         // so GI rays (mask 0x01) skip them — avoids T-pose ghost in GI.
         // With dynamic BLAS rebuild, all instances are visible to all rays
         bool isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
-        // Animated instances: mask 0xFE (bit 0 clear) hides from GI rays (mask 0x01)
+        // Animated instances: mask 0xFE (bit 0 clear) — invisible to GI and shadow rays (mask 0x01)
         // to prevent T-pose or animated model projecting onto walls
         uint32_t instanceMask = isAnimated ? 0xFE : 0xFF;
         m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), globalTriOffset, instanceMask);

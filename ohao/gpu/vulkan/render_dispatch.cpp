@@ -198,8 +198,8 @@ void VulkanRenderer::renderDeferred() {
             } else {
                 blas = abi.originalBlas;  // static geometry — use original
             }
-            // Animated: mask 0xFE (bit 0 clear) — visible to shadows (0xFF) but
-            // invisible to GI rays (0x01). Prevents model projecting onto walls.
+            // Animated: mask 0xFE (bit 0 clear) — invisible to GI rays (mask 0x01)
+            // and invisible to shadow rays (mask 0x01). Prevents model projecting onto walls.
             // Static: mask 0xFF — visible to everything.
             uint32_t mask = (animIt != animatedBlasMap.end()) ? 0xFE : 0xFF;
             m_rtAccel->addInstance(blas, actorIt->second->getTransform()->getWorldMatrix(),
