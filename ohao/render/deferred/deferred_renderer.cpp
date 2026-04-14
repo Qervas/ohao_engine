@@ -417,10 +417,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 3.8. RT GI — traces indirect rays, outputs color bleeding
-    // RTGI disabled — the ray mask 0x01 doesn't prevent animated model projection
-    // onto walls. The position-based ambient GI hack provides sufficient color bleeding.
-    // TODO: fix RTGI mask interaction with animated BLAS instances
-    if (false && m_useRTGI && m_rtGI && m_rtAccel && m_rtAccel->isSupported() &&
+    if (m_useRTGI && m_rtGI && m_rtAccel && m_rtAccel->isSupported() &&
         m_rtAccel->getInstanceCount() > 0 && m_gbufferPass) {
         m_renderGraph.addComputePass("RTGI",
             [&](PassBuilder& builder) {
@@ -443,18 +440,7 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
                 gi.accel = m_rtAccel;
 
-                // Pass per-instance albedos to RTGI material buffer
-                if (m_scene) {
-                    std::vector<glm::vec3> albedos;
-                    for (const auto& [id, actor] : m_scene->getAllActors()) {
-                        auto mc = actor->getComponent<MeshComponent>();
-                        if (!mc || !mc->isVisible()) continue;
-                        auto matComp = actor->getComponent<MaterialComponent>();
-                        glm::vec3 color = matComp ? matComp->getMaterial().baseColor : glm::vec3(0.8f);
-                        albedos.push_back(color);
-                    }
-                    m_rtGI->setMaterialAlbedos(albedos);
-                }
+                // GI material albedos updated in render_dispatch (matches TLAS instance order)
 
                 // Find brightest scene light for GI bounce
                 if (m_scene) {

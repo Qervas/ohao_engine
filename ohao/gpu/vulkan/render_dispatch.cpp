@@ -184,8 +184,9 @@ void VulkanRenderer::renderDeferred() {
                 0, 1, &barrier, 0, nullptr, 0, nullptr);
         }
 
-        // 4. Rebuild TLAS — animated use new BLAS, static use original
+        // 4. Rebuild TLAS + update GI material albedos in same instance order
         m_rtAccel->clearInstances();
+        std::vector<glm::vec3> giAlbedos;
         uint32_t triOffset = 0;
         for (const auto& abi : m_actorBlasList) {
             auto actorIt = m_scene->getAllActors().find(abi.actorId);
@@ -193,19 +194,28 @@ void VulkanRenderer::renderDeferred() {
             auto animIt = animatedBlasMap.find(abi.actorId);
             BlasHandle blas;
             if (animIt != animatedBlasMap.end()) {
-                blas = animIt->second;  // use skinned BLAS
+                blas = animIt->second;
             } else if (abi.isAnimated) {
-                continue;  // skip T-pose — no skinned BLAS available this frame
+                continue;
             } else {
-                blas = abi.originalBlas;  // static geometry — use original
+                blas = abi.originalBlas;
             }
             uint32_t mask = (animIt != animatedBlasMap.end()) ? rt::MASK_ANIMATED : rt::MASK_STATIC_ONLY;
             m_rtAccel->addInstance(blas, actorIt->second->getTransform()->getWorldMatrix(),
                                    triOffset, mask);
             triOffset += abi.indexCount / 3;
+
+            // Collect albedo in SAME order as TLAS instances (for GI material buffer)
+            auto matComp = actorIt->second->getComponent<MaterialComponent>();
+            giAlbedos.push_back(matComp ? matComp->getMaterial().baseColor : glm::vec3(0.73f));
         }
         m_rtAccel->forceTlasRebuild();
         m_rtAccel->buildTLAS(skinCmd);
+
+        // Update GI material buffer to match new TLAS instance order
+        if (m_deferredRenderer && m_deferredRenderer->getRT_GI()) {
+            m_deferredRenderer->getRT_GI()->setMaterialAlbedos(giAlbedos);
+        }
 
         // Single submit: compute + all BLAS + TLAS
         vkEndCommandBuffer(skinCmd);
