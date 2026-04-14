@@ -252,7 +252,7 @@ void main() {
         // Skin: non-metallic, moderate roughness, warm-toned albedo.
         // Wrap lighting simulates light transmitting through thin geometry.
         float isSkin = (1.0 - metallic) *                              // non-metallic
-                       smoothstep(0.55, 0.85, roughness) *              // rough range
+                       smoothstep(0.7, 0.95, roughness) *               // matte skin range
                        smoothstep(0.15, 0.4, albedo.r) *               // has red component
                        (1.0 - smoothstep(0.0, 0.3, abs(albedo.r - albedo.g - 0.05))); // warm tone
 
