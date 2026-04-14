@@ -417,7 +417,10 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     }
 
     // 3.8. RT GI — traces indirect rays, outputs color bleeding
-    if (m_useRTGI && m_rtGI && m_rtAccel && m_rtAccel->isSupported() &&
+    // RTGI disabled — the ray mask 0x01 doesn't prevent animated model projection
+    // onto walls. The position-based ambient GI hack provides sufficient color bleeding.
+    // TODO: fix RTGI mask interaction with animated BLAS instances
+    if (false && m_useRTGI && m_rtGI && m_rtAccel && m_rtAccel->isSupported() &&
         m_rtAccel->getInstanceCount() > 0 && m_gbufferPass) {
         m_renderGraph.addComputePass("RTGI",
             [&](PassBuilder& builder) {

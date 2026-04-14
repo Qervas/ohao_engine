@@ -65,17 +65,52 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
 
-    // Cornell box backdrop
+    // Room backdrop — 3x larger than Cornell box, checkerboard pattern walls
     auto scene = std::make_unique<Scene>("Model Viewer");
-    const float S = 5.0f;
+    const float S = 15.0f;  // room half-size (30 units total)
     const glm::vec3 white(0.73f), red(0.65f, 0.05f, 0.05f), green(0.12f, 0.45f, 0.15f);
-    glm::vec3 LBB(-S,-S,-S), RBB(S,-S,-S), LTB(-S,S,-S), RTB(S,S,-S);
-    glm::vec3 LBF(-S,-S,S),  RBF(S,-S,S),  LTF(-S,S,S),  RTF(S,S,S);
-    addWall(scene.get(), "Back",    LBB, RBB, RTB, LTB, {0,0,1},  white);
-    addWall(scene.get(), "Left",    LBB, LTB, LTF, LBF, {1,0,0},  red);
-    addWall(scene.get(), "Right",   RBB, RBF, RTF, RTB, {-1,0,0}, green);
-    addWall(scene.get(), "Floor",   LBB, LBF, RBF, RBB, {0,1,0},  white);
-    addWall(scene.get(), "Ceiling", LTB, RTB, RTF, LTF, {0,-1,0}, white);
+
+    // Build checkerboard grid walls (subdivided into tiles for visible pattern)
+    auto addGridWall = [&](const std::string& name, glm::vec3 origin, glm::vec3 uAxis, glm::vec3 vAxis,
+                           glm::vec3 normal, int tilesU, int tilesV) {
+        auto actor = scene->createActor(name);
+        auto model = std::make_shared<Model>();
+        float tileU = 1.0f / tilesU, tileV = 1.0f / tilesV;
+        for (int iu = 0; iu < tilesU; iu++) {
+            for (int iv = 0; iv < tilesV; iv++) {
+                bool dark = (iu + iv) % 2 == 0;
+                glm::vec3 col = dark ? glm::vec3(0.55f) : glm::vec3(0.85f);
+                float u0 = iu * tileU, u1 = (iu+1) * tileU;
+                float v0 = iv * tileV, v1 = (iv+1) * tileV;
+                glm::vec3 a = origin + uAxis * u0 + vAxis * v0;
+                glm::vec3 b = origin + uAxis * u1 + vAxis * v0;
+                glm::vec3 c = origin + uAxis * u1 + vAxis * v1;
+                glm::vec3 d = origin + uAxis * u0 + vAxis * v1;
+                uint32_t base = static_cast<uint32_t>(model->vertices.size());
+                auto mkv = [&](glm::vec3 pos) {
+                    Vertex v{}; v.position = pos; v.normal = normal; v.color = col;
+                    v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+                    v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+                    return v;
+                };
+                model->vertices.push_back(mkv(a)); model->vertices.push_back(mkv(b));
+                model->vertices.push_back(mkv(c)); model->vertices.push_back(mkv(d));
+                model->indices.insert(model->indices.end(), {base,base+1,base+2, base,base+2,base+3});
+            }
+        }
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(model); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = {0.7f, 0.7f, 0.7f};
+        mat->getMaterial().roughness = 0.95f;
+    };
+
+    int tiles = 8;
+    addGridWall("Back",    {-S,-S,-S}, {2*S,0,0}, {0,2*S,0}, {0,0,1},  tiles, tiles);
+    addGridWall("Left",    {-S,-S,-S}, {0,0,2*S}, {0,2*S,0}, {1,0,0},  tiles, tiles);
+    addGridWall("Right",   {S,-S,-S},  {0,0,2*S}, {0,2*S,0}, {-1,0,0}, tiles, tiles);
+    addGridWall("Floor",   {-S,-S,-S}, {2*S,0,0}, {0,0,2*S}, {0,1,0},  tiles, tiles);
+    addGridWall("Ceiling", {-S,S,-S},  {2*S,0,0}, {0,0,2*S}, {0,-1,0}, tiles, tiles);
 
     // Load model
     auto model = std::make_shared<Model>();
@@ -249,25 +284,43 @@ int main(int argc, char* argv[]) {
     auto kl = keyLight->addComponent<LightComponent>();
     kl->setLightType(LightType::Sphere);
     kl->setColor({1.0f, 0.95f, 0.9f});
-    kl->setIntensity(30.0f);
-    kl->setRadius(1.0f);
-    keyLight->getTransform()->setPosition({3.0f, 3.0f, 3.0f});
+    kl->setIntensity(200.0f);   // much stronger for larger room
+    kl->setRadius(2.0f);        // larger radius = softer shadows
+    keyLight->getTransform()->setPosition({5.0f, 8.0f, 10.0f});
 
-    // Fill light
+    // Fill light — softer, from the other side
     auto fillLight = scene->createActor("FillLight");
     auto fl = fillLight->addComponent<LightComponent>();
     fl->setLightType(LightType::Sphere);
-    fl->setColor({0.6f, 0.7f, 1.0f});
-    fl->setIntensity(10.0f);
-    fl->setRadius(0.5f);
-    fillLight->getTransform()->setPosition({-3.0f, 1.0f, 2.0f});
+    fl->setColor({0.7f, 0.8f, 1.0f});
+    fl->setIntensity(80.0f);
+    fl->setRadius(2.0f);
+    fillLight->getTransform()->setPosition({-5.0f, 6.0f, 8.0f});
+
+    // Rim light — warm back light for depth
+    auto rimLight = scene->createActor("RimLight");
+    auto rl = rimLight->addComponent<LightComponent>();
+    rl->setLightType(LightType::Sphere);
+    rl->setColor({1.0f, 0.85f, 0.7f});
+    rl->setIntensity(60.0f);
+    rl->setRadius(1.5f);
+    rimLight->getTransform()->setPosition({0.0f, 5.0f, -8.0f});
+
+    // Front fill — soft face light to reduce harsh shadows
+    auto frontFill = scene->createActor("FrontFill");
+    auto ff = frontFill->addComponent<LightComponent>();
+    ff->setLightType(LightType::Sphere);
+    ff->setColor({1.0f, 0.95f, 0.9f});
+    ff->setIntensity(40.0f);
+    ff->setRadius(3.0f);  // large radius = very soft
+    frontFill->getTransform()->setPosition({0.0f, 3.0f, 15.0f});
 
     renderer.setScene(scene.get());
     renderer.updateSceneBuffers();
 
     auto& camera = renderer.getCamera();
-    camera.setPosition({0, 0, 13});
-    camera.setFov(35.0f);
+    camera.setPosition({0, 0, 25});   // further back for larger room
+    camera.setFov(45.0f);
     camera.setRotation(0.0f, -90.0f);
     // Mode: "deferred" for hybrid RT, anything else for path traced
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
@@ -279,7 +332,7 @@ int main(int argc, char* argv[]) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
             pp->setSSAOEnabled(true);
-            pp->setExposure(1.2f);   // slightly brighter than default
+            pp->setExposure(1.0f);
         }
     }
 

@@ -246,7 +246,7 @@ glm::mat4 VulkanRenderer::calculateLightSpaceMatrix(const LightData& light) {
 void VulkanRenderer::updateLightBuffer() {
     LightUniformBuffer lightUbo{};
     lightUbo.numLights = 0;
-    lightUbo.ambientIntensity = 0.15f;
+    lightUbo.ambientIntensity = 0.35f;
     lightUbo.shadowBias = 0.005f;
     lightUbo.shadowStrength = 0.7f;
 
@@ -336,7 +336,7 @@ void VulkanRenderer::updateLightBuffer(uint32_t frameIndex) {
 
     LightUniformBuffer lightUbo{};
     lightUbo.numLights = 0;
-    lightUbo.ambientIntensity = 0.15f;
+    lightUbo.ambientIntensity = 0.35f;
     lightUbo.shadowBias = 0.005f;
     lightUbo.shadowStrength = 0.7f;
 

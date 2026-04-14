@@ -136,7 +136,7 @@ bool Model::loadFromFBX(const std::string& filename) {
             roughness = 0.9f;   // skin: mostly matte (real skin is 0.85-0.95)
         } else if (lower.find("shirt") != std::string::npos || lower.find("pants") != std::string::npos ||
                    lower.find("waist") != std::string::npos || lower.find("trim") != std::string::npos) {
-            roughness = 0.85f;  // fabric: matte
+            roughness = 0.95f;  // fabric: very matte (no specular hotspots)
         } else if (lower.find("hair") != std::string::npos || lower.find("scalp") != std::string::npos) {
             roughness = 0.45f;  // hair: slight sheen
         } else if (lower.find("eye") != std::string::npos && lower.find("moisture") != std::string::npos) {
