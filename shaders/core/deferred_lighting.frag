@@ -258,6 +258,19 @@ void main() {
         ambient += ssgiColor * albedo * ao;
     }
 
+    // Metallic ambient reflection — metals need something to reflect.
+    // Without env map or RT, approximate by reflecting the ambient room color.
+    // Only affects metallic > 0.5 (visor, chrome, jewelry). Skin/fabric unaffected.
+    if (metallic > 0.5) {
+        vec3 V = normalize(pc.cameraPos - fragPos);
+        vec3 R = reflect(-V, N);
+        // Simple sky/ground gradient based on reflection direction
+        float upness = R.y * 0.5 + 0.5;
+        vec3 reflColor = mix(vec3(0.15, 0.12, 0.10), vec3(0.4, 0.38, 0.35), upness);
+        float reflStrength = metallic * (1.0 - roughness * 0.7);
+        ambient += reflColor * albedo * reflStrength;
+    }
+
     // Emissive — self-illuminating surfaces (glow independent of lighting)
     vec3 emissive = albedo * emissiveLuminance;
 

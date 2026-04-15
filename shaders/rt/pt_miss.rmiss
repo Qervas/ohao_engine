@@ -44,6 +44,9 @@ void main() {
         vec2 uv = dirToEquirect(dir);
         payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb;
     } else {
-        payload.color = vec3(0.0);
+        // No env map — use subtle sky gradient instead of pure black
+        vec3 dir = normalize(gl_WorldRayDirectionEXT);
+        float t = dir.y * 0.5 + 0.5;  // 0=below, 1=above
+        payload.color = mix(vec3(0.05, 0.04, 0.03), vec3(0.15, 0.14, 0.12), t);
     }
 }

@@ -43,8 +43,9 @@ void main() {
     vec3 N = decodeNormalOctahedron(normalSample.xy);
     float roughness = normalSample.b;
 
-    // Skip very rough surfaces (no visible reflections)
-    if (roughness > 0.7) {
+    // Skip rough non-metallic surfaces (skin, fabric — no visible reflections)
+    // Keep metallic surfaces regardless of roughness (metals always reflect)
+    if (roughness > 0.7 && metallic < 0.5) {
         imageStore(ssrOutput, pixel, vec4(0.0));
         return;
     }
