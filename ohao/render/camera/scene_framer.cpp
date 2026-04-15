@@ -45,7 +45,9 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
     bool posZIsUp = true;  // only used for Z-up models
 
     if (isYUp) {
-        result.modelRotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
+        // No rotation — most models face +Z (toward camera) natively.
+        // Use "flip" arg in model_viewer if a model faces the wrong way.
+        result.modelRotation = glm::quat(1, 0, 0, 0);
         float feetOffset = -bmin.y * scale;
         result.modelPosition = {-center.x * scale, -S + feetOffset, -center.z * scale};
     } else {

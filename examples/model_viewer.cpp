@@ -307,10 +307,17 @@ int main(int argc, char* argv[]) {
     // Auto-framed camera
     auto& camera = renderer.getCamera();
     SceneFramer::applyCamera(camera, frame);
-    // Optional 6th arg "back" to view model from the other side
-    if (argc > 5 && std::string(argv[5]) == "back") {
-        camera.setPosition({0, 2, -14});
-        camera.setRotation(0.0f, 90.0f);
+
+    // Check any arg for "flip" — rotates model 180° Y (for models facing away)
+    for (int i = 4; i < argc; i++) {
+        if (std::string(argv[i]) == "flip") {
+            glm::quat flipRot = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
+            for (const auto& [id, actor] : scene->getAllActors()) {
+                if (actor->getName().find("Mesh_") == 0 || actor->getName() == "Model")
+                    actor->getTransform()->setRotation(flipRot);
+            }
+            break;
+        }
     }
     // Mode: "deferred" for hybrid RT, anything else for path traced
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
