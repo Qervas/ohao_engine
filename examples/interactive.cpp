@@ -17,12 +17,14 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
+#include "render/camera/scene_framer.hpp"
 
 #include <iostream>
 #include <string>
@@ -33,8 +35,8 @@ using namespace ohao;
 
 struct CameraState {
     float yaw = -90.0f, pitch = 0.0f;
-    glm::vec3 position = {0, 0, 8};
-    float speed = 5.0f;
+    glm::vec3 position = {0, 0, 25};
+    float speed = 8.0f;
     float sensitivity = 0.15f;
     bool rightMouseDown = false;
     double lastMouseX = 0, lastMouseY = 0;
@@ -130,50 +132,105 @@ int main(int argc, char* argv[]) {
 
     if (!envPath.empty()) renderer.setEnvironmentMap(envPath);
 
-    // Build scene
+    // Load model
+    auto model = modelPath.empty() ? nullptr : ModelLoader::load(modelPath);
+    FrameResult frame;
+    if (model) {
+        frame = SceneFramer::computeFraming(model->vertices);
+        std::cout << "Model: " << model->vertices.size() << " verts, scale=" << frame.modelScale << std::endl;
+    } else {
+        frame.roomHalfSize = 15.0f;
+        frame.modelScale = 1.0f;
+        frame.modelPosition = glm::vec3(0);
+        frame.modelRotation = glm::quat(1, 0, 0, 0);
+        frame.cameraPosition = {0, 0, 25};
+        frame.cameraFov = 45.0f;
+    }
+    float S = frame.roomHalfSize;
+
+    // Build bedroom scene
     auto scene = std::make_unique<Scene>("Interactive");
 
-    if (!modelPath.empty()) {
-        auto model = std::make_shared<Model>();
-        bool loaded = false;
-        auto dot = modelPath.find_last_of('.');
-        std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-        if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
-        else loaded = model->loadFromGLTF(modelPath);
+    auto addQuad = [&](const std::string& name, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+                       glm::vec3 normal, glm::vec3 color, float roughness) {
+        auto actor = scene->createActor(name);
+        auto m = std::make_shared<Model>();
+        auto mkv = [&](glm::vec3 pos) {
+            Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
+            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+            return v;
+        };
+        m->vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
+        m->indices = {0,1,2, 0,2,3};
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(m); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = color;
+        mat->getMaterial().roughness = roughness;
+    };
 
-        if (loaded) {
-            glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
-            for (const auto& v : model->vertices) {
-                bmin = glm::min(bmin, v.position);
-                bmax = glm::max(bmax, v.position);
-            }
-            glm::vec3 extent = bmax - bmin;
-            bool isYUp = (extent.y >= extent.z);
-            float modelHeight = isYUp ? extent.y : extent.z;
-            float scale = 4.0f / modelHeight;
-
-            auto actor = scene->createActor("Model");
-            if (isYUp)
-                actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
-            else
-                actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(-90, 0, 0))));
-            actor->getTransform()->setScale(glm::vec3(scale));
-            glm::vec3 center = (bmin + bmax) * 0.5f;
-            actor->getTransform()->setPosition({-center.x*scale, -center.y*scale, -center.z*scale});
-            auto mesh = actor->addComponent<MeshComponent>();
-            mesh->setModel(model); mesh->setVisible(true);
-            actor->addComponent<MaterialComponent>();
-            std::cout << "Model: " << model->vertices.size() << " verts" << std::endl;
+    auto addBox = [&](const std::string& name, glm::vec3 lo, glm::vec3 hi,
+                      glm::vec3 color, float roughness) {
+        auto actor = scene->createActor(name);
+        auto m = std::make_shared<Model>();
+        auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
+            Vertex v{}; v.position = pos; v.normal = n; v.color = color;
+            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+            return v;
+        };
+        glm::vec3 c[8] = {
+            {lo.x,lo.y,lo.z},{hi.x,lo.y,lo.z},{hi.x,hi.y,lo.z},{lo.x,hi.y,lo.z},
+            {lo.x,lo.y,hi.z},{hi.x,lo.y,hi.z},{hi.x,hi.y,hi.z},{lo.x,hi.y,hi.z}
+        };
+        int faces[6][4] = {{4,5,6,7},{1,0,3,2},{0,4,7,3},{5,1,2,6},{3,7,6,2},{0,1,5,4}};
+        glm::vec3 normals[6] = {{0,0,1},{0,0,-1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0}};
+        for (int f = 0; f < 6; f++) {
+            uint32_t base = (uint32_t)m->vertices.size();
+            for (int k = 0; k < 4; k++) m->vertices.push_back(mkv(c[faces[f][k]], normals[f]));
+            m->indices.insert(m->indices.end(), {base,base+1,base+2, base,base+2,base+3});
         }
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(m); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = color;
+        mat->getMaterial().roughness = roughness;
+    };
+
+    // Bedroom walls/floor
+    glm::vec3 wallColor(0.82f, 0.78f, 0.72f);
+    glm::vec3 floorColor(0.25f, 0.15f, 0.08f);
+    glm::vec3 ceilColor(0.90f, 0.88f, 0.85f);
+    addQuad("Back",  {-S,-S,-S},{S,-S,-S},{S,S,-S},{-S,S,-S}, {0,0,1}, wallColor, 0.9f);
+    addQuad("Left",  {-S,-S,-S},{-S,-S,S},{-S,S,S},{-S,S,-S}, {1,0,0}, wallColor, 0.9f);
+    addQuad("Right", {S,-S,S},{S,-S,-S},{S,S,-S},{S,S,S}, {-1,0,0}, wallColor, 0.9f);
+    addQuad("Floor", {-S,-S,-S},{S,-S,-S},{S,-S,S},{-S,-S,S}, {0,1,0}, floorColor, 0.6f);
+    addQuad("Ceiling",{-S,S,-S},{S,S,-S},{S,S,S},{-S,S,S}, {0,-1,0}, ceilColor, 0.9f);
+
+    // Bed + furniture
+    float bedW = S*0.8f, bedH = S*0.25f, bedD = S*0.6f;
+    addBox("BedFrame", {-bedW,-S,-S}, {bedW,-S+bedH*0.4f,-S+bedD}, {0.20f,0.12f,0.06f}, 0.5f);
+    addBox("Mattress", {-bedW+0.2f,-S+bedH*0.4f,-S+0.2f}, {bedW-0.2f,-S+bedH,-S+bedD-0.2f}, {0.85f,0.82f,0.78f}, 0.95f);
+    addBox("Headboard", {-bedW,-S,-S}, {bedW,-S+bedH*2.5f,-S+0.3f}, {0.20f,0.12f,0.06f}, 0.4f);
+    addBox("Pillow", {-bedW*0.4f,-S+bedH,-S+0.4f}, {bedW*0.4f,-S+bedH+1.0f,-S+bedD*0.4f}, {0.92f,0.90f,0.88f}, 0.95f);
+    addBox("Nightstand", {S*0.55f,-S,-S}, {S*0.55f+3.0f,-S+bedH*1.5f,-S+3.0f}, {0.22f,0.14f,0.07f}, 0.45f);
+
+    // Place model
+    if (model) {
+        auto actor = scene->createActor("Model");
+        actor->getTransform()->setRotation(frame.modelRotation);
+        actor->getTransform()->setScale(glm::vec3(frame.modelScale));
+        actor->getTransform()->setPosition(frame.modelPosition);
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(model); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
+        mat->getMaterial().roughness = 0.5f;
     }
 
-    auto keyLight = scene->createActor("Key");
-    auto kl = keyLight->addComponent<LightComponent>();
-    kl->setLightType(LightType::Sphere);
-    kl->setColor({1, 0.95f, 0.9f});
-    kl->setIntensity(15.0f);
-    kl->setRadius(1.0f);
-    keyLight->getTransform()->setPosition({4, 3, 4});
+    // Bedroom lights
+    SceneFramer::applyLights(scene.get(), frame);
 
     renderer.setScene(scene.get());
     renderer.setRenderMode(RenderMode::PathTraced);
