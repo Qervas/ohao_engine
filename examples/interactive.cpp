@@ -267,6 +267,11 @@ int main(int argc, char* argv[]) {
         // Blit pixels to OpenGL texture → screen
         const uint8_t* pixels = renderer.getPixels();
         if (pixels) {
+            // Match GL viewport to actual framebuffer size (handles HiDPI/Wayland scaling)
+            int fbW, fbH;
+            glfwGetFramebufferSize(window, &fbW, &fbH);
+            glViewport(0, 0, fbW, fbH);
+
             glBindTexture(GL_TEXTURE_2D, displayTex);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 

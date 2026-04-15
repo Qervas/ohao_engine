@@ -444,6 +444,14 @@ void main() {
         }
     }
 
+    // Luminance-preserving denoise: rescale denoised to match accumulated luminance
+    // This prevents the denoiser from changing brightness between moving/static states
+    float accLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
+    float denLum = dot(denoised, vec3(0.2126, 0.7152, 0.0722));
+    if (denLum > 0.001 && accLum > 0.001) {
+        denoised *= accLum / denLum;
+    }
+
     // Tonemap + gamma
     vec3 ldr = ACES(denoised * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
