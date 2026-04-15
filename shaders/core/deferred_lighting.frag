@@ -332,10 +332,12 @@ void main() {
     float NdotV = max(dot(N, viewDir), 0.0);
     vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
 
-    // Reflection: strong on metallic + glossy, suppressed on rough dielectrics
-    // Use roughness^4 falloff (steeper than roughness^2) for more natural dielectric look
-    float reflectionFade = (1.0 - roughness * roughness) * (1.0 - roughness * roughness);
-    vec3 envReflection = envColor * F * reflectionFade;
+    // Reflection: metals get full env reflection, dielectrics get almost none.
+    // This matches Blender's approach — skin/fabric shouldn't reflect the environment.
+    // Metallic controls the blend: metallic=1 → full reflection, metallic=0 → near zero.
+    float dielectricReflection = (1.0 - roughness * roughness) * (1.0 - roughness * roughness) * 0.3;
+    float reflectionStrength = mix(dielectricReflection, 1.0 - roughness * 0.3, metallic);
+    vec3 envReflection = envColor * F * reflectionStrength;
 
     // Diffuse ambient from env map (irradiance approximation)
     vec2 diffEnvUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
