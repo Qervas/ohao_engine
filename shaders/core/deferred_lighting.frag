@@ -156,7 +156,8 @@ void main() {
     float metallic = gBuffer0Sample.a;
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
-    float roughness = gBuffer1Sample.b; // B channel = 10 bits in A2R10G10B10
+    float roughness = gBuffer1Sample.b;
+    float emissiveLuminance = gBuffer1Sample.a;  // stored by GBuffer pass
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -257,8 +258,11 @@ void main() {
         ambient += ssgiColor * albedo * ao;
     }
 
+    // Emissive — self-illuminating surfaces (glow independent of lighting)
+    vec3 emissive = albedo * emissiveLuminance;
+
     // Final color
-    vec3 color = ambient + Lo;
+    vec3 color = ambient + Lo + emissive;
 
     // Cloud shadows — applied to final color (not per-light) with 0.3 floor
     if ((pc.flags & 16u) != 0u) {
