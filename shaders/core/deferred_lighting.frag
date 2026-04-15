@@ -209,6 +209,19 @@ void main() {
     // Build BRDF surface once (used for all lights)
     BRDFSurface surface = initBRDFSurface(fragPos, N, V, albedo, metallic, roughness, ao);
 
+    // Skin specular correction: real skin has IOR=1.4 (F0=0.028, not 0.04)
+    // and SSS causes specular to pick up subtle skin color tint.
+    // Without this, white specular on warm skin = porcelain/plastic look.
+    float skinFactor = (1.0 - metallic) *
+                       smoothstep(0.1, 0.35, albedo.r) *
+                       step(albedo.g, albedo.r) *
+                       (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01)));
+    if (skinFactor > 0.01) {
+        // Lower F0 (IOR 1.4 → 0.028) + tint toward skin color (SSS bleed into specular)
+        vec3 skinF0 = mix(vec3(0.028), albedo * 0.15, 0.5);  // half physical, half skin-tinted
+        surface.F0 = mix(surface.F0, skinF0, skinFactor);
+    }
+
     // Accumulate lighting from SSBO data
     vec3 Lo = vec3(0.0);
 
