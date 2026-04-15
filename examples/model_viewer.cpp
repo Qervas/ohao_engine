@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
     std::string modelPath = argv[1];
     std::string output = argc > 2 ? argv[2] : "model_output.png";
     int samples = argc > 3 ? std::atoi(argv[3]) : 1024;
-    uint32_t W = 1920, H = 1080;  // Default to 1080p (4K causes sub-pixel issues on dense meshes)
+    uint32_t W = 3840, H = 2160;
 
     std::cout << "OHAO Model Viewer — " << modelPath << std::endl;
     std::cout << W << "x" << H << " @ " << samples << " spp" << std::endl;
