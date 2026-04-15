@@ -207,12 +207,14 @@ int main(int argc, char* argv[]) {
     glm::vec3 wallColor(0.55f, 0.50f, 0.45f);   // muted warm gray walls
     glm::vec3 floorColor(0.18f, 0.10f, 0.05f);  // dark walnut wood
     glm::vec3 ceilColor(0.60f, 0.58f, 0.55f);   // gray ceiling
-    addQuad("Back",   {-S,-S,-S},{S,-S,-S},{S,S,-S},{-S,S,-S}, {0,0,1},  wallColor, 0.9f);
-    addQuad("Front",  {S,-S,S},{-S,-S,S},{-S,S,S},{S,S,S},   {0,0,-1}, wallColor, 0.9f);
-    addQuad("Left",   {-S,-S,-S},{-S,-S,S},{-S,S,S},{-S,S,-S},{1,0,0},  wallColor, 0.9f);
-    addQuad("Right",  {S,-S,S},{S,-S,-S},{S,S,-S},{S,S,S},    {-1,0,0}, wallColor, 0.9f);
-    addQuad("Floor",  {-S,-S,-S},{S,-S,-S},{S,-S,S},{-S,-S,S},{0,1,0},  floorColor, 0.6f);
-    addQuad("Ceiling",{-S,S,-S},{S,S,-S},{S,S,S},{-S,S,S},    {0,-1,0}, ceilColor, 0.9f);
+    // Walls extend 0.1 past corners to prevent ray leaks at seams
+    float E = 0.1f;
+    addQuad("Back",   {-S-E,-S-E,-S},{S+E,-S-E,-S},{S+E,S+E,-S},{-S-E,S+E,-S}, {0,0,1},  wallColor, 0.9f);
+    addQuad("Front",  {S+E,-S-E,S},{-S-E,-S-E,S},{-S-E,S+E,S},{S+E,S+E,S},     {0,0,-1}, wallColor, 0.9f);
+    addQuad("Left",   {-S,-S-E,-S-E},{-S,-S-E,S+E},{-S,S+E,S+E},{-S,S+E,-S-E}, {1,0,0},  wallColor, 0.9f);
+    addQuad("Right",  {S,-S-E,S+E},{S,-S-E,-S-E},{S,S+E,-S-E},{S,S+E,S+E},     {-1,0,0}, wallColor, 0.9f);
+    addQuad("Floor",  {-S-E,-S,-S-E},{S+E,-S,-S-E},{S+E,-S,S+E},{-S-E,-S,S+E}, {0,1,0},  floorColor, 0.6f);
+    addQuad("Ceiling",{-S-E,S,-S-E},{S+E,S,-S-E},{S+E,S,S+E},{-S-E,S,S+E},     {0,-1,0}, ceilColor, 0.9f);
 
     // Bed + furniture
     float bedW = S*0.8f, bedH = S*0.25f, bedD = S*0.6f;

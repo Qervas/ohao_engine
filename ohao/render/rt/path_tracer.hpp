@@ -101,7 +101,7 @@ private:
     uint32_t m_height = 0;
 
     // Config
-    uint32_t m_maxBounces = 8;
+    uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
     static constexpr uint32_t m_maxBindlessTextures = 1024;
     VkBuffer m_normalBuffer = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
