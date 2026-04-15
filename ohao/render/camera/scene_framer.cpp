@@ -31,8 +31,9 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices) {
     float S = 15.0f;
     result.roomHalfSize = S;
 
-    // Scale model to fill ~80% of room height
-    result.modelScale = (S * 1.6f) / std::max(modelHeight, 0.001f);
+    // Scale to fit: use largest extent so crouching/wide models don't overflow
+    float maxExtent = std::max({extent.x, extent.y, extent.z});
+    result.modelScale = (S * 1.2f) / std::max(maxExtent, 0.001f);
 
     // Rotation: face camera, handle Z-up conversion
     if (isYUp) {
@@ -58,8 +59,8 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices) {
         result.modelPosition = {-center.x * scale, -S + feetOffset, center.y * scale};
     }
 
-    // Camera: looking at model center
-    result.cameraPosition = {0, 0, 25.0f};
+    // Camera: far enough to see the full model
+    result.cameraPosition = {0, 0, S * 1.7f};
     result.cameraFov = 45.0f;
 
     // 4-light studio setup (tuned for S=15 room)
