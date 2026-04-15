@@ -49,16 +49,10 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
         float feetOffset = -bmin.y * scale;
         result.modelPosition = {-center.x * scale, -S + feetOffset, -center.z * scale};
     } else {
-        // Z-up: detect which Z direction is "up" using vertex normals at the Z extremes.
-        float topZ = -FLT_MAX;
-        glm::vec3 topNormal(0, 0, 1);
-        for (const auto& v : vertices) {
-            if (v.position.z > topZ) {
-                topZ = v.position.z;
-                topNormal = v.normal;
-            }
-        }
-        posZIsUp = (topNormal.z >= 0.0f);
+        // Z-up: detect which Z direction is "up".
+        // If Z range is entirely ≤ 0, the model uses -Z as up (head at negative Z).
+        // If Z range spans positive values, +Z is up (standard).
+        posZIsUp = (bmax.z > 0.01f);
         result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));
 
         if (posZIsUp) {
