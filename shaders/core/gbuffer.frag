@@ -65,14 +65,13 @@ void main() {
         albedo = fragColor * pc.albedoColor.rgb;
     }
 
-    // Check for bindless normal map
+    // Normal map: use bindless texture if available, otherwise derive from albedo
     uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
     if (normalTexIdx != 0xFFFFFFFFu) {
-        // Sample normal map and perturb geometric normal
+        // Explicit normal map — use it directly
         vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], fragTexCoord).rgb;
         tangentNormal = tangentNormal * 2.0 - 1.0;
 
-        // Compute TBN from derivatives (no explicit tangent attribute needed)
         vec3 dPdx = dFdx(fragWorldPos);
         vec3 dPdy = dFdy(fragWorldPos);
         vec2 dUVdx = dFdx(fragTexCoord);
@@ -83,6 +82,21 @@ void main() {
         mat3 TBN = mat3(T, B, N);
 
         N = normalize(TBN * tangentNormal);
+    } else if (albedoTexIdx != 0xFFFFFFFFu) {
+        // No normal map but has albedo texture — derive micro-detail bumps from albedo.
+        // Screen-space bump mapping: luminance gradient → normal perturbation.
+        // This adds skin pores, fabric weave, surface detail without a dedicated normal map.
+        float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
+        float dLdx = dFdx(lum);
+        float dLdy = dFdy(lum);
+
+        vec3 dPdx = dFdx(fragWorldPos);
+        vec3 dPdy = dFdy(fragWorldPos);
+
+        // Perturb normal using luminance gradient (bump strength controls detail intensity)
+        float bumpStrength = 0.4;
+        vec3 bump = -(dLdx * cross(N, dPdy) + dLdy * cross(dPdx, N));
+        N = normalize(N + bump * bumpStrength);
     }
 
     // Per-pixel roughness/metallic from texture (if available)
@@ -98,11 +112,13 @@ void main() {
         metallic = rm.g;
         ao = 1.0;  // no AO texture — default to 1.0
     } else {
-        // No roughness texture — derive per-pixel variation from albedo to break uniform sheen.
-        // Darker albedo areas (creases, folds) get slightly rougher; lighter areas slightly smoother.
-        // This mimics natural surface micro-variation without requiring a dedicated roughness map.
+        // No roughness texture — derive per-pixel variation from albedo.
+        // Darker areas (creases, shadows, folds) → rougher. Lighter areas → smoother.
+        // Also add high-frequency variation from albedo detail for micro-roughness.
         float albedoLum = dot(albedo, vec3(0.299, 0.587, 0.114));
-        roughness = clamp(roughness + (0.5 - albedoLum) * 0.2, 0.04, 1.0);
+        float macroVar = (0.5 - albedoLum) * 0.3;          // broad variation from albedo tone
+        float microVar = (dFdx(albedoLum) + dFdy(albedoLum)) * 2.0; // detail edges → rougher
+        roughness = clamp(roughness + macroVar + abs(microVar), 0.04, 1.0);
     }
 
     // GBuffer0: World Position + Metallic
