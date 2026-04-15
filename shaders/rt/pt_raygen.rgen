@@ -369,14 +369,11 @@ void main() {
             prevPixel = clamp(prevPixel, ivec2(0), ivec2(pc.params.xy) - 1);
             vec4 history = imageLoad(accumBuffer, prevPixel);
 
-            // Blend: exponential moving average
-            // More history weight = smoother but more ghosting
-            // Less = noisier but more responsive
-            float alpha = 0.1;  // 10% new, 90% history
-            acc = mix(history.rgb, radiance, alpha);
-            count = min(history.w + 1.0, 64.0);  // cap accumulation
+            // Progressive accumulation — proper running average, never overexposes
+            count = history.w + 1.0;
+            acc = (history.rgb * history.w + radiance) / count;
         } else {
-            // Disoccluded or first frame — use progressive accumulation
+            // Disoccluded or first frame — start fresh accumulation
             count = prev.w + 1.0;
             acc = (prev.rgb * prev.w + radiance) / count;
         }
