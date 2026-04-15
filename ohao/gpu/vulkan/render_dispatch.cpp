@@ -172,10 +172,11 @@ void VulkanRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Use the engine camera's view/projection matrices directly
+    // PT needs unflipped projection (ray generation handles Y internally).
+    // Use same FOV/aspect as deferred for consistent framing.
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptView = m_camera->getViewMatrix();
-    glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
+    glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Sphere light: position, intensity, color, radius
     m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
