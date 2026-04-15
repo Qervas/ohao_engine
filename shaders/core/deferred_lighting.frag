@@ -332,12 +332,14 @@ void main() {
     float NdotV = max(dot(N, viewDir), 0.0);
     vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
 
-    // Reflection: strong on metallic + glossy, subtle on dielectric
-    vec3 envReflection = envColor * F * (1.0 - roughness * roughness);
+    // Reflection: strong on metallic + glossy, suppressed on rough dielectrics
+    // Use roughness^4 falloff (steeper than roughness^2) for more natural dielectric look
+    float reflectionFade = (1.0 - roughness * roughness) * (1.0 - roughness * roughness);
+    vec3 envReflection = envColor * F * reflectionFade;
 
     // Diffuse ambient from env map (irradiance approximation)
     vec2 diffEnvUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
-    vec3 irradiance = texture(envMap, diffEnvUV).rgb * 0.3;  // rough approximation
+    vec3 irradiance = texture(envMap, diffEnvUV).rgb * 0.3;
     vec3 kD = (1.0 - F) * (1.0 - metallic);
     ambient += envReflection + kD * irradiance * albedo;
 
