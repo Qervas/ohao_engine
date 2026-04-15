@@ -73,16 +73,16 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
     result.cameraPosition = {0, modelCenterY, S * 1.7f};
     result.cameraFov = 45.0f;
 
-    // Soft studio setup — large radius lights for diffuse, natural look
+    // 4-light studio setup (tuned for S=15 room)
     result.lights = {
-        // Key light — warm, upper right, large radius for soft shadows
-        {"KeyLight",  {5.0f, 8.0f, 10.0f}, {1.0f, 0.95f, 0.9f}, 100.0f, 4.0f},
+        // Key light — warm, strong, upper right
+        {"KeyLight",  {5.0f, 8.0f, 10.0f}, {1.0f, 0.95f, 0.9f}, 200.0f, 2.0f},
         // Fill light — cool, softer, left side
-        {"FillLight", {-5.0f, 6.0f, 8.0f}, {0.7f, 0.8f, 1.0f}, 40.0f, 4.0f},
-        // Rim light — subtle back light for depth
-        {"RimLight",  {0.0f, 5.0f, -8.0f}, {1.0f, 0.85f, 0.7f}, 30.0f, 3.0f},
-        // Front fill — very soft face light
-        {"FrontFill", {0.0f, 3.0f, 15.0f}, {1.0f, 0.95f, 0.9f}, 20.0f, 5.0f},
+        {"FillLight", {-5.0f, 6.0f, 8.0f}, {0.7f, 0.8f, 1.0f}, 80.0f, 2.0f},
+        // Rim light — warm back light for depth
+        {"RimLight",  {0.0f, 5.0f, -8.0f}, {1.0f, 0.85f, 0.7f}, 60.0f, 1.5f},
+        // Front fill — soft face light
+        {"FrontFill", {0.0f, 3.0f, 15.0f}, {1.0f, 0.95f, 0.9f}, 40.0f, 3.0f},
     };
 
     return result;

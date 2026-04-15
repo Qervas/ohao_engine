@@ -102,8 +102,13 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
     // Cook-Torrance specular BRDF
     vec3 numerator = D * G * F;
     float denominator = 4.0 * NdotV * NdotL;
+    vec3 spec = numerator / max(denominator, EPSILON);
 
-    return numerator / max(denominator, EPSILON);
+    // Damp specular on very rough non-metallic surfaces (roughness > 0.7)
+    // Physically, rough dielectrics scatter specular energy so broadly it becomes invisible.
+    // This prevents "plastic sheen" on skin/fabric without affecting metals or smooth surfaces.
+    float dielectricDamp = mix(1.0, 0.25, smoothstep(0.7, 1.0, roughness) * (1.0 - length(F0) / 1.732));
+    return spec * dielectricDamp;
 }
 
 // Evaluate the complete PBR BRDF (diffuse + specular)
