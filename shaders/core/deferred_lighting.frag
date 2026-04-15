@@ -259,17 +259,35 @@ void main() {
         ambient += ssgiColor * ao;
     }
 
-    // Metallic ambient reflection — metals need something to reflect.
-    // Without env map or RT, approximate by reflecting the ambient room color.
-    // Only affects metallic > 0.5 (visor, chrome, jewelry). Skin/fabric unaffected.
-    if (metallic > 0.5) {
+    // Image-based lighting — only when env map is loaded.
+    // No env map = no IBL (direct lights + RTGI handle ambient instead).
+    // Prevents fake gradient reflections that make skin look plastic.
+    if (textureSize(envMap, 0).x > 1) {
         vec3 V = normalize(pc.cameraPos - fragPos);
         vec3 R = reflect(-V, N);
-        // Simple sky/ground gradient based on reflection direction
-        float upness = R.y * 0.5 + 0.5;
-        vec3 reflColor = mix(vec3(0.15, 0.12, 0.10), vec3(0.4, 0.38, 0.35), upness);
-        float reflStrength = metallic * (1.0 - roughness * 0.7);
-        ambient += reflColor * albedo * reflStrength;
+        float NdotV = max(dot(N, V), 0.0);
+
+        float phi = atan(R.z, R.x);
+        float theta = asin(clamp(R.y, -1.0, 1.0));
+        vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
+        vec3 envColor = texture(envMap, envUV).rgb;
+
+        // Blur by roughness
+        vec3 avgEnv = mix(envColor, vec3(dot(envColor, vec3(0.333))), roughness * roughness);
+
+        // Fresnel: metals get full Fresnel, dielectrics only get F0 (no grazing boost)
+        vec3 F0 = mix(vec3(0.04), albedo, metallic);
+        vec3 F = mix(F0, F0 + (vec3(1.0) - F0) * pow(1.0 - NdotV, 5.0), metallic);
+
+        // Specular IBL with roughness^4 falloff
+        float r2 = roughness * roughness;
+        vec3 specIBL = avgEnv * F * (1.0 - r2) * (1.0 - r2);
+
+        // Diffuse IBL
+        vec3 kD = (1.0 - F0) * (1.0 - metallic);
+        vec3 diffIBL = kD * albedo * avgEnv * 0.1;
+
+        ambient += specIBL + diffIBL;
     }
 
     // Emissive — self-illuminating surfaces (glow independent of lighting)
