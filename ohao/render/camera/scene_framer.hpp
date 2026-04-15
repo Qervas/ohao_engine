@@ -36,7 +36,8 @@ struct FrameResult {
 class SceneFramer {
 public:
     // Compute framing for a model based on its vertex data
-    static FrameResult computeFraming(const std::vector<Vertex>& vertices);
+    // forceYUp: set true for formats that guarantee Y-up (GLB/glTF)
+    static FrameResult computeFraming(const std::vector<Vertex>& vertices, bool forceYUp = false);
 
     // Apply lights from a FrameResult to a scene
     static void applyLights(Scene* scene, const FrameResult& result);

@@ -7,10 +7,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace ohao {
 
-FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices) {
+FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, bool forceYUp) {
     FrameResult result;
 
     // Compute AABB
@@ -23,8 +24,12 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices) {
     glm::vec3 center = (bmin + bmax) * 0.5f;
 
     // Detect up axis: most models are Y-up, some are Z-up
-    bool isYUp = (extent.y >= extent.z);
+    // GLB/glTF spec mandates Y-up, so forceYUp overrides the extent check
+    bool isYUp = forceYUp || (extent.y >= extent.z);
+    // modelHeight = the extent along the up axis (used for camera centering)
+    // For forced Y-up with atypical models, still use the actual Y extent
     float modelHeight = isYUp ? extent.y : extent.z;
+
 
 
     // Fixed comfortable room size — model is scaled to fit
@@ -35,32 +40,43 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices) {
     float maxExtent = std::max({extent.x, extent.y, extent.z});
     result.modelScale = (S * 1.2f) / std::max(maxExtent, 0.001f);
 
-    // Rotation: face camera, handle Z-up conversion
+    // Rotation + position: handle Y-up vs Z-up
+    float scale = result.modelScale;
+    bool posZIsUp = true;  // only used for Z-up models
+
     if (isYUp) {
         result.modelRotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
-    } else {
-        // Z-up: rotate -90° around X to convert +Z→+Y (head up)
-        // Then check if feet are at min or max Z to determine direction
-        float zMid = (bmin.z + bmax.z) * 0.5f;
-        // Most Z-up models: +Z is up. Rotate -90° X: +Z→+Y
-        // Some inverted models: -Z is up. Rotate +90° X: -Z→+Y
-        bool posZIsUp = (bmax.z - zMid) >= (zMid - bmin.z);
-        result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));
-    }
-
-    // Position: feet on the floor (Y = -S)
-    float scale = result.modelScale;
-    if (isYUp) {
         float feetOffset = -bmin.y * scale;
         result.modelPosition = {-center.x * scale, -S + feetOffset, -center.z * scale};
     } else {
-        // Z-up: after +90° X rotation, old Z becomes Y. Feet at bmin.z → -bmin.z offset.
-        float feetOffset = -bmin.z * scale;
-        result.modelPosition = {-center.x * scale, -S + feetOffset, center.y * scale};
+        // Z-up: detect which Z direction is "up" using vertex normals at the Z extremes.
+        float topZ = -FLT_MAX;
+        glm::vec3 topNormal(0, 0, 1);
+        for (const auto& v : vertices) {
+            if (v.position.z > topZ) {
+                topZ = v.position.z;
+                topNormal = v.normal;
+            }
+        }
+        posZIsUp = (topNormal.z >= 0.0f);
+        result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));
+
+        if (posZIsUp) {
+            // +Z up: -90° X maps Z→Y. Feet at bmin.z.
+            float feetOffset = -bmin.z * scale;
+            result.modelPosition = {-center.x * scale, -S + feetOffset, center.y * scale};
+        } else {
+            // -Z up: +90° X maps -Z→+Y. Feet at bmax.z.
+            float feetOffset = bmax.z * scale;
+            result.modelPosition = {-center.x * scale, -S + feetOffset, -center.y * scale};
+        }
     }
 
-    // Camera: far enough to see the full model
-    result.cameraPosition = {0, 0, S * 1.7f};
+    // Camera: centered on model vertically (toe to head)
+    // For Z-up models, after rotation the height in Y = modelHeight (the Z extent)
+    float scaledHeight = modelHeight * scale;
+    float modelCenterY = -S + scaledHeight * 0.5f;
+    result.cameraPosition = {0, modelCenterY, S * 1.7f};
     result.cameraFov = 45.0f;
 
     // 4-light studio setup (tuned for S=15 room)
