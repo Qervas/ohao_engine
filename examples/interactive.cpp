@@ -130,7 +130,12 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
 
-    if (!envPath.empty()) renderer.setEnvironmentMap(envPath);
+    // Env map: skip for indoor bedroom scene — interior lights only.
+    // Outdoor HDR penetrates wall gaps and overexposes the room.
+    // Pass "outdoor" as 3rd arg to force env map loading.
+    if (!envPath.empty() && argc > 3 && std::string(argv[3]) == "outdoor") {
+        renderer.setEnvironmentMap(envPath);
+    }
 
     // Load model
     auto model = modelPath.empty() ? nullptr : ModelLoader::load(modelPath);
