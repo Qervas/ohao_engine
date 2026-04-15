@@ -139,9 +139,9 @@ int main(int argc, char* argv[]) {
     };
 
     // === BEDROOM SCENE ===
-    glm::vec3 wallColor(0.82f, 0.78f, 0.72f);   // warm cream walls
-    glm::vec3 floorColor(0.25f, 0.15f, 0.08f);   // dark walnut wood
-    glm::vec3 ceilColor(0.90f, 0.88f, 0.85f);    // off-white ceiling
+    glm::vec3 wallColor(0.55f, 0.50f, 0.45f);   // muted warm gray walls
+    glm::vec3 floorColor(0.18f, 0.10f, 0.05f);  // dark walnut wood
+    glm::vec3 ceilColor(0.60f, 0.58f, 0.55f);   // gray ceiling
 
     // Walls
     addQuad("Back",    {-S,-S,-S}, {S,-S,-S}, {S,S,-S}, {-S,S,-S}, {0,0,1},  wallColor, 0.9f);
