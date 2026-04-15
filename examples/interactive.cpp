@@ -35,7 +35,7 @@ using namespace ohao;
 
 struct CameraState {
     float yaw = -90.0f, pitch = 0.0f;
-    glm::vec3 position = {0, 0, 25};
+    glm::vec3 position = {0, 0, 12};  // inside the room (room Z range: -S to +S)
     float speed = 8.0f;
     float sensitivity = 0.15f;
     bool rightMouseDown = false;
@@ -202,11 +202,12 @@ int main(int argc, char* argv[]) {
     glm::vec3 wallColor(0.82f, 0.78f, 0.72f);
     glm::vec3 floorColor(0.25f, 0.15f, 0.08f);
     glm::vec3 ceilColor(0.90f, 0.88f, 0.85f);
-    addQuad("Back",  {-S,-S,-S},{S,-S,-S},{S,S,-S},{-S,S,-S}, {0,0,1}, wallColor, 0.9f);
-    addQuad("Left",  {-S,-S,-S},{-S,-S,S},{-S,S,S},{-S,S,-S}, {1,0,0}, wallColor, 0.9f);
-    addQuad("Right", {S,-S,S},{S,-S,-S},{S,S,-S},{S,S,S}, {-1,0,0}, wallColor, 0.9f);
-    addQuad("Floor", {-S,-S,-S},{S,-S,-S},{S,-S,S},{-S,-S,S}, {0,1,0}, floorColor, 0.6f);
-    addQuad("Ceiling",{-S,S,-S},{S,S,-S},{S,S,S},{-S,S,S}, {0,-1,0}, ceilColor, 0.9f);
+    addQuad("Back",   {-S,-S,-S},{S,-S,-S},{S,S,-S},{-S,S,-S}, {0,0,1},  wallColor, 0.9f);
+    addQuad("Front",  {S,-S,S},{-S,-S,S},{-S,S,S},{S,S,S},   {0,0,-1}, wallColor, 0.9f);
+    addQuad("Left",   {-S,-S,-S},{-S,-S,S},{-S,S,S},{-S,S,-S},{1,0,0},  wallColor, 0.9f);
+    addQuad("Right",  {S,-S,S},{S,-S,-S},{S,S,-S},{S,S,S},    {-1,0,0}, wallColor, 0.9f);
+    addQuad("Floor",  {-S,-S,-S},{S,-S,-S},{S,-S,S},{-S,-S,S},{0,1,0},  floorColor, 0.6f);
+    addQuad("Ceiling",{-S,S,-S},{S,S,-S},{S,S,S},{-S,S,S},    {0,-1,0}, ceilColor, 0.9f);
 
     // Bed + furniture
     float bedW = S*0.8f, bedH = S*0.25f, bedD = S*0.6f;
