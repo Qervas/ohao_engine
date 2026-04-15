@@ -288,7 +288,9 @@ void main() {
     float greenGI = rightProx * rightFacing * giStrength;
     ambientColor += vec3(redGI, -redGI*0.3, -redGI*0.3);        // red wall bleeds warm
     ambientColor += vec3(-greenGI*0.3, greenGI, -greenGI*0.2);  // green wall bleeds cool
-    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor;
+    // Warm ambient — real indirect light has a warm bias from skin/environment bounce
+    vec3 warmAmbient = vec3(1.05, 0.97, 0.92);  // subtle warm tint (like sunlit room)
+    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor * warmAmbient;
 
     // Subsurface ambient: skin has a warm internal glow even in shadow
     {

@@ -104,10 +104,9 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
     float denominator = 4.0 * NdotV * NdotL;
     vec3 spec = numerator / max(denominator, EPSILON);
 
-    // Damp specular on very rough non-metallic surfaces (roughness > 0.7)
-    // Physically, rough dielectrics scatter specular energy so broadly it becomes invisible.
-    // This prevents "plastic sheen" on skin/fabric without affecting metals or smooth surfaces.
-    float dielectricDamp = mix(1.0, 0.25, smoothstep(0.7, 1.0, roughness) * (1.0 - length(F0) / 1.732));
+    // Damp specular on very rough non-metallic surfaces (roughness > 0.85)
+    // Skin (roughness ~0.9-1.0) gets damped. Clothing/sportswear (0.5-0.8) keeps natural sheen.
+    float dielectricDamp = mix(1.0, 0.2, smoothstep(0.85, 1.0, roughness) * (1.0 - length(F0) / 1.732));
     return spec * dielectricDamp;
 }
 

@@ -53,6 +53,17 @@ vec3 Uncharted2(vec3 x) {
     return curr * whiteScale;
 }
 
+// Filmic tonemapping — softer highlight rolloff than ACES, better mid-tone contrast
+// Based on Jim Hejl's filmic curve (used in many AAA games)
+vec3 FilmicTonemap(vec3 x) {
+    // Pre-curve lift to preserve shadow detail
+    x = max(vec3(0.0), x - 0.004);
+    // Filmic S-curve with gentle highlight compression
+    x = (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
+    // Result is already in gamma space — no need for gamma correction after this
+    return x;
+}
+
 // Neutral tonemapping (logarithmic)
 vec3 NeutralTonemap(vec3 x) {
     const float startCompression = 0.8 - 0.04;
@@ -106,13 +117,18 @@ void main() {
         case 3:
             mapped = NeutralTonemap(hdrColor);
             break;
+        case 4:
+            mapped = FilmicTonemap(hdrColor);
+            break;
         default:
             mapped = ACESFilm(hdrColor);
             break;
     }
 
-    // Apply gamma correction
-    mapped = pow(mapped, vec3(1.0 / params.gamma));
+    // Apply gamma correction (Filmic curve already outputs gamma-space)
+    if (params.tonemapOperator != 4u) {
+        mapped = pow(mapped, vec3(1.0 / params.gamma));
+    }
 
     outColor = vec4(mapped, 1.0);
 }

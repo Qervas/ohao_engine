@@ -13,7 +13,8 @@ enum class TonemapOperator : uint32_t {
     ACES = 0,
     Reinhard = 1,
     Uncharted2 = 2,
-    Neutral = 3
+    Neutral = 3,
+    Filmic = 4        // Soft highlights, good mid-tone contrast (Hejl filmic curve)
 };
 
 // Post-processing pipeline that orchestrates all post-processing passes
@@ -121,7 +122,7 @@ private:
     float m_totalTime{0.0f};
 
     // Tonemapping parameters
-    TonemapOperator m_tonemapOp{TonemapOperator::ACES};
+    TonemapOperator m_tonemapOp{TonemapOperator::Filmic};
     float m_exposure{1.0f};
     float m_gamma{2.2f};
     float m_flashIntensity{0.0f};
