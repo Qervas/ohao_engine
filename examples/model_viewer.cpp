@@ -87,47 +87,86 @@ int main(int argc, char* argv[]) {
 
     auto scene = std::make_unique<Scene>("Model Viewer");
 
-    // Build checkerboard grid walls (subdivided into tiles for visible pattern)
-    auto addGridWall = [&](const std::string& name, glm::vec3 origin, glm::vec3 uAxis, glm::vec3 vAxis,
-                           glm::vec3 normal, int tilesU, int tilesV) {
+    // Helper: create a solid quad (wall/floor/furniture face)
+    auto addQuad = [&](const std::string& name, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+                       glm::vec3 normal, glm::vec3 color, float roughness) {
         auto actor = scene->createActor(name);
-        auto wallModel = std::make_shared<Model>();
-        float tileU = 1.0f / tilesU, tileV = 1.0f / tilesV;
-        for (int iu = 0; iu < tilesU; iu++) {
-            for (int iv = 0; iv < tilesV; iv++) {
-                bool dark = (iu + iv) % 2 == 0;
-                glm::vec3 col = dark ? glm::vec3(0.55f) : glm::vec3(0.85f);
-                float u0 = iu * tileU, u1 = (iu+1) * tileU;
-                float v0 = iv * tileV, v1 = (iv+1) * tileV;
-                glm::vec3 a = origin + uAxis * u0 + vAxis * v0;
-                glm::vec3 b = origin + uAxis * u1 + vAxis * v0;
-                glm::vec3 c = origin + uAxis * u1 + vAxis * v1;
-                glm::vec3 d = origin + uAxis * u0 + vAxis * v1;
-                uint32_t base = static_cast<uint32_t>(wallModel->vertices.size());
-                auto mkv = [&](glm::vec3 pos) {
-                    Vertex v{}; v.position = pos; v.normal = normal; v.color = col;
-                    v.texCoord = {0,0}; v.tangent = {1,0,0,1};
-                    v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
-                    return v;
-                };
-                wallModel->vertices.push_back(mkv(a)); wallModel->vertices.push_back(mkv(b));
-                wallModel->vertices.push_back(mkv(c)); wallModel->vertices.push_back(mkv(d));
-                wallModel->indices.insert(wallModel->indices.end(), {base,base+1,base+2, base,base+2,base+3});
-            }
-        }
+        auto m = std::make_shared<Model>();
+        auto mkv = [&](glm::vec3 pos) {
+            Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
+            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+            return v;
+        };
+        m->vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
+        m->indices = {0,1,2, 0,2,3};
         auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(wallModel); mesh->setVisible(true);
+        mesh->setModel(m); mesh->setVisible(true);
         auto mat = actor->addComponent<MaterialComponent>();
-        mat->getMaterial().baseColor = {0.7f, 0.7f, 0.7f};
-        mat->getMaterial().roughness = 0.95f;
+        mat->getMaterial().baseColor = color;
+        mat->getMaterial().roughness = roughness;
     };
 
-    int tiles = 8;
-    addGridWall("Back",    {-S,-S,-S}, {2*S,0,0}, {0,2*S,0}, {0,0,1},  tiles, tiles);
-    addGridWall("Left",    {-S,-S,-S}, {0,0,2*S}, {0,2*S,0}, {1,0,0},  tiles, tiles);
-    addGridWall("Right",   {S,-S,-S},  {0,0,2*S}, {0,2*S,0}, {-1,0,0}, tiles, tiles);
-    addGridWall("Floor",   {-S,-S,-S}, {2*S,0,0}, {0,0,2*S}, {0,1,0},  tiles, tiles);
-    addGridWall("Ceiling", {-S,S,-S},  {2*S,0,0}, {0,0,2*S}, {0,-1,0}, tiles, tiles);
+    // Helper: create a box (6 faces) for furniture
+    auto addBox = [&](const std::string& name, glm::vec3 lo, glm::vec3 hi,
+                      glm::vec3 color, float roughness, float metallic = 0.0f) {
+        auto actor = scene->createActor(name);
+        auto m = std::make_shared<Model>();
+        auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
+            Vertex v{}; v.position = pos; v.normal = n; v.color = color;
+            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+            return v;
+        };
+        glm::vec3 c[8] = {
+            {lo.x,lo.y,lo.z}, {hi.x,lo.y,lo.z}, {hi.x,hi.y,lo.z}, {lo.x,hi.y,lo.z},
+            {lo.x,lo.y,hi.z}, {hi.x,lo.y,hi.z}, {hi.x,hi.y,hi.z}, {lo.x,hi.y,hi.z}
+        };
+        // 6 faces: front, back, left, right, top, bottom
+        int faces[6][4] = {{4,5,6,7},{1,0,3,2},{0,4,7,3},{5,1,2,6},{3,7,6,2},{0,1,5,4}};
+        glm::vec3 normals[6] = {{0,0,1},{0,0,-1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0}};
+        for (int f = 0; f < 6; f++) {
+            uint32_t base = (uint32_t)m->vertices.size();
+            for (int k = 0; k < 4; k++) m->vertices.push_back(mkv(c[faces[f][k]], normals[f]));
+            m->indices.insert(m->indices.end(), {base,base+1,base+2, base,base+2,base+3});
+        }
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(m); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = color;
+        mat->getMaterial().roughness = roughness;
+        mat->getMaterial().metallic = metallic;
+    };
+
+    // === BEDROOM SCENE ===
+    glm::vec3 wallColor(0.82f, 0.78f, 0.72f);   // warm cream walls
+    glm::vec3 floorColor(0.25f, 0.15f, 0.08f);   // dark walnut wood
+    glm::vec3 ceilColor(0.90f, 0.88f, 0.85f);    // off-white ceiling
+
+    // Walls
+    addQuad("Back",    {-S,-S,-S}, {S,-S,-S}, {S,S,-S}, {-S,S,-S}, {0,0,1},  wallColor, 0.9f);
+    addQuad("Left",    {-S,-S,-S}, {-S,-S,S}, {-S,S,S}, {-S,S,-S}, {1,0,0},  wallColor, 0.9f);
+    addQuad("Right",   {S,-S,S},  {S,-S,-S}, {S,S,-S}, {S,S,S},    {-1,0,0}, wallColor, 0.9f);
+    addQuad("Floor",   {-S,-S,-S},{S,-S,-S}, {S,-S,S}, {-S,-S,S},  {0,1,0},  floorColor, 0.6f);
+    addQuad("Ceiling", {-S,S,-S}, {S,S,-S},  {S,S,S},  {-S,S,S},   {0,-1,0}, ceilColor, 0.9f);
+
+    // Bed — behind the model, against back wall
+    float bedW = S * 0.8f, bedH = S * 0.25f, bedD = S * 0.6f;
+    glm::vec3 bedColor(0.85f, 0.82f, 0.78f);     // linen white sheets
+    glm::vec3 frameColor(0.20f, 0.12f, 0.06f);    // dark wood frame
+    addBox("BedFrame", {-bedW, -S, -S}, {bedW, -S + bedH * 0.4f, -S + bedD}, frameColor, 0.5f);
+    addBox("Mattress", {-bedW + 0.2f, -S + bedH * 0.4f, -S + 0.2f},
+                       {bedW - 0.2f, -S + bedH, -S + bedD - 0.2f}, bedColor, 0.95f);
+    // Headboard
+    addBox("Headboard", {-bedW, -S, -S}, {bedW, -S + bedH * 2.5f, -S + 0.3f}, frameColor, 0.4f);
+    // Pillow
+    addBox("Pillow", {-bedW * 0.4f, -S + bedH, -S + 0.4f},
+                     {bedW * 0.4f, -S + bedH + 1.0f, -S + bedD * 0.4f}, {0.92f, 0.90f, 0.88f}, 0.95f);
+
+    // Nightstand — right side
+    float nsX = S * 0.55f;
+    glm::vec3 nsColor(0.22f, 0.14f, 0.07f);
+    addBox("Nightstand", {nsX, -S, -S}, {nsX + 3.0f, -S + bedH * 1.5f, -S + 3.0f}, nsColor, 0.45f);
 
     if (loaded) {
         float scale = frame.modelScale;

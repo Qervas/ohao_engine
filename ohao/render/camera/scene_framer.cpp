@@ -75,14 +75,14 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
 
     // 4-light studio setup (tuned for S=15 room)
     result.lights = {
-        // Key light — warm, strong, upper right
-        {"KeyLight",  {5.0f, 8.0f, 10.0f}, {1.0f, 0.95f, 0.9f}, 200.0f, 2.0f},
-        // Fill light — cool, softer, left side
-        {"FillLight", {-5.0f, 6.0f, 8.0f}, {0.7f, 0.8f, 1.0f}, 80.0f, 2.0f},
-        // Rim light — warm back light for depth
-        {"RimLight",  {0.0f, 5.0f, -8.0f}, {1.0f, 0.85f, 0.7f}, 60.0f, 1.5f},
-        // Front fill — soft face light
-        {"FrontFill", {0.0f, 3.0f, 15.0f}, {1.0f, 0.95f, 0.9f}, 40.0f, 3.0f},
+        // Ceiling light — warm overhead, simulates bedroom ceiling fixture
+        {"CeilingLight", {0.0f, S * 0.9f, 2.0f}, {1.0f, 0.92f, 0.82f}, 150.0f, 3.0f},
+        // Window light — cool daylight from the right, like a bedroom window
+        {"WindowLight", {S * 0.8f, 3.0f, 5.0f}, {0.85f, 0.9f, 1.0f}, 120.0f, 4.0f},
+        // Bedside lamp — warm point light on the nightstand
+        {"BedsideLamp", {S * 0.55f, -S + 6.0f, -S + 2.0f}, {1.0f, 0.85f, 0.65f}, 40.0f, 1.0f},
+        // Fill — subtle front fill to see the face
+        {"FrontFill", {0.0f, 0.0f, S * 0.9f}, {1.0f, 0.95f, 0.9f}, 30.0f, 3.0f},
     };
 
     return result;
