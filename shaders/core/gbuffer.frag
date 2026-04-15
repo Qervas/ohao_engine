@@ -105,12 +105,12 @@ void main() {
     float ao = pc.materialParams.z;
 
     uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
-    if (roughMetalTexIdx < 4096u) {  // valid bindless index (not AO float or 0xFFFFFFFF)
-        // GLTF convention: G=roughness, B=metallic (already repacked to R=rough, G=metal)
+    if (roughMetalTexIdx < 4096u) {  // valid bindless index
+        // GLTF metallicRoughness texture: R=AO (optional), G=Roughness, B=Metallic
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
-        roughness = rm.r;
-        metallic = rm.g;
-        ao = 1.0;  // no AO texture — default to 1.0
+        roughness = rm.g;
+        metallic = rm.b;
+        ao = rm.r;  // R channel often contains AO in ORM textures
     } else {
         // No roughness texture — derive per-pixel variation from albedo.
         // Darker areas (creases, shadows, folds) → rougher. Lighter areas → smoother.

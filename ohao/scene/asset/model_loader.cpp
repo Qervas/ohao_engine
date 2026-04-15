@@ -317,12 +317,23 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
             model->materialNormalTexIndex[m] = loadAssimpTexture(scene, mat,
                 aiTextureType_HEIGHT, modelDir, model->normalTextures);
 
+        // Roughness/metallic texture (GLTF stores as aiTextureType_UNKNOWN with metallic-roughness)
+        model->materialRoughMetalTexIndex[m] = loadAssimpTexture(scene, mat,
+            aiTextureType_UNKNOWN, modelDir, model->roughMetalTextures);
+        if (model->materialRoughMetalTexIndex[m] < 0)
+            model->materialRoughMetalTexIndex[m] = loadAssimpTexture(scene, mat,
+                aiTextureType_METALNESS, modelDir, model->roughMetalTextures);
+        if (model->materialRoughMetalTexIndex[m] < 0)
+            model->materialRoughMetalTexIndex[m] = loadAssimpTexture(scene, mat,
+                aiTextureType_DIFFUSE_ROUGHNESS, modelDir, model->roughMetalTextures);
+
         model->materialEmissiveTexIndex[m] = loadAssimpTexture(scene, mat,
             aiTextureType_EMISSIVE, modelDir, model->emissiveTextures);
 
         std::cout << "  Material " << m << " (" << matName.C_Str() << "): "
                   << "diffuse=" << (model->materialTextureIndex[m] >= 0 ? "tex" : "color")
                   << " normal=" << (model->materialNormalTexIndex[m] >= 0 ? "tex" : "none")
+                  << " roughMetal=" << (model->materialRoughMetalTexIndex[m] >= 0 ? "tex" : "none")
                   << " rough=" << roughness << " metal=" << metallic << std::endl;
     }
 
