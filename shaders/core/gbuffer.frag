@@ -97,6 +97,12 @@ void main() {
         roughness = rm.r;
         metallic = rm.g;
         ao = 1.0;  // no AO texture — default to 1.0
+    } else {
+        // No roughness texture — derive per-pixel variation from albedo to break uniform sheen.
+        // Darker albedo areas (creases, folds) get slightly rougher; lighter areas slightly smoother.
+        // This mimics natural surface micro-variation without requiring a dedicated roughness map.
+        float albedoLum = dot(albedo, vec3(0.299, 0.587, 0.114));
+        roughness = clamp(roughness + (0.5 - albedoLum) * 0.2, 0.04, 1.0);
     }
 
     // GBuffer0: World Position + Metallic
