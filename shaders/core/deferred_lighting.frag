@@ -55,10 +55,10 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
 // Cloud shadow map (binding 13) — R16F, [0..1], 0=shadowed, 1=clear
 layout(set = 0, binding = 13) uniform sampler2D cloudShadowMap;
 
-// RT shadow mask (binding 14)
+// RT shadow mask (binding 14) — R8, 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR.
 layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
 
-// HDR environment map (binding 15) — equirectangular
+// HDR environment map (binding 15) — kept for descriptor layout compatibility
 layout(set = 0, binding = 15) uniform sampler2D envMap;
 
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
@@ -156,8 +156,7 @@ void main() {
     float metallic = gBuffer0Sample.a;
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
-    float roughness = gBuffer1Sample.b;
-    float emissiveLuminance = gBuffer1Sample.a;  // from GBuffer, emissive texture sampled there
+    float roughness = gBuffer1Sample.b; // B channel = 10 bits in A2R10G10B10
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -209,19 +208,6 @@ void main() {
     // Build BRDF surface once (used for all lights)
     BRDFSurface surface = initBRDFSurface(fragPos, N, V, albedo, metallic, roughness, ao);
 
-    // Skin specular correction: real skin has IOR=1.4 (F0=0.028, not 0.04)
-    // and SSS causes specular to pick up subtle skin color tint.
-    // Without this, white specular on warm skin = porcelain/plastic look.
-    float skinFactor = (1.0 - metallic) *
-                       smoothstep(0.1, 0.35, albedo.r) *
-                       step(albedo.g, albedo.r) *
-                       (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01)));
-    if (skinFactor > 0.01) {
-        // Lower F0 (IOR 1.4 → 0.028) + tint toward skin color (SSS bleed into specular)
-        vec3 skinF0 = mix(vec3(0.028), albedo * 0.15, 0.5);  // half physical, half skin-tinted
-        surface.F0 = mix(surface.F0, skinF0, skinFactor);
-    }
-
     // Accumulate lighting from SSBO data
     vec3 Lo = vec3(0.0);
 
@@ -260,111 +246,19 @@ void main() {
 
         // Cook-Torrance BRDF via include (height-correlated Smith-GGX)
         Lo += evaluateBRDF(surface, L, radiance) * shadow;
-
-        // Subsurface scattering approximation for skin-like materials.
-        // Skin: non-metallic, moderate roughness, warm-toned albedo.
-        // Wrap lighting simulates light transmitting through thin geometry.
-        // Skin detection: non-metallic + warm-toned albedo (red > green)
-        // No roughness dependency — works with any PBR values
-        float isSkin = (1.0 - metallic) *
-                       smoothstep(0.1, 0.35, albedo.r) *               // has red component
-                       step(albedo.g, albedo.r) *                       // red > green (warm tone)
-                       (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01))); // not blue
-
-        if (isSkin > 0.01) {
-            float NdotL = dot(N, L);
-            float wrap = 0.5;
-            float wrapDiffuse = max(0.0, (NdotL + wrap) / (1.0 + wrap));
-            // Standard diffuse for comparison
-            float stdDiffuse = max(0.0, NdotL);
-            // Subsurface contribution = wrapped light minus standard (the extra light)
-            float sssContrib = max(0.0, wrapDiffuse - stdDiffuse);
-
-            // Subsurface color: warm red-orange tint (blood under skin)
-            vec3 sssColor = vec3(1.0, 0.35, 0.15) * albedo;
-            Lo += sssColor * sssContrib * radiance.rgb * shadow * isSkin * 0.6;
-        }
     }
 
-    // Ambient lighting with GI color bleeding approximation
-    // Position-based tint simulates 1-bounce indirect from Cornell box walls
-    vec3 ambientColor = vec3(1.0);
-    float boxSize = 5.0;
-    // Proximity to colored walls: stronger when closer, facing toward the wall
-    float leftProx = max(0.0, 1.0 - (fragPos.x + boxSize) / boxSize);  // 1.0 at left wall, 0 at center
-    float rightProx = max(0.0, (fragPos.x) / boxSize);                  // 1.0 at right wall, 0 at center
-    // Normal-weighted: surfaces facing the wall receive more indirect light
-    float leftFacing = max(0.0, -N.x) * 0.5 + 0.5;  // bias so even parallel surfaces get some
-    float rightFacing = max(0.0, N.x) * 0.5 + 0.5;
-    float giStrength = 0.25;
-    float redGI = leftProx * leftFacing * giStrength;
-    float greenGI = rightProx * rightFacing * giStrength;
-    ambientColor += vec3(redGI, -redGI*0.3, -redGI*0.3);        // red wall bleeds warm
-    ambientColor += vec3(-greenGI*0.3, greenGI, -greenGI*0.2);  // green wall bleeds cool
-    // Warm ambient — real indirect light has a warm bias from skin/environment bounce
-    vec3 warmAmbient = vec3(1.05, 0.97, 0.92);  // subtle warm tint (like sunlit room)
-    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor * warmAmbient;
-
-    // Subsurface ambient: skin has a warm internal glow even in shadow
-    {
-        // Skin detection: non-metallic + warm-toned albedo (red > green)
-        // No roughness dependency — works with any PBR values
-        float isSkin = (1.0 - metallic) *
-                       smoothstep(0.1, 0.35, albedo.r) *
-                       step(albedo.g, albedo.r) *
-                       (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01)));
-        if (isSkin > 0.01) {
-            vec3 sssAmbient = vec3(0.8, 0.3, 0.15) * albedo * lighting.ambientIntensity * 0.4;
-            ambient += sssAmbient * isSkin;
-        }
-    }
+    // Ambient lighting
+    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
-    // RTGI indirect lighting
     if ((pc.flags & 8u) != 0u) {
         vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
-        ambient += ssgiColor * ao;
+        ambient += ssgiColor * albedo * ao;
     }
 
-    // Environment reflection — sample HDR env map in reflection direction
-    vec3 viewDir = normalize(pc.cameraPos - fragPos);
-    vec3 R = reflect(-viewDir, N);
-
-    // Convert reflection direction to equirectangular UV
-    float phi = atan(R.z, R.x);
-    float theta = asin(clamp(R.y, -1.0, 1.0));
-    vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
-
-    // Sample env map — blur based on roughness (mip-like approximation)
-    vec3 envColor = texture(envMap, envUV).rgb;
-
-    // For rough surfaces, blend toward average env color (fake blur)
-    vec3 avgEnv = vec3(0.3, 0.35, 0.4);  // approximate average sky
-    envColor = mix(envColor, avgEnv, roughness * roughness);
-
-    // Fresnel for reflection intensity
-    vec3 F0 = mix(vec3(0.04), albedo, metallic);
-    float NdotV = max(dot(N, viewDir), 0.0);
-    vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
-
-    // Reflection: metals get full env reflection, dielectrics get almost none.
-    // This matches Blender's approach — skin/fabric shouldn't reflect the environment.
-    // Metallic controls the blend: metallic=1 → full reflection, metallic=0 → near zero.
-    float dielectricReflection = (1.0 - roughness * roughness) * (1.0 - roughness * roughness) * 0.3;
-    float reflectionStrength = mix(dielectricReflection, 1.0 - roughness * 0.3, metallic);
-    vec3 envReflection = envColor * F * reflectionStrength;
-
-    // Diffuse ambient from env map (irradiance approximation)
-    vec2 diffEnvUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
-    vec3 irradiance = texture(envMap, diffEnvUV).rgb * 0.3;
-    vec3 kD = (1.0 - F) * (1.0 - metallic);
-    ambient += envReflection + kD * irradiance * albedo;
-
-    // Emissive contribution — self-illuminating surfaces
-    vec3 emissive = albedo * emissiveLuminance;
-
     // Final color
-    vec3 color = ambient + Lo + emissive;
+    vec3 color = ambient + Lo;
 
     // Cloud shadows — applied to final color (not per-light) with 0.3 floor
     if ((pc.flags & 16u) != 0u) {

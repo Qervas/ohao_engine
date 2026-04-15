@@ -122,7 +122,7 @@ private:
     float m_totalTime{0.0f};
 
     // Tonemapping parameters
-    TonemapOperator m_tonemapOp{TonemapOperator::Filmic};
+    TonemapOperator m_tonemapOp{TonemapOperator::ACES};
     float m_exposure{1.0f};
     float m_gamma{2.2f};
     float m_flashIntensity{0.0f};

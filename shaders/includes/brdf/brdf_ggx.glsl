@@ -102,12 +102,8 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
     // Cook-Torrance specular BRDF
     vec3 numerator = D * G * F;
     float denominator = 4.0 * NdotV * NdotL;
-    vec3 spec = numerator / max(denominator, EPSILON);
 
-    // Damp specular on very rough non-metallic surfaces (roughness > 0.85)
-    // Skin (roughness ~0.9-1.0) gets damped. Clothing/sportswear (0.5-0.8) keeps natural sheen.
-    float dielectricDamp = mix(1.0, 0.2, smoothstep(0.85, 1.0, roughness) * (1.0 - length(F0) / 1.732));
-    return spec * dielectricDamp;
+    return numerator / max(denominator, EPSILON);
 }
 
 // Evaluate the complete PBR BRDF (diffuse + specular)

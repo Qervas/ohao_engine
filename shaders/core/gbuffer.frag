@@ -65,10 +65,9 @@ void main() {
         albedo = fragColor * pc.albedoColor.rgb;
     }
 
-    // Normal map: use bindless texture if available, otherwise derive from albedo
+    // Check for bindless normal map
     uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
     if (normalTexIdx != 0xFFFFFFFFu) {
-        // Explicit normal map — use it directly
         vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], fragTexCoord).rgb;
         tangentNormal = tangentNormal * 2.0 - 1.0;
 
@@ -82,21 +81,6 @@ void main() {
         mat3 TBN = mat3(T, B, N);
 
         N = normalize(TBN * tangentNormal);
-    } else if (albedoTexIdx != 0xFFFFFFFFu) {
-        // No normal map but has albedo texture — derive micro-detail bumps from albedo.
-        // Screen-space bump mapping: luminance gradient → normal perturbation.
-        // This adds skin pores, fabric weave, surface detail without a dedicated normal map.
-        float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
-        float dLdx = dFdx(lum);
-        float dLdy = dFdy(lum);
-
-        vec3 dPdx = dFdx(fragWorldPos);
-        vec3 dPdy = dFdy(fragWorldPos);
-
-        // Perturb normal using luminance gradient (bump strength controls detail intensity)
-        float bumpStrength = 0.4;
-        vec3 bump = -(dLdx * cross(N, dPdy) + dLdy * cross(dPdx, N));
-        N = normalize(N + bump * bumpStrength);
     }
 
     // Per-pixel roughness/metallic from texture (if available)
@@ -105,20 +89,12 @@ void main() {
     float ao = pc.materialParams.z;
 
     uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
-    if (roughMetalTexIdx < 4096u) {  // valid bindless index
-        // GLTF metallicRoughness texture: R=AO (optional), G=Roughness, B=Metallic
+    if (roughMetalTexIdx < 4096u) {
+        // GLTF metallicRoughness texture: R=AO, G=Roughness, B=Metallic
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
         roughness = rm.g;
         metallic = rm.b;
-        ao = rm.r;  // R channel often contains AO in ORM textures
-    } else {
-        // No roughness texture — derive per-pixel variation from albedo.
-        // Darker areas (creases, shadows, folds) → rougher. Lighter areas → smoother.
-        // Also add high-frequency variation from albedo detail for micro-roughness.
-        float albedoLum = dot(albedo, vec3(0.299, 0.587, 0.114));
-        float macroVar = (0.5 - albedoLum) * 0.3;          // broad variation from albedo tone
-        float microVar = (dFdx(albedoLum) + dFdy(albedoLum)) * 2.0; // detail edges → rougher
-        roughness = clamp(roughness + macroVar + abs(microVar), 0.04, 1.0);
+        ao = rm.r;
     }
 
     // GBuffer0: World Position + Metallic
