@@ -131,7 +131,6 @@ int main(int argc, char* argv[]) {
     }
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
 
     auto& camera = renderer.getCamera();
     camera.setPosition({0.0f, 0.0f, 13.0f});

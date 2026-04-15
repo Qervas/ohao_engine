@@ -180,7 +180,6 @@ int main(int argc, char* argv[]) {
     }
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
     renderer.setRenderMode(RenderMode::PathTraced);
 
     // Render turntable orbit — adjust radius per mode

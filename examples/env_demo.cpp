@@ -93,7 +93,6 @@ int main(int argc, char* argv[]) {
     keyLight->getTransform()->setPosition({4.0f, 3.0f, 4.0f});
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
 
     auto& camera = renderer.getCamera();
     camera.setPosition({0, 0.5f, 8});

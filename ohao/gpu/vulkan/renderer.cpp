@@ -193,6 +193,8 @@ bool VulkanRenderer::initialize() {
             std::cerr << "GPUSkinning init failed (non-fatal)" << std::endl;
             m_gpuSkinning.reset();
         }
+        // Initialize animated RT manager (dependencies set later during scene setup)
+        m_animatedRT = std::make_unique<AnimatedRTManager>();
 
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
@@ -214,6 +216,10 @@ void VulkanRenderer::shutdown() {
         vkDeviceWaitIdle(m_device);
 
         // Cleanup RT resources BEFORE device destruction
+        if (m_animatedRT) {
+            m_animatedRT->cleanup();
+            m_animatedRT.reset();
+        }
         if (m_gpuSkinning) {
             m_gpuSkinning->cleanup();
             m_gpuSkinning.reset();

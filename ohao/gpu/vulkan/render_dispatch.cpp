@@ -50,9 +50,7 @@ void VulkanRenderer::renderDeferred() {
         }
     }
 
-    // Dynamic BLAS rebuild is done on the deferred render's command buffer
-    // (see below after command buffer begins). For now, pass RT for static scenes only.
-    bool hasDynamicBLAS = hasAnimatedActors && m_gpuSkinning && !m_animatedMeshes.empty();
+    bool hasDynamicBLAS = hasAnimatedActors && m_animatedRT && m_animatedRT->hasAnimatedContent();
 
     if (m_rtAccel && m_rtAccel->isSupported()) {
         m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
@@ -127,109 +125,7 @@ void VulkanRenderer::renderDeferred() {
 
     // ── Dynamic BLAS: compute skinning → fresh BLAS → TLAS rebuild ──
     if (hasDynamicBLAS) {
-        // 1. Destroy previous frame's animated BLASes
-        for (auto blas : m_oldAnimatedBLAS)
-            m_rtAccel->destroyBLAS(blas);
-        m_oldAnimatedBLAS.clear();
-
-        // 2. Compute skinning → global position buffer
-        VkCommandBuffer skinCmd;
-        VkCommandBufferAllocateInfo cmdAlloc{};
-        cmdAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        cmdAlloc.commandPool = m_commandPool;
-        cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        cmdAlloc.commandBufferCount = 1;
-        vkAllocateCommandBuffers(m_device, &cmdAlloc, &skinCmd);
-        VkCommandBufferBeginInfo oneShot{};
-        oneShot.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        oneShot.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(skinCmd, &oneShot);
-
-        for (const auto& am : m_animatedMeshes) {
-            auto actorIt = m_scene->getAllActors().find(am.actorId);
-            if (actorIt == m_scene->getAllActors().end()) continue;
-            auto animComp = actorIt->second->getComponent<AnimationComponent>();
-            if (!animComp || !animComp->isPlaying()) continue;
-            const auto& bones = animComp->getJointMatrices();
-            if (!bones.empty())
-                m_gpuSkinning->skin(skinCmd, am.skinHandle, bones);
-        }
-
-        // 3. BLAS builds from GLOBAL skinned buffer (stride=12, correct offsets)
-        m_rtAccel->ensureScratchBuffer(64 * 1024 * 1024);
-        VkBuffer globalPosBuf = m_gpuSkinning->getGlobalSkinnedPositionBuffer();
-        std::unordered_map<uint64_t, BlasHandle> animatedBlasMap;
-        for (const auto& abi : m_actorBlasList) {
-            if (!abi.isAnimated) continue;
-
-            // Use global buffer with vertex byte offset (stride=12 for packed vec3)
-            VkDeviceSize vertexByteOffset = abi.indexOffset * 0; // not needed — indices are global
-            BlasHandle newBlas = m_rtAccel->createBLASFromPositions(
-                globalPosBuf,              // global skinned position buffer
-                m_vertexCount,             // total vertices in global buffer
-                m_rtIndexBuffer, abi.indexCount,
-                abi.indexOffset * sizeof(uint32_t),
-                skinCmd);
-            if (newBlas != INVALID_BLAS) {
-                animatedBlasMap[abi.actorId] = newBlas;
-                m_oldAnimatedBLAS.push_back(newBlas);
-            }
-            VkMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-            barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-            vkCmdPipelineBarrier(skinCmd,
-                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                0, 1, &barrier, 0, nullptr, 0, nullptr);
-        }
-
-        // 4. Rebuild TLAS + update GI material albedos in same instance order
-        m_rtAccel->clearInstances();
-        std::vector<glm::vec3> giAlbedos;
-        std::vector<float> giFlags;
-        uint32_t triOffset = 0;
-        for (const auto& abi : m_actorBlasList) {
-            auto actorIt = m_scene->getAllActors().find(abi.actorId);
-            if (actorIt == m_scene->getAllActors().end()) continue;
-            auto animIt = animatedBlasMap.find(abi.actorId);
-            BlasHandle blas;
-            if (animIt != animatedBlasMap.end()) {
-                blas = animIt->second;
-            } else if (abi.isAnimated) {
-                continue;
-            } else {
-                blas = abi.originalBlas;
-            }
-            uint32_t mask = (animIt != animatedBlasMap.end()) ? rt::MASK_ANIMATED : rt::MASK_STATIC_ONLY;
-            m_rtAccel->addInstance(blas, actorIt->second->getTransform()->getWorldMatrix(),
-                                   triOffset, mask);
-            triOffset += abi.indexCount / 3;
-
-            // Collect albedo + static flag (alpha: 1.0=static, 0.0=animated)
-            auto matComp = actorIt->second->getComponent<MaterialComponent>();
-            glm::vec3 color = matComp ? matComp->getMaterial().baseColor : glm::vec3(0.73f);
-            float isStatic = (animIt == animatedBlasMap.end()) ? 1.0f : 0.0f;
-            giAlbedos.push_back(color);
-            giFlags.push_back(isStatic);
-        }
-        m_rtAccel->forceTlasRebuild();
-        m_rtAccel->buildTLAS(skinCmd);
-
-        // Update GI material buffer — albedos + static/animated flags
-        if (m_deferredRenderer && m_deferredRenderer->getRT_GI()) {
-            m_deferredRenderer->getRT_GI()->setMaterialAlbedos(giAlbedos, giFlags);
-        }
-
-        // Single submit: compute + all BLAS + TLAS
-        vkEndCommandBuffer(skinCmd);
-        VkSubmitInfo skinSubmit{};
-        skinSubmit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        skinSubmit.commandBufferCount = 1;
-        skinSubmit.pCommandBuffers = &skinCmd;
-        vkQueueSubmit(m_graphicsQueue, 1, &skinSubmit, VK_NULL_HANDLE);
-        vkQueueWaitIdle(m_graphicsQueue);
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &skinCmd);
+        m_animatedRT->update(m_scene, m_rtIndexBuffer, m_vertexCount);
     }
 
 

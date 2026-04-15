@@ -251,10 +251,12 @@ void main() {
         // Subsurface scattering approximation for skin-like materials.
         // Skin: non-metallic, moderate roughness, warm-toned albedo.
         // Wrap lighting simulates light transmitting through thin geometry.
-        float isSkin = (1.0 - metallic) *                              // non-metallic
-                       smoothstep(0.7, 0.95, roughness) *               // matte skin range
-                       smoothstep(0.15, 0.4, albedo.r) *               // has red component
-                       (1.0 - smoothstep(0.0, 0.3, abs(albedo.r - albedo.g - 0.05))); // warm tone
+        // Skin detection: non-metallic + warm-toned albedo (red > green)
+        // No roughness dependency — works with any PBR values
+        float isSkin = (1.0 - metallic) *
+                       smoothstep(0.1, 0.35, albedo.r) *               // has red component
+                       step(albedo.g, albedo.r) *                       // red > green (warm tone)
+                       (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01))); // not blue
 
         if (isSkin > 0.01) {
             float NdotL = dot(N, L);
@@ -290,10 +292,12 @@ void main() {
 
     // Subsurface ambient: skin has a warm internal glow even in shadow
     {
+        // Skin detection: non-metallic + warm-toned albedo (red > green)
+        // No roughness dependency — works with any PBR values
         float isSkin = (1.0 - metallic) *
-                       smoothstep(0.55, 0.85, roughness) *
-                       smoothstep(0.15, 0.4, albedo.r) *
-                       (1.0 - smoothstep(0.0, 0.3, abs(albedo.r - albedo.g - 0.05)));
+                       smoothstep(0.1, 0.35, albedo.r) *
+                       step(albedo.g, albedo.r) *
+                       (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01)));
         if (isSkin > 0.01) {
             vec3 sssAmbient = vec3(0.8, 0.3, 0.15) * albedo * lighting.ambientIntensity * 0.4;
             ambient += sssAmbient * isSkin;

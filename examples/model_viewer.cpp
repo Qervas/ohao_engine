@@ -17,6 +17,7 @@
 #include "animation/animation_component.hpp"
 #include "animation/animation_clip.hpp"
 #include "render/camera/camera.hpp"
+#include "render/camera/scene_framer.hpp"
 #include "render/rt/oidn_denoise.hpp"
 
 #include <iostream>
@@ -56,7 +57,7 @@ int main(int argc, char* argv[]) {
     std::string modelPath = argv[1];
     std::string output = argc > 2 ? argv[2] : "model_output.png";
     int samples = argc > 3 ? std::atoi(argv[3]) : 1024;
-    uint32_t W = 3840, H = 2160;
+    uint32_t W = 1920, H = 1080;  // Default to 1080p (4K causes sub-pixel issues on dense meshes)
 
     std::cout << "OHAO Model Viewer — " << modelPath << std::endl;
     std::cout << W << "x" << H << " @ " << samples << " spp" << std::endl;
@@ -66,16 +67,31 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
 
-    // Room backdrop — 3x larger than Cornell box, checkerboard pattern walls
+    // Load model first — room size adapts to model
+    auto model = ModelLoader::load(modelPath);
+    bool loaded = (model != nullptr);
+
+    // Compute framing (room size, camera, lights) from model bounds
+    FrameResult frame;
+    if (loaded) {
+        frame = SceneFramer::computeFraming(model->vertices);
+    } else {
+        frame.roomHalfSize = 15.0f;
+        frame.modelScale = 1.0f;
+        frame.modelPosition = glm::vec3(0);
+        frame.modelRotation = glm::quat(1, 0, 0, 0);
+        frame.cameraPosition = {0, 0, 25};
+        frame.cameraFov = 45.0f;
+    }
+    const float S = frame.roomHalfSize;
+
     auto scene = std::make_unique<Scene>("Model Viewer");
-    const float S = 15.0f;  // room half-size (30 units total)
-    const glm::vec3 white(0.73f), red(0.65f, 0.05f, 0.05f), green(0.12f, 0.45f, 0.15f);
 
     // Build checkerboard grid walls (subdivided into tiles for visible pattern)
     auto addGridWall = [&](const std::string& name, glm::vec3 origin, glm::vec3 uAxis, glm::vec3 vAxis,
                            glm::vec3 normal, int tilesU, int tilesV) {
         auto actor = scene->createActor(name);
-        auto model = std::make_shared<Model>();
+        auto wallModel = std::make_shared<Model>();
         float tileU = 1.0f / tilesU, tileV = 1.0f / tilesV;
         for (int iu = 0; iu < tilesU; iu++) {
             for (int iv = 0; iv < tilesV; iv++) {
@@ -87,20 +103,20 @@ int main(int argc, char* argv[]) {
                 glm::vec3 b = origin + uAxis * u1 + vAxis * v0;
                 glm::vec3 c = origin + uAxis * u1 + vAxis * v1;
                 glm::vec3 d = origin + uAxis * u0 + vAxis * v1;
-                uint32_t base = static_cast<uint32_t>(model->vertices.size());
+                uint32_t base = static_cast<uint32_t>(wallModel->vertices.size());
                 auto mkv = [&](glm::vec3 pos) {
                     Vertex v{}; v.position = pos; v.normal = normal; v.color = col;
                     v.texCoord = {0,0}; v.tangent = {1,0,0,1};
                     v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
                     return v;
                 };
-                model->vertices.push_back(mkv(a)); model->vertices.push_back(mkv(b));
-                model->vertices.push_back(mkv(c)); model->vertices.push_back(mkv(d));
-                model->indices.insert(model->indices.end(), {base,base+1,base+2, base,base+2,base+3});
+                wallModel->vertices.push_back(mkv(a)); wallModel->vertices.push_back(mkv(b));
+                wallModel->vertices.push_back(mkv(c)); wallModel->vertices.push_back(mkv(d));
+                wallModel->indices.insert(wallModel->indices.end(), {base,base+1,base+2, base,base+2,base+3});
             }
         }
         auto mesh = actor->addComponent<MeshComponent>();
-        mesh->setModel(model); mesh->setVisible(true);
+        mesh->setModel(wallModel); mesh->setVisible(true);
         auto mat = actor->addComponent<MaterialComponent>();
         mat->getMaterial().baseColor = {0.7f, 0.7f, 0.7f};
         mat->getMaterial().roughness = 0.95f;
@@ -113,40 +129,10 @@ int main(int argc, char* argv[]) {
     addGridWall("Floor",   {-S,-S,-S}, {2*S,0,0}, {0,0,2*S}, {0,1,0},  tiles, tiles);
     addGridWall("Ceiling", {-S,S,-S},  {2*S,0,0}, {0,0,2*S}, {0,-1,0}, tiles, tiles);
 
-    // Load model
-    auto model = std::make_shared<Model>();
-    bool loaded = false;
-    auto dot = modelPath.find_last_of('.');
-    std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-    // Unified loader: FBX → ufbx, GLB/GLTF → Assimp, OBJ → native
-    model = ModelLoader::load(modelPath);
-    loaded = (model != nullptr);
-
     if (loaded) {
-        // Auto-frame: compute bounds, scale to fit box
-        glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
-        for (const auto& v : model->vertices) {
-            bmin = glm::min(bmin, v.position);
-            bmax = glm::max(bmax, v.position);
-        }
-        {
-            glm::vec3 ext = bmax - bmin;
-            std::cout << "Model bounds: (" << bmin.x << "," << bmin.y << "," << bmin.z
-                      << ") - (" << bmax.x << "," << bmax.y << "," << bmax.z
-                      << ") extent=(" << ext.x << "," << ext.y << "," << ext.z << ")" << std::endl;
-        }
-        glm::vec3 extent = bmax - bmin;
-        bool isYUp = (extent.y >= extent.z);
-        float modelHeight = isYUp ? extent.y : extent.z;
-        float scale = (S * 1.6f) / modelHeight;
-
-        // Compute shared transform
-        glm::quat rotation = isYUp
-            ? glm::quat(glm::radians(glm::vec3(0, 180, 0)))
-            : glm::quat(glm::radians(glm::vec3(((bmin.z + bmax.z) * 0.5f < 0.0f) ? 90.0f : -90.0f, 0, 0)));
-        glm::vec3 center = (bmin + bmax) * 0.5f;
-        float feetOffset = isYUp ? -bmin.y * scale : 0.0f;
-        glm::vec3 position = {-center.x * scale, -S + feetOffset, isYUp ? -center.z * scale : 0.0f};
+        float scale = frame.modelScale;
+        glm::quat rotation = frame.modelRotation;
+        glm::vec3 position = frame.modelPosition;
 
         // Split model into per-material sub-models for correct multi-material rendering
         bool hasMultipleMaterials = model->materialPerTriangle.size() > 0 &&
@@ -271,49 +257,20 @@ int main(int argc, char* argv[]) {
     // Environment map
     renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");
 
-    // Key light
-    auto keyLight = scene->createActor("KeyLight");
-    auto kl = keyLight->addComponent<LightComponent>();
-    kl->setLightType(LightType::Sphere);
-    kl->setColor({1.0f, 0.95f, 0.9f});
-    kl->setIntensity(200.0f);   // much stronger for larger room
-    kl->setRadius(2.0f);        // larger radius = softer shadows
-    keyLight->getTransform()->setPosition({5.0f, 8.0f, 10.0f});
-
-    // Fill light — softer, from the other side
-    auto fillLight = scene->createActor("FillLight");
-    auto fl = fillLight->addComponent<LightComponent>();
-    fl->setLightType(LightType::Sphere);
-    fl->setColor({0.7f, 0.8f, 1.0f});
-    fl->setIntensity(80.0f);
-    fl->setRadius(2.0f);
-    fillLight->getTransform()->setPosition({-5.0f, 6.0f, 8.0f});
-
-    // Rim light — warm back light for depth
-    auto rimLight = scene->createActor("RimLight");
-    auto rl = rimLight->addComponent<LightComponent>();
-    rl->setLightType(LightType::Sphere);
-    rl->setColor({1.0f, 0.85f, 0.7f});
-    rl->setIntensity(60.0f);
-    rl->setRadius(1.5f);
-    rimLight->getTransform()->setPosition({0.0f, 5.0f, -8.0f});
-
-    // Front fill — soft face light to reduce harsh shadows
-    auto frontFill = scene->createActor("FrontFill");
-    auto ff = frontFill->addComponent<LightComponent>();
-    ff->setLightType(LightType::Sphere);
-    ff->setColor({1.0f, 0.95f, 0.9f});
-    ff->setIntensity(40.0f);
-    ff->setRadius(3.0f);  // large radius = very soft
-    frontFill->getTransform()->setPosition({0.0f, 3.0f, 15.0f});
+    // Auto-framed lights (scaled to room size)
+    SceneFramer::applyLights(scene.get(), frame);
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
+    // Note: setScene() calls updateSceneBuffers() internally — no explicit call needed
 
+    // Auto-framed camera
     auto& camera = renderer.getCamera();
-    camera.setPosition({0, 0, 25});   // further back for larger room
-    camera.setFov(45.0f);
-    camera.setRotation(0.0f, -90.0f);
+    SceneFramer::applyCamera(camera, frame);
+    // Optional 6th arg "back" to view model from the other side
+    if (argc > 5 && std::string(argv[5]) == "back") {
+        camera.setPosition({0, 2, -14});
+        camera.setRotation(0.0f, 90.0f);
+    }
     // Mode: "deferred" for hybrid RT, anything else for path traced
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
 

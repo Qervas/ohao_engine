@@ -176,7 +176,6 @@ int main(int argc, char* argv[]) {
     keyLight->getTransform()->setPosition({4, 3, 4});
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
     renderer.setRenderMode(RenderMode::PathTraced);
 
     // Main loop

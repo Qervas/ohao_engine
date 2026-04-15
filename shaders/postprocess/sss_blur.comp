@@ -39,11 +39,12 @@ const vec3 kernelWeightsR[KERNEL_SIZE] = vec3[](
 );
 
 // Detect skin material (same heuristic as lighting shader)
-float detectSkin(float metallic, float roughness, vec3 albedo) {
+// No roughness dependency — works with any PBR values
+float detectSkin(float metallic, vec3 albedo) {
     return (1.0 - metallic) *
-           smoothstep(0.7, 0.95, roughness) *
-           smoothstep(0.15, 0.4, albedo.r) *
-           (1.0 - smoothstep(0.0, 0.3, abs(albedo.r - albedo.g - 0.05)));
+           smoothstep(0.1, 0.35, albedo.r) *              // has red component
+           step(albedo.g, albedo.r) *                       // red > green (warm tone)
+           (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01))); // not blue
 }
 
 void main() {
@@ -61,7 +62,7 @@ void main() {
     float roughness = normSample.b;
 
     // Check if this pixel is skin
-    float skinFactor = detectSkin(metallic, roughness, albedo);
+    float skinFactor = detectSkin(metallic, albedo);
 
     // Non-skin pixels: pass through unchanged
     if (skinFactor < 0.01) {

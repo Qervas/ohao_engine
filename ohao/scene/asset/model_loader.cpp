@@ -45,19 +45,130 @@ std::string ModelLoader::getExtension(const std::string& path) {
     return ext;
 }
 
+// Mesh repair: merge vertices at the same position and recalculate smooth normals.
+// AI-generated meshes (Meshy, etc.) export "triangle soup" where every triangle has 3 unique
+// vertices. This makes smooth normals impossible — each vertex only sees 1 face.
+// Fix: group vertices by position, accumulate face normals across all triangles at each position,
+// then write back area-weighted smooth normals. Same as Blender's "Shade Smooth" on import.
+static void repairMeshNormals(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+    if (indices.size() < 3 || vertices.empty()) return;
+
+    // Detect triangle soup: if vertexCount == indexCount, no vertices are shared
+    bool isTriangleSoup = (vertices.size() == indices.size());
+
+    // Spatial hash: quantize positions to group vertices at the same location
+    // Use a grid cell size based on mesh bounds
+    glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
+    for (const auto& v : vertices) {
+        bmin = glm::min(bmin, v.position);
+        bmax = glm::max(bmax, v.position);
+    }
+    float meshSize = glm::length(bmax - bmin);
+    float cellSize = meshSize * 1e-5f;  // ~0.001% of mesh size
+    if (cellSize < 1e-7f) cellSize = 1e-7f;
+    float invCell = 1.0f / cellSize;
+
+    // Hash position → list of vertex indices at that position
+    auto posHash = [&](const glm::vec3& p) -> uint64_t {
+        int64_t x = int64_t(std::floor(p.x * invCell));
+        int64_t y = int64_t(std::floor(p.y * invCell));
+        int64_t z = int64_t(std::floor(p.z * invCell));
+        // FNV-1a hash
+        uint64_t h = 14695981039346656037ULL;
+        h ^= uint64_t(x); h *= 1099511628211ULL;
+        h ^= uint64_t(y); h *= 1099511628211ULL;
+        h ^= uint64_t(z); h *= 1099511628211ULL;
+        return h;
+    };
+
+    // Map: position hash → accumulated smooth normal
+    std::unordered_map<uint64_t, glm::vec3> smoothNormals;
+    smoothNormals.reserve(vertices.size() / 2);
+
+    // Accumulate area-weighted face normals at each unique position
+    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+        const glm::vec3& p0 = vertices[indices[i]].position;
+        const glm::vec3& p1 = vertices[indices[i+1]].position;
+        const glm::vec3& p2 = vertices[indices[i+2]].position;
+
+        glm::vec3 faceN = glm::cross(p1 - p0, p2 - p0);
+        // Cross product magnitude = 2x triangle area → area weighting is automatic
+
+        for (uint32_t k = 0; k < 3; k++) {
+            uint64_t h = posHash(vertices[indices[i+k]].position);
+            smoothNormals[h] += faceN;
+        }
+    }
+
+    // Normalize accumulated normals
+    for (auto& [h, n] : smoothNormals) {
+        float len = glm::length(n);
+        if (len > 1e-8f) n /= len;
+        else n = glm::vec3(0, 1, 0);
+    }
+
+    // Write back smooth normals to all vertices
+    uint32_t changed = 0;
+    for (auto& v : vertices) {
+        uint64_t h = posHash(v.position);
+        auto it = smoothNormals.find(h);
+        if (it != smoothNormals.end()) {
+            if (glm::dot(v.normal, it->second) < 0.95f) changed++;
+            v.normal = it->second;
+        }
+    }
+
+    size_t uniquePositions = smoothNormals.size();
+    if (isTriangleSoup || changed > vertices.size() / 10) {
+        std::cout << "[ModelLoader] Mesh repair: " << vertices.size() << " vertices → "
+                  << uniquePositions << " unique positions, "
+                  << changed << " normals smoothed" << std::endl;
+    }
+}
+
 // === Main Entry Point ===
 
 std::shared_ptr<Model> ModelLoader::load(const std::string& path) {
     std::string ext = getExtension(path);
 
+    std::shared_ptr<Model> model;
     if (ext == "obj") {
-        return loadOBJ(path);
+        model = loadOBJ(path);
     } else if (ext == "fbx") {
-        return loadFBX(path);
+        // Try ufbx first (correct rotation orders, animation, embedded textures)
+        model = loadFBX(path);
+        // If ufbx result has no skeleton, retry through Assimp for better mesh processing
+        // (JoinIdenticalVertices, GenSmoothNormals, FixInfacingNormals fix AI-generated meshes)
+        if (model && !model->hasSkeleton()) {
+            auto assimpModel = loadAssimp(path);
+            if (assimpModel && !assimpModel->vertices.empty()) {
+                std::cout << "[ModelLoader] FBX: using Assimp geometry (better mesh cleanup)" << std::endl;
+                // Keep ufbx textures if Assimp didn't find any (ufbx extracts embedded textures better)
+                if (assimpModel->albedoTextures.empty() && !model->albedoTextures.empty()) {
+                    assimpModel->albedoTextures = std::move(model->albedoTextures);
+                    assimpModel->normalTextures = std::move(model->normalTextures);
+                    assimpModel->roughMetalTextures = std::move(model->roughMetalTextures);
+                    assimpModel->emissiveTextures = std::move(model->emissiveTextures);
+                    assimpModel->materialTextureIndex = std::move(model->materialTextureIndex);
+                    assimpModel->materialNormalTexIndex = std::move(model->materialNormalTexIndex);
+                    assimpModel->materialRoughMetalTexIndex = std::move(model->materialRoughMetalTexIndex);
+                    assimpModel->materialEmissiveTexIndex = std::move(model->materialEmissiveTexIndex);
+                    std::cout << "[ModelLoader] Kept ufbx textures (" << assimpModel->albedoTextures.size() << " albedo)" << std::endl;
+                }
+                model = assimpModel;
+            }
+        }
     } else {
         // GLB, GLTF, DAE, etc → Assimp
-        return loadAssimp(path);
+        model = loadAssimp(path);
     }
+
+    // Post-load: fix inverted normals (handles broken AI-generated exports)
+    if (model && !model->vertices.empty()) {
+        repairMeshNormals(model->vertices, model->indices);
+    }
+
+    return model;
 }
 
 // === OBJ Loader (native) ===
@@ -139,11 +250,15 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
 
     unsigned int flags =
         aiProcess_Triangulate |
-        aiProcess_GenNormals |
+        aiProcess_GenSmoothNormals |
         aiProcess_CalcTangentSpace |
         aiProcess_JoinIdenticalVertices |
         aiProcess_LimitBoneWeights |
-        aiProcess_FlipUVs;
+        aiProcess_FlipUVs |
+        aiProcess_FindDegenerates |
+        aiProcess_SortByPType |
+        aiProcess_ImproveCacheLocality |
+        aiProcess_FixInfacingNormals;
 
     const aiScene* scene = importer.ReadFile(path, flags);
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {

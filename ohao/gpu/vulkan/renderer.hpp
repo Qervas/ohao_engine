@@ -13,6 +13,7 @@
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/gpu_skinning.hpp"
+#include "render/rt/animated_rt_manager.hpp"
 
 namespace ohao {
 
@@ -324,23 +325,9 @@ private:
 
     // GPU compute skinning for animated BLAS rebuild
     std::unique_ptr<GPUSkinning> m_gpuSkinning;
-    struct AnimatedMeshInfo {
-        uint32_t skinHandle;     // GPUSkinning mesh handle
-        uint64_t actorId;        // scene actor ID
-    };
-    std::vector<AnimatedMeshInfo> m_animatedMeshes;
-    std::vector<BlasHandle> m_oldAnimatedBLAS;
 
-    // Per-actor BLAS info for TLAS rebuild (built once, used every frame)
-    struct ActorBlasInfo {
-        uint64_t actorId;
-        BlasHandle originalBlas;
-        bool isAnimated;
-        uint32_t triOffset;
-        uint32_t indexCount;
-        uint32_t indexOffset;
-    };
-    std::vector<ActorBlasInfo> m_actorBlasList;
+    // Consolidated animated RT pipeline (skinning → BLAS → TLAS → material sync)
+    std::unique_ptr<AnimatedRTManager> m_animatedRT;
 
     // Sync
     VkFence m_renderFence{VK_NULL_HANDLE};

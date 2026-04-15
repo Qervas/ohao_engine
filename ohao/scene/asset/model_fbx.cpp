@@ -121,36 +121,25 @@ bool Model::loadFromFBX(const std::string& filename) {
 
         // Base color
         ufbx_vec4 color = mat->pbr.base_color.value_vec4;
-        float roughness = float(mat->pbr.roughness.value_real);
         float metallic = float(mat->pbr.metalness.value_real);
 
-        // CC3/Daz FBX often exports identical roughness for all materials.
-        // Override with physically plausible values based on material name.
-        std::string matName = mat->name.data;
-        std::string lower = matName;
-        for (auto& c : lower) c = std::tolower(c);
-
-        if (lower.find("skin") != std::string::npos || lower.find("body") != std::string::npos ||
-            lower.find("head") != std::string::npos || lower.find("arm") != std::string::npos ||
-            lower.find("leg") != std::string::npos || lower.find("nail") != std::string::npos) {
-            roughness = 0.9f;   // skin: mostly matte (real skin is 0.85-0.95)
-        } else if (lower.find("shirt") != std::string::npos || lower.find("pants") != std::string::npos ||
-                   lower.find("waist") != std::string::npos || lower.find("trim") != std::string::npos) {
-            roughness = 0.95f;  // fabric: very matte (no specular hotspots)
-        } else if (lower.find("hair") != std::string::npos || lower.find("scalp") != std::string::npos) {
-            roughness = 0.45f;  // hair: slight sheen
-        } else if (lower.find("eye") != std::string::npos && lower.find("moisture") != std::string::npos) {
-            roughness = 0.05f;  // eye moisture: very glossy
-        } else if (lower.find("eye") != std::string::npos) {
-            roughness = 0.3f;   // eyeball: glossy
-        } else if (lower.find("teeth") != std::string::npos || lower.find("tongue") != std::string::npos ||
-                   lower.find("mouth") != std::string::npos) {
-            roughness = 0.4f;   // wet surfaces
-        } else if (lower.find("lash") != std::string::npos) {
-            roughness = 0.6f;
-        } else if (roughness == 0.0f) {
-            roughness = 0.6f;   // safe default
+        // Read roughness from model's PBR data, handling glossiness conversion
+        float roughness = 0.5f;  // sensible default
+        if (mat->pbr.roughness.has_value) {
+            roughness = float(mat->pbr.roughness.value_real);
+            // If the model stores roughness as glossiness, invert it
+            if (mat->features.roughness_as_glossiness.enabled) {
+                roughness = 1.0f - roughness;
+            }
+        } else if (mat->pbr.glossiness.has_value) {
+            // Explicit glossiness map — convert to roughness
+            roughness = 1.0f - float(mat->pbr.glossiness.value_real);
+        } else if (mat->pbr.roughness.texture || mat->pbr.glossiness.texture) {
+            // Has a roughness/glossiness texture but no scalar — use 1.0 (texture controls it)
+            roughness = 1.0f;
         }
+        // Physical minimum: no real dielectric surface has roughness < 0.04
+        roughness = std::max(roughness, 0.04f);
 
         materialColors[mi] = glm::vec4(float(color.x), float(color.y), float(color.z), roughness);
         materialMetallic[mi] = metallic;

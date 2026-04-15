@@ -724,8 +724,9 @@ void VulkanRenderer::buildBLASTLAS() {
         if (blas != INVALID_BLAS) actorBlas[actorId] = blas;
     }
 
-    // Register animated meshes for GPU skinning + dynamic BLAS rebuild
-    m_animatedMeshes.clear();
+    // Register animated meshes and BLAS metadata with AnimatedRTManager
+    std::vector<AnimatedMeshInfo> animMeshes;
+    std::vector<ActorBlasInfo> actorBlasList;
     if (m_gpuSkinning) {
         for (const auto& [actorId, actor] : m_scene->getAllActors()) {
             if (!actor->getComponent<AnimationComponent>()) continue;
@@ -740,18 +741,14 @@ void VulkanRenderer::buildBLASTLAS() {
             AnimatedMeshInfo info{};
             info.skinHandle = skinHandle;
             info.actorId = actorId;
-            m_animatedMeshes.push_back(info);
+            animMeshes.push_back(info);
         }
-        if (!m_animatedMeshes.empty()) {
-            // Create global skinned position buffer (all vertices packed together)
+        if (!animMeshes.empty()) {
             m_gpuSkinning->createGlobalBuffer(m_vertexCount);
-            std::cout << "[RT] Registered " << m_animatedMeshes.size()
+            std::cout << "[RT] Registered " << animMeshes.size()
                       << " animated meshes for GPU skinning" << std::endl;
         }
     }
-
-    // Build per-actor BLAS info list for dynamic TLAS rebuild
-    m_actorBlasList.clear();
     for (const auto& [actorId, actor] : m_scene->getAllActors()) {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
@@ -764,7 +761,13 @@ void VulkanRenderer::buildBLASTLAS() {
         abi.isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
         abi.indexCount = meshIt->second.indexCount;
         abi.indexOffset = meshIt->second.indexOffset;
-        m_actorBlasList.push_back(abi);
+        actorBlasList.push_back(abi);
+    }
+    if (m_animatedRT) {
+        RTGITechnique* rtGI = m_deferredRenderer ? m_deferredRenderer->getRT_GI() : nullptr;
+        m_animatedRT->setDependencies(m_device, m_commandPool, m_graphicsQueue,
+                                       m_gpuSkinning.get(), m_rtAccel.get(), rtGI);
+        m_animatedRT->registerMeshes(std::move(animMeshes), std::move(actorBlasList));
     }
 
     // Build TLAS instances + collect materials in the SAME order
