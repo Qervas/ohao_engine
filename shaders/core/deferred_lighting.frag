@@ -253,9 +253,10 @@ void main() {
     vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
+    // Note: RTGI output already includes surface albedo modulation — don't double-multiply
     if ((pc.flags & 8u) != 0u) {
         vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
-        ambient += ssgiColor * albedo * ao;
+        ambient += ssgiColor * ao;
     }
 
     // Metallic ambient reflection — metals need something to reflect.

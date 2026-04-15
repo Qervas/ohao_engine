@@ -668,6 +668,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     m_height = height;
 
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
+    if (m_rtGI) m_rtGI->resize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);
