@@ -186,7 +186,11 @@ void main() {
             // Sample light and compute contribution based on type
             vec3 lightDir = normalize(light.dirAndParam.xyz);
             float outerAngle = light.extra.w;
-            vec3 Le = lightColor * lightIntensity;
+            // Convert light intensity to radiance (power per unit area)
+            // This matches the deferred pipeline's attenuation-based model
+            float r = max(lightRadius, 0.01);
+            float area = 4.0 * 3.14159 * r * r;
+            vec3 Le = lightColor * lightIntensity / max(area, 0.01);
             vec3 L;
             float shadowDist;
             float weight;  // geometric term * area / PDF
@@ -452,7 +456,7 @@ void main() {
         denoised *= accLum / denLum;
     }
 
-    // Tonemap + gamma
+    // Tonemap + gamma (same exposure as deferred pipeline)
     vec3 ldr = ACES(denoised * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
