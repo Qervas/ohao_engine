@@ -38,8 +38,13 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices) {
     if (isYUp) {
         result.modelRotation = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
     } else {
-        float zCenter = (bmin.z + bmax.z) * 0.5f;
-        result.modelRotation = glm::quat(glm::radians(glm::vec3(zCenter < 0.0f ? 90.0f : -90.0f, 0, 0)));
+        // Z-up: rotate -90° around X to convert +Z→+Y (head up)
+        // Then check if feet are at min or max Z to determine direction
+        float zMid = (bmin.z + bmax.z) * 0.5f;
+        // Most Z-up models: +Z is up. Rotate -90° X: +Z→+Y
+        // Some inverted models: -Z is up. Rotate +90° X: -Z→+Y
+        bool posZIsUp = (bmax.z - zMid) >= (zMid - bmin.z);
+        result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));
     }
 
     // Position: feet on the floor (Y = -S)
