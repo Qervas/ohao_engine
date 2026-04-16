@@ -94,16 +94,13 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
     float NdotH = max(dot(N, H), 0.0);
     float HdotV = max(dot(H, V), 0.0);
 
-    // Cook-Torrance components
+    // Cook-Torrance components — height-correlated Smith-GGX (Frostbite/Blender)
     float D = distributionGGX(NdotH, roughness);
-    float G = geometrySmith(NdotV, NdotL, roughness);
+    float V_term = geometrySmithCorrelated(NdotV, NdotL, roughness); // includes 4*NdotV*NdotL
     F = fresnelSchlick(HdotV, F0);
 
-    // Cook-Torrance specular BRDF
-    vec3 numerator = D * G * F;
-    float denominator = 4.0 * NdotV * NdotL;
-
-    return numerator / max(denominator, EPSILON);
+    // V_term already includes the 1/(4*NdotV*NdotL) denominator
+    return D * V_term * F;
 }
 
 // Evaluate the complete PBR BRDF (diffuse + specular)
@@ -146,8 +143,12 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
     // Energy conservation: diffuse = 1 - Fresnel (what's not reflected is diffused)
     vec3 kD = (vec3(1.0) - F) * (1.0 - surface.metallic);
 
-    // Diffuse BRDF (Lambertian)
-    vec3 diffuse = kD * surface.albedo * INV_PI;
+    // Burley/Disney diffuse (matches Blender's Principled BSDF)
+    // Brighter than Lambertian at high roughness due to retro-reflection,
+    // making specular relatively less prominent on rough dielectric surfaces.
+    vec3 H = normalize(V + L);
+    float LdotH = max(dot(L, H), 0.0);
+    vec3 diffuse = kD * burleyDiffuse(surface.albedo, surface.roughness, NdotV, NdotL, LdotH);
 
     // Multi-scatter GGX energy compensation (Kulla-Conty 2017, Turquin 2019)
     // Single-scatter GGX loses energy at high roughness. The lost energy is

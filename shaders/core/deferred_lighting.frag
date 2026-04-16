@@ -86,9 +86,12 @@ layout(push_constant) uniform PushConstants {
 // Calculate attenuation for point/spot lights
 float calculateAttenuation(vec3 lightPos, vec3 fragPos, float range) {
     float distance = length(lightPos - fragPos);
-    float attenuation = 1.0 / (1.0 + distance * distance / (range * range));
-    float falloff = clamp(1.0 - (distance / range), 0.0, 1.0);
-    return attenuation * falloff * falloff;
+    // Physically-correct inverse-square falloff with smooth range cutoff
+    // Matches Blender/UE5 light attenuation
+    float d2 = distance * distance;
+    float invSq = 1.0 / max(d2, 0.01);  // inverse-square (physical)
+    float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);
+    return invSq * windowing * windowing;
 }
 
 // Spot light cone attenuation
