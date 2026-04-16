@@ -20,6 +20,7 @@ struct Vertex{
     glm::vec3 color;
     glm::vec3 normal;
     glm::vec2 texCoord;
+    glm::vec2 texCoord1{0.0f, 0.0f};    // Second UV set (GLTF texCoord: 1)
     glm::vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};       // xyz = tangent direction, w = handedness (+1/-1)
     glm::ivec4 boneIndices{0, 0, 0, 0};  // Up to 4 bone influences per vertex
     glm::vec4 boneWeights{1.0f, 0.0f, 0.0f, 0.0f};   // Corresponding weights (sum to 1.0)

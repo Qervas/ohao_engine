@@ -7,16 +7,18 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec3 inNormal;
 layout(location = 3) in vec2 inTexCoord;
-layout(location = 4) in vec4 inTangent;
-layout(location = 5) in ivec4 inBoneIndices;
-layout(location = 6) in vec4 inBoneWeights;
+layout(location = 4) in vec2 inTexCoord1;
+layout(location = 5) in vec4 inTangent;
+layout(location = 6) in ivec4 inBoneIndices;
+layout(location = 7) in vec4 inBoneWeights;
 
 layout(location = 0) out vec3 fragWorldPos;
 layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec3 fragColor;
 layout(location = 3) out vec2 fragTexCoord;
-layout(location = 4) out vec4 fragCurrentPos;  // Current frame clip position
-layout(location = 5) out vec4 fragPrevPos;     // Previous frame clip position (for velocity)
+layout(location = 4) out vec2 fragTexCoord1;
+layout(location = 5) out vec4 fragCurrentPos;
+layout(location = 6) out vec4 fragPrevPos;
 
 // Per-object push constants (matches GBufferUBO in C++)
 // Total: 240 bytes (3 mat4 + 3 vec4) — fits within 256-byte NVIDIA limit
@@ -41,6 +43,7 @@ void main() {
     // Pass through vertex color and texture coordinates
     fragColor = inColor;
     fragTexCoord = inTexCoord;
+    fragTexCoord1 = inTexCoord1;
 
     // Current frame clip position
     fragCurrentPos = pc.viewProj * worldPos;

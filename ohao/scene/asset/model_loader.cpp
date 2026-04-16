@@ -390,6 +390,9 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
             v.texCoord = mesh->HasTextureCoords(0)
                 ? glm::vec2(mesh->mTextureCoords[0][vi].x, mesh->mTextureCoords[0][vi].y)
                 : glm::vec2(0);
+            v.texCoord1 = mesh->HasTextureCoords(1)
+                ? glm::vec2(mesh->mTextureCoords[1][vi].x, mesh->mTextureCoords[1][vi].y)
+                : v.texCoord;  // fallback to UV0 if no UV1
             if (mesh->HasTangentsAndBitangents())
                 v.tangent = glm::vec4(toGlm(mesh->mTangents[vi]), 1.0f);
             v.color = glm::vec3(model->materialColors[matIdx]);

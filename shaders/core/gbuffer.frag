@@ -8,8 +8,9 @@ layout(location = 0) in vec3 fragWorldPos;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
 layout(location = 3) in vec2 fragTexCoord;
-layout(location = 4) in vec4 fragCurrentPos;
-layout(location = 5) in vec4 fragPrevPos;
+layout(location = 4) in vec2 fragTexCoord1;
+layout(location = 5) in vec4 fragCurrentPos;
+layout(location = 6) in vec4 fragPrevPos;
 
 // G-Buffer outputs
 // GBuffer0: World Position (rgb) + Metallic (a) - R16G16B16A16_SFLOAT
@@ -65,16 +66,17 @@ void main() {
         albedo = fragColor * pc.albedoColor.rgb;
     }
 
-    // Check for bindless normal map
+    // Check for bindless normal map — uses UV1 (models often map normals to a different UV set)
     uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
     if (normalTexIdx != 0xFFFFFFFFu) {
-        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], fragTexCoord).rgb;
+        vec2 normalUV = fragTexCoord1;  // normal maps typically use UV1 in GLTF
+        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], normalUV).rgb;
         tangentNormal = tangentNormal * 2.0 - 1.0;
 
         vec3 dPdx = dFdx(fragWorldPos);
         vec3 dPdy = dFdy(fragWorldPos);
-        vec2 dUVdx = dFdx(fragTexCoord);
-        vec2 dUVdy = dFdy(fragTexCoord);
+        vec2 dUVdx = dFdx(normalUV);
+        vec2 dUVdy = dFdy(normalUV);
 
         vec3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
         vec3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
@@ -90,8 +92,8 @@ void main() {
 
     uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
     if (roughMetalTexIdx < 4096u) {
-        // GLTF metallicRoughness texture: R=AO, G=Roughness, B=Metallic
-        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
+        // GLTF metallicRoughness texture — uses UV1 (same UV set as normal map)
+        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord1);
         roughness = rm.g;
         metallic = rm.b;
         ao = rm.r;
