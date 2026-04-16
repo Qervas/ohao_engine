@@ -37,9 +37,13 @@ float f0FromIOR(float ior) {
 // Calculate F0 for a metallic surface
 // For dielectrics, F0 is typically around 0.04 (4%)
 // For metals, F0 is the albedo color
+// Metallic is sharpened: values 0-0.35 → dielectric, 0.65-1.0 → metal.
+// This handles models with sloppy metallic values (0.1-0.4 on skin)
+// where the intent is dielectric but the value isn't cleanly 0.
 vec3 calculateF0(vec3 albedo, float metallic) {
+    float sharpenedMetallic = smoothstep(0.35, 0.65, metallic);
     vec3 dielectricF0 = vec3(0.04);
-    return mix(dielectricF0, albedo, metallic);
+    return mix(dielectricF0, albedo, sharpenedMetallic);
 }
 
 // =============================================================================
@@ -119,10 +123,10 @@ BRDFSurface initBRDFSurface(vec3 position, vec3 normal, vec3 viewDir,
     surface.normal = normalize(normal);
     surface.viewDir = normalize(viewDir);
     surface.albedo = albedo;
-    surface.metallic = metallic;
-    surface.roughness = max(roughness, 0.04); // Prevent division by zero
+    surface.metallic = smoothstep(0.35, 0.65, metallic);  // sharpen: 0.3→dielectric, 0.7→metal
+    surface.roughness = max(roughness, 0.04);
     surface.ao = ao;
-    surface.F0 = calculateF0(albedo, metallic);
+    surface.F0 = calculateF0(albedo, metallic);  // already sharpens internally
     return surface;
 }
 
