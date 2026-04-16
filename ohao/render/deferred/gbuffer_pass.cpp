@@ -252,9 +252,6 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             uint32_t albedoTexIdx = UINT32_MAX;
             uint32_t normalTexIdx = UINT32_MAX;
             uint32_t roughMetalTexIdx = UINT32_MAX;
-            uint32_t emissiveTexIdx = UINT32_MAX;
-            float emissiveStrength = 0.0f;
-
             if (m_textureManager && materialComp) {
                 const auto& mat = materialComp->getMaterial();
                 if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
@@ -269,28 +266,37 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                     auto handle = m_textureManager->getTextureByPath(mat.roughnessTexture);
                     if (handle.valid()) roughMetalTexIdx = handle.index;
                 }
-                if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.emissiveTexture);
-                    if (handle.valid()) emissiveTexIdx = handle.index;
-                    emissiveStrength = glm::length(mat.emissive) > 0.01f ? 3.0f : 0.0f;
-                }
             }
 
-            auto packIdx = [](uint32_t idx) -> float {
-                float f; memcpy(&f, &idx, sizeof(float)); return f;
-            };
+            // Pack texture indices as uint bits
+            float packedAlbedoIdx, packedNormalIdx, packedRoughMetalIdx;
+            memcpy(&packedAlbedoIdx, &albedoTexIdx, sizeof(float));
+            memcpy(&packedNormalIdx, &normalTexIdx, sizeof(float));
+            memcpy(&packedRoughMetalIdx, &roughMetalTexIdx, sizeof(float));
+
+            // materialParams.z = roughMetalTexIdx (overloads AO slot)
+            // If no roughMetal texture, pack AO value instead (shader checks for 0xFFFFFFFF)
+            float aoOrRoughMetal = (roughMetalTexIdx != UINT32_MAX) ? packedRoughMetalIdx : ao;
 
             GBufferUBO ubo{};
             ubo.model = modelMatrix;
             ubo.viewProj = m_projection * m_view;
             ubo.prevMVP = m_prevViewProj * modelMatrix;
-            
-            // materialParams: x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
-            ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));
-            // albedoColor: rgb=albedo, a=normalTexIdx
-            ubo.albedoColor = glm::vec4(albedo, packIdx(normalTexIdx));
-            // emissiveParams: x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
-            ubo.emissiveParams = glm::vec4(packIdx(emissiveTexIdx), emissiveStrength, 0.0f, 0.0f);
+            // Emissive texture index
+            uint32_t emissiveTexIdx = UINT32_MAX;
+            if (m_textureManager && materialComp) {
+                const auto& mat = materialComp->getMaterial();
+                if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
+                    auto handle = m_textureManager->getTextureByPath(mat.emissiveTexture);
+                    if (handle.valid()) emissiveTexIdx = handle.index;
+                }
+            }
+            float packedEmissiveIdx;
+            memcpy(&packedEmissiveIdx, &emissiveTexIdx, sizeof(float));
+
+            ubo.materialParams = glm::vec4(metallic, roughness, aoOrRoughMetal, packedAlbedoIdx);
+            ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
+            ubo.emissiveParams = glm::vec4(packedEmissiveIdx, 3.0f, 0, 0);  // strength = 3.0
 
             VkPipelineLayout activeLayout = useSkinning ? m_skinnedPipelineLayout : m_pipelineLayout;
             vkCmdPushConstants(cmd, activeLayout,

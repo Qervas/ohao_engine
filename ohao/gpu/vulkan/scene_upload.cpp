@@ -1,7 +1,6 @@
 #include "renderer_impl.hpp"
 #include <array>
 #include <deque>
-#include "render/camera/camera.hpp"
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/rt/gpu_light.hpp"
@@ -207,48 +206,32 @@ void VulkanRenderer::renderSceneObjects(VkCommandBuffer cmd) {
         // Setup push constants
         ObjectPushConstants pc{};
         pc.model = actor->getTransform()->getWorldMatrix();
-        pc.viewProj = m_camera->getViewProjectionMatrix();
-        pc.prevMVP = pc.viewProj * pc.model; // Fallback: use current if no motion history
-
-        // Material defaults
-        glm::vec3 baseColor(0.8f);
-        float metallic = 0.0f;
-        float roughness = 0.5f;
+        pc.baseColor = glm::vec3(0.8f, 0.8f, 0.8f);  // Default gray
+        pc.metallic = 0.0f;
+        pc.roughness = 0.5f;
+        pc.ao = 1.0f;
 
         // Default: no texture
         uint32_t albedoTexIdx = UINT32_MAX;
         uint32_t normalTexIdx = UINT32_MAX;
-        uint32_t roughMetalTexIdx = UINT32_MAX;
-        uint32_t emissiveTexIdx = UINT32_MAX;
-        float emissiveStrength = 0.0f;
 
         // Get material properties from MaterialComponent
         auto materialComp = actor->getComponent<MaterialComponent>();
         if (materialComp) {
             const auto& mat = materialComp->getMaterial();
-            baseColor = mat.baseColor;
-            metallic = mat.metallic;
-            roughness = mat.roughness;
+            pc.baseColor = mat.baseColor;
+            pc.metallic = mat.metallic;
+            pc.roughness = mat.roughness;
+            pc.ao = mat.ao;
 
             // Look up texture indices for bindless rendering
-            if (m_textureManager) {
-                if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.albedoTexture);
-                    if (handle.valid()) albedoTexIdx = handle.index;
-                }
-                if (mat.useNormalTexture && !mat.normalTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
-                    if (handle.valid()) normalTexIdx = handle.index;
-                }
-                if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.roughnessTexture);
-                    if (handle.valid()) roughMetalTexIdx = handle.index;
-                }
-                if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.emissiveTexture);
-                    if (handle.valid()) emissiveTexIdx = handle.index;
-                    emissiveStrength = glm::length(mat.emissive) > 0.01f ? 3.0f : 0.0f;
-                }
+            if (m_textureManager && mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
+                auto handle = m_textureManager->getTextureByPath(mat.albedoTexture);
+                if (handle.valid()) albedoTexIdx = handle.index;
+            }
+            if (m_textureManager && mat.useNormalTexture && !mat.normalTexture.empty()) {
+                auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
+                if (handle.valid()) normalTexIdx = handle.index;
             }
         }
         // Fallback: get from model materials
@@ -256,18 +239,13 @@ void VulkanRenderer::renderSceneObjects(VkCommandBuffer cmd) {
             auto model = meshComponent->getModel();
             if (model && !model->materials.empty()) {
                 const auto& mat = model->materials.begin()->second;
-                baseColor = mat.diffuse;
-                // Add metallic/roughness from model if needed
+                pc.baseColor = mat.diffuse;
             }
         }
 
-        auto packIdx = [](uint32_t idx) -> float {
-            float f; memcpy(&f, &idx, sizeof(float)); return f;
-        };
-
-        pc.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));
-        pc.albedoColor = glm::vec4(baseColor, packIdx(normalTexIdx));
-        pc.emissiveParams = glm::vec4(packIdx(emissiveTexIdx), emissiveStrength, 0.0f, 0.0f);
+        // Pack texture indices as float bits
+        memcpy(&pc.albedoTexIdx, &albedoTexIdx, sizeof(float));
+        memcpy(&pc.normalTexIdx, &normalTexIdx, sizeof(float));
 
         vkCmdPushConstants(cmd, m_pipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -355,6 +333,10 @@ void VulkanRenderer::renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descr
         // Setup push constants (only model matrix matters for shadow pass)
         ObjectPushConstants pc{};
         pc.model = actor->getTransform()->getWorldMatrix();
+        pc.baseColor = glm::vec3(0.0f);  // Not used in shadow pass
+        pc.metallic = 0.0f;
+        pc.roughness = 0.0f;
+        pc.ao = 0.0f;
 
         vkCmdPushConstants(cmd, m_shadowPipelineLayout,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
