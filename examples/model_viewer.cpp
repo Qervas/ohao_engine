@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
     // No front wall — camera renders from outside looking in
     addQuad("Left",    {-S,-S-E,-S-E},{-S,-S-E,S+E},{-S,S+E,S+E},{-S,S+E,-S-E},  {1,0,0},  wallColor, 0.9f);
     addQuad("Right",   {S,-S-E,S+E},{S,-S-E,-S-E},{S,S+E,-S-E},{S,S+E,S+E},      {-1,0,0}, wallColor, 0.9f);
-    addQuad("Floor",   {-S-E,-S,-S-E},{S+E,-S,-S-E},{S+E,-S,S+E},{-S-E,-S,S+E},  {0,1,0},  floorColor, 0.6f);
+    addQuad("Floor",   {-S-E,-S,-S-E},{S+E,-S,-S-E},{S+E,-S,S+E},{-S-E,-S,S+E},  {0,1,0},  floorColor, 0.95f);
     addQuad("Ceiling", {-S-E,S,-S-E},{S+E,S,-S-E},{S+E,S,S+E},{-S-E,S,S+E},      {0,-1,0}, ceilColor, 0.9f);
 
     // Bed — behind the model, against back wall

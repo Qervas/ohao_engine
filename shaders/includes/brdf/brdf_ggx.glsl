@@ -96,10 +96,9 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
 
     // Cook-Torrance components — height-correlated Smith-GGX (Frostbite/Blender)
     float D = distributionGGX(NdotH, roughness);
-    float V_term = geometrySmithCorrelated(NdotV, NdotL, roughness); // includes 4*NdotV*NdotL
+    float V_term = geometrySmithCorrelated(NdotV, NdotL, roughness);
     F = fresnelSchlick(HdotV, F0);
 
-    // V_term already includes the 1/(4*NdotV*NdotL) denominator
     return D * V_term * F;
 }
 
@@ -140,12 +139,13 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
     vec3 F;
     vec3 specular = evaluateSpecularBRDF(N, V, L, surface.roughness, surface.F0, F);
 
-    // Energy conservation: diffuse = 1 - Fresnel (what's not reflected is diffused)
-    vec3 kD = (vec3(1.0) - F) * (1.0 - surface.metallic);
+    // Diffuse weight: metals have no diffuse. For dielectrics, Burley diffuse
+    // has its own Fresnel handling internally — don't double-count with (1-F).
+    // Using (1 - F0) instead of (1 - F) avoids the "wet rim" darkening at
+    // grazing angles that makes dielectric skin look shiny.
+    vec3 kD = (vec3(1.0) - surface.F0) * (1.0 - surface.metallic);
 
     // Burley/Disney diffuse (matches Blender's Principled BSDF)
-    // Brighter than Lambertian at high roughness due to retro-reflection,
-    // making specular relatively less prominent on rough dielectric surfaces.
     vec3 H = normalize(V + L);
     float LdotH = max(dot(L, H), 0.0);
     vec3 diffuse = kD * burleyDiffuse(surface.albedo, surface.roughness, NdotV, NdotL, LdotH);
