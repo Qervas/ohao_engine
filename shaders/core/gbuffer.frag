@@ -9,8 +9,9 @@ layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
 layout(location = 3) in vec2 fragTexCoord;
 layout(location = 4) in vec2 fragTexCoord1;
-layout(location = 5) in vec4 fragCurrentPos;
-layout(location = 6) in vec4 fragPrevPos;
+layout(location = 5) in vec4 fragTangent;
+layout(location = 6) in vec4 fragCurrentPos;
+layout(location = 7) in vec4 fragPrevPos;
 
 // G-Buffer outputs
 // GBuffer0: World Position (rgb) + Metallic (a) - R16G16B16A16_SFLOAT
@@ -66,20 +67,26 @@ void main() {
         albedo = fragColor * pc.albedoColor.rgb;
     }
 
-    // Check for bindless normal map — uses UV1 (models often map normals to a different UV set)
+    // Check for bindless normal map
     uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
     if (normalTexIdx != 0xFFFFFFFFu) {
-        vec2 normalUV = fragTexCoord1;  // normal maps typically use UV1 in GLTF
+        vec2 normalUV = fragTexCoord;  // Standardize on UV0 for now, same as RT path
         vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], normalUV).rgb;
         tangentNormal = tangentNormal * 2.0 - 1.0;
 
-        vec3 dPdx = dFdx(fragWorldPos);
-        vec3 dPdy = dFdy(fragWorldPos);
-        vec2 dUVdx = dFdx(normalUV);
-        vec2 dUVdy = dFdy(normalUV);
-
-        vec3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
-        vec3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+        vec3 T;
+        vec3 B;
+        if (dot(fragTangent.xyz, fragTangent.xyz) > 1e-6) {
+            T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));
+            B = normalize(cross(N, T)) * fragTangent.w;
+        } else {
+            vec3 dPdx = dFdx(fragWorldPos);
+            vec3 dPdy = dFdy(fragWorldPos);
+            vec2 dUVdx = dFdx(normalUV);
+            vec2 dUVdy = dFdy(normalUV);
+            T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
+            B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+        }
         mat3 TBN = mat3(T, B, N);
 
         N = normalize(TBN * tangentNormal);
@@ -92,12 +99,15 @@ void main() {
 
     uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
     if (roughMetalTexIdx < 4096u) {
-        // GLTF metallicRoughness texture — uses UV1 (same UV set as normal map)
-        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord1);
-        ao = rm.r;         // R channel = AO
-        roughness = rm.g;  // G channel = Roughness
-        metallic = rm.b;   // B channel = Metallic
+        // GLTF metallicRoughness texture — use UV0 to match RT path and standard models
+        vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
+        ao *= rm.r;         // R channel = AO
+        roughness *= rm.g;  // G channel = Roughness
+        metallic *= rm.b;   // B channel = Metallic
     }
+
+    // Safety: don't allow roughness to be absolute zero (causes mirror artifacts)
+    roughness = max(roughness, 0.04);
 
     // GBuffer0: World Position + Metallic
     outGBuffer0 = vec4(fragWorldPos, metallic);

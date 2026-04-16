@@ -483,6 +483,20 @@ const BindlessTextureInfo* BindlessTextureManager::getTextureInfo(BindlessTextur
     return &m_textures[handle.index];
 }
 
+BindlessTextureHandle BindlessTextureManager::findTexture(const std::string& key) const {
+    if (key.empty()) return BindlessTextureHandle{UINT32_MAX};
+    
+    // Check name map first (used by deferred texture bridge)
+    auto it = m_nameToHandle.find(key);
+    if (it != m_nameToHandle.end()) return it->second;
+    
+    // Check path map (used by normal loading)
+    it = m_pathToHandle.find(key);
+    if (it != m_pathToHandle.end()) return it->second;
+    
+    return BindlessTextureHandle{UINT32_MAX};
+}
+
 BindlessTextureHandle BindlessTextureManager::getTextureByName(const std::string& name) const {
     auto it = m_nameToHandle.find(name);
     return it != m_nameToHandle.end() ? it->second : BindlessTextureHandle{UINT32_MAX};
@@ -514,28 +528,28 @@ BindlessTextureHandle BindlessTextureManager::getDefaultTexture(BindlessTextureT
 
 void BindlessTextureManager::updateDescriptorSet() {
     std::vector<VkDescriptorImageInfo> imageInfos;
-    imageInfos.reserve(m_loadedCount);
-
     std::vector<VkWriteDescriptorSet> writes;
+    imageInfos.reserve(m_textures.size());
+    writes.reserve(m_textures.size());
 
     for (uint32_t i = 0; i < m_textures.size(); ++i) {
-        if (m_textures[i].view != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.sampler = m_defaultSampler;
-            imageInfo.imageView = m_textures[i].view;
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfos.push_back(imageInfo);
+        if (m_textures[i].view == VK_NULL_HANDLE) continue;
 
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = m_descriptorSet;
-            write.dstBinding = 0;
-            write.dstArrayElement = i;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &imageInfos.back();
-            writes.push_back(write);
-        }
+        imageInfos.push_back(VkDescriptorImageInfo{
+            m_defaultSampler,
+            m_textures[i].view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        });
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_descriptorSet;
+        write.dstBinding = 0;
+        write.dstArrayElement = i;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfos.back();
+        writes.push_back(write);
     }
 
     if (!writes.empty()) {

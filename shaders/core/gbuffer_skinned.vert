@@ -17,8 +17,9 @@ layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec3 fragColor;
 layout(location = 3) out vec2 fragTexCoord;
 layout(location = 4) out vec2 fragTexCoord1;
-layout(location = 5) out vec4 fragCurrentPos;
-layout(location = 6) out vec4 fragPrevPos;
+layout(location = 5) out vec4 fragTangent;
+layout(location = 6) out vec4 fragCurrentPos;
+layout(location = 7) out vec4 fragPrevPos;
 
 // Per-object push constants (matches GBufferUBO in C++)
 // Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit
@@ -55,6 +56,7 @@ void main() {
     mat3 skinNormalMatrix = transpose(inverse(mat3(skinMatrix)));
     mat3 modelNormalMatrix = transpose(inverse(mat3(pc.model)));
     fragNormal = normalize(modelNormalMatrix * skinNormalMatrix * inNormal);
+    fragTangent = vec4(normalize(modelNormalMatrix * skinNormalMatrix * inTangent.xyz), inTangent.w);
 
     fragColor = inColor;
     fragTexCoord = inTexCoord;

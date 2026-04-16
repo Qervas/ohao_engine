@@ -212,6 +212,8 @@ int main(int argc, char* argv[]) {
                 // Copy only THIS material's textures
                 int albedoIdx = (matIdx < model->materialTextureIndex.size()) ? model->materialTextureIndex[matIdx] : -1;
                 int normalIdx = (matIdx < model->materialNormalTexIndex.size()) ? model->materialNormalTexIndex[matIdx] : -1;
+                int roughMetalIdx = (matIdx < model->materialRoughMetalTexIndex.size()) ? model->materialRoughMetalTexIndex[matIdx] : -1;
+                int emissiveIdx = (matIdx < model->materialEmissiveTexIndex.size()) ? model->materialEmissiveTexIndex[matIdx] : -1;
                 if (albedoIdx >= 0 && albedoIdx < static_cast<int>(model->albedoTextures.size())) {
                     subModel->albedoTextures.push_back(model->albedoTextures[albedoIdx]);
                     subModel->materialTextureIndex.push_back(0);
@@ -223,6 +225,18 @@ int main(int argc, char* argv[]) {
                     subModel->materialNormalTexIndex.push_back(0);
                 } else {
                     subModel->materialNormalTexIndex.push_back(-1);
+                }
+                if (roughMetalIdx >= 0 && roughMetalIdx < static_cast<int>(model->roughMetalTextures.size())) {
+                    subModel->roughMetalTextures.push_back(model->roughMetalTextures[roughMetalIdx]);
+                    subModel->materialRoughMetalTexIndex.push_back(0);
+                } else {
+                    subModel->materialRoughMetalTexIndex.push_back(-1);
+                }
+                if (emissiveIdx >= 0 && emissiveIdx < static_cast<int>(model->emissiveTextures.size())) {
+                    subModel->emissiveTextures.push_back(model->emissiveTextures[emissiveIdx]);
+                    subModel->materialEmissiveTexIndex.push_back(0);
+                } else {
+                    subModel->materialEmissiveTexIndex.push_back(-1);
                 }
 
                 auto actor = scene->createActor("Mesh_" + std::to_string(matIdx));

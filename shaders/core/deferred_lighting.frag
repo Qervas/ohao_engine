@@ -39,6 +39,9 @@ layout(set = 0, binding = 5) uniform LightingUBO {
 // Shadow map — CSM array (4 cascades)
 layout(set = 0, binding = 6) uniform sampler2DArray shadowMap;
 
+// IBL resources
+layout(set = 0, binding = 9) uniform sampler2D brdfLUT;
+
 // SSGI texture (binding 11) — half-res indirect lighting
 layout(set = 0, binding = 11) uniform sampler2D ssgiTexture;
 
@@ -264,8 +267,7 @@ void main() {
 
     // Image-based lighting — only when env map is loaded.
     // No env map = no IBL (direct lights + RTGI handle ambient instead).
-    // Prevents fake gradient reflections that make skin look plastic.
-    if (textureSize(envMap, 0).x > 1) {
+    if ((pc.flags & 1u) != 0u && textureSize(envMap, 0).x > 1) {
         vec3 V = normalize(pc.cameraPos - fragPos);
         vec3 R = reflect(-V, N);
         float NdotV = max(dot(N, V), 0.0);
@@ -273,24 +275,23 @@ void main() {
         float phi = atan(R.z, R.x);
         float theta = asin(clamp(R.y, -1.0, 1.0));
         vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
-        vec3 envColor = texture(envMap, envUV).rgb;
 
-        // Blur by roughness
-        vec3 avgEnv = mix(envColor, vec3(dot(envColor, vec3(0.333))), roughness * roughness);
+        // Approximate IBL from the equirect environment map.
+        // Use the BRDF LUT to keep specular from behaving like a mirror on skin.
+        float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512
+        vec3 prefilteredColor = textureLod(envMap, envUV, lod).rgb;
+        vec3 irradiance = textureLod(envMap, envUV, 9.0).rgb;
 
-        // Fresnel: metals get full Fresnel, dielectrics only get F0 (no grazing boost)
-        vec3 F0 = mix(vec3(0.04), albedo, metallic);
-        vec3 F = mix(F0, F0 + (vec3(1.0) - F0) * pow(1.0 - NdotV, 5.0), metallic);
+        vec3 F = fresnelSchlickRoughness(NdotV, surface.F0, roughness);
+        vec3 kS = F;
+        vec3 kD = 1.0 - kS;
+        kD *= 1.0 - metallic;
+        vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
 
-        // Specular IBL with roughness^4 falloff
-        float r2 = roughness * roughness;
-        vec3 specIBL = avgEnv * F * (1.0 - r2) * (1.0 - r2);
+        vec3 specularAmbient = prefilteredColor * (F * brdf.x + brdf.y);
+        vec3 diffuseAmbient = kD * albedo * irradiance;
 
-        // Diffuse IBL
-        vec3 kD = (1.0 - F0) * (1.0 - metallic);
-        vec3 diffIBL = kD * albedo * avgEnv * 0.1;
-
-        ambient += specIBL + diffIBL;
+        ambient += (specularAmbient + diffuseAmbient) * ao;
     }
 
     // Emissive — self-illuminating surfaces (glow independent of lighting)

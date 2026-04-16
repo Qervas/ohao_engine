@@ -17,8 +17,9 @@ layout(location = 1) out vec3 fragNormal;
 layout(location = 2) out vec3 fragColor;
 layout(location = 3) out vec2 fragTexCoord;
 layout(location = 4) out vec2 fragTexCoord1;
-layout(location = 5) out vec4 fragCurrentPos;
-layout(location = 6) out vec4 fragPrevPos;
+layout(location = 5) out vec4 fragTangent;
+layout(location = 6) out vec4 fragCurrentPos;
+layout(location = 7) out vec4 fragPrevPos;
 
 // Per-object push constants (matches GBufferUBO in C++)
 // Total: 240 bytes (3 mat4 + 3 vec4) — fits within 256-byte NVIDIA limit
@@ -39,6 +40,7 @@ void main() {
     // Transform normal to world space (assuming uniform scaling)
     mat3 normalMatrix = transpose(inverse(mat3(pc.model)));
     fragNormal = normalize(normalMatrix * inNormal);
+    fragTangent = vec4(normalize(normalMatrix * inTangent.xyz), inTangent.w);
 
     // Pass through vertex color and texture coordinates
     fragColor = inColor;

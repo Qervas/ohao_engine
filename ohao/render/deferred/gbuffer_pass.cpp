@@ -7,12 +7,85 @@
 #include "animation/animation_component.hpp"
 #include "../../scene/asset/model.hpp"
 #include <stdexcept>
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <cstring>
 #include <cfloat>
+#include <vector>
 
 namespace ohao {
+
+namespace {
+
+struct MaterialDrawRange {
+    uint32_t materialIndex;
+    uint32_t firstIndex;
+    uint32_t indexCount;
+};
+
+std::vector<MaterialDrawRange> buildMaterialDrawRanges(const Model& model, const MeshBufferInfo& bufferInfo) {
+    std::vector<MaterialDrawRange> ranges;
+    const uint32_t triangleCount = bufferInfo.indexCount / 3;
+    if (triangleCount == 0) return ranges;
+
+    if (model.materialPerTriangle.empty()) {
+        ranges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
+        return ranges;
+    }
+
+    const uint32_t cappedTriangleCount = std::min<uint32_t>(
+        triangleCount, static_cast<uint32_t>(model.materialPerTriangle.size()));
+    if (cappedTriangleCount == 0) {
+        ranges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
+        return ranges;
+    }
+
+    uint32_t runMaterial = model.materialPerTriangle[0];
+    uint32_t runStartTriangle = 0;
+
+    for (uint32_t tri = 1; tri < cappedTriangleCount; ++tri) {
+        const uint32_t materialIndex = model.materialPerTriangle[tri];
+        if (materialIndex == runMaterial) continue;
+
+        ranges.push_back({
+            runMaterial,
+            bufferInfo.indexOffset + runStartTriangle * 3,
+            (tri - runStartTriangle) * 3
+        });
+        runMaterial = materialIndex;
+        runStartTriangle = tri;
+    }
+
+    ranges.push_back({
+        runMaterial,
+        bufferInfo.indexOffset + runStartTriangle * 3,
+        (cappedTriangleCount - runStartTriangle) * 3
+    });
+
+    if (cappedTriangleCount < triangleCount) {
+        ranges.push_back({
+            0u,
+            bufferInfo.indexOffset + cappedTriangleCount * 3,
+            (triangleCount - cappedTriangleCount) * 3
+        });
+    }
+
+    return ranges;
+}
+
+uint32_t findMaterialTextureIndex(BindlessTextureManager* textureManager,
+                                  const Actor& actor,
+                                  const char* suffix,
+                                  uint32_t materialIndex) {
+    if (!textureManager) return UINT32_MAX;
+
+    const std::string textureName = actor.getName() + "_" + suffix + "_" + std::to_string(materialIndex);
+    const auto handle = textureManager->findTexture(textureName);
+    return handle.valid() ? handle.index : UINT32_MAX;
+}
+
+}
 
 GBufferPass::~GBufferPass() {
     cleanup();
@@ -112,9 +185,9 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
 
     // Begin render pass
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
-    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position
-    clearValues[1].color = {{0.5f, 0.5f, 1.0f, 0.0f}}; // Normal (up = 0.5, 0.5, 1.0)
-    clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // Albedo
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)
+    clearValues[1].color = {{0.5f, 0.5f, 0.5f, 0.0f}}; // OctNormal (rg) + Roughness (b) + Emissive (a)
+    clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // Albedo (rgb) + AO (a)
     clearValues[3].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Velocity
     clearValues[4].depthStencil = {1.0f, 0};           // Depth
 
@@ -233,79 +306,99 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 }
             }
 
-            // Get material (optional) - extract properties from Material struct
-            auto materialComp = actor->getComponent<MaterialComponent>();
-            glm::vec3 albedo = materialComp ? materialComp->getMaterial().baseColor : glm::vec3(0.8f);
-            float metallic = materialComp ? materialComp->getMaterial().metallic : 0.0f;
-            float roughness = materialComp ? materialComp->getMaterial().roughness : 0.5f;
-
             // Find buffer info for this actor
             auto it = m_meshBufferMap->find(actorId);
             if (it == m_meshBufferMap->end()) continue;
 
             const MeshBufferInfo& bufferInfo = it->second;
 
-            // Get AO from material if available
-            float ao = materialComp ? materialComp->getMaterial().ao : 1.0f;
+            auto packIdx = [](uint32_t idx) -> float {
+                float f; memcpy(&f, &idx, sizeof(float)); return f;
+            };
+            auto materialComp = actor->getComponent<MaterialComponent>();
 
-            // Look up texture indices for bindless rendering
-            uint32_t albedoTexIdx = UINT32_MAX;
-            uint32_t normalTexIdx = UINT32_MAX;
-            uint32_t roughMetalTexIdx = UINT32_MAX;
-            if (m_textureManager && materialComp) {
-                const auto& mat = materialComp->getMaterial();
-                if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.albedoTexture);
-                    if (handle.valid()) albedoTexIdx = handle.index;
-                }
-                if (mat.useNormalTexture && !mat.normalTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
-                    if (handle.valid()) normalTexIdx = handle.index;
-                }
-                if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.roughnessTexture);
-                    if (handle.valid()) roughMetalTexIdx = handle.index;
-                }
+            std::vector<MaterialDrawRange> drawRanges;
+            if (model && !model->materialColors.empty()) {
+                drawRanges = buildMaterialDrawRanges(*model, bufferInfo);
             }
-
-            // Pack texture indices as uint bits
-            float packedAlbedoIdx, packedNormalIdx, packedRoughMetalIdx;
-            memcpy(&packedAlbedoIdx, &albedoTexIdx, sizeof(float));
-            memcpy(&packedNormalIdx, &normalTexIdx, sizeof(float));
-            memcpy(&packedRoughMetalIdx, &roughMetalTexIdx, sizeof(float));
-
-            // materialParams.z = roughMetalTexIdx (overloads AO slot)
-            // If no roughMetal texture, pack AO value instead (shader checks for 0xFFFFFFFF)
-            float aoOrRoughMetal = (roughMetalTexIdx != UINT32_MAX) ? packedRoughMetalIdx : ao;
-
-            GBufferUBO ubo{};
-            ubo.model = modelMatrix;
-            ubo.viewProj = m_projection * m_view;
-            ubo.prevMVP = m_prevViewProj * modelMatrix;
-            // Emissive texture index
-            uint32_t emissiveTexIdx = UINT32_MAX;
-            if (m_textureManager && materialComp) {
-                const auto& mat = materialComp->getMaterial();
-                if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.emissiveTexture);
-                    if (handle.valid()) emissiveTexIdx = handle.index;
-                }
+            if (drawRanges.empty()) {
+                drawRanges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
             }
-            float packedEmissiveIdx;
-            memcpy(&packedEmissiveIdx, &emissiveTexIdx, sizeof(float));
-
-            ubo.materialParams = glm::vec4(metallic, roughness, aoOrRoughMetal, packedAlbedoIdx);
-            ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
-            ubo.emissiveParams = glm::vec4(packedEmissiveIdx, 3.0f, 0, 0);  // strength = 3.0
 
             VkPipelineLayout activeLayout = useSkinning ? m_skinnedPipelineLayout : m_pipelineLayout;
-            vkCmdPushConstants(cmd, activeLayout,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(GBufferUBO), &ubo);
+            const glm::mat4 viewProj = m_projection * m_view;
+            const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;
 
-            // Draw indexed
-            vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
-                            bufferInfo.indexOffset, 0, 0);
+            for (const MaterialDrawRange& range : drawRanges) {
+                glm::vec3 albedo(0.8f);
+                float metallic = 0.0f;
+                float roughness = 0.5f;
+                uint32_t albedoTexIdx = UINT32_MAX;
+                uint32_t normalTexIdx = UINT32_MAX;
+                uint32_t roughMetalTexIdx = UINT32_MAX;
+                uint32_t emissiveTexIdx = UINT32_MAX;
+                float emissiveStrength = 0.0f;
+
+                const bool hasModelMaterial =
+                    model &&
+                    range.materialIndex < model->materialColors.size();
+
+                if (hasModelMaterial) {
+                    const uint32_t materialIndex = range.materialIndex;
+                    albedo = glm::vec3(model->materialColors[materialIndex]);
+                    roughness = model->materialColors[materialIndex].w;
+                    if (materialIndex < model->materialMetallic.size()) {
+                        metallic = model->materialMetallic[materialIndex];
+                    }
+
+                    albedoTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "albedo", materialIndex);
+                    normalTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "normal", materialIndex);
+                    roughMetalTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "roughmetal", materialIndex);
+                    emissiveTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "emissive", materialIndex);
+                    if (emissiveTexIdx != UINT32_MAX) {
+                        emissiveStrength = 1.0f;
+                    }
+                } else if (materialComp) {
+                    const auto& mat = materialComp->getMaterial();
+                    albedo = mat.baseColor;
+                    metallic = mat.metallic;
+                    roughness = mat.roughness;
+
+                    if (m_textureManager) {
+                        if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.albedoTexture);
+                            if (handle.valid()) albedoTexIdx = handle.index;
+                        }
+                        if (mat.useNormalTexture && !mat.normalTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.normalTexture);
+                            if (handle.valid()) normalTexIdx = handle.index;
+                        }
+                        if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.roughnessTexture);
+                            if (handle.valid()) roughMetalTexIdx = handle.index;
+                        }
+                        if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.emissiveTexture);
+                            if (handle.valid()) emissiveTexIdx = handle.index;
+                            emissiveStrength = glm::length(mat.emissive) > 0.01f ? 1.0f : 0.0f;
+                        }
+                    }
+                }
+
+                GBufferUBO ubo{};
+                ubo.model = modelMatrix;
+                ubo.viewProj = viewProj;
+                ubo.prevMVP = prevMVP;
+                ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));
+                ubo.albedoColor = glm::vec4(albedo, packIdx(normalTexIdx));
+                ubo.emissiveParams = glm::vec4(packIdx(emissiveTexIdx), emissiveStrength, 0.0f, 0.0f);
+
+                vkCmdPushConstants(cmd, activeLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(GBufferUBO), &ubo);
+
+                vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
+            }
         }
     }
 
@@ -359,7 +452,7 @@ bool GBufferPass::createGBuffer() {
 
     std::array<GBufferFormat, GBUFFER_COUNT> formats = {{
         {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
-        {VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
+        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT}
@@ -446,7 +539,7 @@ bool GBufferPass::createRenderPass() {
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // Normal + Roughness
-    attachments[1].format = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+    attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;
     attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
