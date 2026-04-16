@@ -478,7 +478,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
                 if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
                     const auto& img = gltfModel.images[texIdx];
                     if (!img.image.empty() && img.width > 0 && img.height > 0) {
-                        // Repack: GLTF (R=AO, G=roughness, B=metallic) → our (R=roughness, G=metallic, B=0, A=255)
+                        // Repack: GLTF (R=AO, G=roughness, B=metallic) → standard order (R=AO, G=Roughness, B=Metallic, A=255)
                         TextureData td;
                         td.width = img.width;
                         td.height = img.height;
@@ -486,11 +486,12 @@ bool Model::loadFromGLTF(const std::string& filename) {
                         td.pixels.resize(img.width * img.height * 4);
                         int comp = img.component;
                         for (int p = 0; p < img.width * img.height; p++) {
+                            uint8_t ao        = (comp >= 1) ? img.image[p * comp + 0] : 255;  // R channel
                             uint8_t roughness = (comp >= 2) ? img.image[p * comp + 1] : 128;  // G channel
                             uint8_t metallic  = (comp >= 3) ? img.image[p * comp + 2] : 0;    // B channel
-                            td.pixels[p*4+0] = roughness;
-                            td.pixels[p*4+1] = metallic;
-                            td.pixels[p*4+2] = 0;
+                            td.pixels[p*4+0] = ao;
+                            td.pixels[p*4+1] = roughness;
+                            td.pixels[p*4+2] = metallic;
                             td.pixels[p*4+3] = 255;
                         }
                         rmTexFound = static_cast<int>(roughMetalTextures.size());

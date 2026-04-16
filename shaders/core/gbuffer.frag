@@ -88,15 +88,15 @@ void main() {
     // Per-pixel roughness/metallic from texture (if available)
     float metallic = pc.materialParams.x;
     float roughness = pc.materialParams.y;
-    float ao = pc.materialParams.z;
+    float ao = 1.0;
 
     uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
     if (roughMetalTexIdx < 4096u) {
         // GLTF metallicRoughness texture — uses UV1 (same UV set as normal map)
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord1);
-        roughness = rm.g;
-        metallic = rm.b;
-        ao = rm.r;
+        ao = rm.r;         // R channel = AO
+        roughness = rm.g;  // G channel = Roughness
+        metallic = rm.b;   // B channel = Metallic
     }
 
     // GBuffer0: World Position + Metallic

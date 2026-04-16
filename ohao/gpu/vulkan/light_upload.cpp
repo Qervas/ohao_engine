@@ -107,7 +107,7 @@ void VulkanRenderer::uploadDeferredTextures() {
                 std::string texName = actor->getName() + "_emissive_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
                     etd.pixels.data(), etd.width, etd.height, VK_FORMAT_R8G8B8A8_SRGB,
-                    BindlessTextureType::Custom);
+                    BindlessTextureType::Emissive);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
                     matComp->getMaterial().useEmissiveTexture = true;

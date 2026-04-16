@@ -92,17 +92,17 @@ void main() {
     uint roughMetalTexIdx = floatBitsToUint(matParams2.x);
 
     // === Albedo: sample diffuse texture or use base color ===
-    vec3 albedo;
+    vec3 albedo = matColor.rgb;
     if (diffuseTexIdx != 0xFFFFFFFFu) {
-        albedo = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).rgb;
-    } else {
-        albedo = matColor.rgb;
+        vec3 sampled = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).rgb;
+        // RT texture array is UNORM, manual sRGB to Linear conversion
+        albedo *= pow(sampled, vec3(2.2));
     }
 
     // === Normal mapping via Frisvad basis (constructs TBN from normal alone) ===
     if (normalTexIdx != 0xFFFFFFFFu) {
         vec3 mapN = texture(textures[nonuniformEXT(normalTexIdx)], texUV).rgb;
-        mapN = mapN * 2.0 - 1.0;  // [0,1] → [-1,1]
+        mapN = normalize(mapN * 2.0 - 1.0);  // [0,1] → [-1,1] and normalize for stability
 
         // Frisvad orthonormal basis from single normal vector
         vec3 T, B;
@@ -125,16 +125,20 @@ void main() {
     // === PBR params: per-pixel from texture or scalar fallback ===
     float roughness = matParams.x;
     float metallic  = matParams.y;
+    float ao        = 1.0;
     if (roughMetalTexIdx != 0xFFFFFFFFu) {
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], texUV);
-        roughness = rm.r;  // R channel = roughness (repacked from GLTF G channel)
-        metallic  = rm.g;  // G channel = metallic (repacked from GLTF B channel)
+        ao        = rm.r;  // R channel = AO
+        roughness = rm.g;  // G channel = Roughness
+        metallic  = rm.b;  // B channel = Metallic
     }
 
     // === Emissive ===
     vec3 emissive = vec3(0.0);
     if (emissiveTexIdx != 0xFFFFFFFFu) {
-        emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], texUV).rgb;
+        vec3 sampled = texture(textures[nonuniformEXT(emissiveTexIdx)], texUV).rgb;
+        // RT texture array is UNORM, manual sRGB to Linear conversion
+        emissive = pow(sampled, vec3(2.2));
     }
     payload.color = emissive;
 

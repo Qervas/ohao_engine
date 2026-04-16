@@ -334,7 +334,7 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(const std::string& pat
     uint32_t width, height;
     VkFormat format;
 
-    if (!loadTextureData(path, data, width, height, format)) {
+    if (!loadTextureData(path, type, data, width, height, format)) {
         std::cerr << "Failed to load texture: " << path << std::endl;
         return getDefaultTexture(type);
     }
@@ -543,7 +543,7 @@ void BindlessTextureManager::updateDescriptorSet() {
     }
 }
 
-bool BindlessTextureManager::loadTextureData(const std::string& path, std::vector<uint8_t>& outData,
+bool BindlessTextureManager::loadTextureData(const std::string& path, BindlessTextureType type, std::vector<uint8_t>& outData,
                                                uint32_t& width, uint32_t& height, VkFormat& format) {
     int w, h, channels;
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
@@ -554,7 +554,13 @@ bool BindlessTextureManager::loadTextureData(const std::string& path, std::vecto
 
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
-    format = VK_FORMAT_R8G8B8A8_SRGB;
+    
+    // Albedo and Emissive textures are usually sRGB, while others (normal, roughness, etc.) are linear
+    if (type == BindlessTextureType::Albedo || type == BindlessTextureType::Emissive) {
+        format = VK_FORMAT_R8G8B8A8_SRGB;
+    } else {
+        format = VK_FORMAT_R8G8B8A8_UNORM;
+    }
 
     size_t size = width * height * 4;
     outData.resize(size);

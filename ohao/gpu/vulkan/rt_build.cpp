@@ -458,7 +458,7 @@ void VulkanRenderer::uploadRTTextureArray() {
             VkImageCreateInfo imgInfo{};
             imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
             imgInfo.imageType = VK_IMAGE_TYPE_2D;
-            imgInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+            imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
             imgInfo.extent = {targetW, targetH, 1};
             imgInfo.mipLevels = 1;
             imgInfo.arrayLayers = numTextures;
@@ -483,7 +483,7 @@ void VulkanRenderer::uploadRTTextureArray() {
                 viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
                 viewInfo.image = m_rtTextureArray;
                 viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-                viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+                viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
                 viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 viewInfo.subresourceRange.baseMipLevel = 0;
                 viewInfo.subresourceRange.levelCount = 1;
@@ -651,7 +651,7 @@ void VulkanRenderer::uploadRTTextureArray() {
                     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
                     viewInfo.image = m_rtTextureArray;
                     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;  // single layer as 2D
-                    viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+                    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
                     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                     viewInfo.subresourceRange.baseMipLevel = 0;
                     viewInfo.subresourceRange.levelCount = 1;
