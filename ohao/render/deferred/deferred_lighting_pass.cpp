@@ -418,8 +418,10 @@ void DeferredLightingPass::updateDescriptorSets() {
 
     // Binding 15: HDR environment map
     imageInfos[13].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    // Use env map if available, else RT shadow view (or any valid view) as dummy
-    imageInfos[13].imageView = m_envMapView ? m_envMapView : (m_rtShadowView ? m_rtShadowView : imageInfos[0].imageView);
+    // Env map: use actual env map if available, else 1x1 dummy so shader skips IBL.
+    // CRITICAL: previously fell back to GBuffer position texture which was sampled
+    // as a fake env map, producing garbage specular on ALL surfaces!
+    imageInfos[13].imageView = m_envMapView ? m_envMapView : m_dummyView;
     imageInfos[13].sampler = m_envMapSampler ? m_envMapSampler : m_gbufferSampler;
 
     writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
