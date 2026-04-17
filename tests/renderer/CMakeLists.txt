@@ -47,3 +47,12 @@ add_custom_command(TARGET renderer_test POST_BUILD
 )
 
 message(STATUS "Standalone renderer test configured")
+
+# Env CDF unit test
+add_executable(env_cdf_test env_cdf_test.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp
+)
+target_include_directories(env_cdf_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+target_link_libraries(env_cdf_test PRIVATE gtest gtest_main pthread)
+include(GoogleTest)
+gtest_discover_tests(env_cdf_test)
