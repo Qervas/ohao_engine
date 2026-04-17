@@ -121,6 +121,11 @@ void main() {
     vec3 firstHitPos = vec3(0.0);
     float firstHitDist = -1.0;
 
+    // MIS state carried across bounces: PDF of the last BSDF-sampled direction.
+    // Primary ray is a delta (pinhole), so it contributes no MIS weight.
+    float lastBsdfPdf = 1.0;
+    bool  lastBounceWasDelta = true;
+
     for (uint bounce = 0u; bounce <= maxBounces; bounce++) {
         payload.hitDist = -1.0;
         traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
@@ -133,15 +138,14 @@ void main() {
         }
 
         if (payload.hitDist < 0.0) {
-            // miss — escaped scene. MIS-weight the env contribution on non-primary rays;
-            // primary rays are camera-driven and not subject to BSDF-env MIS.
+            // miss — escaped scene. MIS-weight the env contribution on non-primary rays,
+            // using the actual PDF of the BSDF-sampled direction from the previous bounce.
             float envMisWeight = 1.0;
-            if (bounce > 0u && payload.envPdf > 0.0 && pc.control.w > 0u) {
-                // Approximate BSDF PDF of the ray direction that just hit env.
-                // Task 5 replaces this with the actual tracked last-bounce PDF.
-                float bsdfPdfEst = max(1.0 / OHAO_TWOPI, 1e-3);
-                envMisWeight = misBalanceHeuristic(bsdfPdfEst, payload.envPdf);
+            if (bounce > 0u && payload.envPdf > 0.0 && pc.control.w > 0u && !lastBounceWasDelta) {
+                envMisWeight = misBalanceHeuristic(lastBsdfPdf, payload.envPdf);
             }
+            // Delta bounces (near-mirror): no MIS weighting — BSDF PDF is a Dirac delta
+            // and the env-side sampler can't represent it, so we just take the BSDF sample.
             radiance += throughput * payload.color * envMisWeight;
             if (bounce == 0u && enableAOVs) {
                 imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
@@ -388,7 +392,7 @@ void main() {
         if (isMetal) specProb = 1.0;
 
         if (rand01() < specProb || roughness < 0.05) {
-            // Specular bounce
+            vec3 inDir = rayDir;  // capture incoming direction before overwrite
             vec3 reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
                 vec3 jitter = cosineHemisphere(reflected) * roughness;
@@ -399,12 +403,34 @@ void main() {
             rayOrigin = hitPos + N * 0.01;
             throughput *= isMetal ? albedo : vec3(1.0);
             throughput /= max(specProb, 0.01);
+
+            // MIS tracking: PDF of the sampled specular direction
+            if (roughness < 0.05) {
+                // Near-mirror: delta BSDF, no MIS weighting possible
+                lastBsdfPdf = 1.0;
+                lastBounceWasDelta = true;
+            } else {
+                vec3 Hspec = normalize(-inDir + rayDir);
+                float NdotH_s = max(dot(N, Hspec), 0.001);
+                float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                float as = roughness * roughness;
+                float as2 = as * as;
+                float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
+                float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                lastBsdfPdf = specProb * pdf_spec;
+                lastBounceWasDelta = false;
+            }
         } else {
             // Diffuse bounce
             rayDir = cosineHemisphere(N);
             rayOrigin = hitPos + N * 0.01;
             throughput *= albedo;
             throughput /= max(1.0 - specProb, 0.01);
+
+            // MIS tracking: cosine-weighted hemisphere PDF
+            lastBsdfPdf = (1.0 - specProb) * max(dot(rayDir, N), 0.0) / OHAO_PI;
+            lastBounceWasDelta = false;
         }
     }
 
