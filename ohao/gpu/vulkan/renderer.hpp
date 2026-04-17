@@ -328,6 +328,10 @@ private:
     VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
     uint32_t m_rtLightCount{0};
+    VkBuffer m_envMarginalCDFBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_envMarginalCDFMemory{VK_NULL_HANDLE};
+    VkBuffer m_envConditionalCDFBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_envConditionalCDFMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
     VkImage m_rtTextureArray{VK_NULL_HANDLE};

@@ -38,6 +38,9 @@ public:
     virtual std::vector<VkImageView> getBindlessImageViews() const = 0;
     virtual std::vector<VkSampler> getBindlessSamplers() const = 0;
 
+    virtual void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
+                                   uint32_t envWidth, uint32_t envHeight, float integral) = 0;
+
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
     virtual void notifyViewChanged() = 0;
     virtual void resetAccumulation() = 0;
@@ -94,6 +97,11 @@ public:
     }
     std::vector<VkImageView> getBindlessImageViews() const override { return m_pathTracer.getBindlessImageViews(); }
     std::vector<VkSampler> getBindlessSamplers() const override { return m_pathTracer.getBindlessSamplers(); }
+
+    void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
+                          uint32_t envWidth, uint32_t envHeight, float integral) override {
+        m_pathTracer.setEnvCDFBuffers(marginal, conditional, envWidth, envHeight, integral);
+    }
 
     void setRenderSettings(const RTRenderSettings& settings) override {
         m_settings = settings;

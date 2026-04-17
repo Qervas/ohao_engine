@@ -4,6 +4,7 @@
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/rt/gpu_light.hpp"
+#include "render/rt/env_cdf.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "stb_image.h"
 #include "scene/actor/actor.hpp"
@@ -321,7 +322,6 @@ void VulkanRenderer::uploadLightBuffer() {
                     vkMapMemory(m_device, stagingMem, 0, pixelSize, 0, &sm);
                     memcpy(sm, hdrPixels, pixelSize);
                     vkUnmapMemory(m_device, stagingMem);
-                    stbi_image_free(hdrPixels);
 
                     // Copy to image
                     VkCommandBuffer uploadCmd;
@@ -387,6 +387,47 @@ void VulkanRenderer::uploadLightBuffer() {
                     vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
                     m_envMapImageView = envView;  // store for deferred pipeline
 
+                    // === Build env map CDF for MIS ===
+                    EnvCDF envCDF;
+                    envCDF.build(hdrPixels, ew, eh);
+
+                    auto uploadCDFBuffer = [&](const std::vector<float>& data,
+                                                VkBuffer& outBuf, VkDeviceMemory& outMem) {
+                        VkDeviceSize sz = data.size() * sizeof(float);
+                        VkBufferCreateInfo bci{};
+                        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                        bci.size = sz;
+                        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                        vkCreateBuffer(m_device, &bci, nullptr, &outBuf);
+                        VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, outBuf, &mr);
+                        VkMemoryAllocateInfo ai{};
+                        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                        ai.allocationSize = mr.size;
+                        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                        vkAllocateMemory(m_device, &ai, nullptr, &outMem);
+                        vkBindBufferMemory(m_device, outBuf, outMem, 0);
+                        void* dp; vkMapMemory(m_device, outMem, 0, sz, 0, &dp);
+                        memcpy(dp, data.data(), sz);
+                        vkUnmapMemory(m_device, outMem);
+                    };
+
+                    uploadCDFBuffer(envCDF.marginalCDF(),
+                                    m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
+                    uploadCDFBuffer(envCDF.conditionalCDF(),
+                                    m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
+
+                    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                        renderer.setEnvCDFBuffers(
+                            m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
+                            uint32_t(ew), uint32_t(eh), envCDF.integral());
+                    });
+                    std::cout << "[RT] Env CDF built: " << ew << "x" << eh
+                              << " integral=" << envCDF.integral() << std::endl;
+
+                    stbi_image_free(hdrPixels);
+
                     // Add to bindless textures
                     auto views = m_rtOfflineRenderer ? m_rtOfflineRenderer->getBindlessImageViews()
                                                      : std::vector<VkImageView>{};
@@ -408,6 +449,35 @@ void VulkanRenderer::uploadLightBuffer() {
                     std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
                               << " (bindless idx=" << envTexIdx << ")" << std::endl;
                 }
+            }
+
+            // Ensure CDF bindings are valid even without an env map
+            if (!m_envMarginalCDFBuffer || !m_envConditionalCDFBuffer) {
+                auto createDummyCDF = [&](VkBuffer& outBuf, VkDeviceMemory& outMem) {
+                    VkBufferCreateInfo bci{};
+                    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                    bci.size = sizeof(float);
+                    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                    vkCreateBuffer(m_device, &bci, nullptr, &outBuf);
+                    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, outBuf, &mr);
+                    VkMemoryAllocateInfo ai{};
+                    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    ai.allocationSize = mr.size;
+                    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                    vkAllocateMemory(m_device, &ai, nullptr, &outMem);
+                    vkBindBufferMemory(m_device, outBuf, outMem, 0);
+                    void* dp; vkMapMemory(m_device, outMem, 0, sizeof(float), 0, &dp);
+                    float v = 1.0f; memcpy(dp, &v, sizeof(float));
+                    vkUnmapMemory(m_device, outMem);
+                };
+                if (!m_envMarginalCDFBuffer)    createDummyCDF(m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
+                if (!m_envConditionalCDFBuffer) createDummyCDF(m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
+                forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                    renderer.setEnvCDFBuffers(m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
+                                              0, 0, 0.0f);
+                });
             }
 
             forEachRTRenderer([&](IRTRendererProfile& renderer) {

@@ -470,7 +470,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[17] = {};
+    VkDescriptorSetLayoutBinding bindings[19] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -566,22 +566,34 @@ bool PathTracer::createDescriptorResources() {
     bindings[16].descriptorCount = 1;
     bindings[16].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
+    // 17: Env marginal CDF (storage buffer) — accessed by raygen + miss
+    bindings[17].binding = 17;
+    bindings[17].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[17].descriptorCount = 1;
+    bindings[17].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+
+    // 18: Env conditional CDF (storage buffer) — accessed by raygen + miss
+    bindings[18].binding = 18;
+    bindings[18].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[18].descriptorCount = 1;
+    bindings[18].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
+
     // Enable bindless: variable count on the LAST binding only
-    VkDescriptorBindingFlags bindingFlags[17] = {};
+    VkDescriptorBindingFlags bindingFlags[19] = {};
     bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 17;
+    flagsInfo.bindingCount = 19;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 17;
+    layoutInfo.bindingCount = 19;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -591,7 +603,7 @@ bool PathTracer::createDescriptorResources() {
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +1 for light buffer
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},  // +2 for env CDF marginal + conditional
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
 
@@ -924,7 +936,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[17] = {};
+    VkWriteDescriptorSet writes[19] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -1087,6 +1099,36 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[writeCount].pImageInfo = &currShadingHistoryInfo;
     writeCount++;
 
+    // Binding 17: env marginal CDF (only if set — dummy buffers from light_upload guarantee this)
+    VkDescriptorBufferInfo envMargInfo{};
+    if (m_envMarginalCDFBuffer != VK_NULL_HANDLE) {
+        envMargInfo.buffer = m_envMarginalCDFBuffer;
+        envMargInfo.offset = 0;
+        envMargInfo.range = VK_WHOLE_SIZE;
+        writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[writeCount].dstSet = m_descriptorSet;
+        writes[writeCount].dstBinding = 17;
+        writes[writeCount].descriptorCount = 1;
+        writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[writeCount].pBufferInfo = &envMargInfo;
+        writeCount++;
+    }
+
+    // Binding 18: env conditional CDF (only if set)
+    VkDescriptorBufferInfo envCondInfo{};
+    if (m_envConditionalCDFBuffer != VK_NULL_HANDLE) {
+        envCondInfo.buffer = m_envConditionalCDFBuffer;
+        envCondInfo.offset = 0;
+        envCondInfo.range = VK_WHOLE_SIZE;
+        writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[writeCount].dstSet = m_descriptorSet;
+        writes[writeCount].dstBinding = 18;
+        writes[writeCount].descriptorCount = 1;
+        writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[writeCount].pBufferInfo = &envCondInfo;
+        writeCount++;
+    }
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -1219,7 +1261,8 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
     pc.control.y = m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
-    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, 0.0f, 0.0f, 0.0f);
+    pc.control.w = m_envCDFWidth;
+    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral, 0.0f);
 
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;

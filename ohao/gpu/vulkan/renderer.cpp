@@ -287,6 +287,12 @@ void VulkanRenderer::shutdown() {
             vkFreeMemory(m_device, m_lightBufferMemory, nullptr);
         }
 
+        // Cleanup env CDF buffers
+        if (m_envMarginalCDFBuffer)    { vkDestroyBuffer(m_device, m_envMarginalCDFBuffer, nullptr); m_envMarginalCDFBuffer = VK_NULL_HANDLE; }
+        if (m_envMarginalCDFMemory)    { vkFreeMemory(m_device, m_envMarginalCDFMemory, nullptr);    m_envMarginalCDFMemory = VK_NULL_HANDLE; }
+        if (m_envConditionalCDFBuffer) { vkDestroyBuffer(m_device, m_envConditionalCDFBuffer, nullptr); m_envConditionalCDFBuffer = VK_NULL_HANDLE; }
+        if (m_envConditionalCDFMemory) { vkFreeMemory(m_device, m_envConditionalCDFMemory, nullptr);    m_envConditionalCDFMemory = VK_NULL_HANDLE; }
+
         // Cleanup descriptor pool
         if (m_descriptorPool != VK_NULL_HANDLE) {
             vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);

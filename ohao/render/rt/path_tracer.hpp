@@ -122,6 +122,16 @@ public:
     std::vector<VkImageView> getBindlessImageViews() const { return m_bindlessImageViews; }
     std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
 
+    // Env CDF buffers for MIS importance sampling (bindings 17 + 18)
+    void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
+                          uint32_t envWidth, uint32_t envHeight, float integral) {
+        m_envMarginalCDFBuffer   = marginal;
+        m_envConditionalCDFBuffer = conditional;
+        m_envCDFWidth            = envWidth;
+        m_envCDFHeight           = envHeight;
+        m_envCDFIntegral         = integral;
+    }
+
     // Reset accumulation — call when camera moves so the buffer restarts
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
@@ -161,6 +171,13 @@ private:
     VkBuffer m_matColorBuffer = VK_NULL_HANDLE;
     VkBuffer m_lightBuffer = VK_NULL_HANDLE;
     uint32_t m_lightCount = 0;
+
+    // Env CDF storage buffers (bindings 17, 18)
+    VkBuffer m_envMarginalCDFBuffer   = VK_NULL_HANDLE;
+    VkBuffer m_envConditionalCDFBuffer = VK_NULL_HANDLE;
+    uint32_t m_envCDFWidth   = 0;
+    uint32_t m_envCDFHeight  = 0;
+    float    m_envCDFIntegral = 0.0f;
 
     // Bindless textures — individual sampler2D entries
     std::vector<VkImageView> m_bindlessImageViews;
@@ -229,15 +246,15 @@ private:
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
     VkStridedDeviceAddressRegionKHR m_callRegion{};  // empty, not used
 
-    // Push constants — 176 bytes
+    // Push constants — 240 bytes
     struct PTPushConstants {
         glm::mat4 invView;              // 64 bytes
         glm::mat4 invProj;              // 64 bytes
         glm::mat4 prevViewProj;         // 64 bytes — for temporal reprojection
         glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=sampleIndex, w=maxBounces)
-        glm::uvec4 control;             // x=flags, y=historyFrameCount, z=viewChanged
-        glm::vec4 tuning;               // x=firefly clamp luminance
-    };  // total = 208 bytes
+        glm::uvec4 control;             // x=flags, y=historyFrameCount, z=viewChanged, w=envCDFWidth
+        glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
+    };  // total = 240 bytes
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 
