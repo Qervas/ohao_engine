@@ -56,3 +56,12 @@ target_include_directories(env_cdf_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
 target_link_libraries(env_cdf_test PRIVATE gtest gtest_main pthread)
 include(GoogleTest)
 gtest_discover_tests(env_cdf_test)
+
+# Sobol + Owen scramble unit tests (Feature 1.2)
+add_executable(sobol_test sobol_test.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/sobol_generator.cpp
+)
+target_include_directories(sobol_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+target_link_libraries(sobol_test PRIVATE gtest gtest_main pthread)
+include(GoogleTest)
+gtest_discover_tests(sobol_test)
