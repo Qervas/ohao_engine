@@ -74,6 +74,9 @@ __pycache__/
 # Playground (quick throwaway experiments, never committed)
 playground/
 
+# Variance-tool diff artifacts
+*.diff.png
+
 # Misc
 imgui.ini
 Downloads/
