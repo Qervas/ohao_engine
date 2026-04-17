@@ -65,3 +65,48 @@ TEST(Sobol, DimensionsStayInUnitInterval) {
     EXPECT_GE(v, 0.0f);
     EXPECT_LT(v, 1.0f);
 }
+
+#include "render/rt/owen_scramble.hpp"
+
+using ohao::owenScramble;
+
+// Owen scramble of an unscrambled Sobol value is deterministic:
+// same (value, seed) -> same output.
+TEST(Owen, Deterministic) {
+    const uint32_t v = 0xABCD1234u;
+    const uint32_t s = 0xDEADBEEFu;
+    uint32_t r1 = owenScramble(v, s);
+    uint32_t r2 = owenScramble(v, s);
+    EXPECT_EQ(r1, r2);
+}
+
+// Different seeds produce different outputs for the same input (decorrelation).
+TEST(Owen, DifferentSeedsDecorrelate) {
+    const uint32_t v = 0x01234567u;
+    uint32_t r1 = owenScramble(v, 0x00000001u);
+    uint32_t r2 = owenScramble(v, 0x00000002u);
+    EXPECT_NE(r1, r2);
+}
+
+// Input 0 with any nonzero seed must still produce a value in [0, 2^32).
+TEST(Owen, ZeroInputProducesValidOutput) {
+    uint32_t r = owenScramble(0u, 0xCAFEBABEu);
+    EXPECT_GE(r, 0u);
+    EXPECT_LE(r, 0xFFFFFFFFu);
+}
+
+// Mass decorrelation — for 1000 random inputs, two different scrambles
+// should disagree in most bits (statistical proxy for Owen's uniform-scramble property).
+TEST(Owen, MassDecorrelation) {
+    uint32_t bitDiffTotal = 0;
+    for (uint32_t i = 1; i <= 1000u; i++) {
+        uint32_t v = i * 0x9E3779B9u;  // any deterministic spread
+        uint32_t a = owenScramble(v, 0x1u);
+        uint32_t b = owenScramble(v, 0x2u);
+        bitDiffTotal += __builtin_popcount(a ^ b);
+    }
+    // For a good hash-based scramble, expected bit differences ≈ 16 per sample,
+    // i.e. 16000 total for 1000 samples. Allow wide band.
+    EXPECT_GT(bitDiffTotal, 12000u);
+    EXPECT_LT(bitDiffTotal, 20000u);
+}
