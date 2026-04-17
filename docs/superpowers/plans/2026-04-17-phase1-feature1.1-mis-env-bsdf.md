@@ -34,7 +34,7 @@
 | `shaders/rt/pt_raygen.rgen` | Add env MIS shadow ray; weight BSDF-miss-to-env by MIS |
 | `shaders/rt/pt_miss.rmiss` | Return env color + env PDF (via payload extension) |
 | `ohao/render/rt/path_tracer.hpp` | Add CDF buffer handles + setter |
-| `ohao/render/rt/path_tracer.cpp` | Add descriptor bindings 13 (marginalCDF), 14 (conditionalCDF) |
+| `ohao/render/rt/path_tracer.cpp` | Add descriptor bindings 17 (marginalCDF), 18 (conditionalCDF) |
 | `ohao/gpu/vulkan/light_upload.cpp` | After env map upload: build `EnvCDF`, upload to GPU, bind to PathTracer |
 | `tests/renderer/CMakeLists.txt` | Add `env_cdf_test` executable |
 | `CMakeLists.txt` (shaders target) | Include `shaders/includes/rt/` in include path |
@@ -286,7 +286,7 @@ sin(theta). GoogleTest coverage: uniform env + hot-spot concentration."
 
 **Files:**
 - Modify: `ohao/render/rt/path_tracer.hpp` (add CDF buffer handles + setter)
-- Modify: `ohao/render/rt/path_tracer.cpp` (add descriptor bindings 13, 14)
+- Modify: `ohao/render/rt/path_tracer.cpp` (add descriptor bindings 17, 18)
 - Modify: `ohao/gpu/vulkan/light_upload.cpp` (build + upload CDF after env load)
 
 - [ ] **Step 2.1: Add CDF storage fields + setter to `path_tracer.hpp`**
@@ -315,21 +315,21 @@ Then in the private section near `m_lightBuffer`, add:
     float m_envCDFIntegral = 0.0f;
 ```
 
-- [ ] **Step 2.2: Extend descriptor set layout for bindings 13 + 14**
+- [ ] **Step 2.2: Extend descriptor set layout for bindings 17 + 18**
 
 In `ohao/render/rt/path_tracer.cpp`, find `createDescriptorResources()` and locate the `VkDescriptorSetLayoutBinding bindings[]` array. Add two new bindings after the existing last one (binding 12):
 
 ```cpp
-    // Binding 13: env marginal CDF (storage buffer)
+    // Binding 17: env marginal CDF (storage buffer)
     VkDescriptorSetLayoutBinding envMargBinding{};
-    envMargBinding.binding = 13;
+    envMargBinding.binding = 17;
     envMargBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     envMargBinding.descriptorCount = 1;
     envMargBinding.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
 
-    // Binding 14: env conditional CDF (storage buffer)
+    // Binding 18: env conditional CDF (storage buffer)
     VkDescriptorSetLayoutBinding envCondBinding{};
-    envCondBinding.binding = 14;
+    envCondBinding.binding = 18;
     envCondBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     envCondBinding.descriptorCount = 1;
     envCondBinding.stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR;
@@ -342,7 +342,7 @@ Append these two bindings to whatever `std::vector<VkDescriptorSetLayoutBinding>
 In `path_tracer.cpp`, find the descriptor set write block (look for `VkWriteDescriptorSet` array assembly — grep for `dstBinding = 11` or similar). Add two entries after existing writes:
 
 ```cpp
-    // Binding 13: marginal CDF
+    // Binding 17: marginal CDF
     VkDescriptorBufferInfo envMargInfo{};
     envMargInfo.buffer = m_envMarginalCDFBuffer;
     envMargInfo.offset = 0;
@@ -350,12 +350,12 @@ In `path_tracer.cpp`, find the descriptor set write block (look for `VkWriteDesc
     VkWriteDescriptorSet envMargWrite{};
     envMargWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     envMargWrite.dstSet = m_descriptorSet;
-    envMargWrite.dstBinding = 13;
+    envMargWrite.dstBinding = 17;
     envMargWrite.descriptorCount = 1;
     envMargWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     envMargWrite.pBufferInfo = &envMargInfo;
 
-    // Binding 14: conditional CDF
+    // Binding 18: conditional CDF
     VkDescriptorBufferInfo envCondInfo{};
     envCondInfo.buffer = m_envConditionalCDFBuffer;
     envCondInfo.offset = 0;
@@ -363,7 +363,7 @@ In `path_tracer.cpp`, find the descriptor set write block (look for `VkWriteDesc
     VkWriteDescriptorSet envCondWrite{};
     envCondWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     envCondWrite.dstSet = m_descriptorSet;
-    envCondWrite.dstBinding = 14;
+    envCondWrite.dstBinding = 18;
     envCondWrite.descriptorCount = 1;
     envCondWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     envCondWrite.pBufferInfo = &envCondInfo;
@@ -571,7 +571,7 @@ Expected: PNG produced, no Vulkan validation errors in stderr, image looks ident
 git add ohao/render/rt/path_tracer.hpp ohao/render/rt/path_tracer.cpp \
         ohao/gpu/vulkan/renderer.hpp ohao/gpu/vulkan/renderer.cpp \
         ohao/gpu/vulkan/light_upload.cpp
-git commit -m "feat(rt): upload env CDF to GPU (bindings 13, 14)
+git commit -m "feat(rt): upload env CDF to GPU (bindings 17, 18)
 
 Builds EnvCDF on CPU when env map loads; uploads marginal + conditional
 buffers to path tracer descriptor set. Shader integration to follow."
@@ -621,8 +621,8 @@ Create `shaders/includes/rt/env_sampling.glsl`:
 #define OHAO_ENV_SAMPLING_GLSL
 
 // Requires the caller to declare:
-//   layout(set=0, binding=13) readonly buffer EnvMarginalCDF  { float data[]; } envMarg;
-//   layout(set=0, binding=14) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+//   layout(set=0, binding=17) readonly buffer EnvMarginalCDF  { float data[]; } envMarg;
+//   layout(set=0, binding=18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
 // and push constants:
 //   uint envWidth  = pc.control.w
 //   uint envHeight = uint(pc.tuning.y)
@@ -743,8 +743,8 @@ Edit `shaders/rt/pt_raygen.rgen`. At top, after existing extensions and before d
 Add the new buffer bindings BEFORE the includes (the includes reference them):
 
 ```glsl
-layout(set = 0, binding = 13) readonly buffer EnvMarginalCDF { float data[]; } envMarg;
-layout(set = 0, binding = 14) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF { float data[]; } envMarg;
+layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
 ```
 
 Then include (place after existing includes, or after PCG rng helpers):
@@ -817,8 +817,8 @@ In `pt_miss.rmiss`, include the env sampling header and add PDF lookup:
 ```glsl
 #extension GL_GOOGLE_include_directive : require
 
-layout(set = 0, binding = 13) readonly buffer EnvMarginalCDF { float data[]; } envMarg;
-layout(set = 0, binding = 14) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF { float data[]; } envMarg;
+layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
