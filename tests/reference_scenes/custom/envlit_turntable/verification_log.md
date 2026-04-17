@@ -34,3 +34,18 @@ window) should show a larger improvement.
 
 Feature 1.1 complete. Task 7 Blender Cycles cross-engine check deferred —
 the 4096-spp OHAO self-convergence check substitutes as the quality gate.
+
+## 2026-04-17: Sobol sampler (Feature 1.2) validation
+
+Offline sampler upgraded from PCG to Owen-scrambled Sobol. Direct
+variance comparison at equal 16 spp:
+
+| Sampler | Local 5×5 variance | RMSE vs 4096-spp truth |
+|---------|-------------------|-------------------------|
+| PCG (previous)  | 0.002863  | 0.069884 |
+| Sobol (current) | 0.002584  | 0.067062 |
+
+- Noise reduction (variance) vs PCG: +9.8%
+- RMSE improvement vs truth: +4.0%
+
+Feature 1.2 complete. Reference render regenerated with Sobol (offline default).
