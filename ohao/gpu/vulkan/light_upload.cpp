@@ -85,9 +85,25 @@ void VulkanRenderer::uploadDeferredTextures() {
                 const auto& rmtd = model->roughMetalTextures[rmIdx];
                 if (rmtd.pixels.empty()) continue;
 
+                // REPACK: Assimp gives raw GLTF (R=unused/AO, G=Roughness, B=Metallic)
+                // We must ensure the Bindless texture matches our shader layout (R=AO, G=Roughness, B=Metallic)
+                // If it's already 4 channels, we'll verify/swizzle it to be safe.
+                std::vector<uint8_t> repacked;
+                repacked.resize(rmtd.width * rmtd.height * 4);
+                for (int p = 0; p < rmtd.width * rmtd.height; p++) {
+                    // Assimp usually provides 4 channels if we requested it, but the order is raw
+                    uint8_t r = rmtd.pixels[p*4+0]; // AO (or 255)
+                    uint8_t g = rmtd.pixels[p*4+1]; // Roughness
+                    uint8_t b = rmtd.pixels[p*4+2]; // Metallic
+                    repacked[p*4+0] = r;   // R = AO
+                    repacked[p*4+1] = g;   // G = Roughness
+                    repacked[p*4+2] = b;   // B = Metallic
+                    repacked[p*4+3] = 255;
+                }
+
                 std::string texName = actor->getName() + "_roughmetal_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
-                    rmtd.pixels.data(), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
+                    repacked.data(), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
                     BindlessTextureType::Roughness);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
@@ -136,7 +152,11 @@ void VulkanRenderer::uploadLightBuffer() {
             auto pos = actor->getTransform()->getPosition();
             gl.positionAndType = glm::vec4(pos, static_cast<float>(lc->getLightType()));
             gl.colorAndIntensity = glm::vec4(lc->getColor(), lc->getIntensity());
-            gl.dirAndParam = glm::vec4(lc->getDirection(), lc->getRadius());
+            float dirParam = lc->getRadius();
+            if (lc->getLightType() == LightType::Spot) {
+                dirParam = lc->getInnerConeAngle();
+            }
+            gl.dirAndParam = glm::vec4(lc->getDirection(), dirParam);
 
             if (lc->getLightType() == LightType::AreaRect) {
                 glm::vec3 e1 = lc->getEdge1(), e2 = lc->getEdge2();
@@ -214,6 +234,7 @@ void VulkanRenderer::uploadLightBuffer() {
         // Destroy old buffer
         if (m_rtLightBuffer) { vkDestroyBuffer(m_device, m_rtLightBuffer, nullptr); m_rtLightBuffer = VK_NULL_HANDLE; }
         if (m_rtLightMemory) { vkFreeMemory(m_device, m_rtLightMemory, nullptr); m_rtLightMemory = VK_NULL_HANDLE; }
+        m_rtLightCount = 0;
 
         if (!gpuLights.empty()) {
             // Buffer layout: uint32 lightCount + 12 bytes padding + GPULight[] lights
@@ -239,6 +260,7 @@ void VulkanRenderer::uploadLightBuffer() {
             vkMapMemory(m_device, m_rtLightMemory, 0, bufSize, 0, &mapped);
             memset(mapped, 0xFF, 16);  // init header to 0xFFFFFFFF (no env map by default)
             uint32_t count = static_cast<uint32_t>(gpuLights.size());
+            m_rtLightCount = count;
             memcpy(mapped, &count, sizeof(uint32_t));
             // envMapTexIdx at offset 4 — set by env map loader, default 0xFFFFFFFF (none)
             memcpy(static_cast<uint8_t*>(mapped) + lightDataOffset, gpuLights.data(), gpuLights.size() * sizeof(GPULight));

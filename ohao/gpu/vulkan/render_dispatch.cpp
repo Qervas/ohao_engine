@@ -164,6 +164,33 @@ void VulkanRenderer::renderPathTraced() {
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();
 
+    bool hasAnimatedActors = false;
+    if (m_scene) {
+        const float dt = 1.0f / 60.0f;
+        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+            auto animComp = actor->getComponent<AnimationComponent>();
+            if (animComp && animComp->isPlaying()) {
+                animComp->update(dt);
+                hasAnimatedActors = true;
+            }
+        }
+    }
+
+    bool hasDynamicBLAS = hasAnimatedActors && m_animatedRT && m_animatedRT->hasAnimatedContent();
+
+    updateLightBuffer();
+    if (m_rtLightBuffer != VK_NULL_HANDLE) {
+        m_pathTracer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
+    }
+    if (hasDynamicBLAS && m_gpuSkinning) {
+        VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
+        if (skinnedNormalBuf != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
+            m_pathTracer->setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
+        }
+    } else if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
+        m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
+    }
+
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);
 
@@ -171,6 +198,10 @@ void VulkanRenderer::renderPathTraced() {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
+
+    if (hasDynamicBLAS) {
+        m_animatedRT->update(m_scene, m_rtIndexBuffer, m_vertexCount);
+    }
 
     // PT needs unflipped projection (ray generation handles Y internally).
     // Use same FOV/aspect as deferred for consistent framing.

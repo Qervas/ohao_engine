@@ -31,6 +31,12 @@ int main(int argc, char* argv[]) {
     std::string output = argc > 3 ? argv[3] : "env_demo.png";
     int samples = argc > 4 ? std::atoi(argv[4]) : 1024;
     uint32_t W = 1920, H = 1080;
+    RenderMode rtMode = RenderMode::RTOffline;
+    for (int i = 5; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
+        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+    }
 
     std::cout << "OHAO Env Demo — " << modelPath << " + " << envPath << std::endl;
 
@@ -98,9 +104,9 @@ int main(int argc, char* argv[]) {
     camera.setPosition({0, 0.5f, 8});
     camera.setFov(40.0f);
     camera.setRotation(0.0f, -90.0f);
-    renderer.setRenderMode(RenderMode::PathTraced);
+    renderer.setRenderMode(rtMode);
 
-    std::cout << "Rendering..." << std::endl;
+    std::cout << "Rendering (" << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < samples + 3; i++) renderer.render();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(

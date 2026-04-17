@@ -26,7 +26,8 @@ class DeferredRenderer;
 enum class RenderMode {
     Forward,      // Legacy forward rendering (8 light limit)
     Deferred,     // AAA deferred rendering (CSM, post-processing)
-    PathTraced    // Full path tracing (reference quality, accumulates over frames)
+    RTRealtime,   // Path tracing tuned for interactive use
+    RTOffline     // Path tracing tuned for reference/offline rendering
 };
 
 // Simple vertex structure for basic rendering (Phase 1 triangle)
@@ -42,15 +43,14 @@ struct CameraUniformBuffer {
     alignas(16) glm::vec3 viewPos;
 };
 
-// Per-object push constants (model matrix + material)
+// Per-object push constants (matches GBuffer pass shader layout)
 struct ObjectPushConstants {
-    alignas(16) glm::mat4 model;
-    alignas(16) glm::vec3 baseColor;
-    alignas(4) float metallic;
-    alignas(4) float roughness;
-    alignas(4) float ao;
-    alignas(4) float albedoTexIdx;  // uint32 packed as float (UINT32_MAX = no texture)
-    alignas(4) float normalTexIdx;  // uint32 packed as float (UINT32_MAX = no texture)
+    glm::mat4 model;
+    glm::mat4 viewProj;
+    glm::mat4 prevMVP;
+    glm::vec4 materialParams;  // x=metallic, y=roughness, z=roughMetalTexIdx, w=albedoTexIdx
+    glm::vec4 albedoColor;     // rgb=albedo, a=normalTexIdx
+    glm::vec4 emissiveParams;  // x=emissiveTexIdx, y=emissiveStrength, z=unused, w=unused
 };
 
 // Light data for uniform buffer (matches shader layout)
@@ -114,6 +114,9 @@ public:
     // Render mode
     void setRenderMode(RenderMode mode);
     RenderMode getRenderMode() const { return m_renderMode; }
+    void setRTRenderSettings(const RTRenderSettings& settings);
+    void setRTRenderProfile(RTRenderProfile profile);
+    const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
     void setEnvironmentMap(const std::string& path) { m_envMapPath = path; }
     void resetAccumulation() { if (m_pathTracer) m_pathTracer->resetAccumulation(); }
     uint32_t getPathTracerFrameIndex() const { return m_pathTracer ? m_pathTracer->getFrameIndex() : 0; }
@@ -311,6 +314,7 @@ private:
     VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
     VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
+    uint32_t m_rtLightCount{0};
     std::string m_envMapPath;
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
@@ -360,8 +364,11 @@ private:
 
     // Deferred rendering methods
     bool initializeDeferredRenderer();
+    void applyRTRenderSettings();
     void renderDeferred();
     void copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd);
+
+    RTRenderSettings m_rtSettings{kOfflineRTSettings};
 };
 
 } // namespace ohao

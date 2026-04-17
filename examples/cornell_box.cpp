@@ -62,6 +62,14 @@ int main(int argc, char* argv[]) {
     std::string output = argc > 1 ? argv[1] : "cornell_box.png";
     int samples = argc > 2 ? std::atoi(argv[2]) : 1024;
     uint32_t W = 1920, H = 1080;
+    RenderMode rtMode = RenderMode::RTOffline;
+    bool useDeferred = false;
+    for (int i = 3; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "deferred") useDeferred = true;
+        else if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
+        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+    }
 
     std::cout << "OHAO Cornell Box — " << W << "x" << H << " @ " << samples << " spp" << std::endl;
 
@@ -137,11 +145,10 @@ int main(int argc, char* argv[]) {
     camera.setFov(38.0f);
     camera.setRotation(0.0f, -90.0f);
 
-    // Mode: "deferred" for hybrid RT, anything else for path traced
-    bool useDeferred = (argc > 3 && std::string(argv[3]) == "deferred");
-    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
+    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : rtMode);
 
-    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : "PathTraced") << ")..." << std::endl;
+    const char* rtLabel = (rtMode == RenderMode::RTRealtime) ? "RTRealtime" : "RTOffline";
+    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : rtLabel) << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
     int frames = useDeferred ? 10 : (samples + 3);
     for (int i = 0; i < frames; i++) renderer.render();

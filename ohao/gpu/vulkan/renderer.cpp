@@ -176,6 +176,7 @@ bool VulkanRenderer::initialize() {
             // Initialize path tracer
             m_pathTracer = std::make_unique<PathTracer>();
             if (m_pathTracer->init(m_device, m_physicalDevice, m_width, m_height)) {
+                applyRTRenderSettings();
                 std::cout << "Path tracer: available" << std::endl;
             } else {
                 std::cout << "Path tracer: init failed" << std::endl;
@@ -365,7 +366,8 @@ void VulkanRenderer::render() {
     if (!m_initialized) return;
 
     // Check render mode
-    if (m_renderMode == RenderMode::PathTraced && m_pathTracer && m_rtAccel) {
+    if ((m_renderMode == RenderMode::RTRealtime || m_renderMode == RenderMode::RTOffline) &&
+        m_pathTracer && m_rtAccel) {
         renderPathTraced();
         return;
     }
@@ -388,13 +390,44 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
         std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
         return;
     }
-    if (mode == RenderMode::PathTraced && (!m_pathTracer || !m_rtAccel)) {
+    if ((mode == RenderMode::RTRealtime || mode == RenderMode::RTOffline) &&
+        (!m_pathTracer || !m_rtAccel)) {
         std::cerr << "Path tracing not available, staying in current mode" << std::endl;
         return;
     }
+
+    if (mode == RenderMode::RTRealtime) {
+        setRTRenderProfile(RTRenderProfile::Realtime);
+    } else if (mode == RenderMode::RTOffline) {
+        setRTRenderProfile(RTRenderProfile::Offline);
+    }
+
     m_renderMode = mode;
-    const char* names[] = {"Forward", "Deferred", "PathTraced"};
+    const char* names[] = {"Forward", "Deferred", "RTRealtime", "RTOffline"};
     std::cout << "Render mode set to: " << names[static_cast<int>(mode)] << std::endl;
+}
+
+void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
+    m_rtSettings = settings;
+    applyRTRenderSettings();
+
+    const char* profileName = (m_rtSettings.profile == RTRenderProfile::Realtime) ? "Realtime" : "Offline";
+    std::cout << "RT profile set to: " << profileName
+              << " (maxBounces=" << m_rtSettings.maxBounces
+              << ", accumulation=" << (m_rtSettings.preferAccumulation ? "preferred" : "reduced")
+              << ", AOVs=" << (m_rtSettings.enableAuxiliaryAOVs ? "on" : "off")
+              << ", externalDenoiser=" << (m_rtSettings.allowExternalDenoiser ? "allowed" : "off")
+              << ")" << std::endl;
+}
+
+void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
+    setRTRenderSettings(profile == RTRenderProfile::Realtime ? kRealtimeRTSettings : kOfflineRTSettings);
+}
+
+void VulkanRenderer::applyRTRenderSettings() {
+    if (!m_pathTracer) return;
+    m_pathTracer->setMaxBounces(m_rtSettings.maxBounces);
+    m_pathTracer->setRenderSettings(m_rtSettings);
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {

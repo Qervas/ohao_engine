@@ -62,9 +62,10 @@ void main() {
     vec3 n2 = normalBuf.normals[i2].xyz;
     vec3 interpolated = w * n0 + u * n1 + v * n2;
 
+    mat3 normalMatrix = transpose(inverse(mat3(gl_ObjectToWorldEXT)));
     vec3 worldNormal;
     if (dot(interpolated, interpolated) > 0.0001) {
-        worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * normalize(interpolated));
+        worldNormal = normalize(normalMatrix * normalize(interpolated));
     } else {
         vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
         vec3 al = abs(hitLocal);
@@ -72,7 +73,7 @@ void main() {
         if (al.x >= al.y && al.x >= al.z) localN = vec3(sign(hitLocal.x), 0, 0);
         else if (al.y >= al.z) localN = vec3(0, sign(hitLocal.y), 0);
         else localN = vec3(0, 0, sign(hitLocal.z));
-        worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
+        worldNormal = normalize(normalMatrix * localN);
     }
 
     bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
@@ -128,10 +129,11 @@ void main() {
     float ao        = 1.0;
     if (roughMetalTexIdx != 0xFFFFFFFFu) {
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], texUV);
-        ao        = rm.r;  // R channel = AO
-        roughness = rm.g;  // G channel = Roughness
-        metallic  = rm.b;  // B channel = Metallic
+        ao        *= rm.r;  // R channel = AO
+        roughness *= rm.g;  // G channel = Roughness
+        metallic  *= rm.b;  // B channel = Metallic
     }
+    roughness = max(roughness, 0.04);
 
     // === Emissive ===
     vec3 emissive = vec3(0.0);

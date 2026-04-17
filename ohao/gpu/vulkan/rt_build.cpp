@@ -13,6 +13,7 @@
 #include "scene/component/material_component.hpp"
 #include "scene/asset/model.hpp"
 #include <cstring>
+#include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include "render/deferred/deferred_renderer.hpp"
 
@@ -449,10 +450,62 @@ void VulkanRenderer::uploadRTTextureArray() {
         }
 
         if (!allTextures.empty()) {
-            const uint32_t targetW = 1024;
-            const uint32_t targetH = 1024;
+            VkPhysicalDeviceProperties deviceProps{};
+            vkGetPhysicalDeviceProperties(m_physicalDevice, &deviceProps);
+
+            uint32_t maxSrcW = 1;
+            uint32_t maxSrcH = 1;
+            for (const auto& tex : allTextures) {
+                maxSrcW = std::max(maxSrcW, static_cast<uint32_t>(tex.width));
+                maxSrcH = std::max(maxSrcH, static_cast<uint32_t>(tex.height));
+            }
+
+            const uint32_t textureCap = std::min(deviceProps.limits.maxImageDimension2D, 2048u);
+            const uint32_t targetW = std::min(maxSrcW, textureCap);
+            const uint32_t targetH = std::min(maxSrcH, textureCap);
             uint32_t numTextures = static_cast<uint32_t>(allTextures.size());
             m_rtTextureCount = numTextures;
+
+            auto resizeRGBA8Bilinear = [](const uint8_t* srcPixels, int srcW, int srcH,
+                                          uint32_t dstW, uint32_t dstH) {
+                std::vector<uint8_t> dst(dstW * dstH * 4);
+                if (!srcPixels || srcW <= 0 || srcH <= 0) {
+                    return dst;
+                }
+
+                const float scaleX = static_cast<float>(srcW) / static_cast<float>(dstW);
+                const float scaleY = static_cast<float>(srcH) / static_cast<float>(dstH);
+
+                for (uint32_t y = 0; y < dstH; ++y) {
+                    float srcY = (static_cast<float>(y) + 0.5f) * scaleY - 0.5f;
+                    srcY = std::clamp(srcY, 0.0f, static_cast<float>(srcH - 1));
+                    int y0 = static_cast<int>(std::floor(srcY));
+                    int y1 = std::min(y0 + 1, srcH - 1);
+                    float fy = srcY - static_cast<float>(y0);
+
+                    for (uint32_t x = 0; x < dstW; ++x) {
+                        float srcX = (static_cast<float>(x) + 0.5f) * scaleX - 0.5f;
+                        srcX = std::clamp(srcX, 0.0f, static_cast<float>(srcW - 1));
+                        int x0 = static_cast<int>(std::floor(srcX));
+                        int x1 = std::min(x0 + 1, srcW - 1);
+                        float fx = srcX - static_cast<float>(x0);
+
+                        const uint8_t* c00 = srcPixels + (y0 * srcW + x0) * 4;
+                        const uint8_t* c10 = srcPixels + (y0 * srcW + x1) * 4;
+                        const uint8_t* c01 = srcPixels + (y1 * srcW + x0) * 4;
+                        const uint8_t* c11 = srcPixels + (y1 * srcW + x1) * 4;
+
+                        uint8_t* out = dst.data() + (y * dstW + x) * 4;
+                        for (int c = 0; c < 4; ++c) {
+                            float top = c00[c] + (c10[c] - c00[c]) * fx;
+                            float bot = c01[c] + (c11[c] - c01[c]) * fx;
+                            float value = top + (bot - top) * fy;
+                            out[c] = static_cast<uint8_t>(std::clamp(value, 0.0f, 255.0f));
+                        }
+                    }
+                }
+                return dst;
+            };
 
             // Create VkImage (2D array)
             VkImageCreateInfo imgInfo{};
@@ -562,20 +615,11 @@ void VulkanRenderer::uploadRTTextureArray() {
                     int srcW = tex.width;
                     int srcH = tex.height;
 
-                    // Resize to targetW x targetH if needed (nearest-neighbor)
+                    // Resize to the shared array dimensions with bilinear filtering when needed.
                     std::vector<uint8_t> resized;
                     const uint8_t* srcPixels = tex.pixels;
                     if (srcW != static_cast<int>(targetW) || srcH != static_cast<int>(targetH)) {
-                        resized.resize(targetW * targetH * 4);
-                        for (uint32_t y = 0; y < targetH; y++) {
-                            for (uint32_t x = 0; x < targetW; x++) {
-                                int sx = x * srcW / targetW;
-                                int sy = y * srcH / targetH;
-                                int srcIdx = (sy * srcW + sx) * 4;
-                                int dstIdx = (y * targetW + x) * 4;
-                                memcpy(&resized[dstIdx], &tex.pixels[srcIdx], 4);
-                            }
-                        }
+                        resized = resizeRGBA8Bilinear(tex.pixels, srcW, srcH, targetW, targetH);
                         srcPixels = resized.data();
                     }
 
@@ -687,7 +731,8 @@ void VulkanRenderer::uploadRTTextureArray() {
                 }
 
                 std::cout << "[RT] Bindless textures: " << numTextures
-                          << " at " << targetW << "x" << targetH << std::endl;
+                          << " at " << targetW << "x" << targetH
+                          << " (source max " << maxSrcW << "x" << maxSrcH << ")" << std::endl;
             }
         } else {
             std::cout << "[RT] No textures found in scene models" << std::endl;
@@ -839,12 +884,21 @@ void VulkanRenderer::buildBLASTLAS() {
             if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
                 m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
             }
+            if (m_rtLightBuffer != VK_NULL_HANDLE) {
+                m_pathTracer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
+            }
             if (m_rtUVBuffer) m_pathTracer->setUVBuffer(m_rtUVBuffer);
             if (m_rtMatIDBuffer && m_rtMatColorBuffer) {
                 m_pathTracer->setMaterialBuffers(m_rtMatIDBuffer, m_rtMatColorBuffer);
             }
             if (m_rtTextureArrayView && m_rtTextureSampler && m_rtTextureCount > 0) {
                 m_pathTracer->setTextureArray(m_rtTextureArrayView, m_rtTextureSampler, m_rtTextureCount);
+            }
+            if (m_gpuSkinning && !animMeshes.empty()) {
+                VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
+                if (skinnedNormalBuf != VK_NULL_HANDLE) {
+                    m_pathTracer->setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
+                }
             }
         }
     }

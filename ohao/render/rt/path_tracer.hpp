@@ -29,6 +29,44 @@
 
 namespace ohao {
 
+enum class RTRenderProfile {
+    Realtime,
+    Offline,
+};
+
+struct RTRenderSettings {
+    RTRenderProfile profile{RTRenderProfile::Offline};
+    uint32_t maxBounces{4};
+    bool preferAccumulation{true};
+    bool enableAuxiliaryAOVs{true};
+    bool allowExternalDenoiser{true};
+    bool enableInternalDenoise{false};
+    bool enableFireflyClamp{false};
+    float fireflyClampLuminance{10.0f};
+};
+
+inline constexpr RTRenderSettings kRealtimeRTSettings{
+    RTRenderProfile::Realtime,
+    2,
+    true,
+    false,
+    false,
+    true,
+    true,
+    10.0f,
+};
+
+inline constexpr RTRenderSettings kOfflineRTSettings{
+    RTRenderProfile::Offline,
+    4,
+    true,
+    true,
+    true,
+    false,
+    false,
+    0.0f,
+};
+
 class PathTracer {
 public:
     PathTracer() = default;
@@ -83,6 +121,8 @@ public:
 
     // Config
     void setMaxBounces(uint32_t bounces) { m_maxBounces = bounces; }
+    void setRenderSettings(const RTRenderSettings& settings) { m_renderSettings = settings; }
+    const RTRenderSettings& getRenderSettings() const { return m_renderSettings; }
     uint32_t getFrameIndex() const { return m_frameIndex; }
 
 private:
@@ -102,6 +142,7 @@ private:
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
+    RTRenderSettings m_renderSettings{kOfflineRTSettings};
     static constexpr uint32_t m_maxBindlessTextures = 1024;
     VkBuffer m_normalBuffer = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
@@ -168,6 +209,8 @@ private:
         glm::mat4 invProj;              // 64 bytes
         glm::mat4 prevViewProj;         // 64 bytes — for temporal reprojection
         glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=frameIndex, w=maxBounces)
+        glm::uvec4 control;             // x=flags
+        glm::vec4 tuning;               // x=firefly clamp luminance
     };  // total = 208 bytes
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame

@@ -99,6 +99,12 @@ int main(int argc, char* argv[]) {
     std::string modelPath = argc > 1 ? argv[1] : "";
     std::string envPath = argc > 2 ? argv[2] : "";
     uint32_t W = 1280, H = 720;
+    RenderMode rtMode = RenderMode::RTRealtime;
+    for (int i = 3; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
+        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+    }
 
     // Init GLFW with OpenGL (for pixel display)
     if (!glfwInit()) { std::cerr << "GLFW init failed" << std::endl; return 1; }
@@ -241,7 +247,7 @@ int main(int argc, char* argv[]) {
     SceneFramer::applyLights(scene.get(), frame);
 
     renderer.setScene(scene.get());
-    renderer.setRenderMode(RenderMode::PathTraced);
+    renderer.setRenderMode(rtMode);
 
     // Main loop
     auto lastTime = std::chrono::high_resolution_clock::now();

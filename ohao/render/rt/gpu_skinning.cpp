@@ -81,6 +81,8 @@ void GPUSkinning::cleanup() {
 
     if (m_globalPosBuffer) { vkDestroyBuffer(m_device, m_globalPosBuffer, nullptr); m_globalPosBuffer = VK_NULL_HANDLE; }
     if (m_globalPosMem) { vkFreeMemory(m_device, m_globalPosMem, nullptr); m_globalPosMem = VK_NULL_HANDLE; }
+    if (m_globalNormBuffer) { vkDestroyBuffer(m_device, m_globalNormBuffer, nullptr); m_globalNormBuffer = VK_NULL_HANDLE; }
+    if (m_globalNormMem) { vkFreeMemory(m_device, m_globalNormMem, nullptr); m_globalNormMem = VK_NULL_HANDLE; }
 
     for (auto& entry : m_entries) {
         if (entry.skinnedPosBuffer) vkDestroyBuffer(m_device, entry.skinnedPosBuffer, nullptr);
@@ -266,6 +268,7 @@ uint32_t GPUSkinning::registerMesh(VkBuffer srcVertexBuffer, uint32_t vertexCoun
 void GPUSkinning::createGlobalBuffer(uint32_t totalVertexCount) {
     m_totalVertexCount = totalVertexCount;
     VkDeviceSize posSize = totalVertexCount * 3 * sizeof(float);
+    VkDeviceSize normSize = totalVertexCount * 3 * sizeof(float);
 
     VkBufferCreateInfo bufInfo{};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -292,28 +295,47 @@ void GPUSkinning::createGlobalBuffer(uint32_t totalVertexCount) {
     vkAllocateMemory(m_device, &allocInfo, nullptr, &m_globalPosMem);
     vkBindBufferMemory(m_device, m_globalPosBuffer, m_globalPosMem, 0);
 
+    bufInfo.size = normSize;
+    bufInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    vkCreateBuffer(m_device, &bufInfo, nullptr, &m_globalNormBuffer);
+
+    vkGetBufferMemoryRequirements(m_device, m_globalNormBuffer, &memReqs);
+
+    allocInfo.pNext = nullptr;
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = findMemoryType(m_physicalDevice, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vkAllocateMemory(m_device, &allocInfo, nullptr, &m_globalNormMem);
+    vkBindBufferMemory(m_device, m_globalNormBuffer, m_globalNormMem, 0);
+
     // Re-bind output descriptors to the global buffer for each entry
     for (auto& entry : m_entries) {
         if (entry.descriptorSet == VK_NULL_HANDLE) continue;
 
-        VkDescriptorBufferInfo globalBufInfo{};
-        globalBufInfo.buffer = m_globalPosBuffer;
-        globalBufInfo.offset = 0;
-        globalBufInfo.range = posSize;
+        std::array<VkDescriptorBufferInfo, 2> globalBufInfos{};
+        globalBufInfos[0].buffer = m_globalPosBuffer;
+        globalBufInfos[0].offset = 0;
+        globalBufInfos[0].range = posSize;
+        globalBufInfos[1].buffer = m_globalNormBuffer;
+        globalBufInfos[1].offset = 0;
+        globalBufInfos[1].range = normSize;
 
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = entry.descriptorSet;
-        write.dstBinding = 1;  // output positions
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &globalBufInfo;
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        for (uint32_t i = 0; i < writes.size(); ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = entry.descriptorSet;
+            writes[i].dstBinding = 1 + i;  // 1=positions, 2=normals
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[i].pBufferInfo = &globalBufInfos[i];
+        }
 
-        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(m_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
-    std::cout << "[GPUSkinning] Global position buffer: " << totalVertexCount
-              << " vertices (" << posSize << " bytes)" << std::endl;
+    std::cout << "[GPUSkinning] Global skinning buffers: " << totalVertexCount
+              << " vertices (" << posSize << " bytes positions, "
+              << normSize << " bytes normals)" << std::endl;
 }
 
 void GPUSkinning::skin(VkCommandBuffer cmd, uint32_t meshHandle,

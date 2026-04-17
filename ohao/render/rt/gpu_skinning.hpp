@@ -33,11 +33,12 @@ public:
     void skin(VkCommandBuffer cmd, uint32_t meshHandle,
               const std::vector<glm::mat4>& boneMatrices);
 
-    // Get the GLOBAL skinned position buffer (all meshes write to their offset)
-    // BLAS builds reference this with per-mesh byte offsets, just like the original RT vertex buffer.
+    // Get the GLOBAL skinned position/normal buffers (all meshes write to their offsets).
+    // BLAS builds reference positions, while RT shading reads normals from the packed normal buffer.
     VkBuffer getGlobalSkinnedPositionBuffer() const { return m_globalPosBuffer; }
+    VkBuffer getGlobalSkinnedNormalBuffer() const { return m_globalNormBuffer; }
 
-    // Create the global skinned position buffer (call once after all meshes registered)
+    // Create the global skinned position/normal buffers (call once after all meshes registered)
     void createGlobalBuffer(uint32_t totalVertexCount);
 
     // Get per-mesh info
@@ -77,6 +78,8 @@ private:
     // Global skinned position buffer (all meshes packed together)
     VkBuffer m_globalPosBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_globalPosMem{VK_NULL_HANDLE};
+    VkBuffer m_globalNormBuffer{VK_NULL_HANDLE};
+    VkDeviceMemory m_globalNormMem{VK_NULL_HANDLE};
     uint32_t m_totalVertexCount{0};
 
     struct SkinPushConstants {

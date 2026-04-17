@@ -50,7 +50,7 @@ void addWall(Scene* scene, const std::string& name,
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples]" << std::endl;
+        std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples] [deferred|rt_realtime|rt_offline] [flip] [video]" << std::endl;
         return 1;
     }
 
@@ -62,7 +62,14 @@ int main(int argc, char* argv[]) {
     std::cout << "OHAO Model Viewer — " << modelPath << std::endl;
     std::cout << W << "x" << H << " @ " << samples << " spp" << std::endl;
 
-    bool useDeferred = (argc > 4 && std::string(argv[4]) == "deferred");
+    bool useDeferred = false;
+    RenderMode rtMode = RenderMode::RTOffline;
+    for (int i = 4; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "deferred") useDeferred = true;
+        else if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
+        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+    }
 
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
@@ -334,7 +341,7 @@ int main(int argc, char* argv[]) {
         }
     }
     // Mode: "deferred" for hybrid RT, anything else for path traced
-    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : RenderMode::PathTraced);
+    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : rtMode);
 
     // Enable all deferred quality features
     if (useDeferred && renderer.getDeferredRenderer()) {
@@ -347,12 +354,19 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : "PathTraced") << ")..." << std::endl;
+    const char* rtLabel = (rtMode == RenderMode::RTRealtime) ? "RTRealtime" : "RTOffline";
+    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : rtLabel) << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
     int frames = useDeferred ? 30 : (samples + 3);
 
     // If 5th arg is "video", render a frame sequence for ffmpeg
-    bool renderVideo = (argc > 5 && std::string(argv[5]) == "video");
+    bool renderVideo = false;
+    for (int i = 4; i < argc; i++) {
+        if (std::string(argv[i]) == "video") {
+            renderVideo = true;
+            break;
+        }
+    }
     if (renderVideo && useDeferred) {
         int fps = 30;
         int seconds = 3;
@@ -392,10 +406,12 @@ int main(int argc, char* argv[]) {
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
-    // OIDN denoising — only for path traced mode (deferred doesn't use accumulation buffer)
+    // Temporarily disable OIDN so model_viewer reports pure RT output/perf.
+    constexpr bool kEnableOIDN = false;
+
     std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
     uint32_t rw, rh;
-    if (!useDeferred && renderer.readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+    if (kEnableOIDN && !useDeferred && renderer.readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
         // Convert RGBA32F → float3 (OIDN needs float3)
         auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
         auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);

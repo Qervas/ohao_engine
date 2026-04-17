@@ -29,7 +29,13 @@ layout(push_constant) uniform PushConstants {
     mat4 invProj;
     mat4 prevViewProj;          // for temporal reprojection
     uvec4 params;  // x=width, y=height, z=frameIndex, w=maxBounces
+    uvec4 control;
+    vec4 tuning;
 } pc;
+
+const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
+const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
+const uint PT_FLAG_ENABLE_FIREFLY_CLAMP = 1u << 2;
 
 struct RayPayload {
     vec3 color;
@@ -74,6 +80,9 @@ void main() {
     ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
     uint frameIdx = pc.params.z;
     uint maxBounces = pc.params.w;
+    bool enableAOVs = (pc.control.x & PT_FLAG_ENABLE_AOVS) != 0u;
+    bool enableInternalDenoise = (pc.control.x & PT_FLAG_ENABLE_INTERNAL_DENOISE) != 0u;
+    bool enableFireflyClamp = (pc.control.x & PT_FLAG_ENABLE_FIREFLY_CLAMP) != 0u;
 
     rngInit(uvec2(pixel), frameIdx);
 
@@ -115,7 +124,7 @@ void main() {
         if (payload.hitDist < 0.0) {
             // miss — escaped scene, add environment contribution
             radiance += throughput * payload.color;  // env map sampled in miss shader
-            if (bounce == 0u) {
+            if (bounce == 0u && enableAOVs) {
                 imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
                 imageStore(normalAOV, pixel, vec4(0));
             }
@@ -133,31 +142,9 @@ void main() {
         }
 
         // Write first-hit AOVs for denoiser guide buffers
-        if (bounce == 0u) {
+        if (bounce == 0u && enableAOVs) {
             imageStore(albedoAOV, pixel, vec4(albedo, 1.0));
             imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));
-        }
-
-        // === Emissive surface check ===
-        uint inst = payload.hitInstance;
-        if (inst == 4u && payload.hitPos.y > 3.0) {
-            // Cornell box ceiling light panel
-            vec3 hp = payload.hitPos;
-            if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
-                if (bounce == 0u) {
-                    // Primary ray sees the light directly — full emission
-                    radiance += throughput * vec3(1.0, 0.98, 0.92) * 1.5;
-                }
-                // bounce > 0: NEE already handles direct light, skip to avoid double-count
-            }
-            break;
-        }
-        // GLTF scene lights (invisible to primary rays)
-        if (inst >= 2u && inst <= 4u && inst != 4u) {
-            if (bounce == 0u) break;
-            float intensity = (inst == 2u) ? 2.5 : 1.0;
-            radiance += throughput * vec3(1.0) * intensity;
-            break;
         }
 
         // === Decode material ===
@@ -235,7 +222,7 @@ void main() {
 
                 // Cone falloff: smooth between inner and outer angle
                 float cosAngle = dot(-L, lightDir);
-                float innerCos = cos(radians(light.dirAndParam.w));  // reuse radius slot for inner angle... actually use dirAndParam.w
+                float innerCos = cos(radians(light.dirAndParam.w));
                 float outerCos = cos(radians(outerAngle));
                 float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
                 spotFactor *= spotFactor;  // quadratic falloff
@@ -294,7 +281,12 @@ void main() {
                     vec3 diff = kD * albedo / 3.14159;
 
                     // NdotL * weight * numLights (uniform selection correction)
-                    radiance += throughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                    vec3 directContribution = throughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float contribLum = dot(directContribution, vec3(0.2126, 0.7152, 0.0722));
+                        if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
+                    }
+                    radiance += directContribution;
                 }
             }
         }
@@ -336,8 +328,10 @@ void main() {
     }
 
     // Firefly clamp — cap extreme outlier samples
-    float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
-    if (lum > 10.0) radiance *= 10.0 / lum;
+    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+        float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;
+    }
 
     // Temporal accumulation with reprojection
     vec3 acc;
@@ -384,10 +378,10 @@ void main() {
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    // Multi-scale edge-aware spatial denoise (A-Trous-like bilateral filter)
-    // Runs at ALL sample counts — adaptive strength based on local variance
     vec3 denoised = acc;
-    {
+    if (enableInternalDenoise && enableAOVs) {
+        // Multi-scale edge-aware spatial denoise (A-Trous-like bilateral filter)
+        // Intended for the real-time profile, not the offline/reference path.
         vec3 centerNormal = imageLoad(normalAOV, pixel).rgb;
 
         // Estimate local variance from 3x3 neighborhood
@@ -448,12 +442,14 @@ void main() {
         }
     }
 
-    // Luminance-preserving denoise: rescale denoised to match accumulated luminance
-    // This prevents the denoiser from changing brightness between moving/static states
-    float accLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
-    float denLum = dot(denoised, vec3(0.2126, 0.7152, 0.0722));
-    if (denLum > 0.001 && accLum > 0.001) {
-        denoised *= accLum / denLum;
+    if (enableInternalDenoise) {
+        // Luminance-preserving denoise: rescale denoised to match accumulated luminance
+        // This prevents the denoiser from changing brightness between moving/static states
+        float accLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
+        float denLum = dot(denoised, vec3(0.2126, 0.7152, 0.0722));
+        if (denLum > 0.001 && accLum > 0.001) {
+            denoised *= accLum / denLum;
+        }
     }
 
     // Tonemap + gamma (same exposure as deferred pipeline)

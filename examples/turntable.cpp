@@ -55,10 +55,17 @@ int main(int argc, char* argv[]) {
     std::string mode = argv[2];
     int spp = argc > 3 ? std::atoi(argv[3]) : 64;
     int totalFrames = argc > 4 ? std::atoi(argv[4]) : 120;  // 4 sec at 30fps
+    RenderMode rtMode = RenderMode::RTOffline;
+    for (int i = 5; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
+        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+    }
 
     uint32_t W = 1280, H = 720;
 
-    std::cout << "OHAO Turntable — " << mode << " mode, " << spp << " spp, " << totalFrames << " frames" << std::endl;
+    std::cout << "OHAO Turntable — " << mode << " mode, " << spp << " spp, " << totalFrames
+              << " frames, " << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << std::endl;
 
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) return 1;
@@ -180,7 +187,7 @@ int main(int argc, char* argv[]) {
     }
 
     renderer.setScene(scene.get());
-    renderer.setRenderMode(RenderMode::PathTraced);
+    renderer.setRenderMode(rtMode);
 
     // Render turntable orbit — adjust radius per mode
     float orbitRadius = (mode == "env") ? 8.0f : (mode == "mirror") ? 4.5f : 4.2f;

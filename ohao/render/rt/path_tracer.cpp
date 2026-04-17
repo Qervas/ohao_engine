@@ -6,6 +6,12 @@
 
 namespace ohao {
 
+namespace {
+constexpr uint32_t kPTFlagEnableAOVs = 1u << 0;
+constexpr uint32_t kPTFlagEnableInternalDenoise = 1u << 1;
+constexpr uint32_t kPTFlagEnableFireflyClamp = 1u << 2;
+}
+
 PathTracer::~PathTracer() {
     destroy();
 }
@@ -944,7 +950,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     }
 
     // --- Transition AOV images to GENERAL for storage write ---
-    {
+    if (m_renderSettings.enableAuxiliaryAOVs) {
         VkImageMemoryBarrier aovBarriers[2] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -979,6 +985,11 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.invProj = glm::inverse(proj);
     pc.prevViewProj = m_prevViewProj;
     pc.params = glm::uvec4(m_width, m_height, m_frameIndex, m_maxBounces);
+    pc.control = glm::uvec4(0u);
+    if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
+    if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;
+    if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
+    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, 0.0f, 0.0f, 0.0f);
 
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;
@@ -1007,7 +1018,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     }
 
     // --- Transition AOV images to TRANSFER_SRC_OPTIMAL for denoiser readback ---
-    {
+    if (m_renderSettings.enableAuxiliaryAOVs) {
         VkImageMemoryBarrier aovBarriers[2] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
