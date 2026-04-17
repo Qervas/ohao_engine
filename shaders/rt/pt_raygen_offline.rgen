@@ -54,6 +54,7 @@ struct RayPayload {
     vec3 hitAlbedo;
     float hitDist;
     uint hitInstance;
+    float envPdf;       // set by miss shader when env map sampled; used for MIS weighting
 };
 
 layout(location = 0) rayPayloadEXT RayPayload payload;
@@ -132,8 +133,16 @@ void main() {
         }
 
         if (payload.hitDist < 0.0) {
-            // miss — escaped scene, add environment contribution
-            radiance += throughput * payload.color;  // env map sampled in miss shader
+            // miss — escaped scene. MIS-weight the env contribution on non-primary rays;
+            // primary rays are camera-driven and not subject to BSDF-env MIS.
+            float envMisWeight = 1.0;
+            if (bounce > 0u && payload.envPdf > 0.0 && pc.control.w > 0u) {
+                // Approximate BSDF PDF of the ray direction that just hit env.
+                // Task 5 replaces this with the actual tracked last-bounce PDF.
+                float bsdfPdfEst = max(1.0 / OHAO_TWOPI, 1e-3);
+                envMisWeight = misBalanceHeuristic(bsdfPdfEst, payload.envPdf);
+            }
+            radiance += throughput * payload.color * envMisWeight;
             if (bounce == 0u && enableAOVs) {
                 imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
                 imageStore(normalAOV, pixel, vec4(0));
@@ -297,6 +306,68 @@ void main() {
                         if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
                     }
                     radiance += directContribution;
+                }
+            }
+        }
+
+        // === Env MIS — importance-sample env map, trace shadow, weight by balance heuristic ===
+        if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+            float u1 = rand01();
+            float u2 = rand01();
+            vec3 envDir;
+            float envPdf;
+            sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+            float NdotL_env = max(dot(N, envDir), 0.0);
+            if (NdotL_env > 0.0 && envPdf > 0.0) {
+                // Shadow ray toward sampled env direction
+                payload.hitDist = 999.0;
+                traceRayEXT(topLevelAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xFF, 0, 0, 0,
+                    hitPos + N * 0.01, 0.001, envDir, 10000.0, 0);
+
+                if (payload.hitDist < 0.0) {
+                    // Hit nothing — env is visible in this direction.
+                    // payload.color is set by the miss shader with env radiance.
+                    vec3 envRadiance = payload.color;
+
+                    // Cook-Torrance BRDF at envDir (same form as NEE block)
+                    vec3 V = normalize(-rayDir);
+                    vec3 H = normalize(envDir + V);
+                    float NdotH = max(dot(N, H), 0.001);
+                    float NdotV = max(dot(N, V), 0.001);
+                    float VdotH = max(dot(V, H), 0.001);
+                    float a = roughness * roughness;
+                    float a2 = a * a;
+                    float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                    float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+                    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+                    float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                            * (NdotV / (NdotV * (1.0 - k) + k));
+                    vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                    vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                    vec3 diff = kD * albedo / OHAO_PI;
+                    vec3 brdf = diff + spec;
+
+                    // Estimate BSDF PDF in envDir (matches the specProb split used below for sampling)
+                    float cosI = abs(dot(normalize(rayDir), N));
+                    vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
+                    float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
+                    if (isMetal) specProbMIS = 1.0;
+                    float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                    float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                    float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                    float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                    vec3 envContribution = throughput * envRadiance * brdf * NdotL_env * w / envPdf;
+
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                        if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                    }
+                    radiance += envContribution;
                 }
             }
         }

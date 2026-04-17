@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_GOOGLE_include_directive : require
 
 // Path Tracer Miss Shader — ray escaped the scene
 // Samples HDR environment map if available, otherwise returns black
@@ -13,6 +14,7 @@ struct RayPayload {
     vec3 hitAlbedo;
     float hitDist;
     uint hitInstance;
+    float envPdf;       // set by miss shader when env map sampled; used for MIS weighting
 };
 
 layout(location = 0) rayPayloadInEXT RayPayload payload;
@@ -27,6 +29,20 @@ layout(set = 0, binding = 11) readonly buffer LightBuffer {
     uint _pad[2];
     // GPULight lights[] follows at offset 16
 } lightBuf;
+
+layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
+layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+
+layout(push_constant) uniform PushConstants {
+    mat4 invView;
+    mat4 invProj;
+    mat4 prevViewProj;
+    uvec4 params;
+    uvec4 control;
+    vec4 tuning;
+} pc;
+
+#include "includes/rt/env_sampling.glsl"
 
 // Convert ray direction to equirectangular UV
 vec2 dirToEquirect(vec3 dir) {
@@ -48,5 +64,13 @@ void main() {
         vec3 dir = normalize(gl_WorldRayDirectionEXT);
         float t = dir.y * 0.5 + 0.5;  // 0=below, 1=above
         payload.color = mix(vec3(0.05, 0.04, 0.03), vec3(0.15, 0.14, 0.12), t);
+    }
+
+    // Report env PDF so the caller can apply MIS weighting on BSDF-side env hits.
+    if (lightBuf.envMapTexIdx != 0xFFFFFFFFu && pc.control.w > 0u && pc.tuning.y > 0.0) {
+        vec3 dir = normalize(gl_WorldRayDirectionEXT);
+        payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));
+    } else {
+        payload.envPdf = 0.0;
     }
 }

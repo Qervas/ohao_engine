@@ -50,6 +50,7 @@ struct RayPayload {
     vec3 hitAlbedo;
     float hitDist;
     uint hitInstance;
+    float envPdf;       // set by miss shader when env map sampled; used for MIS weighting
 };
 
 layout(location = 0) rayPayloadEXT RayPayload payload;
