@@ -79,7 +79,8 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_physicalDevice = physicalDevice;
     m_width = width;
     m_height = height;
-    m_frameIndex = 0;
+    m_sampleIndex = 0;
+    m_historyFrameCount = 0;
 
     if (!loadFunctionPointers()) {
         std::cerr << "[PathTracer] Failed to load RT function pointers" << std::endl;
@@ -278,6 +279,90 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_normalAOVView) != VK_SUCCESS) return false;
     }
 
+    // --- Surface history ping-pong: RGBA32F for world-position validation ---
+    for (uint32_t i = 0; i < 2; ++i) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_surfaceHistoryImages[i]) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_surfaceHistoryImages[i], &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_surfaceHistoryMemory[i]) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_surfaceHistoryImages[i], m_surfaceHistoryMemory[i], 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_surfaceHistoryImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_surfaceHistoryViews[i]) != VK_SUCCESS) return false;
+        m_surfaceHistoryInitialized[i] = false;
+    }
+    m_surfaceHistoryWriteIndex = 0;
+
+    // --- Shading history ping-pong: RGBA32F for normal/roughness validation ---
+    for (uint32_t i = 0; i < 2; ++i) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_shadingHistoryImages[i]) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_shadingHistoryImages[i], &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_shadingHistoryMemory[i]) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_shadingHistoryImages[i], m_shadingHistoryMemory[i], 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_shadingHistoryImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_shadingHistoryViews[i]) != VK_SUCCESS) return false;
+        m_shadingHistoryInitialized[i] = false;
+    }
+    m_shadingHistoryWriteIndex = 0;
+
     return true;
 }
 
@@ -297,6 +382,20 @@ void PathTracer::destroyImages() {
     if (m_normalAOVView) { vkDestroyImageView(m_device, m_normalAOVView, nullptr); m_normalAOVView = VK_NULL_HANDLE; }
     if (m_normalAOV) { vkDestroyImage(m_device, m_normalAOV, nullptr); m_normalAOV = VK_NULL_HANDLE; }
     if (m_normalAOVMemory) { vkFreeMemory(m_device, m_normalAOVMemory, nullptr); m_normalAOVMemory = VK_NULL_HANDLE; }
+
+    for (uint32_t i = 0; i < 2; ++i) {
+        if (m_surfaceHistoryViews[i]) { vkDestroyImageView(m_device, m_surfaceHistoryViews[i], nullptr); m_surfaceHistoryViews[i] = VK_NULL_HANDLE; }
+        if (m_surfaceHistoryImages[i]) { vkDestroyImage(m_device, m_surfaceHistoryImages[i], nullptr); m_surfaceHistoryImages[i] = VK_NULL_HANDLE; }
+        if (m_surfaceHistoryMemory[i]) { vkFreeMemory(m_device, m_surfaceHistoryMemory[i], nullptr); m_surfaceHistoryMemory[i] = VK_NULL_HANDLE; }
+        m_surfaceHistoryInitialized[i] = false;
+
+        if (m_shadingHistoryViews[i]) { vkDestroyImageView(m_device, m_shadingHistoryViews[i], nullptr); m_shadingHistoryViews[i] = VK_NULL_HANDLE; }
+        if (m_shadingHistoryImages[i]) { vkDestroyImage(m_device, m_shadingHistoryImages[i], nullptr); m_shadingHistoryImages[i] = VK_NULL_HANDLE; }
+        if (m_shadingHistoryMemory[i]) { vkFreeMemory(m_device, m_shadingHistoryMemory[i], nullptr); m_shadingHistoryMemory[i] = VK_NULL_HANDLE; }
+        m_shadingHistoryInitialized[i] = false;
+    }
+    m_surfaceHistoryWriteIndex = 0;
+    m_shadingHistoryWriteIndex = 0;
 }
 
 // ─── Material buffer ─────────────────────────────────────────────────
@@ -362,7 +461,7 @@ void PathTracer::setMaterialData(const std::vector<glm::vec4>& materials) {
 // ─── Descriptor resources ────────────────────────────────────────────
 
 bool PathTracer::createDescriptorResources() {
-    // Layout: 8 bindings
+    // Layout: RT resources + realtime history validation images
     //   0: TLAS (acceleration structure)           — RAYGEN
     //   1: Accumulation buffer (storage image)     — RAYGEN   (RGBA32F)
     //   2: Output image (storage image)            — RAYGEN   (RGBA8)
@@ -371,7 +470,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[13] = {};
+    VkDescriptorSetLayoutBinding bindings[17] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -443,22 +542,46 @@ bool PathTracer::createDescriptorResources() {
     bindings[12].descriptorCount = m_maxBindlessTextures;
     bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
 
+    // 13: Previous-frame surface history image
+    bindings[13].binding = 13;
+    bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[13].descriptorCount = 1;
+    bindings[13].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+    // 14: Current-frame surface history image
+    bindings[14].binding = 14;
+    bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[14].descriptorCount = 1;
+    bindings[14].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+    // 15: Previous-frame shading history image
+    bindings[15].binding = 15;
+    bindings[15].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[15].descriptorCount = 1;
+    bindings[15].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+    // 16: Current-frame shading history image
+    bindings[16].binding = 16;
+    bindings[16].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[16].descriptorCount = 1;
+    bindings[16].stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     // Enable bindless: variable count on the LAST binding only
-    VkDescriptorBindingFlags bindingFlags[13] = {};
+    VkDescriptorBindingFlags bindingFlags[17] = {};
     bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 13;
+    flagsInfo.bindingCount = 17;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 13;
+    layoutInfo.bindingCount = 17;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -467,7 +590,7 @@ bool PathTracer::createDescriptorResources() {
     // Pool — allocate enough for bindless textures
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +1 for light buffer
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
@@ -503,10 +626,10 @@ bool PathTracer::createDescriptorResources() {
 
 bool PathTracer::createRTPipeline() {
     // Load shader SPVs
-    auto rgenCode = readFile("bin/shaders/rt_pt_raygen.rgen.spv");
-    auto rmissCode = readFile("bin/shaders/rt_pt_miss.rmiss.spv");
-    auto rchitCode = readFile("bin/shaders/rt_pt_closesthit.rchit.spv");
-    auto rahitCode = readFile("bin/shaders/rt_pt_anyhit.rahit.spv");
+    auto rgenCode = readFile(m_shaderSet.raygenSpv);
+    auto rmissCode = readFile(m_shaderSet.missSpv);
+    auto rchitCode = readFile(m_shaderSet.closestHitSpv);
+    auto rahitCode = readFile(m_shaderSet.anyHitSpv);
 
     if (rgenCode.empty() || rmissCode.empty() || rchitCode.empty()) {
         std::cerr << "[PathTracer] Failed to load RT shader SPVs" << std::endl;
@@ -783,7 +906,25 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     normalAOVInfo.imageView = m_normalAOVView;
     normalAOVInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[13] = {};
+    const uint32_t prevSurfaceHistoryIndex = 1u - m_surfaceHistoryWriteIndex;
+    VkDescriptorImageInfo prevSurfaceHistoryInfo{};
+    prevSurfaceHistoryInfo.imageView = m_surfaceHistoryViews[prevSurfaceHistoryIndex];
+    prevSurfaceHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkDescriptorImageInfo currSurfaceHistoryInfo{};
+    currSurfaceHistoryInfo.imageView = m_surfaceHistoryViews[m_surfaceHistoryWriteIndex];
+    currSurfaceHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    const uint32_t prevShadingHistoryIndex = 1u - m_shadingHistoryWriteIndex;
+    VkDescriptorImageInfo prevShadingHistoryInfo{};
+    prevShadingHistoryInfo.imageView = m_shadingHistoryViews[prevShadingHistoryIndex];
+    prevShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkDescriptorImageInfo currShadingHistoryInfo{};
+    currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
+    currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[17] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -914,22 +1055,54 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         writeCount++;
     }
 
+    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstBinding = 13;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo = &prevSurfaceHistoryInfo;
+    writeCount++;
+
+    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstBinding = 14;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo = &currSurfaceHistoryInfo;
+    writeCount++;
+
+    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstBinding = 15;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo = &prevShadingHistoryInfo;
+    writeCount++;
+
+    writes[writeCount].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet = m_descriptorSet;
+    writes[writeCount].dstBinding = 16;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo = &currShadingHistoryInfo;
+    writeCount++;
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
-    // On first frame (frameIndex==0), transition from UNDEFINED to clear it;
+    // On first accumulated frame, transition from UNDEFINED to clear it;
     // on subsequent frames, keep GENERAL (already there from last trace).
     {
         VkImageMemoryBarrier accumBarrier{};
         accumBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        accumBarrier.srcAccessMask = (m_frameIndex == 0) ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
+        accumBarrier.srcAccessMask = (m_historyFrameCount == 0) ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
         accumBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        accumBarrier.oldLayout = (m_frameIndex == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+        accumBarrier.oldLayout = (m_historyFrameCount == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
         accumBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         accumBarrier.image = m_accumBuffer;
         accumBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd,
-            (m_frameIndex == 0) ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            (m_historyFrameCount == 0) ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
             VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
             0, 0, nullptr, 0, nullptr, 1, &accumBarrier);
     }
@@ -974,6 +1147,61 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             0, 0, nullptr, 0, nullptr, 2, aovBarriers);
     }
 
+    // --- Transition surface history images to GENERAL ---
+    {
+        const uint32_t prevSurfaceHistoryIndex = 1u - m_surfaceHistoryWriteIndex;
+        VkImageMemoryBarrier historyBarriers[2] = {};
+
+        historyBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        historyBarriers[0].srcAccessMask = m_surfaceHistoryInitialized[prevSurfaceHistoryIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+        historyBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        historyBarriers[0].oldLayout = m_surfaceHistoryInitialized[prevSurfaceHistoryIndex] ? VK_IMAGE_LAYOUT_GENERAL
+                                                                                            : VK_IMAGE_LAYOUT_UNDEFINED;
+        historyBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        historyBarriers[0].image = m_surfaceHistoryImages[prevSurfaceHistoryIndex];
+        historyBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        historyBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        historyBarriers[1].srcAccessMask = m_surfaceHistoryInitialized[m_surfaceHistoryWriteIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+        historyBarriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        historyBarriers[1].oldLayout = m_surfaceHistoryInitialized[m_surfaceHistoryWriteIndex] ? VK_IMAGE_LAYOUT_GENERAL
+                                                                                                : VK_IMAGE_LAYOUT_UNDEFINED;
+        historyBarriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        historyBarriers[1].image = m_surfaceHistoryImages[m_surfaceHistoryWriteIndex];
+        historyBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            0, 0, nullptr, 0, nullptr, 2, historyBarriers);
+    }
+
+    {
+        const uint32_t prevShadingHistoryIndex = 1u - m_shadingHistoryWriteIndex;
+        VkImageMemoryBarrier historyBarriers[2] = {};
+
+        historyBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        historyBarriers[0].srcAccessMask = m_shadingHistoryInitialized[prevShadingHistoryIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+        historyBarriers[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        historyBarriers[0].oldLayout = m_shadingHistoryInitialized[prevShadingHistoryIndex] ? VK_IMAGE_LAYOUT_GENERAL
+                                                                                            : VK_IMAGE_LAYOUT_UNDEFINED;
+        historyBarriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        historyBarriers[0].image = m_shadingHistoryImages[prevShadingHistoryIndex];
+        historyBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        historyBarriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        historyBarriers[1].srcAccessMask = m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+        historyBarriers[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        historyBarriers[1].oldLayout = m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] ? VK_IMAGE_LAYOUT_GENERAL
+                                                                                                : VK_IMAGE_LAYOUT_UNDEFINED;
+        historyBarriers[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        historyBarriers[1].image = m_shadingHistoryImages[m_shadingHistoryWriteIndex];
+        historyBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            0, 0, nullptr, 0, nullptr, 2, historyBarriers);
+    }
+
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -984,11 +1212,13 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.invView = glm::inverse(view);
     pc.invProj = glm::inverse(proj);
     pc.prevViewProj = m_prevViewProj;
-    pc.params = glm::uvec4(m_width, m_height, m_frameIndex, m_maxBounces);
+    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces);
     pc.control = glm::uvec4(0u);
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
     if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;
     if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
+    pc.control.y = m_historyFrameCount;
+    pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, 0.0f, 0.0f, 0.0f);
 
     // Store current viewProj for next frame's reprojection
@@ -1042,14 +1272,28 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             0, 0, nullptr, 0, nullptr, 2, aovBarriers);
     }
 
-    // Increment frame for progressive accumulation
-    m_frameIndex++;
+    // Advance sample sequence and track accumulation history separately.
+    m_sampleIndex++;
+    m_historyFrameCount++;
+    m_viewChangedThisFrame = false;
+    m_surfaceHistoryInitialized[m_surfaceHistoryWriteIndex] = true;
+    m_surfaceHistoryWriteIndex = 1u - m_surfaceHistoryWriteIndex;
+    m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] = true;
+    m_shadingHistoryWriteIndex = 1u - m_shadingHistoryWriteIndex;
 }
 
 // ─── Accumulation reset ──────────────────────────────────────────────
 
 void PathTracer::resetAccumulation() {
-    m_frameIndex = 0;
+    m_sampleIndex = 0;
+    m_historyFrameCount = 0;
+    m_viewChangedThisFrame = false;
+    m_surfaceHistoryWriteIndex = 0;
+    m_surfaceHistoryInitialized[0] = false;
+    m_surfaceHistoryInitialized[1] = false;
+    m_shadingHistoryWriteIndex = 0;
+    m_shadingHistoryInitialized[0] = false;
+    m_shadingHistoryInitialized[1] = false;
 }
 
 // ─── Resize ──────────────────────────────────────────────────────────
@@ -1064,7 +1308,15 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     createImages();
 
     // Reset accumulation since the buffer dimensions changed
-    m_frameIndex = 0;
+    m_sampleIndex = 0;
+    m_historyFrameCount = 0;
+    m_viewChangedThisFrame = false;
+    m_surfaceHistoryWriteIndex = 0;
+    m_surfaceHistoryInitialized[0] = false;
+    m_surfaceHistoryInitialized[1] = false;
+    m_shadingHistoryWriteIndex = 0;
+    m_shadingHistoryInitialized[0] = false;
+    m_shadingHistoryInitialized[1] = false;
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────────────

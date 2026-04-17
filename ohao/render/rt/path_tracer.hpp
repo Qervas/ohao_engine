@@ -45,11 +45,18 @@ struct RTRenderSettings {
     float fireflyClampLuminance{10.0f};
 };
 
+struct PathTracerShaderSet {
+    const char* raygenSpv{"bin/shaders/rt_pt_raygen.rgen.spv"};
+    const char* missSpv{"bin/shaders/rt_pt_miss.rmiss.spv"};
+    const char* closestHitSpv{"bin/shaders/rt_pt_closesthit.rchit.spv"};
+    const char* anyHitSpv{"bin/shaders/rt_pt_anyhit.rahit.spv"};
+};
+
 inline constexpr RTRenderSettings kRealtimeRTSettings{
     RTRenderProfile::Realtime,
     2,
     true,
-    false,
+    true,
     false,
     true,
     true,
@@ -74,6 +81,7 @@ public:
 
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
               uint32_t width, uint32_t height);
+    void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
     void render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                 const glm::mat4& view, const glm::mat4& proj,
@@ -115,6 +123,7 @@ public:
     std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
 
     // Reset accumulation — call when camera moves so the buffer restarts
+    void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
 
     void destroy();
@@ -123,7 +132,7 @@ public:
     void setMaxBounces(uint32_t bounces) { m_maxBounces = bounces; }
     void setRenderSettings(const RTRenderSettings& settings) { m_renderSettings = settings; }
     const RTRenderSettings& getRenderSettings() const { return m_renderSettings; }
-    uint32_t getFrameIndex() const { return m_frameIndex; }
+    uint32_t getFrameIndex() const { return m_historyFrameCount; }
 
 private:
     bool createImages();
@@ -143,6 +152,7 @@ private:
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
     RTRenderSettings m_renderSettings{kOfflineRTSettings};
+    PathTracerShaderSet m_shaderSet{};
     static constexpr uint32_t m_maxBindlessTextures = 1024;
     VkBuffer m_normalBuffer = VK_NULL_HANDLE;
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
@@ -163,7 +173,9 @@ private:
     VkSampler m_textureSampler = VK_NULL_HANDLE;
     uint32_t m_textureArrayCount = 0;
     uint32_t m_normalVertexCount = 0;
-    uint32_t m_frameIndex = 0;
+    uint32_t m_sampleIndex = 0;
+    uint32_t m_historyFrameCount = 0;
+    bool m_viewChangedThisFrame = false;
 
     // Accumulation buffer — RGBA32F HDR
     VkImage m_accumBuffer = VK_NULL_HANDLE;
@@ -182,6 +194,20 @@ private:
     VkImage m_normalAOV = VK_NULL_HANDLE;
     VkDeviceMemory m_normalAOVMemory = VK_NULL_HANDLE;
     VkImageView m_normalAOVView = VK_NULL_HANDLE;
+
+    // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
+    VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory m_surfaceHistoryMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView m_surfaceHistoryViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    bool m_surfaceHistoryInitialized[2] = {false, false};
+    uint32_t m_surfaceHistoryWriteIndex = 0;
+
+    // Shading history ping-pong for realtime validation (xyz = first-hit normal, w = roughness)
+    VkImage m_shadingHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory m_shadingHistoryMemory[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView m_shadingHistoryViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    bool m_shadingHistoryInitialized[2] = {false, false};
+    uint32_t m_shadingHistoryWriteIndex = 0;
 
     // Material buffer (per-instance albedo, vec4 SSBO)
     VkBuffer m_materialBuffer = VK_NULL_HANDLE;
@@ -208,8 +234,8 @@ private:
         glm::mat4 invView;              // 64 bytes
         glm::mat4 invProj;              // 64 bytes
         glm::mat4 prevViewProj;         // 64 bytes — for temporal reprojection
-        glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=frameIndex, w=maxBounces)
-        glm::uvec4 control;             // x=flags
+        glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=sampleIndex, w=maxBounces)
+        glm::uvec4 control;             // x=flags, y=historyFrameCount, z=viewChanged
         glm::vec4 tuning;               // x=firefly clamp luminance
     };  // total = 208 bytes
 

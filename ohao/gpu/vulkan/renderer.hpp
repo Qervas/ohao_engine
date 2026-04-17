@@ -6,12 +6,15 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <functional>
 #include <glm/glm.hpp>
 #include "core/common_types.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
+#include "render/rt/rt_render_pipeline.hpp"
+#include "render/rt/rt_profile_renderer.hpp"
 #include "render/rt/gpu_skinning.hpp"
 #include "render/rt/animated_rt_manager.hpp"
 
@@ -118,8 +121,9 @@ public:
     void setRTRenderProfile(RTRenderProfile profile);
     const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
     void setEnvironmentMap(const std::string& path) { m_envMapPath = path; }
-    void resetAccumulation() { if (m_pathTracer) m_pathTracer->resetAccumulation(); }
-    uint32_t getPathTracerFrameIndex() const { return m_pathTracer ? m_pathTracer->getFrameIndex() : 0; }
+    void notifyCameraChanged();
+    void resetAccumulation();
+    uint32_t getPathTracerFrameIndex() const;
 
     // Read back HDR buffers for OIDN denoising
     bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
@@ -187,6 +191,8 @@ private:
     void updateLightBuffer();   // Phase 3: Collect and update lights
     void updateLightBuffer(uint32_t frameIndex);    // Per-frame version
     void cacheEmissiveLights(); // Scan emissive materials → cached LightData (called once per scene change)
+    bool updateAnimatedActorsForRT();
+    void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS);
 
     // Phase 2: Scene mesh rendering
     void renderSceneObjects(VkCommandBuffer cmd);  // Draw all scene meshes with push constants
@@ -195,10 +201,14 @@ private:
     void recordCommandBuffer();
     void copyFramebufferToPixelBuffer();
     void renderMultiFrame();  // Multi-frame ring buffer rendering
-    void renderPathTraced();     // Full path tracing (RT pipeline, no rasterization)
+    void renderRTPipeline(const IRTRenderPipeline& pipeline);
 public:
 private:
     void renderLegacy();      // Legacy single-frame rendering
+    const IRTRenderPipeline* getRTPipeline(RenderMode mode) const;
+    IRTRendererProfile* getRTRenderer(RenderMode mode);
+    const IRTRendererProfile* getRTRenderer(RenderMode mode) const;
+    void forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn);
 
     // Cleanup
     void cleanupFramebuffer();
@@ -290,7 +300,10 @@ private:
 
     // RT acceleration structure + path tracer
     std::unique_ptr<RTAccelerationStructure> m_rtAccel;
-    std::unique_ptr<PathTracer> m_pathTracer;
+    RTRealtimePipeline m_rtRealtimePipeline;
+    RTOfflinePipeline m_rtOfflinePipeline;
+    std::unique_ptr<RTRealtimeRenderer> m_rtRealtimeRenderer;
+    std::unique_ptr<RTOfflineRenderer> m_rtOfflineRenderer;
     bool m_rtAccelDirty{true};
     void buildAccelerationStructures();  // orchestrator — calls sub-functions below
     void createRTVertexIndexBuffers();    // copy raster buffers to device-local RT buffers

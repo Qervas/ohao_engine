@@ -1,0 +1,7 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+// Offline/reference raygen shader.
+// Kept as a separate entry point so offline and realtime can diverge cleanly.
+
+#include "pt_raygen.rgen"

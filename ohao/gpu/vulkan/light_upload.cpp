@@ -388,12 +388,16 @@ void VulkanRenderer::uploadLightBuffer() {
                     m_envMapImageView = envView;  // store for deferred pipeline
 
                     // Add to bindless textures
-                    auto views = m_pathTracer->getBindlessImageViews();
-                    auto samplers = m_pathTracer->getBindlessSamplers();
+                    auto views = m_rtOfflineRenderer ? m_rtOfflineRenderer->getBindlessImageViews()
+                                                     : std::vector<VkImageView>{};
+                    auto samplers = m_rtOfflineRenderer ? m_rtOfflineRenderer->getBindlessSamplers()
+                                                        : std::vector<VkSampler>{};
                     uint32_t envTexIdx = static_cast<uint32_t>(views.size());
                     views.push_back(envView);
                     samplers.push_back(m_rtTextureSampler);
-                    m_pathTracer->setBindlessTextures(views, samplers);
+                    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                        renderer.setBindlessTextures(views, samplers);
+                    });
 
                     // Write env map index to light buffer header (offset 4)
                     void* lm;
@@ -406,9 +410,9 @@ void VulkanRenderer::uploadLightBuffer() {
                 }
             }
 
-            if (m_pathTracer) {
-                m_pathTracer->setLightBuffer(m_rtLightBuffer, count);
-            }
+            forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                renderer.setLightBuffer(m_rtLightBuffer, count);
+            });
 
             std::cout << "[RT] Light buffer: " << count << " lights" << std::endl;
         }

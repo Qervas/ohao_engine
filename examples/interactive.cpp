@@ -269,7 +269,7 @@ int main(int argc, char* argv[]) {
         camera.setFov(45.0f);
 
         if (g_cam.moved) {
-            renderer.resetAccumulation();
+            renderer.notifyCameraChanged();
             g_cam.moved = false;
         }
 

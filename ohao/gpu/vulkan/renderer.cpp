@@ -2,6 +2,7 @@
 #include "render/camera/camera.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
+#include "animation/animation_component.hpp"
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
@@ -173,14 +174,16 @@ bool VulkanRenderer::initialize() {
         if (m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool)) {
             std::cout << "Ray tracing: available" << std::endl;
 
-            // Initialize path tracer
-            m_pathTracer = std::make_unique<PathTracer>();
-            if (m_pathTracer->init(m_device, m_physicalDevice, m_width, m_height)) {
-                applyRTRenderSettings();
-                std::cout << "Path tracer: available" << std::endl;
-            } else {
-                std::cout << "Path tracer: init failed" << std::endl;
-                m_pathTracer.reset();
+            m_rtRealtimeRenderer = std::make_unique<RTRealtimeRenderer>();
+            if (!m_rtRealtimeRenderer->init(m_device, m_physicalDevice, m_width, m_height)) {
+                std::cout << "RT realtime renderer: init failed" << std::endl;
+                m_rtRealtimeRenderer.reset();
+            }
+
+            m_rtOfflineRenderer = std::make_unique<RTOfflineRenderer>();
+            if (!m_rtOfflineRenderer->init(m_device, m_physicalDevice, m_width, m_height)) {
+                std::cout << "RT offline renderer: init failed" << std::endl;
+                m_rtOfflineRenderer.reset();
             }
         } else {
             std::cout << "Ray tracing: not available (continuing without RT)" << std::endl;
@@ -225,10 +228,8 @@ void VulkanRenderer::shutdown() {
             m_gpuSkinning->cleanup();
             m_gpuSkinning.reset();
         }
-        if (m_pathTracer) {
-            m_pathTracer->destroy();
-            m_pathTracer.reset();
-        }
+        if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }
+        if (m_rtOfflineRenderer) { m_rtOfflineRenderer->destroy(); m_rtOfflineRenderer.reset(); }
         if (m_rtAccel) {
             m_rtAccel->destroy();
             m_rtAccel.reset();
@@ -366,9 +367,9 @@ void VulkanRenderer::render() {
     if (!m_initialized) return;
 
     // Check render mode
-    if ((m_renderMode == RenderMode::RTRealtime || m_renderMode == RenderMode::RTOffline) &&
-        m_pathTracer && m_rtAccel) {
-        renderPathTraced();
+    if (const auto* rtPipeline = getRTPipeline(m_renderMode);
+        rtPipeline && getRTRenderer(m_renderMode) && m_rtAccel) {
+        renderRTPipeline(*rtPipeline);
         return;
     }
 
@@ -390,16 +391,15 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
         std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
         return;
     }
-    if ((mode == RenderMode::RTRealtime || mode == RenderMode::RTOffline) &&
-        (!m_pathTracer || !m_rtAccel)) {
+    const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
+    if (rtPipeline && (!getRTRenderer(mode) || !m_rtAccel)) {
         std::cerr << "Path tracing not available, staying in current mode" << std::endl;
         return;
     }
 
-    if (mode == RenderMode::RTRealtime) {
-        setRTRenderProfile(RTRenderProfile::Realtime);
-    } else if (mode == RenderMode::RTOffline) {
-        setRTRenderProfile(RTRenderProfile::Offline);
+    if (rtPipeline) {
+        m_rtSettings = rtPipeline->getDefaultSettings();
+        applyRTRenderSettings();
     }
 
     m_renderMode = mode;
@@ -425,9 +425,111 @@ void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
 }
 
 void VulkanRenderer::applyRTRenderSettings() {
-    if (!m_pathTracer) return;
-    m_pathTracer->setMaxBounces(m_rtSettings.maxBounces);
-    m_pathTracer->setRenderSettings(m_rtSettings);
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->setRenderSettings(m_rtSettings);
+    }
+}
+
+bool VulkanRenderer::updateAnimatedActorsForRT() {
+    bool hasAnimatedActors = false;
+    if (!m_scene) return false;
+
+    const float dt = 1.0f / 60.0f;
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto animComp = actor->getComponent<AnimationComponent>();
+        if (animComp && animComp->isPlaying()) {
+            animComp->update(dt);
+            hasAnimatedActors = true;
+        }
+    }
+    return hasAnimatedActors;
+}
+
+void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS) {
+    auto* rtRenderer = getRTRenderer(m_renderMode);
+    if (!rtRenderer) return;
+
+    // Keep the active RT pipeline authoritative over path tracer behavior.
+    m_rtSettings = pipeline.getDefaultSettings();
+    applyRTRenderSettings();
+
+    updateLightBuffer();
+    if (m_rtLightBuffer != VK_NULL_HANDLE) {
+        rtRenderer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
+    }
+
+    if (hasDynamicBLAS && m_gpuSkinning) {
+        VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
+        if (skinnedNormalBuf != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
+            rtRenderer->setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
+            return;
+        }
+    }
+
+    if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
+        rtRenderer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
+    }
+}
+
+const IRTRenderPipeline* VulkanRenderer::getRTPipeline(RenderMode mode) const {
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        return &m_rtRealtimePipeline;
+    case RenderMode::RTOffline:
+        return &m_rtOfflinePipeline;
+    default:
+        return nullptr;
+    }
+}
+
+IRTRendererProfile* VulkanRenderer::getRTRenderer(RenderMode mode) {
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        return m_rtRealtimeRenderer.get();
+    case RenderMode::RTOffline:
+        return m_rtOfflineRenderer.get();
+    default:
+        return nullptr;
+    }
+}
+
+const IRTRendererProfile* VulkanRenderer::getRTRenderer(RenderMode mode) const {
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        return m_rtRealtimeRenderer.get();
+    case RenderMode::RTOffline:
+        return m_rtOfflineRenderer.get();
+    default:
+        return nullptr;
+    }
+}
+
+void VulkanRenderer::forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn) {
+    if (m_rtOfflineRenderer) {
+        fn(*m_rtOfflineRenderer);
+    }
+    if (m_rtRealtimeRenderer) {
+        fn(*m_rtRealtimeRenderer);
+    }
+}
+
+void VulkanRenderer::resetAccumulation() {
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->resetAccumulation();
+    }
+}
+
+void VulkanRenderer::notifyCameraChanged() {
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->notifyViewChanged();
+    }
+}
+
+uint32_t VulkanRenderer::getPathTracerFrameIndex() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getFrameIndex();
+    }
+    return 0;
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {

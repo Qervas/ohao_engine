@@ -148,8 +148,9 @@ void VulkanRenderer::renderDeferred() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void VulkanRenderer::renderPathTraced() {
-    if (!m_pathTracer || !m_rtAccel) return;
+void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
+    auto* rtRenderer = getRTRenderer(m_renderMode);
+    if (!rtRenderer || !m_rtAccel) return;
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
@@ -164,32 +165,9 @@ void VulkanRenderer::renderPathTraced() {
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();
 
-    bool hasAnimatedActors = false;
-    if (m_scene) {
-        const float dt = 1.0f / 60.0f;
-        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-            auto animComp = actor->getComponent<AnimationComponent>();
-            if (animComp && animComp->isPlaying()) {
-                animComp->update(dt);
-                hasAnimatedActors = true;
-            }
-        }
-    }
-
+    bool hasAnimatedActors = updateAnimatedActorsForRT();
     bool hasDynamicBLAS = hasAnimatedActors && m_animatedRT && m_animatedRT->hasAnimatedContent();
-
-    updateLightBuffer();
-    if (m_rtLightBuffer != VK_NULL_HANDLE) {
-        m_pathTracer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
-    }
-    if (hasDynamicBLAS && m_gpuSkinning) {
-        VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
-        if (skinnedNormalBuf != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
-            m_pathTracer->setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
-        }
-    } else if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
-        m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
-    }
+    prepareRTSceneForFrame(pipeline, hasDynamicBLAS);
 
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);
@@ -210,12 +188,12 @@ void VulkanRenderer::renderPathTraced() {
     glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Sphere light: position, intensity, color, radius
-    m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
-                         glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
+    rtRenderer->render(cmd, m_rtAccel.get(), ptView, ptProj,
+                       glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
+                       glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
 
     // Copy path tracer output to staging buffer for CPU readback
-    VkImage ptOutput = m_pathTracer->getOutputImage();
+    VkImage ptOutput = rtRenderer->getOutputImage();
     if (ptOutput != VK_NULL_HANDLE && frame.stagingBuffer != VK_NULL_HANDLE) {
         // Output is already in TRANSFER_SRC_OPTIMAL from render()
         VkBufferImageCopy copyRegion{};
@@ -578,8 +556,9 @@ bool VulkanRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& o
 }
 
 bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
-                                            std::vector<float>& normal, uint32_t& w, uint32_t& h) {
-    if (!m_pathTracer) return false;
+                                        std::vector<float>& normal, uint32_t& w, uint32_t& h) {
+    const auto* rtRenderer = getRTRenderer(m_renderMode);
+    if (!rtRenderer) return false;
     w = m_width; h = m_height;
 
     auto readbackImage = [&](VkImage image, std::vector<float>& outBuf) -> bool {
@@ -662,9 +641,9 @@ bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<
     };
 
     vkDeviceWaitIdle(m_device);
-    bool ok = readbackImage(m_pathTracer->getAccumImage(), beauty);
-    ok &= readbackImage(m_pathTracer->getAlbedoAOV(), albedo);
-    ok &= readbackImage(m_pathTracer->getNormalAOV(), normal);
+    bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);
+    ok &= readbackImage(rtRenderer->getAlbedoAOV(), albedo);
+    ok &= readbackImage(rtRenderer->getNormalAOV(), normal);
     return ok;
 }
 

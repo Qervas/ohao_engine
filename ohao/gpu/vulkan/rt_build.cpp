@@ -704,7 +704,9 @@ void VulkanRenderer::uploadRTTextureArray() {
                     vkCreateImageView(m_device, &viewInfo, nullptr, &bindlessViews[layer]);
                     bindlessSamplers[layer] = m_rtTextureSampler;
                 }
-                m_pathTracer->setBindlessTextures(bindlessViews, bindlessSamplers);
+                forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                    renderer.setBindlessTextures(bindlessViews, bindlessSamplers);
+                });
 
                 // Update material buffer: encode texture indices as uint bits
                 // Shader uses floatBitsToUint() to decode, 0xFFFFFFFF = no texture
@@ -879,28 +881,28 @@ void VulkanRenderer::buildBLASTLAS() {
             auto* gi = m_deferredRenderer->getRT_GI();
             if (gi) gi->setMaterialAlbedos(materialAlbedos);
         }
-        if (m_pathTracer) {
-            m_pathTracer->setMaterialData(materialFullData);
+        forEachRTRenderer([&](IRTRendererProfile& renderer) {
+            renderer.setMaterialData(materialFullData);
             if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
-                m_pathTracer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
+                renderer.setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
             }
             if (m_rtLightBuffer != VK_NULL_HANDLE) {
-                m_pathTracer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
+                renderer.setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
             }
-            if (m_rtUVBuffer) m_pathTracer->setUVBuffer(m_rtUVBuffer);
+            if (m_rtUVBuffer) renderer.setUVBuffer(m_rtUVBuffer);
             if (m_rtMatIDBuffer && m_rtMatColorBuffer) {
-                m_pathTracer->setMaterialBuffers(m_rtMatIDBuffer, m_rtMatColorBuffer);
+                renderer.setMaterialBuffers(m_rtMatIDBuffer, m_rtMatColorBuffer);
             }
             if (m_rtTextureArrayView && m_rtTextureSampler && m_rtTextureCount > 0) {
-                m_pathTracer->setTextureArray(m_rtTextureArrayView, m_rtTextureSampler, m_rtTextureCount);
+                renderer.setTextureArray(m_rtTextureArrayView, m_rtTextureSampler, m_rtTextureCount);
             }
             if (m_gpuSkinning && !animMeshes.empty()) {
                 VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
                 if (skinnedNormalBuf != VK_NULL_HANDLE) {
-                    m_pathTracer->setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
+                    renderer.setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
                 }
             }
-        }
+        });
     }
     }
 
