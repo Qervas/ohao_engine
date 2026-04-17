@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
 
 // Realtime raygen shader.
 // This keeps the shared hit/miss/material path, but uses motion-tolerant accumulation
@@ -38,6 +39,8 @@ layout(push_constant) uniform PushConstants {
     vec4 tuning;
 } pc;
 
+#include "includes/rt/sampler_api.glsl"
+
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
 const uint PT_FLAG_ENABLE_FIREFLY_CLAMP = 1u << 2;
@@ -55,23 +58,12 @@ struct RayPayload {
 
 layout(location = 0) rayPayloadEXT RayPayload payload;
 
-uint rngState;
-void rngInit(uvec2 pixel, uint frame) {
-    rngState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
-}
-uint rngNext() {
-    rngState = rngState * 747796405u + 2891336453u;
-    uint w = ((rngState >> ((rngState >> 28u) + 4u)) ^ rngState) * 277803737u;
-    return (w >> 22u) ^ w;
-}
-float rand01() { return float(rngNext()) / 4294967296.0; }
-
-vec3 cosineHemisphere(vec3 N) {
+vec3 cosineHemisphere(vec3 N, vec2 u) {
     vec3 up = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
     vec3 T = normalize(cross(up, N));
     vec3 B = cross(N, T);
-    float r = sqrt(rand01());
-    float phi = 6.2831853 * rand01();
+    float r = sqrt(u.x);
+    float phi = 6.2831853 * u.y;
     return normalize(T * r * cos(phi) + B * r * sin(phi) + N * sqrt(max(0.0, 1.0 - r*r)));
 }
 
@@ -89,9 +81,11 @@ void main() {
     bool enableInternalDenoise = (pc.control.x & PT_FLAG_ENABLE_INTERNAL_DENOISE) != 0u;
     bool enableFireflyClamp = (pc.control.x & PT_FLAG_ENABLE_FIREFLY_CLAMP) != 0u;
 
-    rngInit(uvec2(pixel), frameIdx);
+    samplerInit(uvec2(pixel), frameIdx);
+    uint dimIdx = 0u;
 
-    vec2 jitter = vec2(rand01(), rand01()) - 0.5;
+    vec2 jitter = getSample2D(dimIdx) - 0.5;
+    dimIdx += 2u;
     vec2 uv = (vec2(pixel) + 0.5 + jitter) / vec2(pc.params.xy);
     vec2 ndc = uv * 2.0 - 1.0;
 
@@ -160,7 +154,8 @@ void main() {
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
         if (lightBuf.lightCount > 0u) {
-            uint selectedLightIdx = uint(rand01() * float(lightBuf.lightCount));
+            uint selectedLightIdx = uint(getSample1D(dimIdx) * float(lightBuf.lightCount));
+            dimIdx += 1u;
             selectedLightIdx = min(selectedLightIdx, lightBuf.lightCount - 1u);
 
             GPULight light = lightBuf.lights[selectedLightIdx];
@@ -180,7 +175,8 @@ void main() {
             float weight;
 
             if (lightType < 0.5) {
-                float u1 = rand01(), u2 = rand01();
+                vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = u12.x; float u2 = u12.y;
                 float cosTheta = 1.0 - 2.0 * u1;
                 float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
                 float phi = 6.2831853 * u2;
@@ -199,7 +195,8 @@ void main() {
                 weight = 1.0;
                 shadowDist = 10000.0;
             } else if (lightType < 2.5) {
-                float u1 = rand01(), u2 = rand01();
+                vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = u12.x; float u2 = u12.y;
                 float cosTheta = 1.0 - 2.0 * u1;
                 float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
                 float phi = 6.2831853 * u2;
@@ -220,7 +217,8 @@ void main() {
                 vec3 edge1 = light.extra.xyz;
                 vec3 edge2 = light.extra2.xyz;
                 float rectArea = light.extra2.w;
-                vec3 lightPoint = lightCenter + edge1 * rand01() + edge2 * rand01();
+                vec2 areaUV = getSample2D(dimIdx); dimIdx += 2u;
+                vec3 lightPoint = lightCenter + edge1 * areaUV.x + edge2 * areaUV.y;
                 vec3 lightNormal = normalize(cross(edge1, edge2));
                 vec3 toLight = lightPoint - hitPos;
                 float lightDist = length(toLight);
@@ -270,7 +268,8 @@ void main() {
         if (bounce > 1u) {
             float p = max(throughput.r, max(throughput.g, throughput.b));
             p = clamp(p, 0.1, 0.95);
-            if (rand01() > p) break;
+            float rrRand = getSample1D(dimIdx); dimIdx += 1u;
+            if (rrRand > p) break;
             throughput /= p;
         }
 
@@ -280,19 +279,25 @@ void main() {
         specProb *= (1.0 - roughness * 0.9);
         if (isMetal) specProb = 1.0;
 
-        if (rand01() < specProb || roughness < 0.05) {
+        float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
+        if (bsdfChoice < specProb || roughness < 0.05) {
             vec3 reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
-                vec3 jitterDir = cosineHemisphere(reflected) * roughness;
+                vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
+                vec3 jitterDir = cosineHemisphere(reflected, jitU) * roughness;
                 reflected = normalize(reflected + jitterDir);
-                if (dot(reflected, N) < 0.0) reflected = cosineHemisphere(N);
+                if (dot(reflected, N) < 0.0) {
+                    vec2 fallbackU = getSample2D(dimIdx); dimIdx += 2u;
+                    reflected = cosineHemisphere(N, fallbackU);
+                }
             }
             rayDir = reflected;
             rayOrigin = hitPos + N * 0.01;
             throughput *= isMetal ? albedo : vec3(1.0);
             throughput /= max(specProb, 0.01);
         } else {
-            rayDir = cosineHemisphere(N);
+            vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
+            rayDir = cosineHemisphere(N, diffU);
             rayOrigin = hitPos + N * 0.01;
             throughput *= albedo;
             throughput /= max(1.0 - specProb, 0.01);
