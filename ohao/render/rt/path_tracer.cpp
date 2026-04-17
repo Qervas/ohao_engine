@@ -1368,6 +1368,14 @@ void PathTracer::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
 
+    // CDF buffers are owned by VulkanRenderer, not by the path tracer.
+    // Clear the cached handles so later destroy calls or reuse don't touch freed memory.
+    m_envMarginalCDFBuffer = VK_NULL_HANDLE;
+    m_envConditionalCDFBuffer = VK_NULL_HANDLE;
+    m_envCDFWidth = 0;
+    m_envCDFHeight = 0;
+    m_envCDFIntegral = 0.0f;
+
     // SBT
     if (m_sbtBuffer) { vkDestroyBuffer(m_device, m_sbtBuffer, nullptr); m_sbtBuffer = VK_NULL_HANDLE; }
     if (m_sbtMemory) { vkFreeMemory(m_device, m_sbtMemory, nullptr); m_sbtMemory = VK_NULL_HANDLE; }

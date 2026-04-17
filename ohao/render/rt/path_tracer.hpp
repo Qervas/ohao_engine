@@ -122,7 +122,9 @@ public:
     std::vector<VkImageView> getBindlessImageViews() const { return m_bindlessImageViews; }
     std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
 
-    // Env CDF buffers for MIS importance sampling (bindings 17 + 18)
+    // Shader contract: envWidth == 0 means "no env map loaded" — the shader
+    // must skip env importance sampling in this case. The renderer provides
+    // 1-float dummy buffers so descriptor writes remain valid.
     void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
                           uint32_t envWidth, uint32_t envHeight, float integral) {
         m_envMarginalCDFBuffer   = marginal;
@@ -253,6 +255,7 @@ private:
         glm::mat4 prevViewProj;         // 64 bytes — for temporal reprojection
         glm::uvec4 params;              // 16 bytes  (x=width, y=height, z=sampleIndex, w=maxBounces)
         glm::uvec4 control;             // x=flags, y=historyFrameCount, z=viewChanged, w=envCDFWidth
+                                        // control.w = envCDFWidth. If 0, shader must skip env importance sampling.
         glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
     };  // total = 240 bytes
 
