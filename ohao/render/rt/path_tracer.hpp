@@ -22,6 +22,7 @@
 //   pt.resize(newWidth, newHeight);
 
 #include "rt_acceleration_structure.hpp"
+#include "render/rt/sampler_types.hpp"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <vector>
@@ -43,6 +44,7 @@ struct RTRenderSettings {
     bool enableInternalDenoise{false};
     bool enableFireflyClamp{false};
     float fireflyClampLuminance{10.0f};
+    SamplerType samplerType{SamplerType::Sobol};
 };
 
 struct PathTracerShaderSet {
@@ -61,6 +63,7 @@ inline constexpr RTRenderSettings kRealtimeRTSettings{
     true,
     true,
     10.0f,
+    SamplerType::PCG,
 };
 
 inline constexpr RTRenderSettings kOfflineRTSettings{
@@ -72,6 +75,7 @@ inline constexpr RTRenderSettings kOfflineRTSettings{
     false,
     false,
     0.0f,
+    SamplerType::Sobol,
 };
 
 class PathTracer {
