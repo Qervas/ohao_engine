@@ -673,6 +673,23 @@ bool PathTracer::createRTPipeline() {
     stages[0].module = rgenModule;
     stages[0].pName = "main";
 
+    // Specialization constant: sampler type baked into the raygen SPIR-V
+    // (see shaders/includes/rt/sampler_api.glsl, layout(constant_id=0)).
+    VkSpecializationMapEntry samplerEntry{};
+    samplerEntry.constantID = kSamplerSpecConstantId;
+    samplerEntry.offset = 0;
+    samplerEntry.size = sizeof(uint32_t);
+
+    uint32_t samplerTypeVal = static_cast<uint32_t>(m_renderSettings.samplerType);
+
+    VkSpecializationInfo samplerSpecInfo{};
+    samplerSpecInfo.mapEntryCount = 1;
+    samplerSpecInfo.pMapEntries = &samplerEntry;
+    samplerSpecInfo.dataSize = sizeof(uint32_t);
+    samplerSpecInfo.pData = &samplerTypeVal;
+
+    stages[0].pSpecializationInfo = &samplerSpecInfo;
+
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_MISS_BIT_KHR;
     stages[1].module = rmissModule;
