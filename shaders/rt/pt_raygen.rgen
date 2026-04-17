@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
 
 // Brute-force path tracer — simplest possible correct implementation.
 // No NEE, no tricks. Just trace rays, bounce off surfaces, hit the light.
@@ -24,6 +25,9 @@ layout(set = 0, binding = 11) readonly buffer LightBuffer {
     GPULight lights[];
 } lightBuf;
 
+layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
+layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+
 layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
@@ -32,6 +36,9 @@ layout(push_constant) uniform PushConstants {
     uvec4 control;
     vec4 tuning;
 } pc;
+
+#include "includes/rt/mis.glsl"
+#include "includes/rt/env_sampling.glsl"
 
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
