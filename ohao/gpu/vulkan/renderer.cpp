@@ -549,6 +549,13 @@ uint32_t VulkanRenderer::getPathTracerFrameIndex() const {
     return 0;
 }
 
+VkImageView VulkanRenderer::getMotionVectorAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getMotionVectorAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
 bool VulkanRenderer::initializeDeferredRenderer() {
     std::cout << "VulkanRenderer: Creating DeferredRenderer..." << std::endl;
     if (!m_deferredRenderer) {

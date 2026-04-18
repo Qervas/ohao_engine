@@ -144,6 +144,10 @@ public:
     void        setDenoiseMode(DenoiseMode mode);
     DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
 
+    // Returns the motion vector AOV image view from the active RT profile,
+    // or VK_NULL_HANDLE if no RT profile is active.
+    VkImageView getMotionVectorAOV() const;
+
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();
     // subsequent calls return the cached result until the next render().

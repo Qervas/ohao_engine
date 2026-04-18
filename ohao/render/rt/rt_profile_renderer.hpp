@@ -26,6 +26,7 @@ public:
     virtual VkImage getAccumImage() const = 0;
     virtual VkImage getAlbedoAOV() const = 0;
     virtual VkImage getNormalAOV() const = 0;
+    virtual VkImageView getMotionVectorAOV() const = 0;
 
     virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
     virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
@@ -78,6 +79,7 @@ public:
     VkImage getAccumImage() const override { return m_pathTracer.getAccumImage(); }
     VkImage getAlbedoAOV() const override { return m_pathTracer.getAlbedoAOV(); }
     VkImage getNormalAOV() const override { return m_pathTracer.getNormalAOV(); }
+    VkImageView getMotionVectorAOV() const override { return m_pathTracer.getMotionVectorAOV(); }
 
     void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {
