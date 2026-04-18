@@ -49,3 +49,19 @@ variance comparison at equal 16 spp:
 - RMSE improvement vs truth: +4.0%
 
 Feature 1.2 complete. Reference render regenerated with Sobol (offline default).
+
+## 2026-04-18: OIDN denoiser switch (Denoiser Sub-plan 1) validation
+
+Offline profile now denoises via Intel OIDN by default. Comparison at
+16 spp on DamagedHelmet + env_studio:
+
+| Mode | Local 5×5 variance | RMSE vs 4096-spp truth |
+|------|-------------------|------------------------|
+| --denoise=none (noisy)   | 0.002584 | 0.067062 |
+| --denoise=oidn (default) | 0.000734 | 0.037243 |
+
+- RMSE reduction: 44.5%
+- Visual: Cornell walls + helmet edges look clean at 16 spp
+
+Denoiser Sub-plan 1 complete. Sub-plans 2-5 (OptiX, realtime
+foundation, NRD, DLSS RR) follow per the roadmap.
