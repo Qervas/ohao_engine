@@ -38,6 +38,7 @@ int main(int argc, char* argv[]) {
     RenderMode rtMode = RenderMode::RTOffline;
     std::optional<ohao::DenoiseMode> denoiseOverride;
     std::string dumpMvPath;
+    float panX = 0.0f;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
@@ -46,6 +47,8 @@ int main(int argc, char* argv[]) {
             denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
         } else if (arg.rfind("--dump-mv=", 0) == 0) {
             dumpMvPath = arg.substr(10);
+        } else if (arg.rfind("--pan-x=", 0) == 0) {
+            panX = std::stof(arg.substr(8));
         }
     }
 
@@ -128,7 +131,16 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Rendering (" << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < samples + 3; i++) renderer.render();
+    // If --pan-x is set, render samples+2 frames, then translate camera +X
+    // and render one final frame — that last frame's MV reflects the pan.
+    int preCount = samples + 3;
+    if (panX != 0.0f) preCount = samples + 2;
+    for (int i = 0; i < preCount; i++) renderer.render();
+    if (panX != 0.0f) {
+        auto pos = camera.getPosition();
+        camera.setPosition({pos.x + panX, pos.y, pos.z});
+        renderer.render();
+    }
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;

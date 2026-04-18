@@ -1245,7 +1245,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition AOV images to GENERAL for storage write ---
     if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[2] = {};
+        VkImageMemoryBarrier aovBarriers[3] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         aovBarriers[0].srcAccessMask = 0;
@@ -1263,9 +1263,20 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         aovBarriers[1].image = m_normalAOV;
         aovBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+        // Sub-plan 3.A: motion vector AOV needs same UNDEFINED→GENERAL transition
+        // so raygen can imageStore to it. Safe to transition every frame — the
+        // shader overwrites the entire image each pass.
+        aovBarriers[2].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[2].srcAccessMask = 0;
+        aovBarriers[2].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[2].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[2].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[2].image = m_motionVectorImage;
+        aovBarriers[2].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 2, aovBarriers);
+            0, 0, nullptr, 0, nullptr, 3, aovBarriers);
     }
 
     // --- Transition surface history images to GENERAL ---
