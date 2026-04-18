@@ -9,7 +9,7 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
-#include "render/rt/denoise/oidn_denoise.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -18,6 +18,7 @@
 #include "render/camera/camera.hpp"
 
 #include <iostream>
+#include <optional>
 #include <string>
 #include <cmath>
 #include <cstdio>
@@ -56,10 +57,14 @@ int main(int argc, char* argv[]) {
     int spp = argc > 3 ? std::atoi(argv[3]) : 64;
     int totalFrames = argc > 4 ? std::atoi(argv[4]) : 120;  // 4 sec at 30fps
     RenderMode rtMode = RenderMode::RTOffline;
+    std::optional<ohao::DenoiseMode> denoiseOverride;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
         else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+        else if (arg.rfind("--denoise=", 0) == 0) {
+            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
+        }
     }
 
     uint32_t W = 1280, H = 720;
@@ -189,6 +194,15 @@ int main(int argc, char* argv[]) {
     renderer.setScene(scene.get());
     renderer.setRenderMode(rtMode);
 
+    if (denoiseOverride.has_value()) {
+        renderer.setDenoiseMode(*denoiseOverride);
+        std::cout << "Denoise mode (CLI override): "
+                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+    } else {
+        std::cout << "Denoise mode (preset): "
+                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
+    }
+
     // Render turntable orbit — adjust radius per mode
     float orbitRadius = (mode == "env") ? 8.0f : (mode == "mirror") ? 4.5f : 4.2f;
     float orbitHeight = (mode == "env") ? 1.0f : -3.5f;
@@ -214,23 +228,12 @@ int main(int argc, char* argv[]) {
         for (int s = 0; s < spp + 3; s++)
             renderer.render();
 
-        // OIDN denoise per frame
-        std::vector<float> beautyBuf, albedoBuf, normalBuf;
-        uint32_t rw, rh;
         char filename[256];
         snprintf(filename, sizeof(filename), "renders/turntable/%s_%04d.png", mode.c_str(), frame);
 
-        if (renderer.readbackHDRBuffers(beautyBuf, albedoBuf, normalBuf, rw, rh)) {
-            auto beauty3 = ohao::rgba32fToFloat3(beautyBuf.data(), rw, rh);
-            auto albedo3 = ohao::rgba32fToFloat3(albedoBuf.data(), rw, rh);
-            auto normal3 = ohao::rgba32fToFloat3(normalBuf.data(), rw, rh);
-            ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(), rw, rh, true);
-            auto rgba8 = ohao::float3ToRGBA8(beauty3.data(), rw, rh, 0.5f);
-            stbi_write_png(filename, rw, rh, 4, rgba8.data(), rw * 4);
-        } else {
-            const uint8_t* pixels = renderer.getPixels();
-            if (pixels) stbi_write_png(filename, W, H, 4, pixels, W * 4);
-        }
+        // getPixels() handles OIDN transparently if denoiseMode != None
+        const uint8_t* pixels = renderer.getPixels();
+        if (pixels) stbi_write_png(filename, W, H, 4, pixels, W * 4);
 
         printf("\rFrame %d/%d (%.0f%%)", frame + 1, totalFrames, (frame + 1) * 100.0f / totalFrames);
         fflush(stdout);

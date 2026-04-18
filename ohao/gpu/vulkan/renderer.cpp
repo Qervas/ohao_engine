@@ -438,8 +438,9 @@ void VulkanRenderer::applyRTRenderSettings() {
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }
-    // Sync denoiser mode from the active render profile settings
-    if (m_denoiseMode != m_rtSettings.denoiseMode) {
+    // Sync denoiser mode from the active render profile settings,
+    // but only when the caller hasn't issued an explicit setDenoiseMode() override.
+    if (!m_denoiseModeOverridden && m_denoiseMode != m_rtSettings.denoiseMode) {
         m_denoiseMode = m_rtSettings.denoiseMode;
         m_denoiseCacheValid = false;
     }
@@ -566,6 +567,7 @@ bool VulkanRenderer::initializeDeferredRenderer() {
 }
 
 void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
+    m_denoiseModeOverridden = true;
     if (mode != m_denoiseMode) {
         m_denoiseMode = mode;
         m_denoiseCacheValid = false;

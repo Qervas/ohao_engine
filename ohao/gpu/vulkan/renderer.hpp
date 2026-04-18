@@ -365,6 +365,7 @@ private:
 
     // Denoise state
     DenoiseMode                  m_denoiseMode{DenoiseMode::None};
+    bool                         m_denoiseModeOverridden{false}; // true = setDenoiseMode() called; blocks applyRTRenderSettings from resetting it
     mutable std::vector<uint8_t> m_denoisedPixelBuffer;
     mutable bool                 m_denoiseCacheValid{false};
 

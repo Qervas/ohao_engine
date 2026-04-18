@@ -18,9 +18,10 @@
 #include "animation/animation_clip.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
-#include "render/rt/denoise/oidn_denoise.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
 
 #include <iostream>
+#include <optional>
 #include <string>
 #include <chrono>
 #include <filesystem>
@@ -64,11 +65,15 @@ int main(int argc, char* argv[]) {
 
     bool useDeferred = false;
     RenderMode rtMode = RenderMode::RTOffline;
+    std::optional<ohao::DenoiseMode> denoiseOverride;
     for (int i = 4; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "deferred") useDeferred = true;
         else if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
         else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+        else if (arg.rfind("--denoise=", 0) == 0) {
+            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
+        }
     }
 
     VulkanRenderer renderer(W, H);
@@ -343,6 +348,15 @@ int main(int argc, char* argv[]) {
     // Mode: "deferred" for hybrid RT, anything else for path traced
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : rtMode);
 
+    if (denoiseOverride.has_value()) {
+        renderer.setDenoiseMode(*denoiseOverride);
+        std::cout << "Denoise mode (CLI override): "
+                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+    } else {
+        std::cout << "Denoise mode (preset): "
+                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
+    }
+
     // Enable all deferred quality features
     if (useDeferred && renderer.getDeferredRenderer()) {
         auto* pp = renderer.getDeferredRenderer()->getPostProcessing();
@@ -406,31 +420,13 @@ int main(int argc, char* argv[]) {
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
-    // Temporarily disable OIDN so model_viewer reports pure RT output/perf.
-    constexpr bool kEnableOIDN = false;
-
-    std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
-    uint32_t rw, rh;
-    if (kEnableOIDN && !useDeferred && renderer.readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
-        // Convert RGBA32F → float3 (OIDN needs float3)
-        auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
-        auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
-        auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
-
-        // Denoise
-        ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(), rw, rh, true);
-
-        // Tonemap + save
-        auto rgba8 = ohao::float3ToRGBA8(beauty3.data(), rw, rh, 0.5f);
-        stbi_write_png(output.c_str(), rw, rh, 4, rgba8.data(), rw * 4);
-        std::cout << "Saved (OIDN denoised): " << output << std::endl;
-    } else {
-        // Fallback: save without denoising
-        const uint8_t* pixels = renderer.getPixels();
-        if (pixels) {
-            stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
-            std::cout << "Saved: " << output << std::endl;
-        }
+    // getPixels() handles OIDN transparently if denoiseMode != None
+    const uint8_t* pixels = renderer.getPixels();
+    if (pixels) {
+        stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
+        std::cout << "Saved"
+                  << (renderer.getDenoiseMode() == ohao::DenoiseMode::None ? "" : " (denoised)")
+                  << ": " << output << std::endl;
     }
 
     scene.reset();

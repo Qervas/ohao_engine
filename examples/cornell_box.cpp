@@ -15,8 +15,10 @@
 #include "render/camera/camera.hpp"
 
 #include <iostream>
+#include <optional>
 #include <string>
 #include <chrono>
+#include "render/rt/denoise/denoise_types.hpp"
 
 using namespace ohao;
 
@@ -64,11 +66,15 @@ int main(int argc, char* argv[]) {
     uint32_t W = 1920, H = 1080;
     RenderMode rtMode = RenderMode::RTOffline;
     bool useDeferred = false;
+    std::optional<ohao::DenoiseMode> denoiseOverride;
     for (int i = 3; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "deferred") useDeferred = true;
         else if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
         else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+        else if (arg.rfind("--denoise=", 0) == 0) {
+            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
+        }
     }
 
     std::cout << "OHAO Cornell Box — " << W << "x" << H << " @ " << samples << " spp" << std::endl;
@@ -147,6 +153,15 @@ int main(int argc, char* argv[]) {
 
     renderer.setRenderMode(useDeferred ? RenderMode::Deferred : rtMode);
 
+    if (denoiseOverride.has_value()) {
+        renderer.setDenoiseMode(*denoiseOverride);
+        std::cout << "Denoise mode (CLI override): "
+                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+    } else {
+        std::cout << "Denoise mode (preset): "
+                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
+    }
+
     const char* rtLabel = (rtMode == RenderMode::RTRealtime) ? "RTRealtime" : "RTOffline";
     std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : rtLabel) << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
@@ -156,10 +171,13 @@ int main(int argc, char* argv[]) {
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
+    // getPixels() handles OIDN transparently if denoiseMode != None
     const uint8_t* pixels = renderer.getPixels();
     if (pixels) {
         stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
-        std::cout << "Saved: " << output << std::endl;
+        std::cout << "Saved"
+                  << (renderer.getDenoiseMode() == ohao::DenoiseMode::None ? "" : " (denoised)")
+                  << ": " << output << std::endl;
     }
 
     // Destroy scene before renderer to avoid Vulkan/Jolt cleanup order crash
