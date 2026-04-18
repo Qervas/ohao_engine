@@ -66,3 +66,12 @@ target_include_directories(sobol_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
 target_link_libraries(sobol_test PRIVATE gtest gtest_main pthread)
 include(GoogleTest)
 gtest_discover_tests(sobol_test)
+
+# Denoise parse unit test (Denoiser Sub-plan 1)
+add_executable(denoise_parse_test denoise_parse_test.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
+)
+target_include_directories(denoise_parse_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+target_link_libraries(denoise_parse_test PRIVATE gtest gtest_main pthread)
+include(GoogleTest)
+gtest_discover_tests(denoise_parse_test)
