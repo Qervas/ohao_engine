@@ -18,7 +18,7 @@
 #include "animation/animation_clip.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
-#include "render/rt/oidn_denoise.hpp"
+#include "render/rt/denoise/oidn_denoise.hpp"
 
 #include <iostream>
 #include <string>

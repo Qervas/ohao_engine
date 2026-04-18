@@ -16,7 +16,7 @@ if(TARGET Jolt)
 endif()
 
 # Model Viewer (with OIDN denoising)
-add_executable(model_viewer model_viewer.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/oidn_denoise.cpp)
+add_executable(model_viewer model_viewer.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/oidn_denoise.cpp)
 target_include_directories(model_viewer PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(model_viewer PRIVATE
     -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
@@ -66,7 +66,7 @@ if(glfw3_FOUND)
 endif()
 
 # Turntable Recorder (with OIDN)
-add_executable(turntable turntable.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/oidn_denoise.cpp)
+add_executable(turntable turntable.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/oidn_denoise.cpp)
 target_include_directories(turntable PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(turntable PRIVATE
     -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group

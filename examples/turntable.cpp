@@ -9,7 +9,7 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
-#include "render/rt/oidn_denoise.hpp"
+#include "render/rt/denoise/oidn_denoise.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"

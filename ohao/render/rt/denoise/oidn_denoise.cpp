@@ -1,4 +1,4 @@
-#include "oidn_denoise.hpp"
+#include "render/rt/denoise/oidn_denoise.hpp"
 #include <OpenImageDenoise/oidn.hpp>
 #include <iostream>
 #include <cmath>
