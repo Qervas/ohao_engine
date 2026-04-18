@@ -1,6 +1,7 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
 #include "render/rt/denoise/oidn_denoise.hpp"
+#include "render/rt/denoise/optix_denoise.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
 #include "animation/animation_component.hpp"
@@ -582,38 +583,47 @@ const uint8_t* VulkanRenderer::getPixels() const {
         return m_denoisedPixelBuffer.data();
     }
 
-    if (m_denoiseMode == DenoiseMode::OIDN) {
-        std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
-        uint32_t rw = 0, rh = 0;
-        // readbackHDRBuffers is non-const and has device-global side effects
-        // (allocates a command buffer, submits it, waits idle). Functionally
-        // safe after render() completes in a single-threaded game loop, but
-        // this const_cast is a maintenance trap: if getPixels() is ever
-        // called concurrently or re-entrantly, the cast hides real state
-        // mutation. TODO: make readbackHDRBuffers const by factoring the
-        // staging-buffer machinery behind a mutable cache.
-        auto* self = const_cast<VulkanRenderer*>(this);
-        if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
-            std::cerr << "[Denoise] readbackHDRBuffers failed — returning noisy pixels\n";
-            return m_pixelBuffer.data();
+    // Shared readback + float3 conversion for any denoiser backend.
+    // readbackHDRBuffers is non-const and has device-global side effects
+    // (allocates a command buffer, submits it, waits idle). Functionally
+    // safe after render() completes in a single-threaded game loop.
+    // TODO: make readbackHDRBuffers const by factoring the staging-buffer
+    // machinery behind a mutable cache.
+    std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
+    uint32_t rw = 0, rh = 0;
+    auto* self = const_cast<VulkanRenderer*>(this);
+    if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+        std::cerr << "[Denoise] readbackHDRBuffers failed — returning noisy pixels\n";
+        return m_pixelBuffer.data();
+    }
+    auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
+    auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
+    auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
+
+    bool denoised = false;
+
+    // Primary denoiser attempt
+    if (m_denoiseMode == DenoiseMode::OptiX) {
+        denoised = ohao::optixDenoise(beauty3.data(), albedo3.data(), normal3.data(),
+                                       rw, rh, /*hdr*/ true);
+        if (!denoised) {
+            std::cerr << "[Denoise] OptiX unavailable or failed — falling back to OIDN\n";
         }
+    }
 
-        auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
-        auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
-        auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
-
-        if (!ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
-                                rw, rh, /*hdr*/ true)) {
+    // Fallback to OIDN if OptiX failed, or if mode was OIDN to begin with
+    if (!denoised) {
+        denoised = ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
+                                      rw, rh, /*hdr*/ true);
+        if (!denoised) {
             std::cerr << "[Denoise] OIDN failed — returning noisy pixels\n";
             return m_pixelBuffer.data();
         }
-
-        m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);
-        m_denoiseCacheValid = true;
-        return m_denoisedPixelBuffer.data();
     }
 
-    return m_pixelBuffer.data();
+    m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);
+    m_denoiseCacheValid = true;
+    return m_denoisedPixelBuffer.data();
 }
 
 } // namespace ohao
