@@ -1,6 +1,8 @@
 # OHAO Render Library — rendering algorithms, passes, RT
 # GPU abstraction lives in gpu/vulkan/
 
+find_package(OpenImageDenoise REQUIRED)
+
 file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
@@ -26,4 +28,5 @@ target_link_libraries(ohao_renderer PUBLIC
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}
+    OpenImageDenoise
 )

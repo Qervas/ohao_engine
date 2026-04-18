@@ -14,6 +14,7 @@
 #include "render/rt/rt_acceleration_structure.hpp"
 #include "render/rt/path_tracer.hpp"
 #include "render/rt/rt_render_pipeline.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
 #include "render/rt/gpu_skinning.hpp"
 #include "render/rt/animated_rt_manager.hpp"
@@ -139,8 +140,14 @@ public:
     RTAccelerationStructure* getRT() { return m_rtAccel.get(); }
     bool isRTSupported() const { return m_rtAccel && m_rtAccel->isSupported(); }
 
-    // Pixel access (RGBA format, 4 bytes per pixel)
-    const uint8_t* getPixels() const { return m_pixelBuffer.data(); }
+    // Denoiser control
+    void        setDenoiseMode(DenoiseMode mode);
+    DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
+
+    // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
+    // the buffer is lazily denoised on the first call after render();
+    // subsequent calls return the cached result until the next render().
+    const uint8_t* getPixels() const;
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
     size_t getPixelBufferSize() const { return m_pixelBuffer.size(); }
@@ -355,6 +362,11 @@ private:
 
     // Pixel buffer (CPU accessible)
     std::vector<uint8_t> m_pixelBuffer;
+
+    // Denoise state
+    DenoiseMode                  m_denoiseMode{DenoiseMode::None};
+    mutable std::vector<uint8_t> m_denoisedPixelBuffer;
+    mutable bool                 m_denoiseCacheValid{false};
 
     // Scene and camera
     Scene* m_scene{nullptr};

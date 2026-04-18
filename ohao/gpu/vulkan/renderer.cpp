@@ -1,5 +1,6 @@
 #include "renderer_impl.hpp"
 #include "render/camera/camera.hpp"
+#include "render/rt/denoise/oidn_denoise.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
 #include "animation/animation_component.hpp"
@@ -376,11 +377,13 @@ void VulkanRenderer::render() {
     if (const auto* rtPipeline = getRTPipeline(m_renderMode);
         rtPipeline && getRTRenderer(m_renderMode) && m_rtAccel) {
         renderRTPipeline(*rtPipeline);
+        m_denoiseCacheValid = false;
         return;
     }
 
     if (m_renderMode == RenderMode::Deferred && m_deferredRenderer) {
         renderDeferred();
+        m_denoiseCacheValid = false;
         return;
     }
 
@@ -390,6 +393,7 @@ void VulkanRenderer::render() {
     } else {
         renderLegacy();
     }
+    m_denoiseCacheValid = false;
 }
 
 void VulkanRenderer::setRenderMode(RenderMode mode) {
@@ -433,6 +437,11 @@ void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
 void VulkanRenderer::applyRTRenderSettings() {
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
+    }
+    // Sync denoiser mode from the active render profile settings
+    if (m_denoiseMode != m_rtSettings.denoiseMode) {
+        m_denoiseMode = m_rtSettings.denoiseMode;
+        m_denoiseCacheValid = false;
     }
 }
 
@@ -556,5 +565,53 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     return true;
 }
 
+void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
+    if (mode != m_denoiseMode) {
+        m_denoiseMode = mode;
+        m_denoiseCacheValid = false;
+    }
+}
+
+const uint8_t* VulkanRenderer::getPixels() const {
+    if (m_denoiseMode == DenoiseMode::None) {
+        return m_pixelBuffer.data();
+    }
+    if (m_denoiseCacheValid) {
+        return m_denoisedPixelBuffer.data();
+    }
+
+    if (m_denoiseMode == DenoiseMode::OIDN) {
+        std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
+        uint32_t rw = 0, rh = 0;
+        // readbackHDRBuffers is non-const and has device-global side effects
+        // (allocates a command buffer, submits it, waits idle). Functionally
+        // safe after render() completes in a single-threaded game loop, but
+        // this const_cast is a maintenance trap: if getPixels() is ever
+        // called concurrently or re-entrantly, the cast hides real state
+        // mutation. TODO: make readbackHDRBuffers const by factoring the
+        // staging-buffer machinery behind a mutable cache.
+        auto* self = const_cast<VulkanRenderer*>(this);
+        if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+            std::cerr << "[Denoise] readbackHDRBuffers failed — returning noisy pixels\n";
+            return m_pixelBuffer.data();
+        }
+
+        auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
+        auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
+        auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
+
+        if (!ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
+                                rw, rh, /*hdr*/ true)) {
+            std::cerr << "[Denoise] OIDN failed — returning noisy pixels\n";
+            return m_pixelBuffer.data();
+        }
+
+        m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);
+        m_denoiseCacheValid = true;
+        return m_denoisedPixelBuffer.data();
+    }
+
+    return m_pixelBuffer.data();
+}
 
 } // namespace ohao
