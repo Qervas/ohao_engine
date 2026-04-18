@@ -6,6 +6,7 @@
 //   Mouse — look around (hold right click)
 //   +/-   — increase/decrease spp per frame
 //   F12   — save screenshot
+//   M     — dump motion vector AOV (encoded RGB: +X→red, +Y→green)
 //   ESC   — quit
 
 #include <GL/gl.h>
@@ -29,6 +30,9 @@
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <cstring>
+#include <algorithm>
+#include <vector>
 #include <cmath>
 
 using namespace ohao;
@@ -130,7 +134,7 @@ int main(int argc, char* argv[]) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
     std::cout << "=== OHAO Interactive Path Tracer ===" << std::endl;
-    std::cout << "WASD=move  RightMouse=look  +/-=spp  F12=screenshot  ESC=quit" << std::endl;
+    std::cout << "WASD=move  RightMouse=look  +/-=spp  F12=screenshot  M=dumpMV  ESC=quit" << std::endl;
 
     // Init Vulkan renderer (offscreen)
     VulkanRenderer renderer(W, H);
@@ -324,6 +328,41 @@ int main(int argc, char* argv[]) {
             }
         }
         if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_RELEASE) f12Pressed = false;
+
+        // Motion vector dump (M) — encodes MV AOV as RGB debug PNG
+        static bool mPressed = false;
+        if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !mPressed) {
+            mPressed = true;
+            std::vector<uint16_t> mvRaw;
+            uint32_t mw = 0, mh = 0;
+            if (!renderer.readbackMotionVector(mvRaw, mw, mh)) {
+                std::cerr << "[MV dump] readback failed (no RT profile active?)\n";
+            } else {
+                auto half2float = [](uint16_t h) -> float {
+                    uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+                    uint32_t f;
+                    if (e == 0) { if (m == 0) f = s << 31; else {
+                        e = 1; while (!(m & 0x400)) { m <<= 1; e--; } m &= 0x3ff;
+                        f = (s << 31) | ((e + 112) << 23) | (m << 13);
+                    }} else if (e == 0x1f) f = (s << 31) | (0xff << 23) | (m << 13);
+                    else f = (s << 31) | ((e + 112) << 23) | (m << 13);
+                    float out; std::memcpy(&out, &f, 4); return out;
+                };
+                std::vector<uint8_t> rgb(static_cast<size_t>(mw) * mh * 3, 128);
+                const float scale = 0.02f;
+                for (uint32_t i = 0; i < mw * mh; i++) {
+                    float dx = half2float(mvRaw[i * 2 + 0]);
+                    float dy = half2float(mvRaw[i * 2 + 1]);
+                    float r01 = std::max(-1.0f, std::min(1.0f, dx * scale));
+                    float g01 = std::max(-1.0f, std::min(1.0f, dy * scale));
+                    rgb[i * 3 + 0] = static_cast<uint8_t>(128.0f + r01 * 127.0f);
+                    rgb[i * 3 + 1] = static_cast<uint8_t>(128.0f + g01 * 127.0f);
+                }
+                stbi_write_png("renders/mv_interactive.png", mw, mh, 3, rgb.data(), mw * 3);
+                std::cout << "MV dumped: renders/mv_interactive.png" << std::endl;
+            }
+        }
+        if (glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) mPressed = false;
     }
 
     scene.reset();  // destroy scene before renderer to avoid cleanup crash
