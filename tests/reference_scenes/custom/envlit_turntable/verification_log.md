@@ -84,3 +84,21 @@ Comparison at 16 spp on DamagedHelmet + env_studio:
 Denoiser Sub-plan 2 complete. Next: Sub-plan 3 (realtime foundation —
 motion vectors + history + depth/roughness AOVs) unlocks NRD (Sub-plan 4)
 and DLSS RR (Sub-plan 5).
+
+## 2026-04-18: Camera motion vectors (Sub-plan 3.A) validation
+
+Path tracer now writes per-pixel 2D MV AOV (RG16F @ binding 19) on
+first-hit. Camera motion only; skeletal is 3.F.
+
+Verification:
+- **Static camera:** MV dump is uniform gray (128, 128, 128) — zero motion.
+  Saved: `renders/mv_static.png`.
+- **Regression:** beauty output at `--denoise=none` bit-identical to
+  pre-3.A — MV is pure output AOV.
+
+Known limitations:
+- First frame outputs zero MV (prevViewProj is stale). Documented.
+- Pan-camera test deferred to Sub-plan 3.C (temporal reprojection needs
+  camera-animation infrastructure that env_demo doesn't have).
+
+Sub-plan 3.A complete. Next: 3.B (depth + roughness AOVs).

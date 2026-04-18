@@ -18,6 +18,8 @@
 #include <optional>
 #include <string>
 #include <chrono>
+#include <cstring>
+#include <algorithm>
 #include "render/rt/denoise/denoise_types.hpp"
 
 using namespace ohao;
@@ -35,12 +37,15 @@ int main(int argc, char* argv[]) {
     uint32_t W = 1920, H = 1080;
     RenderMode rtMode = RenderMode::RTOffline;
     std::optional<ohao::DenoiseMode> denoiseOverride;
+    std::string dumpMvPath;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
         else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
         else if (arg.rfind("--denoise=", 0) == 0) {
             denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
+        } else if (arg.rfind("--dump-mv=", 0) == 0) {
+            dumpMvPath = arg.substr(10);
         }
     }
 
@@ -135,5 +140,55 @@ int main(int argc, char* argv[]) {
         std::cout << "Saved"
                   << (renderer.getDenoiseMode() == ohao::DenoiseMode::None ? "" : " (denoised)")
                   << ": " << output << std::endl;
+    }
+
+    if (!dumpMvPath.empty()) {
+        std::vector<uint16_t> mvRaw;
+        uint32_t mw = 0, mh = 0;
+        if (!renderer.readbackMotionVector(mvRaw, mw, mh)) {
+            std::cerr << "[MV dump] readback failed or no RT profile active\n";
+        } else {
+            // IEEE 754 half → float
+            auto half2float = [](uint16_t h) -> float {
+                uint32_t sign = (h >> 15) & 0x1;
+                uint32_t exp  = (h >> 10) & 0x1f;
+                uint32_t mant = h & 0x3ff;
+                uint32_t f;
+                if (exp == 0) {
+                    if (mant == 0) {
+                        f = sign << 31;
+                    } else {
+                        exp = 1;
+                        while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+                        mant &= 0x3ff;
+                        f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+                    }
+                } else if (exp == 0x1f) {
+                    f = (sign << 31) | (0xff << 23) | (mant << 13);
+                } else {
+                    f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+                }
+                float out;
+                std::memcpy(&out, &f, 4);
+                return out;
+            };
+
+            // Encode: +X motion → red, +Y motion → green, neutral = 128
+            std::vector<uint8_t> rgb(static_cast<size_t>(mw) * mh * 3, 128);
+            const float scale = 0.02f;  // ~50px motion saturates to full red/green
+            for (uint32_t i = 0; i < mw * mh; i++) {
+                float dx = half2float(mvRaw[i * 2 + 0]);
+                float dy = half2float(mvRaw[i * 2 + 1]);
+                float r01 = std::max(-1.0f, std::min(1.0f, dx * scale));
+                float g01 = std::max(-1.0f, std::min(1.0f, dy * scale));
+                int r = static_cast<int>(128.0f + r01 * 127.0f);
+                int g = static_cast<int>(128.0f + g01 * 127.0f);
+                rgb[i * 3 + 0] = static_cast<uint8_t>(r);
+                rgb[i * 3 + 1] = static_cast<uint8_t>(g);
+                rgb[i * 3 + 2] = 128;
+            }
+            stbi_write_png(dumpMvPath.c_str(), mw, mh, 3, rgb.data(), mw * 3);
+            std::cout << "Saved MV debug: " << dumpMvPath << std::endl;
+        }
     }
 }

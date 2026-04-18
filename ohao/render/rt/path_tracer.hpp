@@ -104,6 +104,7 @@ public:
     VkImage getNormalAOV() const { return m_normalAOV; }
     VkImageView getOutputView() const { return m_outputView; }
     VkImageView getMotionVectorAOV() const { return m_motionVectorView; }
+    VkImage getMotionVectorImage() const { return m_motionVectorImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);

@@ -148,6 +148,14 @@ public:
     // or VK_NULL_HANDLE if no RT profile is active.
     VkImageView getMotionVectorAOV() const;
 
+    // Returns the motion vector AOV VkImage (needed for vkCmdCopyImageToBuffer).
+    VkImage getMotionVectorImage() const;
+
+    // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
+    // One 2-half pair per pixel; total = 2 * width * height values.
+    // Returns false if no RT profile is active or readback fails.
+    bool readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height);
+
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();
     // subsequent calls return the cached result until the next render().
