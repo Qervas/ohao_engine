@@ -27,6 +27,7 @@ layout(set = 0, binding = 11) readonly buffer LightBuffer {
 
 layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
 layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+layout(set = 0, binding = 19, rg16f) uniform image2D motionVector;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
@@ -124,6 +125,29 @@ void main() {
         if (bounce == 0u) {
             firstHitPos = payload.hitPos;
             firstHitDist = payload.hitDist;
+        }
+
+        // Sub-plan 3.A: motion vector on first-hit
+        if (bounce == 0u) {
+            vec2 motion = vec2(0.0);
+            // First frame: prevViewProj is stale — force zero MV
+            if (firstHitDist > 0.0 && historyFrameCount > 0u) {
+                // Derive currViewProj in-shader from push-constant inverses.
+                // Cost: 2 mat4 inverts per raygen thread on bounce 0.
+                // CameraUBO refactor (out of scope) removes this.
+                mat4 currViewProj = inverse(pc.invProj) * inverse(pc.invView);
+
+                vec4 currClip = currViewProj    * vec4(firstHitPos, 1.0);
+                vec4 prevClip = pc.prevViewProj * vec4(firstHitPos, 1.0);
+                if (currClip.w > 0.0 && prevClip.w > 0.0) {
+                    vec2 currNDC = currClip.xy / currClip.w;
+                    vec2 prevNDC = prevClip.xy / prevClip.w;
+                    vec2 currPix = (currNDC * 0.5 + 0.5) * vec2(pc.params.xy);
+                    vec2 prevPix = (prevNDC * 0.5 + 0.5) * vec2(pc.params.xy);
+                    motion = currPix - prevPix;
+                }
+            }
+            imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
         }
 
         if (payload.hitDist < 0.0) {
