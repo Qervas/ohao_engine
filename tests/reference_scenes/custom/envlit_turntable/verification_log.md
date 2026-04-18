@@ -65,3 +65,22 @@ Offline profile now denoises via Intel OIDN by default. Comparison at
 
 Denoiser Sub-plan 1 complete. Sub-plans 2-5 (OptiX, realtime
 foundation, NRD, DLSS RR) follow per the roadmap.
+
+## 2026-04-18: OptiX denoiser (Denoiser Sub-plan 2) validation
+
+OptiX backend available when CUDA + OptiX SDK present at build time.
+Comparison at 16 spp on DamagedHelmet + env_studio:
+
+| Mode | RMSE vs 4096-spp truth |
+|------|------------------------|
+| --denoise=none  (noisy)  | 0.067062 |
+| --denoise=oidn           | 0.037243 |
+| --denoise=optix          | 0.038676 |
+
+- OptiX RMSE reduction vs noisy: 42.3%
+- OptiX vs OIDN RMSE delta: -3.8%  (signed — positive = OptiX better, both acceptable)
+- Build with OPTIX_ROOT unset → --denoise=optix falls back to OIDN
+
+Denoiser Sub-plan 2 complete. Next: Sub-plan 3 (realtime foundation —
+motion vectors + history + depth/roughness AOVs) unlocks NRD (Sub-plan 4)
+and DLSS RR (Sub-plan 5).
