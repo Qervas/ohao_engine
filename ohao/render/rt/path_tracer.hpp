@@ -103,6 +103,7 @@ public:
     VkImage getAlbedoAOV() const { return m_albedoAOV; }
     VkImage getNormalAOV() const { return m_normalAOV; }
     VkImageView getOutputView() const { return m_outputView; }
+    VkImageView getMotionVectorAOV() const { return m_motionVectorView; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -221,6 +222,11 @@ private:
     VkImage m_normalAOV = VK_NULL_HANDLE;
     VkDeviceMemory m_normalAOVMemory = VK_NULL_HANDLE;
     VkImageView m_normalAOVView = VK_NULL_HANDLE;
+
+    // Feature 3.A: camera motion vector AOV (RG16F)
+    VkImage        m_motionVectorImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_motionVectorMemory = VK_NULL_HANDLE;
+    VkImageView    m_motionVectorView = VK_NULL_HANDLE;
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
