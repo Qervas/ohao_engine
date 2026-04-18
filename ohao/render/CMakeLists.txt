@@ -3,6 +3,35 @@
 
 find_package(OpenImageDenoise REQUIRED)
 
+# --- OptiX SDK detection (Denoiser Sub-plan 2) ---
+# Header-only SDK. Headers live under $OPTIX_ROOT/include/. CUDA runtime
+# is linked separately. If either is missing, OHAO_HAS_OPTIX stays undef
+# and optix_denoise.cpp compiles a no-op stub (runtime falls back to OIDN).
+
+find_path(OPTIX_INCLUDE_DIR optix.h
+    HINTS
+        $ENV{OPTIX_ROOT}
+        $ENV{HOME}/optix-sdk/NVIDIA-OptiX-SDK-9.1.0-linux64-x86_64
+        /opt/optix-sdk
+        /usr/local/optix
+    PATH_SUFFIXES include
+)
+find_package(CUDAToolkit QUIET)
+
+if(OPTIX_INCLUDE_DIR AND CUDAToolkit_FOUND)
+    message(STATUS "OptiX SDK found: ${OPTIX_INCLUDE_DIR}")
+    message(STATUS "  CUDA Toolkit: ${CUDAToolkit_VERSION}")
+    set(OHAO_OPTIX_AVAILABLE TRUE)
+else()
+    set(OHAO_OPTIX_AVAILABLE FALSE)
+    if(NOT OPTIX_INCLUDE_DIR)
+        message(STATUS "OptiX SDK: not found (set OPTIX_ROOT env var) — OptiX denoiser unavailable")
+    endif()
+    if(NOT CUDAToolkit_FOUND)
+        message(STATUS "CUDA Toolkit: not found — OptiX denoiser unavailable")
+    endif()
+endif()
+
 file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
@@ -30,3 +59,10 @@ target_link_libraries(ohao_renderer PUBLIC
     ${Vulkan_LIBRARIES}
     OpenImageDenoise
 )
+
+# Conditional OptiX support
+if(OHAO_OPTIX_AVAILABLE)
+    target_compile_definitions(ohao_renderer PUBLIC OHAO_HAS_OPTIX)
+    target_include_directories(ohao_renderer PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_link_libraries(ohao_renderer PUBLIC CUDA::cudart CUDA::cuda_driver)
+endif()
