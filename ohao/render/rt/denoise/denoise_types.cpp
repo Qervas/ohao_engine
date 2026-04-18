@@ -17,8 +17,9 @@ std::string toLower(const std::string& s) {
 
 DenoiseMode parseDenoiseMode(const std::string& s) {
     const std::string lower = toLower(s);
-    if (lower == "none") return DenoiseMode::None;
-    if (lower == "oidn") return DenoiseMode::OIDN;
+    if (lower == "none")  return DenoiseMode::None;
+    if (lower == "oidn")  return DenoiseMode::OIDN;
+    if (lower == "optix") return DenoiseMode::OptiX;
     std::cerr << "[Denoise] Unknown mode '" << s
               << "' — falling back to None\n";
     return DenoiseMode::None;
@@ -26,8 +27,9 @@ DenoiseMode parseDenoiseMode(const std::string& s) {
 
 const char* denoiseModeName(DenoiseMode mode) {
     switch (mode) {
-        case DenoiseMode::None: return "none";
-        case DenoiseMode::OIDN: return "oidn";
+        case DenoiseMode::None:  return "none";
+        case DenoiseMode::OIDN:  return "oidn";
+        case DenoiseMode::OptiX: return "optix";
     }
     return "unknown";
 }

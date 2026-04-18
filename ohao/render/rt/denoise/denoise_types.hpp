@@ -12,10 +12,10 @@
 namespace ohao {
 
 enum class DenoiseMode : uint32_t {
-    None  = 0,
-    OIDN  = 1,
+    None   = 0,
+    OIDN   = 1,
+    OptiX  = 2,   // NVIDIA OptiX (requires CUDA + OptiX SDK at build time)
     // future:
-    // OptiX  = 2,
     // NRD    = 3,
     // DLSSRR = 4,
 };

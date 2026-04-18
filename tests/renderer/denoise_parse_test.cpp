@@ -25,3 +25,13 @@ TEST(DenoiseTypes, NameRoundTrip) {
     EXPECT_STREQ(denoiseModeName(DenoiseMode::None), "none");
     EXPECT_STREQ(denoiseModeName(DenoiseMode::OIDN), "oidn");
 }
+
+TEST(DenoiseTypes, ParsesOptix) {
+    EXPECT_EQ(parseDenoiseMode("optix"), DenoiseMode::OptiX);
+    EXPECT_EQ(parseDenoiseMode("OptiX"), DenoiseMode::OptiX);
+    EXPECT_EQ(parseDenoiseMode("OPTIX"), DenoiseMode::OptiX);
+}
+
+TEST(DenoiseTypes, OptixNameRoundTrip) {
+    EXPECT_STREQ(denoiseModeName(DenoiseMode::OptiX), "optix");
+}
