@@ -23,6 +23,7 @@
 
 #include "rt_acceleration_structure.hpp"
 #include "render/rt/sampler_types.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <vector>
@@ -45,6 +46,7 @@ struct RTRenderSettings {
     bool enableFireflyClamp{false};
     float fireflyClampLuminance{10.0f};
     SamplerType samplerType{SamplerType::Sobol};
+    DenoiseMode denoiseMode{DenoiseMode::None};
 };
 
 struct PathTracerShaderSet {
@@ -64,6 +66,7 @@ inline constexpr RTRenderSettings kRealtimeRTSettings{
     true,
     10.0f,
     SamplerType::PCG,
+    DenoiseMode::None,    // realtime uses NRD/DLSS RR (Sub-plans 4-5), not OIDN
 };
 
 inline constexpr RTRenderSettings kOfflineRTSettings{
@@ -76,6 +79,7 @@ inline constexpr RTRenderSettings kOfflineRTSettings{
     false,
     0.0f,
     SamplerType::Sobol,
+    DenoiseMode::OIDN,    // offline default — matches Cycles
 };
 
 class PathTracer {
