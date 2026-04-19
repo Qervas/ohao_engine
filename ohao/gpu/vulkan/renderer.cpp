@@ -12,6 +12,33 @@
 
 namespace ohao {
 
+namespace {
+// IEEE 754 binary16 → binary32 (for R16F AOV readback).
+inline float half_to_float(uint16_t h) {
+    uint32_t sign = (h >> 15) & 0x1;
+    uint32_t exp  = (h >> 10) & 0x1f;
+    uint32_t mant = h & 0x3ff;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) {
+            f = sign << 31;
+        } else {
+            exp = 1;
+            while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+            mant &= 0x3ff;
+            f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1f) {
+        f = (sign << 31) | (0xff << 23) | (mant << 13);
+    } else {
+        f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+    }
+    float out;
+    std::memcpy(&out, &f, 4);
+    return out;
+}
+}  // namespace
+
 // Helper function implementation
 uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties memProperties;
@@ -906,13 +933,13 @@ bool VulkanRenderer::readbackDepthAOV(std::vector<float>& depthData, uint32_t& w
     return true;
 }
 
-bool VulkanRenderer::readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint32_t& width, uint32_t& height) {
+bool VulkanRenderer::readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height) {
     VkImage roughImage = getRoughnessAOVImage();
     if (roughImage == VK_NULL_HANDLE) return false;
 
     width  = m_width;
     height = m_height;
-    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 1; // R8 UNORM = 1 byte/pixel
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 2; // R16F = 2 bytes/pixel
     roughData.resize(static_cast<size_t>(width) * height);
 
     // Staging buffer
@@ -994,7 +1021,10 @@ bool VulkanRenderer::readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint3
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
-    std::memcpy(roughData.data(), mapped, byteCount);
+    const uint16_t* halfs = reinterpret_cast<const uint16_t*>(mapped);
+    for (uint32_t i = 0; i < width * height; i++) {
+        roughData[i] = half_to_float(halfs[i]);
+    }
     vkUnmapMemory(m_device, stagingMem);
 
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
@@ -1003,14 +1033,14 @@ bool VulkanRenderer::readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint3
     return true;
 }
 
-bool VulkanRenderer::readbackDiffuseRadiance(std::vector<uint16_t>& halfData, uint32_t& width, uint32_t& height) {
+bool VulkanRenderer::readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height) {
     VkImage srcImage = getDiffuseRadianceAOVImage();
     if (srcImage == VK_NULL_HANDLE) return false;
 
     width  = m_width;
     height = m_height;
-    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 8; // RGBA16F = 8 bytes/pixel
-    halfData.resize(static_cast<size_t>(width) * height * 4);
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
 
     // Staging buffer
     VkBuffer stagingBuf = VK_NULL_HANDLE;
@@ -1091,7 +1121,7 @@ bool VulkanRenderer::readbackDiffuseRadiance(std::vector<uint16_t>& halfData, ui
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
-    std::memcpy(halfData.data(), mapped, byteCount);
+    std::memcpy(data.data(), mapped, byteCount);
     vkUnmapMemory(m_device, stagingMem);
 
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
@@ -1100,14 +1130,14 @@ bool VulkanRenderer::readbackDiffuseRadiance(std::vector<uint16_t>& halfData, ui
     return true;
 }
 
-bool VulkanRenderer::readbackSpecularRadiance(std::vector<uint16_t>& halfData, uint32_t& width, uint32_t& height) {
+bool VulkanRenderer::readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height) {
     VkImage srcImage = getSpecularRadianceAOVImage();
     if (srcImage == VK_NULL_HANDLE) return false;
 
     width  = m_width;
     height = m_height;
-    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 8; // RGBA16F = 8 bytes/pixel
-    halfData.resize(static_cast<size_t>(width) * height * 4);
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
 
     // Staging buffer
     VkBuffer stagingBuf = VK_NULL_HANDLE;
@@ -1188,7 +1218,7 @@ bool VulkanRenderer::readbackSpecularRadiance(std::vector<uint16_t>& halfData, u
 
     void* mapped = nullptr;
     vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
-    std::memcpy(halfData.data(), mapped, byteCount);
+    std::memcpy(data.data(), mapped, byteCount);
     vkUnmapMemory(m_device, stagingMem);
 
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);

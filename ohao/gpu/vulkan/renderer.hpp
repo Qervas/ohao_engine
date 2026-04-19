@@ -170,14 +170,14 @@ public:
     // Debug: readback the depth AOV as raw float buffer (1 float per pixel).
     bool readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height);
 
-    // Debug: readback the roughness AOV as raw uint8 buffer (1 byte per pixel).
-    bool readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint32_t& width, uint32_t& height);
+    // Debug: readback R16F roughness AOV as native float (decoded from half in-helper).
+    bool readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height);
 
-    // Debug: readback RGBA16F diffuse radiance (4 halfs per pixel → 8 bytes).
-    bool readbackDiffuseRadiance(std::vector<uint16_t>& halfData, uint32_t& width, uint32_t& height);
+    // Debug: readback RGBA32F diffuse radiance AOV (4 floats per pixel, native).
+    bool readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
 
-    // Debug: readback RGBA16F specular radiance (4 halfs per pixel → 8 bytes).
-    bool readbackSpecularRadiance(std::vector<uint16_t>& halfData, uint32_t& width, uint32_t& height);
+    // Debug: readback RGBA32F specular radiance AOV (4 floats per pixel, native).
+    bool readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
 
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();

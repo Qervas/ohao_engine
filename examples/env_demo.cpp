@@ -89,15 +89,15 @@ int main(int argc, char* argv[]) {
         return out;
     };
 
-    // Reinhard tonemap RGBA16F → 8-bit RGB PNG (reports max channel to stdout).
-    auto dumpRGBA16FStream = [&](const std::string& path, const std::vector<uint16_t>& halfData,
+    // Decode RGBA32F → Reinhard-tonemapped 8-bit RGB PNG (reports max channel to stdout).
+    auto dumpRGBA32FStream = [&](const std::string& path, const std::vector<float>& data,
                                   uint32_t w, uint32_t h) {
         std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3, 0);
         float maxC = 0.0f;
         for (uint32_t i = 0; i < w * h; i++) {
-            float r = half2float(halfData[i * 4 + 0]);
-            float g = half2float(halfData[i * 4 + 1]);
-            float b = half2float(halfData[i * 4 + 2]);
+            float r = data[i * 4 + 0];
+            float g = data[i * 4 + 1];
+            float b = data[i * 4 + 2];
             maxC = std::max({maxC, r, g, b});
             float rT = r / (r + 1.0f);
             float gT = g / (g + 1.0f);
@@ -262,33 +262,39 @@ int main(int argc, char* argv[]) {
     }
 
     if (!dumpRoughnessPath.empty()) {
-        std::vector<uint8_t> roughData;
+        std::vector<float> roughData;
         uint32_t rw = 0, rh = 0;
         if (!renderer.readbackRoughnessAOV(roughData, rw, rh)) {
             std::cerr << "[Roughness dump] readback failed\n";
         } else {
-            stbi_write_png(dumpRoughnessPath.c_str(), rw, rh, 1, roughData.data(), rw);
+            // R16F → 8-bit grayscale PNG. Roughness is [0, 1], clamp + scale.
+            std::vector<uint8_t> gray(static_cast<size_t>(rw) * rh, 0);
+            for (uint32_t i = 0; i < rw * rh; i++) {
+                float r = std::max(0.0f, std::min(1.0f, roughData[i]));
+                gray[i] = static_cast<uint8_t>(r * 255.0f);
+            }
+            stbi_write_png(dumpRoughnessPath.c_str(), rw, rh, 1, gray.data(), rw);
             std::cout << "Saved roughness debug: " << dumpRoughnessPath << std::endl;
         }
     }
 
     if (!dumpDiffusePath.empty()) {
-        std::vector<uint16_t> halfData;
+        std::vector<float> data;
         uint32_t dw = 0, dh = 0;
-        if (!renderer.readbackDiffuseRadiance(halfData, dw, dh)) {
+        if (!renderer.readbackDiffuseRadiance(data, dw, dh)) {
             std::cerr << "[Diffuse dump] readback failed\n";
         } else {
-            dumpRGBA16FStream(dumpDiffusePath, halfData, dw, dh);
+            dumpRGBA32FStream(dumpDiffusePath, data, dw, dh);
         }
     }
 
     if (!dumpSpecularPath.empty()) {
-        std::vector<uint16_t> halfData;
+        std::vector<float> data;
         uint32_t sw = 0, sh = 0;
-        if (!renderer.readbackSpecularRadiance(halfData, sw, sh)) {
+        if (!renderer.readbackSpecularRadiance(data, sw, sh)) {
             std::cerr << "[Specular dump] readback failed\n";
         } else {
-            dumpRGBA16FStream(dumpSpecularPath, halfData, sw, sh);
+            dumpRGBA32FStream(dumpSpecularPath, data, sw, sh);
         }
     }
 }

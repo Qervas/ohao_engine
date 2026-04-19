@@ -145,3 +145,30 @@ Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
   Sub-plan 4 NRD integration.
 
 Sub-plan 3.C complete. Next: 3.D (disocclusion mask).
+
+## 2026-04-19: Format upgrades — roughness R16F + radiance RGBA32F (Sub-plan 3.C.5)
+
+Format promotions for quality-first NRD consumption:
+- Binding 21 roughness: R8_UNORM → R16_SFLOAT (+2 MB at 1080p).
+- Bindings 22+23 radiance: RGBA16F → RGBA32F (+33 MB at 1080p combined).
+- Raygen clamp `min(..., 60000.0)` removed from diffuse+specular exit writes.
+
+Readback helper signatures upgraded to native `std::vector<float>` for
+cleaner debug consumers. env_demo dump decoders simplified (no more
+half2float dance for diffuse/specular; MV still uses it).
+
+Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
+- **Roughness dump:** visually identical to pre-3.C.5 at 8-bit display.
+  R16F AOV has finer precision at low-roughness (visor/glossy) regions
+  that the PNG quantization hides; NRD will consume the full precision.
+- **Diffuse dump:** unchanged in appearance (demodulation math unchanged).
+  Max channel: 93.2568.
+- **Specular dump:** max channel: 34076.5. If > 60000, this
+  is the clamp removal taking effect on genuine HDR spikes. Reinhard
+  display may show relative darkening vs pre-3.C.5.
+- **Regression:** beauty output unchanged (format-only change — no
+  radiance math modified).
+
+Sub-plan 3.C.5 complete. Next: 3.C.6 (demod AOV exposure — write raw
+radiance, expose firstHitDiffAlbedo / firstHitSpecColor at new bindings
+so NRD remodulates downstream).
