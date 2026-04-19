@@ -30,6 +30,8 @@ layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; 
 layout(set = 0, binding = 19, rg16f) uniform image2D motionVector;
 layout(set = 0, binding = 20, r32f) uniform image2D depthAOV;
 layout(set = 0, binding = 21, r8)   uniform image2D roughnessAOV;
+layout(set = 0, binding = 22, rgba16f) uniform image2D diffuseRadiance;
+layout(set = 0, binding = 23, rgba16f) uniform image2D specularRadiance;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
@@ -112,6 +114,13 @@ void main() {
     vec3 throughput = vec3(1.0);
     vec3 firstHitPos = vec3(0.0);
     float firstHitDist = -1.0;
+
+    // Sub-plan 3.C: diffuse + specular radiance split (demodulated)
+    vec3 diffContrib        = vec3(0.0);
+    vec3 specContrib        = vec3(0.0);
+    vec3 firstHitDiffAlbedo = vec3(0.0);  // diffuse albedo at bounce 0 (metals: 0)
+    vec3 firstHitSpecColor  = vec3(0.04); // F0 at bounce 0 (dielectric default)
+    uint lobeMask           = 0u;         // 0 = diffuse, 1 = specular (set at bounce 0 BSDF sample)
 
     // MIS state carried across bounces: PDF of the last BSDF-sampled direction.
     // Primary ray is a delta (pinhole), so it contributes no MIS weight.
@@ -216,6 +225,12 @@ void main() {
 
         // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
+
+        // Sub-plan 3.C: capture first-hit demodulation factors
+        if (bounce == 0u) {
+            firstHitDiffAlbedo = isMetal ? vec3(0.0) : albedo;
+            firstHitSpecColor  = F0;
+        }
 
         // === NEE: uniform random light selection ===
         if (lightBuf.lightCount > 0u) {
@@ -610,5 +625,13 @@ void main() {
     // Tonemap + gamma (same exposure as deferred pipeline)
     vec3 ldr = ACES(denoised * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
+    // Sub-plan 3.C: demodulate + write diffuse/specular radiance AOVs
+    vec3 diffDemod = diffContrib / max(firstHitDiffAlbedo, vec3(0.01));
+    vec3 specDemod = specContrib / max(firstHitSpecColor,  vec3(0.01));
+    // Clamp to RGBA16F safe range (max 65504; leave headroom for NRD internal ops)
+    diffDemod = min(diffDemod, vec3(60000.0));
+    specDemod = min(specDemod, vec3(60000.0));
+    imageStore(diffuseRadiance,  pixel, vec4(diffDemod, 1.0));
+    imageStore(specularRadiance, pixel, vec4(specDemod, 1.0));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
