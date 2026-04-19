@@ -113,6 +113,10 @@ public:
     VkImage     getDiffuseRadianceAOVImage() const { return m_diffuseRadianceImage; }
     VkImageView getSpecularRadianceAOV()      const { return m_specularRadianceView; }
     VkImage     getSpecularRadianceAOVImage() const { return m_specularRadianceImage; }
+    VkImageView getDiffAlbedoAOV()      const { return m_diffAlbedoView; }
+    VkImage     getDiffAlbedoAOVImage() const { return m_diffAlbedoImage; }
+    VkImageView getSpecColorAOV()       const { return m_specColorView; }
+    VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -256,6 +260,16 @@ private:
     VkImage        m_specularRadianceImage = VK_NULL_HANDLE;
     VkDeviceMemory m_specularRadianceMemory = VK_NULL_HANDLE;
     VkImageView    m_specularRadianceView = VK_NULL_HANDLE;
+
+    // Feature 3.C.6: diffuse albedo AOV for NRD remodulate (RGBA8 UNORM)
+    VkImage        m_diffAlbedoImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_diffAlbedoMemory = VK_NULL_HANDLE;
+    VkImageView    m_diffAlbedoView = VK_NULL_HANDLE;
+
+    // Feature 3.C.6: specular color / F0 AOV for NRD remodulate (RGBA8 UNORM)
+    VkImage        m_specColorImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_specColorMemory = VK_NULL_HANDLE;
+    VkImageView    m_specColorView = VK_NULL_HANDLE;
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
