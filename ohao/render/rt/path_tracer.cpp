@@ -904,13 +904,13 @@ bool PathTracer::createDescriptorResources() {
     bindings[21].descriptorCount = 1;
     bindings[21].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // Binding 22: diffuse radiance (RGBA16F storage image) — Sub-plan 3.C
+    // Binding 22: diffuse radiance (RGBA32F storage image, raw) — Sub-plan 3.C / 3.C.5 / 3.C.6
     bindings[22].binding         = 22;
     bindings[22].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[22].descriptorCount = 1;
     bindings[22].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
-    // Binding 23: specular radiance (RGBA16F storage image) — Sub-plan 3.C
+    // Binding 23: specular radiance (RGBA32F storage image, raw) — Sub-plan 3.C / 3.C.5 / 3.C.6
     bindings[23].binding         = 23;
     bindings[23].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[23].descriptorCount = 1;

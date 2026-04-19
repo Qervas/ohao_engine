@@ -251,12 +251,12 @@ private:
     VkDeviceMemory m_roughnessAOVMemory = VK_NULL_HANDLE;
     VkImageView    m_roughnessAOVView = VK_NULL_HANDLE;
 
-    // Feature 3.C: demodulated diffuse radiance (RGBA16F)
+    // Feature 3.C (raw since 3.C.6): diffuse radiance (RGBA32F since 3.C.5)
     VkImage        m_diffuseRadianceImage = VK_NULL_HANDLE;
     VkDeviceMemory m_diffuseRadianceMemory = VK_NULL_HANDLE;
     VkImageView    m_diffuseRadianceView = VK_NULL_HANDLE;
 
-    // Feature 3.C: demodulated specular radiance (RGBA16F)
+    // Feature 3.C (raw since 3.C.6): specular radiance (RGBA32F since 3.C.5)
     VkImage        m_specularRadianceImage = VK_NULL_HANDLE;
     VkDeviceMemory m_specularRadianceMemory = VK_NULL_HANDLE;
     VkImageView    m_specularRadianceView = VK_NULL_HANDLE;
