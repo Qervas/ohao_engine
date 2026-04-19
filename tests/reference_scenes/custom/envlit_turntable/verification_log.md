@@ -121,3 +121,27 @@ Verification on DamagedHelmet + env_studio, 16 spp, --denoise=none:
 
 Sub-plan 3.B complete. Next: 3.C (history refactor — MV-aware
 temporal reprojection + diffuse/specular split).
+
+## 2026-04-19: Diffuse + specular radiance split (Sub-plan 3.C) validation
+
+Path tracer now writes demodulated diffuse (RGBA16F @ binding 22) and
+specular (RGBA16F @ binding 23) radiance streams on first-hit, for
+future NRD consumption (Sub-plan 4).
+
+Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
+- **Diffuse:** warm ambient shading across matte plate areas; visor
+  near-black (metal lobes skip diffuse channel; F0 × albedo = 0 for pure metal).
+  Max channel value: 93.25.
+  Saved: `renders/diffuse_helmet.png`.
+- **Specular:** bright visor with HDR env reflection; metal body
+  bright; dielectric accessories dimmer.
+  Max channel value: 34048.
+  Saved: `renders/specular_helmet.png`.
+- **Regression:** beauty output at `--denoise=none/oidn/optix`
+  unchanged from pre-3.C (split logic mirrors existing radiance math;
+  no accumulation path modified).
+- **Sum-match:** eyeball check — diffuse + specular re-modulated
+  approximately equals beauty. Exact CPU regression deferred to
+  Sub-plan 4 NRD integration.
+
+Sub-plan 3.C complete. Next: 3.D (disocclusion mask).

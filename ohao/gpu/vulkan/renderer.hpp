@@ -173,6 +173,12 @@ public:
     // Debug: readback the roughness AOV as raw uint8 buffer (1 byte per pixel).
     bool readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint32_t& width, uint32_t& height);
 
+    // Debug: readback RGBA16F diffuse radiance (4 halfs per pixel → 8 bytes).
+    bool readbackDiffuseRadiance(std::vector<uint16_t>& halfData, uint32_t& width, uint32_t& height);
+
+    // Debug: readback RGBA16F specular radiance (4 halfs per pixel → 8 bytes).
+    bool readbackSpecularRadiance(std::vector<uint16_t>& halfData, uint32_t& width, uint32_t& height);
+
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();
     // subsequent calls return the cached result until the next render().

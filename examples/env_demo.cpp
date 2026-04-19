@@ -40,6 +40,8 @@ int main(int argc, char* argv[]) {
     std::string dumpMvPath;
     std::string dumpDepthPath;
     std::string dumpRoughnessPath;
+    std::string dumpDiffusePath;
+    std::string dumpSpecularPath;
     float panX = 0.0f;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
@@ -53,10 +55,60 @@ int main(int argc, char* argv[]) {
             dumpDepthPath = arg.substr(13);
         } else if (arg.rfind("--dump-roughness=", 0) == 0) {
             dumpRoughnessPath = arg.substr(17);
+        } else if (arg.rfind("--dump-diffuse=", 0) == 0) {
+            dumpDiffusePath = arg.substr(15);
+        } else if (arg.rfind("--dump-specular=", 0) == 0) {
+            dumpSpecularPath = arg.substr(16);
         } else if (arg.rfind("--pan-x=", 0) == 0) {
             panX = std::stof(arg.substr(8));
         }
     }
+
+    // IEEE 754 half → float (shared by MV + RGBA16F radiance dumps)
+    auto half2float = [](uint16_t h) -> float {
+        uint32_t sign = (h >> 15) & 0x1;
+        uint32_t exp  = (h >> 10) & 0x1f;
+        uint32_t mant = h & 0x3ff;
+        uint32_t f;
+        if (exp == 0) {
+            if (mant == 0) {
+                f = sign << 31;
+            } else {
+                exp = 1;
+                while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+                mant &= 0x3ff;
+                f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+            }
+        } else if (exp == 0x1f) {
+            f = (sign << 31) | (0xff << 23) | (mant << 13);
+        } else {
+            f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+        }
+        float out;
+        std::memcpy(&out, &f, 4);
+        return out;
+    };
+
+    // Reinhard tonemap RGBA16F → 8-bit RGB PNG (reports max channel to stdout).
+    auto dumpRGBA16FStream = [&](const std::string& path, const std::vector<uint16_t>& halfData,
+                                  uint32_t w, uint32_t h) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3, 0);
+        float maxC = 0.0f;
+        for (uint32_t i = 0; i < w * h; i++) {
+            float r = half2float(halfData[i * 4 + 0]);
+            float g = half2float(halfData[i * 4 + 1]);
+            float b = half2float(halfData[i * 4 + 2]);
+            maxC = std::max({maxC, r, g, b});
+            float rT = r / (r + 1.0f);
+            float gT = g / (g + 1.0f);
+            float bT = b / (b + 1.0f);
+            rgb[i * 3 + 0] = static_cast<uint8_t>(std::max(0, std::min(255, int(rT * 255.0f))));
+            rgb[i * 3 + 1] = static_cast<uint8_t>(std::max(0, std::min(255, int(gT * 255.0f))));
+            rgb[i * 3 + 2] = static_cast<uint8_t>(std::max(0, std::min(255, int(bT * 255.0f))));
+        }
+        stbi_write_png(path.c_str(), w, h, 3, rgb.data(), w * 3);
+        std::cout << "Saved " << path << " (max channel = " << maxC << ")" << std::endl;
+    };
 
     std::cout << "OHAO Env Demo — " << modelPath << " + " << envPath << std::endl;
 
@@ -166,31 +218,6 @@ int main(int argc, char* argv[]) {
         if (!renderer.readbackMotionVector(mvRaw, mw, mh)) {
             std::cerr << "[MV dump] readback failed or no RT profile active\n";
         } else {
-            // IEEE 754 half → float
-            auto half2float = [](uint16_t h) -> float {
-                uint32_t sign = (h >> 15) & 0x1;
-                uint32_t exp  = (h >> 10) & 0x1f;
-                uint32_t mant = h & 0x3ff;
-                uint32_t f;
-                if (exp == 0) {
-                    if (mant == 0) {
-                        f = sign << 31;
-                    } else {
-                        exp = 1;
-                        while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
-                        mant &= 0x3ff;
-                        f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
-                    }
-                } else if (exp == 0x1f) {
-                    f = (sign << 31) | (0xff << 23) | (mant << 13);
-                } else {
-                    f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
-                }
-                float out;
-                std::memcpy(&out, &f, 4);
-                return out;
-            };
-
             // Encode: +X motion → red, +Y motion → green, neutral = 128
             std::vector<uint8_t> rgb(static_cast<size_t>(mw) * mh * 3, 128);
             const float scale = 0.02f;  // ~50px motion saturates to full red/green
@@ -242,6 +269,26 @@ int main(int argc, char* argv[]) {
         } else {
             stbi_write_png(dumpRoughnessPath.c_str(), rw, rh, 1, roughData.data(), rw);
             std::cout << "Saved roughness debug: " << dumpRoughnessPath << std::endl;
+        }
+    }
+
+    if (!dumpDiffusePath.empty()) {
+        std::vector<uint16_t> halfData;
+        uint32_t dw = 0, dh = 0;
+        if (!renderer.readbackDiffuseRadiance(halfData, dw, dh)) {
+            std::cerr << "[Diffuse dump] readback failed\n";
+        } else {
+            dumpRGBA16FStream(dumpDiffusePath, halfData, dw, dh);
+        }
+    }
+
+    if (!dumpSpecularPath.empty()) {
+        std::vector<uint16_t> halfData;
+        uint32_t sw = 0, sh = 0;
+        if (!renderer.readbackSpecularRadiance(halfData, sw, sh)) {
+            std::cerr << "[Specular dump] readback failed\n";
+        } else {
+            dumpRGBA16FStream(dumpSpecularPath, halfData, sw, sh);
         }
     }
 }
