@@ -612,6 +612,20 @@ VkImageView VulkanRenderer::getSpecularRadianceAOV() const {
     return VK_NULL_HANDLE;
 }
 
+VkImageView VulkanRenderer::getDiffAlbedoAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getDiffAlbedoAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getSpecColorAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getSpecColorAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
 bool VulkanRenderer::initializeDeferredRenderer() {
     std::cout << "VulkanRenderer: Creating DeferredRenderer..." << std::endl;
     if (!m_deferredRenderer) {
@@ -735,6 +749,26 @@ VkImage VulkanRenderer::getSpecularRadianceAOVImage() const {
     }
     if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
         return m_rtRealtimeRenderer->getSpecularRadianceAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getDiffAlbedoAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getDiffAlbedoAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getDiffAlbedoAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getSpecColorAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getSpecColorAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getSpecColorAOVImage();
     }
     return VK_NULL_HANDLE;
 }

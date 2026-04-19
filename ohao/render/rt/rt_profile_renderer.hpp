@@ -36,6 +36,10 @@ public:
     virtual VkImage     getDiffuseRadianceAOVImage() const = 0;
     virtual VkImageView getSpecularRadianceAOV()      const = 0;
     virtual VkImage     getSpecularRadianceAOVImage() const = 0;
+    virtual VkImageView getDiffAlbedoAOV()      const = 0;
+    virtual VkImage     getDiffAlbedoAOVImage() const = 0;
+    virtual VkImageView getSpecColorAOV()       const = 0;
+    virtual VkImage     getSpecColorAOVImage()  const = 0;
 
     virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
     virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
@@ -98,6 +102,10 @@ public:
     VkImage     getDiffuseRadianceAOVImage() const override { return m_pathTracer.getDiffuseRadianceAOVImage(); }
     VkImageView getSpecularRadianceAOV()      const override { return m_pathTracer.getSpecularRadianceAOV(); }
     VkImage     getSpecularRadianceAOVImage() const override { return m_pathTracer.getSpecularRadianceAOVImage(); }
+    VkImageView getDiffAlbedoAOV()      const override { return m_pathTracer.getDiffAlbedoAOV(); }
+    VkImage     getDiffAlbedoAOVImage() const override { return m_pathTracer.getDiffAlbedoAOVImage(); }
+    VkImageView getSpecColorAOV()       const override { return m_pathTracer.getSpecColorAOV(); }
+    VkImage     getSpecColorAOVImage()  const override { return m_pathTracer.getSpecColorAOVImage(); }
 
     void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {
