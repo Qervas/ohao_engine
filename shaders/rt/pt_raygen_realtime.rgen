@@ -13,6 +13,8 @@ layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; 
 layout(set = 0, binding = 6, rgba32f) uniform image2D albedoAOV;
 layout(set = 0, binding = 7, rgba32f) uniform image2D normalAOV;
 layout(set = 0, binding = 19, rg16f) uniform image2D motionVector;
+layout(set = 0, binding = 20, r32f) uniform image2D depthAOV;
+layout(set = 0, binding = 21, r8)   uniform image2D roughnessAOV;
 
 struct GPULight {
     vec4 positionAndType;
@@ -139,6 +141,28 @@ void main() {
                 }
             }
             imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
+
+            // Sub-plan 3.B: depth (view-space Z) + roughness AOVs on first-hit
+            float depth = 1e30;
+            float rough = 1.0;
+            if (firstHitDist > 0.0) {
+                // View-space Z: right-handed → camera looks down -Z, so -viewPos.z = forward distance.
+                // Reuses inverse(pc.invView) which Sub-plan 3.A already computes in this block —
+                // reading `currViewProj`'s intermediate isn't exposed, so recompute the view inverse.
+                mat4 viewMat = inverse(pc.invView);
+                vec4 viewPos = viewMat * vec4(firstHitPos, 1.0);
+                depth = -viewPos.z;
+
+                // Roughness: unpack from payload.attenuation.x — encoding matches pt_closesthit.rchit.
+                // Magic-number form: sign bit → metal flag, magnitude → roughness; values >= 10 are
+                // shifted (historic encoding from Feature 1.1 era).
+                float packed = payload.attenuation.x;
+                rough = abs(packed);
+                if (rough >= 10.0) rough -= 10.0;
+                rough = clamp(rough, 0.01, 1.0);
+            }
+            imageStore(depthAOV,     pixel, vec4(depth, 0.0, 0.0, 0.0));
+            imageStore(roughnessAOV, pixel, vec4(rough, 0.0, 0.0, 0.0));
         }
 
         if (payload.hitDist < 0.0) {
