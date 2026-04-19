@@ -483,6 +483,86 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_roughnessAOVView) != VK_SUCCESS) return false;
     }
 
+    // ---- Feature 3.C: Diffuse radiance (RGBA16F) ----
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_diffuseRadianceImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_diffuseRadianceImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_diffuseRadianceMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_diffuseRadianceImage, m_diffuseRadianceMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_diffuseRadianceImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_diffuseRadianceView) != VK_SUCCESS) return false;
+    }
+
+    // ---- Feature 3.C: Specular radiance (RGBA16F) ----
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_specularRadianceImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_specularRadianceImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_specularRadianceMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_specularRadianceImage, m_specularRadianceMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_specularRadianceImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_specularRadianceView) != VK_SUCCESS) return false;
+    }
+
     return true;
 }
 
@@ -514,6 +594,14 @@ void PathTracer::destroyImages() {
     if (m_roughnessAOVView)  { vkDestroyImageView(m_device, m_roughnessAOVView, nullptr); m_roughnessAOVView = VK_NULL_HANDLE; }
     if (m_roughnessAOVImage) { vkDestroyImage(m_device, m_roughnessAOVImage, nullptr);    m_roughnessAOVImage = VK_NULL_HANDLE; }
     if (m_roughnessAOVMemory){ vkFreeMemory(m_device, m_roughnessAOVMemory, nullptr);     m_roughnessAOVMemory = VK_NULL_HANDLE; }
+
+    if (m_diffuseRadianceView)    { vkDestroyImageView(m_device, m_diffuseRadianceView, nullptr);   m_diffuseRadianceView = VK_NULL_HANDLE; }
+    if (m_diffuseRadianceImage)   { vkDestroyImage(m_device, m_diffuseRadianceImage, nullptr);      m_diffuseRadianceImage = VK_NULL_HANDLE; }
+    if (m_diffuseRadianceMemory)  { vkFreeMemory(m_device, m_diffuseRadianceMemory, nullptr);       m_diffuseRadianceMemory = VK_NULL_HANDLE; }
+
+    if (m_specularRadianceView)   { vkDestroyImageView(m_device, m_specularRadianceView, nullptr);  m_specularRadianceView = VK_NULL_HANDLE; }
+    if (m_specularRadianceImage)  { vkDestroyImage(m_device, m_specularRadianceImage, nullptr);     m_specularRadianceImage = VK_NULL_HANDLE; }
+    if (m_specularRadianceMemory) { vkFreeMemory(m_device, m_specularRadianceMemory, nullptr);      m_specularRadianceMemory = VK_NULL_HANDLE; }
 
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_surfaceHistoryViews[i]) { vkDestroyImageView(m_device, m_surfaceHistoryViews[i], nullptr); m_surfaceHistoryViews[i] = VK_NULL_HANDLE; }

@@ -109,6 +109,10 @@ public:
     VkImage     getDepthAOVImage()    const { return m_depthAOVImage; }
     VkImageView getRoughnessAOV()     const { return m_roughnessAOVView; }
     VkImage     getRoughnessAOVImage() const { return m_roughnessAOVImage; }
+    VkImageView getDiffuseRadianceAOV()      const { return m_diffuseRadianceView; }
+    VkImage     getDiffuseRadianceAOVImage() const { return m_diffuseRadianceImage; }
+    VkImageView getSpecularRadianceAOV()      const { return m_specularRadianceView; }
+    VkImage     getSpecularRadianceAOVImage() const { return m_specularRadianceImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -242,6 +246,16 @@ private:
     VkImage        m_roughnessAOVImage = VK_NULL_HANDLE;
     VkDeviceMemory m_roughnessAOVMemory = VK_NULL_HANDLE;
     VkImageView    m_roughnessAOVView = VK_NULL_HANDLE;
+
+    // Feature 3.C: demodulated diffuse radiance (RGBA16F)
+    VkImage        m_diffuseRadianceImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_diffuseRadianceMemory = VK_NULL_HANDLE;
+    VkImageView    m_diffuseRadianceView = VK_NULL_HANDLE;
+
+    // Feature 3.C: demodulated specular radiance (RGBA16F)
+    VkImage        m_specularRadianceImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_specularRadianceMemory = VK_NULL_HANDLE;
+    VkImageView    m_specularRadianceView = VK_NULL_HANDLE;
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
