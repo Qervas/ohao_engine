@@ -557,6 +557,20 @@ VkImageView VulkanRenderer::getMotionVectorAOV() const {
     return VK_NULL_HANDLE;
 }
 
+VkImageView VulkanRenderer::getDepthAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getDepthAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getRoughnessAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getRoughnessAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
 bool VulkanRenderer::initializeDeferredRenderer() {
     std::cout << "VulkanRenderer: Creating DeferredRenderer..." << std::endl;
     if (!m_deferredRenderer) {
@@ -640,6 +654,26 @@ VkImage VulkanRenderer::getMotionVectorImage() const {
     }
     if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
         return m_rtRealtimeRenderer->getMotionVectorImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getDepthAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getDepthAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getDepthAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getRoughnessAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getRoughnessAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getRoughnessAOVImage();
     }
     return VK_NULL_HANDLE;
 }

@@ -28,6 +28,10 @@ public:
     virtual VkImage getNormalAOV() const = 0;
     virtual VkImageView getMotionVectorAOV() const = 0;
     virtual VkImage getMotionVectorImage() const = 0;
+    virtual VkImageView getDepthAOV()         const = 0;
+    virtual VkImage     getDepthAOVImage()    const = 0;
+    virtual VkImageView getRoughnessAOV()     const = 0;
+    virtual VkImage     getRoughnessAOVImage() const = 0;
 
     virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
     virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
@@ -82,6 +86,10 @@ public:
     VkImage getNormalAOV() const override { return m_pathTracer.getNormalAOV(); }
     VkImageView getMotionVectorAOV() const override { return m_pathTracer.getMotionVectorAOV(); }
     VkImage getMotionVectorImage() const override { return m_pathTracer.getMotionVectorImage(); }
+    VkImageView getDepthAOV()         const override { return m_pathTracer.getDepthAOV(); }
+    VkImage     getDepthAOVImage()    const override { return m_pathTracer.getDepthAOVImage(); }
+    VkImageView getRoughnessAOV()     const override { return m_pathTracer.getRoughnessAOV(); }
+    VkImage     getRoughnessAOVImage() const override { return m_pathTracer.getRoughnessAOVImage(); }
 
     void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {

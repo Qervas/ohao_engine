@@ -151,6 +151,13 @@ public:
     // Returns the motion vector AOV VkImage (needed for vkCmdCopyImageToBuffer).
     VkImage getMotionVectorImage() const;
 
+    // Returns the depth / roughness AOV image views and images from the active
+    // RT profile, or VK_NULL_HANDLE if no RT profile is active.
+    VkImageView getDepthAOV()         const;
+    VkImage     getDepthAOVImage()    const;
+    VkImageView getRoughnessAOV()     const;
+    VkImage     getRoughnessAOVImage() const;
+
     // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
     // One 2-half pair per pixel; total = 2 * width * height values.
     // Returns false if no RT profile is active or readback fails.
