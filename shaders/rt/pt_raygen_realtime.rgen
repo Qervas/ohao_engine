@@ -14,9 +14,9 @@ layout(set = 0, binding = 6, rgba32f) uniform image2D albedoAOV;
 layout(set = 0, binding = 7, rgba32f) uniform image2D normalAOV;
 layout(set = 0, binding = 19, rg16f) uniform image2D motionVector;
 layout(set = 0, binding = 20, r32f) uniform image2D depthAOV;
-layout(set = 0, binding = 21, r8)   uniform image2D roughnessAOV;
-layout(set = 0, binding = 22, rgba16f) uniform image2D diffuseRadiance;
-layout(set = 0, binding = 23, rgba16f) uniform image2D specularRadiance;
+layout(set = 0, binding = 21, r16f)  uniform image2D roughnessAOV;
+layout(set = 0, binding = 22, rgba32f) uniform image2D diffuseRadiance;
+layout(set = 0, binding = 23, rgba32f) uniform image2D specularRadiance;
 
 struct GPULight {
     vec4 positionAndType;
@@ -544,9 +544,6 @@ void main() {
     // Sub-plan 3.C: demodulate + write diffuse/specular radiance AOVs
     vec3 diffDemod = diffContrib / max(firstHitDiffAlbedo, vec3(0.01));
     vec3 specDemod = specContrib / max(firstHitSpecColor,  vec3(0.01));
-    // Clamp to RGBA16F safe range (max 65504; leave headroom for NRD internal ops)
-    diffDemod = min(diffDemod, vec3(60000.0));
-    specDemod = min(specDemod, vec3(60000.0));
     imageStore(diffuseRadiance,  pixel, vec4(diffDemod, 1.0));
     imageStore(specularRadiance, pixel, vec4(specDemod, 1.0));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));

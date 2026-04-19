@@ -443,12 +443,12 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_depthAOVView) != VK_SUCCESS) return false;
     }
 
-    // ---- Feature 3.B: Roughness AOV (R8 UNORM) ----
+    // ---- Feature 3.B: Roughness AOV (R16F, promoted 3.C.5) ----
     {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = VK_FORMAT_R8_UNORM;
+        imageInfo.format = VK_FORMAT_R16_SFLOAT;
         imageInfo.extent = {m_width, m_height, 1};
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
@@ -475,7 +475,7 @@ bool PathTracer::createImages() {
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = m_roughnessAOVImage;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R8_UNORM;
+        viewInfo.format = VK_FORMAT_R16_SFLOAT;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
@@ -483,12 +483,12 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_roughnessAOVView) != VK_SUCCESS) return false;
     }
 
-    // ---- Feature 3.C: Diffuse radiance (RGBA16F) ----
+    // ---- Feature 3.C: Diffuse radiance (RGBA32F, promoted 3.C.5) ----
     {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
         imageInfo.extent = {m_width, m_height, 1};
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
@@ -515,7 +515,7 @@ bool PathTracer::createImages() {
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = m_diffuseRadianceImage;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
@@ -523,12 +523,12 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_diffuseRadianceView) != VK_SUCCESS) return false;
     }
 
-    // ---- Feature 3.C: Specular radiance (RGBA16F) ----
+    // ---- Feature 3.C: Specular radiance (RGBA32F, promoted 3.C.5) ----
     {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
         imageInfo.extent = {m_width, m_height, 1};
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
@@ -555,7 +555,7 @@ bool PathTracer::createImages() {
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = m_specularRadianceImage;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
