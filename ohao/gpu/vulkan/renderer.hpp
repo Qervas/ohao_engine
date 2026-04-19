@@ -157,6 +157,10 @@ public:
     VkImage     getDepthAOVImage()    const;
     VkImageView getRoughnessAOV()     const;
     VkImage     getRoughnessAOVImage() const;
+    VkImageView getDiffuseRadianceAOV()      const;
+    VkImage     getDiffuseRadianceAOVImage() const;
+    VkImageView getSpecularRadianceAOV()      const;
+    VkImage     getSpecularRadianceAOVImage() const;
 
     // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
     // One 2-half pair per pixel; total = 2 * width * height values.
