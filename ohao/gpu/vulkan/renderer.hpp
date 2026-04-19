@@ -183,6 +183,12 @@ public:
     // Debug: readback RGBA32F specular radiance AOV (4 floats per pixel, native).
     bool readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
 
+    // Debug: readback RGBA8 diffuse albedo AOV (4 bytes per pixel).
+    bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
+
+    // Debug: readback RGBA8 specular color AOV (4 bytes per pixel).
+    bool readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
+
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();
     // subsequent calls return the cached result until the next render().

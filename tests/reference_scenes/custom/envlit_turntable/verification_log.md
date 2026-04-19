@@ -172,3 +172,30 @@ Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
 Sub-plan 3.C.5 complete. Next: 3.C.6 (demod AOV exposure — write raw
 radiance, expose firstHitDiffAlbedo / firstHitSpecColor at new bindings
 so NRD remodulates downstream).
+
+## 2026-04-19: Demod AOV exposure (Sub-plan 3.C.6)
+
+Raygen stops pre-dividing radiance by albedo/F0 at exit. Two new AOVs
+expose demod factors so NRD remodulates downstream:
+- **Binding 24 (diffuse albedo)**: RGBA8 UNORM. `isMetal ? 0 : albedo`.
+- **Binding 25 (specular color)**: RGBA8 UNORM. `isMetal ? albedo : vec3(0.04)`.
+
+Bindings 22+23 now hold RAW `diffContrib` / `specContrib` radiance
+(not demodulated). Removes the 100×-amplification-on-dark-channels
+bug in the 3.C demod division.
+
+Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
+- **Diff albedo dump:** matte plates show helmet base color; metal
+  regions near-black; sky black.
+- **Spec color dump:** matte plates near-black (~10/255, dielectric F0);
+  metal regions show metal albedo; sky black.
+- **Diffuse radiance (raw):** max channel 19.9896. Dimmer
+  than 3.C.5 (was 93.25).
+- **Specular radiance (raw):** max channel 1363.06. Also
+  dimmer than 3.C.5 (was 34076).
+- **Regression:** beauty output unchanged (AOV semantics only).
+
+Memory: +8 MB at 1080p for 2 new RGBA8 AOVs.
+
+Sub-plan 3.C.6 complete. Next: 3.C.7 (dual-ray bounce-0 split — first
+visible offline quality improvement).

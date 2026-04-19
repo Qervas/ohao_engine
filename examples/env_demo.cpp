@@ -42,6 +42,8 @@ int main(int argc, char* argv[]) {
     std::string dumpRoughnessPath;
     std::string dumpDiffusePath;
     std::string dumpSpecularPath;
+    std::string dumpDiffAlbedoPath;
+    std::string dumpSpecColorPath;
     float panX = 0.0f;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
@@ -59,6 +61,10 @@ int main(int argc, char* argv[]) {
             dumpDiffusePath = arg.substr(15);
         } else if (arg.rfind("--dump-specular=", 0) == 0) {
             dumpSpecularPath = arg.substr(16);
+        } else if (arg.rfind("--dump-diff-albedo=", 0) == 0) {
+            dumpDiffAlbedoPath = arg.substr(19);
+        } else if (arg.rfind("--dump-spec-color=", 0) == 0) {
+            dumpSpecColorPath = arg.substr(18);
         } else if (arg.rfind("--pan-x=", 0) == 0) {
             panX = std::stof(arg.substr(8));
         }
@@ -108,6 +114,19 @@ int main(int argc, char* argv[]) {
         }
         stbi_write_png(path.c_str(), w, h, 3, rgb.data(), w * 3);
         std::cout << "Saved " << path << " (max channel = " << maxC << ")" << std::endl;
+    };
+
+    // RGBA8 → RGB PNG passthrough. No tonemap/decode — data is already in [0, 255] per channel.
+    auto dumpRGBA8ToRGB = [&](const std::string& path, const std::vector<uint8_t>& rgba,
+                               uint32_t w, uint32_t h) {
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3, 0);
+        for (uint32_t i = 0; i < w * h; i++) {
+            rgb[i * 3 + 0] = rgba[i * 4 + 0];
+            rgb[i * 3 + 1] = rgba[i * 4 + 1];
+            rgb[i * 3 + 2] = rgba[i * 4 + 2];
+        }
+        stbi_write_png(path.c_str(), w, h, 3, rgb.data(), w * 3);
+        std::cout << "Saved " << path << std::endl;
     };
 
     std::cout << "OHAO Env Demo — " << modelPath << " + " << envPath << std::endl;
@@ -295,6 +314,26 @@ int main(int argc, char* argv[]) {
             std::cerr << "[Specular dump] readback failed\n";
         } else {
             dumpRGBA32FStream(dumpSpecularPath, data, sw, sh);
+        }
+    }
+
+    if (!dumpDiffAlbedoPath.empty()) {
+        std::vector<uint8_t> rgba;
+        uint32_t dw = 0, dh = 0;
+        if (!renderer.readbackDiffAlbedoAOV(rgba, dw, dh)) {
+            std::cerr << "[Diff albedo dump] readback failed\n";
+        } else {
+            dumpRGBA8ToRGB(dumpDiffAlbedoPath, rgba, dw, dh);
+        }
+    }
+
+    if (!dumpSpecColorPath.empty()) {
+        std::vector<uint8_t> rgba;
+        uint32_t sw = 0, sh = 0;
+        if (!renderer.readbackSpecColorAOV(rgba, sw, sh)) {
+            std::cerr << "[Spec color dump] readback failed\n";
+        } else {
+            dumpRGBA8ToRGB(dumpSpecColorPath, rgba, sw, sh);
         }
     }
 }
