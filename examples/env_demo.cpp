@@ -38,6 +38,8 @@ int main(int argc, char* argv[]) {
     RenderMode rtMode = RenderMode::RTOffline;
     std::optional<ohao::DenoiseMode> denoiseOverride;
     std::string dumpMvPath;
+    std::string dumpDepthPath;
+    std::string dumpRoughnessPath;
     float panX = 0.0f;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
@@ -47,6 +49,10 @@ int main(int argc, char* argv[]) {
             denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
         } else if (arg.rfind("--dump-mv=", 0) == 0) {
             dumpMvPath = arg.substr(10);
+        } else if (arg.rfind("--dump-depth=", 0) == 0) {
+            dumpDepthPath = arg.substr(13);
+        } else if (arg.rfind("--dump-roughness=", 0) == 0) {
+            dumpRoughnessPath = arg.substr(17);
         } else if (arg.rfind("--pan-x=", 0) == 0) {
             panX = std::stof(arg.substr(8));
         }
@@ -201,6 +207,41 @@ int main(int argc, char* argv[]) {
             }
             stbi_write_png(dumpMvPath.c_str(), mw, mh, 3, rgb.data(), mw * 3);
             std::cout << "Saved MV debug: " << dumpMvPath << std::endl;
+        }
+    }
+
+    if (!dumpDepthPath.empty()) {
+        std::vector<float> depthData;
+        uint32_t dw = 0, dh = 0;
+        if (!renderer.readbackDepthAOV(depthData, dw, dh)) {
+            std::cerr << "[Depth dump] readback failed\n";
+        } else {
+            float maxFinite = 0.0f;
+            for (float d : depthData) if (d < 1e20f && d > maxFinite) maxFinite = d;
+            if (maxFinite <= 0.0f) maxFinite = 1.0f;
+
+            std::vector<uint8_t> gray(static_cast<size_t>(dw) * dh, 255);
+            for (uint32_t i = 0; i < dw * dh; i++) {
+                float d = depthData[i];
+                if (d < 1e20f) {
+                    int v = static_cast<int>((d / maxFinite) * 255.0f);
+                    gray[i] = static_cast<uint8_t>(std::max(0, std::min(255, v)));
+                }
+            }
+            stbi_write_png(dumpDepthPath.c_str(), dw, dh, 1, gray.data(), dw);
+            std::cout << "Saved depth debug: " << dumpDepthPath
+                      << " (max finite = " << maxFinite << ")" << std::endl;
+        }
+    }
+
+    if (!dumpRoughnessPath.empty()) {
+        std::vector<uint8_t> roughData;
+        uint32_t rw = 0, rh = 0;
+        if (!renderer.readbackRoughnessAOV(roughData, rw, rh)) {
+            std::cerr << "[Roughness dump] readback failed\n";
+        } else {
+            stbi_write_png(dumpRoughnessPath.c_str(), rw, rh, 1, roughData.data(), rw);
+            std::cout << "Saved roughness debug: " << dumpRoughnessPath << std::endl;
         }
     }
 }

@@ -775,4 +775,198 @@ bool VulkanRenderer::readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t
     return true;
 }
 
+bool VulkanRenderer::readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height) {
+    VkImage depthImage = getDepthAOVImage();
+    if (depthImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4; // R32F = 4 bytes/pixel
+    depthData.resize(static_cast<size_t>(width) * height);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition depth image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = depthImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, depthImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition depth image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = depthImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(depthData.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint32_t& width, uint32_t& height) {
+    VkImage roughImage = getRoughnessAOVImage();
+    if (roughImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 1; // R8 UNORM = 1 byte/pixel
+    roughData.resize(static_cast<size_t>(width) * height);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition roughness image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = roughImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, roughImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition roughness image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = roughImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(roughData.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
 } // namespace ohao

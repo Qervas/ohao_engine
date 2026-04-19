@@ -102,3 +102,22 @@ Known limitations:
   camera-animation infrastructure that env_demo doesn't have).
 
 Sub-plan 3.A complete. Next: 3.B (depth + roughness AOVs).
+
+## 2026-04-19: Depth + roughness AOVs (Sub-plan 3.B) validation
+
+Path tracer now writes view-space depth (R32F @ binding 20) and
+perceptual roughness (R8 UNORM @ binding 21) on first-hit.
+
+Verification on DamagedHelmet + env_studio, 16 spp, --denoise=none:
+- **Depth:** grayscale dump shows helmet near-surfaces darker, back
+  surfaces lighter, sky (miss) fully white (sentinel 1e30).
+  Max finite depth recorded: 9.41316 world units.
+  Saved: `renders/depth_helmet.png`.
+- **Roughness:** visor near-black (glossy metal), helmet body dark
+  gray, dielectric accessories lighter, sky white (miss sentinel 1.0).
+  Saved: `renders/roughness_helmet.png`.
+- **Regression:** beauty output at `--denoise=none/oidn/optix`
+  bit-identical to pre-3.B. AOVs are pure output.
+
+Sub-plan 3.B complete. Next: 3.C (history refactor — MV-aware
+temporal reprojection + diffuse/specular split).

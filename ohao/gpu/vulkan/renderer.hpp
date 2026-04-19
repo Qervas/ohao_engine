@@ -163,6 +163,12 @@ public:
     // Returns false if no RT profile is active or readback fails.
     bool readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height);
 
+    // Debug: readback the depth AOV as raw float buffer (1 float per pixel).
+    bool readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height);
+
+    // Debug: readback the roughness AOV as raw uint8 buffer (1 byte per pixel).
+    bool readbackRoughnessAOV(std::vector<uint8_t>& roughData, uint32_t& width, uint32_t& height);
+
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();
     // subsequent calls return the cached result until the next render().
