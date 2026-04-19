@@ -778,7 +778,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[24] = {};
+    VkDescriptorSetLayoutBinding bindings[26] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -916,22 +916,34 @@ bool PathTracer::createDescriptorResources() {
     bindings[23].descriptorCount = 1;
     bindings[23].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
+    // Binding 24: diffuse albedo AOV (RGBA8 UNORM storage image) — Sub-plan 3.C.6
+    bindings[24].binding         = 24;
+    bindings[24].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[24].descriptorCount = 1;
+    bindings[24].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+    // Binding 25: specular color AOV (RGBA8 UNORM storage image) — Sub-plan 3.C.6
+    bindings[25].binding         = 25;
+    bindings[25].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[25].descriptorCount = 1;
+    bindings[25].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     // Enable bindless: variable count on the LAST binding only
-    VkDescriptorBindingFlags bindingFlags[24] = {};
+    VkDescriptorBindingFlags bindingFlags[26] = {};
     bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 24;
+    flagsInfo.bindingCount = 26;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 24;
+    layoutInfo.bindingCount = 26;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -940,7 +952,7 @@ bool PathTracer::createDescriptorResources() {
     // Pool — allocate enough for bindless textures
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 13},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec (3.C)
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 15},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec (3.C), +2 albedo/specColor (3.C.6)
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},  // +2 for env CDF marginal + conditional
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
@@ -1291,7 +1303,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[24] = {};
+    VkWriteDescriptorSet writes[26] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -1544,6 +1556,30 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[writeCount].pImageInfo      = &specRadianceInfo;
     writeCount++;
 
+    // Binding 24: diffuse albedo — Sub-plan 3.C.6
+    VkDescriptorImageInfo diffAlbedoInfo{};
+    diffAlbedoInfo.imageView   = m_diffAlbedoView;
+    diffAlbedoInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstBinding      = 24;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo      = &diffAlbedoInfo;
+    writeCount++;
+
+    // Binding 25: specular color — Sub-plan 3.C.6
+    VkDescriptorImageInfo specColorInfo{};
+    specColorInfo.imageView   = m_specColorView;
+    specColorInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstBinding      = 25;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo      = &specColorInfo;
+    writeCount++;
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -1581,7 +1617,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition AOV images to GENERAL for storage write ---
     if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[7] = {};
+        VkImageMemoryBarrier aovBarriers[9] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         aovBarriers[0].srcAccessMask = 0;
@@ -1646,9 +1682,27 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         aovBarriers[6].image = m_specularRadianceImage;
         aovBarriers[6].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+        // Sub-plan 3.C.6: diffuse albedo AOV barrier
+        aovBarriers[7].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[7].srcAccessMask = 0;
+        aovBarriers[7].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[7].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[7].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[7].image = m_diffAlbedoImage;
+        aovBarriers[7].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        // Sub-plan 3.C.6: specular color AOV barrier
+        aovBarriers[8].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[8].srcAccessMask = 0;
+        aovBarriers[8].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[8].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[8].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[8].image = m_specColorImage;
+        aovBarriers[8].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 7, aovBarriers);
+            0, 0, nullptr, 0, nullptr, 9, aovBarriers);
     }
 
     // --- Transition surface history images to GENERAL ---
