@@ -175,7 +175,17 @@ void main() {
         }
 
         if (payload.hitDist < 0.0) {
-            radiance += throughput * payload.color;
+            vec3 envMissContribution = throughput * payload.color;
+            radiance += envMissContribution;
+            // Sub-plan 3.C: attribute env-miss radiance by bounce-0 lobe stamp
+            if (bounce == 0u) {
+                // Primary miss (no hit at all): both channels zero — already initialized.
+                // Fall through without adding to either channel.
+            } else if (lobeMask == 0u) {
+                diffContrib += envMissContribution;
+            } else {
+                specContrib += envMissContribution;
+            }
             if (bounce == 0u && enableAOVs) {
                 imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
                 imageStore(normalAOV, pixel, vec4(0));
@@ -189,7 +199,14 @@ void main() {
         vec3 emissive = payload.color;
 
         if (length(emissive) > 0.001) {
-            radiance += throughput * emissive;
+            vec3 emissiveContribution = throughput * emissive;
+            radiance += emissiveContribution;
+            // Sub-plan 3.C: attribute emissive to diffuse channel (convention)
+            if (bounce == 0u || lobeMask == 0u) {
+                diffContrib += emissiveContribution;
+            } else {
+                specContrib += emissiveContribution;
+            }
         }
 
         if (bounce == 0u && enableAOVs) {
@@ -324,6 +341,24 @@ void main() {
                         if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
                     }
                     radiance += directContribution;
+                    // Sub-plan 3.C: split NEE contribution into diff/spec channels
+                    vec3 neeCommon = throughput * Le * NdotL * weight * float(lightBuf.lightCount);
+                    vec3 neeDiffuse  = neeCommon * diff;
+                    vec3 neeSpecular = neeCommon * spec;
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float lumD = dot(neeDiffuse,  vec3(0.2126, 0.7152, 0.0722));
+                        float lumS = dot(neeSpecular, vec3(0.2126, 0.7152, 0.0722));
+                        if (lumD > pc.tuning.x) neeDiffuse  *= pc.tuning.x / lumD;
+                        if (lumS > pc.tuning.x) neeSpecular *= pc.tuning.x / lumS;
+                    }
+                    if (bounce == 0u) {
+                        diffContrib += neeDiffuse;
+                        specContrib += neeSpecular;
+                    } else if (lobeMask == 0u) {
+                        diffContrib += neeDiffuse + neeSpecular;
+                    } else {
+                        specContrib += neeDiffuse + neeSpecular;
+                    }
                 }
             }
         }
@@ -344,6 +379,7 @@ void main() {
 
         float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
         if (bsdfChoice < specProb || roughness < 0.05) {
+            if (bounce == 0u) lobeMask = 1u;
             vec3 reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
                 vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
@@ -359,6 +395,7 @@ void main() {
             throughput *= isMetal ? albedo : vec3(1.0);
             throughput /= max(specProb, 0.01);
         } else {
+            if (bounce == 0u) lobeMask = 0u;
             vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
             rayDir = cosineHemisphere(N, diffU);
             rayOrigin = hitPos + N * 0.01;

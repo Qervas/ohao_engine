@@ -194,7 +194,17 @@ void main() {
             }
             // Delta bounces (near-mirror): no MIS weighting — BSDF PDF is a Dirac delta
             // and the env-side sampler can't represent it, so we just take the BSDF sample.
-            radiance += throughput * payload.color * envMisWeight;
+            vec3 envMissContribution = throughput * payload.color * envMisWeight;
+            radiance += envMissContribution;
+            // Sub-plan 3.C: attribute env-miss radiance by bounce-0 lobe stamp
+            if (bounce == 0u) {
+                // Primary miss (no hit at all): both channels zero — already initialized.
+                // Fall through without adding to either channel.
+            } else if (lobeMask == 0u) {
+                diffContrib += envMissContribution;
+            } else {
+                specContrib += envMissContribution;
+            }
             if (bounce == 0u && enableAOVs) {
                 imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
                 imageStore(normalAOV, pixel, vec4(0));
@@ -209,7 +219,14 @@ void main() {
 
         // Add emissive contribution (self-glowing surfaces)
         if (length(emissive) > 0.001) {
-            radiance += throughput * emissive;
+            vec3 emissiveContribution = throughput * emissive;
+            radiance += emissiveContribution;
+            // Sub-plan 3.C: attribute emissive to diffuse channel (convention)
+            if (bounce == 0u || lobeMask == 0u) {
+                diffContrib += emissiveContribution;
+            } else {
+                specContrib += emissiveContribution;
+            }
         }
 
         // Write first-hit AOVs for denoiser guide buffers
@@ -368,6 +385,24 @@ void main() {
                         if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
                     }
                     radiance += directContribution;
+                    // Sub-plan 3.C: split NEE contribution into diff/spec channels
+                    vec3 neeCommon = throughput * Le * NdotL * weight * float(lightBuf.lightCount);
+                    vec3 neeDiffuse  = neeCommon * diff;
+                    vec3 neeSpecular = neeCommon * spec;
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float lumD = dot(neeDiffuse,  vec3(0.2126, 0.7152, 0.0722));
+                        float lumS = dot(neeSpecular, vec3(0.2126, 0.7152, 0.0722));
+                        if (lumD > pc.tuning.x) neeDiffuse  *= pc.tuning.x / lumD;
+                        if (lumS > pc.tuning.x) neeSpecular *= pc.tuning.x / lumS;
+                    }
+                    if (bounce == 0u) {
+                        diffContrib += neeDiffuse;
+                        specContrib += neeSpecular;
+                    } else if (lobeMask == 0u) {
+                        diffContrib += neeDiffuse + neeSpecular;
+                    } else {
+                        specContrib += neeDiffuse + neeSpecular;
+                    }
                 }
             }
         }
@@ -425,11 +460,28 @@ void main() {
                     float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
                     vec3 envContribution = throughput * envRadiance * brdf * NdotL_env * w / envPdf;
 
+                    // Sub-plan 3.C: split env-MIS contribution into diff/spec channels
+                    vec3 envCommon  = throughput * envRadiance * NdotL_env * w / envPdf;
+                    vec3 envDiffuse  = envCommon * diff;
+                    vec3 envSpecular = envCommon * spec;
+
                     if (enableFireflyClamp && pc.tuning.x > 0.0) {
                         float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
                         if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        float lumD = dot(envDiffuse,  vec3(0.2126, 0.7152, 0.0722));
+                        float lumS = dot(envSpecular, vec3(0.2126, 0.7152, 0.0722));
+                        if (lumD > pc.tuning.x) envDiffuse  *= pc.tuning.x / lumD;
+                        if (lumS > pc.tuning.x) envSpecular *= pc.tuning.x / lumS;
                     }
                     radiance += envContribution;
+                    if (bounce == 0u) {
+                        diffContrib += envDiffuse;
+                        specContrib += envSpecular;
+                    } else if (lobeMask == 0u) {
+                        diffContrib += envDiffuse + envSpecular;
+                    } else {
+                        specContrib += envDiffuse + envSpecular;
+                    }
                 }
             }
         }
@@ -452,6 +504,7 @@ void main() {
 
         float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
         if (bsdfChoice < specProb || roughness < 0.05) {
+            if (bounce == 0u) lobeMask = 1u;
             vec3 inDir = rayDir;  // capture incoming direction before overwrite
             vec3 reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
@@ -486,6 +539,7 @@ void main() {
                 lastBounceWasDelta = false;
             }
         } else {
+            if (bounce == 0u) lobeMask = 0u;
             // Diffuse bounce
             vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
             rayDir = cosineHemisphere(N, diffU);
