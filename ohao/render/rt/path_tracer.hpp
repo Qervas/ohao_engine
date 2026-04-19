@@ -105,6 +105,10 @@ public:
     VkImageView getOutputView() const { return m_outputView; }
     VkImageView getMotionVectorAOV() const { return m_motionVectorView; }
     VkImage getMotionVectorImage() const { return m_motionVectorImage; }
+    VkImageView getDepthAOV()         const { return m_depthAOVView; }
+    VkImage     getDepthAOVImage()    const { return m_depthAOVImage; }
+    VkImageView getRoughnessAOV()     const { return m_roughnessAOVView; }
+    VkImage     getRoughnessAOVImage() const { return m_roughnessAOVImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -228,6 +232,16 @@ private:
     VkImage        m_motionVectorImage = VK_NULL_HANDLE;
     VkDeviceMemory m_motionVectorMemory = VK_NULL_HANDLE;
     VkImageView    m_motionVectorView = VK_NULL_HANDLE;
+
+    // Feature 3.B: view-space depth AOV (R32F)
+    VkImage        m_depthAOVImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_depthAOVMemory = VK_NULL_HANDLE;
+    VkImageView    m_depthAOVView = VK_NULL_HANDLE;
+
+    // Feature 3.B: perceptual roughness AOV (R8 UNORM)
+    VkImage        m_roughnessAOVImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_roughnessAOVMemory = VK_NULL_HANDLE;
+    VkImageView    m_roughnessAOVView = VK_NULL_HANDLE;
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
