@@ -449,8 +449,9 @@ void main() {
                 }
             }
             specDir = reflected;
+            // Dual-ray: each path is deterministic, no stochastic selection to correct for.
+            // Material throughput factor (f*cos/pdf for the specular lobe, simplified).
             specThroughput = isMetal ? albedo : vec3(1.0);
-            specThroughput /= max(specProb, 0.01);
 
             if (roughness < 0.05) {
                 specLastBsdfPdf = 1.0;
@@ -464,7 +465,7 @@ void main() {
                 float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
                 float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
                 float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
-                specLastBsdfPdf = specProb * pdf_spec;
+                specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)
                 specLastBounceWasDelta = false;
             }
         }
@@ -764,8 +765,11 @@ void main() {
 
             vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
             diffDir = cosineHemisphere(N, diffU);
-            diffThroughput = albedo / max(1.0 - specProb, 0.01);
-            diffLastBsdfPdf = (1.0 - specProb) * max(dot(diffDir, N), 0.0) / OHAO_PI;
+            // Dual-ray: each path is deterministic, no stochastic selection to correct for.
+            // Material throughput factor (f*cos/pdf for the diffuse lobe = albedo).
+            diffThroughput = albedo;
+            // MIS PDF for env-miss weighting: pure cosine-hemisphere PDF (no lobe-mix factor).
+            diffLastBsdfPdf = max(dot(diffDir, N), 0.0) / OHAO_PI;
             diffLastBounceWasDelta = false;
         }
 
