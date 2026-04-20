@@ -199,3 +199,50 @@ Memory: +8 MB at 1080p for 2 new RGBA8 AOVs.
 
 Sub-plan 3.C.6 complete. Next: 3.C.7 (dual-ray bounce-0 split — first
 visible offline quality improvement).
+
+## 2026-04-20: Dual-ray bounce-0 split (Sub-plan 3.C.7)
+
+At primary hit, raygen now traces two independent indirect paths (one
+diff-sampled, one spec-sampled) instead of stochastically picking one
+lobe. `lobeMask` deleted entirely. Each path has its own trajectory
+and accumulates exclusively into its own channel.
+
+Cost: 1 primary + 2×maxBounces indirect rays (~1.8× for maxBounces=4;
+~1.5× for realtime maxBounces=1). Shader-only change.
+
+Correctness fix shipped in T1 (commit 034859d): dual-ray init blocks
+do NOT divide throughput by `/P(lobe)` — that was a single-ray
+stochastic-selection correction. With deterministic dual-ray, each
+path's throughput is just `f*cos/pdf` for its lobe (simplified as
+`isMetal ? albedo : 1` for spec, `albedo` for diff). Inner-loop
+bounce-≥2 BSDF sample KEEPS single-ray semantics.
+
+Verification on DamagedHelmet + env_studio:
+
+- **1 spp, --denoise=none:** diffuse AOV shows ambient lighting on
+  every matte pixel; specular AOV shows env reflection on every
+  glossy pixel. No more stochastic "polka dot" lobe-select pattern.
+  diffuse max: 47.0279. specular max: 379.487.
+  Compared to pre-3.C.7's 1spp render where half the pixels were
+  zero in one channel — dramatically cleaner.
+- **256 spp, --denoise=none:** beauty converges to a plausible
+  HDR image. No 2× brightness regression (correctness fix works).
+- **Cornell 64spp regression:** standard Cornell box (red/green walls,
+  spheres) renders correctly.
+
+Visible win at low spp: **yes** — first sub-plan in the 3.x chain to
+ship a user-visible quality improvement at 1-16 spp. At high spp
+convergence unchanged.
+
+Follow-ups parked for Sub-plan 4:
+- Dead `specProb` locals in Stage B/C init blocks (computed but unused
+  in dual-ray context). Cosmetic.
+- Unused `const float OHAO_PI` local in pt_raygen_realtime.rgen top.
+- `rectArea` vs `area` naming drift between realtime and default/offline.
+- Spec-constant gate to disable dual-ray in realtime if NRD shows it
+  costs too much frame time.
+- Extract Stage B/C inner loop into `indirect_path.glsl` helper
+  (bundled with the longstanding readback-helper extraction).
+
+Sub-plan 3.C.7 complete. Next: 3.D (ping-pong prev-depth for NRD
+disocclusion input).
