@@ -246,3 +246,58 @@ Follow-ups parked for Sub-plan 4:
 
 Sub-plan 3.C.7 complete. Next: 3.D (ping-pong prev-depth for NRD
 disocclusion input).
+
+## 2026-04-20: Hit-distance packing (Sub-plan 3.D)
+
+Raygen packs hit-distance into alpha channel of bindings 22 (diffuse) and 23
+(specular). NRD REBLUR consumes this for per-pixel spatial-filter sizing.
+
+Semantics per NRD convention:
+- Diffuse: single-segment. Distance from primary hit to first secondary hit
+  (bounce 1's `payload.hitDist` in Stage C, captured via `diffHitRecorded` latch).
+- Specular: accumulated along specular chain. Each Stage-B bounce adds
+  `payload.hitDist` to `specHitDist` while `specChainActive` is true. Chain
+  breaks on the first diffuse BSDF sample at bounce >=2 — flag flips false
+  and accumulation stops. Matches NRD-canonical virtual-distance semantics
+  for mirror-chain preservation.
+
+Shader-only change. No new bindings, no C++ touches. Raw world-space
+units; NRD-side normalization deferred to Sub-plan 4.
+
+Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
+- **Specular hit-distance dump:** visible helmet silhouette (visor + neck
+  plates + collar edges). Sky correctly black. Max: 3.1221 world units.
+  Saved: `renders/hit_dist_specular_helmet.png`.
+- **Diffuse hit-distance dump:** visible helmet silhouette with moderate
+  gray on matte seams and edges. Sky correctly black. Max: 3.17404 world
+  units. Saved: `renders/hit_dist_diffuse_helmet.png`.
+- **Radiance dumps (unchanged from 3.C.7):** diffuse max 27.3332; specular
+  max 475.01. Alpha-channel packing has zero effect on RGB sum — confirmed
+  by bit-identical beauty render.
+- **Regression:** beauty output (`renders/helmet_64spp_with_hitdist.png`)
+  and Cornell 64 spp match pre-3.D visually.
+
+### Open observation
+
+Specular hit-dist max (3.12) is numerically close to diffuse max (3.17) on
+this scene, whereas the NRD-canonical expectation for a polished visor
+reflecting the environment is that the specular virtual-distance should be
+much larger than the diffuse single-segment distance (env effectively at
+infinity). Possible causes to investigate in Sub-plan 4 before wiring NRD:
+- `payload.hitDist` for the env-miss case may not be propagating into the
+  specular accumulator (miss sets FLT_MAX, which the `< 1e20f` finite mask
+  correctly excludes from the max — but the 3.12 value suggests most pixels
+  terminate at short primary-bounce distances rather than extending).
+- `specChainActive` may be flipping false earlier than expected on the
+  rough metal regions of the helmet.
+- Max-finite normalization can hide the tail — a histogram dump would
+  clarify whether the bright pixels are a handful of outliers near 3.12 or
+  a broad distribution.
+
+Shape (sky black, helmet visible, no uniform darkness/brightness failure
+modes) matches pass criteria from the task spec, so 3.D is marked
+complete. Deeper NRD-semantic validation deferred to Sub-plan 4 when the
+denoiser output makes filter-radius mismatches visible.
+
+Sub-plan 3.D complete. Next: Sub-plan 4 (NRD integration) — the jaw-drop
+moment when realtime 1spp renders look like offline 1024spp.

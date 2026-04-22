@@ -44,6 +44,8 @@ int main(int argc, char* argv[]) {
     std::string dumpSpecularPath;
     std::string dumpDiffAlbedoPath;
     std::string dumpSpecColorPath;
+    std::string dumpHitDistDiffusePath;
+    std::string dumpHitDistSpecularPath;
     float panX = 0.0f;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
@@ -65,6 +67,10 @@ int main(int argc, char* argv[]) {
             dumpDiffAlbedoPath = arg.substr(19);
         } else if (arg.rfind("--dump-spec-color=", 0) == 0) {
             dumpSpecColorPath = arg.substr(18);
+        } else if (arg.rfind("--dump-hit-dist-diffuse=", 0) == 0) {
+            dumpHitDistDiffusePath = arg.substr(24);
+        } else if (arg.rfind("--dump-hit-dist-specular=", 0) == 0) {
+            dumpHitDistSpecularPath = arg.substr(25);
         } else if (arg.rfind("--pan-x=", 0) == 0) {
             panX = std::stof(arg.substr(8));
         }
@@ -127,6 +133,27 @@ int main(int argc, char* argv[]) {
         }
         stbi_write_png(path.c_str(), w, h, 3, rgb.data(), w * 3);
         std::cout << "Saved " << path << std::endl;
+    };
+
+    auto dumpHitDistance = [&](const std::string& path, const std::vector<float>& data,
+                               uint32_t w, uint32_t h) {
+        // Alpha channel of RGBA32F carries raw world-space hit-distance.
+        // Normalize to max finite for 8-bit grayscale preview.
+        float maxFinite = 0.0f;
+        for (uint32_t i = 0; i < w * h; i++) {
+            float d = data[i * 4 + 3];  // alpha channel
+            if (d > maxFinite && d < 1e20f) maxFinite = d;
+        }
+        if (maxFinite <= 0.0f) maxFinite = 1.0f;
+
+        std::vector<uint8_t> gray(static_cast<size_t>(w) * h, 0);
+        for (uint32_t i = 0; i < w * h; i++) {
+            float d = data[i * 4 + 3];
+            float norm = std::max(0.0f, std::min(1.0f, d / maxFinite));
+            gray[i] = static_cast<uint8_t>(norm * 255.0f);
+        }
+        stbi_write_png(path.c_str(), w, h, 1, gray.data(), w);
+        std::cout << "Saved " << path << " (max hit-dist = " << maxFinite << " world units)" << std::endl;
     };
 
     std::cout << "OHAO Env Demo — " << modelPath << " + " << envPath << std::endl;
@@ -314,6 +341,26 @@ int main(int argc, char* argv[]) {
             std::cerr << "[Specular dump] readback failed\n";
         } else {
             dumpRGBA32FStream(dumpSpecularPath, data, sw, sh);
+        }
+    }
+
+    if (!dumpHitDistDiffusePath.empty()) {
+        std::vector<float> data;
+        uint32_t w = 0, h = 0;
+        if (!renderer.readbackDiffuseRadiance(data, w, h)) {
+            std::cerr << "[Hit-dist diffuse dump] readback failed\n";
+        } else {
+            dumpHitDistance(dumpHitDistDiffusePath, data, w, h);
+        }
+    }
+
+    if (!dumpHitDistSpecularPath.empty()) {
+        std::vector<float> data;
+        uint32_t w = 0, h = 0;
+        if (!renderer.readbackSpecularRadiance(data, w, h)) {
+            std::cerr << "[Hit-dist specular dump] readback failed\n";
+        } else {
+            dumpHitDistance(dumpHitDistSpecularPath, data, w, h);
         }
     }
 
