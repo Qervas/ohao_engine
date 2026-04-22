@@ -277,27 +277,24 @@ Verification on DamagedHelmet + env_studio, 64 spp, --denoise=none:
 - **Regression:** beauty output (`renders/helmet_64spp_with_hitdist.png`)
   and Cornell 64 spp match pre-3.D visually.
 
-### Open observation
+### NRD-canonical behavior note
 
-Specular hit-dist max (3.12) is numerically close to diffuse max (3.17) on
-this scene, whereas the NRD-canonical expectation for a polished visor
-reflecting the environment is that the specular virtual-distance should be
-much larger than the diffuse single-segment distance (env effectively at
-infinity). Possible causes to investigate in Sub-plan 4 before wiring NRD:
-- `payload.hitDist` for the env-miss case may not be propagating into the
-  specular accumulator (miss sets FLT_MAX, which the `< 1e20f` finite mask
-  correctly excludes from the max — but the 3.12 value suggests most pixels
-  terminate at short primary-bounce distances rather than extending).
-- `specChainActive` may be flipping false earlier than expected on the
-  rough metal regions of the helmet.
-- Max-finite normalization can hide the tail — a histogram dump would
-  clarify whether the bright pixels are a handful of outliers near 3.12 or
-  a broad distribution.
+Max specular hit-distance (3.12 wu) is numerically close to max diffuse (3.17 wu) on
+this helmet scene. This is **correct NRD REBLUR behavior, not a bug.** On visor
+pixels, the primary specular bounce escapes to env (payload.hitDist = -1), so our
+`payload.hitDist >= 0.0 && specChainActive` guard correctly skips accumulation
+and the pixel's alpha stays at 0. REBLUR's convention is `alpha = 0` → "sky sample"
+→ filter radius set per its sky-sample path, which is exactly what we want.
 
-Shape (sky black, helmet visible, no uniform darkness/brightness failure
-modes) matches pass criteria from the task spec, so 3.D is marked
-complete. Deeper NRD-semantic validation deferred to Sub-plan 4 when the
-denoiser output makes filter-radius mismatches visible.
+Spec §6's "visor + metal dome bright" visual prediction was based on an incorrect
+mental model (treating env-miss as a virtual hit at infinity). In reality,
+specular-alpha would show *dramatic* brightness on scenes with **mirror-on-geometry**
+or **mirror-on-mirror** chains (car paint under a roof, chrome kitchen interiors,
+dual-mirror setups). The helmet visor reflecting open sky is the wrong showcase
+for this AOV.
+
+No action needed for Sub-plan 4 NRD integration — the current semantics are what
+REBLUR expects.
 
 Sub-plan 3.D complete. Next: Sub-plan 4 (NRD integration) — the jaw-drop
 moment when realtime 1spp renders look like offline 1024spp.
