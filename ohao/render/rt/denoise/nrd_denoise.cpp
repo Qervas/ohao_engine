@@ -97,8 +97,26 @@ void NrdDenoiser::setInputImages(const NrdInputImages& images) {
 
 #else  // OHAO_NRD_ENABLED not defined
 
-// When OHAO_NRD=OFF, this TU compiles to an empty unit.
-// Callers MUST guard `NrdDenoiser` instantiations with `#ifdef OHAO_NRD_ENABLED`
-// or they'll hit link errors.
+// When OHAO_NRD=OFF, NrdDenoiser compiles to a no-op stub. This is needed
+// because PathTracer holds an unconditional `std::unique_ptr<NrdDenoiser>`
+// (for ABI parity across the ohao_renderer / ohao_gpu_vulkan split). The
+// unique_ptr's default_delete instantiation requires NrdDenoiser's dtor to
+// be linkable even when no NrdDenoiser is ever constructed. Methods that
+// return values still return sentinel failure values; in practice they're
+// never called on the OFF path (guarded by OHAO_NRD_ENABLED in callers).
+
+namespace ohao {
+
+struct NrdDenoiser::Impl {};  // empty stub
+
+NrdDenoiser::NrdDenoiser()  = default;
+NrdDenoiser::~NrdDenoiser() = default;
+
+bool NrdDenoiser::initialize(VkDevice, VkPhysicalDevice, uint32_t, uint32_t) { return false; }
+void NrdDenoiser::shutdown() {}
+bool NrdDenoiser::setCommonSettings(const NrdCameraInputs&) { return false; }
+void NrdDenoiser::setInputImages(const NrdInputImages&)    {}
+
+}  // namespace ohao
 
 #endif  // OHAO_NRD_ENABLED

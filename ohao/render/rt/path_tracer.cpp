@@ -4,9 +4,13 @@
 #include <algorithm>
 #include <iostream>
 
-#ifdef OHAO_NRD_ENABLED
+// Always include: nrd_denoise.hpp is header-only safe regardless of
+// OHAO_NRD_ENABLED (just declares the class). PathTracer holds an
+// unconditional std::unique_ptr<NrdDenoiser>, so the destructor needs
+// NrdDenoiser to be a complete type in this TU for the unique_ptr
+// instantiation to compile. Method calls on NrdDenoiser remain guarded
+// by OHAO_NRD_ENABLED because definitions only exist in that mode.
 #include "render/rt/denoise/nrd_denoise.hpp"
-#endif
 
 namespace ohao {
 
@@ -15,6 +19,8 @@ constexpr uint32_t kPTFlagEnableAOVs = 1u << 0;
 constexpr uint32_t kPTFlagEnableInternalDenoise = 1u << 1;
 constexpr uint32_t kPTFlagEnableFireflyClamp = 1u << 2;
 }
+
+PathTracer::PathTracer() = default;
 
 PathTracer::~PathTracer() {
     destroy();
@@ -119,30 +125,12 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     std::cout << "[PathTracer] Initialized (" << width << "x" << height << ")" << std::endl;
 
 #ifdef OHAO_NRD_ENABLED
-    {
-        NrdDenoiser nrdProbe;
-        if (nrdProbe.initialize(m_device, m_physicalDevice, m_width, m_height)) {
-            std::cout << "[NRD] initialized for " << m_width << "x" << m_height << std::endl;
-
-            // Sub-plan 4.B: exercise setCommonSettings with identity matrices
-            NrdCameraInputs dummyInputs {};
-            for (int i = 0; i < 4; ++i) {
-                dummyInputs.viewMatrix[i * 4 + i]     = 1.0f;
-                dummyInputs.viewMatrixPrev[i * 4 + i] = 1.0f;
-                dummyInputs.projMatrix[i * 4 + i]     = 1.0f;
-            }
-            dummyInputs.motionVectorScale = {1.0f, 1.0f, 0.0f};
-
-            if (nrdProbe.setCommonSettings(dummyInputs)) {
-                std::cout << "[NRD probe] 4.B CommonSettings accepted" << std::endl;
-            } else {
-                std::cerr << "[NRD probe] 4.B CommonSettings FAILED" << std::endl;
-            }
-
-            nrdProbe.shutdown();
-        } else {
-            std::cerr << "[NRD probe] initialize FAILED" << std::endl;
-        }
+    m_nrdDenoiser = std::make_unique<NrdDenoiser>();
+    if (m_nrdDenoiser->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+        std::cout << "[NRD] persistent instance ready @ " << m_width << "x" << m_height << std::endl;
+    } else {
+        std::cerr << "[NRD] persistent instance init FAILED — disabling NRD path" << std::endl;
+        m_nrdDenoiser.reset();
     }
 #endif
 
@@ -407,7 +395,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_motionVectorImage) != VK_SUCCESS) return false;
@@ -447,7 +435,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_depthAOVImage) != VK_SUCCESS) return false;
@@ -527,7 +515,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_diffuseRadianceImage) != VK_SUCCESS) return false;
@@ -567,7 +555,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_specularRadianceImage) != VK_SUCCESS) return false;
@@ -690,7 +678,7 @@ bool PathTracer::createImages() {
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(m_device, &imageInfo, nullptr, &m_normalRoughnessImage) != VK_SUCCESS) return false;
@@ -717,6 +705,86 @@ bool PathTracer::createImages() {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_normalRoughnessView) != VK_SUCCESS) return false;
+    }
+
+    // ---- Sub-plan 4.C: NRD denoised diffuse output (RGBA32F) at binding 27 ----
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_outDiffRadianceImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_outDiffRadianceImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_outDiffRadianceMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_outDiffRadianceImage, m_outDiffRadianceMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_outDiffRadianceImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_outDiffRadianceView) != VK_SUCCESS) return false;
+    }
+
+    // ---- Sub-plan 4.C: NRD denoised specular output (RGBA32F) at binding 28 ----
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_outSpecRadianceImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_outSpecRadianceImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_outSpecRadianceMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_outSpecRadianceImage, m_outSpecRadianceMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_outSpecRadianceImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_outSpecRadianceView) != VK_SUCCESS) return false;
     }
 
     return true;
@@ -770,6 +838,14 @@ void PathTracer::destroyImages() {
     if (m_normalRoughnessView)   { vkDestroyImageView(m_device, m_normalRoughnessView, nullptr);  m_normalRoughnessView = VK_NULL_HANDLE; }
     if (m_normalRoughnessImage)  { vkDestroyImage(m_device, m_normalRoughnessImage, nullptr);     m_normalRoughnessImage = VK_NULL_HANDLE; }
     if (m_normalRoughnessMemory) { vkFreeMemory(m_device, m_normalRoughnessMemory, nullptr);      m_normalRoughnessMemory = VK_NULL_HANDLE; }
+
+    if (m_outDiffRadianceView)    { vkDestroyImageView(m_device, m_outDiffRadianceView, nullptr);   m_outDiffRadianceView = VK_NULL_HANDLE; }
+    if (m_outDiffRadianceImage)   { vkDestroyImage(m_device, m_outDiffRadianceImage, nullptr);      m_outDiffRadianceImage = VK_NULL_HANDLE; }
+    if (m_outDiffRadianceMemory)  { vkFreeMemory(m_device, m_outDiffRadianceMemory, nullptr);       m_outDiffRadianceMemory = VK_NULL_HANDLE; }
+
+    if (m_outSpecRadianceView)    { vkDestroyImageView(m_device, m_outSpecRadianceView, nullptr);   m_outSpecRadianceView = VK_NULL_HANDLE; }
+    if (m_outSpecRadianceImage)   { vkDestroyImage(m_device, m_outSpecRadianceImage, nullptr);      m_outSpecRadianceImage = VK_NULL_HANDLE; }
+    if (m_outSpecRadianceMemory)  { vkFreeMemory(m_device, m_outSpecRadianceMemory, nullptr);       m_outSpecRadianceMemory = VK_NULL_HANDLE; }
 
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_surfaceHistoryViews[i]) { vkDestroyImageView(m_device, m_surfaceHistoryViews[i], nullptr); m_surfaceHistoryViews[i] = VK_NULL_HANDLE; }
@@ -858,7 +934,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[27] = {};
+    VkDescriptorSetLayoutBinding bindings[29] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -1014,22 +1090,35 @@ bool PathTracer::createDescriptorResources() {
     bindings[26].descriptorCount = 1;
     bindings[26].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
+    // Binding 27: NRD denoised diffuse (RGBA32F storage image) — Sub-plan 4.C
+    // Written by NRD compute dispatch (T3). Raygen stage flag kept for layout parity.
+    bindings[27].binding         = 27;
+    bindings[27].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[27].descriptorCount = 1;
+    bindings[27].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
+    // Binding 28: NRD denoised specular (RGBA32F storage image) — Sub-plan 4.C
+    bindings[28].binding         = 28;
+    bindings[28].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[28].descriptorCount = 1;
+    bindings[28].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     // Enable bindless: variable count on the LAST binding only
-    VkDescriptorBindingFlags bindingFlags[27] = {};
+    VkDescriptorBindingFlags bindingFlags[29] = {};
     bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 27;
+    flagsInfo.bindingCount = 29;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 27;
+    layoutInfo.bindingCount = 29;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -1038,7 +1127,7 @@ bool PathTracer::createDescriptorResources() {
     // Pool — allocate enough for bindless textures
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B)
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 18},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B), +2 denoised out (4.C)
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},  // +2 for env CDF marginal + conditional
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
@@ -1389,7 +1478,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[27] = {};
+    VkWriteDescriptorSet writes[29] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -1678,6 +1767,30 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[writeCount].pImageInfo      = &normalRoughnessInfo;
     writeCount++;
 
+    // Binding 27: NRD denoised diffuse — Sub-plan 4.C
+    VkDescriptorImageInfo outDiffInfo{};
+    outDiffInfo.imageView   = m_outDiffRadianceView;
+    outDiffInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstBinding      = 27;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo      = &outDiffInfo;
+    writeCount++;
+
+    // Binding 28: NRD denoised specular — Sub-plan 4.C
+    VkDescriptorImageInfo outSpecInfo{};
+    outSpecInfo.imageView   = m_outSpecRadianceView;
+    outSpecInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstBinding      = 28;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo      = &outSpecInfo;
+    writeCount++;
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -1715,7 +1828,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition AOV images to GENERAL for storage write ---
     if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[10] = {};
+        VkImageMemoryBarrier aovBarriers[12] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         aovBarriers[0].srcAccessMask = 0;
@@ -1807,9 +1920,27 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         aovBarriers[9].image = m_normalRoughnessImage;
         aovBarriers[9].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+        // Sub-plan 4.C: denoised diffuse output barrier
+        aovBarriers[10].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[10].srcAccessMask = 0;
+        aovBarriers[10].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[10].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[10].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[10].image = m_outDiffRadianceImage;
+        aovBarriers[10].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        // Sub-plan 4.C: denoised specular output barrier
+        aovBarriers[11].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[11].srcAccessMask = 0;
+        aovBarriers[11].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[11].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[11].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[11].image = m_outSpecRadianceImage;
+        aovBarriers[11].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 10, aovBarriers);
+            0, 0, nullptr, 0, nullptr, 12, aovBarriers);
     }
 
     // --- Transition surface history images to GENERAL ---
@@ -1990,6 +2121,13 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
 void PathTracer::destroy() {
     if (!m_device) return;
     vkDeviceWaitIdle(m_device);
+
+#ifdef OHAO_NRD_ENABLED
+    if (m_nrdDenoiser) {
+        m_nrdDenoiser->shutdown();
+        m_nrdDenoiser.reset();
+    }
+#endif
 
     // CDF buffers are owned by VulkanRenderer, not by the path tracer.
     // Clear the cached handles so later destroy calls or reuse don't touch freed memory.

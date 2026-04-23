@@ -28,6 +28,14 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <cstdint>
+#include <memory>
+
+// Forward declaration kept unconditional (even when OHAO_NRD=OFF) so the
+// PathTracer class layout is identical across translation units. The
+// OHAO_NRD_ENABLED macro is PRIVATE to ohao_renderer, so conditional
+// members in this header would violate ODR (ohao_gpu_vulkan sees a
+// different layout than ohao_renderer).
+namespace ohao { class NrdDenoiser; }
 
 namespace ohao {
 
@@ -84,7 +92,11 @@ inline constexpr RTRenderSettings kOfflineRTSettings{
 
 class PathTracer {
 public:
-    PathTracer() = default;
+    // Both ctor and dtor are out-of-line so the unique_ptr<NrdDenoiser>
+    // member does not instantiate std::default_delete here (requires
+    // complete type of NrdDenoiser, which is only available in TUs that
+    // include nrd_denoise.hpp).
+    PathTracer();
     ~PathTracer();
 
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
@@ -119,6 +131,10 @@ public:
     VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
     VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
     VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
+    VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
+    VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
+    VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
+    VkImage     getOutSpecRadianceAOVImage() const { return m_outSpecRadianceImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -184,6 +200,15 @@ private:
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+
+    // Sub-plan 4.C: replaces 4.B scoped probe.
+    // Member is unconditional (not guarded by OHAO_NRD_ENABLED) so the class
+    // layout matches across ohao_renderer (macro defined) and ohao_gpu_vulkan
+    // (macro NOT defined). Only the method bodies in path_tracer.cpp that
+    // actually touch NrdDenoiser remain guarded by OHAO_NRD_ENABLED; when
+    // NRD is off, this pointer stays null and unique_ptr's default dtor is a
+    // no-op on a null held pointer (no need for complete type).
+    std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
@@ -277,6 +302,16 @@ private:
     VkImage        m_normalRoughnessImage = VK_NULL_HANDLE;
     VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
     VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
+
+    // Feature 4.C: NRD denoised diffuse output (RGBA32F)
+    VkImage        m_outDiffRadianceImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_outDiffRadianceMemory = VK_NULL_HANDLE;
+    VkImageView    m_outDiffRadianceView   = VK_NULL_HANDLE;
+
+    // Feature 4.C: NRD denoised specular output (RGBA32F)
+    VkImage        m_outSpecRadianceImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_outSpecRadianceMemory = VK_NULL_HANDLE;
+    VkImageView    m_outSpecRadianceView   = VK_NULL_HANDLE;
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
