@@ -165,6 +165,8 @@ public:
     VkImage     getDiffAlbedoAOVImage() const;
     VkImageView getSpecColorAOV()       const;
     VkImage     getSpecColorAOVImage()  const;
+    VkImageView getNormalRoughnessAOV()      const;
+    VkImage     getNormalRoughnessAOVImage() const;
 
     // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
     // One 2-half pair per pixel; total = 2 * width * height values.

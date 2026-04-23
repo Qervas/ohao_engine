@@ -664,6 +664,46 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_specColorView) != VK_SUCCESS) return false;
     }
 
+    // ---- Feature 4.B: Normal+roughness packed AOV (RGBA8 UNORM) for NRD REBLUR ----
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_normalRoughnessImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_normalRoughnessImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_normalRoughnessMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_normalRoughnessImage, m_normalRoughnessMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_normalRoughnessImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_normalRoughnessView) != VK_SUCCESS) return false;
+    }
+
     return true;
 }
 
@@ -711,6 +751,10 @@ void PathTracer::destroyImages() {
     if (m_specColorView)     { vkDestroyImageView(m_device, m_specColorView, nullptr);   m_specColorView = VK_NULL_HANDLE; }
     if (m_specColorImage)    { vkDestroyImage(m_device, m_specColorImage, nullptr);      m_specColorImage = VK_NULL_HANDLE; }
     if (m_specColorMemory)   { vkFreeMemory(m_device, m_specColorMemory, nullptr);       m_specColorMemory = VK_NULL_HANDLE; }
+
+    if (m_normalRoughnessView)   { vkDestroyImageView(m_device, m_normalRoughnessView, nullptr);  m_normalRoughnessView = VK_NULL_HANDLE; }
+    if (m_normalRoughnessImage)  { vkDestroyImage(m_device, m_normalRoughnessImage, nullptr);     m_normalRoughnessImage = VK_NULL_HANDLE; }
+    if (m_normalRoughnessMemory) { vkFreeMemory(m_device, m_normalRoughnessMemory, nullptr);      m_normalRoughnessMemory = VK_NULL_HANDLE; }
 
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_surfaceHistoryViews[i]) { vkDestroyImageView(m_device, m_surfaceHistoryViews[i], nullptr); m_surfaceHistoryViews[i] = VK_NULL_HANDLE; }
@@ -799,7 +843,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[26] = {};
+    VkDescriptorSetLayoutBinding bindings[27] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -949,22 +993,28 @@ bool PathTracer::createDescriptorResources() {
     bindings[25].descriptorCount = 1;
     bindings[25].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
 
+    // Binding 26: normal+roughness packed AOV (RGBA8 UNORM storage image) — Sub-plan 4.B
+    bindings[26].binding         = 26;
+    bindings[26].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[26].descriptorCount = 1;
+    bindings[26].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     // Enable bindless: variable count on the LAST binding only
-    VkDescriptorBindingFlags bindingFlags[26] = {};
+    VkDescriptorBindingFlags bindingFlags[27] = {};
     bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 26;
+    flagsInfo.bindingCount = 27;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 26;
+    layoutInfo.bindingCount = 27;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -973,7 +1023,7 @@ bool PathTracer::createDescriptorResources() {
     // Pool — allocate enough for bindless textures
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 15},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec (3.C), +2 albedo/specColor (3.C.6)
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B)
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},  // +2 for env CDF marginal + conditional
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };
@@ -1324,7 +1374,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[26] = {};
+    VkWriteDescriptorSet writes[27] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -1601,6 +1651,18 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[writeCount].pImageInfo      = &specColorInfo;
     writeCount++;
 
+    // Binding 26: normal+roughness packed — Sub-plan 4.B
+    VkDescriptorImageInfo normalRoughnessInfo{};
+    normalRoughnessInfo.imageView   = m_normalRoughnessView;
+    normalRoughnessInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstBinding      = 26;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo      = &normalRoughnessInfo;
+    writeCount++;
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -1638,7 +1700,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition AOV images to GENERAL for storage write ---
     if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[9] = {};
+        VkImageMemoryBarrier aovBarriers[10] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         aovBarriers[0].srcAccessMask = 0;
@@ -1721,9 +1783,18 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         aovBarriers[8].image = m_specColorImage;
         aovBarriers[8].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+        // Sub-plan 4.B: normal+roughness packed AOV barrier
+        aovBarriers[9].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[9].srcAccessMask = 0;
+        aovBarriers[9].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[9].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[9].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[9].image = m_normalRoughnessImage;
+        aovBarriers[9].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 9, aovBarriers);
+            0, 0, nullptr, 0, nullptr, 10, aovBarriers);
     }
 
     // --- Transition surface history images to GENERAL ---

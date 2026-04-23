@@ -36,6 +36,7 @@ layout(set = 0, binding = 22, rgba32f) uniform image2D diffuseRadiance;
 layout(set = 0, binding = 23, rgba32f) uniform image2D specularRadiance;
 layout(set = 0, binding = 24, rgba8) uniform image2D diffuseAlbedoAOV;
 layout(set = 0, binding = 25, rgba8) uniform image2D specColorAOV;
+layout(set = 0, binding = 26, rgba8) uniform image2D normalRoughnessAOV;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
@@ -80,6 +81,13 @@ vec3 cosineHemisphere(vec3 N, vec2 u) {
 // ACES tonemapping
 vec3 ACES(vec3 x) {
     return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0);
+}
+
+// Sub-plan 4.B: octahedral encoding for NRD REBLUR IN_NORMAL_ROUGHNESS
+vec2 octEncode(vec3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    vec2 enc = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * sign(n.xy);
+    return enc * 0.5 + 0.5;
 }
 
 void main() {
@@ -133,6 +141,9 @@ void main() {
     // Sub-plan 3.C.6: zero-init demod AOVs; bounce-0 first-hit overwrites on hit.
     imageStore(diffuseAlbedoAOV, pixel, vec4(0.0));
     imageStore(specColorAOV,     pixel, vec4(0.0));
+
+    // Sub-plan 4.B: zero-init normal+roughness AOV for miss pixels
+    imageStore(normalRoughnessAOV, pixel, vec4(0.0));
 
     // ================================================================
     // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
@@ -220,6 +231,9 @@ void main() {
         firstHitSpecColor  = F0;
         imageStore(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
         imageStore(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
+
+        // Sub-plan 4.B: pack oct-encoded normal (RG) + roughness (B) for NRD REBLUR
+        imageStore(normalRoughnessAOV, pixel, vec4(octEncode(N), roughness, 0.0));
 
         // Emissive at primary hit → diffuse channel (3.C.6 convention)
         if (length(emissive) > 0.001) {

@@ -626,6 +626,13 @@ VkImageView VulkanRenderer::getSpecColorAOV() const {
     return VK_NULL_HANDLE;
 }
 
+VkImageView VulkanRenderer::getNormalRoughnessAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getNormalRoughnessAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
 bool VulkanRenderer::initializeDeferredRenderer() {
     std::cout << "VulkanRenderer: Creating DeferredRenderer..." << std::endl;
     if (!m_deferredRenderer) {
@@ -769,6 +776,16 @@ VkImage VulkanRenderer::getSpecColorAOVImage() const {
     }
     if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
         return m_rtRealtimeRenderer->getSpecColorAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getNormalRoughnessAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getNormalRoughnessAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getNormalRoughnessAOVImage();
     }
     return VK_NULL_HANDLE;
 }

@@ -40,6 +40,8 @@ public:
     virtual VkImage     getDiffAlbedoAOVImage() const = 0;
     virtual VkImageView getSpecColorAOV()       const = 0;
     virtual VkImage     getSpecColorAOVImage()  const = 0;
+    virtual VkImageView getNormalRoughnessAOV()      const = 0;
+    virtual VkImage     getNormalRoughnessAOVImage() const = 0;
 
     virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
     virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
@@ -106,6 +108,8 @@ public:
     VkImage     getDiffAlbedoAOVImage() const override { return m_pathTracer.getDiffAlbedoAOVImage(); }
     VkImageView getSpecColorAOV()       const override { return m_pathTracer.getSpecColorAOV(); }
     VkImage     getSpecColorAOVImage()  const override { return m_pathTracer.getSpecColorAOVImage(); }
+    VkImageView getNormalRoughnessAOV()      const override { return m_pathTracer.getNormalRoughnessAOV(); }
+    VkImage     getNormalRoughnessAOVImage() const override { return m_pathTracer.getNormalRoughnessAOVImage(); }
 
     void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {

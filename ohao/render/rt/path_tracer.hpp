@@ -117,6 +117,8 @@ public:
     VkImage     getDiffAlbedoAOVImage() const { return m_diffAlbedoImage; }
     VkImageView getSpecColorAOV()       const { return m_specColorView; }
     VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
+    VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
+    VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -270,6 +272,11 @@ private:
     VkImage        m_specColorImage = VK_NULL_HANDLE;
     VkDeviceMemory m_specColorMemory = VK_NULL_HANDLE;
     VkImageView    m_specColorView = VK_NULL_HANDLE;
+
+    // Feature 4.B: NRD REBLUR IN_NORMAL_ROUGHNESS — oct-encoded normal (RG) + roughness (B)
+    VkImage        m_normalRoughnessImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
+    VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
