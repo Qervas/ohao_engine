@@ -119,18 +119,30 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     std::cout << "[PathTracer] Initialized (" << width << "x" << height << ")" << std::endl;
 
 #ifdef OHAO_NRD_ENABLED
-    // Sub-plan 4.A probe: one-shot NRD lifecycle smoke. Verifies that the
-    // NrdDenoiser PIMPL can create and destroy an NRD instance against the
-    // live Vulkan device. Probe is removed in 4.B when real per-frame
-    // dispatch takes over.
     {
         NrdDenoiser nrdProbe;
         if (nrdProbe.initialize(m_device, m_physicalDevice, m_width, m_height)) {
-            std::cout << "[NRD probe] 4.A lifecycle smoke passed" << std::endl;
+            std::cout << "[NRD] initialized for " << m_width << "x" << m_height << std::endl;
+
+            // Sub-plan 4.B: exercise setCommonSettings with identity matrices
+            NrdCameraInputs dummyInputs {};
+            for (int i = 0; i < 4; ++i) {
+                dummyInputs.viewMatrix[i * 4 + i]     = 1.0f;
+                dummyInputs.viewMatrixPrev[i * 4 + i] = 1.0f;
+                dummyInputs.projMatrix[i * 4 + i]     = 1.0f;
+            }
+            dummyInputs.motionVectorScale = {1.0f, 1.0f, 0.0f};
+
+            if (nrdProbe.setCommonSettings(dummyInputs)) {
+                std::cout << "[NRD probe] 4.B CommonSettings accepted" << std::endl;
+            } else {
+                std::cerr << "[NRD probe] 4.B CommonSettings FAILED" << std::endl;
+            }
+
+            nrdProbe.shutdown();
         } else {
-            std::cerr << "[NRD probe] 4.A lifecycle smoke FAILED" << std::endl;
+            std::cerr << "[NRD probe] initialize FAILED" << std::endl;
         }
-        nrdProbe.shutdown();
     }
 #endif
 

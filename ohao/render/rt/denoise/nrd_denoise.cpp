@@ -7,6 +7,7 @@
 
 #include <NRD.h>
 #include <iostream>
+#include <cstring>
 
 namespace ohao {
 
@@ -16,6 +17,7 @@ struct NrdDenoiser::Impl {
     uint32_t         width          = 0;
     uint32_t         height         = 0;
     nrd::Instance*   instance       = nullptr;
+    NrdInputImages   inputs {};    // stored for 4.C dispatch
 };
 
 NrdDenoiser::NrdDenoiser()  : m_impl(std::make_unique<Impl>()) {}
@@ -55,6 +57,40 @@ void NrdDenoiser::shutdown() {
         nrd::DestroyInstance(*m_impl->instance);
         m_impl->instance = nullptr;
     }
+}
+
+bool NrdDenoiser::setCommonSettings(const NrdCameraInputs& in) {
+    if (!m_impl->instance) return false;
+
+    nrd::CommonSettings s = {};
+    std::memcpy(s.viewToClipMatrix,      in.projMatrix.data(),         sizeof(float) * 16);
+    std::memcpy(s.worldToViewMatrix,     in.viewMatrix.data(),         sizeof(float) * 16);
+    std::memcpy(s.worldToViewMatrixPrev, in.viewMatrixPrev.data(),     sizeof(float) * 16);
+    std::memcpy(s.motionVectorScale,     in.motionVectorScale.data(),  sizeof(float) * 3);
+    std::memcpy(s.cameraJitter,          in.jitter.data(),             sizeof(float) * 2);
+    std::memcpy(s.cameraJitterPrev,      in.jitterPrev.data(),         sizeof(float) * 2);
+    s.frameIndex = in.frameIndex;
+    s.isMotionVectorInWorldSpace = in.isMotionVectorInWorldSpace;
+
+    // NRD asserts resourceSize/rectSize are non-zero. Default to the width/height
+    // captured at initialize(). Dynamic resolution scaling (4.C+) can override.
+    const uint16_t w = static_cast<uint16_t>(m_impl->width);
+    const uint16_t h = static_cast<uint16_t>(m_impl->height);
+    s.resourceSize[0]     = w; s.resourceSize[1]     = h;
+    s.resourceSizePrev[0] = w; s.resourceSizePrev[1] = h;
+    s.rectSize[0]         = w; s.rectSize[1]         = h;
+    s.rectSizePrev[0]     = w; s.rectSizePrev[1]     = h;
+
+    nrd::Result r = nrd::SetCommonSettings(*m_impl->instance, s);
+    if (r != nrd::Result::SUCCESS) {
+        std::cerr << "[NRD] SetCommonSettings failed: " << int(r) << std::endl;
+        return false;
+    }
+    return true;
+}
+
+void NrdDenoiser::setInputImages(const NrdInputImages& images) {
+    m_impl->inputs = images;
 }
 
 }  // namespace ohao

@@ -351,4 +351,51 @@ Deviations from plan:
   correctly, so no `target_include_directories` workaround was needed
   in `ohao/render/CMakeLists.txt`.
 
+## 2026-04-23: NRD API expansion — normal+roughness AOV + settings pump (Sub-plan 4.B)
+
+T1 (commits 744dded + aa2e3f9 fix): Added packed normal+roughness AOV at
+binding 26 (R10G10B10A2_UNORM with NRD canonical rotated oct-pack + sign-
+smuggled roughness, matching `_NRD_EncodeNormalRoughness101010` from NRD
+v4.17's NRD.hlsli verbatim). NRD_NORMAL_ENCODING=2 + NRD_ROUGHNESS_ENCODING=1
+pinned in CMake to prevent version drift. All 3 raygens write the canonical
+pack at Stage A first-hit; zero-init on miss. Descriptor pool STORAGE_IMAGE
+15→16, AOV barrier group 9→10, bindings count 26→27. Beauty untouched.
+
+T2: Expanded NrdDenoiser public API with `NrdCameraInputs` + `NrdInputImages`
+structs and `setCommonSettings` + `setInputImages` methods. `setCommonSettings`
+calls `nrd::SetCommonSettings` per-frame with view/proj/jitter/frameIndex
+populated. `setInputImages` stores VkImageView handles on Impl for 4.C's
+compute dispatch to consume via NRD's UserPool.
+
+Resolved NRD v4.17 CommonSettings field names against
+`build/_deps/nrd-src/Include/NRDSettings.h`: `viewToClipMatrix`,
+`worldToViewMatrix`, `worldToViewMatrixPrev`, `motionVectorScale`,
+`cameraJitter`, `cameraJitterPrev`, `frameIndex`,
+`isMotionVectorInWorldSpace` all match the plan's candidates verbatim.
+One non-obvious hard requirement: NRD asserts `resourceSize` and
+`rectSize` must be non-zero (InstanceImpl.cpp:283). `setCommonSettings`
+populates them from the width/height captured at `initialize()`;
+dynamic-resolution support deferred to 4.C+.
+
+Verification on probe run (identity matrices, dummy jitter):
+```
+[NRD] initialized for 1920x1080
+[NRD] initialized for 1920x1080
+[NRD probe] 4.B CommonSettings accepted
+[NRD] initialized for 1920x1080
+[NRD] initialized for 1920x1080
+[NRD probe] 4.B CommonSettings accepted
+Saved: /tmp/t2_4b_cornell.png
+```
+(The first `[NRD] initialized` per PathTracer is logged inside
+`NrdDenoiser::initialize`; the second is the probe's own acknowledgement.
+Probe fires twice — RTOffline + RTRealtime PathTracer instances.)
+
+- Beauty output unchanged from pre-4.B.
+- No Vulkan validation errors on OHAO_NRD=ON.
+- OFF build (OHAO_NRD=OFF) unaffected (normal+roughness AOV still writes —
+  it's NRD-agnostic; probe is `#ifdef`-compiled-out).
+
+Next: Sub-plan 4.C (first REBLUR compute dispatch — denoise actually runs).
+
 Next: Sub-plan 4.B (NRD API expansion — per-frame input population).
