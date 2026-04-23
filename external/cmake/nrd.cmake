@@ -15,6 +15,13 @@ set(NRD_EMBEDS_DXIL_SHADERS        OFF CACHE BOOL "" FORCE)
 set(NRD_EMBEDS_SPIRV_SHADERS       ON  CACHE BOOL "" FORCE)
 set(NRD_STATIC_LIBRARY             ON  CACHE BOOL "" FORCE)
 
+# Pin NRD normal+roughness encoding to R10G10B10A2_UNORM (rotated oct + sign-in-roughness
+# + 2-bit materialID). This is NRD's upstream default, but making it explicit protects
+# us from future NRD bumps silently flipping the encoding.
+# Roughness encoding: LINEAR (1) = raw linear roughness stored as-is (NRD default).
+set(NRD_NORMAL_ENCODING    "2" CACHE STRING "" FORCE)
+set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
+
 FetchContent_Declare(
     NRD
     GIT_REPOSITORY https://github.com/NVIDIAGameWorks/RayTracingDenoiser.git

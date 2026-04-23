@@ -34,7 +34,7 @@ layout(set = 0, binding = 22, rgba32f) uniform image2D diffuseRadiance;
 layout(set = 0, binding = 23, rgba32f) uniform image2D specularRadiance;
 layout(set = 0, binding = 24, rgba8) uniform image2D diffuseAlbedoAOV;
 layout(set = 0, binding = 25, rgba8) uniform image2D specColorAOV;
-layout(set = 0, binding = 26, rgba8) uniform image2D normalRoughnessAOV;
+layout(set = 0, binding = 26, rgb10_a2) uniform image2D normalRoughnessAOV;
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
@@ -81,11 +81,26 @@ vec3 ACES(vec3 x) {
     return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0);
 }
 
-// Sub-plan 4.B: octahedral encoding for NRD REBLUR IN_NORMAL_ROUGHNESS
-vec2 octEncode(vec3 n) {
-    n /= (abs(n.x) + abs(n.y) + abs(n.z));
-    vec2 enc = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * sign(n.xy);
-    return enc * 0.5 + 0.5;
+// Sub-plan 4.B (fix): NRD-canonical rotated oct + sign-in-roughness packing for
+// IN_NORMAL_ROUGHNESS (NRD_NORMAL_ENCODING=2, R10G10B10A2_UNORM).
+// Ported verbatim from build/_deps/nrd-src/Shaders/NRD.hlsli::_NRD_EncodeNormalRoughness101010.
+// NRD_ROUGHNESS_ENCODING=1 (LINEAR): roughness stored as-is (no sqrt/square).
+vec4 nrdPackNormalRoughness(vec3 n, float roughness) {
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+
+    vec3 r;
+    r.y = n.y * 0.5 + 0.5;
+    r.x = n.x * 0.5 + r.y;
+    r.y -= n.x * 0.5;
+
+    // Encode roughness + n.z sign into z-channel ( 10-bits is too much for roughness, linear at least ).
+    // Clamp roughness away from 0 so the smuggled n.z sign bit survives.
+    roughness = max(roughness, 1.5 / 512.0);
+    float s = (n.z < 0.0) ? -roughness : roughness;
+    r.z = s * 0.5 + 0.5;
+
+    // materialID bits (A2): 0 = default slot. NRD decoder: materialID = p.w * 3.0.
+    return vec4(r, 0.0);
 }
 
 void main() {
@@ -230,8 +245,8 @@ void main() {
         imageStore(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
         imageStore(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
 
-        // Sub-plan 4.B: pack oct-encoded normal (RG) + roughness (B) for NRD REBLUR
-        imageStore(normalRoughnessAOV, pixel, vec4(octEncode(N), roughness, 0.0));
+        // Sub-plan 4.B (fix): pack via NRD canonical encoder for REBLUR IN_NORMAL_ROUGHNESS
+        imageStore(normalRoughnessAOV, pixel, nrdPackNormalRoughness(N, roughness));
 
         // Emissive at primary hit → diffuse channel (3.C.6 convention)
         if (length(emissive) > 0.001) {

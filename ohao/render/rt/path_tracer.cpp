@@ -664,12 +664,15 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_specColorView) != VK_SUCCESS) return false;
     }
 
-    // ---- Feature 4.B: Normal+roughness packed AOV (RGBA8 UNORM) for NRD REBLUR ----
+    // ---- Feature 4.B: Normal+roughness packed AOV (R10G10B10A2 UNORM) for NRD REBLUR ----
+    // Format matches NRD_NORMAL_ENCODING=2 (NRD_NORMAL_ENCODING_R10G10B10A2_UNORM) as set in
+    // external/cmake/nrd.cmake. Encoding is NRD's rotated oct + sign-in-roughness + 2-bit materialID,
+    // ported verbatim from build/_deps/nrd-src/Shaders/NRD.hlsli::_NRD_EncodeNormalRoughness101010.
     {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        imageInfo.format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         imageInfo.extent = {m_width, m_height, 1};
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
@@ -696,7 +699,7 @@ bool PathTracer::createImages() {
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = m_normalRoughnessImage;
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        viewInfo.format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         viewInfo.subresourceRange.levelCount = 1;
         viewInfo.subresourceRange.layerCount = 1;
