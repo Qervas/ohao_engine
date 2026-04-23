@@ -73,8 +73,11 @@ endif()
 if(OHAO_NRD)
     target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_ENABLED)
     target_link_libraries(ohao_renderer PRIVATE NRD)
-    if(TARGET NRDIntegration)
-        target_link_libraries(ohao_renderer PRIVATE NRDIntegration)
+    # Sub-plan 4.C T3a: our own NRDIntegration static lib is named
+    # OhaoNRDIntegration to avoid clash with NRD's upstream INTERFACE target
+    # (which points at nrd-src/Integration/ and carries no symbols).
+    if(TARGET OhaoNRDIntegration)
+        target_link_libraries(ohao_renderer PRIVATE OhaoNRDIntegration)
         target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_INTEGRATION_AVAILABLE)
     endif()
 endif()
