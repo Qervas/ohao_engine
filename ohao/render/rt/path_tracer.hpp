@@ -99,8 +99,16 @@ public:
     PathTracer();
     ~PathTracer();
 
+    // Sub-plan 4.C T3b: NRD integration needs VkInstance + graphics queue
+    // family index + the exact instance/device-extension lists used at
+    // vkCreateDevice / vkCreateInstance time. Defaults keep backward
+    // compatibility for callers that don't use NRD.
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              uint32_t width, uint32_t height);
+              uint32_t width, uint32_t height,
+              VkInstance instance = VK_NULL_HANDLE,
+              uint32_t graphicsQueueFamilyIndex = 0,
+              const std::vector<const char*>& instanceExtensions = {},
+              const std::vector<const char*>& deviceExtensions = {});
     void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
     void render(VkCommandBuffer cmd, RTAccelerationStructure* accel,

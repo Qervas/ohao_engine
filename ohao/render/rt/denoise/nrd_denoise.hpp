@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <array>
+#include <vector>
 
 namespace ohao {
 
@@ -51,11 +52,22 @@ public:
     NrdDenoiser& operator=(const NrdDenoiser&) = delete;
 
     /// Create an NRD instance sized for w x h against the given Vulkan device.
+    /// Sub-plan 4.C T3b: also creates an NRI-wrapped device + nrd::Integration
+    /// helper so denoise() can record real REBLUR_DIFFUSE_SPECULAR dispatches.
+    ///
+    /// `deviceExtensions` / `instanceExtensions` must be the same lists passed
+    /// to vkCreateInstance / vkCreateDevice — NRI validates them against what
+    /// it uses internally (memory, sync2, etc).
+    ///
     /// Returns false on NRD-side failure (logs error).
-    bool initialize(VkDevice         device,
-                    VkPhysicalDevice physicalDevice,
-                    uint32_t         width,
-                    uint32_t         height);
+    bool initialize(VkInstance                        instance,
+                    VkDevice                          device,
+                    VkPhysicalDevice                  physicalDevice,
+                    uint32_t                          graphicsQueueFamilyIndex,
+                    const std::vector<const char*>&   instanceExtensions,
+                    const std::vector<const char*>&   deviceExtensions,
+                    uint32_t                          width,
+                    uint32_t                          height);
 
     /// Destroy the NRD instance. Safe to call multiple times; safe to call
     /// without a prior successful initialize.
@@ -66,6 +78,37 @@ public:
 
     /// Per-frame: record the Vulkan image views NRD will consume/produce during 4.C dispatch.
     void setInputImages(const NrdInputImages& images);
+
+    /// Sub-plan 4.C T3b: Record NRD REBLUR_DIFFUSE_SPECULAR compute dispatches onto cmd.
+    /// Preconditions:
+    ///   - initialize() succeeded
+    ///   - setCommonSettings() called this frame
+    ///   - setInputImages() called this frame with all IN_* + OUT_* VkImage handles + VkFormats
+    ///   - IN_* images in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL (or any layout NRI accepts)
+    ///   - OUT_* images in VK_IMAGE_LAYOUT_GENERAL (SHADER_RESOURCE_STORAGE)
+    /// NRI/NRD will transition internally; after this call resources are in the
+    /// "unique" final states recorded in the ResourceSnapshot (restoreInitialState=false).
+    /// Returns false on failure (logs error).
+    bool denoise(VkCommandBuffer cmd);
+
+    /// Sub-plan 4.C T3b: setInputImages must carry raw VkImage + VkFormat for
+    /// NRD's VK path (which wraps them as nri::Texture internally). The
+    /// existing NrdInputImages struct stashes VkImageView which we don't
+    /// forward to NRD — setInputResources below is what denoise() reads.
+    struct NrdInputResource {
+        VkImage  image  = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+    };
+    struct NrdInputResources {
+        NrdInputResource motionVector;           // IN_MV
+        NrdInputResource viewZ;                  // IN_VIEWZ
+        NrdInputResource normalRoughness;        // IN_NORMAL_ROUGHNESS
+        NrdInputResource diffRadianceHitDist;    // IN_DIFF_RADIANCE_HITDIST
+        NrdInputResource specRadianceHitDist;    // IN_SPEC_RADIANCE_HITDIST
+        NrdInputResource outDiffRadianceHitDist; // OUT_DIFF_RADIANCE_HITDIST
+        NrdInputResource outSpecRadianceHitDist; // OUT_SPEC_RADIANCE_HITDIST
+    };
+    void setInputResources(const NrdInputResources& resources);
 
 private:
     struct Impl;

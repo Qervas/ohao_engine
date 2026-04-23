@@ -42,6 +42,8 @@ int main(int argc, char* argv[]) {
     std::string dumpRoughnessPath;
     std::string dumpDiffusePath;
     std::string dumpSpecularPath;
+    std::string dumpNrdDiffusePath;
+    std::string dumpNrdSpecularPath;
     std::string dumpDiffAlbedoPath;
     std::string dumpSpecColorPath;
     std::string dumpHitDistDiffusePath;
@@ -63,6 +65,10 @@ int main(int argc, char* argv[]) {
             dumpDiffusePath = arg.substr(15);
         } else if (arg.rfind("--dump-specular=", 0) == 0) {
             dumpSpecularPath = arg.substr(16);
+        } else if (arg.rfind("--dump-nrd-diffuse=", 0) == 0) {
+            dumpNrdDiffusePath = arg.substr(19);
+        } else if (arg.rfind("--dump-nrd-specular=", 0) == 0) {
+            dumpNrdSpecularPath = arg.substr(20);
         } else if (arg.rfind("--dump-diff-albedo=", 0) == 0) {
             dumpDiffAlbedoPath = arg.substr(19);
         } else if (arg.rfind("--dump-spec-color=", 0) == 0) {
@@ -341,6 +347,26 @@ int main(int argc, char* argv[]) {
             std::cerr << "[Specular dump] readback failed\n";
         } else {
             dumpRGBA32FStream(dumpSpecularPath, data, sw, sh);
+        }
+    }
+
+    if (!dumpNrdDiffusePath.empty()) {
+        std::vector<float> data;
+        uint32_t dw = 0, dh = 0;
+        if (!renderer.readbackDenoisedDiffuse(data, dw, dh)) {
+            std::cerr << "[NRD diffuse dump] readback failed\n";
+        } else {
+            dumpRGBA32FStream(dumpNrdDiffusePath, data, dw, dh);
+        }
+    }
+
+    if (!dumpNrdSpecularPath.empty()) {
+        std::vector<float> data;
+        uint32_t sw = 0, sh = 0;
+        if (!renderer.readbackDenoisedSpecular(data, sw, sh)) {
+            std::cerr << "[NRD specular dump] readback failed\n";
+        } else {
+            dumpRGBA32FStream(dumpNrdSpecularPath, data, sw, sh);
         }
     }
 

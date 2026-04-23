@@ -205,13 +205,17 @@ bool VulkanRenderer::initialize() {
             std::cout << "Ray tracing: available" << std::endl;
 
             m_rtRealtimeRenderer = std::make_unique<RTRealtimeRenderer>();
-            if (!m_rtRealtimeRenderer->init(m_device, m_physicalDevice, m_width, m_height)) {
+            if (!m_rtRealtimeRenderer->init(m_device, m_physicalDevice, m_width, m_height,
+                                             m_instance, m_graphicsQueueFamily,
+                                             m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
                 std::cout << "RT realtime renderer: init failed" << std::endl;
                 m_rtRealtimeRenderer.reset();
             }
 
             m_rtOfflineRenderer = std::make_unique<RTOfflineRenderer>();
-            if (!m_rtOfflineRenderer->init(m_device, m_physicalDevice, m_width, m_height)) {
+            if (!m_rtOfflineRenderer->init(m_device, m_physicalDevice, m_width, m_height,
+                                            m_instance, m_graphicsQueueFamily,
+                                            m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
                 std::cout << "RT offline renderer: init failed" << std::endl;
                 m_rtOfflineRenderer.reset();
             }

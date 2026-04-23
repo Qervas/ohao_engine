@@ -22,12 +22,12 @@ bool VulkanRenderer::createInstance() {
 
     // Validation layers — enable with OHAO_VALIDATION=1 env var
     const char* validationLayers[] = {"VK_LAYER_KHRONOS_validation"};
-    const char* instanceExtensions[] = {VK_EXT_DEBUG_UTILS_EXTENSION_NAME};
     if (std::getenv("OHAO_VALIDATION")) {
         createInfo.enabledLayerCount = 1;
         createInfo.ppEnabledLayerNames = validationLayers;
-        createInfo.enabledExtensionCount = 1;
-        createInfo.ppEnabledExtensionNames = instanceExtensions;
+        m_enabledInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(m_enabledInstanceExtensions.size());
+        createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
         std::cout << "[OHAO] Validation layers ENABLED" << std::endl;
     }
 
@@ -101,8 +101,10 @@ bool VulkanRenderer::createLogicalDevice() {
     queueCreateInfo.queueCount = 1;
     queueCreateInfo.pQueuePriorities = &queuePriority;
 
-    // Device extensions — RT requires acceleration structure + ray tracing pipeline
-    std::vector<const char*> deviceExtensions = {
+    // Device extensions — RT requires acceleration structure + ray tracing pipeline.
+    // Sub-plan 4.C T3b: stash the enabled list on the renderer so NRD's NRI
+    // device wrapper (which needs to see the exact enabled list) can read it.
+    m_enabledDeviceExtensions = {
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,  // required by AS
@@ -123,6 +125,7 @@ bool VulkanRenderer::createLogicalDevice() {
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,      // POSIX shared semaphores
 #endif
     };
+    const std::vector<const char*>& deviceExtensions = m_enabledDeviceExtensions;
 
     // Vulkan 1.2 features (buffer device address, descriptor indexing)
     VkPhysicalDeviceVulkan12Features features12{};

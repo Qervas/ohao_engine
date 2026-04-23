@@ -12,8 +12,15 @@ public:
     virtual RTRenderProfile getProfile() const = 0;
     virtual RTRenderSettings getDefaultSettings() const = 0;
 
+    // Sub-plan 4.C T3b: NRD integration needs the full Vulkan context (instance,
+    // queue family, enabled extensions). Default args keep this invocation
+    // backwards-compatible with non-NRD callers.
     virtual bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-                      uint32_t width, uint32_t height) = 0;
+                      uint32_t width, uint32_t height,
+                      VkInstance instance = VK_NULL_HANDLE,
+                      uint32_t graphicsQueueFamilyIndex = 0,
+                      const std::vector<const char*>& instanceExtensions = {},
+                      const std::vector<const char*>& deviceExtensions = {}) = 0;
     virtual void destroy() = 0;
     virtual void resize(uint32_t width, uint32_t height) = 0;
 
@@ -73,9 +80,15 @@ public:
         : m_settings(settings), m_shaderSet(shaderSet) {}
 
     bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              uint32_t width, uint32_t height) override {
+              uint32_t width, uint32_t height,
+              VkInstance instance = VK_NULL_HANDLE,
+              uint32_t graphicsQueueFamilyIndex = 0,
+              const std::vector<const char*>& instanceExtensions = {},
+              const std::vector<const char*>& deviceExtensions = {}) override {
         m_pathTracer.setShaderSet(m_shaderSet);
-        if (!m_pathTracer.init(device, physicalDevice, width, height)) {
+        if (!m_pathTracer.init(device, physicalDevice, width, height,
+                                instance, graphicsQueueFamilyIndex,
+                                instanceExtensions, deviceExtensions)) {
             return false;
         }
         m_pathTracer.setMaxBounces(m_settings.maxBounces);

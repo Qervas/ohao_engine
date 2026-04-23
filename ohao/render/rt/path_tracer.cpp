@@ -3,6 +3,7 @@
 #include <cstring>
 #include <algorithm>
 #include <iostream>
+#include <glm/gtc/type_ptr.hpp>
 
 // Always include: nrd_denoise.hpp is header-only safe regardless of
 // OHAO_NRD_ENABLED (just declares the class). PathTracer holds an
@@ -84,7 +85,11 @@ static std::vector<char> readFile(const std::string& path) {
 // ─── Initialization ──────────────────────────────────────────────────
 
 bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
-                       uint32_t width, uint32_t height) {
+                       uint32_t width, uint32_t height,
+                       VkInstance instance,
+                       uint32_t graphicsQueueFamilyIndex,
+                       const std::vector<const char*>& instanceExtensions,
+                       const std::vector<const char*>& deviceExtensions) {
     m_device = device;
     m_physicalDevice = physicalDevice;
     m_width = width;
@@ -126,12 +131,23 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
 
 #ifdef OHAO_NRD_ENABLED
     m_nrdDenoiser = std::make_unique<NrdDenoiser>();
-    if (m_nrdDenoiser->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+    if (instance != VK_NULL_HANDLE &&
+        m_nrdDenoiser->initialize(instance, m_device, m_physicalDevice,
+                                   graphicsQueueFamilyIndex,
+                                   instanceExtensions, deviceExtensions,
+                                   m_width, m_height)) {
         std::cout << "[NRD] persistent instance ready @ " << m_width << "x" << m_height << std::endl;
     } else {
-        std::cerr << "[NRD] persistent instance init FAILED — disabling NRD path" << std::endl;
+        if (instance == VK_NULL_HANDLE) {
+            std::cerr << "[NRD] no VkInstance provided — skipping NRD init (caller should plumb it)" << std::endl;
+        } else {
+            std::cerr << "[NRD] persistent instance init FAILED — disabling NRD path" << std::endl;
+        }
         m_nrdDenoiser.reset();
     }
+#else
+    (void)instance; (void)graphicsQueueFamilyIndex;
+    (void)instanceExtensions; (void)deviceExtensions;
 #endif
 
     return true;
@@ -2028,6 +2044,53 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // --- Trace rays! ---
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
+
+#ifdef OHAO_NRD_ENABLED
+    // --- Sub-plan 4.C T3b: NRD REBLUR_DIFFUSE_SPECULAR dispatch ---
+    // After trace rays, all NRD input AOVs are in VK_IMAGE_LAYOUT_GENERAL with
+    // SHADER_WRITE access. NRD's internal _Dispatch will insert its own
+    // transitions (GENERAL -> SHADER_READ for inputs, stay GENERAL for outputs)
+    // before the compute dispatch, so we only need a memory barrier to publish
+    // raygen writes before compute reads. We also need `restoreInitialState=true`
+    // in the snapshot so after denoise, inputs come back to GENERAL for
+    // downstream readback.
+    if (m_nrdDenoiser && m_renderSettings.enableAuxiliaryAOVs) {
+        // Publish raygen stores before NRD's compute pipelines read them.
+        VkMemoryBarrier rayToCompute {};
+        rayToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        rayToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        rayToCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &rayToCompute, 0, nullptr, 0, nullptr);
+
+        NrdCameraInputs camera {};
+        const glm::mat4 viewM = glm::inverse(pc.invView);
+        const glm::mat4 projM = glm::inverse(pc.invProj);
+        std::memcpy(camera.viewMatrix.data(),     glm::value_ptr(viewM), sizeof(float) * 16);
+        std::memcpy(camera.viewMatrixPrev.data(), glm::value_ptr(viewM), sizeof(float) * 16); // first frame: no history
+        std::memcpy(camera.projMatrix.data(),     glm::value_ptr(projM), sizeof(float) * 16);
+        camera.motionVectorScale = {1.0f, 1.0f, 0.0f};
+        camera.jitter     = {0.0f, 0.0f};
+        camera.jitterPrev = {0.0f, 0.0f};
+        camera.frameIndex = 0;  // T3b: single-shot spatial-only. Temporal wiring lives in 4.E.
+        camera.isMotionVectorInWorldSpace = false;
+        m_nrdDenoiser->setCommonSettings(camera);
+
+        NrdDenoiser::NrdInputResources res {};
+        res.motionVector           = {m_motionVectorImage,     VK_FORMAT_R16G16_SFLOAT};
+        res.viewZ                  = {m_depthAOVImage,         VK_FORMAT_R32_SFLOAT};
+        res.normalRoughness        = {m_normalRoughnessImage,  VK_FORMAT_A2B10G10R10_UNORM_PACK32};
+        res.diffRadianceHitDist    = {m_diffuseRadianceImage,  VK_FORMAT_R32G32B32A32_SFLOAT};
+        res.specRadianceHitDist    = {m_specularRadianceImage, VK_FORMAT_R32G32B32A32_SFLOAT};
+        res.outDiffRadianceHitDist = {m_outDiffRadianceImage,  VK_FORMAT_R32G32B32A32_SFLOAT};
+        res.outSpecRadianceHitDist = {m_outSpecRadianceImage,  VK_FORMAT_R32G32B32A32_SFLOAT};
+        m_nrdDenoiser->setInputResources(res);
+
+        m_nrdDenoiser->denoise(cmd);
+    }
+#endif  // OHAO_NRD_ENABLED
 
     // --- Transition output image to TRANSFER_SRC_OPTIMAL for readback/blit ---
     {

@@ -32,5 +32,13 @@
 #include "NRI.h"
 #include "Extensions/NRIHelper.h"
 #include "Extensions/NRIDeviceCreation.h"  // nriDestroyDevice declaration
+// Sub-plan 4.C T3b: include NRIRayTracing.h BEFORE NRIWrapperVK.h — the VK
+// wrapper's AccelerationStructureVKDesc references AccelerationStructureBits
+// declared in the ray-tracing extension header. NRDIntegration.hpp gates its
+// VK-specific Recreate/DenoiseVK methods behind `#ifdef NRI_WRAPPER_VK_H`, so
+// we must define NRI_WRAPPER_VK_H (via the include) at the compile-unit
+// level so the VK method bodies are emitted.
+#include "Extensions/NRIRayTracing.h"
+#include "Extensions/NRIWrapperVK.h"
 
 #include "NRDIntegration.hpp"

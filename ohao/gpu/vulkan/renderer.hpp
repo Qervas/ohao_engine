@@ -430,6 +430,14 @@ private:
     // Queue family index
     uint32_t m_graphicsQueueFamily{0};
 
+    // Sub-plan 4.C T3b: stash the instance + device extension name lists we
+    // enabled at vkCreateInstance / vkCreateDevice time so NRD's NRI device
+    // wrapper can re-validate them (NRI doesn't have a way to query them
+    // back from a raw VkDevice — it expects the app to provide the list).
+    // Storage is owned by renderer.cpp's createInstance() / createLogicalDevice().
+    std::vector<const char*> m_enabledInstanceExtensions;
+    std::vector<const char*> m_enabledDeviceExtensions;
+
     // Shader base path
     std::string m_shaderBasePath;
 

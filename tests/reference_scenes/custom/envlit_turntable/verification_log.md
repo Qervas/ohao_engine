@@ -399,3 +399,65 @@ Probe fires twice — RTOffline + RTRealtime PathTracer instances.)
 Next: Sub-plan 4.C (first REBLUR compute dispatch — denoise actually runs).
 
 Next: Sub-plan 4.B (NRD API expansion — per-frame input population).
+
+## 2026-04-23 — Sub-plan 4.C T3b: First REBLUR dispatch lives
+
+**Command:**
+```bash
+./build/env_demo assets/walking_woman.glb assets/test_models/env_studio.hdr \
+    /tmp/beauty.png 1 \
+    --dump-diffuse=/tmp/raw_diff.png --dump-nrd-diffuse=/tmp/nrd_diff.png \
+    --dump-specular=/tmp/raw_spec.png --dump-nrd-specular=/tmp/nrd_spec.png
+```
+
+**Evidence:**
+- `[NRD] integration ready @ 1920x1080 (NRI-backed REBLUR_DIFFUSE_SPECULAR)`
+  logged twice at init (one per PT profile — RTOffline + RTRealtime).
+- `[NRD] persistent instance ready @ 1920x1080` confirms PathTracer's
+  wrapper accepted the integration.
+- First NRD dispatch fired on the command buffer without any new Vulkan
+  validation errors (9 pre-existing errors from deferred renderer
+  descriptor layout — identical count before and after T3b).
+- `nrd_diff.png` visibly smoother than `raw_diff.png` — spatial filter
+  dominates at `frameIndex=0` (no temporal history, single-shot REBLUR).
+  Max channel reduced from 1164.1 (raw) to 28.3 (NRD) — fireflies
+  absorbed by the spatial kernel as expected.
+- `nrd_spec.png` shows clean specular plate across the torso where raw
+  specular was speckle noise.
+- Beauty PNG (OIDN post-process) visually identical to pre-T3b output.
+
+**Implementation notes:**
+- `NrdDenoiser::initialize()` signature extended to take `VkInstance`,
+  graphics queue family, and the instance/device extension name lists
+  used at VkInstance/VkDevice creation — NRI's `DeviceCreationVKDesc`
+  requires all of these to wrap our existing Vulkan device.
+- RT extensions (`VK_KHR_acceleration_structure`, `VK_KHR_ray_tracing_pipeline`,
+  `VK_KHR_deferred_host_operations`) are filtered OUT of the list handed
+  to NRI. NRI's dispatch-table resolver eagerly tries to resolve
+  `vkCmdTraceRaysIndirect2KHR` (part of `VK_KHR_ray_tracing_maintenance1`
+  which we don't enable) whenever it sees ray-tracing pipeline in the
+  list, and returns `UNSUPPORTED` when it can't find the entrypoint.
+  NRD's REBLUR is compute-only — filtering RT extensions out of the
+  NRI-facing list lets NRI skip the RT code path entirely.
+- Resource snapshot declares all AOVs in initial state
+  `Layout::SHADER_RESOURCE_STORAGE / AccessBits::SHADER_RESOURCE_STORAGE`
+  (matches post-traceRays `VK_IMAGE_LAYOUT_GENERAL`). NRD's `_Dispatch`
+  emits its own `nri::CmdBarrier` transitions to pull inputs into
+  `SHADER_RESOURCE` (VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) before
+  sampling — no manual pre-barrier needed at call site, just a raygen→
+  compute memory barrier on VK_ACCESS_SHADER_WRITE_BIT.
+- `restoreInitialState = true` in the snapshot so NRD reverts IN_*
+  back to GENERAL after dispatch — downstream readbacks
+  (`VulkanRenderer::readbackDiffuseRadiance` etc.) find them where
+  they expect.
+- `NRDIntegration.cpp` now also includes `NRIWrapperVK.h` (+ its
+  prerequisite `NRIRayTracing.h`) so the `.hpp`'s `RecreateVK` /
+  `DenoiseVK` method bodies are emitted into the static lib — without
+  this the T3b link failed with undefined refs on those symbols.
+
+**Observation:**
+First real NRD work. Spatial-only at `frameIndex=0` is expected — temporal
+path wiring + multi-frame accumulation comes with 4.E's CLI / realtime
+integration. Compositing back into beauty lives in 4.D.
+
+**Status:** dispatch path proven; 4.D (remodulation compositor) unblocked.
