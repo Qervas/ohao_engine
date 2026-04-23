@@ -34,3 +34,35 @@ if(TARGET NRD)
 else()
     message(WARNING "NRD: target 'NRD' NOT found after FetchContent_MakeAvailable")
 endif()
+
+# Sub-plan 4.C: NRDIntegration — NVIDIA's reference Vulkan integration helper,
+# vendored into external/nrd_integration/. Wraps NRD's "recipe" API
+# (GetComputeDispatches, GetInstanceDesc) with concrete Vulkan pipeline,
+# descriptor pool, texture pool, and barrier management.
+set(OHAO_NRD_INTEGRATION_DIR ${CMAKE_SOURCE_DIR}/external/nrd_integration)
+
+file(GLOB OHAO_NRD_INTEGRATION_SOURCES
+    "${OHAO_NRD_INTEGRATION_DIR}/*.cpp"
+    "${OHAO_NRD_INTEGRATION_DIR}/*.h"
+    "${OHAO_NRD_INTEGRATION_DIR}/*.hpp"
+)
+
+if(OHAO_NRD_INTEGRATION_SOURCES)
+    set(OHAO_NRD_HAS_CPP OFF)
+    foreach(src ${OHAO_NRD_INTEGRATION_SOURCES})
+        if(src MATCHES "\\.cpp$")
+            set(OHAO_NRD_HAS_CPP ON)
+        endif()
+    endforeach()
+    if(OHAO_NRD_HAS_CPP)
+        add_library(NRDIntegration STATIC ${OHAO_NRD_INTEGRATION_SOURCES})
+        target_include_directories(NRDIntegration PUBLIC
+            ${OHAO_NRD_INTEGRATION_DIR}
+            ${Vulkan_INCLUDE_DIRS}
+        )
+        target_link_libraries(NRDIntegration PUBLIC NRD ${Vulkan_LIBRARIES})
+        target_compile_features(NRDIntegration PUBLIC cxx_std_17)
+    else()
+        message(STATUS "NRD: NRDIntegration vendored as headers-only (v4.17.2 .hpp-impl depends on NRI); skipping static lib")
+    endif()
+endif()
