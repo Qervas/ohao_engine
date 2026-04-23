@@ -18,8 +18,10 @@
 //
 // Sub-plan 4.C T3a — existence of this .cpp flips CMake's .cpp-presence
 // glob in external/cmake/nrd.cmake from "headers-only" to "build the
-// NRDIntegration static lib," which ohao_renderer then links via its
-// existing if(TARGET NRDIntegration) gate.
+// OhaoNRDIntegration static lib," which ohao_renderer then links via its
+// existing if(TARGET OhaoNRDIntegration) gate. Name is namespaced to
+// avoid colliding with NRD's own INTERFACE target literally named
+// `NRDIntegration` that points at nrd-src/Integration/.
 
 // cstring/cstdio provide memcpy/snprintf — used by NRDIntegration.hpp but
 // not included transitively by any of its other deps.

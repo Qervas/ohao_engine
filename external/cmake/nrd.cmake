@@ -66,10 +66,10 @@ endforeach()
 # descriptor pool, texture pool, and barrier management.
 set(OHAO_NRD_INTEGRATION_DIR ${CMAKE_SOURCE_DIR}/external/nrd_integration)
 
-# CONFIGURE_DEPENDS so that when a future task drops a .cpp into
-# external/nrd_integration/ (e.g. after vendoring NRI to unlock the
-# single-TU integration), the glob re-runs and the static lib branch
-# below flips on automatically — no manual reconfigure needed.
+# CONFIGURE_DEPENDS so that any .cpp added to or removed from
+# external/nrd_integration/ triggers a re-configure and the static-lib
+# branch below flips on/off automatically — no manual reconfigure needed.
+# (T3a added NRDIntegration.cpp here; the glob picks it up.)
 file(GLOB OHAO_NRD_INTEGRATION_SOURCES CONFIGURE_DEPENDS
     "${OHAO_NRD_INTEGRATION_DIR}/*.cpp"
     "${OHAO_NRD_INTEGRATION_DIR}/*.cxx"
