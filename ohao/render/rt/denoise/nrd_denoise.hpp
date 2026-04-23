@@ -20,20 +20,6 @@ struct NrdCameraInputs {
     bool isMotionVectorInWorldSpace = false;
 };
 
-/// Vulkan image views NRD will read/write during dispatch (4.C).
-/// 4.B stores them on Impl but does not yet bind via UserPool.
-struct NrdInputImages {
-    VkImageView viewZ                  = VK_NULL_HANDLE;
-    VkImageView motionVector           = VK_NULL_HANDLE;
-    VkImageView normalRoughness        = VK_NULL_HANDLE;
-    VkImageView diffRadianceHitDist    = VK_NULL_HANDLE;
-    VkImageView specRadianceHitDist    = VK_NULL_HANDLE;
-    VkImageView diffAlbedo             = VK_NULL_HANDLE;
-    VkImageView specColor              = VK_NULL_HANDLE;
-    VkImageView outDiffRadianceHitDist = VK_NULL_HANDLE;  // outputs filled by 4.C
-    VkImageView outSpecRadianceHitDist = VK_NULL_HANDLE;
-};
-
 /// PIMPL wrapper around NVIDIA RayTracingDenoiser (NRD).
 ///
 /// 4.A scope: lifecycle only (initialize / shutdown).
@@ -76,25 +62,24 @@ public:
     /// Per-frame: push camera state into NRD's CommonSettings. Returns true on success.
     bool setCommonSettings(const NrdCameraInputs& inputs);
 
-    /// Per-frame: record the Vulkan image views NRD will consume/produce during 4.C dispatch.
-    void setInputImages(const NrdInputImages& images);
-
     /// Sub-plan 4.C T3b: Record NRD REBLUR_DIFFUSE_SPECULAR compute dispatches onto cmd.
     /// Preconditions:
     ///   - initialize() succeeded
     ///   - setCommonSettings() called this frame
-    ///   - setInputImages() called this frame with all IN_* + OUT_* VkImage handles + VkFormats
-    ///   - IN_* images in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL (or any layout NRI accepts)
-    ///   - OUT_* images in VK_IMAGE_LAYOUT_GENERAL (SHADER_RESOURCE_STORAGE)
-    /// NRI/NRD will transition internally; after this call resources are in the
-    /// "unique" final states recorded in the ResourceSnapshot (restoreInitialState=false).
+    ///   - setInputResources() called this frame with all IN_* + OUT_* VkImage handles + VkFormats
+    ///   - Resources in VK_IMAGE_LAYOUT_GENERAL (SHADER_RESOURCE_STORAGE). NRI transitions
+    ///     internally using its nri::CmdBarrier machinery; with restoreInitialState=true
+    ///     resources are returned to GENERAL after dispatch.
     /// Returns false on failure (logs error).
     bool denoise(VkCommandBuffer cmd);
 
-    /// Sub-plan 4.C T3b: setInputImages must carry raw VkImage + VkFormat for
-    /// NRD's VK path (which wraps them as nri::Texture internally). The
-    /// existing NrdInputImages struct stashes VkImageView which we don't
-    /// forward to NRD — setInputResources below is what denoise() reads.
+    /// Sub-plan 4.C T3b: per-frame resource binding. NRD's VK path wraps raw
+    /// VkImage+VkFormat as nri::Texture internally — so we hand over image
+    /// handles (not views) plus their format. The 7 slots here map directly
+    /// to nrd::ResourceType (IN_MV / IN_VIEWZ / IN_NORMAL_ROUGHNESS /
+    /// IN_DIFF_RADIANCE_HITDIST / IN_SPEC_RADIANCE_HITDIST /
+    /// OUT_DIFF_RADIANCE_HITDIST / OUT_SPEC_RADIANCE_HITDIST) for
+    /// REBLUR_DIFFUSE_SPECULAR.
     struct NrdInputResource {
         VkImage  image  = VK_NULL_HANDLE;
         VkFormat format = VK_FORMAT_UNDEFINED;

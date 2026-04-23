@@ -34,7 +34,6 @@ struct NrdDenoiser::Impl {
     uint32_t         graphicsQueueFamilyIndex = 0;
     uint32_t         width                    = 0;
     uint32_t         height                   = 0;
-    NrdInputImages   inputs {};    // stashed for legacy callers; not consumed by denoise()
     NrdInputResources resources {}; // consumed by denoise() for NRI snapshot wrapping
 
 #ifdef OHAO_NRD_INTEGRATION_AVAILABLE
@@ -213,10 +212,6 @@ bool NrdDenoiser::setCommonSettings(const NrdCameraInputs& in) {
     return true;
 }
 
-void NrdDenoiser::setInputImages(const NrdInputImages& images) {
-    m_impl->inputs = images;
-}
-
 void NrdDenoiser::setInputResources(const NrdInputResources& resources) {
     m_impl->resources = resources;
 }
@@ -307,7 +302,6 @@ bool NrdDenoiser::initialize(VkInstance, VkDevice, VkPhysicalDevice, uint32_t,
                               uint32_t, uint32_t) { return false; }
 void NrdDenoiser::shutdown() {}
 bool NrdDenoiser::setCommonSettings(const NrdCameraInputs&) { return false; }
-void NrdDenoiser::setInputImages(const NrdInputImages&)    {}
 void NrdDenoiser::setInputResources(const NrdInputResources&) {}
 bool NrdDenoiser::denoise(VkCommandBuffer) { return false; }
 
