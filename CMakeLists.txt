@@ -38,6 +38,11 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---- NRD (NVIDIA RayTracingDenoiser) for realtime RT denoise (Sub-plan 4.A) ----
+# Hard dependency when enabled. -DOHAO_NRD=OFF opts out cleanly (no fetch,
+# no link, nrd_denoise.cpp is compiled empty via OHAO_NRD_ENABLED guard).
+option(OHAO_NRD "Enable NRD (NVIDIA RayTracingDenoiser) integration" ON)
+
 # Find Vulkan package
 find_package(Vulkan REQUIRED)
 

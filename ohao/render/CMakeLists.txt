@@ -66,3 +66,11 @@ if(OHAO_OPTIX_AVAILABLE)
     target_include_directories(ohao_renderer PRIVATE ${OPTIX_INCLUDE_DIR})
     target_link_libraries(ohao_renderer PUBLIC CUDA::cudart CUDA::cuda_driver)
 endif()
+
+# Conditional NRD support (Sub-plan 4.A). nrd_denoise.cpp is always in
+# RENDERER_SOURCES via the glob; its body is guarded by OHAO_NRD_ENABLED
+# so it compiles to an empty TU when OHAO_NRD=OFF.
+if(OHAO_NRD)
+    target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_ENABLED)
+    target_link_libraries(ohao_renderer PRIVATE NRD)
+endif()
