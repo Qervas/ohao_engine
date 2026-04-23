@@ -41,8 +41,14 @@ endif()
 # descriptor pool, texture pool, and barrier management.
 set(OHAO_NRD_INTEGRATION_DIR ${CMAKE_SOURCE_DIR}/external/nrd_integration)
 
-file(GLOB OHAO_NRD_INTEGRATION_SOURCES
+# CONFIGURE_DEPENDS so that when a future task drops a .cpp into
+# external/nrd_integration/ (e.g. after vendoring NRI to unlock the
+# single-TU integration), the glob re-runs and the static lib branch
+# below flips on automatically — no manual reconfigure needed.
+file(GLOB OHAO_NRD_INTEGRATION_SOURCES CONFIGURE_DEPENDS
     "${OHAO_NRD_INTEGRATION_DIR}/*.cpp"
+    "${OHAO_NRD_INTEGRATION_DIR}/*.cxx"
+    "${OHAO_NRD_INTEGRATION_DIR}/*.cc"
     "${OHAO_NRD_INTEGRATION_DIR}/*.h"
     "${OHAO_NRD_INTEGRATION_DIR}/*.hpp"
 )
@@ -50,7 +56,7 @@ file(GLOB OHAO_NRD_INTEGRATION_SOURCES
 if(OHAO_NRD_INTEGRATION_SOURCES)
     set(OHAO_NRD_HAS_CPP OFF)
     foreach(src ${OHAO_NRD_INTEGRATION_SOURCES})
-        if(src MATCHES "\\.cpp$")
+        if(src MATCHES "\\.(cpp|cxx|cc)$")
             set(OHAO_NRD_HAS_CPP ON)
         endif()
     endforeach()
