@@ -298,3 +298,57 @@ REBLUR expects.
 
 Sub-plan 3.D complete. Next: Sub-plan 4 (NRD integration) — the jaw-drop
 moment when realtime 1spp renders look like offline 1024spp.
+
+## 2026-04-23: NRD library integration (Sub-plan 4.A)
+
+NVIDIA RayTracingDenoiser wired via CMake FetchContent as hard dep.
+`NrdDenoiser` PIMPL exposes `initialize` + `shutdown` against the
+existing Vulkan device. Denoise dispatch lands in 4.B.
+
+Build integration:
+- `OHAO_NRD=ON` (default): FetchContent clones NRD v4.17.2, links
+  the static library into `ohao_renderer`, compiles `nrd_denoise.cpp`
+  with `OHAO_NRD_ENABLED` defined.
+- `OHAO_NRD=OFF`: FetchContent + link skipped. `nrd_denoise.cpp` still
+  compiles (GLOB_RECURSE picks it up) but its body is `#ifdef`-guarded
+  to an empty TU. Callers use `#ifdef OHAO_NRD_ENABLED` to guard
+  instantiations.
+
+Pinned NRD tag: v4.17.2.
+
+Resolved NRD v4.17 API symbols:
+- `nrd::CreateInstance(const InstanceCreationDesc&, Instance*&)` — out-ref
+- `nrd::DestroyInstance(Instance&)` — takes reference (not Release)
+- `nrd::DenoiserDesc` holds `{identifier, denoiser}` only — render
+  resolution is **not** a creation-time field; it's supplied per-frame
+  via `CommonSettings` in 4.B.
+- `nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR`, `nrd::Result::SUCCESS`.
+
+Lifecycle smoke via probe in `PathTracer::init`:
+```
+[PathTracer] Initialized (1920x1080)
+[NRD] initialized for 1920x1080
+[NRD probe] 4.A lifecycle smoke passed
+```
+No Vulkan validation errors. Probe fires twice (once for RTRealtime
+and once for RTOffline PathTracer instances — expected, both call
+`PathTracer::init`). Probe removed in 4.B when real dispatch takes over.
+
+OFF-build smoke: `./build-nonrd/cornell_box ...` produces `Saved:` line
+with no `[NRD]` log lines — probe is fully `#ifdef`-guarded out.
+
+Deviations from plan:
+- Plan spec'd probe in `ohao/gpu/vulkan/renderer.cpp`. Moved to
+  `ohao/render/rt/path_tracer.cpp` (specifically `PathTracer::init`
+  tail, after SBT creation) because NRD is linked to `ohao_renderer`,
+  not `ohao_gpu_vulkan` — T1 review surfaced this split-lib constraint.
+  `OHAO_NRD_ENABLED` is only defined for the `ohao_renderer` target.
+- Plan template included `renderWidth`/`renderHeight` fields on
+  `DenoiserDesc`; NRD v4.17's struct doesn't have them. Adapted — the
+  probe still passes `w`/`h` into `initialize()` and stores them on Impl
+  for future use (CommonSettings in 4.B).
+- NRD's `NRD` CMake target does propagate `INTERFACE_INCLUDE_DIRECTORIES`
+  correctly, so no `target_include_directories` workaround was needed
+  in `ohao/render/CMakeLists.txt`.
+
+Next: Sub-plan 4.B (NRD API expansion — per-frame input population).

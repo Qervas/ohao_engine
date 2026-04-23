@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <iostream>
 
+#ifdef OHAO_NRD_ENABLED
+#include "render/rt/denoise/nrd_denoise.hpp"
+#endif
+
 namespace ohao {
 
 namespace {
@@ -113,6 +117,23 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     }
 
     std::cout << "[PathTracer] Initialized (" << width << "x" << height << ")" << std::endl;
+
+#ifdef OHAO_NRD_ENABLED
+    // Sub-plan 4.A probe: one-shot NRD lifecycle smoke. Verifies that the
+    // NrdDenoiser PIMPL can create and destroy an NRD instance against the
+    // live Vulkan device. Probe is removed in 4.B when real per-frame
+    // dispatch takes over.
+    {
+        NrdDenoiser nrdProbe;
+        if (nrdProbe.initialize(m_device, m_physicalDevice, m_width, m_height)) {
+            std::cout << "[NRD probe] 4.A lifecycle smoke passed" << std::endl;
+        } else {
+            std::cerr << "[NRD probe] 4.A lifecycle smoke FAILED" << std::endl;
+        }
+        nrdProbe.shutdown();
+    }
+#endif
+
     return true;
 }
 
