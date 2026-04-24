@@ -21,6 +21,10 @@ namespace {
 constexpr uint32_t kPTFlagEnableAOVs = 1u << 0;
 constexpr uint32_t kPTFlagEnableInternalDenoise = 1u << 1;
 constexpr uint32_t kPTFlagEnableFireflyClamp = 1u << 2;
+// Sub-plan 4.F T3: in NRD mode, raygen uses a running mean over N samples for the
+// five NRD AOV bindings (22/23/24/25/26) so offline --spp=N feeds NRD an N-spp
+// averaged input. Must stay in sync with PT_FLAG_ACCUMULATE_AOVS in the raygen shaders.
+constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
@@ -629,6 +633,9 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
     if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;
     if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
+    // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings, not the
+    // final sample's 1spp. Raygen handles sample-0 (overwrite) vs N>0 (running mean).
+    if (m_renderSettings.denoiseMode == DenoiseMode::NRD) pc.control.x |= kPTFlagAccumulateAOVs;
     pc.control.y = m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;

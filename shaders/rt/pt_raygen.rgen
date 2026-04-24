@@ -52,6 +52,21 @@ layout(push_constant) uniform PushConstants {
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
 const uint PT_FLAG_ENABLE_FIREFLY_CLAMP = 1u << 2;
+const uint PT_FLAG_ACCUMULATE_AOVS = 1u << 3;  // Sub-plan 4.F T3: N-spp running mean on NRD AOVs
+
+// Sub-plan 4.F T3: running-average helper for NRD AOV bindings (22/23/24/25/26).
+// When accumulateAOVs is set AND sampleIdx>0, blend `current` with previous image value
+// via 1/(n+1) weight so the image holds the mean of samples 0..sampleIdx. Sample 0 hits
+// the overwrite branch (equivalent to old behavior); realtime (N=1) always uses overwrite.
+#define AOV_ACCUMULATE_WRITE(img, pix, currentExpr) do {                 \
+    vec4 _ohaoAovCur = (currentExpr);                                    \
+    if (accumulateAOVs && pc.params.z > 0u) {                            \
+        vec4 _ohaoAovPrev = imageLoad(img, pix);                         \
+        float _ohaoAovN = float(pc.params.z + 1u);                       \
+        _ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);   \
+    }                                                                    \
+    imageStore(img, pix, _ohaoAovCur);                                   \
+} while(false)
 
 struct RayPayload {
     vec3 color;
@@ -111,6 +126,7 @@ void main() {
     bool enableAOVs = (pc.control.x & PT_FLAG_ENABLE_AOVS) != 0u;
     bool enableInternalDenoise = (pc.control.x & PT_FLAG_ENABLE_INTERNAL_DENOISE) != 0u;
     bool enableFireflyClamp = (pc.control.x & PT_FLAG_ENABLE_FIREFLY_CLAMP) != 0u;
+    bool accumulateAOVs = (pc.control.x & PT_FLAG_ACCUMULATE_AOVS) != 0u;
 
     samplerInit(uvec2(pixel), frameIdx);
     uint dimIdx = 0u;
@@ -152,11 +168,15 @@ void main() {
     bool  diffHitRecorded  = false; // latch set once on first Stage-C bounce-1 hit
 
     // Sub-plan 3.C.6: zero-init demod AOVs; bounce-0 first-hit overwrites on hit.
-    imageStore(diffuseAlbedoAOV, pixel, vec4(0.0));
-    imageStore(specColorAOV,     pixel, vec4(0.0));
-
-    // Sub-plan 4.B: zero-init normal+roughness AOV for miss pixels
-    imageStore(normalRoughnessAOV, pixel, vec4(0.0));
+    // Sub-plan 4.F T3: in accumulate mode for sample N>0, skip the zero-init so the
+    // previous running mean survives and we blend the current sample in at the hit
+    // or miss branch below.
+    if (!accumulateAOVs || pc.params.z == 0u) {
+        imageStore(diffuseAlbedoAOV, pixel, vec4(0.0));
+        imageStore(specColorAOV,     pixel, vec4(0.0));
+        // Sub-plan 4.B: zero-init normal+roughness AOV for miss pixels
+        imageStore(normalRoughnessAOV, pixel, vec4(0.0));
+    }
 
     // ================================================================
     // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
@@ -219,6 +239,13 @@ void main() {
             imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
             imageStore(normalAOV, pixel, vec4(0));
         }
+        // Sub-plan 4.F T3: in accumulate mode we skipped zero-init for N>0, so we
+        // must explicitly blend the current (miss=zero) sample into the demod AOVs.
+        if (accumulateAOVs && pc.params.z > 0u) {
+            AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV,   pixel, vec4(0.0));
+            AOV_ACCUMULATE_WRITE(specColorAOV,       pixel, vec4(0.0));
+            AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, vec4(0.0));
+        }
     } else {
         // ==== First-hit material decode ====
         vec3 hitPos   = payload.hitPos;
@@ -242,11 +269,12 @@ void main() {
         // Sub-plan 3.C.6: capture demod factors + write demod AOVs
         firstHitDiffAlbedo = isMetal ? vec3(0.0) : albedo;
         firstHitSpecColor  = F0;
-        imageStore(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
-        imageStore(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
+        // Sub-plan 4.F T3: running-average in NRD accumulate mode, overwrite otherwise.
+        AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
+        AOV_ACCUMULATE_WRITE(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
 
         // Sub-plan 4.B (fix): pack via NRD canonical encoder for REBLUR IN_NORMAL_ROUGHNESS
-        imageStore(normalRoughnessAOV, pixel, nrdPackNormalRoughness(N, roughness));
+        AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, nrdPackNormalRoughness(N, roughness));
 
         // Emissive at primary hit → diffuse channel (3.C.6 convention)
         if (length(emissive) > 0.001) {
@@ -1232,7 +1260,8 @@ void main() {
     vec3 ldr = ACES(denoised * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
     // Sub-plan 3.C.6 + 3.D: RAW radiance in RGB, hit-distance in alpha (for NRD REBLUR filter sizing)
-    imageStore(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));
-    imageStore(specularRadiance, pixel, vec4(specContrib, specHitDist));
+    // Sub-plan 4.F T3: running-average across N samples when NRD mode is active.
+    AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));
+    AOV_ACCUMULATE_WRITE(specularRadiance, pixel, vec4(specContrib, specHitDist));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
