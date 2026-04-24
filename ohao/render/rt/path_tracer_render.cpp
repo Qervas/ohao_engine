@@ -675,8 +675,18 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         camera.motionVectorScale = {1.0f, 1.0f, 0.0f};
         camera.jitter     = {0.0f, 0.0f};
         camera.jitterPrev = {0.0f, 0.0f};
-        camera.frameIndex = m_historyFrameCount;  // 4.E T2: real per-frame counter (was hard-coded 0)
+        camera.frameIndex = m_viewChangedThisFrame ? 0u : m_historyFrameCount;  // 4.F T2: bootstrap on view change
         camera.isMotionVectorInWorldSpace = false;
+
+        // 4.F T2: when view changed this frame, force NRD to treat it as a
+        // fresh frame (no history). Override prev V/P with CURRENT values so
+        // NRD doesn't reproject from a stale camera pose → prevents ghosting
+        // trail while the user moves the camera. Paired with frameIndex=0
+        // above, NRD falls back to spatial-only denoise for this frame.
+        if (m_viewChangedThisFrame) {
+            std::memcpy(camera.viewMatrixPrev.data(), glm::value_ptr(viewM), sizeof(float) * 16);
+            std::memcpy(camera.projMatrixPrev.data(), glm::value_ptr(projM), sizeof(float) * 16);
+        }
         m_nrdDenoiser->setCommonSettings(camera);
 
         // 4.E T2: capture current frame's V/P for NEXT frame's NRD input.

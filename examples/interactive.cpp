@@ -287,6 +287,12 @@ int main(int argc, char* argv[]) {
         camera.setRotation(g_cam.pitch, g_cam.yaw);
         camera.setFov(45.0f);
 
+        // 4.F T2: on any camera movement (mouse drag, WASD, QE), tell the
+        // renderer the view changed. VulkanRenderer::notifyCameraChanged →
+        // PathTracer::notifyViewChanged, which (a) resets accumulation and
+        // (b) tells NRD to bootstrap (frameIndex=0 + prev V/P := current
+        // V/P) so reprojection doesn't smear stale history into the new
+        // camera pose.
         if (g_cam.moved) {
             renderer.notifyCameraChanged();
             g_cam.moved = false;
