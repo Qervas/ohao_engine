@@ -847,6 +847,13 @@ bool PathTracer::createImages() {
         viewInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_nrdComposedView) != VK_SUCCESS) return false;
+
+        // Reset first-frame latch so the UNDEFINED→GENERAL barrier fires
+        // correctly on the new image, even if createImages() is re-entered
+        // for resize (future 4.E scope). Without this, a resized VkImage
+        // starts in UNDEFINED but the latch says "already transitioned",
+        // producing a validation error + potential garbage first frame.
+        m_nrdComposeFirstFrame = true;
     }
 
     return true;
@@ -2142,10 +2149,15 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
         if (m_nrdCompositor) {
             // Transition inputs for compose: bindings 24, 25, 27, 28.
-            // NRD's restoreInitialState=true left 22/23/26 in GENERAL (and also
-            // returned 27/28 to GENERAL implicitly via its barrier graph). Emit
-            // a blanket SHADER_WRITE→SHADER_READ barrier so compose sees the
-            // NRD-produced + demod-produced content.
+            // Writer stages differ per slot: 24/25 were written by raygen
+            // (RAY_TRACING_SHADER); 27/28 were written by NRD's internal
+            // compute dispatches. The upstream NRD-input barrier already
+            // chained RAY_TRACING → COMPUTE for the raygen-produced slots
+            // (visibility is in COMPUTE stage by the time we get here), so
+            // this barrier serves:
+            //   - 27/28: a COMPUTE→COMPUTE WAR/RAW acquire
+            //   - 24/25: a no-op acquire (memory already visible)
+            // NRD's restoreInitialState=true left 22/23/26/27/28 in GENERAL.
             VkImageMemoryBarrier cbIn[4] = {};
             VkImage cbInImages[4] = {
                 m_diffAlbedoImage,       // binding 24
