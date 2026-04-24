@@ -33,6 +33,28 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                          const glm::vec3& lightColor, float lightRadius) {
     if (!m_rtPipeline || !accel || !accel->getTLAS()) return;
 
+    // --- Sub-plan 4.F T4: Halton(2,3) pixel jitter for NRD temporal diversity ---
+    // Realtime 1spp + jitter + temporal ≈ offline 8-16spp equivalent quality: the
+    // sub-pixel offset shifts the sample grid each frame so NRD's temporal
+    // accumulation integrates over a wider footprint than center-sampling would.
+    // Period 16 is enough to hit every 4x4 sub-pixel cell twice over 32 frames —
+    // classic TAA pattern. Skip index 0 (Halton value is 0 there, which would
+    // equal "no jitter" and waste one of the 16 slots).
+    auto halton = [](uint32_t i, uint32_t base) -> float {
+        float f = 1.0f, r = 0.0f;
+        while (i > 0) { f /= float(base); r += f * float(i % base); i /= base; }
+        return r;
+    };
+    if (m_renderSettings.denoiseMode == DenoiseMode::NRD) {
+        const uint32_t idx = (m_haltonIndex % 16u) + 1u;
+        m_jitterCurrent = glm::vec2(halton(idx, 2) - 0.5f, halton(idx, 3) - 0.5f);
+        m_haltonIndex++;
+    } else {
+        // Non-NRD paths (None/OIDN/OptiX) keep pixel-center sampling — zero jitter
+        // here preserves bit-exact parity with pre-T4 behavior.
+        m_jitterCurrent = glm::vec2(0.0f);
+    }
+
     // --- Update descriptor set with current frame's data ---
 
     // Binding 0: TLAS
@@ -640,6 +662,9 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral, 0.0f);
+    // Sub-plan 4.F T4: propagate pixel jitter to raygen. zw are reserved padding
+    // (kept 0 so the push-constant tail is deterministic across frames).
+    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, 0.0f, 0.0f);
 
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;
@@ -680,8 +705,14 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         std::memcpy(camera.projMatrix.data(),     glm::value_ptr(projM),               sizeof(float) * 16);
         std::memcpy(camera.projMatrixPrev.data(), glm::value_ptr(m_prevProjMatrix),    sizeof(float) * 16);
         camera.motionVectorScale = {1.0f, 1.0f, 0.0f};
-        camera.jitter     = {0.0f, 0.0f};
-        camera.jitterPrev = {0.0f, 0.0f};
+        // Sub-plan 4.F T4: feed Halton jitter to NRD so it undoes the sub-pixel
+        // shift during temporal reprojection (NRD expects "where this frame's ray
+        // origin was offset to vs the canonical pixel center"). jitterPrev is
+        // LAST frame's jitter; m_jitterPrev is captured at end of previous
+        // render() (see below). On first frame + every view reset, both are 0,
+        // which matches the frameIndex=0 bootstrap branch.
+        camera.jitter     = {m_jitterCurrent.x, m_jitterCurrent.y};
+        camera.jitterPrev = {m_jitterPrev.x,    m_jitterPrev.y};
         camera.frameIndex = m_viewChangedThisFrame ? 0u : m_historyFrameCount;  // 4.F T2: bootstrap on view change
         camera.isMotionVectorInWorldSpace = false;
 
@@ -701,6 +732,10 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         // history" (spatial-only) — matches pre-T2 behavior exactly.
         m_prevViewMatrix = viewM;
         m_prevProjMatrix = projM;
+        // 4.F T4: capture current jitter as jitterPrev for next frame's NRD
+        // reprojection. Paired with viewChanged → NRD sees both "same pose" and
+        // "same jitter" → zero disocclusion, stays in temporal-only mode.
+        m_jitterPrev = m_jitterCurrent;
 
         NrdDenoiser::NrdInputResources res {};
         res.motionVector           = {m_motionVectorImage,     VK_FORMAT_R16G16_SFLOAT};

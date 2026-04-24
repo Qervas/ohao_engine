@@ -96,6 +96,42 @@ public:
     };
     void setInputResources(const NrdInputResources& resources);
 
+    /// Sub-plan 4.F T4: Production-tuned REBLUR parameters.
+    ///
+    /// Defaults are NVIDIA's reference values for 1-4spp input (vs the stock
+    /// NRD defaults which are tuned for 0.25spp game input with SHARC/ReSTIR).
+    /// Longer accumulation windows + pre-pass blur = cleaner output at the
+    /// expense of a few more frames of lag on disocclusion. Matches what NVIDIA
+    /// ships in the RTXDI / RTXNTC sample applications.
+    ///
+    /// Field names mirror NRD v4.17 `nrd::ReblurSettings` verbatim where a
+    /// 1:1 mapping exists. Fields that did NOT exist in v4.17 (e.g. the
+    /// `enableMaterialTest` flag from older NRD versions) are omitted.
+    struct NrdReblurProfile {
+        // hitDistanceParameters.A (units > 0) — constant term of the hit-distance
+        // normalization "f = (A + viewZ*B) * lerp(C, 1, smc)". NRD default is 3.0.
+        float    hitDistanceParamA           = 3.0f;
+        // Prepass spatial-reuse blur radius in pixels. NRD defaults 30 / 50.
+        float    diffusePrepassBlurRadius    = 30.0f;
+        float    specularPrepassBlurRadius   = 50.0f;
+        // Number of reconstructed frames after history reset. NRD default 3.
+        uint32_t historyFixFrameNum          = 3;
+        // Maximum linearly accumulated frames. NRD default 30; we bump to 63
+        // (REBLUR_MAX_HISTORY_FRAME_NUM) since 1-4spp input can safely accumulate
+        // longer without over-smoothing.
+        uint32_t maxAccumulatedFrameNum      = 63;
+        // Fast-history accumulation (reacts faster on disocclusion). NRD default 6.
+        uint32_t maxFastAccumulatedFrameNum  = 8;
+        // Antilag sigma scale — higher = less aggressive reject on luminance delta.
+        // NRD v4.17 field is `antilagSettings.luminanceSigmaScale`, default 2.0.
+        float    antilagLuminanceSigmaScale  = 2.0f;
+    };
+
+    /// Apply REBLUR settings. Call once after initialize() succeeds.
+    /// Returns false if called before initialize() or on OHAO_NRD=OFF build,
+    /// or if the underlying `nrd::SetDenoiserSettings` call reports failure.
+    bool setReblurSettings(const NrdReblurProfile& profile);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;

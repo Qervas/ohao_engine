@@ -397,7 +397,7 @@ private:
     VkStridedDeviceAddressRegionKHR m_hitRegion{};
     VkStridedDeviceAddressRegionKHR m_callRegion{};  // empty, not used
 
-    // Push constants — 240 bytes
+    // Push constants — 256 bytes (Vulkan max on most RT GPUs)
     struct PTPushConstants {
         glm::mat4 invView;              // 64 bytes
         glm::mat4 invProj;              // 64 bytes
@@ -406,7 +406,8 @@ private:
         glm::uvec4 control;             // x=flags, y=historyFrameCount, z=viewChanged, w=envCDFWidth
                                         // control.w = envCDFWidth. If 0, shader must skip env importance sampling.
         glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
-    };  // total = 240 bytes
+        glm::vec4 jitter;               // 4.F T4: xy=Halton(2,3) pixel offset (0 outside NRD mode), zw=pad
+    };  // total = 256 bytes
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 
@@ -416,6 +417,14 @@ private:
     // vectors use the combined VP matrix; NRD wants V and P separately).
     glm::mat4 m_prevViewMatrix{1.0f};
     glm::mat4 m_prevProjMatrix{1.0f};
+
+    // Sub-plan 4.F T4: TAA-style pixel jitter for NRD temporal sample diversity.
+    // Halton(2,3) sequence (period 16) generates ±0.5 sub-pixel offsets per frame
+    // when DenoiseMode::NRD is active; fed to NRD's cameraJitter/cameraJitterPrev
+    // so NRD properly undoes the sub-pixel shift during temporal reprojection.
+    glm::vec2 m_jitterCurrent{0.0f};
+    glm::vec2 m_jitterPrev{0.0f};
+    uint32_t  m_haltonIndex{0};
 
     // Function pointers (loaded dynamically for RT extensions)
     PFN_vkCreateRayTracingPipelinesKHR vkCreateRayTracingPipelinesKHR = nullptr;

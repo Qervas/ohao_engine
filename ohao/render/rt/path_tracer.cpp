@@ -110,7 +110,16 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                                    graphicsQueueFamilyIndex,
                                    instanceExtensions, deviceExtensions,
                                    m_width, m_height)) {
-        std::cout << "[NRD] persistent instance ready @ " << m_width << "x" << m_height << std::endl;
+        // Sub-plan 4.F T4: apply NVIDIA's reference REBLUR tuning for 1-4spp input.
+        // Stock NRD defaults target 0.25spp game-style input with SHARC/ReSTIR; our
+        // path tracer feeds N-spp averaged AOVs (see 4.F T3), so longer accumulation
+        // + production prepass radii give visibly cleaner output.
+        NrdDenoiser::NrdReblurProfile profile{};
+        const bool ok = m_nrdDenoiser->setReblurSettings(profile);
+        std::cout << "[NRD] persistent instance ready @ " << m_width << "x" << m_height
+                  << (ok ? " (T4: production ReblurSettings applied)"
+                         : " (T4: ReblurSettings apply FAILED — defaults in use)")
+                  << std::endl;
     } else {
         if (instance == VK_NULL_HANDLE) {
             std::cerr << "[NRD] no VkInstance provided — skipping NRD init (caller should plumb it)" << std::endl;
@@ -156,6 +165,12 @@ void PathTracer::resetAccumulation() {
     // confuse NRD's temporal reprojection on first post-reset frame.
     m_prevViewMatrix = glm::mat4(1.0f);
     m_prevProjMatrix = glm::mat4(1.0f);
+
+    // Sub-plan 4.F T4: reset Halton sequence + stale jitter history so the first
+    // post-reset frame's NRD cameraJitterPrev matches cameraJitter = Halton(0).
+    m_jitterCurrent = glm::vec2(0.0f);
+    m_jitterPrev    = glm::vec2(0.0f);
+    m_haltonIndex   = 0;
 }
 
 // ─── Resize ──────────────────────────────────────────────────────────
@@ -184,6 +199,11 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     // bootstrap after resize.
     m_prevViewMatrix = glm::mat4(1.0f);
     m_prevProjMatrix = glm::mat4(1.0f);
+
+    // Sub-plan 4.F T4: same rationale as in resetAccumulation().
+    m_jitterCurrent = glm::vec2(0.0f);
+    m_jitterPrev    = glm::vec2(0.0f);
+    m_haltonIndex   = 0;
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────────────

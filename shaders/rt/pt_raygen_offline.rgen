@@ -45,6 +45,7 @@ layout(push_constant) uniform PushConstants {
     uvec4 params;  // x=width, y=height, z=sampleIndex, w=maxBounces
     uvec4 control;
     vec4 tuning;
+    vec4 jitter;                // 4.F T4: xy = Halton(2,3) sub-pixel offset (0 outside NRD mode)
 } pc;
 
 #include "includes/rt/mis.glsl"
@@ -136,7 +137,8 @@ void main() {
     // Camera ray with sub-pixel jitter
     vec2 jitter = getSample2D(dimIdx) - 0.5;
     dimIdx += 2u;
-    vec2 uv = (vec2(pixel) + 0.5 + jitter) / vec2(pc.params.xy);
+    // 4.F T4: see pt_raygen.rgen — TAA-style Halton grid shift, zero outside NRD mode.
+    vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);
     vec2 ndc = uv * 2.0 - 1.0;
 
     // Pinhole camera from invView

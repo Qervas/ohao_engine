@@ -40,6 +40,9 @@ layout(push_constant) uniform PushConstants {
     uvec4 params;
     uvec4 control;
     vec4 tuning;
+    vec4 jitter;                // 4.F T4: matches raygen — needed so the miss
+                                // shader's push-constant block size matches the
+                                // pipeline layout. Not otherwise read here.
 } pc;
 
 #include "includes/rt/env_sampling.glsl"

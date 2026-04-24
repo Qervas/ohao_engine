@@ -217,6 +217,35 @@ void NrdDenoiser::setInputResources(const NrdInputResources& resources) {
     m_impl->resources = resources;
 }
 
+bool NrdDenoiser::setReblurSettings(const NrdReblurProfile& p) {
+#ifdef OHAO_NRD_INTEGRATION_AVAILABLE
+    if (!m_impl->integrationReady) {
+        std::cerr << "[NRD] setReblurSettings() called before initialize()" << std::endl;
+        return false;
+    }
+    nrd::ReblurSettings s {};  // start from NRD defaults — we override a subset
+    s.hitDistanceParameters.A         = p.hitDistanceParamA;
+    s.diffusePrepassBlurRadius        = p.diffusePrepassBlurRadius;
+    s.specularPrepassBlurRadius       = p.specularPrepassBlurRadius;
+    s.historyFixFrameNum              = p.historyFixFrameNum;
+    s.maxAccumulatedFrameNum          = p.maxAccumulatedFrameNum;
+    s.maxFastAccumulatedFrameNum      = p.maxFastAccumulatedFrameNum;
+    s.antilagSettings.luminanceSigmaScale = p.antilagLuminanceSigmaScale;
+
+    // DenoiserDesc registered ID 0 as REBLUR_DIFFUSE_SPECULAR (see initialize()).
+    const nrd::Identifier id = 0;
+    const nrd::Result r = m_impl->integration.SetDenoiserSettings(id, &s);
+    if (r != nrd::Result::SUCCESS) {
+        std::cerr << "[NRD] SetDenoiserSettings(REBLUR) failed: " << int(r) << std::endl;
+        return false;
+    }
+    return true;
+#else
+    (void)p;
+    return false;
+#endif
+}
+
 bool NrdDenoiser::denoise(VkCommandBuffer cmd) {
 #ifdef OHAO_NRD_INTEGRATION_AVAILABLE
     if (!m_impl->integrationReady) {
@@ -305,6 +334,7 @@ void NrdDenoiser::shutdown() {}
 bool NrdDenoiser::setCommonSettings(const NrdCameraInputs&) { return false; }
 void NrdDenoiser::setInputResources(const NrdInputResources&) {}
 bool NrdDenoiser::denoise(VkCommandBuffer) { return false; }
+bool NrdDenoiser::setReblurSettings(const NrdReblurProfile&) { return false; }
 
 }  // namespace ohao
 
