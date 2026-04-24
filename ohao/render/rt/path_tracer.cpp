@@ -150,6 +150,12 @@ void PathTracer::resetAccumulation() {
     m_shadingHistoryWriteIndex = 0;
     m_shadingHistoryInitialized[0] = false;
     m_shadingHistoryInitialized[1] = false;
+
+    // Sub-plan 4.E T2: keep NRD's prev matrices in sync with frameIndex=0
+    // bootstrap. Leaving them stale across a view change / resize could
+    // confuse NRD's temporal reprojection on first post-reset frame.
+    m_prevViewMatrix = glm::mat4(1.0f);
+    m_prevProjMatrix = glm::mat4(1.0f);
 }
 
 // ─── Resize ──────────────────────────────────────────────────────────
@@ -173,6 +179,11 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     m_shadingHistoryWriteIndex = 0;
     m_shadingHistoryInitialized[0] = false;
     m_shadingHistoryInitialized[1] = false;
+
+    // Sub-plan 4.E T2: keep NRD's prev matrices in sync with frameIndex=0
+    // bootstrap after resize.
+    m_prevViewMatrix = glm::mat4(1.0f);
+    m_prevProjMatrix = glm::mat4(1.0f);
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────────────
