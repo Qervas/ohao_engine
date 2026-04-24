@@ -55,6 +55,9 @@ public:
     // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
     virtual VkImage     getNrdComposedAOVImage() const = 0;
     virtual VkImageView getNrdComposedAOV()      const = 0;
+    // Sub-plan 4.E: NRD tonemapped output (RGBA8 UNORM)
+    virtual VkImage     getNrdTonemappedAOVImage() const = 0;
+    virtual VkImageView getNrdTonemappedAOV()      const = 0;
 
     virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
     virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
@@ -133,6 +136,8 @@ public:
     VkImage     getOutSpecRadianceAOVImage() const override { return m_pathTracer.getOutSpecRadianceAOVImage(); }
     VkImage     getNrdComposedAOVImage() const override { return m_pathTracer.getNrdComposedAOVImage(); }
     VkImageView getNrdComposedAOV()      const override { return m_pathTracer.getNrdComposedAOV(); }
+    VkImage     getNrdTonemappedAOVImage() const override { return m_pathTracer.getNrdTonemappedAOVImage(); }
+    VkImageView getNrdTonemappedAOV()      const override { return m_pathTracer.getNrdTonemappedAOV(); }
 
     void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {

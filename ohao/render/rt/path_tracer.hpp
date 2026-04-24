@@ -37,6 +37,7 @@
 // different layout than ohao_renderer).
 namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }  // NEW 4.D
+namespace ohao { class NrdTonemap; }     // NEW 4.E
 
 namespace ohao {
 
@@ -146,6 +147,9 @@ public:
     VkImage     getOutSpecRadianceAOVImage() const { return m_outSpecRadianceImage; }
     VkImageView getNrdComposedAOV()      const { return m_nrdComposedView; }
     VkImage     getNrdComposedAOVImage() const { return m_nrdComposedImage; }
+    // Sub-plan 4.E T1: tonemapped NRD output (RGBA8 UNORM, binding 30).
+    VkImageView getNrdTonemappedAOV()      const { return m_nrdTonemappedView; }
+    VkImage     getNrdTonemappedAOVImage() const { return m_nrdTonemappedImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -221,6 +225,7 @@ private:
     // no-op on a null held pointer (no need for complete type).
     std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
     std::unique_ptr<NrdCompositor> m_nrdCompositor;  // NEW 4.D
+    std::unique_ptr<NrdTonemap> m_nrdTonemap;        // NEW 4.E
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
@@ -332,6 +337,13 @@ private:
     VkDeviceMemory m_nrdComposedMemory    = VK_NULL_HANDLE;
     VkImageView    m_nrdComposedView      = VK_NULL_HANDLE;
     bool           m_nrdComposeFirstFrame = true;  // gates UNDEFINED→GENERAL transition on binding 29
+
+    // Feature 4.E: NRD tonemapped output (RGBA8 UNORM) at binding 30.
+    // NOT in PT's RT descriptor layout — only in NrdTonemap's compute set.
+    VkImage        m_nrdTonemappedImage     = VK_NULL_HANDLE;
+    VkDeviceMemory m_nrdTonemappedMemory    = VK_NULL_HANDLE;
+    VkImageView    m_nrdTonemappedView      = VK_NULL_HANDLE;
+    bool           m_nrdTonemapFirstFrame   = true;  // gates UNDEFINED→GENERAL on binding 30
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};

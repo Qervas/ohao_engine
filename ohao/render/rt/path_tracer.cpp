@@ -10,6 +10,7 @@
 // by OHAO_NRD_ENABLED because definitions only exist in that mode.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
+#include "render/rt/denoise/nrd_tonemap.hpp"
 
 namespace ohao {
 
@@ -123,6 +124,11 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         std::cerr << "[NRD compose] init FAILED — compose pass will be skipped" << std::endl;
         m_nrdCompositor.reset();
     }
+    m_nrdTonemap = std::make_unique<NrdTonemap>();
+    if (!m_nrdTonemap->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+        std::cerr << "[NRD tonemap] init FAILED — tonemap pass will be skipped" << std::endl;
+        m_nrdTonemap.reset();
+    }
 #else
     (void)instance; (void)graphicsQueueFamilyIndex;
     (void)instanceExtensions; (void)deviceExtensions;
@@ -183,6 +189,10 @@ void PathTracer::destroy() {
     if (m_nrdCompositor) {
         m_nrdCompositor->shutdown();
         m_nrdCompositor.reset();
+    }
+    if (m_nrdTonemap) {
+        m_nrdTonemap->shutdown();
+        m_nrdTonemap.reset();
     }
 #endif
 

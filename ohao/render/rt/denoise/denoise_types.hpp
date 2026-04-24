@@ -15,8 +15,8 @@ enum class DenoiseMode : uint32_t {
     None   = 0,
     OIDN   = 1,
     OptiX  = 2,   // NVIDIA OptiX (requires CUDA + OptiX SDK at build time)
+    NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)
     // future:
-    // NRD    = 3,
     // DLSSRR = 4,
 };
 

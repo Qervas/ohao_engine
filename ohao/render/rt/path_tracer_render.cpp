@@ -13,6 +13,7 @@
 // dispatch methods are OHAO_NRD_ENABLED-guarded inside this TU.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
+#include "render/rt/denoise/nrd_tonemap.hpp"
 
 namespace ohao {
 
@@ -749,6 +750,47 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             // After compose, binding 29 is in GENERAL with SHADER_WRITE access.
             // No further in-frame consumer in 4.D scope — readback transitions
             // GENERAL→TRANSFER_SRC itself when env_demo dumps it.
+        }
+
+        if (m_nrdTonemap) {
+            // Transition binding 29 SHADER_WRITE → SHADER_READ for tonemap's read.
+            VkImageMemoryBarrier tbIn{};
+            tbIn.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            tbIn.srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            tbIn.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+            tbIn.oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbIn.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbIn.image            = m_nrdComposedImage;
+            tbIn.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &tbIn);
+
+            // Transition binding 30: UNDEFINED→GENERAL first frame, GENERAL→GENERAL after.
+            // Per-instance m_nrdTonemapFirstFrame (not a function-local static) — same
+            // rationale as m_nrdComposeFirstFrame in 4.D.
+            VkImageMemoryBarrier tbOut{};
+            tbOut.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            tbOut.srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
+            tbOut.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            tbOut.oldLayout        = m_nrdTonemapFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+            tbOut.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbOut.image            = m_nrdTonemappedImage;
+            tbOut.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd,
+                m_nrdTonemapFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &tbOut);
+            m_nrdTonemapFirstFrame = false;
+
+            // Dispatch
+            NrdTonemapInputs ti {};
+            ti.composedHDR   = m_nrdComposedView;
+            ti.tonemappedOut = m_nrdTonemappedView;
+            m_nrdTonemap->dispatch(cmd, ti);
+
+            // After tonemap, binding 30 is in GENERAL with SHADER_WRITE access.
+            // Downstream readback (readbackNrdTonemapped) transitions GENERAL→TRANSFER_SRC.
         }
     }
 #endif  // OHAO_NRD_ENABLED

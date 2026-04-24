@@ -20,6 +20,14 @@ DenoiseMode parseDenoiseMode(const std::string& s) {
     if (lower == "none")  return DenoiseMode::None;
     if (lower == "oidn")  return DenoiseMode::OIDN;
     if (lower == "optix") return DenoiseMode::OptiX;
+    if (lower == "nrd") {
+#ifdef OHAO_NRD_ENABLED
+        return DenoiseMode::NRD;
+#else
+        std::cerr << "[DenoiseMode] --denoise=nrd requested but OHAO_NRD=OFF at build time — falling back to None\n";
+        return DenoiseMode::None;
+#endif
+    }
     std::cerr << "[Denoise] Unknown mode '" << s
               << "' — falling back to None\n";
     return DenoiseMode::None;
@@ -30,6 +38,7 @@ const char* denoiseModeName(DenoiseMode mode) {
         case DenoiseMode::None:  return "none";
         case DenoiseMode::OIDN:  return "oidn";
         case DenoiseMode::OptiX: return "optix";
+        case DenoiseMode::NRD:   return "nrd";
     }
     return "unknown";
 }

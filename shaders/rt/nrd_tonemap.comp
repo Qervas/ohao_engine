@@ -1,0 +1,31 @@
+#version 460
+
+// Sub-plan 4.E: tonemap compute pass for NRD composed output.
+// Reads binding 29 (composed HDR RGBA32F), writes binding 30 (tonemapped RGBA8).
+// ACES approximation + sRGB gamma — matches raygen's in-shader tonemap so raw-PT
+// and NRD modes produce visually consistent output.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly  image2D inHDR;
+layout(set = 0, binding = 1, rgba8)   uniform writeonly image2D outLDR;
+
+vec3 acesFilm(vec3 x) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 p    = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outLDR);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    vec3 hdr    = imageLoad(inHDR, p).rgb;
+    vec3 mapped = acesFilm(hdr);
+    vec3 srgb   = pow(mapped, vec3(1.0 / 2.2));
+    imageStore(outLDR, p, vec4(srgb, 1.0));
+}
