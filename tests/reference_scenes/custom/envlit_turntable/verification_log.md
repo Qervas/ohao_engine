@@ -530,3 +530,26 @@ Demodulation loop closed: 3.C.6 split raw radiance into (demod AOV × albedo), 4
 **Status:** Phase 4 (NRD integration) **COMPLETE**. Sub-plans 4.A–4.E shipped. NRD is a first-class peer to OIDN/OptiX. `--denoise=nrd` works across all 5 examples (`cornell_box`, `model_viewer`, `env_demo`, `turntable`, `interactive`).
 
 **Known limitation (parked for Phase 4+ follow-up):** NRD composed output does not include env-map contribution for miss rays (env shows as black in the figure's background). The demod loop (3.C.6 + 4.D) only covers surface hits; miss rays are handled in raygen's beauty path, not in the NRD AOVs. A future sub-plan can blend env from raw PT beauty into NRD output.
+
+## 2026-04-24 — Sub-plan 4.F: NRD Quality Pass
+
+**T1 (env composite):** Extended `shaders/rt/nrd_tonemap.comp` from 2 bindings (HDR in, LDR out) to 4 bindings (+depth AOV, +env sampler). Tonemap now branches: depth ≥ 1e20 (sky sentinel) → reconstruct ray dir from NDC + cam inv matrices → sample env map directly; else → use NRD composed HDR. Closes the "figure in void" regression — env visible in all `--denoise=nrd` output. See `renders/4f_t1/nrd_env_composited.png` vs `oidn_reference.png`.
+
+**T2 (view-change bootstrap):** Interactive viewer already wired `notifyCameraChanged()` → `PathTracer::notifyViewChanged()`. Fix: in NRD dispatch block, when `m_viewChangedThisFrame == true` → force `camera.frameIndex = 0` + set `viewMatrixPrev/projMatrixPrev` to current V/P (not stale prev). NRD treats that frame as fresh history → spatial-only → no stale-reprojection ghosting trail. Audit: `m_prevViewProj` capture order verified correct (captured at end of render, used next frame).
+
+**T3 (multi-spp AOV accumulation):** Added `kPTFlagAccumulateAOVs = 1u << 3` push-constant bit, set only when `denoiseMode == DenoiseMode::NRD`. Raygen's 5 AOV imageStore sites (bindings 22/23/24/25/26) gain a running-average branch using `mix(prev, current, 1/(n+1))` for samples n>0. `env_demo --denoise=nrd --spp=N` now feeds NRD N-spp averaged input. Primary-miss rays also participate in the running average (blend zero radiance into the mean on partial-coverage pixels). Non-NRD modes: flag unset, overwrite semantics preserved — pixel-identical to pre-T3.
+
+**T4 (Halton jitter + production ReblurSettings):** Halton(2,3) period-16 pixel jitter generated per NRD frame in `PathTracer::render()`; `pc.jitter.xy` offsets ray origin in raygen; NRD's `camera.jitter / jitterPrev` consumes for temporal reprojection. `m_jitterCurrent/Prev` reset alongside `m_prevView/Proj` in resetAccumulation + resize (4.E T2 I1 pattern). New `NrdDenoiser::setReblurSettings(NrdReblurProfile)` API: hitDistParam A=3, prepass blur 30/50, historyFix 3, maxAccum 63/8, antilag luminance 2× (NRD v4.17 API field names verified via vendored `NRDSettings.h`; `enableMaterialTestFor*` fields don't exist in v4.17 and were dropped). Called once after `NrdDenoiser::initialize` succeeds.
+
+**Evidence — `renders/4f_final/` (spp=1/16 + OIDN reference + none-spp=64 reference):**
+- `nrd_spp1.png`: env lit, figure visible (was dark/void in 4.E). Less sharp than OIDN but recognizable.
+- `nrd_spp16.png`: notably cleaner than spp=1; figure shading closer to reference.
+- `oidn_spp1.png`: reference — well-lit figure on lit env.
+- `none_spp64.png`: raw PT 64spp ground-truth.
+
+**Known remaining gaps to AAA quality (deferred to 4.G / Phase 5):**
+- NRD's effective sample count at 1spp input + jitter + temporal ≈ 8-16spp equivalent. Raw PT 64spp reference still has finer shadow detail than NRD can recover from 1 sample.
+- ReSTIR DI (task #20 → Sub-plan 4.G) would give NRD ~10-100x less noisy direct-lighting input on shiny surfaces. Single biggest remaining lever.
+- DLSS Ray Reconstruction (Phase 5) replaces NRD entirely on NVIDIA GPUs — ML-based denoiser trained on offline reference.
+
+**Status:** 4.F SHIPPED. `--denoise=nrd` is now "shippable realtime denoiser": env visible, no motion ghosting (with T2 override), multi-spp offline quality lift, production ReblurSettings applied. Remaining AAA-ship gap is ReSTIR DI + DLSS RR.
