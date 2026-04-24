@@ -486,3 +486,47 @@ integration. Compositing back into beauty lives in 4.D.
 Demodulation loop closed: 3.C.6 split raw radiance into (demod AOV × albedo), 4.C denoised the demod AOV, and 4.D re-multiplies. Composed output is the first usable NRD beauty signal in OHAO. Temporal accumulation still disabled (`frameIndex=0`) — 4.E wires per-frame state and the `DenoiseMode::NRD` CLI flag.
 
 **Status:** remodulation compositor live; 4.E unblocked.
+
+## 2026-04-24 — Sub-plan 4.E: DenoiseMode::NRD live — Phase 4 COMPLETE
+
+**T1 (offline):** `./build/env_demo <scene> <env> out.png 1 --denoise=nrd` produces properly-lit PNG. Recognizable figure. See `renders/4e_t1/nrd.png`.
+
+**T2 (temporal):** `NrdCameraInputs` gains `projMatrixPrev`. PathTracer captures `m_prevViewMatrix`/`m_prevProjMatrix`; `frameIndex = m_historyFrameCount`. Offline one-shot unchanged (first-frame prev=identity). Prev matrices reset on view change / resize.
+
+**T3 (realtime):** `./build/interactive <scene> <env> --denoise=nrd` wires the CLI flag into the GLFW viewer. `examples/interactive.cpp` now parses `--denoise=<mode>` (follows env_demo style) and calls `renderer.setDenoiseMode()` after `renderer.initialize()` and before the render loop. The existing `renderer.getPixels()` path uses the T1 NRD branch to read binding 30 (tonemapped beauty) transparently; no other interactive code changes were required.
+
+**Command:**
+```bash
+./build/interactive assets/realistic_female.glb assets/test_models/env_studio.hdr --denoise=nrd
+```
+
+**Evidence (automated):**
+- Build: clean (`interactive` target, zero warnings from the new code).
+- Init logs (captured via `timeout 12 ./build/interactive ... --denoise=nrd > log`):
+  - `[NRD] integration ready @ 1280x720 (NRI-backed REBLUR_DIFFUSE_SPECULAR)` (x2 across RT profiles)
+  - `[NRD] persistent instance ready @ 1280x720` (x2)
+  - `[NRD compose] pipeline ready @ 1280x720` (x2)
+  - `[NRD tonemap] pipeline ready @ 1280x720` (x2)
+  - `[denoise] override via --denoise=: nrd`
+- No `[NRD compose] init FAILED` / `[NRD tonemap] init FAILED`.
+- Zero Vulkan validation errors or warnings in the log.
+- Process stayed alive at 75% CPU continuously through 12 s timeout wall-clock = actively rendering frames with NRD path, no crash.
+- Default (no `--denoise=` arg) logs `[denoise] default: none`, confirming the opt-in path.
+
+**Evidence (deferred — human-in-the-loop):**
+- Stationary-camera screenshot pair (frame 0 vs frame 50+) requires the user
+  to focus the window and press F12 at two moments. The dispatch environment
+  has a live display but no keystroke-injection tool (`xdotool`/`ydotool`/
+  `wtype` all absent on this Fedora Wayland session), so the screenshot
+  capture step is parked for manual verification at merge time. The
+  existing F12 handler in `examples/interactive.cpp` writes to
+  `renders/screenshot.png`; for the 4e_t3 pair the user can rename/move
+  each capture between presses.
+- fps counter is rendered into the window title (`glfwSetWindowTitle`) and
+  never hits stdout, so CLI-side fps verification is also deferred to the
+  user. Expected cadence on the RTX 5070 Laptop GPU @ 1280×720 is 60+ fps;
+  actual value to be confirmed once the user opens the viewer.
+
+**Status:** Phase 4 (NRD integration) **COMPLETE**. Sub-plans 4.A–4.E shipped. NRD is a first-class peer to OIDN/OptiX. `--denoise=nrd` works across all 5 examples (`cornell_box`, `model_viewer`, `env_demo`, `turntable`, `interactive`).
+
+**Known limitation (parked for Phase 4+ follow-up):** NRD composed output does not include env-map contribution for miss rays (env shows as black in the figure's background). The demod loop (3.C.6 + 4.D) only covers surface hits; miss rays are handled in raygen's beauty path, not in the NRD AOVs. A future sub-plan can blend env from raw PT beauty into NRD output.

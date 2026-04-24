@@ -26,12 +26,14 @@
 #include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
 
 #include <iostream>
 #include <string>
 #include <chrono>
 #include <cstring>
 #include <algorithm>
+#include <optional>
 #include <vector>
 #include <cmath>
 
@@ -104,10 +106,14 @@ int main(int argc, char* argv[]) {
     std::string envPath = argc > 2 ? argv[2] : "";
     uint32_t W = 1280, H = 720;
     RenderMode rtMode = RenderMode::RTRealtime;
+    std::optional<ohao::DenoiseMode> denoiseOverride;
     for (int i = 3; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
         else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+        else if (arg.rfind("--denoise=", 0) == 0) {
+            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
+        }
     }
 
     // Init GLFW with OpenGL (for pixel display)
@@ -139,6 +145,15 @@ int main(int argc, char* argv[]) {
     // Init Vulkan renderer (offscreen)
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
+
+    if (denoiseOverride.has_value()) {
+        renderer.setDenoiseMode(*denoiseOverride);
+        std::cout << "[denoise] override via --denoise=: "
+                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+    } else {
+        std::cout << "[denoise] default: "
+                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
+    }
 
     // Env map: skip for indoor bedroom scene — interior lights only.
     // Outdoor HDR penetrates wall gaps and overexposes the room.
