@@ -52,6 +52,9 @@ public:
     // Sub-plan 4.C: NRD denoised outputs (RGBA32F)
     virtual VkImage     getOutDiffRadianceAOVImage() const = 0;
     virtual VkImage     getOutSpecRadianceAOVImage() const = 0;
+    // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
+    virtual VkImage     getNrdComposedAOVImage() const = 0;
+    virtual VkImageView getNrdComposedAOV()      const = 0;
 
     virtual void setMaterialData(const std::vector<glm::vec4>& materials) = 0;
     virtual void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) = 0;
@@ -128,6 +131,8 @@ public:
     VkImage     getNormalRoughnessAOVImage() const override { return m_pathTracer.getNormalRoughnessAOVImage(); }
     VkImage     getOutDiffRadianceAOVImage() const override { return m_pathTracer.getOutDiffRadianceAOVImage(); }
     VkImage     getOutSpecRadianceAOVImage() const override { return m_pathTracer.getOutSpecRadianceAOVImage(); }
+    VkImage     getNrdComposedAOVImage() const override { return m_pathTracer.getNrdComposedAOVImage(); }
+    VkImageView getNrdComposedAOV()      const override { return m_pathTracer.getNrdComposedAOV(); }
 
     void setMaterialData(const std::vector<glm::vec4>& materials) override { m_pathTracer.setMaterialData(materials); }
     void setNormalBuffer(VkBuffer normalBuf, VkBuffer indexBuf, uint32_t vertexCount) override {

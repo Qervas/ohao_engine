@@ -36,6 +36,7 @@
 // members in this header would violate ODR (ohao_gpu_vulkan sees a
 // different layout than ohao_renderer).
 namespace ohao { class NrdDenoiser; }
+namespace ohao { class NrdCompositor; }  // NEW 4.D
 
 namespace ohao {
 
@@ -143,6 +144,8 @@ public:
     VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
     VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
     VkImage     getOutSpecRadianceAOVImage() const { return m_outSpecRadianceImage; }
+    VkImageView getNrdComposedAOV()      const { return m_nrdComposedView; }
+    VkImage     getNrdComposedAOVImage() const { return m_nrdComposedImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -217,6 +220,7 @@ private:
     // NRD is off, this pointer stays null and unique_ptr's default dtor is a
     // no-op on a null held pointer (no need for complete type).
     std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
+    std::unique_ptr<NrdCompositor> m_nrdCompositor;  // NEW 4.D
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
@@ -320,6 +324,14 @@ private:
     VkImage        m_outSpecRadianceImage  = VK_NULL_HANDLE;
     VkDeviceMemory m_outSpecRadianceMemory = VK_NULL_HANDLE;
     VkImageView    m_outSpecRadianceView   = VK_NULL_HANDLE;
+
+    // Feature 4.D: NRD composed HDR output (RGBA32F) at binding 29.
+    // NOT in PathTracer's RT descriptor layout — only in NrdCompositor's
+    // compute descriptor set.
+    VkImage        m_nrdComposedImage     = VK_NULL_HANDLE;
+    VkDeviceMemory m_nrdComposedMemory    = VK_NULL_HANDLE;
+    VkImageView    m_nrdComposedView      = VK_NULL_HANDLE;
+    bool           m_nrdComposeFirstFrame = true;  // gates UNDEFINED→GENERAL transition on binding 29
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};

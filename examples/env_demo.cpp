@@ -44,6 +44,7 @@ int main(int argc, char* argv[]) {
     std::string dumpSpecularPath;
     std::string dumpNrdDiffusePath;
     std::string dumpNrdSpecularPath;
+    std::string dumpNrdComposedPath;
     std::string dumpDiffAlbedoPath;
     std::string dumpSpecColorPath;
     std::string dumpHitDistDiffusePath;
@@ -69,6 +70,8 @@ int main(int argc, char* argv[]) {
             dumpNrdDiffusePath = arg.substr(19);
         } else if (arg.rfind("--dump-nrd-specular=", 0) == 0) {
             dumpNrdSpecularPath = arg.substr(20);
+        } else if (arg.rfind("--dump-nrd-composed=", 0) == 0) {
+            dumpNrdComposedPath = arg.substr(20);
         } else if (arg.rfind("--dump-diff-albedo=", 0) == 0) {
             dumpDiffAlbedoPath = arg.substr(19);
         } else if (arg.rfind("--dump-spec-color=", 0) == 0) {
@@ -367,6 +370,16 @@ int main(int argc, char* argv[]) {
             std::cerr << "[NRD specular dump] readback failed\n";
         } else {
             dumpRGBA32FStream(dumpNrdSpecularPath, data, sw, sh);
+        }
+    }
+
+    if (!dumpNrdComposedPath.empty()) {
+        std::vector<float> data;
+        uint32_t w = 0, h = 0;
+        if (!renderer.readbackNrdComposed(data, w, h)) {
+            std::cerr << "[NRD composed dump] readback failed\n";
+        } else {
+            dumpRGBA32FStream(dumpNrdComposedPath, data, w, h);
         }
     }
 

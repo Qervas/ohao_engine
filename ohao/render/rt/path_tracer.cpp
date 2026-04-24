@@ -12,6 +12,7 @@
 // instantiation to compile. Method calls on NrdDenoiser remain guarded
 // by OHAO_NRD_ENABLED because definitions only exist in that mode.
 #include "render/rt/denoise/nrd_denoise.hpp"
+#include "render/rt/denoise/nrd_compose.hpp"
 
 namespace ohao {
 
@@ -144,6 +145,11 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
             std::cerr << "[NRD] persistent instance init FAILED — disabling NRD path" << std::endl;
         }
         m_nrdDenoiser.reset();
+    }
+    m_nrdCompositor = std::make_unique<NrdCompositor>();
+    if (!m_nrdCompositor->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+        std::cerr << "[NRD compose] init FAILED — compose pass will be skipped" << std::endl;
+        m_nrdCompositor.reset();
     }
 #else
     (void)instance; (void)graphicsQueueFamilyIndex;
@@ -803,6 +809,46 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_outSpecRadianceView) != VK_SUCCESS) return false;
     }
 
+    // ---- Sub-plan 4.D: NRD composed HDR output (RGBA32F) at binding 29 ----
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        imageInfo.format        = VK_FORMAT_R32G32B32A32_SFLOAT;
+        imageInfo.extent        = {m_width, m_height, 1};
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = 1;
+        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_nrdComposedImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_nrdComposedImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_nrdComposedMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_nrdComposedImage, m_nrdComposedMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image                       = m_nrdComposedImage;
+        viewInfo.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format                      = VK_FORMAT_R32G32B32A32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_nrdComposedView) != VK_SUCCESS) return false;
+    }
+
     return true;
 }
 
@@ -862,6 +908,10 @@ void PathTracer::destroyImages() {
     if (m_outSpecRadianceView)    { vkDestroyImageView(m_device, m_outSpecRadianceView, nullptr);   m_outSpecRadianceView = VK_NULL_HANDLE; }
     if (m_outSpecRadianceImage)   { vkDestroyImage(m_device, m_outSpecRadianceImage, nullptr);      m_outSpecRadianceImage = VK_NULL_HANDLE; }
     if (m_outSpecRadianceMemory)  { vkFreeMemory(m_device, m_outSpecRadianceMemory, nullptr);       m_outSpecRadianceMemory = VK_NULL_HANDLE; }
+
+    if (m_nrdComposedView)   { vkDestroyImageView(m_device, m_nrdComposedView, nullptr);   m_nrdComposedView   = VK_NULL_HANDLE; }
+    if (m_nrdComposedImage)  { vkDestroyImage(m_device, m_nrdComposedImage, nullptr);      m_nrdComposedImage  = VK_NULL_HANDLE; }
+    if (m_nrdComposedMemory) { vkFreeMemory(m_device, m_nrdComposedMemory, nullptr);       m_nrdComposedMemory = VK_NULL_HANDLE; }
 
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_surfaceHistoryViews[i]) { vkDestroyImageView(m_device, m_surfaceHistoryViews[i], nullptr); m_surfaceHistoryViews[i] = VK_NULL_HANDLE; }
@@ -2089,6 +2139,63 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         m_nrdDenoiser->setInputResources(res);
 
         m_nrdDenoiser->denoise(cmd);
+
+        if (m_nrdCompositor) {
+            // Transition inputs for compose: bindings 24, 25, 27, 28.
+            // NRD's restoreInitialState=true left 22/23/26 in GENERAL (and also
+            // returned 27/28 to GENERAL implicitly via its barrier graph). Emit
+            // a blanket SHADER_WRITE→SHADER_READ barrier so compose sees the
+            // NRD-produced + demod-produced content.
+            VkImageMemoryBarrier cbIn[4] = {};
+            VkImage cbInImages[4] = {
+                m_diffAlbedoImage,       // binding 24
+                m_specColorImage,        // binding 25
+                m_outDiffRadianceImage,  // binding 27
+                m_outSpecRadianceImage,  // binding 28
+            };
+            for (int i = 0; i < 4; ++i) {
+                cbIn[i].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                cbIn[i].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+                cbIn[i].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+                cbIn[i].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                cbIn[i].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                cbIn[i].image            = cbInImages[i];
+                cbIn[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            }
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 4, cbIn);
+
+            // Transition binding 29: UNDEFINED→GENERAL on first dispatch, GENERAL→GENERAL after.
+            // Using m_nrdComposeFirstFrame (per-instance member, NOT a function-local static) so
+            // offline + realtime PT profiles each get their own first-frame counter.
+            VkImageMemoryBarrier cbOut{};
+            cbOut.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            cbOut.srcAccessMask    = m_nrdComposeFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
+            cbOut.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            cbOut.oldLayout        = m_nrdComposeFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+            cbOut.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            cbOut.image            = m_nrdComposedImage;
+            cbOut.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd,
+                m_nrdComposeFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &cbOut);
+            m_nrdComposeFirstFrame = false;
+
+            // Dispatch
+            NrdComposeInputs ci {};
+            ci.diffRadiance = m_outDiffRadianceView;
+            ci.specRadiance = m_outSpecRadianceView;
+            ci.diffAlbedo   = m_diffAlbedoView;
+            ci.specColor    = m_specColorView;
+            ci.composedOut  = m_nrdComposedView;
+            m_nrdCompositor->dispatch(cmd, ci);
+
+            // After compose, binding 29 is in GENERAL with SHADER_WRITE access.
+            // No further in-frame consumer in 4.D scope — readback transitions
+            // GENERAL→TRANSFER_SRC itself when env_demo dumps it.
+        }
     }
 #endif  // OHAO_NRD_ENABLED
 
@@ -2189,6 +2296,10 @@ void PathTracer::destroy() {
     if (m_nrdDenoiser) {
         m_nrdDenoiser->shutdown();
         m_nrdDenoiser.reset();
+    }
+    if (m_nrdCompositor) {
+        m_nrdCompositor->shutdown();
+        m_nrdCompositor.reset();
     }
 #endif
 

@@ -461,3 +461,28 @@ path wiring + multi-frame accumulation comes with 4.E's CLI / realtime
 integration. Compositing back into beauty lives in 4.D.
 
 **Status:** dispatch path proven; 4.D (remodulation compositor) unblocked.
+
+## 2026-04-24 — Sub-plan 4.D: Remodulation compositor
+
+**Command:**
+```bash
+./build/env_demo assets/realistic_female.glb assets/test_models/env_studio.hdr /tmp/beauty_4d.png 1 \
+    --dump-diffuse=/tmp/raw_diff_4d.png --dump-nrd-diffuse=/tmp/nrd_diff_4d.png \
+    --dump-specular=/tmp/raw_spec_4d.png --dump-nrd-specular=/tmp/nrd_spec_4d.png \
+    --dump-diff-albedo=/tmp/albedo_4d.png --dump-spec-color=/tmp/f0_4d.png \
+    --dump-nrd-composed=/tmp/composed_4d.png
+```
+
+**Evidence:**
+- `[NRD compose] pipeline ready @ 1920x1080` logs once per PT profile (offline + realtime = 2 total).
+- Binding 29 (RGBA32F) allocated; UNDEFINED→GENERAL barrier fires first frame only (gated by `m_nrdComposeFirstFrame`).
+- Composed HDR PNG shows scene with recognizable object colors — albedo re-applied to denoised radiance; skin tones, shirt, shorts, gold shoes all visible.
+- Composed PNG dramatically cleaner than raw 1spp diffuse (raw shows scattered noise pixels; composed shows coherent silhouette + materials).
+- Overall palette + shape plausible vs. 256-spp OIDN reference, modulo NRD's spatial-filter blur and lack of tonemapping on the raw HDR dump.
+- Beauty PNG (binding 2, `out.png`) structurally identical to pre-4.D baseline; file-size delta < 0.02 %. Bit-for-bit PNG hash is not stable across runs in this codebase (pre-existing non-determinism at spp=1 — confirmed by three back-to-back runs of the same binary producing three different hashes), so the invariant is tracked via file-size + visual equivalence rather than sha256.
+- Zero new Vulkan validation errors.
+
+**Observation:**
+Demodulation loop closed: 3.C.6 split raw radiance into (demod AOV × albedo), 4.C denoised the demod AOV, and 4.D re-multiplies. Composed output is the first usable NRD beauty signal in OHAO. Temporal accumulation still disabled (`frameIndex=0`) — 4.E wires per-frame state and the `DenoiseMode::NRD` CLI flag.
+
+**Status:** remodulation compositor live; 4.E unblocked.

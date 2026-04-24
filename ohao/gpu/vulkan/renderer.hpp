@@ -170,6 +170,8 @@ public:
     // Sub-plan 4.C: NRD denoised outputs (RGBA32F)
     VkImage     getOutDiffRadianceAOVImage() const;
     VkImage     getOutSpecRadianceAOVImage() const;
+    // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
+    VkImage     getNrdComposedAOVImage() const;
 
     // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
     // One 2-half pair per pixel; total = 2 * width * height values.
@@ -191,6 +193,8 @@ public:
     // Sub-plan 4.C: NRD denoised output readback (RGBA32F)
     bool readbackDenoisedDiffuse(std::vector<float>& data, uint32_t& width, uint32_t& height);
     bool readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height);
+    // Sub-plan 4.D: NRD composed HDR output readback (RGBA32F)
+    bool readbackNrdComposed(std::vector<float>& data, uint32_t& width, uint32_t& height);
 
     // Debug: readback RGBA8 diffuse albedo AOV (4 bytes per pixel).
     bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
