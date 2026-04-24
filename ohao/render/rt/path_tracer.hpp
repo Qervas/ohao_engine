@@ -392,6 +392,13 @@ private:
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 
+    // Sub-plan 4.E T2: previous-frame view + proj matrices for NRD's temporal
+    // reprojection. Captured at end of each render() call; consumed by the
+    // NEXT frame's NrdCameraInputs. Distinct from m_prevViewProj (3.A motion
+    // vectors use the combined VP matrix; NRD wants V and P separately).
+    glm::mat4 m_prevViewMatrix{1.0f};
+    glm::mat4 m_prevProjMatrix{1.0f};
+
     // Function pointers (loaded dynamically for RT extensions)
     PFN_vkCreateRayTracingPipelinesKHR vkCreateRayTracingPipelinesKHR = nullptr;
     PFN_vkGetRayTracingShaderGroupHandlesKHR vkGetRayTracingShaderGroupHandlesKHR = nullptr;

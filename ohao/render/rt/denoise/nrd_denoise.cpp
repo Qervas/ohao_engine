@@ -182,9 +182,10 @@ bool NrdDenoiser::setCommonSettings(const NrdCameraInputs& in) {
     std::memcpy(s.viewToClipMatrix,      in.projMatrix.data(),         sizeof(float) * 16);
     std::memcpy(s.worldToViewMatrix,     in.viewMatrix.data(),         sizeof(float) * 16);
     std::memcpy(s.worldToViewMatrixPrev, in.viewMatrixPrev.data(),     sizeof(float) * 16);
-    // Copy prior clip→view to stay consistent with worldToViewMatrixPrev.
-    // For T3b we don't have a real previous proj, use current (first-frame: no history).
-    std::memcpy(s.viewToClipMatrixPrev,  in.projMatrix.data(),         sizeof(float) * 16);
+    // 4.E T2: use explicit prev proj instead of mirroring current. NRD v4.17
+    // CommonSettings::viewToClipMatrixPrev verified present in NRDSettings.h.
+    // On the first frame callers pass identity here (no history yet).
+    std::memcpy(s.viewToClipMatrixPrev,  in.projMatrixPrev.data(),     sizeof(float) * 16);
     std::memcpy(s.motionVectorScale,     in.motionVectorScale.data(),  sizeof(float) * 3);
     std::memcpy(s.cameraJitter,          in.jitter.data(),             sizeof(float) * 2);
     std::memcpy(s.cameraJitterPrev,      in.jitterPrev.data(),         sizeof(float) * 2);

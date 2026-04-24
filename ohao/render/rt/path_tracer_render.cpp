@@ -668,15 +668,22 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         NrdCameraInputs camera {};
         const glm::mat4 viewM = glm::inverse(pc.invView);
         const glm::mat4 projM = glm::inverse(pc.invProj);
-        std::memcpy(camera.viewMatrix.data(),     glm::value_ptr(viewM), sizeof(float) * 16);
-        std::memcpy(camera.viewMatrixPrev.data(), glm::value_ptr(viewM), sizeof(float) * 16); // first frame: no history
-        std::memcpy(camera.projMatrix.data(),     glm::value_ptr(projM), sizeof(float) * 16);
+        std::memcpy(camera.viewMatrix.data(),     glm::value_ptr(viewM),               sizeof(float) * 16);
+        std::memcpy(camera.viewMatrixPrev.data(), glm::value_ptr(m_prevViewMatrix),    sizeof(float) * 16);
+        std::memcpy(camera.projMatrix.data(),     glm::value_ptr(projM),               sizeof(float) * 16);
+        std::memcpy(camera.projMatrixPrev.data(), glm::value_ptr(m_prevProjMatrix),    sizeof(float) * 16);
         camera.motionVectorScale = {1.0f, 1.0f, 0.0f};
         camera.jitter     = {0.0f, 0.0f};
         camera.jitterPrev = {0.0f, 0.0f};
-        camera.frameIndex = 0;  // T3b: single-shot spatial-only. Temporal wiring lives in 4.E.
+        camera.frameIndex = m_historyFrameCount;  // 4.E T2: real per-frame counter (was hard-coded 0)
         camera.isMotionVectorInWorldSpace = false;
         m_nrdDenoiser->setCommonSettings(camera);
+
+        // 4.E T2: capture current frame's V/P for NEXT frame's NRD input.
+        // On the first frame m_prev*Matrix are identity, so NRD sees "no
+        // history" (spatial-only) — matches pre-T2 behavior exactly.
+        m_prevViewMatrix = viewM;
+        m_prevProjMatrix = projM;
 
         NrdDenoiser::NrdInputResources res {};
         res.motionVector           = {m_motionVectorImage,     VK_FORMAT_R16G16_SFLOAT};

@@ -13,6 +13,7 @@ struct NrdCameraInputs {
     std::array<float, 16> viewMatrix      {};
     std::array<float, 16> viewMatrixPrev  {};
     std::array<float, 16> projMatrix      {};
+    std::array<float, 16> projMatrixPrev  {};   // 4.E T2 — consumes 4.C I5 follow-up
     std::array<float, 2>  jitter          {};
     std::array<float, 2>  jitterPrev      {};
     std::array<float, 3>  motionVectorScale {1.0f, 1.0f, 0.0f};
