@@ -148,10 +148,10 @@ int main(int argc, char* argv[]) {
 
     if (denoiseOverride.has_value()) {
         renderer.setDenoiseMode(*denoiseOverride);
-        std::cout << "[denoise] override via --denoise=: "
+        std::cout << "Denoise mode (CLI override): "
                   << ohao::denoiseModeName(*denoiseOverride) << std::endl;
     } else {
-        std::cout << "[denoise] default: "
+        std::cout << "Denoise mode (preset): "
                   << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
 
