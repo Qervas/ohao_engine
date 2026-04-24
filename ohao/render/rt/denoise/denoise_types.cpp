@@ -24,7 +24,7 @@ DenoiseMode parseDenoiseMode(const std::string& s) {
 #ifdef OHAO_NRD_ENABLED
         return DenoiseMode::NRD;
 #else
-        std::cerr << "[DenoiseMode] --denoise=nrd requested but OHAO_NRD=OFF at build time — falling back to None\n";
+        std::cerr << "[Denoise] --denoise=nrd requested but OHAO_NRD=OFF at build time — falling back to None\n";
         return DenoiseMode::None;
 #endif
     }

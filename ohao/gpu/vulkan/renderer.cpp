@@ -675,6 +675,7 @@ const uint8_t* VulkanRenderer::getPixels() const {
     if (m_denoiseMode == DenoiseMode::NRD) {
         std::vector<uint8_t> rgba;
         uint32_t rw = 0, rh = 0;
+        (void)rw; (void)rh;  // readback fills them; size is implicit in the buffer.
         auto* self = const_cast<VulkanRenderer*>(this);
         if (!self->readbackNrdTonemapped(rgba, rw, rh)) {
             std::cerr << "[Denoise] NRD readback failed — returning noisy pixels\n";

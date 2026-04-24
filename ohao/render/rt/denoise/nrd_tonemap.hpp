@@ -38,8 +38,8 @@ public:
     /// Record a tonemap dispatch onto `cmd`. Preconditions:
     ///   - initialize() succeeded
     ///   - Both image views valid
-    ///   - composedHDR in SHADER_READ_ONLY_OPTIMAL (or GENERAL)
-    ///   - tonemappedOut in GENERAL
+    ///   - composedHDR in VK_IMAGE_LAYOUT_GENERAL (storage-image access)
+    ///   - tonemappedOut in VK_IMAGE_LAYOUT_GENERAL
     /// Writes ACES-tonemapped sRGB to tonemappedOut.
     void dispatch(VkCommandBuffer cmd, const NrdTonemapInputs& inputs);
 
