@@ -189,6 +189,19 @@ public:
         m_envCDFIntegral         = integral;
     }
 
+    // Sub-plan 4.F T1: expose HDR env map view + sampler to the NRD tonemap
+    // compositor so it can composite the lit sky for miss-ray pixels. The
+    // renderer owns the view/sampler lifetime; PathTracer only holds borrowed
+    // handles. Pass {NULL, NULL} to indicate "no env loaded" — tonemap will
+    // set envIntensity=0 and sky pixels stay black (pre-4.F behavior).
+    void setEnvMapResource(VkImageView view, VkSampler sampler) {
+        m_envMapView    = view;
+        m_envMapSampler = sampler;
+    }
+    VkImageView getEnvMapView()    const { return m_envMapView; }
+    VkSampler   getEnvMapSampler() const { return m_envMapSampler; }
+    float       getEnvCDFIntegral() const { return m_envCDFIntegral; }
+
     // Reset accumulation — call when camera moves so the buffer restarts
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
@@ -246,6 +259,11 @@ private:
     uint32_t m_envCDFWidth   = 0;
     uint32_t m_envCDFHeight  = 0;
     float    m_envCDFIntegral = 0.0f;
+
+    // Sub-plan 4.F T1: HDR env map for NRD tonemap's sky composite. Borrowed —
+    // the renderer owns the VkImage/VkImageView lifetime.
+    VkImageView m_envMapView    = VK_NULL_HANDLE;
+    VkSampler   m_envMapSampler = VK_NULL_HANDLE;
 
     // Bindless textures — individual sampler2D entries
     std::vector<VkImageView> m_bindlessImageViews;

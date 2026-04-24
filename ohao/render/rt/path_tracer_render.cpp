@@ -760,18 +760,29 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         }
 
         if (m_nrdTonemap) {
-            // Transition binding 29 SHADER_WRITE → SHADER_READ for tonemap's read.
-            VkImageMemoryBarrier tbIn{};
-            tbIn.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            tbIn.srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            tbIn.dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
-            tbIn.oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbIn.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbIn.image            = m_nrdComposedImage;
-            tbIn.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            // Sub-plan 4.F T1: tonemap now reads bindings 29 (composed HDR, written
+            // by compose's COMPUTE dispatch) + 20 (depth AOV, written by raygen's
+            // RT dispatch). Publish both writes. COMPUTE→COMPUTE for 29; the
+            // earlier rayToCompute memory barrier already handled RT→COMPUTE for
+            // 20, but we include it here for explicitness + defensive layering.
+            VkImageMemoryBarrier tbIn[2] = {};
+            tbIn[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            tbIn[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            tbIn[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+            tbIn[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbIn[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbIn[0].image            = m_nrdComposedImage;
+            tbIn[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            tbIn[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            tbIn[1].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            tbIn[1].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+            tbIn[1].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbIn[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            tbIn[1].image            = m_depthAOVImage;
+            tbIn[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vkCmdPipelineBarrier(cmd,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 1, &tbIn);
+                0, 0, nullptr, 0, nullptr, 2, tbIn);
 
             // Transition binding 30: UNDEFINED→GENERAL first frame, GENERAL→GENERAL after.
             // Per-instance m_nrdTonemapFirstFrame (not a function-local static) — same
@@ -791,9 +802,21 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             m_nrdTonemapFirstFrame = false;
 
             // Dispatch
+            // Sub-plan 4.F T1: populate depth AOV + env resource + camera inv
+            // matrices so the tonemap shader composites the lit sky for miss
+            // rays. When no env is loaded (m_envCDFIntegral == 0), envIntensity
+            // stays at 0 and sky pixels produce the pre-4.F black output.
             NrdTonemapInputs ti {};
             ti.composedHDR   = m_nrdComposedView;
             ti.tonemappedOut = m_nrdTonemappedView;
+            ti.depthAOV      = m_depthAOVView;
+            ti.envMapView    = m_envMapView;
+            ti.envMapSampler = m_envMapSampler;
+            std::memcpy(ti.invView.data(), glm::value_ptr(pc.invView), sizeof(float) * 16);
+            std::memcpy(ti.invProj.data(), glm::value_ptr(pc.invProj), sizeof(float) * 16);
+            ti.extent[0]     = static_cast<float>(m_width);
+            ti.extent[1]     = static_cast<float>(m_height);
+            ti.envIntensity  = (m_envCDFIntegral > 0.0f && m_envMapView) ? 1.0f : 0.0f;
             m_nrdTonemap->dispatch(cmd, ti);
 
             // After tonemap, binding 30 is in GENERAL with SHADER_WRITE access.

@@ -446,6 +446,12 @@ void VulkanRenderer::uploadLightBuffer() {
                     memcpy(static_cast<uint8_t*>(lm) + 4, &envTexIdx, sizeof(uint32_t));
                     vkUnmapMemory(m_device, m_rtLightMemory);
 
+                    // Sub-plan 4.F T1: expose env view+sampler to path tracers
+                    // for the NRD tonemap's sky composite branch.
+                    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                        renderer.setEnvMapResource(envView, m_rtTextureSampler);
+                    });
+
                     std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
                               << " (bindless idx=" << envTexIdx << ")" << std::endl;
                 }

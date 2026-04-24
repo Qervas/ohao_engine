@@ -73,6 +73,10 @@ public:
     virtual void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
                                    uint32_t envWidth, uint32_t envHeight, float integral) = 0;
 
+    // Sub-plan 4.F T1: wire HDR env map resource through to PathTracer for
+    // NRD tonemap's sky composite. Pass {NULL, NULL} to signal no env loaded.
+    virtual void setEnvMapResource(VkImageView view, VkSampler sampler) = 0;
+
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
     virtual void notifyViewChanged() = 0;
     virtual void resetAccumulation() = 0;
@@ -161,6 +165,10 @@ public:
     void setEnvCDFBuffers(VkBuffer marginal, VkBuffer conditional,
                           uint32_t envWidth, uint32_t envHeight, float integral) override {
         m_pathTracer.setEnvCDFBuffers(marginal, conditional, envWidth, envHeight, integral);
+    }
+
+    void setEnvMapResource(VkImageView view, VkSampler sampler) override {
+        m_pathTracer.setEnvMapResource(view, sampler);
     }
 
     void setRenderSettings(const RTRenderSettings& settings) override {
