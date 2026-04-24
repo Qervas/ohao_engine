@@ -89,9 +89,11 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     }
 
     // 3. Load SPV and create shader module.
-    auto spv = readShaderSpv("nrd_compose.comp.spv");
+    // OHAO's shader CMake flattens directory paths with underscores:
+    // shaders/rt/nrd_compose.comp → build/shaders/rt_nrd_compose.comp.spv.
+    auto spv = readShaderSpv("rt_nrd_compose.comp.spv");
     if (spv.empty()) {
-        std::cerr << "[NRD compose] failed to load nrd_compose.comp.spv\n";
+        std::cerr << "[NRD compose] failed to load rt_nrd_compose.comp.spv\n";
         return false;
     }
     VkShaderModuleCreateInfo smInfo{};
