@@ -73,8 +73,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     layoutInfo.pBindings    = bindings.data();
-    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_impl->setLayout) != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateDescriptorSetLayout failed\n";
+    if (VkResult r = vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_impl->setLayout); r != VK_SUCCESS) {
+        std::cerr << "[NRD compose] vkCreateDescriptorSetLayout failed: " << int(r) << std::endl;
         return false;
     }
 
@@ -83,8 +83,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     plInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plInfo.setLayoutCount = 1;
     plInfo.pSetLayouts    = &m_impl->setLayout;
-    if (vkCreatePipelineLayout(device, &plInfo, nullptr, &m_impl->pipelineLayout) != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreatePipelineLayout failed\n";
+    if (VkResult r = vkCreatePipelineLayout(device, &plInfo, nullptr, &m_impl->pipelineLayout); r != VK_SUCCESS) {
+        std::cerr << "[NRD compose] vkCreatePipelineLayout failed: " << int(r) << std::endl;
         return false;
     }
 
@@ -101,8 +101,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     smInfo.codeSize = spv.size();
     smInfo.pCode    = reinterpret_cast<const uint32_t*>(spv.data());
     VkShaderModule shaderModule = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(device, &smInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateShaderModule failed\n";
+    if (VkResult r = vkCreateShaderModule(device, &smInfo, nullptr, &shaderModule); r != VK_SUCCESS) {
+        std::cerr << "[NRD compose] vkCreateShaderModule failed: " << int(r) << std::endl;
         return false;
     }
 
@@ -135,8 +135,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes    = &poolSize;
     poolInfo.maxSets       = 1;
-    if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_impl->descriptorPool) != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkCreateDescriptorPool failed\n";
+    if (VkResult r = vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_impl->descriptorPool); r != VK_SUCCESS) {
+        std::cerr << "[NRD compose] vkCreateDescriptorPool failed: " << int(r) << std::endl;
         return false;
     }
 
@@ -145,8 +145,8 @@ bool NrdCompositor::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
     dsai.descriptorPool     = m_impl->descriptorPool;
     dsai.descriptorSetCount = 1;
     dsai.pSetLayouts        = &m_impl->setLayout;
-    if (vkAllocateDescriptorSets(device, &dsai, &m_impl->descriptorSet) != VK_SUCCESS) {
-        std::cerr << "[NRD compose] vkAllocateDescriptorSets failed\n";
+    if (VkResult r = vkAllocateDescriptorSets(device, &dsai, &m_impl->descriptorSet); r != VK_SUCCESS) {
+        std::cerr << "[NRD compose] vkAllocateDescriptorSets failed: " << int(r) << std::endl;
         return false;
     }
 
