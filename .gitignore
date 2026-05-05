@@ -56,6 +56,14 @@ external/imgui
 # Claude context (local only)
 .claude/
 
+# Skill / plugin install artifacts
+.agents/
+.codex
+skills-lock.json
+
+# Local test assets (user-downloaded models)
+assets/test_pbr/
+
 # Debug markdown files (temporary)
 *_FIXES.md
 *_FIX.md
@@ -66,8 +74,12 @@ __pycache__/
 # Playground (quick throwaway experiments, never committed)
 playground/
 
+# Variance-tool diff artifacts
+*.diff.png
+
 # Misc
 imgui.ini
 Downloads/
 ohao_engine
 renders/
+CLAUDE.md
