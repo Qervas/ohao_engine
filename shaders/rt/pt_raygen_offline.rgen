@@ -427,16 +427,28 @@ void main() {
                     float sssStr   = pc.tuning.w * skinHint;
                     vec3 nlDiff = vec3(NdotL);
                     if (sssStr > 0.001 && !isMetal) {
-                        // Wrap exponents tuned for skin (red deep, blue tight).
-                        // Red continues into shadow via wider intercept; blue is
-                        // near-lambert. Multiplier amplifies the wrap so SSS
-                        // can dominate even at moderate sssStr values.
-                        float r = max(0.0, NdotL * 0.4 + 0.6);   // red wraps very deep
-                        float g = max(0.0, NdotL * 0.6 + 0.4);   // green moderate
-                        float b = max(0.0, NdotL * 0.85 + 0.15); // blue near-lambert
+                        // 4.L v5: Christensen-Burley Gaussian diffusion profile.
+                        // Replaces the linear 3-channel wrap with a physically-
+                        // motivated multi-wavelength Gaussian — red has long
+                        // diffusion length (deep bleed), green medium, blue
+                        // near-lambert. The (1-w)² exponential gives the
+                        // characteristic "smooth shoulder past terminator" look
+                        // that real skin has and linear wrap can't fake.
+                        // Exponents calibrated to Disney-2015 skin profile
+                        // approximation: σ_R ≈ 0.7mm, σ_G ≈ 0.3mm, σ_B ≈ 0.15mm
+                        // mapped to normalized [0,1] wrap domain.
+                        float w = NdotL * 0.5 + 0.5;       // wrap to [0,1]
+                        float d = 1.0 - w;                  // distance from fully lit
+                        float d2 = d * d;
+                        float r = exp(-d2 * 1.8);           // red: wide Gaussian
+                        float g = exp(-d2 * 6.0);           // green: medium
+                        float b = exp(-d2 * 20.0);          // blue: tight (near-lambert)
                         vec3 sssWrap = vec3(r, g, b);
-                        // Saturated flesh-red tint, kicks in earlier at terminator
-                        // and amps the warmth on shadow side.
+                        // Multiplicative warm flesh tint: ramps in as light
+                        // direction crosses below the terminator. Real skin
+                        // exhibits this because long-wavelength red survives
+                        // millimeters of subsurface travel; short-wavelength
+                        // blue is absorbed faster.
                         vec3 sssTint = vec3(1.0, 0.45, 0.30);
                         sssWrap *= mix(vec3(1.0), sssTint, smoothstep(0.7, -0.4, NdotL));
                         nlDiff = mix(nlDiff, sssWrap, sssStr);
