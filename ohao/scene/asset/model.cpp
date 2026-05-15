@@ -276,6 +276,61 @@ bool Model::loadFromOBJ(const std::string& filename) {
                     std::cout << "  OBJ Material " << idx << " (" << name << "): color=("
                               << mat.diffuse.r << "," << mat.diffuse.g << "," << mat.diffuse.b << ")" << std::endl;
                 }
+
+                // 4.L v4: auto-discover normal + gloss maps next to the diff
+                // map. Convention used by 3ds Max / Photoshop exports:
+                //   {name}_norm_*.{jpg,png}   → tangent-space normal map
+                //   {name}_gloss_*.{jpg,png}  → grayscale glossiness (1-rough)
+                // Roughness packed into G channel of roughMetalTexture, R=AO=1,
+                // B=metal=0 so the existing closesthit sampler (rm.g) works.
+                int normalIdx = -1;
+                int roughMetalIdx = -1;
+                if (fs::exists(texDir)) {
+                    for (const auto& entry : fs::directory_iterator(texDir)) {
+                        std::string fname = entry.path().filename().string();
+                        // Normal map
+                        if (normalIdx < 0 && fname.find(name + "_norm_") != std::string::npos) {
+                            int w, h, ch;
+                            stbi_uc* pixels = stbi_load(entry.path().string().c_str(), &w, &h, &ch, STBI_rgb_alpha);
+                            if (pixels) {
+                                TextureData td; td.width = w; td.height = h;
+                                td.materialIndex = static_cast<int>(idx);
+                                td.pixels.assign(pixels, pixels + w * h * 4);
+                                stbi_image_free(pixels);
+                                normalIdx = static_cast<int>(normalTextures.size());
+                                normalTextures.push_back(std::move(td));
+                                std::cout << "  OBJ Material " << idx << " (" << name
+                                          << "): normal " << w << "x" << h << " from " << fname << std::endl;
+                            }
+                        }
+                        // Gloss map → repack as (1, 1-gloss, 0, 255) into roughMetal slot
+                        if (roughMetalIdx < 0 && fname.find(name + "_gloss_") != std::string::npos) {
+                            int w, h, ch;
+                            stbi_uc* pixels = stbi_load(entry.path().string().c_str(), &w, &h, &ch, STBI_rgb_alpha);
+                            if (pixels) {
+                                std::vector<uint8_t> packed(w * h * 4);
+                                for (int i = 0; i < w * h; i++) {
+                                    uint8_t gloss = pixels[i * 4 + 0];  // grayscale → R channel
+                                    packed[i * 4 + 0] = 255;             // AO
+                                    packed[i * 4 + 1] = 255 - gloss;     // roughness = 1 - gloss
+                                    packed[i * 4 + 2] = 0;               // metallic
+                                    packed[i * 4 + 3] = 255;
+                                }
+                                stbi_image_free(pixels);
+                                TextureData td; td.width = w; td.height = h;
+                                td.materialIndex = static_cast<int>(idx);
+                                td.pixels = std::move(packed);
+                                roughMetalIdx = static_cast<int>(roughMetalTextures.size());
+                                roughMetalTextures.push_back(std::move(td));
+                                std::cout << "  OBJ Material " << idx << " (" << name
+                                          << "): gloss→rough " << w << "x" << h << " from " << fname << std::endl;
+                            }
+                        }
+                    }
+                }
+                materialNormalTexIndex.push_back(normalIdx);
+                materialRoughMetalTexIndex.push_back(roughMetalIdx);
+                materialEmissiveTexIndex.push_back(-1);  // no emissive auto-discovery for OBJ yet
             }
             // Per-triangle material index
             materialPerTriangle.resize(materialAssignments.size());
