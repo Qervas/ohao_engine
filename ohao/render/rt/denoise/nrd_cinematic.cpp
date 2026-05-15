@@ -83,6 +83,16 @@ struct CompositePC {
 };
 static_assert(sizeof(CompositePC) == 176, "CompositePC must be 176B");
 
+// Push-constant for cinematic_dof.comp — matches the GLSL DoFPushConstants
+// struct. 4 floats × 4 bytes = 16 bytes (well under the 256-byte minimum).
+struct DoFPC {
+    float focusDistance;
+    float aperture;
+    float maxCoCPixels;
+    float _pad;
+};
+static_assert(sizeof(DoFPC) == 16, "DoFPC must be 16B");
+
 bool createFallbackEnv(VkDevice device, VkPhysicalDevice physicalDevice,
                        VkImage& image, VkDeviceMemory& memory,
                        VkImageView& view, VkSampler& sampler) {
@@ -188,6 +198,12 @@ struct NrdCinematicPost::Impl {
     VkPipelineLayout      compositePipeLayout= VK_NULL_HANDLE;
     VkPipeline            compositePipeline  = VK_NULL_HANDLE;
     VkDescriptorSet       compositeSet       = VK_NULL_HANDLE;
+
+    // 4.J: depth-of-field gather pipeline
+    VkDescriptorSetLayout dofLayout          = VK_NULL_HANDLE;
+    VkPipelineLayout      dofPipeLayout      = VK_NULL_HANDLE;
+    VkPipeline            dofPipeline        = VK_NULL_HANDLE;
+    VkDescriptorSet       dofSet             = VK_NULL_HANDLE;
 
     // Single descriptor pool shared by all 3 pipelines
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -359,6 +375,55 @@ bool createCompositePipeline(NrdCinematicPost::Impl& I) {
     return r == VK_SUCCESS;
 }
 
+bool createDoFPipeline(NrdCinematicPost::Impl& I) {
+    // Bindings (matches shaders/rt/cinematic_dof.comp):
+    //   0 = pre-DoF LDR  (storage image rgba8 read)
+    //   1 = depth AOV    (storage image r32f  read)
+    //   2 = final LDR    (storage image rgba8 write)
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        bindings[i].binding         = i;
+        bindings[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo li{};
+    li.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    li.bindingCount = static_cast<uint32_t>(bindings.size());
+    li.pBindings    = bindings.data();
+    if (vkCreateDescriptorSetLayout(I.device, &li, nullptr, &I.dofLayout) != VK_SUCCESS) return false;
+
+    VkPushConstantRange pc{};
+    pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pc.offset     = 0;
+    pc.size       = sizeof(DoFPC);
+
+    VkPipelineLayoutCreateInfo pli{};
+    pli.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount         = 1;
+    pli.pSetLayouts            = &I.dofLayout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges    = &pc;
+    if (vkCreatePipelineLayout(I.device, &pli, nullptr, &I.dofPipeLayout) != VK_SUCCESS) return false;
+
+    VkShaderModule sm = loadShader(I.device, "rt_cinematic_dof.comp.spv");
+    if (sm == VK_NULL_HANDLE) return false;
+
+    VkPipelineShaderStageCreateInfo stage{};
+    stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = sm;
+    stage.pName  = "main";
+
+    VkComputePipelineCreateInfo cpi{};
+    cpi.sType  = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpi.stage  = stage;
+    cpi.layout = I.dofPipeLayout;
+    VkResult r = vkCreateComputePipelines(I.device, VK_NULL_HANDLE, 1, &cpi, nullptr, &I.dofPipeline);
+    vkDestroyShaderModule(I.device, sm, nullptr);
+    return r == VK_SUCCESS;
+}
+
 }  // anonymous namespace
 
 bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevice,
@@ -387,17 +452,22 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
         std::cerr << "[NRD cinematic] createCompositePipeline failed" << std::endl;
         return false;
     }
+    if (!createDoFPipeline(I)) {
+        std::cerr << "[NRD cinematic] createDoFPipeline failed" << std::endl;
+        return false;
+    }
 
     // Descriptor pool — sized for all sets:
     //   extract:    2 storage images, 1 set
     //   blur:       2 storage images per set × 2 sets = 4
     //   composite:  3 storage images + 4 combined image samplers, 1 set
-    // total storage images = 2 + 4 + 3 = 9
+    //   dof:        3 storage images, 1 set  (4.J)
+    // total storage images = 2 + 4 + 3 + 3 = 12
     // total combined image samplers = 4
-    // total sets = 1 + 2 + 1 = 4
+    // total sets = 1 + 2 + 1 + 1 = 5
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type            = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[0].descriptorCount = 9;
+    poolSizes[0].descriptorCount = 12;
     poolSizes[1].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = 4;
 
@@ -405,21 +475,21 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes    = poolSizes.data();
-    poolInfo.maxSets       = 4;
+    poolInfo.maxSets       = 5;
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &I.descriptorPool) != VK_SUCCESS) {
         std::cerr << "[NRD cinematic] vkCreateDescriptorPool failed" << std::endl;
         return false;
     }
 
-    // Allocate the 4 sets.
-    VkDescriptorSet sets[4] = {};
-    VkDescriptorSetLayout layouts[4] = {
-        I.extractLayout, I.blurLayout, I.blurLayout, I.compositeLayout
+    // Allocate the 5 sets.
+    VkDescriptorSet sets[5] = {};
+    VkDescriptorSetLayout layouts[5] = {
+        I.extractLayout, I.blurLayout, I.blurLayout, I.compositeLayout, I.dofLayout
     };
     VkDescriptorSetAllocateInfo ai{};
     ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool     = I.descriptorPool;
-    ai.descriptorSetCount = 4;
+    ai.descriptorSetCount = 5;
     ai.pSetLayouts        = layouts;
     if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS) {
         std::cerr << "[NRD cinematic] vkAllocateDescriptorSets failed" << std::endl;
@@ -429,6 +499,7 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     I.blurSets[0]  = sets[1];
     I.blurSets[1]  = sets[2];
     I.compositeSet = sets[3];
+    I.dofSet       = sets[4];
 
     // Fallback env (descriptor must be valid when no env loaded).
     if (!createFallbackEnv(device, physicalDevice,
@@ -442,7 +513,7 @@ bool NrdCinematicPost::initialize(VkDevice device, VkPhysicalDevice physicalDevi
               << "  bloom mips: " << I.bloomW0 << "x" << I.bloomH0
               << ", "             << I.bloomW1 << "x" << I.bloomH1
               << ", "             << I.bloomW2 << "x" << I.bloomH2
-              << "  (4.G: bloom + AgX + vignette + grade)" << std::endl;
+              << "  (4.G+4.J: bloom + grade + camera DoF)" << std::endl;
     return true;
 }
 
@@ -455,6 +526,9 @@ void NrdCinematicPost::shutdown() {
     if (I.fallbackEnvImage)   { vkDestroyImage(d, I.fallbackEnvImage, nullptr);      I.fallbackEnvImage   = VK_NULL_HANDLE; }
     if (I.fallbackEnvMemory)  { vkFreeMemory(d, I.fallbackEnvMemory, nullptr);       I.fallbackEnvMemory  = VK_NULL_HANDLE; }
     if (I.descriptorPool)     { vkDestroyDescriptorPool(d, I.descriptorPool, nullptr); I.descriptorPool = VK_NULL_HANDLE; }
+    if (I.dofPipeline)           { vkDestroyPipeline(d, I.dofPipeline, nullptr); I.dofPipeline = VK_NULL_HANDLE; }
+    if (I.dofPipeLayout)         { vkDestroyPipelineLayout(d, I.dofPipeLayout, nullptr); I.dofPipeLayout = VK_NULL_HANDLE; }
+    if (I.dofLayout)             { vkDestroyDescriptorSetLayout(d, I.dofLayout, nullptr); I.dofLayout = VK_NULL_HANDLE; }
     if (I.compositePipeline)     { vkDestroyPipeline(d, I.compositePipeline, nullptr); I.compositePipeline = VK_NULL_HANDLE; }
     if (I.compositePipeLayout)   { vkDestroyPipelineLayout(d, I.compositePipeLayout, nullptr); I.compositePipeLayout = VK_NULL_HANDLE; }
     if (I.compositeLayout)       { vkDestroyDescriptorSetLayout(d, I.compositeLayout, nullptr); I.compositeLayout = VK_NULL_HANDLE; }
@@ -468,6 +542,7 @@ void NrdCinematicPost::shutdown() {
     I.blurSets[0] = VK_NULL_HANDLE;
     I.blurSets[1] = VK_NULL_HANDLE;
     I.compositeSet = VK_NULL_HANDLE;
+    I.dofSet = VK_NULL_HANDLE;
     I.device = VK_NULL_HANDLE;
 }
 
@@ -659,6 +734,48 @@ void NrdCinematicPost::dispatchComposite(VkCommandBuffer cmd, const NrdCinematic
     vkCmdDispatch(cmd, gx, gy, 1);
 }
 
+void NrdCinematicPost::dispatchDoF(VkCommandBuffer cmd, const NrdDoFInputs& inputs) {
+    auto& I = *m_impl;
+    if (!I.dofPipeline) return;
+
+    // Three storage-image bindings, all GENERAL.
+    VkDescriptorImageInfo infos[3] = {};
+    infos[0].imageView   = inputs.preDofLdr;
+    infos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    infos[1].imageView   = inputs.depthAOV;
+    infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    infos[2].imageView   = inputs.finalLdrOut;
+    infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        writes[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet          = I.dofSet;
+        writes[i].dstBinding      = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[i].pImageInfo      = &infos[i];
+    }
+    vkUpdateDescriptorSets(I.device, static_cast<uint32_t>(writes.size()),
+                            writes.data(), 0, nullptr);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.dofPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, I.dofPipeLayout,
+                             0, 1, &I.dofSet, 0, nullptr);
+
+    DoFPC pc{};
+    pc.focusDistance = inputs.focusDistance;
+    pc.aperture      = inputs.aperture;
+    pc.maxCoCPixels  = inputs.maxCoCPixels;
+    pc._pad          = 0.0f;
+    vkCmdPushConstants(cmd, I.dofPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                        0, sizeof(pc), &pc);
+
+    const uint32_t gx = (I.width  + 7u) / 8u;
+    const uint32_t gy = (I.height + 7u) / 8u;
+    vkCmdDispatch(cmd, gx, gy, 1);
+}
+
 }  // namespace ohao
 
 #else  // OHAO_NRD_ENABLED
@@ -676,6 +793,7 @@ void NrdCinematicPost::dispatchBloomExtract(VkCommandBuffer, VkImageView, VkImag
 void NrdCinematicPost::dispatchBloomBlur(VkCommandBuffer, uint32_t, VkImageView, VkImageView,
                                           uint32_t, uint32_t, uint32_t, uint32_t) {}
 void NrdCinematicPost::dispatchComposite(VkCommandBuffer, const NrdCinematicInputs&) {}
+void NrdCinematicPost::dispatchDoF(VkCommandBuffer, const NrdDoFInputs&) {}
 
 }  // namespace ohao
 

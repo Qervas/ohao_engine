@@ -920,25 +920,31 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0, 0, nullptr, 0, nullptr, 3, mipsToRead);
 
-            // --- Transition binding 30 (final LDR) for write. ---
+            // --- Transition binding 32 (pre-DoF LDR) for write. ---
+            //
+            // Sub-plan 4.J: the composite now writes the pre-DoF LDR image
+            // (binding 32) instead of the final RGBA8 (binding 30). The DoF
+            // gather pass dispatched right after consumes binding 32 + depth
+            // AOV → writes binding 30. Same UNDEFINED→GENERAL first-frame
+            // latch as the other binding-30 transitions.
             VkImageMemoryBarrier tbOut{};
             tbOut.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            tbOut.srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
+            tbOut.srcAccessMask    = m_preDofFirstFrame ? 0 : VK_ACCESS_SHADER_READ_BIT;
             tbOut.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
-            tbOut.oldLayout        = m_nrdTonemapFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+            tbOut.oldLayout        = m_preDofFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
             tbOut.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
-            tbOut.image            = m_nrdTonemappedImage;
+            tbOut.image            = m_preDofLdrImage;
             tbOut.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vkCmdPipelineBarrier(cmd,
-                m_nrdTonemapFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                m_preDofFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0, 0, nullptr, 0, nullptr, 1, &tbOut);
-            m_nrdTonemapFirstFrame = false;
+            m_preDofFirstFrame = false;
 
-            // 4) Composite.
+            // 4) Composite → binding 32 (pre-DoF LDR).
             NrdCinematicInputs ci{};
             ci.composedHDR     = m_nrdComposedView;
-            ci.tonemappedOut   = m_nrdTonemappedView;
+            ci.tonemappedOut   = m_preDofLdrView;   // 4.J: write pre-DoF, not final
             ci.depthAOV        = m_depthAOVView;
             ci.envMapView      = m_envMapView;
             ci.envMapSampler   = m_envMapSampler;
@@ -977,7 +983,54 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             ci.tint             = {1.0f, 1.0f, 1.0f};   // neutral
             m_cinematicPost->dispatchComposite(cmd, ci);
 
-            // After composite, binding 30 is in GENERAL with SHADER_WRITE access.
+            // --- 5) Depth-of-field gather pass (Sub-plan 4.J) ---
+            //
+            // Composite just wrote binding 32 (pre-DoF LDR). DoF reads that +
+            // depth AOV (binding 20) and writes binding 30 (final LDR for
+            // readback). Two barriers needed:
+            //   a) binding 32: SHADER_WRITE → SHADER_READ (GENERAL→GENERAL)
+            //   b) binding 30: UNDEFINED/GENERAL → GENERAL, gated by latch
+            // Depth AOV (binding 20) is already SHADER_READ-visible from the
+            // tbIn[1] barrier above — no fresh barrier needed.
+            {
+                VkImageMemoryBarrier dofBarriers[2] = {};
+                dofBarriers[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                dofBarriers[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+                dofBarriers[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+                dofBarriers[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                dofBarriers[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                dofBarriers[0].image            = m_preDofLdrImage;
+                dofBarriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+                dofBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                dofBarriers[1].srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_TRANSFER_READ_BIT;
+                dofBarriers[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+                dofBarriers[1].oldLayout        = m_nrdTonemapFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+                dofBarriers[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                dofBarriers[1].image            = m_nrdTonemappedImage;
+                dofBarriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+                vkCmdPipelineBarrier(cmd,
+                    m_nrdTonemapFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0, 0, nullptr, 0, nullptr, 2, dofBarriers);
+                m_nrdTonemapFirstFrame = false;
+            }
+
+            // DoF push-constant defaults (per Sub-plan 4.J): 5m focus distance,
+            // moderate aperture, ≤24 px CoC. env_demo auto-frames the model so
+            // these defaults give a believable defocus on typical 1-3 m showcase
+            // objects without needing per-scene tuning yet.
+            NrdDoFInputs di{};
+            di.preDofLdr     = m_preDofLdrView;
+            di.depthAOV      = m_depthAOVView;
+            di.finalLdrOut   = m_nrdTonemappedView;
+            di.focusDistance = 5.0f;
+            di.aperture      = 0.5f;
+            di.maxCoCPixels  = 24.0f;
+            m_cinematicPost->dispatchDoF(cmd, di);
+
+            // After DoF, binding 30 is in GENERAL with SHADER_WRITE access.
             // Downstream readback (readbackNrdTonemapped) transitions GENERAL→TRANSFER_SRC.
         }
     }

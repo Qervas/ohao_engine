@@ -360,10 +360,24 @@ private:
     // Written by NrdCinematicPost::dispatchComposite (4.G chain replaced 4.E's
     // single-pass tonemap). NOT in PT's RT descriptor layout — only in the
     // cinematic compute set.
+    //
+    // Sub-plan 4.J: binding 30 now holds the FINAL LDR after DoF gather.
+    // The composite shader writes to the new intermediate (binding 32,
+    // m_preDofLdrImage) and the DoF compute pass reads that + depth AOV
+    // (binding 20) → produces binding 30.
     VkImage        m_nrdTonemappedImage     = VK_NULL_HANDLE;
     VkDeviceMemory m_nrdTonemappedMemory    = VK_NULL_HANDLE;
     VkImageView    m_nrdTonemappedView      = VK_NULL_HANDLE;
     bool           m_nrdTonemapFirstFrame   = true;  // gates UNDEFINED→GENERAL on binding 30
+
+    // Feature 4.J: pre-DoF LDR (RGBA8 UNORM) at binding 32.
+    // Composite shader's outLDR is now wired to this view; DoF compute reads
+    // it + depth and writes the final m_nrdTonemappedImage (binding 30).
+    // Not in PT's RT descriptor layout — only used inside the cinematic chain.
+    VkImage        m_preDofLdrImage     = VK_NULL_HANDLE;
+    VkDeviceMemory m_preDofLdrMemory    = VK_NULL_HANDLE;
+    VkImageView    m_preDofLdrView      = VK_NULL_HANDLE;
+    bool           m_preDofFirstFrame   = true;  // gates UNDEFINED→GENERAL on binding 32
 
     // Feature 4.G: bloom mip chain (RGBA16F) — fed by cinematic_bloom_extract +
     // cinematic_bloom_blur, consumed by cinematic_composite. Mip 0 = half-res,
