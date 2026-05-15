@@ -53,6 +53,8 @@ int main(int argc, char* argv[]) {
     float anisoRotation = 0.0f;
     // Sub-plan 4.L: SSS strength for skin. 0.5-0.7 = realistic skin.
     float sssStrength = 0.0f;
+    // --crop=face: tight portrait framing on subject head for SSS close-up.
+    bool faceCrop = false;
     std::string dumpMvPath;
     std::string dumpDepthPath;
     std::string dumpRoughnessPath;
@@ -113,6 +115,8 @@ int main(int argc, char* argv[]) {
             anisoRotation = std::stof(arg.substr(12));
         } else if (arg.rfind("--sss=", 0) == 0) {
             sssStrength = std::clamp(std::stof(arg.substr(6)), 0.0f, 1.0f);
+        } else if (arg == "--crop=face") {
+            faceCrop = true;
         }
     }
 
@@ -379,14 +383,17 @@ int main(int argc, char* argv[]) {
 
     auto& camera = renderer.getCamera();
     if (lightingMode == LightingMode::Cinema) {
-        // Cinematic framing: 50mm-equivalent (40° FOV), camera at upper-body
-        // height. Wider FOV than a tight portrait so taller-than-norm models
-        // (FBX with non-centered origin) still fit. Camera height tuned to
-        // average upper-body of both models when they're placed via 4.H
-        // ground-anchoring logic.
-        camera.setPosition({0.0f, 2.0f, 7.0f});
-        camera.setFov(40.0f);
-        camera.setRotation(-3.0f, -90.0f);
+        if (faceCrop) {
+            // 85mm portrait: very tight, head fills frame. Showcases skin SSS detail.
+            camera.setPosition({0.0f, 2.6f, 3.5f});
+            camera.setFov(20.0f);
+            camera.setRotation(-8.0f, -90.0f);
+        } else {
+            // 50mm full-figure framing.
+            camera.setPosition({0.0f, 2.0f, 7.0f});
+            camera.setFov(40.0f);
+            camera.setRotation(-3.0f, -90.0f);
+        }
     } else {
         camera.setPosition({0, 0.5f, 8});
         camera.setFov(40.0f);
