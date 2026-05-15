@@ -662,9 +662,11 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral, 0.0f);
-    // Sub-plan 4.F T4: propagate pixel jitter to raygen. zw are reserved padding
-    // (kept 0 so the push-constant tail is deterministic across frames).
-    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y, 0.0f, 0.0f);
+    // Sub-plan 4.F T4: propagate pixel jitter to raygen. zw repurposed by 4.K
+    // for global anisotropic override (z=strength, w=rotation in radians).
+    pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y,
+                          m_renderSettings.anisotropyStrength,
+                          m_renderSettings.anisotropyRotation);
 
     // Store current viewProj for next frame's reprojection
     m_prevViewProj = proj * view;

@@ -46,6 +46,11 @@ int main(int argc, char* argv[]) {
     bool groundEnabled = true;
     enum class LightingMode { Studio, HdrOnly, None };
     LightingMode lightingMode = LightingMode::Studio;
+    // Sub-plan 4.K: global anisotropic specular override. 0 = isotropic;
+    // 0.5–0.85 gives visible brushed-metal/chrome streaks. Rotation in
+    // radians orients the tangent frame around N. Both 0 → no change.
+    float anisoStrength = 0.0f;
+    float anisoRotation = 0.0f;
     std::string dumpMvPath;
     std::string dumpDepthPath;
     std::string dumpRoughnessPath;
@@ -99,6 +104,10 @@ int main(int argc, char* argv[]) {
             if (v == "studio")       lightingMode = LightingMode::Studio;
             else if (v == "hdr-only" || v == "hdr") lightingMode = LightingMode::HdrOnly;
             else if (v == "none")    lightingMode = LightingMode::None;
+        } else if (arg.rfind("--aniso=", 0) == 0) {
+            anisoStrength = std::clamp(std::stof(arg.substr(8)), 0.0f, 0.95f);
+        } else if (arg.rfind("--aniso-rot=", 0) == 0) {
+            anisoRotation = std::stof(arg.substr(12));
         }
     }
 
@@ -351,6 +360,15 @@ int main(int argc, char* argv[]) {
     } else {
         std::cout << "Denoise mode (preset): "
                   << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
+    }
+
+    if (anisoStrength > 0.0f) {
+        auto settings = renderer.getRTRenderSettings();
+        settings.anisotropyStrength = anisoStrength;
+        settings.anisotropyRotation = anisoRotation;
+        renderer.setRTRenderSettings(settings);
+        std::cout << "Anisotropic specular: strength=" << anisoStrength
+                  << " rotation=" << anisoRotation << " rad" << std::endl;
     }
 
     std::cout << "Rendering (" << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << ")..." << std::endl;
