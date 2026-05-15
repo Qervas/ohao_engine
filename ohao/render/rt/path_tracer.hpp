@@ -36,8 +36,8 @@
 // members in this header would violate ODR (ohao_gpu_vulkan sees a
 // different layout than ohao_renderer).
 namespace ohao { class NrdDenoiser; }
-namespace ohao { class NrdCompositor; }  // NEW 4.D
-namespace ohao { class NrdTonemap; }     // NEW 4.E
+namespace ohao { class NrdCompositor; }      // NEW 4.D
+namespace ohao { class NrdCinematicPost; }   // NEW 4.G (replaces 4.E NrdTonemap)
 
 namespace ohao {
 
@@ -237,8 +237,8 @@ private:
     // NRD is off, this pointer stays null and unique_ptr's default dtor is a
     // no-op on a null held pointer (no need for complete type).
     std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
-    std::unique_ptr<NrdCompositor> m_nrdCompositor;  // NEW 4.D
-    std::unique_ptr<NrdTonemap> m_nrdTonemap;        // NEW 4.E
+    std::unique_ptr<NrdCompositor> m_nrdCompositor;   // NEW 4.D
+    std::unique_ptr<NrdCinematicPost> m_cinematicPost; // NEW 4.G (replaces 4.E NrdTonemap)
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes
@@ -356,12 +356,28 @@ private:
     VkImageView    m_nrdComposedView      = VK_NULL_HANDLE;
     bool           m_nrdComposeFirstFrame = true;  // gates UNDEFINED→GENERAL transition on binding 29
 
-    // Feature 4.E: NRD tonemapped output (RGBA8 UNORM) at binding 30.
-    // NOT in PT's RT descriptor layout — only in NrdTonemap's compute set.
+    // Feature 4.E/4.G: NRD final LDR output (RGBA8 UNORM) at binding 30.
+    // Written by NrdCinematicPost::dispatchComposite (4.G chain replaced 4.E's
+    // single-pass tonemap). NOT in PT's RT descriptor layout — only in the
+    // cinematic compute set.
     VkImage        m_nrdTonemappedImage     = VK_NULL_HANDLE;
     VkDeviceMemory m_nrdTonemappedMemory    = VK_NULL_HANDLE;
     VkImageView    m_nrdTonemappedView      = VK_NULL_HANDLE;
     bool           m_nrdTonemapFirstFrame   = true;  // gates UNDEFINED→GENERAL on binding 30
+
+    // Feature 4.G: bloom mip chain (RGBA16F) — fed by cinematic_bloom_extract +
+    // cinematic_bloom_blur, consumed by cinematic_composite. Mip 0 = half-res,
+    // mip 1 = quarter-res, mip 2 = eighth-res. Each carries a usage of
+    // STORAGE (for extract/blur writes) + SAMPLED (for composite reads), so we
+    // toggle their layouts UNDEFINED→GENERAL on first dispatch, then
+    // GENERAL→SHADER_READ_ONLY before the composite pass each frame.
+    VkImage        m_bloomMipImages[3]      = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceMemory m_bloomMipMemory[3]      = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkImageView    m_bloomMipViews[3]       = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkSampler      m_bloomSampler           = VK_NULL_HANDLE;  // shared bilinear sampler
+    uint32_t       m_bloomMipWidth[3]       = {0, 0, 0};
+    uint32_t       m_bloomMipHeight[3]      = {0, 0, 0};
+    bool           m_bloomFirstFrame[3]     = {true, true, true};
 
     // Surface history ping-pong for realtime validation (xyz = first-hit world pos, w = hitDist)
     VkImage m_surfaceHistoryImages[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};

@@ -10,7 +10,7 @@
 // by OHAO_NRD_ENABLED because definitions only exist in that mode.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
-#include "render/rt/denoise/nrd_tonemap.hpp"
+#include "render/rt/denoise/nrd_cinematic.hpp"
 
 namespace ohao {
 
@@ -133,10 +133,10 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         std::cerr << "[NRD compose] init FAILED — compose pass will be skipped" << std::endl;
         m_nrdCompositor.reset();
     }
-    m_nrdTonemap = std::make_unique<NrdTonemap>();
-    if (!m_nrdTonemap->initialize(m_device, m_physicalDevice, m_width, m_height)) {
-        std::cerr << "[NRD tonemap] init FAILED — tonemap pass will be skipped" << std::endl;
-        m_nrdTonemap.reset();
+    m_cinematicPost = std::make_unique<NrdCinematicPost>();
+    if (!m_cinematicPost->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+        std::cerr << "[NRD cinematic] init FAILED — cinematic pass will be skipped" << std::endl;
+        m_cinematicPost.reset();
     }
 #else
     (void)instance; (void)graphicsQueueFamilyIndex;
@@ -221,9 +221,9 @@ void PathTracer::destroy() {
         m_nrdCompositor->shutdown();
         m_nrdCompositor.reset();
     }
-    if (m_nrdTonemap) {
-        m_nrdTonemap->shutdown();
-        m_nrdTonemap.reset();
+    if (m_cinematicPost) {
+        m_cinematicPost->shutdown();
+        m_cinematicPost.reset();
     }
 #endif
 

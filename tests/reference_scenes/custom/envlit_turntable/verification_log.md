@@ -553,3 +553,58 @@ Demodulation loop closed: 3.C.6 split raw radiance into (demod AOV × albedo), 4
 - DLSS Ray Reconstruction (Phase 5) replaces NRD entirely on NVIDIA GPUs — ML-based denoiser trained on offline reference.
 
 **Status:** 4.F SHIPPED. `--denoise=nrd` is now "shippable realtime denoiser": env visible, no motion ghosting (with T2 override), multi-spp offline quality lift, production ReblurSettings applied. Remaining AAA-ship gap is ReSTIR DI + DLSS RR.
+
+---
+
+## 2026-04-28: Sub-plan 4.G — Cinematic Post-Process (bloom + AgX + vignette + grade)
+
+Replaced the 4.F single-pass `NrdTonemap` (ACES + sRGB gamma + env sky composite) with a full cinematic chain:
+
+```
+NRD composed HDR (binding 29)
+  → cinematic_bloom_extract.comp   (HDR → bloom mip 0, half-res, Karis soft-threshold)
+  → cinematic_bloom_blur.comp      (mip 0 → mip 1, 13-tap downsample+blur)
+  → cinematic_bloom_blur.comp      (mip 1 → mip 2, same)
+  → cinematic_composite.comp       (HDR + 3 bloom mips + depth + env → binding 30 RGBA8)
+```
+
+Cinematic chain (in composite shader): exposure → bloom add → AgX filmic tonemap → outset matrix (linear) → shadow lift (mix sqrt 0.35) → saturation+contrast+tint grade → analytic radial vignette → sRGB encode.
+
+**Verification renders (`renders/4g/`):**
+
+- `before_oidn_ref.png` — OIDN+ACES reference: bright neutral background, teal helmet, scene-referenced look. Reads as "viewport screenshot."
+- `nrd_after_4g.png` / `nrd_4g_full.png` — Post-4.G NRD with full cinematic chain at 16 spp. Reads as "film still": dramatic vignette, warm-tinted background, deep dramatic shadows on the helmet body, soft bloom on rim highlights and gold accents, slightly desaturated overall (filmic palette).
+
+**Acceptance:** dramatic side-by-side. The before/after pair shows visible filmic transformation across every region of the frame:
+- highlights — bloom glow on rim metal
+- midtones — AgX rolloff replaces ACES s-curve
+- shadows — shadow-lift recovers helmet body detail crushed by AgX
+- corners — vignette
+- whites — warm tint cast
+
+**Tuned parameters after iteration:**
+
+```cpp
+ci.exposure         = 1.0f;
+ci.bloomStrength    = 0.8f;       // bumped from spec's 0.6 — wanted more visible glow
+ci.vignetteStrength = 0.6f;       // bumped from spec's 0.4 — wanted more drama at corners
+ci.saturation       = 1.25f;      // bumped from spec's 1.1 — AgX desaturates more than expected
+ci.contrast         = 1.05f;      // backed off from spec's 1.08 — AgX already adds contrast
+ci.tint             = {1.03, 1.0, 0.97};  // warm-toward-amber whites
+```
+
+**Key implementation calls:**
+1. AgX polynomial fit (iolite-engine minimal AgX) bakes in sRGB display encode. To run outset matrix correctly we decode (pow 2.2) → outset in linear → re-encode (pow 1/2.2) before grade.
+2. Shadow-lift `mix(graded, sqrt(graded), 0.35)` was added empirically: pure AgX with no lift crushes path-traced indirect-lit surfaces (typical luminance ~0.2-0.5) into near-black. The sqrt lift restores midtone legibility without compromising film roll-off in highlights.
+3. Bloom uses Karis-weighted 4-tap downsample + threshold for the extract pass and Jimenez's 13-tap downsample+blur kernel for mip propagation. 4 dispatches total per frame.
+
+**Pipeline / class changes:**
+- NEW: `shaders/rt/cinematic_bloom_extract.comp`, `cinematic_bloom_blur.comp`, `cinematic_composite.comp`
+- NEW: `ohao/render/rt/denoise/nrd_cinematic.{hpp,cpp}` — `NrdCinematicPost` PIMPL with 3 compute pipelines
+- DELETED: `shaders/rt/nrd_tonemap.comp`, `ohao/render/rt/denoise/nrd_tonemap.{hpp,cpp}`
+- PathTracer: `m_nrdTonemap` → `m_cinematicPost`; new `m_bloomMipImages[3]` + `m_bloomMipViews[3]` + `m_bloomMipMemory[3]` + `m_bloomSampler` + `m_bloomMipWidth/Height[3]` + `m_bloomFirstFrame[3]`
+- All bindings preserved: binding 29 (HDR) is the same input, binding 30 (LDR) is the same output — only the chain between them changed. Accessor names `getNrdTonemappedAOV*` kept for ABI continuity.
+
+**Build clean:** ON + OFF.
+
+**Status:** 4.G SHIPPED. `--denoise=nrd` now produces visibly cinematic output. Next gates: ReSTIR DI (4.H), DLSS RR (Phase 5), broaden cinematic post to OIDN modes.
