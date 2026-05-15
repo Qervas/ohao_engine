@@ -13,7 +13,7 @@
 // dispatch methods are OHAO_NRD_ENABLED-guarded inside this TU.
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
-#include "render/rt/denoise/nrd_tonemap.hpp"
+#include "render/rt/denoise/nrd_cinematic.hpp"
 
 namespace ohao {
 
@@ -811,12 +811,22 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             // GENERAL→TRANSFER_SRC itself when env_demo dumps it.
         }
 
-        if (m_nrdTonemap) {
-            // Sub-plan 4.F T1: tonemap now reads bindings 29 (composed HDR, written
-            // by compose's COMPUTE dispatch) + 20 (depth AOV, written by raygen's
-            // RT dispatch). Publish both writes. COMPUTE→COMPUTE for 29; the
-            // earlier rayToCompute memory barrier already handled RT→COMPUTE for
-            // 20, but we include it here for explicitness + defensive layering.
+        if (m_cinematicPost) {
+            // Sub-plan 4.G: cinematic chain replaces 4.F single-pass tonemap.
+            //   1. bloom extract: HDR (binding 29) → bloom mip 0 (half-res)
+            //   2. bloom blur ×2: mip 0 → mip 1; mip 1 → mip 2 (downsample+blur)
+            //   3. composite: HDR + 3 sampled bloom mips + depth + env →
+            //                 binding 30 (RGBA8 final LDR)
+            //
+            // The composite shader reads HDR from binding 29 + depth AOV from
+            // 20 — both are storage-image reads in GENERAL layout. Bloom mips
+            // need a layout flip between extract/blur (GENERAL) and composite
+            // (SHADER_READ_ONLY_OPTIMAL).
+
+            // --- Publish 29 (HDR) and 20 (depth) writes for the extract +
+            //     composite reads. COMPUTE→COMPUTE for 29; RT→COMPUTE for 20
+            //     was already barriered earlier (rayToCompute), but include
+            //     defensively. ---
             VkImageMemoryBarrier tbIn[2] = {};
             tbIn[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             tbIn[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
@@ -836,9 +846,81 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0, 0, nullptr, 0, nullptr, 2, tbIn);
 
-            // Transition binding 30: UNDEFINED→GENERAL first frame, GENERAL→GENERAL after.
-            // Per-instance m_nrdTonemapFirstFrame (not a function-local static) — same
-            // rationale as m_nrdComposeFirstFrame in 4.D.
+            // --- Transition bloom mip 0 UNDEFINED→GENERAL (first frame) or
+            //     SHADER_READ_ONLY→GENERAL (subsequent frames). ---
+            VkImageMemoryBarrier mip0Pre{};
+            mip0Pre.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            mip0Pre.srcAccessMask    = m_bloomFirstFrame[0] ? 0 : VK_ACCESS_SHADER_READ_BIT;
+            mip0Pre.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            mip0Pre.oldLayout        = m_bloomFirstFrame[0] ? VK_IMAGE_LAYOUT_UNDEFINED
+                                                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            mip0Pre.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            mip0Pre.image            = m_bloomMipImages[0];
+            mip0Pre.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd,
+                m_bloomFirstFrame[0] ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                     : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &mip0Pre);
+            m_bloomFirstFrame[0] = false;
+
+            // 1) Extract.
+            m_cinematicPost->dispatchBloomExtract(
+                cmd, m_nrdComposedView, m_bloomMipViews[0],
+                m_width, m_height, m_bloomMipWidth[0], m_bloomMipHeight[0]);
+
+            // Loop: blur (downsample) from mip N → mip N+1.
+            for (uint32_t mip = 1; mip < 3; ++mip) {
+                // Producer (mip N-1) write → reader; transition mip N for write.
+                VkImageMemoryBarrier b[2] = {};
+                b[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+                b[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+                b[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                b[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                b[0].image            = m_bloomMipImages[mip - 1];
+                b[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                b[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b[1].srcAccessMask    = m_bloomFirstFrame[mip] ? 0 : VK_ACCESS_SHADER_READ_BIT;
+                b[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+                b[1].oldLayout        = m_bloomFirstFrame[mip] ? VK_IMAGE_LAYOUT_UNDEFINED
+                                                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                b[1].image            = m_bloomMipImages[mip];
+                b[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(cmd,
+                    (m_bloomFirstFrame[mip] ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                            : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
+                      | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                    0, 0, nullptr, 0, nullptr, 2, b);
+                m_bloomFirstFrame[mip] = false;
+
+                // 2,3) Blur (downsample) mip-1 → mip.
+                m_cinematicPost->dispatchBloomBlur(
+                    cmd, mip - 1, /* slot 0=mip0→mip1, slot 1=mip1→mip2 */
+                    m_bloomMipViews[mip - 1], m_bloomMipViews[mip],
+                    m_bloomMipWidth[mip - 1], m_bloomMipHeight[mip - 1],
+                    m_bloomMipWidth[mip], m_bloomMipHeight[mip]);
+            }
+
+            // --- Flip all 3 bloom mips GENERAL→SHADER_READ_ONLY for the
+            //     composite (sampled binding). ---
+            VkImageMemoryBarrier mipsToRead[3] = {};
+            for (uint32_t mip = 0; mip < 3; ++mip) {
+                mipsToRead[mip].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                mipsToRead[mip].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+                mipsToRead[mip].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+                mipsToRead[mip].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+                mipsToRead[mip].newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                mipsToRead[mip].image            = m_bloomMipImages[mip];
+                mipsToRead[mip].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            }
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 3, mipsToRead);
+
+            // --- Transition binding 30 (final LDR) for write. ---
             VkImageMemoryBarrier tbOut{};
             tbOut.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
             tbOut.srcAccessMask    = m_nrdTonemapFirstFrame ? 0 : VK_ACCESS_SHADER_WRITE_BIT;
@@ -853,25 +935,34 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                 0, 0, nullptr, 0, nullptr, 1, &tbOut);
             m_nrdTonemapFirstFrame = false;
 
-            // Dispatch
-            // Sub-plan 4.F T1: populate depth AOV + env resource + camera inv
-            // matrices so the tonemap shader composites the lit sky for miss
-            // rays. When no env is loaded (m_envCDFIntegral == 0), envIntensity
-            // stays at 0 and sky pixels produce the pre-4.F black output.
-            NrdTonemapInputs ti {};
-            ti.composedHDR   = m_nrdComposedView;
-            ti.tonemappedOut = m_nrdTonemappedView;
-            ti.depthAOV      = m_depthAOVView;
-            ti.envMapView    = m_envMapView;
-            ti.envMapSampler = m_envMapSampler;
-            std::memcpy(ti.invView.data(), glm::value_ptr(pc.invView), sizeof(float) * 16);
-            std::memcpy(ti.invProj.data(), glm::value_ptr(pc.invProj), sizeof(float) * 16);
-            ti.extent[0]     = static_cast<float>(m_width);
-            ti.extent[1]     = static_cast<float>(m_height);
-            ti.envIntensity  = (m_envCDFIntegral > 0.0f && m_envMapView) ? 1.0f : 0.0f;
-            m_nrdTonemap->dispatch(cmd, ti);
+            // 4) Composite.
+            NrdCinematicInputs ci{};
+            ci.composedHDR     = m_nrdComposedView;
+            ci.tonemappedOut   = m_nrdTonemappedView;
+            ci.depthAOV        = m_depthAOVView;
+            ci.envMapView      = m_envMapView;
+            ci.envMapSampler   = m_envMapSampler;
+            ci.bloomMip0View   = m_bloomMipViews[0];
+            ci.bloomMip1View   = m_bloomMipViews[1];
+            ci.bloomMip2View   = m_bloomMipViews[2];
+            ci.bloomSampler    = m_bloomSampler;
+            std::memcpy(ci.invView.data(), glm::value_ptr(pc.invView), sizeof(float) * 16);
+            std::memcpy(ci.invProj.data(), glm::value_ptr(pc.invProj), sizeof(float) * 16);
+            ci.extent[0]       = static_cast<float>(m_width);
+            ci.extent[1]       = static_cast<float>(m_height);
+            ci.envIntensity    = (m_envCDFIntegral > 0.0f && m_envMapView) ? 1.0f : 0.0f;
+            // Defaults from spec §3.7, tuned empirically for cinematic look on
+            // path-traced input. AgX itself is already a strong filmic curve,
+            // so the contrast lift is gentle.
+            ci.exposure         = 1.0f;
+            ci.bloomStrength    = 0.8f;
+            ci.vignetteStrength = 0.6f;
+            ci.saturation       = 1.25f;   // recover chromaticity AgX desaturates
+            ci.contrast         = 1.05f;
+            ci.tint             = {1.03f, 1.0f, 0.97f};
+            m_cinematicPost->dispatchComposite(cmd, ci);
 
-            // After tonemap, binding 30 is in GENERAL with SHADER_WRITE access.
+            // After composite, binding 30 is in GENERAL with SHADER_WRITE access.
             // Downstream readback (readbackNrdTonemapped) transitions GENERAL→TRANSFER_SRC.
         }
     }

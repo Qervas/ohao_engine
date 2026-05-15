@@ -748,6 +748,67 @@ bool PathTracer::createImages() {
         m_nrdTonemapFirstFrame = true;
     }
 
+    // ---- Sub-plan 4.G: bloom mip chain (RGBA16F, 3 levels) ----
+    // Mip 0 = half-res, mip 1 = quarter-res, mip 2 = eighth-res.
+    // Usage: STORAGE (for compute writes in extract/blur) + SAMPLED (for
+    // bilinear upsampling in composite). Layout transitions happen per frame
+    // in path_tracer_render.cpp.
+    m_bloomMipWidth[0]  = (m_width  + 1) / 2;
+    m_bloomMipHeight[0] = (m_height + 1) / 2;
+    m_bloomMipWidth[1]  = (m_bloomMipWidth[0]  + 1) / 2;
+    m_bloomMipHeight[1] = (m_bloomMipHeight[0] + 1) / 2;
+    m_bloomMipWidth[2]  = (m_bloomMipWidth[1]  + 1) / 2;
+    m_bloomMipHeight[2] = (m_bloomMipHeight[1] + 1) / 2;
+    for (uint32_t mip = 0; mip < 3; ++mip) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        imageInfo.format        = VK_FORMAT_R16G16B16A16_SFLOAT;
+        imageInfo.extent        = {m_bloomMipWidth[mip], m_bloomMipHeight[mip], 1};
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = 1;
+        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_bloomMipImages[mip]) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_bloomMipImages[mip], &memReqs);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_bloomMipMemory[mip]) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_bloomMipImages[mip], m_bloomMipMemory[mip], 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image                       = m_bloomMipImages[mip];
+        viewInfo.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format                      = VK_FORMAT_R16G16B16A16_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_bloomMipViews[mip]) != VK_SUCCESS) return false;
+
+        m_bloomFirstFrame[mip] = true;
+    }
+    // Shared linear-clamp sampler for bilinear bloom upsampling in composite.
+    if (m_bloomSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo si{};
+        si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        si.magFilter    = VK_FILTER_LINEAR;
+        si.minFilter    = VK_FILTER_LINEAR;
+        si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        si.maxLod       = 1.0f;
+        if (vkCreateSampler(m_device, &si, nullptr, &m_bloomSampler) != VK_SUCCESS) return false;
+    }
+
     return true;
 }
 
@@ -815,6 +876,17 @@ void PathTracer::destroyImages() {
     if (m_nrdTonemappedView)   { vkDestroyImageView(m_device, m_nrdTonemappedView, nullptr);   m_nrdTonemappedView   = VK_NULL_HANDLE; }
     if (m_nrdTonemappedImage)  { vkDestroyImage(m_device, m_nrdTonemappedImage, nullptr);      m_nrdTonemappedImage  = VK_NULL_HANDLE; }
     if (m_nrdTonemappedMemory) { vkFreeMemory(m_device, m_nrdTonemappedMemory, nullptr);       m_nrdTonemappedMemory = VK_NULL_HANDLE; }
+
+    // 4.G: bloom mip chain teardown.
+    for (uint32_t mip = 0; mip < 3; ++mip) {
+        if (m_bloomMipViews[mip])  { vkDestroyImageView(m_device, m_bloomMipViews[mip], nullptr);   m_bloomMipViews[mip]  = VK_NULL_HANDLE; }
+        if (m_bloomMipImages[mip]) { vkDestroyImage(m_device, m_bloomMipImages[mip], nullptr);      m_bloomMipImages[mip] = VK_NULL_HANDLE; }
+        if (m_bloomMipMemory[mip]) { vkFreeMemory(m_device, m_bloomMipMemory[mip], nullptr);        m_bloomMipMemory[mip] = VK_NULL_HANDLE; }
+        m_bloomMipWidth[mip]   = 0;
+        m_bloomMipHeight[mip]  = 0;
+        m_bloomFirstFrame[mip] = true;
+    }
+    if (m_bloomSampler) { vkDestroySampler(m_device, m_bloomSampler, nullptr); m_bloomSampler = VK_NULL_HANDLE; }
 
     for (uint32_t i = 0; i < 2; ++i) {
         if (m_surfaceHistoryViews[i]) { vkDestroyImageView(m_device, m_surfaceHistoryViews[i], nullptr); m_surfaceHistoryViews[i] = VK_NULL_HANDLE; }

@@ -1,0 +1,74 @@
+#version 460
+
+// Sub-plan 4.G T1: bloom extract pass.
+//
+// Reads the NRD composed HDR image (PT binding 29, RGBA32F) and writes a
+// half-resolution RGBA16F image containing the bright-pixel-only contribution
+// that will feed the bloom blur chain.
+//
+// Layout:
+//   group size 8x8, dispatched over the OUTPUT (half-res) extent
+//   each invocation reads 2x2 pixels from the full-res HDR input,
+//   averages them, soft-thresholds the bright energy, and stores it.
+//
+// Threshold model: soft knee around HDR luminance = 1.0, with quadratic
+// rolloff above. Matches Karis bloom (Doom Eternal / UE4 PostProcessBloom).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly  image2D inHDR;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outBloom;
+
+layout(push_constant) uniform BloomExtractPC {
+    vec2  srcExtent;   // full-res HDR dimensions
+    vec2  dstExtent;   // half-res bloom mip dimensions
+    float threshold;   // luminance knee, default 1.0
+    float knee;        // soft-knee falloff width, default 0.5
+    float _pad0;
+    float _pad1;
+} pc;
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// Karis soft-knee bloom threshold. Smooth around threshold ± knee.
+vec3 softThreshold(vec3 c, float thresh, float knee) {
+    float br   = max(max(c.r, c.g), c.b);
+    float soft = clamp(br - thresh + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 1e-4);
+    float contrib = max(soft, br - thresh) / max(br, 1e-4);
+    return c * contrib;
+}
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    if (dst.x >= int(pc.dstExtent.x) || dst.y >= int(pc.dstExtent.y)) return;
+
+    // Each dst pixel maps to a 2x2 block in the full-res HDR.
+    ivec2 src0 = dst * 2;
+    ivec2 src1 = min(src0 + ivec2(1, 0), ivec2(pc.srcExtent) - 1);
+    ivec2 src2 = min(src0 + ivec2(0, 1), ivec2(pc.srcExtent) - 1);
+    ivec2 src3 = min(src0 + ivec2(1, 1), ivec2(pc.srcExtent) - 1);
+
+    vec3 c0 = imageLoad(inHDR, src0).rgb;
+    vec3 c1 = imageLoad(inHDR, src1).rgb;
+    vec3 c2 = imageLoad(inHDR, src2).rgb;
+    vec3 c3 = imageLoad(inHDR, src3).rgb;
+    vec3 avg = (c0 + c1 + c2 + c3) * 0.25;
+
+    // Karis average-of-firefly-clamped reciprocals to reduce sparkles in bloom.
+    float w0 = 1.0 / (1.0 + luma(c0));
+    float w1 = 1.0 / (1.0 + luma(c1));
+    float w2 = 1.0 / (1.0 + luma(c2));
+    float w3 = 1.0 / (1.0 + luma(c3));
+    float wsum = w0 + w1 + w2 + w3;
+    vec3 weighted = (c0 * w0 + c1 * w1 + c2 * w2 + c3 * w3) / max(wsum, 1e-4);
+
+    // Mix between simple average (preserves total energy) and Karis weighted
+    // (kills fireflies). 0.5 = compromise.
+    vec3 sampled = mix(avg, weighted, 0.5);
+
+    vec3 bright = softThreshold(sampled, pc.threshold, pc.knee);
+    imageStore(outBloom, dst, vec4(bright, 1.0));
+}
