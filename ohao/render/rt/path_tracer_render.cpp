@@ -964,12 +964,17 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             // own warm inset matrix → grey ground reading pink/mauve. Removing
             // explicit tint lets AgX provide the only warmth and ground stays
             // neutral grey as authored.
-            ci.exposure         = 1.8f;
-            ci.bloomStrength    = 0.45f;
-            ci.vignetteStrength = 0.3f;
-            ci.saturation       = 1.10f;   // slight bump only
-            ci.contrast         = 1.04f;
-            ci.tint             = {1.0f, 1.0f, 1.0f};   // neutral — let AgX handle warmth
+            // v7 — REPLACED AgX with Khronos PBR Neutral tonemap in shader.
+            // AgX was stylizing greys toward magenta + over-crushing midtones,
+            // harming photorealism. PBR Neutral (industry std for asset viz)
+            // preserves color fidelity. Defaults now physical; vignette/bloom
+            // are subtle camera-lens effects only.
+            ci.exposure         = 1.0f;    // physical 1.0 — PBR Neutral handles HDR natively
+            ci.bloomStrength    = 0.25f;   // subtle highlight glow only
+            ci.vignetteStrength = 0.15f;   // gentle real-lens fall-off
+            ci.saturation       = 1.0f;    // no grade — physical reproduction
+            ci.contrast         = 1.0f;    // no grade — physical reproduction
+            ci.tint             = {1.0f, 1.0f, 1.0f};   // neutral
             m_cinematicPost->dispatchComposite(cmd, ci);
 
             // After composite, binding 30 is in GENERAL with SHADER_WRITE access.

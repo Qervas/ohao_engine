@@ -187,8 +187,16 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "FATAL" << std::endl; return 1; }
 
-    // Set HDR environment
-    renderer.setEnvironmentMap(envPath);
+    // Set HDR environment — but skip when --lighting=studio because env
+    // contribution overwhelms the 3-point studio lights and tints surfaces
+    // with the env's color (the pink-ground problem in 4.H v1-v6). True
+    // product photography is shot in a closed studio: only explicit lights,
+    // black background. That's what studio mode now does.
+    if (lightingMode != LightingMode::Studio) {
+        renderer.setEnvironmentMap(envPath);
+    } else {
+        std::cout << "[4.I] Studio mode: skipping HDR env load (explicit 3-point lighting only)" << std::endl;
+    }
 
     // Scene with just the model — no walls
     auto scene = std::make_unique<Scene>("Env Demo");
@@ -302,15 +310,18 @@ int main(int argc, char* argv[]) {
             a->getTransform()->setPosition(pos);
         };
 
-        // v5 tuning: studio lights need to DOMINATE env IBL contribution,
-        // otherwise the env's warm color cast tints the grey ground pink. Boost
-        // intensities ~3× so studio lights overwhelm env reflections.
-        // Key light: camera-right, ~30° elevation, warm (~3500K), strong
-        addSphere("KeyLight",  { 4.0f, 4.0f,  4.0f}, {1.0f, 0.85f, 0.70f}, 80.0f, 1.0f);
-        // Fill light: camera-left, lower, cool (~6500K), softer
-        addSphere("FillLight", {-4.0f, 2.5f,  2.0f}, {0.70f, 0.82f, 1.0f}, 28.0f, 1.5f);
-        // Rim light: behind subject + above, neutral, edge-defining
-        addSphere("RimLight",  { 0.0f, 4.5f, -4.0f}, {1.0f, 0.95f, 0.90f}, 50.0f, 0.8f);
+        // v8: D65 neutral white lights (5600K, daylight studio). Warm key was
+        // pink-tinting the grey ground. Real product photography uses
+        // color-corrected daylight strobes; everything reads neutral. Apply
+        // subtle warm/cool only as soft accent.
+        // Key light: camera-right, ~30° elevation, near-neutral daylight, strong
+        addSphere("KeyLight",  { 4.0f, 4.0f,  4.0f}, {1.0f, 0.98f, 0.96f}, 400.0f, 1.5f);
+        // Fill light: camera-left, lower, slight cool tint (~6500K)
+        addSphere("FillLight", {-4.0f, 2.5f,  2.0f}, {0.95f, 0.98f, 1.0f}, 150.0f, 2.0f);
+        // Rim light: behind subject + above, pure neutral, edge-defining
+        addSphere("RimLight",  { 0.0f, 4.5f, -4.0f}, {1.0f, 1.0f, 1.0f}, 300.0f, 1.0f);
+        // Bottom-front bounce fill — opens up under-shadow regions
+        addSphere("BounceLight", { 0.0f, 0.5f,  4.5f}, {0.98f, 1.0f, 1.0f}, 100.0f, 2.5f);
 
         std::cout << "[4.H] Studio 3-point lighting injected (3 sphere lights)" << std::endl;
     } else if (lightingMode == LightingMode::HdrOnly) {
