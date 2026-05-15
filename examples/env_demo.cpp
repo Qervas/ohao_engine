@@ -216,6 +216,7 @@ int main(int argc, char* argv[]) {
     auto dot = modelPath.find_last_of('.');
     std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
     if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
+    else if (ext == "fbx" || ext == "FBX" || ext == "dae" || ext == "blend") loaded = model->loadFromFBX(modelPath);
     else loaded = model->loadFromGLTF(modelPath);
 
     // Sub-plan 4.H: track normalized-space model bounds so we can drop the
