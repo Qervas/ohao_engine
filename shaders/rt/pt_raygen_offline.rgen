@@ -407,14 +407,18 @@ void main() {
                     float sssStr = pc.tuning.w;
                     vec3 nlDiff = vec3(NdotL);
                     if (sssStr > 0.001 && !isMetal) {
-                        float r = max(0.0, NdotL * 0.5 + 0.5);   // red wraps fully (deep)
-                        float g = max(0.0, NdotL * 0.7 + 0.3);   // green moderate
-                        float b = max(0.0, NdotL * 0.9 + 0.1);   // blue near-lambert
+                        // Wrap exponents tuned for skin (red deep, blue tight).
+                        // Red continues into shadow via wider intercept; blue is
+                        // near-lambert. Multiplier amplifies the wrap so SSS
+                        // can dominate even at moderate sssStr values.
+                        float r = max(0.0, NdotL * 0.4 + 0.6);   // red wraps very deep
+                        float g = max(0.0, NdotL * 0.6 + 0.4);   // green moderate
+                        float b = max(0.0, NdotL * 0.85 + 0.15); // blue near-lambert
                         vec3 sssWrap = vec3(r, g, b);
-                        // Warm tint biases the shadow-side wrap toward flesh/red.
-                        // Tint kicks in as NdotL crosses from lit (+1) to shadow (-1).
-                        vec3 sssTint = vec3(1.0, 0.55, 0.4);
-                        sssWrap *= mix(vec3(1.0), sssTint, smoothstep(0.6, -0.2, NdotL));
+                        // Saturated flesh-red tint, kicks in earlier at terminator
+                        // and amps the warmth on shadow side.
+                        vec3 sssTint = vec3(1.0, 0.45, 0.30);
+                        sssWrap *= mix(vec3(1.0), sssTint, smoothstep(0.7, -0.4, NdotL));
                         nlDiff = mix(nlDiff, sssWrap, sssStr);
                     }
                     // throughput=1 at bounce 0
