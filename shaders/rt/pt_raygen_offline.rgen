@@ -417,14 +417,14 @@ void main() {
                     vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
                     vec3 diff = kD * albedo / 3.14159;
 
-                    // 4.L v2: improved SSS — per-channel asymmetric wrap +
-                    // warm shadow-side tint mimics how red light penetrates skin
-                    // and re-emerges past the terminator while blue stays
-                    // near-lambert. Channel ramps cross zero (signed NdotL),
-                    // so red contributes positive radiance even on backfacing
-                    // regions near the terminator — that's the "wax glow."
-                    // Off (sssStr=0): bit-identical to prior lambert.
-                    float sssStr = pc.tuning.w;
+                    // 4.L v4: SSS gated to skin-toned pixels via albedo warmth.
+                    // skinHint ≈ 0 for grey/cool surfaces (cloth, metal, hair),
+                    // ≈ 1 for warm-tinted (face, arms, lips). Stops SSS from
+                    // bleeding wrongly onto the dress / hair when --sss is
+                    // applied globally. Movie-real renderers gate via material
+                    // flag; we approximate with "skin is what looks like skin."
+                    float skinHint = clamp((albedo.r - albedo.b) * 3.0, 0.0, 1.0);
+                    float sssStr   = pc.tuning.w * skinHint;
                     vec3 nlDiff = vec3(NdotL);
                     if (sssStr > 0.001 && !isMetal) {
                         // Wrap exponents tuned for skin (red deep, blue tight).
