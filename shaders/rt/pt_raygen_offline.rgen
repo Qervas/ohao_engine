@@ -271,6 +271,11 @@ void main() {
         roughness = max(roughness, 0.01);
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
+        // 4.M: per-pixel curvature from closesthit (vertex-normal variance).
+        // Used to widen SSS Gaussian on thin/sharp geometry (lips, ears,
+        // nostrils, fingertips) where real skin shows more bleed.
+        float curvature = clamp(payload.attenuation.z, 0.0, 1.0);
+
         // Sub-plan 3.C.6: capture demod factors + write demod AOVs
         firstHitDiffAlbedo = isMetal ? vec3(0.0) : albedo;
         firstHitSpecColor  = F0;
@@ -440,9 +445,14 @@ void main() {
                         float w = NdotL * 0.5 + 0.5;       // wrap to [0,1]
                         float d = 1.0 - w;                  // distance from fully lit
                         float d2 = d * d;
-                        float r = exp(-d2 * 1.8);           // red: wide Gaussian
-                        float g = exp(-d2 * 6.0);           // green: medium
-                        float b = exp(-d2 * 20.0);          // blue: tight (near-lambert)
+                        // 4.M: curvature modulates Gaussian width — high
+                        // curvature (thin geometry) widens the bleed; flat
+                        // regions stay tight. 0 curvature → original σ;
+                        // 1 curvature → ~3× wider scatter.
+                        float curvScale = mix(1.0, 0.3, curvature);
+                        float r = exp(-d2 * 1.8 * curvScale);   // red: wide Gaussian
+                        float g = exp(-d2 * 6.0 * curvScale);   // green: medium
+                        float b = exp(-d2 * 20.0 * curvScale);  // blue: tight (near-lambert)
                         vec3 sssWrap = vec3(r, g, b);
                         // Multiplicative warm flesh tint: ramps in as light
                         // direction crosses below the terminator. Real skin
