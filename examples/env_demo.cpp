@@ -44,7 +44,7 @@ int main(int argc, char* argv[]) {
     // --lighting=hdr-only → preserve original env-only behavior (single warm key)
     // --lighting=none    → no explicit lights, env IBL only (pure HDR studio)
     bool groundEnabled = true;
-    enum class LightingMode { Studio, HdrOnly, None };
+    enum class LightingMode { Studio, HdrOnly, None, Cinema };
     LightingMode lightingMode = LightingMode::Studio;
     // Sub-plan 4.K: global anisotropic specular override. 0 = isotropic;
     // 0.5–0.85 gives visible brushed-metal/chrome streaks. Rotation in
@@ -106,6 +106,7 @@ int main(int argc, char* argv[]) {
             if (v == "studio")       lightingMode = LightingMode::Studio;
             else if (v == "hdr-only" || v == "hdr") lightingMode = LightingMode::HdrOnly;
             else if (v == "none")    lightingMode = LightingMode::None;
+            else if (v == "cinema")  lightingMode = LightingMode::Cinema;
         } else if (arg.rfind("--aniso=", 0) == 0) {
             anisoStrength = std::clamp(std::stof(arg.substr(8)), 0.0f, 0.95f);
         } else if (arg.rfind("--aniso-rot=", 0) == 0) {
@@ -338,6 +339,30 @@ int main(int argc, char* argv[]) {
         addSphere("BounceLight", { 0.0f, 0.5f,  4.5f}, {0.98f, 1.0f, 1.0f}, 100.0f, 2.5f);
 
         std::cout << "[4.H] Studio 3-point lighting injected (3 sphere lights)" << std::endl;
+    } else if (lightingMode == LightingMode::Cinema) {
+        // 4.L: cinematic Rembrandt setup — single strong side key 45° camera-right,
+        // tight dim fill, soft rim. Creates the harsh terminator that SSS softens.
+        // Subject in deep shadow on the camera-left side; key lights the right cheek.
+        // This is what makes skin look like skin instead of marble.
+        auto addSphere = [&](const std::string& name, glm::vec3 pos,
+                             glm::vec3 color, float intensity, float radius) {
+            auto a = scene->createActor(name);
+            auto lc = a->addComponent<LightComponent>();
+            lc->setLightType(LightType::Sphere);
+            lc->setColor(color);
+            lc->setIntensity(intensity);
+            lc->setRadius(radius);
+            a->getTransform()->setPosition(pos);
+        };
+        // Key: 45° camera-right, slight warm (tungsten-ish, 4500K). Dim enough
+        // not to clip on close subjects; SSS does the visual heavy lifting on
+        // skin, not pure brightness.
+        addSphere("KeyLight",  { 5.0f, 3.5f,  2.5f}, {1.0f, 0.95f, 0.88f}, 200.0f, 1.0f);
+        // Fill: 1/8 the key intensity, slight cool (8:1 contrast ratio = cinema standard)
+        addSphere("FillLight", {-3.0f, 1.5f,  2.0f}, {0.85f, 0.92f, 1.0f}, 25.0f, 2.5f);
+        // Rim: behind + above, cooler, sharper highlight
+        addSphere("RimLight",  {-1.5f, 4.0f, -3.5f}, {0.9f, 0.95f, 1.0f}, 80.0f, 0.6f);
+        std::cout << "[4.L] Cinema Rembrandt lighting injected (strong side key, 8:1 ratio)" << std::endl;
     } else if (lightingMode == LightingMode::HdrOnly) {
         // Preserve pre-4.H behavior: single warm key sphere light + HDR env
         auto keyLight = scene->createActor("Key");
@@ -353,9 +378,20 @@ int main(int argc, char* argv[]) {
     renderer.setScene(scene.get());
 
     auto& camera = renderer.getCamera();
-    camera.setPosition({0, 0.5f, 8});
-    camera.setFov(40.0f);
-    camera.setRotation(0.0f, -90.0f);
+    if (lightingMode == LightingMode::Cinema) {
+        // Cinematic framing: 50mm-equivalent (40° FOV), camera at upper-body
+        // height. Wider FOV than a tight portrait so taller-than-norm models
+        // (FBX with non-centered origin) still fit. Camera height tuned to
+        // average upper-body of both models when they're placed via 4.H
+        // ground-anchoring logic.
+        camera.setPosition({0.0f, 2.0f, 7.0f});
+        camera.setFov(40.0f);
+        camera.setRotation(-3.0f, -90.0f);
+    } else {
+        camera.setPosition({0, 0.5f, 8});
+        camera.setFov(40.0f);
+        camera.setRotation(0.0f, -90.0f);
+    }
     renderer.setRenderMode(rtMode);
 
     if (denoiseOverride.has_value()) {
