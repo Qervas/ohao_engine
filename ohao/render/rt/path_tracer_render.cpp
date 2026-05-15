@@ -960,12 +960,16 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             // scenes (chess board, BoomBox) into near-black. Lift overall
             // exposure, soften bloom + vignette so the cinematic curve flatters
             // material detail instead of swallowing it.
-            ci.exposure         = 1.8f;    // was 1.0 — recover from AgX shadow crush on mid-luminance scenes
-            ci.bloomStrength    = 0.45f;   // was 0.8 — subtler highlight glow
-            ci.vignetteStrength = 0.3f;    // was 0.6 — product-shot vignette, not noir
-            ci.saturation       = 1.15f;   // was 1.25 — gentle AgX desat comp
-            ci.contrast         = 1.04f;   // was 1.05 — AgX already strong
-            ci.tint             = {1.02f, 1.0f, 0.98f};   // gentle warm
+            // v4: neutral-tint variant. v3's warm tint compounded with AgX's
+            // own warm inset matrix → grey ground reading pink/mauve. Removing
+            // explicit tint lets AgX provide the only warmth and ground stays
+            // neutral grey as authored.
+            ci.exposure         = 1.8f;
+            ci.bloomStrength    = 0.45f;
+            ci.vignetteStrength = 0.3f;
+            ci.saturation       = 1.10f;   // slight bump only
+            ci.contrast         = 1.04f;
+            ci.tint             = {1.0f, 1.0f, 1.0f};   // neutral — let AgX handle warmth
             m_cinematicPost->dispatchComposite(cmd, ci);
 
             // After composite, binding 30 is in GENERAL with SHADER_WRITE access.
