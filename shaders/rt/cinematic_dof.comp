@@ -47,8 +47,12 @@ const vec2 kPoissonDisk[16] = vec2[](
 
 float computeCoC(float depth) {
     if (depth >= 1e20) {
-        // Sky / miss → assume infinity → max blur (background bokeh)
-        return pc.maxCoCPixels;
+        // Sky / miss — historically returned max CoC (infinity-defocus). That
+        // bled dark sky into subject silhouettes. Real cameras DO blur the
+        // background, but in studio mode (black background) the sky has no
+        // detail to blur into bokeh. Cap at a moderate value so we don't
+        // smear black halos onto in-focus subjects.
+        return min(pc.maxCoCPixels * 0.4, 8.0);
     }
     float defocus = abs(depth - pc.focusDistance);
     // Linear ramp by defocus distance, scaled by aperture, clamped

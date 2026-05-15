@@ -1025,9 +1025,12 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             di.preDofLdr     = m_preDofLdrView;
             di.depthAOV      = m_depthAOVView;
             di.finalLdrOut   = m_nrdTonemappedView;
+            // v2: stronger DoF for visible bokeh. aperture 0.5 → 1.5 gives
+            // real-camera defocus on showcase scenes. Sky CoC capped in shader
+            // so bg blur doesn't bleed black halos into subjects.
             di.focusDistance = 5.0f;
-            di.aperture      = 0.5f;
-            di.maxCoCPixels  = 24.0f;
+            di.aperture      = 1.5f;
+            di.maxCoCPixels  = 32.0f;
             m_cinematicPost->dispatchDoF(cmd, di);
 
             // After DoF, binding 30 is in GENERAL with SHADER_WRITE access.
