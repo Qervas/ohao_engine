@@ -397,18 +397,31 @@ void main() {
                     vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
                     vec3 diff = kD * albedo / 3.14159;
 
+                    // 4.L: SSS replaces hard NdotL on the diffuse channel with a
+                    // wrapped, per-channel-attenuated NdotL — light "wraps around"
+                    // the terminator and the red channel scatters further than blue.
+                    // Off (sssStr=0): bit-identical to prior lambert. Metals never
+                    // get SSS. Specular keeps hard NdotL (correct — no SSS on spec).
+                    float sssStr = pc.tuning.w;
+                    vec3 nlDiff = vec3(NdotL);
+                    if (sssStr > 0.001 && !isMetal) {
+                        float w = max(NdotL * 0.5 + 0.5, 0.0);
+                        vec3 sssWrap = vec3(w, pow(w, 1.3), pow(w, 1.8));
+                        nlDiff = mix(nlDiff, sssWrap, sssStr);
+                    }
                     // throughput=1 at bounce 0
-                    vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                    vec3 directContribution = Le * (diff * nlDiff + spec * NdotL) * weight * float(lightBuf.lightCount);
                     if (enableFireflyClamp && pc.tuning.x > 0.0) {
                         float contribLum = dot(directContribution, vec3(0.2126, 0.7152, 0.0722));
                         if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
                     }
                     radiance += directContribution;
 
-                    // Bounce-0 analytic split: diff/spec BRDF terms routed to their channels
-                    vec3 neeCommon = Le * NdotL * weight * float(lightBuf.lightCount);
-                    vec3 neeDiffuse  = neeCommon * diff;
-                    vec3 neeSpecular = neeCommon * spec;
+                    // Bounce-0 analytic split: diff/spec BRDF terms routed to their channels.
+                    // 4.L: diffuse channel uses SSS-wrapped per-channel NdotL; spec keeps hard.
+                    vec3 neeCommon   = Le * weight * float(lightBuf.lightCount);
+                    vec3 neeDiffuse  = neeCommon * diff * nlDiff;
+                    vec3 neeSpecular = neeCommon * spec * NdotL;
                     if (enableFireflyClamp && pc.tuning.x > 0.0) {
                         float lumD = dot(neeDiffuse,  vec3(0.2126, 0.7152, 0.0722));
                         float lumS = dot(neeSpecular, vec3(0.2126, 0.7152, 0.0722));

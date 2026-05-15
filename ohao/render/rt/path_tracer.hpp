@@ -61,6 +61,10 @@ struct RTRenderSettings {
     // is plumbed per-material). >0 enables D_GGX_Aniso with this strength on all hits.
     float anisotropyStrength{0.0f};       // [0, 0.95] — 0 = isotropic (off)
     float anisotropyRotation{0.0f};       // radians, rotates tangent frame around N
+    // Sub-plan 4.L: subsurface scattering override (skin). >0 blends
+    // wrapped-lighting SSS into the diffuse NEE term — kills the
+    // "plastic skin" failure on un-SSS-aware materials.
+    float subsurfaceStrength{0.0f};       // [0, 1] — 0 = lambertian (off)
 };
 
 struct PathTracerShaderSet {

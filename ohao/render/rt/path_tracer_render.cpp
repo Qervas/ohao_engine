@@ -661,7 +661,8 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.control.y = m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
-    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral, 0.0f);
+    pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,
+                          m_renderSettings.subsurfaceStrength);  // 4.L: SSS strength in tuning.w
     // Sub-plan 4.F T4: propagate pixel jitter to raygen. zw repurposed by 4.K
     // for global anisotropic override (z=strength, w=rotation in radians).
     pc.jitter = glm::vec4(m_jitterCurrent.x, m_jitterCurrent.y,

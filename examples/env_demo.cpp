@@ -51,6 +51,8 @@ int main(int argc, char* argv[]) {
     // radians orients the tangent frame around N. Both 0 → no change.
     float anisoStrength = 0.0f;
     float anisoRotation = 0.0f;
+    // Sub-plan 4.L: SSS strength for skin. 0.5-0.7 = realistic skin.
+    float sssStrength = 0.0f;
     std::string dumpMvPath;
     std::string dumpDepthPath;
     std::string dumpRoughnessPath;
@@ -108,6 +110,8 @@ int main(int argc, char* argv[]) {
             anisoStrength = std::clamp(std::stof(arg.substr(8)), 0.0f, 0.95f);
         } else if (arg.rfind("--aniso-rot=", 0) == 0) {
             anisoRotation = std::stof(arg.substr(12));
+        } else if (arg.rfind("--sss=", 0) == 0) {
+            sssStrength = std::clamp(std::stof(arg.substr(6)), 0.0f, 1.0f);
         }
     }
 
@@ -363,13 +367,17 @@ int main(int argc, char* argv[]) {
                   << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
 
-    if (anisoStrength > 0.0f) {
+    if (anisoStrength > 0.0f || sssStrength > 0.0f) {
         auto settings = renderer.getRTRenderSettings();
         settings.anisotropyStrength = anisoStrength;
         settings.anisotropyRotation = anisoRotation;
+        settings.subsurfaceStrength = sssStrength;
         renderer.setRTRenderSettings(settings);
-        std::cout << "Anisotropic specular: strength=" << anisoStrength
-                  << " rotation=" << anisoRotation << " rad" << std::endl;
+        if (anisoStrength > 0.0f)
+            std::cout << "Anisotropic specular: strength=" << anisoStrength
+                      << " rotation=" << anisoRotation << " rad" << std::endl;
+        if (sssStrength > 0.0f)
+            std::cout << "Subsurface scattering: strength=" << sssStrength << std::endl;
     }
 
     std::cout << "Rendering (" << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << ")..." << std::endl;

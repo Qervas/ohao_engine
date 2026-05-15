@@ -504,9 +504,11 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, b
     // caller explicitly opted in via setRTRenderSettings.
     float preservedAnisoStrength = m_rtSettings.anisotropyStrength;
     float preservedAnisoRotation = m_rtSettings.anisotropyRotation;
+    float preservedSssStrength   = m_rtSettings.subsurfaceStrength;  // 4.L
     m_rtSettings = pipeline.getDefaultSettings();
     m_rtSettings.anisotropyStrength = preservedAnisoStrength;
     m_rtSettings.anisotropyRotation = preservedAnisoRotation;
+    m_rtSettings.subsurfaceStrength = preservedSssStrength;
     applyRTRenderSettings();
 
     updateLightBuffer();
