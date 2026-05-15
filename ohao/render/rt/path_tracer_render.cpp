@@ -950,16 +950,22 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             std::memcpy(ci.invProj.data(), glm::value_ptr(pc.invProj), sizeof(float) * 16);
             ci.extent[0]       = static_cast<float>(m_width);
             ci.extent[1]       = static_cast<float>(m_height);
-            ci.envIntensity    = (m_envCDFIntegral > 0.0f && m_envMapView) ? 1.0f : 0.0f;
-            // Defaults from spec §3.7, tuned empirically for cinematic look on
-            // path-traced input. AgX itself is already a strong filmic curve,
-            // so the contrast lift is gentle.
-            ci.exposure         = 1.0f;
-            ci.bloomStrength    = 0.8f;
-            ci.vignetteStrength = 0.6f;
-            ci.saturation       = 1.25f;   // recover chromaticity AgX desaturates
-            ci.contrast         = 1.05f;
-            ci.tint             = {1.03f, 1.0f, 0.97f};
+            // env_intensity 2.0 (was 1.0): the env contributes both to sky pixels in
+            // the cinematic composite AND as IBL via raygen. Doubling the sky-pixel
+            // contribution makes the background read brighter — without affecting
+            // raygen's lighting calculation (which uses m_envCDFIntegral directly).
+            ci.envIntensity    = (m_envCDFIntegral > 0.0f && m_envMapView) ? 2.0f : 0.0f;
+            // 4.G v2: rebalanced for general scenes. Original tuning (exposure
+            // 1.0, bloom 0.8, vignette 0.6) over-crushed normal-luminance
+            // scenes (chess board, BoomBox) into near-black. Lift overall
+            // exposure, soften bloom + vignette so the cinematic curve flatters
+            // material detail instead of swallowing it.
+            ci.exposure         = 1.8f;    // was 1.0 — recover from AgX shadow crush on mid-luminance scenes
+            ci.bloomStrength    = 0.45f;   // was 0.8 — subtler highlight glow
+            ci.vignetteStrength = 0.3f;    // was 0.6 — product-shot vignette, not noir
+            ci.saturation       = 1.15f;   // was 1.25 — gentle AgX desat comp
+            ci.contrast         = 1.04f;   // was 1.05 — AgX already strong
+            ci.tint             = {1.02f, 1.0f, 0.98f};   // gentle warm
             m_cinematicPost->dispatchComposite(cmd, ci);
 
             // After composite, binding 30 is in GENERAL with SHADER_WRITE access.
