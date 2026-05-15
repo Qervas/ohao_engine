@@ -81,6 +81,17 @@ void main() {
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
 
+    // 4.M: per-pixel curvature proxy from vertex-normal variance. High when
+    // the 3 vertex normals diverge (corners, edges, ears, nostrils); near zero
+    // on flat or smoothly-curved regions. Used by SSS in raygen to modulate
+    // Gaussian wrap width — high curvature = thinner geometry = more bleed.
+    // We can't use screen-space derivatives in RT, this is the cheap analog.
+    vec3 nn0 = normalize(n0);
+    vec3 nn1 = normalize(n1);
+    vec3 nn2 = normalize(n2);
+    float curv = (1.0 - dot(nn0, nn1)) + (1.0 - dot(nn1, nn2)) + (1.0 - dot(nn0, nn2));
+    curv = clamp(curv * 8.0, 0.0, 1.0);  // scale so typical face values land 0..1
+
     // === Material lookup — 3 vec4s per material ===
     uint matID = matIDBuf.matIDs[globalTriID];
     vec4 matColor   = matColorBuf.matColors[matID * 3u + 0u];  // (baseColor.rgb, diffuseTexIdx)
@@ -145,6 +156,7 @@ void main() {
     }
     payload.color = emissive;
 
-    // Pack roughness + metallic for raygen
-    payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, 0.0);
+    // Pack roughness + metallic + curvature for raygen.
+    // .x = roughness (signed for metal flag), .z = per-pixel curvature [0,1].
+    payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, curv);
 }
