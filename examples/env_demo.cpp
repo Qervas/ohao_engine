@@ -385,10 +385,13 @@ int main(int argc, char* argv[]) {
     auto& camera = renderer.getCamera();
     if (lightingMode == LightingMode::Cinema) {
         if (faceCrop) {
-            // 85mm portrait: very tight, head fills frame. Showcases skin SSS detail.
-            camera.setPosition({0.0f, 2.6f, 3.5f});
-            camera.setFov(20.0f);
-            camera.setRotation(-8.0f, -90.0f);
+            // 85mm portrait: head fills frame. Model is normalized to 4-units
+            // tall, centered at origin → head spans y=[1, 2], face center
+            // y=1.5. Camera level with face, no tilt; tight FOV puts the head
+            // + shoulders in frame.
+            camera.setPosition({0.0f, 1.5f, 3.0f});
+            camera.setFov(22.0f);
+            camera.setRotation(0.0f, -90.0f);
         } else {
             // 50mm full-figure framing.
             camera.setPosition({0.0f, 2.0f, 7.0f});
