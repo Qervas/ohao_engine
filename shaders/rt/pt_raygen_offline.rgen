@@ -51,6 +51,7 @@ layout(push_constant) uniform PushConstants {
 #include "includes/rt/mis.glsl"
 #include "includes/rt/env_sampling.glsl"
 #include "includes/rt/sampler_api.glsl"
+#include "includes/material/ggx_aniso.glsl"
 
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
@@ -384,10 +385,7 @@ void main() {
                     float NdotV = max(dot(N, V), 0.001);
                     float VdotH = max(dot(V, H), 0.001);
 
-                    float a = roughness * roughness;
-                    float a2 = a * a;
-                    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                    float D = a2 / (3.14159 * denom * denom + 0.0001);
+                    float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
 
                     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 
@@ -447,10 +445,7 @@ void main() {
                     float NdotH = max(dot(N, H), 0.001);
                     float NdotV = max(dot(N, V), 0.001);
                     float VdotH = max(dot(V, H), 0.001);
-                    float a = roughness * roughness;
-                    float a2 = a * a;
-                    float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                    float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                    float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
                     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
                     float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
                     float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
@@ -527,10 +522,7 @@ void main() {
                 vec3 Hspec = normalize(-inDir + specDir);
                 float NdotH_s = max(dot(N, Hspec), 0.001);
                 float VdotH_s = max(dot(-inDir, Hspec), 0.001);
-                float as = roughness * roughness;
-                float as2 = as * as;
-                float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
-                float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                float D_s = ggxD_anisoOrIso(N, Hspec, NdotH_s, roughness, pc.jitter.z, pc.jitter.w);
                 float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
                 specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)
                 specLastBounceWasDelta = false;

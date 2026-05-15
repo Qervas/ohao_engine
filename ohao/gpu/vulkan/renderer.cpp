@@ -499,7 +499,14 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, b
     if (!rtRenderer) return;
 
     // Keep the active RT pipeline authoritative over path tracer behavior.
+    // Preserve user-set anisotropy overrides (4.K) across the per-frame reset —
+    // pipeline defaults always have aniso=0, so a non-zero strength means the
+    // caller explicitly opted in via setRTRenderSettings.
+    float preservedAnisoStrength = m_rtSettings.anisotropyStrength;
+    float preservedAnisoRotation = m_rtSettings.anisotropyRotation;
     m_rtSettings = pipeline.getDefaultSettings();
+    m_rtSettings.anisotropyStrength = preservedAnisoStrength;
+    m_rtSettings.anisotropyRotation = preservedAnisoRotation;
     applyRTRenderSettings();
 
     updateLightBuffer();

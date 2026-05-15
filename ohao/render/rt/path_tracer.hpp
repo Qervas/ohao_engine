@@ -57,6 +57,10 @@ struct RTRenderSettings {
     float fireflyClampLuminance{10.0f};
     SamplerType samplerType{SamplerType::Sobol};
     DenoiseMode denoiseMode{DenoiseMode::None};
+    // Sub-plan 4.K: global anisotropic specular override (until KHR_materials_anisotropy
+    // is plumbed per-material). >0 enables D_GGX_Aniso with this strength on all hits.
+    float anisotropyStrength{0.0f};       // [0, 0.95] — 0 = isotropic (off)
+    float anisotropyRotation{0.0f};       // radians, rotates tangent frame around N
 };
 
 struct PathTracerShaderSet {

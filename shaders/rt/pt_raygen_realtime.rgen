@@ -49,6 +49,7 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 #include "includes/rt/sampler_api.glsl"
+#include "includes/material/ggx_aniso.glsl"
 
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
@@ -384,10 +385,7 @@ void main() {
                     float NdotV = max(dot(N, V), 0.001);
                     float VdotH = max(dot(V, H), 0.001);
 
-                    float a = roughness * roughness;
-                    float a2 = a * a;
-                    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                    float D = a2 / (3.14159 * denom * denom + 0.0001);
+                    float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
                     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
                     float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
                     float G = (NdotL / (NdotL * (1.0 - k) + k))
