@@ -394,6 +394,26 @@ void main() {
                             * (NdotV / (NdotV * (1.0 - k) + k));
 
                     vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
+                    // 4.L v3: oil-spec lobe for skin — sharp secondary GGX
+                    // at roughness 0.3 adds the wet/oily highlight that
+                    // signals "alive skin" vs plastic. Only active when SSS
+                    // is enabled (skin pixels), F0 forced to dielectric 0.028
+                    // matching skin index of refraction 1.4.
+                    if (pc.tuning.w > 0.001 && !isMetal) {
+                        float rSkin   = 0.3;
+                        float aSkin   = rSkin * rSkin;
+                        float a2Skin  = aSkin * aSkin;
+                        float denomSk = NdotH * NdotH * (a2Skin - 1.0) + 1.0;
+                        float DSkin   = a2Skin / (3.14159 * denomSk * denomSk + 1e-4);
+                        float kSkin   = (rSkin + 1.0) * (rSkin + 1.0) / 8.0;
+                        float GSkin   = (NdotL / (NdotL * (1.0 - kSkin) + kSkin))
+                                      * (NdotV / (NdotV * (1.0 - kSkin) + kSkin));
+                        vec3 FSkin    = vec3(0.028) + (1.0 - vec3(0.028)) * pow(1.0 - VdotH, 5.0);
+                        vec3 oilSpec  = DSkin * GSkin * FSkin / (4.0 * NdotV * NdotL + 1e-3);
+                        // Additive contribution, weighted by sssStr × 0.4 so
+                        // the oil layer doesn't overpower base spec at low SSS.
+                        spec += oilSpec * (pc.tuning.w * 0.4);
+                    }
                     vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
                     vec3 diff = kD * albedo / 3.14159;
 
