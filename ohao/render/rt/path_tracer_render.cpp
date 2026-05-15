@@ -1025,10 +1025,14 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             di.preDofLdr     = m_preDofLdrView;
             di.depthAOV      = m_depthAOVView;
             di.finalLdrOut   = m_nrdTonemappedView;
-            // v2: stronger DoF for visible bokeh. aperture 0.5 → 1.5 gives
-            // real-camera defocus on showcase scenes. Sky CoC capped in shader
-            // so bg blur doesn't bleed black halos into subjects.
-            di.focusDistance = 5.0f;
+            // v3 — derive focusDistance from camera→origin distance dynamically.
+            // env_demo defaults camera at (0, 0.5, 8); model centered at origin.
+            // Reading current camera pos via push-constant transforms (pc.invView's
+            // last column has camera world-space position). Falls back to 8m if
+            // no view matrix yet.
+            glm::vec3 camPos = glm::vec3(glm::inverse(view) * glm::vec4(0,0,0,1));
+            float focusDist = glm::length(camPos);  // distance to world origin (where model sits)
+            di.focusDistance = focusDist > 0.5f ? focusDist : 8.0f;
             di.aperture      = 1.5f;
             di.maxCoCPixels  = 32.0f;
             m_cinematicPost->dispatchDoF(cmd, di);
