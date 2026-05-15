@@ -210,10 +210,11 @@ int main(int argc, char* argv[]) {
     // with the env's color (the pink-ground problem in 4.H v1-v6). True
     // product photography is shot in a closed studio: only explicit lights,
     // black background. That's what studio mode now does.
-    if (lightingMode != LightingMode::Studio) {
+    if (lightingMode != LightingMode::Studio && lightingMode != LightingMode::Cinema) {
         renderer.setEnvironmentMap(envPath);
     } else {
-        std::cout << "[4.I] Studio mode: skipping HDR env load (explicit 3-point lighting only)" << std::endl;
+        std::cout << "[4.I/L] " << (lightingMode == LightingMode::Cinema ? "Cinema" : "Studio")
+                  << " mode: skipping HDR env load (explicit lighting only)" << std::endl;
     }
 
     // Scene with just the model — no walls
@@ -358,14 +359,14 @@ int main(int argc, char* argv[]) {
             lc->setRadius(radius);
             a->getTransform()->setPosition(pos);
         };
-        // Key: 45° camera-right, slight warm (tungsten-ish, 4500K). Dim enough
-        // not to clip on close subjects; SSS does the visual heavy lifting on
-        // skin, not pure brightness.
-        addSphere("KeyLight",  { 5.0f, 3.5f,  2.5f}, {1.0f, 0.95f, 0.88f}, 200.0f, 1.0f);
+        // Key: 45° camera-right, slight warm (tungsten-ish, 4500K). Dimmer
+        // than 4-point studio so close-up subjects don't clip and texture
+        // detail survives. SSS does the visual work, not brightness.
+        addSphere("KeyLight",  { 5.0f, 3.5f,  2.5f}, {1.0f, 0.95f, 0.88f}, 80.0f, 1.0f);
         // Fill: 1/8 the key intensity, slight cool (8:1 contrast ratio = cinema standard)
-        addSphere("FillLight", {-3.0f, 1.5f,  2.0f}, {0.85f, 0.92f, 1.0f}, 25.0f, 2.5f);
+        addSphere("FillLight", {-3.0f, 1.5f,  2.0f}, {0.85f, 0.92f, 1.0f}, 10.0f, 2.5f);
         // Rim: behind + above, cooler, sharper highlight
-        addSphere("RimLight",  {-1.5f, 4.0f, -3.5f}, {0.9f, 0.95f, 1.0f}, 80.0f, 0.6f);
+        addSphere("RimLight",  {-1.5f, 4.0f, -3.5f}, {0.9f, 0.95f, 1.0f}, 30.0f, 0.6f);
         std::cout << "[4.L] Cinema Rembrandt lighting injected (strong side key, 8:1 ratio)" << std::endl;
     } else if (lightingMode == LightingMode::HdrOnly) {
         // Preserve pre-4.H behavior: single warm key sphere light + HDR env
