@@ -748,6 +748,56 @@ bool PathTracer::createImages() {
         m_nrdTonemapFirstFrame = true;
     }
 
+    // ---- Sub-plan 4.J: pre-DoF LDR (RGBA8 UNORM) at binding 32 ----
+    // Composite shader's outLDR is wired here; DoF gather pass reads this +
+    // depth AOV and writes the final RGBA8 (m_nrdTonemappedImage, binding 30).
+    // Same dimensions as binding 30 — they share the full-res output extent.
+    // Usage = STORAGE (compute write by composite, read by DoF) +
+    // TRANSFER_SRC (defensive; downstream readback never targets pre-DoF but
+    // keeping symmetric with binding 30 makes diff-mode comparisons trivial).
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType     = VK_IMAGE_TYPE_2D;
+        imageInfo.format        = VK_FORMAT_R8G8B8A8_UNORM;
+        imageInfo.extent        = {m_width, m_height, 1};
+        imageInfo.mipLevels     = 1;
+        imageInfo.arrayLayers   = 1;
+        imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage         = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_preDofLdrImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_preDofLdrImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize  = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_preDofLdrMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_preDofLdrImage, m_preDofLdrMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType                       = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image                       = m_preDofLdrImage;
+        viewInfo.viewType                    = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format                      = VK_FORMAT_R8G8B8A8_UNORM;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_preDofLdrView) != VK_SUCCESS) return false;
+
+        // Reset first-frame latch on new VkImage (resize-safe, same idiom as
+        // m_nrdTonemapFirstFrame / m_nrdComposeFirstFrame).
+        m_preDofFirstFrame = true;
+    }
+
     // ---- Sub-plan 4.G: bloom mip chain (RGBA16F, 3 levels) ----
     // Mip 0 = half-res, mip 1 = quarter-res, mip 2 = eighth-res.
     // Usage: STORAGE (for compute writes in extract/blur) + SAMPLED (for
@@ -876,6 +926,12 @@ void PathTracer::destroyImages() {
     if (m_nrdTonemappedView)   { vkDestroyImageView(m_device, m_nrdTonemappedView, nullptr);   m_nrdTonemappedView   = VK_NULL_HANDLE; }
     if (m_nrdTonemappedImage)  { vkDestroyImage(m_device, m_nrdTonemappedImage, nullptr);      m_nrdTonemappedImage  = VK_NULL_HANDLE; }
     if (m_nrdTonemappedMemory) { vkFreeMemory(m_device, m_nrdTonemappedMemory, nullptr);       m_nrdTonemappedMemory = VK_NULL_HANDLE; }
+
+    // 4.J: pre-DoF LDR teardown.
+    if (m_preDofLdrView)   { vkDestroyImageView(m_device, m_preDofLdrView, nullptr);   m_preDofLdrView   = VK_NULL_HANDLE; }
+    if (m_preDofLdrImage)  { vkDestroyImage(m_device, m_preDofLdrImage, nullptr);      m_preDofLdrImage  = VK_NULL_HANDLE; }
+    if (m_preDofLdrMemory) { vkFreeMemory(m_device, m_preDofLdrMemory, nullptr);       m_preDofLdrMemory = VK_NULL_HANDLE; }
+    m_preDofFirstFrame = true;
 
     // 4.G: bloom mip chain teardown.
     for (uint32_t mip = 0; mip < 3; ++mip) {

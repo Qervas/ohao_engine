@@ -56,6 +56,24 @@ struct NrdCinematicInputs {
     std::array<float, 3> tint {1.02f, 1.0f, 0.98f};
 };
 
+/// Sub-plan 4.J: per-frame inputs for NrdCinematicPost::dispatchDoF().
+///
+/// Reads the pre-DoF LDR image written by the composite (PT binding 32) plus
+/// the view-space depth AOV (PT binding 20), and writes the final post-DoF
+/// LDR image (PT binding 30). All three views are storage images in
+/// VK_IMAGE_LAYOUT_GENERAL; the caller is responsible for barriers.
+struct NrdDoFInputs {
+    VkImageView preDofLdr      = VK_NULL_HANDLE;  // binding 32 (read)
+    VkImageView depthAOV       = VK_NULL_HANDLE;  // binding 20 (read)
+    VkImageView finalLdrOut    = VK_NULL_HANDLE;  // binding 30 (write)
+
+    // Camera-lens parameters. focusDistance / aperture / maxCoCPixels match
+    // the push constants in shaders/rt/cinematic_dof.comp.
+    float focusDistance        = 5.0f;
+    float aperture             = 0.5f;
+    float maxCoCPixels         = 24.0f;
+};
+
 /// Sub-plan 4.G: cinematic post-process — replaces NrdTonemap with a full
 /// bloom + AgX filmic + vignette + color-grade chain.
 ///
@@ -103,10 +121,17 @@ public:
                            uint32_t dstW, uint32_t dstH);
 
     /// Dispatch the final composite pass — reads HDR + 3 bloom mips (sampled)
-    /// + depth + env → writes binding 30. Preconditions on `inputs`:
+    /// + depth + env → writes binding 32 (pre-DoF LDR). Preconditions:
     ///   composedHDR + tonemappedOut + depthAOV in VK_IMAGE_LAYOUT_GENERAL
     ///   bloomMipN views + envMapView in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    /// NOTE: `tonemappedOut` in `inputs` is wired to the pre-DoF LDR image
+    /// (PT binding 32) since 4.J, so the DoF gather pass can consume it.
     void dispatchComposite(VkCommandBuffer cmd, const NrdCinematicInputs& inputs);
+
+    /// Sub-plan 4.J: depth-of-field gather pass. Reads pre-DoF LDR + depth →
+    /// writes final post-DoF LDR (PT binding 30). All three views must be in
+    /// VK_IMAGE_LAYOUT_GENERAL.
+    void dispatchDoF(VkCommandBuffer cmd, const NrdDoFInputs& inputs);
 
     // PIMPL is exposed (public) so internal-TU helpers in nrd_cinematic.cpp
     // can take an Impl& argument without violating C++ access rules. The
