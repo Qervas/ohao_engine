@@ -302,12 +302,15 @@ int main(int argc, char* argv[]) {
             a->getTransform()->setPosition(pos);
         };
 
+        // v5 tuning: studio lights need to DOMINATE env IBL contribution,
+        // otherwise the env's warm color cast tints the grey ground pink. Boost
+        // intensities ~3× so studio lights overwhelm env reflections.
         // Key light: camera-right, ~30° elevation, warm (~3500K), strong
-        addSphere("KeyLight",  { 4.0f, 4.0f,  4.0f}, {1.0f, 0.85f, 0.70f}, 25.0f, 1.0f);
-        // Fill light: camera-left, lower, cool (~6500K), dimmer (~1/3 of key)
-        addSphere("FillLight", {-4.0f, 2.5f,  2.0f}, {0.70f, 0.82f, 1.0f},  8.0f, 1.5f);
+        addSphere("KeyLight",  { 4.0f, 4.0f,  4.0f}, {1.0f, 0.85f, 0.70f}, 80.0f, 1.0f);
+        // Fill light: camera-left, lower, cool (~6500K), softer
+        addSphere("FillLight", {-4.0f, 2.5f,  2.0f}, {0.70f, 0.82f, 1.0f}, 28.0f, 1.5f);
         // Rim light: behind subject + above, neutral, edge-defining
-        addSphere("RimLight",  { 0.0f, 4.5f, -4.0f}, {1.0f, 0.95f, 0.90f}, 15.0f, 0.8f);
+        addSphere("RimLight",  { 0.0f, 4.5f, -4.0f}, {1.0f, 0.95f, 0.90f}, 50.0f, 0.8f);
 
         std::cout << "[4.H] Studio 3-point lighting injected (3 sphere lights)" << std::endl;
     } else if (lightingMode == LightingMode::HdrOnly) {
