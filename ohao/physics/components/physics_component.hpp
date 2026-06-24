@@ -94,11 +94,7 @@ public:
     virtual void onCollisionBegin(PhysicsComponent* other) {}
     virtual void onCollisionEnd(PhysicsComponent* other) {}
     virtual void onCollisionStay(PhysicsComponent* other) {}
-    
-    // === SERIALIZATION ===
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
-    
+
     // === SETTINGS ===
     void setGravityEnabled(bool enabled);
     bool isGravityEnabled() const { return m_gravityEnabled; }

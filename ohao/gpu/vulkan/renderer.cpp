@@ -2,10 +2,8 @@
 #include <cstring>
 #include "render/camera/camera.hpp"
 #include "render/rt/denoise/oidn_denoise.hpp"
-#include "render/rt/denoise/optix_denoise.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
-#include "animation/animation_component.hpp"
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
@@ -225,14 +223,6 @@ bool VulkanRenderer::initialize() {
         }
 
         m_initialized = true;
-        // Initialize GPU skinning for animated BLAS
-        m_gpuSkinning = std::make_unique<GPUSkinning>();
-        if (!m_gpuSkinning->initialize(m_device, m_physicalDevice, m_commandPool, m_graphicsQueue)) {
-            std::cerr << "GPUSkinning init failed (non-fatal)" << std::endl;
-            m_gpuSkinning.reset();
-        }
-        // Initialize animated RT manager (dependencies set later during scene setup)
-        m_animatedRT = std::make_unique<AnimatedRTManager>();
 
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
@@ -254,14 +244,6 @@ void VulkanRenderer::shutdown() {
         vkDeviceWaitIdle(m_device);
 
         // Cleanup RT resources BEFORE device destruction
-        if (m_animatedRT) {
-            m_animatedRT->cleanup();
-            m_animatedRT.reset();
-        }
-        if (m_gpuSkinning) {
-            m_gpuSkinning->cleanup();
-            m_gpuSkinning.reset();
-        }
         if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }
         if (m_rtOfflineRenderer) { m_rtOfflineRenderer->destroy(); m_rtOfflineRenderer.reset(); }
         if (m_rtAccel) {
@@ -480,18 +462,8 @@ void VulkanRenderer::applyRTRenderSettings() {
 }
 
 bool VulkanRenderer::updateAnimatedActorsForRT() {
-    bool hasAnimatedActors = false;
-    if (!m_scene) return false;
-
-    const float dt = 1.0f / 60.0f;
-    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-        auto animComp = actor->getComponent<AnimationComponent>();
-        if (animComp && animComp->isPlaying()) {
-            animComp->update(dt);
-            hasAnimatedActors = true;
-        }
-    }
-    return hasAnimatedActors;
+    // Skeletal animation removed — no animated actors. Always static.
+    return false;
 }
 
 void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS) {
@@ -516,13 +488,7 @@ void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, b
         rtRenderer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
     }
 
-    if (hasDynamicBLAS && m_gpuSkinning) {
-        VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
-        if (skinnedNormalBuf != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
-            rtRenderer->setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
-            return;
-        }
-    }
+    (void)hasDynamicBLAS;  // dynamic BLAS removed with skeletal animation
 
     if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
         rtRenderer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
@@ -714,16 +680,7 @@ const uint8_t* VulkanRenderer::getPixels() const {
 
     bool denoised = false;
 
-    // Primary denoiser attempt
-    if (m_denoiseMode == DenoiseMode::OptiX) {
-        denoised = ohao::optixDenoise(beauty3.data(), albedo3.data(), normal3.data(),
-                                       rw, rh, /*hdr*/ true);
-        if (!denoised) {
-            std::cerr << "[Denoise] OptiX unavailable or failed — falling back to OIDN\n";
-        }
-    }
-
-    // Fallback to OIDN if OptiX failed, or if mode was OIDN to begin with
+    // OIDN is the offline denoiser backend.
     if (!denoised) {
         denoised = ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
                                       rw, rh, /*hdr*/ true);

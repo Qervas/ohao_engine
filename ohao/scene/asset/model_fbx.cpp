@@ -2,8 +2,6 @@
 // Falls back to Assimp for non-FBX formats (Collada, etc.)
 
 #include "model.hpp"
-#include "animation/skeleton.hpp"
-#include "animation/animation_clip.hpp"
 #include "ufbx.h"
 
 #include <glm/gtc/quaternion.hpp>
@@ -298,57 +296,11 @@ bool Model::loadFromFBX(const std::string& filename) {
         }
     }
 
-    // --- Skeleton ---
-    if (!clusterToJoint.empty()) {
-        skeleton = std::make_shared<Skeleton>();
-        skeleton->joints.resize(nextJointIdx);
-        skeleton->jointMatrices.resize(nextJointIdx, glm::mat4(1.0f));
-        skeleton->ufbxClusterMap.resize(nextJointIdx);
-
-        // Store the ufbx scene for per-frame animation evaluation
-        skeleton->ufbxScene = scene;  // ownership transferred — don't free here
-
-        // Compute mesh bind-pose inverse (for converting world-space skin to mesh-local)
-        // Use the first mesh with a skin deformer
-        for (size_t mi = 0; mi < scene->meshes.count; mi++) {
-            if (scene->meshes.data[mi]->skin_deformers.count > 0 &&
-                scene->meshes.data[mi]->instances.count > 0) {
-                skeleton->meshBindPoseInverse = glm::inverse(
-                    toGlm(scene->meshes.data[mi]->instances.data[0]->geometry_to_world));
-                break;
-            }
-        }
-
-        for (auto& [clusterId, jointIdx] : clusterToJoint) {
-            const ufbx_skin_cluster* cluster = scene->skin_clusters.data[clusterId];
-            Joint& joint = skeleton->joints[jointIdx];
-            joint.name = cluster->bone_node ? cluster->bone_node->name.data : "unknown";
-            joint.inverseBindMatrix = toGlm(cluster->geometry_to_bone);
-            skeleton->ufbxClusterMap[jointIdx] = clusterId;
-
-            // Bind-pose: meshInverse * geoToWorld should be identity
-            skeleton->jointMatrices[jointIdx] =
-                skeleton->meshBindPoseInverse * toGlm(cluster->geometry_to_world);
-        }
-
-        // Get animation info
-        if (scene->anim_stacks.count > 0) {
-            const ufbx_anim_stack* stack = scene->anim_stacks.data[0];
-            skeleton->ufbxAnimDuration = float(stack->time_end - stack->time_begin);
-            skeleton->ufbxAnimIndex = 0;
-
-            for (size_t i = 0; i < scene->anim_stacks.count; i++) {
-                auto* s = scene->anim_stacks.data[i];
-                float dur = float(s->time_end - s->time_begin);
-                std::cout << "  Clip '" << s->name.data << "': " << dur << "s" << std::endl;
-            }
-        }
-
-        std::cout << "FBX skeleton: " << nextJointIdx << " joints" << std::endl;
-    } else {
-        // No skeleton — free the scene immediately
-        ufbx_free_scene(scene);
-    }
+    // Skeletal animation removed — always free the ufbx scene now that
+    // geometry has been extracted. Bone weights remain in the Vertex struct
+    // as inert data (static rendering ignores them).
+    (void)nextJointIdx;
+    ufbx_free_scene(scene);
 
     std::cout << "FBX loaded: " << filename << " ("
               << vertices.size() << " vertices, "

@@ -2,8 +2,6 @@
 // FBX → ufbx, GLB/GLTF → Assimp, OBJ → native.
 
 #include "model_loader.hpp"
-#include "animation/skeleton.hpp"
-#include "animation/animation_clip.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -135,11 +133,11 @@ std::shared_ptr<Model> ModelLoader::load(const std::string& path) {
     if (ext == "obj") {
         model = loadOBJ(path);
     } else if (ext == "fbx") {
-        // Try ufbx first (correct rotation orders, animation, embedded textures)
+        // Try ufbx first (correct rotation orders, embedded textures)
         model = loadFBX(path);
-        // If ufbx result has no skeleton, retry through Assimp for better mesh processing
+        // Retry through Assimp for better mesh processing
         // (JoinIdenticalVertices, GenSmoothNormals, FixInfacingNormals fix AI-generated meshes)
-        if (model && !model->hasSkeleton()) {
+        if (model) {
             auto assimpModel = loadAssimp(path);
             if (assimpModel && !assimpModel->vertices.empty()) {
                 std::cout << "[ModelLoader] FBX: using Assimp geometry (better mesh cleanup)" << std::endl;
@@ -417,124 +415,10 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
         globalVertexOffset += mesh->mNumVertices;
     }
 
-    // --- Skeleton (Assimp node tree → same format as ufbx) ---
-    if (!boneNameToIdx.empty()) {
-        model->skeleton = std::make_shared<Skeleton>();
-        model->skeleton->joints.resize(nextJointIdx);
-        model->skeleton->jointMatrices.resize(nextJointIdx, glm::mat4(1.0f));
-        model->skeleton->useNodeTree = true;
-        model->skeleton->globalInverse = glm::inverse(toGlm(scene->mRootNode->mTransformation));
-
-        // Build full node tree
-        std::function<void(const aiNode*, int)> buildTree =
-        [&](const aiNode* aiNode, int parentTreeIdx) {
-            int myIdx = static_cast<int>(model->skeleton->nodeTree.size());
-
-            SkeletonNode sn;
-            sn.name = aiNode->mName.C_Str();
-            sn.defaultTransform = toGlm(aiNode->mTransformation);
-            sn.animatedTransform = sn.defaultTransform;
-            sn.parentNode = parentTreeIdx;
-
-            auto boneIt = boneNameToIdx.find(sn.name);
-            if (boneIt != boneNameToIdx.end()) {
-                sn.boneIndex = boneIt->second;
-                model->skeleton->joints[boneIt->second].name = sn.name;
-                model->skeleton->joints[boneIt->second].inverseBindMatrix = inverseBindMatrices[boneIt->second];
-            }
-
-            model->skeleton->nodeTree.push_back(std::move(sn));
-
-            for (unsigned c = 0; c < aiNode->mNumChildren; c++) {
-                int childIdx = static_cast<int>(model->skeleton->nodeTree.size());
-                model->skeleton->nodeTree[myIdx].children.push_back(childIdx);
-                buildTree(aiNode->mChildren[c], myIdx);
-            }
-        };
-        model->skeleton->nodeTreeRoot = 0;
-        buildTree(scene->mRootNode, -1);
-
-        model->skeleton->computeJointMatrices();
-        std::cout << "[ModelLoader] Skeleton: " << nextJointIdx << " joints, "
-                  << model->skeleton->nodeTree.size() << " nodes" << std::endl;
-    }
-
-    // --- Animations (Assimp channels → target node tree nodes) ---
-    if (scene->mNumAnimations > 0 && model->skeleton) {
-        // Build node name → tree index map
-        std::unordered_map<std::string, int> nodeNameToTreeIdx;
-        for (size_t ni = 0; ni < model->skeleton->nodeTree.size(); ni++)
-            nodeNameToTreeIdx[model->skeleton->nodeTree[ni].name] = static_cast<int>(ni);
-
-        for (unsigned ai = 0; ai < scene->mNumAnimations; ai++) {
-            const aiAnimation* anim = scene->mAnimations[ai];
-            auto clip = std::make_shared<AnimationClip>();
-            clip->name = anim->mName.length > 0 ? anim->mName.C_Str()
-                        : "animation_" + std::to_string(ai);
-
-            double ticksPerSec = anim->mTicksPerSecond > 0 ? anim->mTicksPerSecond : 24.0;
-            clip->duration = static_cast<float>(anim->mDuration / ticksPerSec);
-
-            for (unsigned ci = 0; ci < anim->mNumChannels; ci++) {
-                const aiNodeAnim* nodeAnim = anim->mChannels[ci];
-                std::string nodeName = nodeAnim->mNodeName.C_Str();
-
-                auto nodeIt = nodeNameToTreeIdx.find(nodeName);
-                if (nodeIt == nodeNameToTreeIdx.end()) continue;
-                int nodeTreeIdx = nodeIt->second;
-
-                auto boneIt = boneNameToIdx.find(nodeName);
-                int jointIdx = (boneIt != boneNameToIdx.end()) ? boneIt->second : -1;
-
-                // Translation
-                if (nodeAnim->mNumPositionKeys > 0) {
-                    AnimationChannel ch;
-                    ch.targetNode = nodeTreeIdx;
-                    ch.targetJoint = jointIdx;
-                    ch.property = AnimationProperty::TRANSLATION;
-                    for (unsigned k = 0; k < nodeAnim->mNumPositionKeys; k++) {
-                        ch.timestamps.push_back(static_cast<float>(nodeAnim->mPositionKeys[k].mTime / ticksPerSec));
-                        auto& v = nodeAnim->mPositionKeys[k].mValue;
-                        ch.values.push_back(glm::vec4(v.x, v.y, v.z, 0));
-                    }
-                    clip->channels.push_back(std::move(ch));
-                }
-
-                // Rotation
-                if (nodeAnim->mNumRotationKeys > 0) {
-                    AnimationChannel ch;
-                    ch.targetNode = nodeTreeIdx;
-                    ch.targetJoint = jointIdx;
-                    ch.property = AnimationProperty::ROTATION;
-                    for (unsigned k = 0; k < nodeAnim->mNumRotationKeys; k++) {
-                        ch.timestamps.push_back(static_cast<float>(nodeAnim->mRotationKeys[k].mTime / ticksPerSec));
-                        auto& q = nodeAnim->mRotationKeys[k].mValue;
-                        ch.values.push_back(glm::vec4(q.x, q.y, q.z, q.w));
-                    }
-                    clip->channels.push_back(std::move(ch));
-                }
-
-                // Scale
-                if (nodeAnim->mNumScalingKeys > 0) {
-                    AnimationChannel ch;
-                    ch.targetNode = nodeTreeIdx;
-                    ch.targetJoint = jointIdx;
-                    ch.property = AnimationProperty::SCALE;
-                    for (unsigned k = 0; k < nodeAnim->mNumScalingKeys; k++) {
-                        ch.timestamps.push_back(static_cast<float>(nodeAnim->mScalingKeys[k].mTime / ticksPerSec));
-                        auto& v = nodeAnim->mScalingKeys[k].mValue;
-                        ch.values.push_back(glm::vec4(v.x, v.y, v.z, 0));
-                    }
-                    clip->channels.push_back(std::move(ch));
-                }
-            }
-
-            model->animations.push_back(std::move(clip));
-            std::cout << "  Clip '" << model->animations.back()->name << "': "
-                      << model->animations.back()->duration << "s, "
-                      << model->animations.back()->channels.size() << " channels" << std::endl;
-        }
-    }
+    // Skeletal animation removed — skeleton and animation channels are no
+    // longer built. Bone weights remain in the Vertex struct as inert data.
+    (void)nextJointIdx;
+    (void)inverseBindMatrices;
 
     std::cout << "[ModelLoader] Loaded: " << path << " ("
               << model->vertices.size() << " verts, "

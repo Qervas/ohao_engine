@@ -4,7 +4,6 @@
 #include "../../scene/actor/actor.hpp"
 #include "../../scene/component/transform_component.hpp"
 #include "scene/component/mesh_component.hpp"
-#include "animation/animation_component.hpp"
 #include "../../scene/asset/model.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
@@ -27,7 +26,6 @@ bool CSMPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createFramebuffers()) return false;
     if (!createCascadeBuffer()) return false;
     if (!createPipeline()) return false;
-    // Skinned pipeline created lazily when bone descriptor is set
 
     // Initialize cascade splits
     calculateCascadeSplits();
@@ -40,14 +38,6 @@ void CSMPass::cleanup() {
 
     vkDeviceWaitIdle(m_device);
 
-    if (m_skinnedPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_device, m_skinnedPipeline, nullptr);
-        m_skinnedPipeline = VK_NULL_HANDLE;
-    }
-    if (m_skinnedPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_device, m_skinnedPipelineLayout, nullptr);
-        m_skinnedPipelineLayout = VK_NULL_HANDLE;
-    }
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
@@ -138,11 +128,6 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
         scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Create skinned pipeline lazily on first use
-        if (m_skinnedPipeline == VK_NULL_HANDLE && m_boneDescriptorLayout != VK_NULL_HANDLE) {
-            createSkinnedPipeline();
-        }
-
         // Bind vertex and index buffers if available
         if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
             VkBuffer vertexBuffers[] = {m_vertexBuffer};
@@ -168,23 +153,13 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 auto transformComp = actor->getComponent<TransformComponent>();
                 glm::mat4 modelMatrix = transformComp ? transformComp->getWorldMatrix() : glm::mat4(1.0f);
 
-                // Check for animated actor
-                auto animComp = actor->getComponent<AnimationComponent>();
-                bool useSkinning = animComp && animComp->hasAnimations()
-                                && m_skinnedPipeline != VK_NULL_HANDLE
-                                && m_boneDescriptorSet != VK_NULL_HANDLE;
-
-                VkPipeline targetPipeline = useSkinning ? m_skinnedPipeline : m_pipeline;
-                VkPipelineLayout targetLayout = useSkinning ? m_skinnedPipelineLayout : m_pipelineLayout;
+                // Static geometry only (skeletal animation removed)
+                VkPipeline targetPipeline = m_pipeline;
+                VkPipelineLayout targetLayout = m_pipelineLayout;
 
                 if (currentPipeline != targetPipeline) {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
                     currentPipeline = targetPipeline;
-                    if (useSkinning) {
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                                m_skinnedPipelineLayout, 0, 1,
-                                                &m_boneDescriptorSet, 0, nullptr);
-                    }
                 }
 
                 // Find buffer info for this actor
@@ -488,117 +463,6 @@ bool CSMPass::createPipeline() {
     vkDestroyShaderModule(m_device, vertShader, nullptr);
     vkDestroyShaderModule(m_device, geomShader, nullptr);
 
-    return result == VK_SUCCESS;
-}
-
-bool CSMPass::createSkinnedPipeline() {
-    if (m_boneDescriptorLayout == VK_NULL_HANDLE) return false;
-
-    VkShaderModule vertShader = loadShaderModule("shadow_shadow_csm_skinned.vert.spv");
-    VkShaderModule geomShader = loadShaderModule("shadow_shadow_csm.geom.spv");
-    if (vertShader == VK_NULL_HANDLE || geomShader == VK_NULL_HANDLE) {
-        if (vertShader) vkDestroyShaderModule(m_device, vertShader, nullptr);
-        if (geomShader) vkDestroyShaderModule(m_device, geomShader, nullptr);
-        return false;
-    }
-
-    std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
-    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    shaderStages[0].module = vertShader;
-    shaderStages[0].pName = "main";
-    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStages[1].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
-    shaderStages[1].module = geomShader;
-    shaderStages[1].pName = "main";
-
-    auto bindingDescs = Vertex::getBindingDescriptions();
-    auto attributeDescs = Vertex::getAttributeDescriptions();
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());
-    vertexInputInfo.pVertexBindingDescriptions = bindingDescs.data();
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescs.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescs.data();
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1; viewportState.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_TRUE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_FRONT_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_TRUE;
-    rasterizer.depthBiasConstantFactor = 1.25f;
-    rasterizer.depthBiasSlopeFactor = 1.75f;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 0;
-
-    std::array<VkDynamicState, 2> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-    dynamicState.pDynamicStates = dynamicStates.data();
-
-    VkPushConstantRange pushConstant{};
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT;
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(ShadowPushConstant);
-
-    // Pipeline layout: bone descriptor at set 0
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &m_boneDescriptorLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
-
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_skinnedPipelineLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(m_device, vertShader, nullptr);
-        vkDestroyShaderModule(m_device, geomShader, nullptr);
-        return false;
-    }
-
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
-    pipelineInfo.pStages = shaderStages.data();
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = m_skinnedPipelineLayout;
-    pipelineInfo.renderPass = m_renderPass;
-    pipelineInfo.subpass = 0;
-
-    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                                nullptr, &m_skinnedPipeline);
-    vkDestroyShaderModule(m_device, vertShader, nullptr);
-    vkDestroyShaderModule(m_device, geomShader, nullptr);
     return result == VK_SUCCESS;
 }
 

@@ -5,7 +5,6 @@
  *   1. EventBus  — subscribe, publish, unsubscribe, clear, typed data, multiple subscribers
  *   2. CommandHistory — execute, undo, redo, canUndo/canRedo, descriptions, clear, max history
  *   3. Scene — createActor, findActor, removeActor, getAllActors, actor count
- *   4. SceneSerializer — serialize JSON structure, round-trip deserialize
  */
 
 #include <iostream>
@@ -17,7 +16,6 @@
 #include "core/event_bus.hpp"
 #include "core/command.hpp"
 #include "scene/scene.hpp"
-#include "scene/scene_serializer.hpp"
 
 using namespace ohao;
 
@@ -396,109 +394,6 @@ static void runSceneTests() {
 }
 
 // =============================================================================
-// SECTION 4 — SCENE SERIALIZER
-// =============================================================================
-
-static void runSceneSerializerTests() {
-    std::cout << "\n[SceneSerializer]\n";
-
-    TEST_BEGIN("serialize produces valid JSON object");
-    {
-        Scene scene("SerializeTest");
-        auto json = SceneSerializer::serialize(&scene);
-        EXPECT(json.is_object(), "serialize should return a JSON object");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("serialize includes scene name");
-    {
-        Scene scene("MyLevel");
-        auto json = SceneSerializer::serialize(&scene);
-        EXPECT(json.contains("name"), "JSON should contain 'name' key");
-        EXPECT(json["name"].get<std::string>() == "MyLevel", "JSON name should match scene name");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("serialize includes version field");
-    {
-        Scene scene("VersionTest");
-        auto json = SceneSerializer::serialize(&scene);
-        EXPECT(json.contains("version"), "JSON should contain 'version' key");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("serialize includes actors array");
-    {
-        Scene scene("ActorArrayTest");
-        scene.createActor("Box1");
-        scene.createActor("Sphere1");
-        auto json = SceneSerializer::serialize(&scene);
-        EXPECT(json.contains("actors"), "JSON should contain 'actors' key");
-        EXPECT(json["actors"].is_array(), "actors should be a JSON array");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("deserialize populates scene name");
-    {
-        Scene src("SourceScene");
-        auto json = SceneSerializer::serialize(&src);
-
-        Scene dst("empty");
-        bool ok = SceneSerializer::deserialize(&dst, json);
-        EXPECT(ok, "deserialize should return true on valid JSON");
-        EXPECT(dst.getName() == "SourceScene", "deserialized scene should have source name");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("deserialize round-trip preserves actor names");
-    {
-        Scene src("RoundTrip");
-        src.createActor("Player");
-        src.createActor("Enemy");
-        auto json = SceneSerializer::serialize(&src);
-
-        Scene dst("empty");
-        SceneSerializer::deserialize(&dst, json);
-        // After deserialize, actors should exist
-        auto player = dst.findActor("Player");
-        auto enemy  = dst.findActor("Enemy");
-        EXPECT(player != nullptr, "Player should survive round-trip");
-        EXPECT(enemy  != nullptr, "Enemy should survive round-trip");
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("deserialize fails gracefully on invalid JSON");
-    {
-        Scene scene("Test");
-        nlohmann::json bad = nlohmann::json::array();  // Array instead of object
-        bool ok = SceneSerializer::deserialize(&scene, bad);
-        // Should either return false or not crash
-        (void)ok;  // Either outcome is acceptable; must not throw
-        TEST_PASS();
-    }
-
-    TEST_BEGIN("saveToFile / loadFromFile round-trip");
-    {
-        const std::string path = "test_scene_tmp.json";
-        Scene src("FileRoundTrip");
-        src.createActor("Cube");
-        bool saved = SceneSerializer::saveToFile(&src, path);
-        EXPECT(saved, "saveToFile should return true");
-
-        Scene dst("empty");
-        bool loaded = SceneSerializer::loadFromFile(&dst, path);
-        EXPECT(loaded, "loadFromFile should return true");
-        EXPECT(dst.getName() == "FileRoundTrip", "loaded scene name should match");
-        auto cube = dst.findActor("Cube");
-        EXPECT(cube != nullptr, "Cube actor should survive file round-trip");
-
-        // Cleanup
-        std::remove(path.c_str());
-        TEST_PASS();
-    }
-}
-
-// =============================================================================
 // MAIN
 // =============================================================================
 
@@ -510,7 +405,6 @@ int main() {
     runEventBusTests();
     runCommandHistoryTests();
     runSceneTests();
-    runSceneSerializerTests();
 
     std::cout << "\n================================================\n";
     std::cout << "  Results: " << testsPassed << "/" << testsRun << " passed";

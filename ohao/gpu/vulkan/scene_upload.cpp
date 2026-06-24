@@ -10,7 +10,6 @@
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/transform_component.hpp"
-#include "animation/animation_component.hpp"
 #include "render/camera/camera.hpp"
 #include "scene/asset/model.hpp"
 #include <cstring>

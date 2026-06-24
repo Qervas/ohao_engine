@@ -16,7 +16,6 @@ target_link_libraries(renderer_test PRIVATE
     ohao_renderer
     ohao_gpu_vulkan
     ohao_scene
-    ohao_animation
     ohao_physics
     ohao_audio
     ohao_core

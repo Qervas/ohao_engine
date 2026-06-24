@@ -45,10 +45,6 @@ public:
     void render() override;
     void destroy() override;
 
-    // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
-
 private:
     Material material;
 

@@ -8,15 +8,12 @@ namespace ohao {
 
 // Unified model loader — handles FBX, GLB, GLTF, OBJ transparently.
 // Tries the best loader for each format:
-//   FBX  → ufbx (correct rotation orders, animation evaluation)
+//   FBX  → ufbx (correct rotation orders), retried through Assimp for cleanup
 //   GLB  → Assimp (ufbx can't read GLB)
 //   GLTF → Assimp (consistent with GLB path)
-//   OBJ  → native parser (no skeleton/animation)
+//   OBJ  → native parser
 //
-// All animated formats produce the same output:
-//   - Full node tree in Skeleton (for correct joint matrices)
-//   - ufbx scene pointer (FBX) or Assimp node tree (GLB/GLTF)
-//   - Per-frame evaluation via Skeleton::evaluate(time)
+// Static geometry only — skeletal animation has been removed.
 class ModelLoader {
 public:
     // Load any supported model format. Returns nullptr on failure.

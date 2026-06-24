@@ -2,7 +2,7 @@
 
 // DenoiseMode — selects the denoiser backend used by the offline path tracer.
 //
-// Sub-plan 1 ships OIDN. Later sub-plans add OptiX, NRD, DLSS RR.
+// Sub-plan 1 ships OIDN. Later sub-plans add NRD, DLSS RR.
 // The enum + parse helpers live here so every backend can share them and
 // the CLI surface stays consistent across examples.
 
@@ -14,7 +14,6 @@ namespace ohao {
 enum class DenoiseMode : uint32_t {
     None   = 0,
     OIDN   = 1,
-    OptiX  = 2,   // NVIDIA OptiX (requires CUDA + OptiX SDK at build time)
     NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)
     // future:
     // DLSSRR = 4,

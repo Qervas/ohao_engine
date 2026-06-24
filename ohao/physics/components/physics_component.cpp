@@ -406,10 +406,6 @@ void PhysicsComponent::destroy() {
     m_initialized = false;
 }
 
-// === SERIALIZATION ===
-void PhysicsComponent::serialize(class Serializer& serializer) const {}
-void PhysicsComponent::deserialize(class Deserializer& deserializer) {}
-
 // === SETTINGS ===
 void PhysicsComponent::setGravityEnabled(bool enabled) {
     m_gravityEnabled = enabled;
