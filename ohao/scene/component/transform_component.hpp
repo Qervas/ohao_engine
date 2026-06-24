@@ -61,11 +61,7 @@ public:
     
     // Component interface
     const char* getTypeName() const override;
-    
-    // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
-    
+
 private:
     void updateLocalMatrix();
     void updateWorldMatrix();

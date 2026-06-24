@@ -10,10 +10,6 @@
 
 namespace ohao{
 
-// Forward declarations for animation types
-struct Skeleton;
-struct AnimationClip;
-
 struct Vertex{
 
     glm::vec3 position;
@@ -106,10 +102,6 @@ public:
     std::vector<int> materialRoughMetalTexIndex;
     std::vector<int> materialEmissiveTexIndex;
 
-    // Animation data (populated by GLTF loader for skinned meshes)
-    std::shared_ptr<Skeleton> skeleton;
-    std::vector<std::shared_ptr<AnimationClip>> animations;
-
     // LOD levels (index 0 = highest detail, each subsequent = lower detail)
     // Empty means no LOD support (always use main vertices/indices)
     std::vector<LODLevel> lodLevels;
@@ -131,7 +123,6 @@ public:
     bool loadMTL(const std::string& filename);
     void setupDefaultMaterial();
 
-    bool hasSkeleton() const { return skeleton.get() != nullptr; }
     bool hasLOD() const { return !lodLevels.empty(); }
 
     const std::string& getSourcePath() const { return sourcePath; }

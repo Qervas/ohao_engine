@@ -6,7 +6,6 @@
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
-#include "animation/animation_component.hpp"
 #include "render/rt/rt_visibility.hpp"
 
 namespace ohao {
@@ -37,20 +36,7 @@ void VulkanRenderer::renderDeferred() {
     m_deferredRenderer->setScene(m_scene);
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
 
-    // Update animation components (skeleton pose → joint matrices)
-    bool hasAnimatedActors = false;
-    if (m_scene) {
-        const float dt = 1.0f / 60.0f;
-        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-            auto animComp = actor->getComponent<AnimationComponent>();
-            if (animComp && animComp->isPlaying()) {
-                animComp->update(dt);
-                hasAnimatedActors = true;
-            }
-        }
-    }
-
-    bool hasDynamicBLAS = hasAnimatedActors && m_animatedRT && m_animatedRT->hasAnimatedContent();
+    // Skeletal animation removed — all meshes are static.
 
     if (m_rtAccel && m_rtAccel->isSupported()) {
         m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
@@ -123,12 +109,6 @@ void VulkanRenderer::renderDeferred() {
 
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // ── Dynamic BLAS: compute skinning → fresh BLAS → TLAS rebuild ──
-    if (hasDynamicBLAS) {
-        m_animatedRT->update(m_scene, m_rtIndexBuffer, m_vertexCount);
-    }
-
-
     // Execute deferred rendering pipeline
     m_deferredRenderer->render(cmd, m_currentFrame);
 
@@ -165,9 +145,8 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();
 
-    bool hasAnimatedActors = updateAnimatedActorsForRT();
-    bool hasDynamicBLAS = hasAnimatedActors && m_animatedRT && m_animatedRT->hasAnimatedContent();
-    prepareRTSceneForFrame(pipeline, hasDynamicBLAS);
+    // Skeletal animation removed — all meshes are static (no dynamic BLAS).
+    prepareRTSceneForFrame(pipeline, false);
 
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);
@@ -176,10 +155,6 @@ void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
-
-    if (hasDynamicBLAS) {
-        m_animatedRT->update(m_scene, m_rtIndexBuffer, m_vertexCount);
-    }
 
     // PT needs unflipped projection (ray generation handles Y internally).
     // Use same FOV/aspect as deferred for consistent framing.

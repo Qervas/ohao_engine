@@ -25,7 +25,4 @@ void LightComponent::update(float deltaTime) {
     // Update light parameters if needed
 }
 
-void LightComponent::serialize(class Serializer& serializer) const {}
-void LightComponent::deserialize(class Deserializer& deserializer) {}
-
 } // namespace ohao

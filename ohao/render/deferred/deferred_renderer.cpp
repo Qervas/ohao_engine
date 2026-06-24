@@ -303,13 +303,6 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         m_csmPass->setScene(m_scene);
         m_csmPass->setLightDirection(m_lightDirection);
         m_csmPass->setCameraData(m_view, m_proj, m_nearPlane, m_farPlane);
-
-        // Share bone resources from GBuffer for skinned shadow rendering
-        if (m_gbufferPass) {
-            m_csmPass->setBoneDescriptor(
-                m_gbufferPass->getBoneDescriptorSet(),
-                m_gbufferPass->getBoneDescriptorLayout());
-        }
     }
 
     // Update lighting pass

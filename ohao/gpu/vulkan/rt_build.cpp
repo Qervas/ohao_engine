@@ -8,7 +8,6 @@
 #include "stb_image.h"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
-#include "animation/animation_component.hpp"
 #include "render/rt/rt_visibility.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/asset/model.hpp"
@@ -771,51 +770,7 @@ void VulkanRenderer::buildBLASTLAS() {
         if (blas != INVALID_BLAS) actorBlas[actorId] = blas;
     }
 
-    // Register animated meshes and BLAS metadata with AnimatedRTManager
-    std::vector<AnimatedMeshInfo> animMeshes;
-    std::vector<ActorBlasInfo> actorBlasList;
-    if (m_gpuSkinning) {
-        for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-            if (!actor->getComponent<AnimationComponent>()) continue;
-            auto blasIt = actorBlas.find(actorId);
-            if (blasIt == actorBlas.end()) continue;
-            auto meshIt = m_meshBufferMap.find(actorId);
-            if (meshIt == m_meshBufferMap.end()) continue;
-
-            uint32_t skinHandle = m_gpuSkinning->registerMesh(
-                m_rtVertexBuffer, meshIt->second.vertexCount, meshIt->second.vertexOffset);
-
-            AnimatedMeshInfo info{};
-            info.skinHandle = skinHandle;
-            info.actorId = actorId;
-            animMeshes.push_back(info);
-        }
-        if (!animMeshes.empty()) {
-            m_gpuSkinning->createGlobalBuffer(m_vertexCount);
-            std::cout << "[RT] Registered " << animMeshes.size()
-                      << " animated meshes for GPU skinning" << std::endl;
-        }
-    }
-    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
-        auto blasIt = actorBlas.find(actorId);
-        if (blasIt == actorBlas.end()) continue;
-        auto meshIt = m_meshBufferMap.find(actorId);
-        if (meshIt == m_meshBufferMap.end()) continue;
-
-        ActorBlasInfo abi{};
-        abi.actorId = actorId;
-        abi.originalBlas = blasIt->second;
-        abi.isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
-        abi.indexCount = meshIt->second.indexCount;
-        abi.indexOffset = meshIt->second.indexOffset;
-        actorBlasList.push_back(abi);
-    }
-    if (m_animatedRT) {
-        RTGITechnique* rtGI = m_deferredRenderer ? m_deferredRenderer->getRT_GI() : nullptr;
-        m_animatedRT->setDependencies(m_device, m_commandPool, m_graphicsQueue,
-                                       m_gpuSkinning.get(), m_rtAccel.get(), rtGI);
-        m_animatedRT->registerMeshes(std::move(animMeshes), std::move(actorBlasList));
-    }
+    // Skeletal animation removed — all meshes are static.
 
     // Build TLAS instances + collect materials in the SAME order
     m_rtAccel->clearInstances();
@@ -827,11 +782,8 @@ void VulkanRenderer::buildBLASTLAS() {
         auto blasIt = actorBlas.find(actorId);
         if (blasIt == actorBlas.end()) continue;
         // customIndex = global triangle offset for material ID lookup
-        // mask: 0xFF = visible to all rays. Animated actors get 0xFE (bit 0 clear)
-        // so GI rays (mask 0x01) skip them — avoids T-pose ghost in GI.
-        // With dynamic BLAS rebuild, all instances are visible to all rays
-        bool isAnimated = actor->getComponent<AnimationComponent>() != nullptr;
-        uint32_t instanceMask = isAnimated ? rt::MASK_ANIMATED : rt::MASK_STATIC_ONLY;
+        // mask: 0xFF = visible to all rays. All meshes are static.
+        uint32_t instanceMask = rt::MASK_STATIC_ONLY;
         m_rtAccel->addInstance(blasIt->second, actor->getTransform()->getWorldMatrix(), globalTriOffset, instanceMask);
 
         // Collect albedo in same order
@@ -895,12 +847,6 @@ void VulkanRenderer::buildBLASTLAS() {
             }
             if (m_rtTextureArrayView && m_rtTextureSampler && m_rtTextureCount > 0) {
                 renderer.setTextureArray(m_rtTextureArrayView, m_rtTextureSampler, m_rtTextureCount);
-            }
-            if (m_gpuSkinning && !animMeshes.empty()) {
-                VkBuffer skinnedNormalBuf = m_gpuSkinning->getGlobalSkinnedNormalBuffer();
-                if (skinnedNormalBuf != VK_NULL_HANDLE) {
-                    renderer.setNormalBuffer(skinnedNormalBuf, m_rtIndexBuffer, m_vertexCount);
-                }
             }
         });
     }

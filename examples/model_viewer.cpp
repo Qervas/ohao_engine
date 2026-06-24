@@ -14,8 +14,6 @@
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
-#include "animation/animation_component.hpp"
-#include "animation/animation_clip.hpp"
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
@@ -191,16 +189,11 @@ int main(int argc, char* argv[]) {
         bool hasMultipleMaterials = model->materialPerTriangle.size() > 0 &&
             *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end()) > 0;
 
-        // Create shared animation component (if skeleton exists)
-        std::shared_ptr<AnimationComponent> sharedAnimComp;
-
         if (hasMultipleMaterials) {
             // Group triangles by material
             uint32_t maxMat = *std::max_element(model->materialPerTriangle.begin(), model->materialPerTriangle.end());
             for (uint32_t matIdx = 0; matIdx <= maxMat; matIdx++) {
                 auto subModel = std::make_shared<Model>();
-                subModel->skeleton = model->skeleton;
-
 
                 // Collect triangles for this material
                 for (size_t tri = 0; tri < model->materialPerTriangle.size(); tri++) {
@@ -269,21 +262,6 @@ int main(int argc, char* argv[]) {
                 mat->getMaterial().baseColor = baseColor;
                 mat->getMaterial().roughness = roughness;
                 mat->getMaterial().metallic = metallic;
-
-                // Attach animation to each sub-actor
-                if (model->hasSkeleton()) {
-                    auto animComp = actor->addComponent<AnimationComponent>();
-                    animComp->setSkeleton(model->skeleton);
-                    if (model->skeleton->ufbxScene) {
-                        animComp->initialize();
-                        animComp->play("ufbx");
-                    } else if (!model->animations.empty()) {
-                        for (const auto& clip : model->animations)
-                            animComp->addAnimation(clip->name, clip);
-                        animComp->initialize();
-                        animComp->play(model->animations[0]->name);
-                    }
-                }
             }
             std::cout << "Split into " << (maxMat + 1) << " material groups" << std::endl;
         } else {
@@ -298,22 +276,6 @@ int main(int argc, char* argv[]) {
             auto mat = actor->addComponent<MaterialComponent>();
             mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
             mat->getMaterial().roughness = 0.5f;
-
-            if (model->hasSkeleton()) {
-                auto animComp = actor->addComponent<AnimationComponent>();
-                animComp->setSkeleton(model->skeleton);
-                if (model->skeleton->ufbxScene) {
-                    animComp->initialize();
-                    animComp->play("ufbx");
-                    std::cout << "Animation: ufbx (" << model->skeleton->joints.size()
-                              << " joints, " << model->skeleton->ufbxAnimDuration << "s)" << std::endl;
-                } else if (!model->animations.empty()) {
-                    for (const auto& clip : model->animations)
-                        animComp->addAnimation(clip->name, clip);
-                    animComp->initialize();
-                    animComp->play(model->animations[0]->name);
-                }
-            }
         }
 
         std::cout << "Loaded: " << model->vertices.size() << " verts, scale=" << scale << std::endl;

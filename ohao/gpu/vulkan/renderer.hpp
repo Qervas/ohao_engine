@@ -16,8 +16,6 @@
 #include "render/rt/rt_render_pipeline.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
 #include "render/rt/rt_profile_renderer.hpp"
-#include "render/rt/gpu_skinning.hpp"
-#include "render/rt/animated_rt_manager.hpp"
 
 namespace ohao {
 
@@ -412,12 +410,6 @@ private:
 
     // Cached emissive mesh lights (computed once during updateSceneBuffers, used per-frame)
     std::vector<LightData> m_cachedEmissiveLights;
-
-    // GPU compute skinning for animated BLAS rebuild
-    std::unique_ptr<GPUSkinning> m_gpuSkinning;
-
-    // Consolidated animated RT pipeline (skinning → BLAS → TLAS → material sync)
-    std::unique_ptr<AnimatedRTManager> m_animatedRT;
 
     // Sync
     VkFence m_renderFence{VK_NULL_HANDLE};

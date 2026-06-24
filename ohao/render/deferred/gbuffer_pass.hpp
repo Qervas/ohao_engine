@@ -11,13 +11,6 @@ namespace ohao {
 
 class Scene;
 
-static constexpr uint32_t MAX_BONES = 128;
-
-struct BoneMatrixUBO {
-    glm::mat4 boneMatrices[MAX_BONES];
-    int boneCount{0};
-};
-
 // G-Buffer generation pass
 // Outputs: Position, Normal, Albedo, Velocity, Depth
 class GBufferPass : public RenderPassBase {
@@ -75,21 +68,12 @@ public:
     VkDescriptorSetLayout getGBufferLayout() const { return m_gbufferLayout; }
     VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }
 
-    // Upload bone matrices for a specific animated actor
-    void uploadBoneMatrices(const std::vector<glm::mat4>& matrices);
-
-    // Expose bone resources for sharing with CSM pass
-    VkDescriptorSet getBoneDescriptorSet() const { return m_boneDescriptorSet; }
-    VkDescriptorSetLayout getBoneDescriptorLayout() const { return m_boneDescriptorLayout; }
-
 private:
     bool createRenderPass();
     bool createFramebuffer();
     bool createPipeline();
-    bool createSkinnedPipeline();
     bool createGBuffer();
     bool createDescriptors();
-    bool createBoneMatrixResources();
     void destroyGBuffer();
 
     // G-Buffer render targets
@@ -104,16 +88,6 @@ private:
     VkPipeline m_pipeline{VK_NULL_HANDLE};
     VkPipeline m_wireframePipeline{VK_NULL_HANDLE};
     VkPipelineLayout m_pipelineLayout{VK_NULL_HANDLE};
-
-    // Skinned pipeline (animated meshes)
-    VkPipeline m_skinnedPipeline{VK_NULL_HANDLE};
-    VkPipelineLayout m_skinnedPipelineLayout{VK_NULL_HANDLE};
-    VkDescriptorSetLayout m_boneDescriptorLayout{VK_NULL_HANDLE};
-    VkDescriptorPool m_boneDescriptorPool{VK_NULL_HANDLE};
-    VkDescriptorSet m_boneDescriptorSet{VK_NULL_HANDLE};
-    VkBuffer m_boneMatrixBuffer{VK_NULL_HANDLE};
-    VkDeviceMemory m_boneMatrixMemory{VK_NULL_HANDLE};
-    void* m_boneMatrixMapped{nullptr};
 
     // Descriptors for G-Buffer access
     VkDescriptorSetLayout m_gbufferLayout{VK_NULL_HANDLE};

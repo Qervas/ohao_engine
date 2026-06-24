@@ -109,9 +109,6 @@ void MaterialComponent::destroy() {
     // Cleanup
 }
 
-void MaterialComponent::serialize(class Serializer& serializer) const {}
-void MaterialComponent::deserialize(class Deserializer& deserializer) {}
-
 void MaterialComponent::updateTextureUsage() {
     // Texture loading is handled by VulkanRenderer
     // MaterialComponent just stores the texture paths for the renderer to use
