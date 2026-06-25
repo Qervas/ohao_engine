@@ -1,7 +1,7 @@
 # Renovation Phase 0 — Deterministic Render Contract + Golden Net
 
 **Date:** 2026-06-24
-**Status:** Design (awaiting review)
+**Status:** In progress — ✅ determinism fix + ✅ golden harness + ✅ pre-push hook (2026-06-25); remaining: CI workflow, trunk cleanup
 **Phase:** 0 of the engine renovation (see `STATUS.md` and memory `renovation_plan`)
 
 ---
@@ -67,12 +67,20 @@ so the subsequent Slang / `.ohao` / unified-integrator work is always regression
   in order: (a) time-seeded RNG, (b) racy GPU accumulation / atomics, (c) uninitialized buffers,
   (d) non-deterministic work ordering. The fix depends on findings — `systematic-debugging`.
 
-### 2. `render-golden` harness
-- A small CLI target (`tests/golden/render_golden.cpp` → `render-golden`): `render-golden <manifest.json>`.
-- For each manifest entry: render via the existing offline path tracer at the entry's
-  `(spp, seed, mode)`, **denoiser off**, read back the raw beauty, compare to the committed golden.
-- Compare modes: `exact` (sha256, same-machine default) and `tolerance` (RMSE and/or SSIM ≤ threshold).
-- On drift: write `<name>.actual.png` + `<name>.diff.png` and exit non-zero with a summary.
+### 2. `render-golden` harness  ✅ IMPLEMENTED
+- `tests/golden/render_golden.py <manifest.json> [--update|--selftest]` — a Python tool (it runs
+  in the local pre-push hook, not GPU-less CI; "run command + diff PNG" is a scripting job).
+- Each manifest entry has a `command` (an existing example invocation with an `{out}` placeholder),
+  a `golden` path, and per-scene `max_abs_diff` / `max_diff_frac`. The command shells out to the
+  current example binaries with `--denoise=none` (raw beauty). When `.ohao` lands (Phase 1) the
+  command just becomes the new renderer invocation — the harness doesn't change.
+- **Tolerance compare, downscaled.** Both images are downscaled to 640px wide before diffing — this
+  averages the FP ghost away (it vanishes to max_abs=0 at compare-res) AND shrinks goldens from
+  ~30 MB to ~450 KB (committable, no git bloat). PASS iff `max_abs_diff` AND `diff_frac` both within
+  bounds — the first catches magnitude, the second catches widespread tiny shifts.
+- `--selftest` renders each scene twice and compares the two (direct determinism check).
+- On drift: writes `<golden>.actual.png` and exits non-zero. Validated: a wrong-spp render is caught
+  (max_abs=90, 99.98% pixels differ, exit 1).
 
 ### 3. Manifest + golden corpus
 - `tests/golden/manifest.json`: list of `{ name, scene, spp, seed, mode, golden, compare, threshold }`.
@@ -90,8 +98,12 @@ so the subsequent Slang / `.ohao` / unified-integrator work is always regression
 
 ## Key design decisions
 
-- **Bit-exact same-machine, perceptual cross-machine.** Hash-compare locally for speed/certainty;
-  RMSE/SSIM as the portable fallback. Avoids chasing cross-GPU FP bit-exactness (intractable).
+- **Tolerance compare, not bit-exact hash (decided from data).** Empirically the offline path tracer
+  is deterministic up to ~6 pixels at 1 LSB on a 1920×1080 frame — irreducible GPU floating-point
+  non-associativity (e.g. multi-light NEE reduction order). PBRT/Mitsuba test suites hit the same wall
+  and also use tolerance. We downscale to 640px (the ghost averages to 0) and bound both magnitude and
+  spread. Chasing true bit-exactness (forced reduction order, no fast-math) is large effort + perf cost
+  for a 6-pixel ghost — not worth it.
 - **Denoiser excluded from goldens.** Pin the raw deterministic beauty; denoised output is a
   separate, non-pinned concern.
 - **Wrap, don't rewrite.** Phase 0 changes the *render loop's determinism* and adds *tooling*; it
