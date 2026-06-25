@@ -1228,6 +1228,14 @@ void main() {
             }
         }
 
+        // Phase 0 determinism contract: temporal reprojection reads accumBuffer at a
+        // reprojected NEIGHBOR pixel that sibling invocations concurrently write below
+        // (imageStore at the end of this shader) — a cross-invocation read-after-write
+        // race with no defined ordering, so output differs run-to-run. The offline
+        // camera is static, so reprojection is unnecessary here. Force the deterministic
+        // own-pixel progressive-accumulation branch.
+        useReprojection = false;
+
         if (useReprojection) {
             // Sample history at reprojected position
             ivec2 prevPixel = ivec2(prevUV * vec2(pc.params.xy));
