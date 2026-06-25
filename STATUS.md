@@ -19,6 +19,12 @@ Pre-renovation cleanup. Each removed independently, rebuilt + render-verified gr
 
 Direction: re-architect toward a **differentiable, inverse-rendering, offline-first** engine (pbrt-style `.ohao` scene format, Slang shaders, one unified integrator). Net-before-surgery sequencing. These removals are step 1 (delete accidental/half-baked complexity).
 
+### Phase 0 — deterministic render contract + golden net (in progress, 2026-06-25)
+Spec: `docs/superpowers/specs/2026-06-24-renovation-phase0-foundation-design.md`
+- ✅ **Determinism fixed.** Root-caused the "3 runs → 3 hashes" non-determinism to a cross-invocation read-after-write race: the offline raygen's temporal reprojection read `accumBuffer` at a reprojected neighbor pixel that sibling threads concurrently write. Disabled reprojection for the static offline path. Now bit-identical run-to-run except an irreducible ~6px@1LSB GPU floating-point floor (averaged to 0 at compare-res).
+- ✅ **Golden harness** `tests/golden/render_golden.py` + `manifest.json` + downscaled goldens (~450 KB). Tolerance compare. Validated: passes vs goldens, self-test deterministic, catches a wrong-spp regression (exit 1).
+- ✅ **Pre-push hook** `.githooks/pre-push` (install: `git config core.hooksPath .githooks`). Cloud CI (build/unit/lint, no GPU) and trunk cleanup still TODO.
+
 ---
 
 ## Feature matrix (evidence-based)
@@ -49,11 +55,16 @@ Evidence images for this pass live in the session scratchpad (not committed):
 
 ## Known bugs (concrete, with root cause)
 
-### 1. ❌ Metals render black in deferred mode
+### 1. ⚠️ Metals look near-black in deferred mode — KNOWN LIMITATION (not a code bug)
 - **Repro:** `./build/model_viewer assets/showcase_objects/BoomBox.glb out.png 1 deferred`
-- **Symptom:** metallic body is black except direct specular highlights; dielectric/textured parts fine.
-- **Root cause (hypothesis):** metals have no diffuse, so their look is entirely environment reflection. `model_viewer` loads no HDR, and deferred has no fallback indirect-specular for metals (prefiltered IBL / RT-GI specular not feeding the metallic term). Path tracer is unaffected because it bounces real rays.
-- **Fix direction:** wire `ibl_processor.cpp` prefiltered-env specular into the deferred metallic path, and/or always bind a neutral fallback env. **No rewrite needed.**
+- **Symptom:** metallic body is near-black except direct specular highlights; dielectric/textured parts fine.
+- **Real cause:** a metal's appearance IS its reflection. In deferred with **no env map and no SSR/RT reflections, there is nothing in the scene to reflect** — only a flat ambient constant. The path tracer is unaffected because it bounces real rays off the Cornell walls. This is a *fundamental limitation* of deferred-without-reflections, not a defect.
+- **Applied (Codex, 2026-06-24):** Fresnel-weighted flat-ambient fallback for metals when no env map is bound — lifts pure-black → dark-gray + faint wall reflections. Marginal; no regression to the env-present path. Kept.
+- **Real resolution:** the unified integrator (renovation Phase 2+) path-traces and reflects the room correctly. Do NOT invest further in the frozen deferred pipeline (would need a default env map or SSR — polishing code slated for replacement).
+
+### Subsystem disposition (renovation, decided 2026-06-24)
+- **Deferred raster pipeline (`ohao/render/deferred/`)** — KEEP, frozen. It works; not deleted because the unified integrator that would replace it doesn't exist yet ("delete on replacement, not intention"). Bug #1 above handed to Codex.
+- **Physics (`ohao/physics/`)** — quarantine (orthogonal, works; not in the offline-differentiable critical path).
 
 ### 2. ⚠️ OptiX denoiser segfaults on shutdown
 - **Repro:** `./build/env_demo <model> <hdr> out.png 16 --denoise=optix`

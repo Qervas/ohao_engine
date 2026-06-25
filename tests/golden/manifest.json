@@ -1,0 +1,19 @@
+{
+  "_comment": "OHAO golden-image regression corpus (renovation Phase 0). Run from repo root. Tolerance compare absorbs the ~6px@1LSB GPU floating-point floor; any real regression shifts far more. Denoiser OFF (we pin raw deterministic beauty). Grow this list as features land — every fixed bug should add a scene so it can't silently regress.",
+  "scenes": [
+    {
+      "name": "cornell_box",
+      "command": "./build/cornell_box {out} 16 --denoise=none",
+      "golden": "tests/golden/cornell_box.png",
+      "max_abs_diff": 4,
+      "max_diff_frac": 0.01
+    },
+    {
+      "name": "metal_rough_spheres",
+      "command": "./build/model_viewer assets/showcase_objects/MetalRoughSpheres.glb {out} 16 --denoise=none",
+      "golden": "tests/golden/metal_rough_spheres.png",
+      "max_abs_diff": 4,
+      "max_diff_frac": 0.01
+    }
+  ]
+}
