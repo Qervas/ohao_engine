@@ -55,6 +55,10 @@ int main(int argc, char* argv[]) {
     float sssStrength = 0.0f;
     // --crop=face: tight portrait framing on subject head for SSS close-up.
     bool faceCrop = false;
+    // --flip: rotate model 180° about Y for assets whose front faces away from
+    // the camera (e.g. DamagedHelmet). glTF has no facing convention, so this is
+    // per-asset. Matches model_viewer's "flip" arg.
+    bool flipModel = false;
     std::string dumpMvPath;
     std::string dumpDepthPath;
     std::string dumpRoughnessPath;
@@ -117,6 +121,8 @@ int main(int argc, char* argv[]) {
             sssStrength = std::clamp(std::stof(arg.substr(6)), 0.0f, 1.0f);
         } else if (arg == "--crop=face") {
             faceCrop = true;
+        } else if (arg == "--flip") {
+            flipModel = true;
         }
     }
 
@@ -243,21 +249,29 @@ int main(int argc, char* argv[]) {
             bmax = glm::max(bmax, v.position);
         }
         glm::vec3 extent = bmax - bmin;
+        glm::vec3 center = (bmin + bmax) * 0.5f;
+        // Orientation — mirror SceneFramer's proven up-axis logic (model_viewer uses it).
+        // env_demo previously reinvented this with the same heuristic PLUS a hardcoded 180°
+        // Y-flip, which rendered Y-up models (MetalRoughSpheres) mirrored/backwards. The
+        // 180° flip was the bug — SceneFramer applies NO rotation for Y-up models.
         bool isYUp = (extent.y >= extent.z);
-        float modelHeight = isYUp ? extent.y : extent.z;
-        float scale = 4.0f / modelHeight;  // normalize to ~4 units tall
+        // Scale by the LARGEST extent so wide/flat models don't overflow the frame
+        // (height-only scaling blew up the chess board and the sphere grid).
+        float maxExtent = std::max({extent.x, extent.y, extent.z});
+        float scale = 4.0f / std::max(maxExtent, 0.001f);
 
         auto actor = scene->createActor("Model");
         if (isYUp) {
-            actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
+            // Y-up faces +Z toward the camera natively; --flip for back-facing assets.
+            actor->getTransform()->setRotation(
+                glm::quat(glm::radians(glm::vec3(0, flipModel ? 180.0f : 0.0f, 0))));
         } else {
-            float zCenter = (bmin.z + bmax.z) * 0.5f;
-            float rotX = (zCenter < 0.0f) ? 90.0f : -90.0f;
+            // Z-up: rotate onto Y. +Z-up → -90° X; -Z-up → +90° X.
+            bool posZIsUp = (bmax.z > 0.01f);
+            float rotX = posZIsUp ? -90.0f : 90.0f;
             actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(rotX, 0, 0))));
         }
         actor->getTransform()->setScale(glm::vec3(scale));
-
-        glm::vec3 center = (bmin + bmax) * 0.5f;
         actor->getTransform()->setPosition({-center.x * scale, -center.y * scale, -center.z * scale});
 
         auto mesh = actor->addComponent<MeshComponent>();
