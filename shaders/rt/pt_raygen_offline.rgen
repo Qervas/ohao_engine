@@ -278,7 +278,11 @@ void main() {
 
         // Sub-plan 3.C.6: capture demod factors + write demod AOVs
         firstHitDiffAlbedo = isMetal ? vec3(0.0) : albedo;
-        firstHitSpecColor  = F0;
+        // Metals bake F0 (=albedo) into the specular radiance via specThroughput, so
+        // compose must NOT re-apply it — doing so double-darkened metals to near-black.
+        // Dielectrics carry specThroughput=1.0, so their 0.04 F0 is the single correct
+        // application. (Fix: realtime clean-metal in NRD compose.)
+        firstHitSpecColor  = isMetal ? vec3(1.0) : F0;
         // Sub-plan 4.F T3: running-average in NRD accumulate mode, overwrite otherwise.
         AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
         AOV_ACCUMULATE_WRITE(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
