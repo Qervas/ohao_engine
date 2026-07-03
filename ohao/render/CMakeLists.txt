@@ -44,3 +44,17 @@ if(OHAO_NRD)
         target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_INTEGRATION_AVAILABLE)
     endif()
 endif()
+
+# Conditional DLSS Ray Reconstruction (NGX) support (Phase 5). dlss_rr.cpp is
+# always in RENDERER_SOURCES via the glob; its body is guarded by
+# OHAO_DLSS_ENABLED so it compiles to an empty TU when OHAO_DLSS=OFF.
+# OHAO_DLSS_SNIPPET_DIR/APPDATA_DIR are baked in as string macros so the DlssRR
+# wrapper can locate the dlssd snippet + a writable NGX appdata dir at runtime.
+# ${CMAKE_DL_LIBS} satisfies the static NGX wrapper's dlopen() of the driver.
+if(OHAO_DLSS AND TARGET ngx_dlss)
+    target_compile_definitions(ohao_renderer PRIVATE
+        OHAO_DLSS_ENABLED
+        OHAO_DLSS_SNIPPET_DIR="${CMAKE_SOURCE_DIR}/external/DLSS/lib/Linux_x86_64/rel"
+        OHAO_DLSS_APPDATA_DIR="${CMAKE_BINARY_DIR}/ngx_appdata")
+    target_link_libraries(ohao_renderer PRIVATE ngx_dlss ${CMAKE_DL_LIBS})
+endif()

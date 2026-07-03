@@ -15,6 +15,9 @@
 #include "render/rt/denoise/nrd_compose.hpp"
 #include "render/rt/denoise/nrd_cinematic.hpp"
 #include "render/rt/denoise/atrous_denoise.hpp"
+#ifdef OHAO_DLSS_ENABLED
+#include "render/rt/denoise/dlss_rr.hpp"
+#endif
 
 namespace ohao {
 
@@ -26,6 +29,9 @@ constexpr uint32_t kPTFlagEnableFireflyClamp = 1u << 2;
 // five NRD AOV bindings (22/23/24/25/26) so offline --spp=N feeds NRD an N-spp
 // averaged input. Must stay in sync with PT_FLAG_ACCUMULATE_AOVS in the raygen shaders.
 constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
+// Phase 5: DLSSRR mode — raygen repurposes normalAOV (binding 7) as the packed
+// (worldN, roughness) guide DLSS Ray Reconstruction consumes.
+constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
@@ -33,6 +39,32 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                          const glm::vec3& lightPos, float lightIntensity,
                          const glm::vec3& lightColor, float lightRadius) {
     if (!m_rtPipeline || !accel || !accel->getTLAS()) return;
+
+#ifdef OHAO_DLSS_ENABLED
+    // --- Phase 1: lazy DLSS-RR NGX init + feature creation ---
+    // First frame in DLSSRR mode: initialize NGX and create the DLSS-RR feature at
+    // render resolution. NGX records feature-setup GPU work into `cmd`, which the
+    // renderer submits with this frame. One-shot (m_dlssInitAttempted latches even
+    // on failure). Phase 1 does NOT dispatch denoising — after creation the render
+    // falls through to raw beauty output.
+    if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR && !m_dlssInitAttempted) {
+        m_dlssInitAttempted = true;
+        m_dlssRR = std::make_unique<DlssRR>();
+        if (m_dlssInstance != VK_NULL_HANDLE &&
+            m_dlssRR->initialize(m_dlssInstance, m_physicalDevice, m_device,
+                                 OHAO_DLSS_SNIPPET_DIR, OHAO_DLSS_APPDATA_DIR)) {
+            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_width, m_height) ||
+                !m_dlssRR->createTonemapPipeline()) {
+                m_dlssRR->shutdown();
+                m_dlssRR.reset();
+            }
+        } else {
+            std::cerr << "[DLSS-RR] init skipped/failed (no VkInstance or NGX init failed)"
+                         " — falling back to raw output\n";
+            m_dlssRR.reset();
+        }
+    }
+#endif
 
     // --- Sub-plan 4.F T4: Halton(2,3) pixel jitter for NRD temporal diversity ---
     // Realtime 1spp + jitter + temporal ≈ offline 8-16spp equivalent quality: the
@@ -46,7 +78,11 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         while (i > 0) { f /= float(base); r += f * float(i % base); i /= base; }
         return r;
     };
-    if (m_renderSettings.denoiseMode == DenoiseMode::NRD) {
+    // DLSS-RR (Phase 5) also REQUIRES sub-pixel camera jitter — same Halton(2,3)
+    // pattern NRD uses. The offset is fed to InJitterOffsetX/Y so DLSS can align
+    // and integrate the sub-pixel samples across frames.
+    if (m_renderSettings.denoiseMode == DenoiseMode::NRD ||
+        m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) {
         const uint32_t idx = (m_haltonIndex % 16u) + 1u;
         m_jitterCurrent = glm::vec2(halton(idx, 2) - 0.5f, halton(idx, 3) - 0.5f);
         m_haltonIndex++;
@@ -669,7 +705,13 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // historyFrameCount>0) — fine for SVGF's static-camera reprojection; the
     // moving-camera MV path is exercised by the live interactive viewer.
     const bool svgfMode = (m_renderSettings.denoiseMode == DenoiseMode::Atrous);
-    pc.control.y = svgfMode ? 0u : m_historyFrameCount;
+    // DLSS-RR does its OWN temporal accumulation, so it must be fed a FRESH per-frame
+    // 1-spp HDR frame (not the engine's running-mean). Forcing historyFrameCount=0 in
+    // the raygen makes accum = radiance (1 spp) each frame — the same trick SVGF uses.
+    // Also raise the DLSSRR flag so the raygen writes the packed normal/roughness guide.
+    const bool dlssMode = (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR);
+    if (dlssMode) pc.control.x |= kPTFlagDLSSRR;
+    pc.control.y = (svgfMode || dlssMode) ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,
@@ -699,6 +741,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // stay physically correct (no black metals, no magenta cast). Independent
     // of NRD, so this lives outside the OHAO_NRD_ENABLED block.
     bool atrousRan = false;
+    bool dlssRan   = false;  // Phase 5: set when DLSS-RR tonemap wrote m_outputImage via COMPUTE
     if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {
         // Publish raygen stores (beauty/normal/depth, RAY_TRACING) to the
         // COMPUTE reads of the first à-trous pass. All three stay in GENERAL.
@@ -726,6 +769,95 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         m_atrousDenoiser->dispatch(cmd, ai);
         atrousRan = true;  // beauty last written by COMPUTE, still GENERAL
     }
+
+#ifdef OHAO_DLSS_ENABLED
+    // --- Phase 5: DLSS Ray Reconstruction denoise + tonemap ---
+    // The raygen produced a FRESH 1-spp HDR frame (accum, control.y=0) plus the
+    // packed normal/roughness guide (normalAOV) this frame. Wrap the guide buffers
+    // as NGX resources, run NGX_VULKAN_EVALUATE_DLSSD_EXT, then tonemap the HDR
+    // COLOR_OUT into the RGBA8 beauty (m_outputImage) the standard readback uses.
+    if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR && m_dlssRR &&
+        m_dlssRR->isFeatureCreated()) {
+        // 1) Publish raygen guide/accum writes (RAY_TRACING) to DLSS's compute
+        //    reads. All these images remain in GENERAL (DLSS handles its own
+        //    internal transitions; we only make the writes visible).
+        VkMemoryBarrier rayToDlss{};
+        rayToDlss.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        rayToDlss.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        rayToDlss.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &rayToDlss, 0, nullptr, 0, nullptr);
+
+        // 2) DLSS COLOR_OUT: UNDEFINED→GENERAL on first dispatch, else keep GENERAL.
+        {
+            VkImageMemoryBarrier b{};
+            b.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask    = m_dlssColorOutFirstFrame ? 0 : VK_ACCESS_SHADER_READ_BIT;
+            b.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            b.oldLayout        = m_dlssColorOutFirstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            b.image            = m_dlssColorOutImage;
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd,
+                m_dlssColorOutFirstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &b);
+            m_dlssColorOutFirstFrame = false;
+        }
+
+        // 3) Fill eval inputs. glm column-major view/proj passed as-is (DLSS wants
+        //    row-major + left-multiply; the two transposes cancel — see wrapper).
+        const glm::mat4 viewM = glm::inverse(pc.invView);
+        const glm::mat4 projM = glm::inverse(pc.invProj);
+
+        DlssRR::EvalInputs ei{};
+        ei.colorInImage     = m_accumBuffer;       ei.colorInView     = m_accumView;        ei.colorInFormat     = VK_FORMAT_R32G32B32A32_SFLOAT;
+        ei.colorOutImage    = m_dlssColorOutImage; ei.colorOutView    = m_dlssColorOutView; ei.colorOutFormat    = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ei.diffAlbedoImage  = m_diffAlbedoImage;   ei.diffAlbedoView  = m_diffAlbedoView;   ei.diffAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
+        ei.specAlbedoImage  = m_specColorImage;    ei.specAlbedoView  = m_specColorView;    ei.specAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
+        ei.normalRoughImage = m_normalAOV;         ei.normalRoughView = m_normalAOVView;    ei.normalRoughFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+        ei.depthImage       = m_depthAOVImage;     ei.depthView       = m_depthAOVView;     ei.depthFormat       = VK_FORMAT_R32_SFLOAT;
+        ei.motionImage      = m_motionVectorImage; ei.motionView      = m_motionVectorView; ei.motionFormat      = VK_FORMAT_R16G16_SFLOAT;
+        ei.renderW = m_width; ei.renderH = m_height;
+        ei.jitterX = m_jitterCurrent.x; ei.jitterY = m_jitterCurrent.y;
+        ei.mvScaleX = -1.0f; ei.mvScaleY = -1.0f;   // OHAO writes currPix-prevPix; DLSS wants prevPix-currPix
+        ei.worldToView = glm::value_ptr(viewM);
+        ei.viewToClip  = glm::value_ptr(projM);
+        // Reset only on the genuine first frame / accumulation reset (NOT camera
+        // move — DLSS reprojects through motion via the motion vectors).
+        ei.reset = (m_historyFrameCount == 0u);
+
+        if (m_dlssRR->evaluate(cmd, ei)) {
+            // 4) Publish DLSS COLOR_OUT (COMPUTE write) → tonemap read, and make
+            //    m_outputImage writable (WAW vs the raygen's beauty write).
+            VkImageMemoryBarrier post[2] = {};
+            post[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            post[0].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            post[0].dstAccessMask    = VK_ACCESS_SHADER_READ_BIT;
+            post[0].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            post[0].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            post[0].image            = m_dlssColorOutImage;
+            post[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            post[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            post[1].srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            post[1].dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+            post[1].oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            post[1].newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+            post[1].image            = m_outputImage;
+            post[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                0, 0, nullptr, 0, nullptr, 2, post);
+
+            // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (ACES+gamma, matches None).
+            m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_width, m_height);
+            dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
+        }
+    }
+#endif  // OHAO_DLSS_ENABLED
 
 #ifdef OHAO_NRD_ENABLED
     // --- Sub-plan 4.C T3b: NRD REBLUR_DIFFUSE_SPECULAR dispatch ---
@@ -1100,8 +1232,8 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         // COMPUTE to the wait is harmless for other modes (nothing wrote the
         // output via compute there).
         const VkPipelineStageFlags outSrcStage =
-            atrousRan ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
-                      : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+            (atrousRan || dlssRan) ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                                   : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         toTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

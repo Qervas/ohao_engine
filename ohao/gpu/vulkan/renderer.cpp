@@ -455,8 +455,11 @@ void VulkanRenderer::applyRTRenderSettings() {
     // it. The profile default (reset each frame) doesn't carry the user's
     // --denoise override, so inject it here. Scoped to Atrous ONLY — None,
     // OIDN, and NRD keep their profile-default denoiseMode untouched.
-    if (m_denoiseModeOverridden && m_denoiseMode == DenoiseMode::Atrous) {
-        m_rtSettings.denoiseMode = DenoiseMode::Atrous;
+    if (m_denoiseModeOverridden &&
+        (m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR)) {
+        // DLSSRR (Phase 5) is dispatched GPU-side by the PathTracer, same as Atrous,
+        // so the tracer must see denoiseMode==DLSSRR to run its NGX init/feature path.
+        m_rtSettings.denoiseMode = m_denoiseMode;
     }
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
@@ -650,7 +653,10 @@ const uint8_t* VulkanRenderer::getPixels() const {
     // Atrous denoises the beauty (m_outputImage) in place on the GPU, so
     // m_pixelBuffer already holds the denoised result — same readback path as
     // None. Do NOT route it through the NRD/OIDN CPU paths below.
-    if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous) {
+    // Phase 1: DLSSRR does not yet dispatch denoising (foundation only) — the
+    // beauty in m_pixelBuffer is the raw RT output, same readback path as None.
+    if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||
+        m_denoiseMode == DenoiseMode::DLSSRR) {
         return m_pixelBuffer.data();
     }
     if (m_denoiseCacheValid) {

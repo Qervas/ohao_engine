@@ -4,6 +4,9 @@
 #include <windows.h>
 #include <vulkan/vulkan_win32.h>
 #endif
+#ifdef OHAO_DLSS_ENABLED
+#include <cstring>  // strcmp for DLSS extension dedup
+#endif
 
 namespace ohao {
 
@@ -30,6 +33,24 @@ bool VulkanRenderer::createInstance() {
         createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
         std::cout << "[OHAO] Validation layers ENABLED" << std::endl;
     }
+
+#ifdef OHAO_DLSS_ENABLED
+    // DLSS-RR (NGX RayReconstruction) requires VK_KHR_get_physical_device_properties2
+    // at the instance level. It is core in Vulkan 1.1+, but NGX's requirement query
+    // still lists it and the RTX driver advertises it, so enabling is safe.
+    // (Re)publish the enabled-extension list AFTER any push so the data() pointer
+    // is never stale — the validation branch above may already have set it.
+    {
+        bool has = false;
+        for (const char* e : m_enabledInstanceExtensions)
+            if (std::strcmp(e, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME) == 0) { has = true; break; }
+        if (!has) m_enabledInstanceExtensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+        createInfo.enabledExtensionCount   = static_cast<uint32_t>(m_enabledInstanceExtensions.size());
+        createInfo.ppEnabledExtensionNames = m_enabledInstanceExtensions.data();
+        std::cout << "[DLSS] instance ext requested: "
+                  << VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME << std::endl;
+    }
+#endif
 
     if (vkCreateInstance(&createInfo, nullptr, &m_instance) != VK_SUCCESS) {
         return false;
@@ -125,6 +146,44 @@ bool VulkanRenderer::createLogicalDevice() {
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,      // POSIX shared semaphores
 #endif
     };
+
+#ifdef OHAO_DLSS_ENABLED
+    // DLSS-RR (NGX RayReconstruction) device extensions. VK_KHR_buffer_device_address
+    // is already enabled above (RT path) — skip it. Add the rest only if the chosen
+    // device advertises them; if the app ever runs on the Intel iGPU (no NVX exts),
+    // we simply don't add them and DLSS feature creation later returns false + falls
+    // back to raw output. buffer_device_address's feature bit is already VK_TRUE below.
+    {
+        const char* dlssDeviceExts[] = {
+            VK_NVX_BINARY_IMPORT_EXTENSION_NAME,
+            VK_NVX_IMAGE_VIEW_HANDLE_EXTENSION_NAME,
+            VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+        };
+        uint32_t availCount = 0;
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, nullptr);
+        std::vector<VkExtensionProperties> avail(availCount);
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, avail.data());
+        auto supported = [&](const char* n) {
+            for (const auto& e : avail) if (std::strcmp(e.extensionName, n) == 0) return true;
+            return false;
+        };
+        auto already = [&](const char* n) {
+            for (const char* e : m_enabledDeviceExtensions) if (std::strcmp(e, n) == 0) return true;
+            return false;
+        };
+        for (const char* e : dlssDeviceExts) {
+            if (already(e)) continue;
+            if (supported(e)) {
+                m_enabledDeviceExtensions.push_back(e);
+                std::cout << "[DLSS] enabling device ext: " << e << std::endl;
+            } else {
+                std::cerr << "[DLSS] device ext NOT supported by selected GPU (DLSS-RR will be unavailable): "
+                          << e << std::endl;
+            }
+        }
+    }
+#endif
+
     const std::vector<const char*>& deviceExtensions = m_enabledDeviceExtensions;
 
     // Vulkan 1.2 features (buffer device address, descriptor indexing)
