@@ -717,10 +717,12 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         ai.normalView    = m_normalAOVView;
         ai.depthView     = m_depthAOVView;
         ai.motionView    = m_motionVectorView;
-        // Reset SVGF history on the first accumulated frame or any view change
-        // (computed from the REAL frame counter, before it is advanced below;
-        // note pc.control.y was forced to 0 for the raygen fresh-sample trick).
-        ai.resetHistory  = (m_historyFrameCount == 0u) || m_viewChangedThisFrame;
+        // Reset SVGF history ONLY on the genuine first frame (or explicit
+        // resetAccumulation). Do NOT reset on camera move — SVGF is meant to
+        // REPROJECT through motion via motion vectors + per-pixel disocclusion
+        // rejection. Resetting every moved frame threw away all accumulated
+        // samples → raw 1-spp noise while moving (the bug the user reported).
+        ai.resetHistory  = (m_historyFrameCount == 0u);
         m_atrousDenoiser->dispatch(cmd, ai);
         atrousRan = true;  // beauty last written by COMPUTE, still GENERAL
     }
