@@ -197,6 +197,17 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     destroyImages();
     createImages();
 
+    // SVGF (DenoiseMode::Atrous) owns persistent history images sized to the
+    // framebuffer — recreate them so they match the new resolution. The
+    // first-frame layout latch + resetHistory path handle re-bootstrapping.
+    if (m_atrousDenoiser) {
+        m_atrousDenoiser->shutdown();
+        if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+            std::cerr << "[svgf] resize re-init FAILED — atrous will pass through noisy beauty\n";
+            m_atrousDenoiser.reset();
+        }
+    }
+
     // Reset accumulation since the buffer dimensions changed
     m_sampleIndex = 0;
     m_historyFrameCount = 0;
