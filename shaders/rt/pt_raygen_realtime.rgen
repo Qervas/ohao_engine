@@ -38,6 +38,12 @@ layout(set = 0, binding = 14, rgba32f) uniform writeonly image2D currSurfaceHist
 layout(set = 0, binding = 15, rgba32f) uniform readonly image2D prevShadingHistory;
 layout(set = 0, binding = 16, rgba32f) uniform writeonly image2D currShadingHistory;
 
+// Env importance-sampling CDFs — shared descriptor set layout with offline raygen
+// (bindings 17/18 already declared RAYGEN-visible in path_tracer_descriptors.cpp).
+// Ported from pt_raygen_offline.rgen to give realtime env-IS + MIS (kills 1-spp sparkle).
+layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
+layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+
 layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
@@ -48,6 +54,8 @@ layout(push_constant) uniform PushConstants {
     vec4 jitter;                // 4.F T4: xy = Halton(2,3) sub-pixel offset (0 outside NRD mode)
 } pc;
 
+#include "includes/rt/mis.glsl"
+#include "includes/rt/env_sampling.glsl"
 #include "includes/rt/sampler_api.glsl"
 #include "includes/material/ggx_aniso.glsl"
 
@@ -181,8 +189,7 @@ void main() {
         imageStore(normalRoughnessAOV, pixel, vec4(0.0));
     }
 
-    // OHAO_PI: realtime shader doesn't include env_sampling.glsl; use local constant.
-    const float OHAO_PI = 3.14159265358979;
+    // OHAO_PI provided by includes/rt/env_sampling.glsl (now included for env-IS).
 
     // ================================================================
     // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
@@ -341,7 +348,13 @@ void main() {
                 L = toLight / lightDist;
                 float lightCos = max(dot(-L, lightNormal), 0.0);
                 float lightArea = 4.0 * 3.14159 * r * r;
-                weight = lightCos * lightArea / (lightDist * lightDist);
+                // Sphere-light NEE geometry term. The auto emissive light can be
+                // large and overlap the mesh (center-of-bbox placement), so the
+                // naive area/dist^2 estimator blows up (1/dist^2 firefly) on
+                // primary rays. A real sphere subtends at most a hemisphere, so
+                // clamp the per-sample weight to 2*pi — kills the firefly while
+                // leaving distant, well-behaved lights (weight << 2pi) untouched.
+                weight = min(lightCos * lightArea / max(lightDist * lightDist, 1e-4), 6.2831853);
                 shadowDist = lightDist - 0.02;
             } else if (lightType < 1.5) {
                 L = -lightDir;
@@ -430,19 +443,89 @@ void main() {
             }
         }
 
-        // NOTE: realtime shader has no env-MIS block (no env CDF bindings).
+        // ==== Analytic direct env-MIS at bounce 0 (ported from offline) ====
+        // Importance-sample the HDRI via the marginal/conditional CDFs, evaluate
+        // the BSDF toward that direction, shadow-trace, and MIS-weight against the
+        // BSDF-sampling strategy (balance heuristic). This is the primary fix for
+        // 1-spp sparkle on metal + ground: the bright env is now reached by a
+        // low-variance importance-sampled ray instead of only random BSDF bounces.
+        if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+            vec2 envU = getSample2D(dimIdx); dimIdx += 2u;
+            float u1 = envU.x; float u2 = envU.y;
+            vec3 envDir;
+            float envPdf;
+            sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+            float NdotL_env = max(dot(N, envDir), 0.0);
+            if (NdotL_env > 0.0 && envPdf > 0.0) {
+                payload.hitDist = 999.0;
+                traceRayEXT(topLevelAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xFF, 0, 0, 0,
+                    hitPos + N * 0.01, 0.001, envDir, 10000.0, 0);
+
+                if (payload.hitDist < 0.0) {
+                    vec3 envRadiance = payload.color;
+
+                    vec3 V = normalize(-rayDir);
+                    vec3 H = normalize(envDir + V);
+                    float NdotH = max(dot(N, H), 0.001);
+                    float NdotV = max(dot(N, V), 0.001);
+                    float VdotH = max(dot(V, H), 0.001);
+                    float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
+                    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+                    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+                    float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                            * (NdotV / (NdotV * (1.0 - k) + k));
+                    vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                    vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                    vec3 diff = kD * albedo / OHAO_PI;
+
+                    float cosI = abs(dot(normalize(rayDir), N));
+                    vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
+                    float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
+                    if (isMetal) specProbMIS = 1.0;
+                    float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                    float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                    float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                    float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                    // throughput=1 at bounce 0
+                    vec3 envContribution = envRadiance * (diff + spec) * NdotL_env * w / envPdf;
+
+                    vec3 envCommon   = envRadiance * NdotL_env * w / envPdf;
+                    vec3 envDiffuse  = envCommon * diff;
+                    vec3 envSpecular = envCommon * spec;
+
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                        if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        float lumD = dot(envDiffuse,  vec3(0.2126, 0.7152, 0.0722));
+                        float lumS = dot(envSpecular, vec3(0.2126, 0.7152, 0.0722));
+                        if (lumD > pc.tuning.x) envDiffuse  *= pc.tuning.x / lumD;
+                        if (lumS > pc.tuning.x) envSpecular *= pc.tuning.x / lumS;
+                    }
+                    radiance    += envContribution;
+                    diffContrib += envDiffuse;
+                    specContrib += envSpecular;
+                }
+            }
+        }
 
         // ================================================================
         // STAGE B: Specular-sampled indirect path (bounces 1..maxBounces)
         // ================================================================
         vec3 specDir;
         vec3 specThroughput;
+        float specLastBsdfPdf;         // for env-miss MIS weighting (ported from offline)
+        bool  specLastBounceWasDelta;
         {
             float cosI = abs(dot(normalize(rayDir), N));
             vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
             float specProb = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
             if (isMetal) specProb = 1.0;
 
+            vec3 inDir = rayDir;
             vec3 reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
                 vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
@@ -457,6 +540,19 @@ void main() {
             // Dual-ray: each path is deterministic, no stochastic selection to correct for.
             // Material throughput factor (f*cos/pdf for the specular lobe, simplified).
             specThroughput = isMetal ? albedo : vec3(1.0);
+
+            if (roughness < 0.05) {
+                specLastBsdfPdf = 1.0;
+                specLastBounceWasDelta = true;
+            } else {
+                vec3 Hspec = normalize(-inDir + specDir);
+                float NdotH_s = max(dot(N, Hspec), 0.001);
+                float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                float D_s = ggxD_anisoOrIso(N, Hspec, NdotH_s, roughness, pc.jitter.z, pc.jitter.w);
+                float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)
+                specLastBounceWasDelta = false;
+            }
         }
 
         vec3 specRayOrigin = hitPos + N * 0.01;
@@ -473,8 +569,13 @@ void main() {
             }
 
             if (payload.hitDist < 0.0) {
-                // Realtime has no env-MIS: plain env-miss accumulation.
-                vec3 envMissContribution = specThroughput * payload.color;
+                // Env-miss MIS: weight the BSDF-sampled env hit against the env-IS
+                // strategy using the pdf the miss shader stored in payload.envPdf.
+                float envMisWeight = 1.0;
+                if (payload.envPdf > 0.0 && pc.control.w > 0u && !specLastBounceWasDelta) {
+                    envMisWeight = misBalanceHeuristic(specLastBsdfPdf, payload.envPdf);
+                }
+                vec3 envMissContribution = specThroughput * payload.color * envMisWeight;
                 radiance    += envMissContribution;
                 specContrib += envMissContribution;
                 break;
@@ -535,7 +636,7 @@ void main() {
                     L = toLight / lightDist;
                     float lightCos = max(dot(-L, lightNormal), 0.0);
                     float lightArea = 4.0 * 3.14159 * r * r;
-                    weight = lightCos * lightArea / (lightDist * lightDist);
+                    weight = min(lightCos * lightArea / max(lightDist * lightDist, 1e-4), 6.2831853);
                     shadowDist = lightDist - 0.02;
                 } else if (lightType < 1.5) {
                     L = -lightDir;
@@ -614,7 +715,63 @@ void main() {
                 }
             }
 
-            // NOTE: realtime shader has no env-MIS block at bounces >= 1.
+            // === Env MIS at bounce>=1 (ported from offline; target: specContrib) ===
+            if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+                vec2 envU = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = envU.x; float u2 = envU.y;
+                vec3 envDir;
+                float envPdf;
+                sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+                float NdotL_env = max(dot(bN, envDir), 0.0);
+                if (NdotL_env > 0.0 && envPdf > 0.0) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
+
+                    if (payload.hitDist < 0.0) {
+                        vec3 envRadiance = payload.color;
+
+                        vec3 V = normalize(-specRayDir);
+                        vec3 H = normalize(envDir + V);
+                        float NdotH = max(dot(bN, H), 0.001);
+                        float NdotV = max(dot(bN, V), 0.001);
+                        float VdotH = max(dot(V, H), 0.001);
+                        float a = bRoughness * bRoughness;
+                        float a2 = a * a;
+                        float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                        vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
+                        float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
+                        float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                                * (NdotV / (NdotV * (1.0 - k) + k));
+                        vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 diff = kD * bAlbedo / OHAO_PI;
+                        vec3 brdf = diff + spec;
+
+                        float cosI = abs(dot(normalize(specRayDir), bN));
+                        vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
+                        float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - bRoughness * 0.9);
+                        if (bIsMetal) specProbMIS = 1.0;
+                        float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                        float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                        float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                        float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                        vec3 envContribution = specThroughput * envRadiance * brdf * NdotL_env * w / envPdf;
+
+                        if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                            float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                            if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        }
+                        radiance    += envContribution;
+                        specContrib += envContribution;
+                    }
+                }
+            }
 
             // === Russian roulette ===
             if (bounce > 1u) {
@@ -635,6 +792,7 @@ void main() {
 
                 float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
                 if (bsdfChoice < specProb || bRoughness < 0.05) {
+                    vec3 inDir = specRayDir;
                     vec3 reflected = reflect(specRayDir, bN);
                     if (bRoughness > 0.01) {
                         vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
@@ -649,6 +807,22 @@ void main() {
                     specRayOrigin = bHitPos + bN * 0.01;
                     specThroughput *= bIsMetal ? bAlbedo : vec3(1.0);
                     specThroughput /= max(specProb, 0.01);
+
+                    if (bRoughness < 0.05) {
+                        specLastBsdfPdf = 1.0;
+                        specLastBounceWasDelta = true;
+                    } else {
+                        vec3 Hspec = normalize(-inDir + specRayDir);
+                        float NdotH_s = max(dot(bN, Hspec), 0.001);
+                        float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                        float as = bRoughness * bRoughness;
+                        float as2 = as * as;
+                        float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
+                        float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                        float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                        specLastBsdfPdf = specProb * pdf_spec;
+                        specLastBounceWasDelta = false;
+                    }
                 } else {
                     // Sub-plan 3.D: specular chain broken by a diffuse bounce; stop accumulating hit-distance
                     specChainActive = false;
@@ -657,6 +831,9 @@ void main() {
                     specRayOrigin = bHitPos + bN * 0.01;
                     specThroughput *= bAlbedo;
                     specThroughput /= max(1.0 - specProb, 0.01);
+
+                    specLastBsdfPdf = (1.0 - specProb) * max(dot(specRayDir, bN), 0.0) / OHAO_PI;
+                    specLastBounceWasDelta = false;
                 }
             }
         }
@@ -666,12 +843,17 @@ void main() {
         // ================================================================
         vec3 diffDir;
         vec3 diffThroughput;
+        float diffLastBsdfPdf;         // for env-miss MIS weighting (ported from offline)
+        bool  diffLastBounceWasDelta;
         {
             vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
             diffDir = cosineHemisphere(N, diffU);
             // Dual-ray: each path is deterministic, no stochastic selection to correct for.
             // Material throughput factor (f*cos/pdf for the diffuse lobe = albedo).
             diffThroughput = albedo;
+            // MIS PDF for env-miss weighting: pure cosine-hemisphere PDF (no lobe-mix factor).
+            diffLastBsdfPdf = max(dot(diffDir, N), 0.0) / OHAO_PI;
+            diffLastBounceWasDelta = false;
         }
 
         vec3 diffRayOrigin = hitPos + N * 0.01;
@@ -689,8 +871,13 @@ void main() {
             }
 
             if (payload.hitDist < 0.0) {
-                // Realtime has no env-MIS: plain env-miss accumulation.
-                vec3 envMissContribution = diffThroughput * payload.color;
+                // Env-miss MIS: weight the BSDF-sampled env hit against env-IS
+                // using payload.envPdf (set by the miss shader).
+                float envMisWeight = 1.0;
+                if (payload.envPdf > 0.0 && pc.control.w > 0u && !diffLastBounceWasDelta) {
+                    envMisWeight = misBalanceHeuristic(diffLastBsdfPdf, payload.envPdf);
+                }
+                vec3 envMissContribution = diffThroughput * payload.color * envMisWeight;
                 radiance    += envMissContribution;
                 diffContrib += envMissContribution;
                 break;
@@ -751,7 +938,7 @@ void main() {
                     L = toLight / lightDist;
                     float lightCos = max(dot(-L, lightNormal), 0.0);
                     float lightArea = 4.0 * 3.14159 * r * r;
-                    weight = lightCos * lightArea / (lightDist * lightDist);
+                    weight = min(lightCos * lightArea / max(lightDist * lightDist, 1e-4), 6.2831853);
                     shadowDist = lightDist - 0.02;
                 } else if (lightType < 1.5) {
                     L = -lightDir;
@@ -830,7 +1017,63 @@ void main() {
                 }
             }
 
-            // NOTE: realtime shader has no env-MIS block at bounces >= 1.
+            // === Env MIS at bounce>=1 (ported from offline; target: diffContrib) ===
+            if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+                vec2 envU = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = envU.x; float u2 = envU.y;
+                vec3 envDir;
+                float envPdf;
+                sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+                float NdotL_env = max(dot(bN, envDir), 0.0);
+                if (NdotL_env > 0.0 && envPdf > 0.0) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
+
+                    if (payload.hitDist < 0.0) {
+                        vec3 envRadiance = payload.color;
+
+                        vec3 V = normalize(-diffRayDir);
+                        vec3 H = normalize(envDir + V);
+                        float NdotH = max(dot(bN, H), 0.001);
+                        float NdotV = max(dot(bN, V), 0.001);
+                        float VdotH = max(dot(V, H), 0.001);
+                        float a = bRoughness * bRoughness;
+                        float a2 = a * a;
+                        float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                        vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
+                        float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
+                        float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                                * (NdotV / (NdotV * (1.0 - k) + k));
+                        vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 diff = kD * bAlbedo / OHAO_PI;
+                        vec3 brdf = diff + spec;
+
+                        float cosI = abs(dot(normalize(diffRayDir), bN));
+                        vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
+                        float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - bRoughness * 0.9);
+                        if (bIsMetal) specProbMIS = 1.0;
+                        float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                        float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                        float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                        float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                        vec3 envContribution = diffThroughput * envRadiance * brdf * NdotL_env * w / envPdf;
+
+                        if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                            float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                            if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        }
+                        radiance    += envContribution;
+                        diffContrib += envContribution;
+                    }
+                }
+            }
 
             // === Russian roulette ===
             if (bounce > 1u) {
@@ -851,6 +1094,7 @@ void main() {
 
                 float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
                 if (bsdfChoice < specProb || bRoughness < 0.05) {
+                    vec3 inDir = diffRayDir;
                     vec3 reflected = reflect(diffRayDir, bN);
                     if (bRoughness > 0.01) {
                         vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
@@ -865,12 +1109,31 @@ void main() {
                     diffRayOrigin = bHitPos + bN * 0.01;
                     diffThroughput *= bIsMetal ? bAlbedo : vec3(1.0);
                     diffThroughput /= max(specProb, 0.01);
+
+                    if (bRoughness < 0.05) {
+                        diffLastBsdfPdf = 1.0;
+                        diffLastBounceWasDelta = true;
+                    } else {
+                        vec3 Hspec = normalize(-inDir + diffRayDir);
+                        float NdotH_s = max(dot(bN, Hspec), 0.001);
+                        float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                        float as = bRoughness * bRoughness;
+                        float as2 = as * as;
+                        float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
+                        float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                        float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                        diffLastBsdfPdf = specProb * pdf_spec;
+                        diffLastBounceWasDelta = false;
+                    }
                 } else {
                     vec2 diffU2 = getSample2D(dimIdx); dimIdx += 2u;
                     diffRayDir = cosineHemisphere(bN, diffU2);
                     diffRayOrigin = bHitPos + bN * 0.01;
                     diffThroughput *= bAlbedo;
                     diffThroughput /= max(1.0 - specProb, 0.01);
+
+                    diffLastBsdfPdf = (1.0 - specProb) * max(dot(diffRayDir, bN), 0.0) / OHAO_PI;
+                    diffLastBounceWasDelta = false;
                 }
             }
         }
@@ -952,6 +1215,16 @@ void main() {
             count = min(history.w + 1.0, useReprojection ? (viewChanged ? 6.0 : 12.0)
                                                          : (viewChanged ? 2.0 : 4.0));
         }
+    }
+    // Anti-firefly clamp — DLSS-RR realtime input ONLY (offline path stays
+    // unbiased, no clamp). At 1 spp, stochastic bright paths (env/specular)
+    // land in random pixels each frame → they "jump/blink" under temporal
+    // reconstruction. Cap per-pixel luminance so DLSS gets a stable input.
+    // Threshold (10.0) sits above the emissive HUD (~5.7) so glyphs survive.
+    if ((pc.control.x & PT_FLAG_DLSSRR) != 0u) {
+        float fireLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
+        const float kFireflyMax = 10.0;
+        if (fireLum > kFireflyMax) acc *= kFireflyMax / fireLum;
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
