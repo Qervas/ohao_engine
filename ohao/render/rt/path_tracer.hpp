@@ -38,6 +38,7 @@
 namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }      // NEW 4.D
 namespace ohao { class NrdCinematicPost; }   // NEW 4.G (replaces 4.E NrdTonemap)
+namespace ohao { class AtrousDenoiser; }     // à-trous beauty denoiser (DenoiseMode::Atrous)
 
 namespace ohao {
 
@@ -247,6 +248,11 @@ private:
     std::unique_ptr<NrdDenoiser> m_nrdDenoiser;
     std::unique_ptr<NrdCompositor> m_nrdCompositor;   // NEW 4.D
     std::unique_ptr<NrdCinematicPost> m_cinematicPost; // NEW 4.G (replaces 4.E NrdTonemap)
+    // À-trous beauty denoiser (DenoiseMode::Atrous). Unconditional member (not
+    // OHAO_NRD-guarded) so the class layout is identical across ohao_renderer
+    // and ohao_gpu_vulkan; dtor is out-of-line in path_tracer.cpp which sees
+    // the complete type via atrous_denoise.hpp.
+    std::unique_ptr<AtrousDenoiser> m_atrousDenoiser;
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes

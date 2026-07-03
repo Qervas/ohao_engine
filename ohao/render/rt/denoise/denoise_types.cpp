@@ -31,6 +31,7 @@ DenoiseMode parseDenoiseMode(const std::string& s) {
         return DenoiseMode::None;
 #endif
     }
+    if (lower == "atrous") return DenoiseMode::Atrous;
     std::cerr << "[Denoise] Unknown mode '" << s
               << "' — falling back to None\n";
     return DenoiseMode::None;
@@ -38,9 +39,10 @@ DenoiseMode parseDenoiseMode(const std::string& s) {
 
 const char* denoiseModeName(DenoiseMode mode) {
     switch (mode) {
-        case DenoiseMode::None:  return "none";
-        case DenoiseMode::OIDN:  return "oidn";
-        case DenoiseMode::NRD:   return "nrd";
+        case DenoiseMode::None:   return "none";
+        case DenoiseMode::OIDN:   return "oidn";
+        case DenoiseMode::NRD:    return "nrd";
+        case DenoiseMode::Atrous: return "atrous";
     }
     return "unknown";
 }
