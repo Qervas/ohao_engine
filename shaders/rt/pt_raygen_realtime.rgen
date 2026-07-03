@@ -55,6 +55,7 @@ const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
 const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
 const uint PT_FLAG_ENABLE_FIREFLY_CLAMP = 1u << 2;
 const uint PT_FLAG_ACCUMULATE_AOVS = 1u << 3;  // Sub-plan 4.F T3: N-spp running mean on NRD AOVs
+const uint PT_FLAG_DLSSRR = 1u << 4;  // Phase 5: repurpose normalAOV → (worldN, roughness) for DLSS-RR
 
 // Sub-plan 4.F T3: running-average helper for NRD AOV bindings (22/23/24/25/26).
 // When accumulateAOVs is set AND sampleIdx>0, blend `current` with previous image value
@@ -270,6 +271,15 @@ void main() {
         if (roughness >= 10.0) roughness -= 10.0;
         roughness = max(roughness, 0.01);
         vec3 F0 = isMetal ? albedo : vec3(0.04);
+
+        // Phase 5 (DLSS-RR): overwrite normalAOV (binding 7) with WORLD-space
+        // normal xyz in [-1,1] + perceptual roughness in w — the packed
+        // normal/roughness guide buffer DLSS Ray Reconstruction expects
+        // (NVSDK_NGX_DLSS_Roughness_Mode_Packed). Gated on DLSSRR mode so every
+        // other denoiser (which reads normalAOV as N*0.5+0.5) stays byte-identical.
+        if ((pc.control.x & PT_FLAG_DLSSRR) != 0u) {
+            imageStore(normalAOV, pixel, vec4(N, roughness));
+        }
 
         // Capture first-hit shading for temporal history
         firstHitNormal = N;

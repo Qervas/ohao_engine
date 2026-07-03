@@ -16,8 +16,7 @@ enum class DenoiseMode : uint32_t {
     OIDN   = 1,
     NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)
     Atrous = 4,   // À-trous (SVGF-style) edge-aware filter on the RT beauty image
-    // future:
-    // DLSSRR = 5,
+    DLSSRR = 5,   // NVIDIA DLSS Ray Reconstruction / NGX "dlssd" (Phase 5)
 };
 
 // Parse a CLI string (case-insensitive). Unknown values return None and

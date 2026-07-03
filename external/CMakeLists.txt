@@ -14,3 +14,10 @@ if(OHAO_NRD)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/nri.cmake)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/nrd.cmake)
 endif()
+
+# Phase 5 — DLSS Ray Reconstruction (NGX). Gated by OHAO_DLSS. Defines the
+# imported `ngx_dlss` static target and copies the dlssd snippet next to the
+# built binaries. Pure vendored SDK — no FetchContent.
+if(OHAO_DLSS)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/dlss.cmake)
+endif()

@@ -15,6 +15,12 @@
 // TU (which defines the out-of-line dtor) needs the complete type. Not
 // OHAO_NRD-guarded — the à-trous path is independent of NRD.
 #include "render/rt/denoise/atrous_denoise.hpp"
+// DLSS-RR wrapper is only a complete type in this TU (and path_tracer_render.cpp)
+// where OHAO_DLSS_ENABLED is defined; the header only forward-declares DlssRR so
+// the unique_ptr member's out-of-line dtor (below) needs the full type here.
+#ifdef OHAO_DLSS_ENABLED
+#include "render/rt/denoise/dlss_rr.hpp"
+#endif
 
 namespace ohao {
 
@@ -156,6 +162,13 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         m_atrousDenoiser.reset();
     }
 
+#ifdef OHAO_DLSS_ENABLED
+    // DLSS-RR NGX init is deferred to the first DLSSRR-mode frame (render()), since
+    // the active denoiseMode is not yet known here (settings apply per-frame). Just
+    // stash the instance handle needed for that lazy init.
+    m_dlssInstance = instance;
+#endif
+
     return true;
 }
 
@@ -255,6 +268,13 @@ void PathTracer::destroy() {
         m_atrousDenoiser->shutdown();
         m_atrousDenoiser.reset();
     }
+
+#ifdef OHAO_DLSS_ENABLED
+    if (m_dlssRR) {
+        m_dlssRR->shutdown();
+        m_dlssRR.reset();
+    }
+#endif
 
     // CDF buffers are owned by VulkanRenderer, not by the path tracer.
     // Clear the cached handles so later destroy calls or reuse don't touch freed memory.

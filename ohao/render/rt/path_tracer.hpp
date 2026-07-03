@@ -39,6 +39,7 @@ namespace ohao { class NrdDenoiser; }
 namespace ohao { class NrdCompositor; }      // NEW 4.D
 namespace ohao { class NrdCinematicPost; }   // NEW 4.G (replaces 4.E NrdTonemap)
 namespace ohao { class AtrousDenoiser; }     // à-trous beauty denoiser (DenoiseMode::Atrous)
+namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5)
 
 namespace ohao {
 
@@ -253,6 +254,24 @@ private:
     // and ohao_gpu_vulkan; dtor is out-of-line in path_tracer.cpp which sees
     // the complete type via atrous_denoise.hpp.
     std::unique_ptr<AtrousDenoiser> m_atrousDenoiser;
+
+    // DLSS Ray Reconstruction (DenoiseMode::DLSSRR, Phase 5). Guarded by
+    // OHAO_DLSS_ENABLED — which CMake defines on BOTH ohao_renderer and
+    // ohao_gpu_vulkan (the latter instantiates PathTracer's layout via
+    // rt_profile_renderer.hpp), so the class layout stays ODR-consistent and a
+    // -DOHAO_DLSS=OFF build carries none of these members. NGX init + feature
+    // creation happen lazily on the first DLSSRR-mode frame (see render()).
+#ifdef OHAO_DLSS_ENABLED
+    std::unique_ptr<DlssRR> m_dlssRR;
+    VkInstance m_dlssInstance     = VK_NULL_HANDLE;  // stashed at init() for lazy NGX init
+    bool       m_dlssInitAttempted = false;          // one-shot latch (success or failure)
+    // DLSS-RR COLOR_OUT — denoised HDR-linear result DLSS writes (RGBA16F). Then
+    // tonemapped into m_outputImage (RGBA8) for the standard beauty readback.
+    VkImage        m_dlssColorOutImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_dlssColorOutMemory = VK_NULL_HANDLE;
+    VkImageView    m_dlssColorOutView   = VK_NULL_HANDLE;
+    bool           m_dlssColorOutFirstFrame = true;  // gates UNDEFINED→GENERAL transition
+#endif
 
     // Config
     uint32_t m_maxBounces = 4;  // 4 bounces: diminishing returns in indoor scenes

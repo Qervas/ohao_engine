@@ -83,3 +83,7 @@ Downloads/
 ohao_engine
 renders/
 CLAUDE.md
+.gstack/
+external/DLSS/
+tools/dlss_probe/dlss_probe
+tools/dlss_probe/ngx_appdata/
