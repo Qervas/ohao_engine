@@ -659,7 +659,17 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings, not the
     // final sample's 1spp. Raygen handles sample-0 (overwrite) vs N>0 (running mean).
     if (m_renderSettings.denoiseMode == DenoiseMode::NRD) pc.control.x |= kPTFlagAccumulateAOVs;
-    pc.control.y = m_historyFrameCount;
+    // DenoiseMode::Atrous (SVGF): feed the denoiser a FRESH per-frame independent
+    // sample instead of the engine's naive accumulated running-mean beauty. SVGF's
+    // own temporal accumulation replaces it — which is what makes the per-pixel
+    // luminance variance (hence the variance-guided spatial filter) meaningful.
+    // raygen historyFrameCount=0 => acc=radiance (1 spp) each frame; the Sobol
+    // sampler still advances via params.z (m_sampleIndex), so frames are
+    // independent noise. Motion vectors are 0 in this mode (raygen gates MV on
+    // historyFrameCount>0) — fine for SVGF's static-camera reprojection; the
+    // moving-camera MV path is exercised by the live interactive viewer.
+    const bool svgfMode = (m_renderSettings.denoiseMode == DenoiseMode::Atrous);
+    pc.control.y = svgfMode ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,
@@ -702,10 +712,15 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             0, 1, &rayToCompute, 0, nullptr, 0, nullptr);
 
         AtrousInputs ai{};
-        ai.beautyImage = m_outputImage;
-        ai.beautyView  = m_outputView;
-        ai.normalView  = m_normalAOVView;
-        ai.depthView   = m_depthAOVView;
+        ai.beautyImage   = m_outputImage;
+        ai.beautyView    = m_outputView;
+        ai.normalView    = m_normalAOVView;
+        ai.depthView     = m_depthAOVView;
+        ai.motionView    = m_motionVectorView;
+        // Reset SVGF history on the first accumulated frame or any view change
+        // (computed from the REAL frame counter, before it is advanced below;
+        // note pc.control.y was forced to 0 for the raygen fresh-sample trick).
+        ai.resetHistory  = (m_historyFrameCount == 0u) || m_viewChangedThisFrame;
         m_atrousDenoiser->dispatch(cmd, ai);
         atrousRan = true;  // beauty last written by COMPUTE, still GENERAL
     }
