@@ -14,6 +14,7 @@
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
 #include "render/rt/denoise/nrd_cinematic.hpp"
+#include "render/rt/denoise/atrous_denoise.hpp"
 
 namespace ohao {
 
@@ -680,6 +681,35 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     vkCmdTraceRaysKHR(cmd, &m_rgenRegion, &m_missRegion, &m_hitRegion, &m_callRegion,
                       m_width, m_height, 1);
 
+    // --- À-trous beauty denoise (DenoiseMode::Atrous) ---
+    // Runs edge-aware spatial filtering on the final beauty (binding 2) in
+    // place, using the normal AOV (binding 7, N*0.5+0.5) and linear depth AOV
+    // (binding 20) for edge-stopping. Because it denoises the correct final
+    // PBR image — not demodulated diffuse/specular like NRD — metals/emissive
+    // stay physically correct (no black metals, no magenta cast). Independent
+    // of NRD, so this lives outside the OHAO_NRD_ENABLED block.
+    bool atrousRan = false;
+    if (m_renderSettings.denoiseMode == DenoiseMode::Atrous && m_atrousDenoiser) {
+        // Publish raygen stores (beauty/normal/depth, RAY_TRACING) to the
+        // COMPUTE reads of the first à-trous pass. All three stay in GENERAL.
+        VkMemoryBarrier rayToCompute{};
+        rayToCompute.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        rayToCompute.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        rayToCompute.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &rayToCompute, 0, nullptr, 0, nullptr);
+
+        AtrousInputs ai{};
+        ai.beautyImage = m_outputImage;
+        ai.beautyView  = m_outputView;
+        ai.normalView  = m_normalAOVView;
+        ai.depthView   = m_depthAOVView;
+        m_atrousDenoiser->dispatch(cmd, ai);
+        atrousRan = true;  // beauty last written by COMPUTE, still GENERAL
+    }
+
 #ifdef OHAO_NRD_ENABLED
     // --- Sub-plan 4.C T3b: NRD REBLUR_DIFFUSE_SPECULAR dispatch ---
     // After trace rays, all NRD input AOVs are in VK_IMAGE_LAYOUT_GENERAL with
@@ -1048,6 +1078,13 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition output image to TRANSFER_SRC_OPTIMAL for readback/blit ---
     {
+        // In à-trous mode the final beauty write comes from the COMPUTE stage,
+        // so the transfer must wait on COMPUTE (not just RAY_TRACING). Adding
+        // COMPUTE to the wait is harmless for other modes (nothing wrote the
+        // output via compute there).
+        const VkPipelineStageFlags outSrcStage =
+            atrousRan ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT
+                      : VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
         VkImageMemoryBarrier toTransfer{};
         toTransfer.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         toTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -1057,7 +1094,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         toTransfer.image = m_outputImage;
         toTransfer.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            outSrcStage, VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, 0, nullptr, 0, nullptr, 1, &toTransfer);
     }
 

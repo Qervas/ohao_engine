@@ -450,6 +450,14 @@ void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
 }
 
 void VulkanRenderer::applyRTRenderSettings() {
+    // Atrous is a GPU-side, in-place beauty denoiser dispatched by the RT
+    // pipeline itself, so the PathTracer must see denoiseMode==Atrous to run
+    // it. The profile default (reset each frame) doesn't carry the user's
+    // --denoise override, so inject it here. Scoped to Atrous ONLY — None,
+    // OIDN, and NRD keep their profile-default denoiseMode untouched.
+    if (m_denoiseModeOverridden && m_denoiseMode == DenoiseMode::Atrous) {
+        m_rtSettings.denoiseMode = DenoiseMode::Atrous;
+    }
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }
@@ -639,7 +647,10 @@ void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
 }
 
 const uint8_t* VulkanRenderer::getPixels() const {
-    if (m_denoiseMode == DenoiseMode::None) {
+    // Atrous denoises the beauty (m_outputImage) in place on the GPU, so
+    // m_pixelBuffer already holds the denoised result — same readback path as
+    // None. Do NOT route it through the NRD/OIDN CPU paths below.
+    if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous) {
         return m_pixelBuffer.data();
     }
     if (m_denoiseCacheValid) {

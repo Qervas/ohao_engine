@@ -11,6 +11,10 @@
 #include "render/rt/denoise/nrd_denoise.hpp"
 #include "render/rt/denoise/nrd_compose.hpp"
 #include "render/rt/denoise/nrd_cinematic.hpp"
+// Unconditional: PathTracer holds a std::unique_ptr<AtrousDenoiser>, so this
+// TU (which defines the out-of-line dtor) needs the complete type. Not
+// OHAO_NRD-guarded — the à-trous path is independent of NRD.
+#include "render/rt/denoise/atrous_denoise.hpp"
 
 namespace ohao {
 
@@ -143,6 +147,15 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     (void)instanceExtensions; (void)deviceExtensions;
 #endif
 
+    // À-trous beauty denoiser (DenoiseMode::Atrous) — independent of NRD.
+    // Cheap to keep resident; only dispatched when the active denoise mode is
+    // Atrous, so None/OIDN/NRD are unaffected.
+    m_atrousDenoiser = std::make_unique<AtrousDenoiser>();
+    if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+        std::cerr << "[atrous] init FAILED — --denoise=atrous will pass through noisy beauty\n";
+        m_atrousDenoiser.reset();
+    }
+
     return true;
 }
 
@@ -226,6 +239,11 @@ void PathTracer::destroy() {
         m_cinematicPost.reset();
     }
 #endif
+
+    if (m_atrousDenoiser) {
+        m_atrousDenoiser->shutdown();
+        m_atrousDenoiser.reset();
+    }
 
     // CDF buffers are owned by VulkanRenderer, not by the path tracer.
     // Clear the cached handles so later destroy calls or reuse don't touch freed memory.
