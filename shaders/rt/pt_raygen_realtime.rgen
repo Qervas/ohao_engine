@@ -248,8 +248,13 @@ void main() {
     // Sub-plan 3.A: motion vector on first-hit
     {
         vec2 motion = vec2(0.0);
-        // First frame: prevViewProj is stale — force zero MV
-        if (firstHitDist > 0.0 && historyFrameCount > 0u) {
+        // First frame: prevViewProj is stale — force zero MV. Gate on frameIdx
+        // (pc.params.z), NOT historyFrameCount (pc.control.y): control.y is forced
+        // to 0 every frame in SVGF/DLSS mode (the fresh-1spp trick), which silently
+        // zeroed the motion vectors and left DLSS-RR reprojecting stale history to
+        // the wrong pixel under camera motion (the ghosting/ringing "blob"). frameIdx
+        // advances every frame in all modes, so this writes correct MVs for DLSS too.
+        if (firstHitDist > 0.0 && frameIdx > 0u) {
             // Derive currViewProj in-shader from push-constant inverses.
             // Cost: 2 mat4 inverts per raygen thread on bounce 0.
             // CameraUBO refactor (out of scope) removes this.
