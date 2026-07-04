@@ -4,6 +4,7 @@
 
 #include "path_tracer.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -687,7 +688,14 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     pc.invView = glm::inverse(view);
     pc.invProj = glm::inverse(proj);
     pc.prevViewProj = m_prevViewProj;
-    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, m_maxBounces);
+    // params.w packs BOTH maxBounces (low 16 bits) and the genuine per-frame
+    // sample count (high 16 bits). The push-constant block is already at the
+    // 256-byte device maxPushConstantsSize, so we cannot append a field — the
+    // realtime raygen unpacks samplesPerFrame from the high bits and loops on it;
+    // base/offline raygen mask it off (they trace one path per dispatch).
+    const uint32_t spf = std::max(1u, m_renderSettings.samplesPerFrame);
+    const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);
+    pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, packedBouncesAndSpf);
     pc.control = glm::uvec4(0u);
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
     if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;

@@ -298,9 +298,12 @@ int main(int argc, char* argv[]) {
             g_cam.moved = false;
         }
 
-        // Path trace
-        for (int i = 0; i < g_spp; i++)
-            renderer.render();
+        // Path trace: ONE dispatch per displayed frame. g_spp now drives a
+        // GENUINE in-raygen per-frame sample loop (N decorrelated paths per
+        // pixel, averaged) instead of N separate temporally-accumulated frames —
+        // so DLSS/SVGF receive a clean N-spp image that survives camera motion.
+        renderer.setRealtimeSamplesPerFrame(static_cast<uint32_t>(g_spp));
+        renderer.render();
 
         // Blit pixels to OpenGL texture → screen
         const uint8_t* pixels = renderer.getPixels();
