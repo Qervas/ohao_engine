@@ -36,9 +36,10 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
 // ReSTIR GI (Phase 1) toggles — driven by env vars for A/B and measurement.
 // Must stay in sync with PT_FLAG_RESTIRGI_* in pt_raygen_realtime.rgen.
-constexpr uint32_t kPTFlagRestirGiOff    = 1u << 5;  // OHAO_RESTIRGI_OFF=1    → no temporal reuse (M=1 anchor)
-constexpr uint32_t kPTFlagRestirGiGiOnly = 1u << 6;  // OHAO_RESTIRGI_GIONLY=1 → write GI-only into diffuseRadiance
-constexpr uint32_t kPTFlagRestirGiLegacy = 1u << 7;  // OHAO_RESTIRGI_LEGACY=1 → original multi-bounce Stage C
+constexpr uint32_t kPTFlagRestirGiOff    = 1u << 5;  // OHAO_RESTIRGI_OFF=1       → no temporal reuse (M=1 anchor)
+constexpr uint32_t kPTFlagRestirGiGiOnly = 1u << 6;  // OHAO_RESTIRGI_GIONLY=1    → write GI-only into diffuseRadiance
+constexpr uint32_t kPTFlagRestirGiLegacy = 1u << 7;  // OHAO_RESTIRGI_LEGACY=1    → original multi-bounce Stage C
+constexpr uint32_t kPTFlagRestirGiNoSpatial = 1u << 8; // OHAO_RESTIRGI_NOSPATIAL=1 → Phase 2 spatial reuse off (Phase-1 behavior)
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
@@ -789,12 +790,14 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // anchor); OHAO_RESTIRGI_GIONLY writes the isolated GI term into diffuseRadiance;
     // OHAO_RESTIRGI_LEGACY restores the original multi-bounce Stage C.
     {
-        static const bool kRestirGiOff    = (std::getenv("OHAO_RESTIRGI_OFF")    != nullptr);
-        static const bool kRestirGiGiOnly = (std::getenv("OHAO_RESTIRGI_GIONLY") != nullptr);
-        static const bool kRestirGiLegacy = (std::getenv("OHAO_RESTIRGI_LEGACY") != nullptr);
-        if (kRestirGiOff)    pc.control.x |= kPTFlagRestirGiOff;
-        if (kRestirGiGiOnly) pc.control.x |= kPTFlagRestirGiGiOnly;
-        if (kRestirGiLegacy) pc.control.x |= kPTFlagRestirGiLegacy;
+        static const bool kRestirGiOff       = (std::getenv("OHAO_RESTIRGI_OFF")       != nullptr);
+        static const bool kRestirGiGiOnly    = (std::getenv("OHAO_RESTIRGI_GIONLY")    != nullptr);
+        static const bool kRestirGiLegacy    = (std::getenv("OHAO_RESTIRGI_LEGACY")    != nullptr);
+        static const bool kRestirGiNoSpatial = (std::getenv("OHAO_RESTIRGI_NOSPATIAL") != nullptr);
+        if (kRestirGiOff)       pc.control.x |= kPTFlagRestirGiOff;
+        if (kRestirGiGiOnly)    pc.control.x |= kPTFlagRestirGiGiOnly;
+        if (kRestirGiLegacy)    pc.control.x |= kPTFlagRestirGiLegacy;
+        if (kRestirGiNoSpatial) pc.control.x |= kPTFlagRestirGiNoSpatial;
     }
     pc.control.y = (svgfMode || dlssMode) ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
