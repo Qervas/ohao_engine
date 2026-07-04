@@ -81,6 +81,7 @@ const uint PT_FLAG_DLSSRR = 1u << 4;  // Phase 5: repurpose normalAOV → (world
 const uint PT_FLAG_RESTIRGI_OFF    = 1u << 5;  // disable TEMPORAL reuse → M=1 anchor (plain cosine estimator)
 const uint PT_FLAG_RESTIRGI_GIONLY = 1u << 6;  // write ONLY the diffuse-GI term into diffuseRadiance (measurement)
 const uint PT_FLAG_RESTIRGI_LEGACY = 1u << 7;  // fall back to original multi-bounce Stage C (escape hatch)
+const uint PT_FLAG_RESTIRGI_NOSPATIAL = 1u << 8;  // Phase 2: disable SPATIAL reuse (→ Phase-1 temporal-only behavior)
 
 // Sub-plan 4.F T3: running-average helper for NRD AOV bindings (22/23/24/25/26).
 // When accumulateAOVs is set AND sampleIdx>0, blend `current` with previous image value
@@ -222,6 +223,26 @@ float giTargetPHat(vec3 albedoD, vec3 n1, vec3 x1, vec3 xs, vec3 Lo) {
     return giLum((albedoD / OHAO_PI) * Lo * cosT);
 }
 
+// Phase 2 — spatial-reuse Jacobian (change of solid-angle measure; Ouyang et al.
+// 2021 "ReSTIR GI" Eq. 11). A neighbor q's sample x_s was integrated w.r.t. q's
+// pixel (primary hit x1q); reused at r (primary hit x1r) it must be reweighted by
+//   J = | (cos_phi_r / dist_r^2) / (cos_phi_q / dist_q^2) |
+// where dist_* = |x_s - x1_*| and cos_phi_* = |dot(n_s, normalize(x1_* - x_s))|.
+// Returns 0 on degenerate geometry (caller skips the neighbor).
+float giSpatialJacobian(vec3 ns, vec3 xs, vec3 x1r, vec3 x1q) {
+    vec3  toR = x1r - xs; float dr2 = dot(toR, toR);
+    vec3  toQ = x1q - xs; float dq2 = dot(toQ, toQ);
+    float dr  = sqrt(max(dr2, 1e-12));
+    float dq  = sqrt(max(dq2, 1e-12));
+    if (dr < 1e-3 || dq < 1e-3) return 0.0;          // sample coincides with a primary hit
+    vec3  nsN  = normalize(ns);
+    float cosR = abs(dot(nsN, toR / dr));
+    float cosQ = abs(dot(nsN, toQ / dq));
+    if (cosQ < 1e-4) return 0.0;                      // guard the denominator
+    float J = (cosR * dq2) / max(cosQ * dr2, 1e-8);
+    return clamp(J, 1e-3, 1e3);                       // numerical safety only (rarely active)
+}
+
 // Vector diffuse-GI estimate for the held sample: f * Lo * cos * W.
 vec3 giShade(vec3 albedoD, vec3 n1, vec3 x1, vec3 xs, vec3 Lo, float W) {
     vec3 d = xs - x1;
@@ -261,6 +282,7 @@ void main() {
     bool restirGiOff    = (pc.control.x & PT_FLAG_RESTIRGI_OFF)    != 0u; // no temporal reuse (M=1 anchor)
     bool restirGiGiOnly = (pc.control.x & PT_FLAG_RESTIRGI_GIONLY) != 0u; // write GI-only into diffuseRadiance
     bool restirGiLegacy = (pc.control.x & PT_FLAG_RESTIRGI_LEGACY) != 0u; // original multi-bounce Stage C
+    bool restirGiNoSpatial = (pc.control.x & PT_FLAG_RESTIRGI_NOSPATIAL) != 0u; // Phase 2: spatial reuse off
 
     samplerInit(uvec2(pixel), frameIdx);
     uint dimIdx = 0u;
@@ -1569,14 +1591,119 @@ void main() {
             }
         }
 
-        // Finalize the unbiased contribution weight of the merged reservoir.
+        // Finalize the TEMPORAL reservoir's unbiased contribution weight. This is
+        // the PERSISTENT state stored to currGIReservoir (Phase-1 semantics); the
+        // Phase-2 spatial pass below is a per-frame, shading-only filter and must
+        // NOT compound into the stored history (that would blur/bias over time).
         float pHatHeld = giTargetPHat(giAlbedoD, firstHitNormal, firstHitPos, merged.xs, merged.Lo);
         merged.W = (pHatHeld > 0.0 && merged.M > 0.0) ? merged.wSum / (merged.M * pHatHeld) : 0.0;
 
-        // Shade the diffuse GI: f · Lo · cos · W  (+ surface-less env-miss term).
+        // Store the merged (TEMPORAL-only) reservoir → read as prev next frame.
+        imageStore(currGIReservoir0, pixel, vec4(merged.xs, merged.M));
+        imageStore(currGIReservoir1, pixel, vec4(merged.ns, merged.W));
+        imageStore(currGIReservoir2, pixel, vec4(merged.Lo, (firstHitDist > 0.0) ? 1.0 : 0.0));
+
+        // ============================================================
+        // PHASE 2 — SPATIAL reuse (Ouyang et al. 2021, §5.2 + Jacobian Eq. 11).
+        //   Combine r's temporal reservoir with K neighbor reservoirs. Pass
+        //   structure = FRAME-BEHIND FUSED: OHAO issues ONE raygen SBT dispatch,
+        //   so this-frame neighbor reservoirs are not yet written when a thread
+        //   runs. We instead read the PREVIOUS frame's temporal reservoirs
+        //   (bindings 29-31) + their primary-hit surface/shading histories
+        //   (bindings 13/15) for neighbors — i.e. 1-frame-stale spatial. This
+        //   needs no second pipeline/SBT/descriptor plumbing (all resources are
+        //   already bound), and under a static/slow camera the staleness is
+        //   negligible. Neighbors are centered on r's primary hit reprojected
+        //   into the previous frame's screen space.
+        // ============================================================
+        GIReservoir spatialR = merged;   // seed with r's temporal reservoir
+        bool spatialOn = (!restirGiOff) && (!restirGiNoSpatial)
+                         && (historyFrameCount > 0u) && (!viewChanged)
+                         && (firstHitDist > 0.0) && (merged.M > 0.0);
+        if (spatialOn) {
+            ivec2 baseCenter = pixel;
+            {
+                vec4 sClip = pc.prevViewProj * vec4(firstHitPos, 1.0);
+                if (sClip.w > 0.0) {
+                    vec2 sUV = sClip.xy / sClip.w * 0.5 + 0.5;
+                    sUV.y = 1.0 - sUV.y;
+                    if (sUV.x >= 0.0 && sUV.x < 1.0 && sUV.y >= 0.0 && sUV.y < 1.0)
+                        baseCenter = clamp(ivec2(sUV * vec2(pc.params.xy)),
+                                           ivec2(0), ivec2(pc.params.xy) - 1);
+                }
+            }
+            const int   K      = 4;      // spatial neighbors merged per pixel
+            const float RADIUS = 20.0;   // screen-space sampling radius (px)
+            vec3 n1r = normalize(firstHitNormal);
+            for (int k = 0; k < K; ++k) {
+                // Uniform-disk neighbor offset (radius decreases mildly per tap).
+                vec2  du = getSample2D(dimIdx); dimIdx += 2u;
+                float rr = RADIUS * (1.0 - 0.15 * float(k)) * sqrt(du.x);
+                float th = 6.2831853 * du.y;
+                ivec2 off = ivec2(round(rr * cos(th)), round(rr * sin(th)));
+                if (off.x == 0 && off.y == 0) off = ivec2(1, 0);
+                ivec2 qPix = clamp(baseCenter + off, ivec2(0), ivec2(pc.params.xy) - 1);
+
+                // --- Geometry gate: neighbor primary hit must be coplanar-ish + same-facing.
+                //     Screen-offset neighbors are NOT at r's world pos, so use tangent-
+                //     plane distance (not the absolute-position temporal threshold).
+                vec4 qSurf = imageLoad(prevSurfaceHistory, qPix);
+                if (qSurf.w <= 0.0) continue;                      // neighbor had no primary hit
+                vec3 x1q = qSurf.xyz;
+                float planeDist = abs(dot(x1q - firstHitPos, n1r));
+                if (planeDist > max(0.05, 0.1 * firstHitDist)) continue;
+                vec4 qShad = imageLoad(prevShadingHistory, qPix);
+                if (qShad.w > 0.0 && dot(normalize(qShad.xyz), n1r) < 0.9) continue;
+
+                // --- Neighbor reservoir (previous-frame temporal reservoir at q).
+                vec4 q0 = imageLoad(prevGIReservoir0, qPix);
+                vec4 q1 = imageLoad(prevGIReservoir1, qPix);
+                vec4 q2 = imageLoad(prevGIReservoir2, qPix);
+                if (q2.w <= 0.5 || q0.w <= 0.0 || q1.w <= 0.0) continue;  // valid, M>0, W>0
+                vec3  qxs = q0.xyz; float Mq = q0.w;
+                vec3  qns = q1.xyz; float Wq = q1.w;
+                vec3  qLo = q2.xyz;
+
+                // --- Re-evaluate the neighbor's sample target at r's domain.
+                float pHatR = giTargetPHat(giAlbedoD, firstHitNormal, firstHitPos, qxs, qLo);
+                if (pHatR <= 0.0) continue;
+
+                // --- JACOBIAN (solid-angle measure change; Ouyang 2021 Eq. 11).
+                float J = giSpatialJacobian(qns, qxs, firstHitPos, x1q);
+                if (J <= 0.0) continue;                            // degenerate geometry
+
+                // --- VISIBILITY x1_r -> x_s (blocks spatial light-leak through walls).
+                vec3  toXs = qxs - firstHitPos;
+                float dXs  = length(toXs);
+                if (dXs > 0.05) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        firstHitPos + n1r * 0.01, 0.001, toXs / dXs, dXs - 0.02, 0);
+                    if (payload.hitDist >= 0.0) continue;          // occluded → contribute 0
+                }
+
+                // --- Fold neighbor into the spatial reservoir (biased M-combiner × J).
+                float mNb = min(Mq, 20.0);                         // bound neighbor confidence
+                float wNb = pHatR * Wq * mNb * J;
+                spatialR.wSum += wNb;
+                spatialR.M    += mNb;
+                float rMerge = getSample1D(dimIdx); dimIdx += 1u;
+                if (wNb > 0.0 && rMerge * spatialR.wSum < wNb) {
+                    spatialR.xs = qxs; spatialR.ns = qns; spatialR.Lo = qLo;
+                }
+            }
+        }
+
+        // Finalize the SPATIAL reservoir and shade the diffuse GI from it:
+        //   f · Lo · cos · W  (+ surface-less env-miss term).
+        float pHatSpatial = giTargetPHat(giAlbedoD, firstHitNormal, firstHitPos, spatialR.xs, spatialR.Lo);
+        spatialR.W = (pHatSpatial > 0.0 && spatialR.M > 0.0) ? spatialR.wSum / (spatialR.M * pHatSpatial) : 0.0;
+
         vec3 giDiffuse = vec3(0.0);
         if (firstHitDist > 0.0) {
-            giDiffuse = giShade(giAlbedoD, firstHitNormal, firstHitPos, merged.xs, merged.Lo, merged.W);
+            giDiffuse = giShade(giAlbedoD, firstHitNormal, firstHitPos, spatialR.xs, spatialR.Lo, spatialR.W);
         }
         giDiffuse += giEnvMiss;
 
@@ -1588,11 +1715,6 @@ void main() {
         radiance         += giDiffuse;
         diffContrib      += giDiffuse;
         giDiffuseTermOut  = giDiffuse;
-
-        // Store the merged reservoir → read as prev next frame (persistent).
-        imageStore(currGIReservoir0, pixel, vec4(merged.xs, merged.M));
-        imageStore(currGIReservoir1, pixel, vec4(merged.ns, merged.W));
-        imageStore(currGIReservoir2, pixel, vec4(merged.Lo, (firstHitDist > 0.0) ? 1.0 : 0.0));
     }
 
     imageStore(currSurfaceHistory, pixel,
