@@ -72,6 +72,7 @@ int main(int argc, char* argv[]) {
     std::string dumpHitDistDiffusePath;
     std::string dumpHitDistSpecularPath;
     float panX = 0.0f;
+    float rotY = 0.0f;  // --rot-y=<deg/frame>: yaw the camera each seq frame (mouse-look repro)
     // Debug capture: --seq=<K> renders K consecutive realtime frames and writes
     // EACH frame's getPixels() to OUT_%03d.png (zero-padded), advancing the
     // sampler/temporal naturally between frames (no reset). Behind the flag so
@@ -112,6 +113,8 @@ int main(int argc, char* argv[]) {
             dumpHitDistSpecularPath = arg.substr(25);
         } else if (arg.rfind("--pan-x=", 0) == 0) {
             panX = std::stof(arg.substr(8));
+        } else if (arg.rfind("--rot-y=", 0) == 0) {
+            rotY = std::stof(arg.substr(8));
         } else if (arg.rfind("--seq=", 0) == 0) {
             seqCount = std::atoi(arg.substr(6).c_str());
         } else if (arg.rfind("--ground=", 0) == 0) {
@@ -473,6 +476,11 @@ int main(int argc, char* argv[]) {
             if (panX != 0.0f) {
                 auto pos = camera.getPosition();
                 camera.setPosition({pos.x + panX, pos.y, pos.z});
+                renderer.notifyCameraChanged();  // faithful to interactive viewer: fire viewChanged so the reset/reproject path runs each frame
+            }
+            if (rotY != 0.0f) {
+                camera.rotate(0.0f, rotY);        // yaw sweep — reproduces mouse-look rotation
+                renderer.notifyCameraChanged();
             }
             renderer.render();
             const uint8_t* px = renderer.getPixels();

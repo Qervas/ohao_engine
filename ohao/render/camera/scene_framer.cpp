@@ -75,17 +75,26 @@ FrameResult SceneFramer::computeFraming(const std::vector<Vertex>& vertices, boo
     result.cameraPosition = {0, modelCenterY, S * 1.7f};
     result.cameraFov = 45.0f;
 
-    // 4-light studio setup (tuned for S=15 room)
+    // 4-light studio setup (tuned for S=15 room).
+    // Radii kept strictly inside the room so no light sphere penetrates a
+    // wall/ceiling — an overlapping sphere gives a near-zero-distance NEE sample
+    // and paints high-variance fireflies on the surface it overlaps. Irradiance
+    // from a uniform sphere is intensity/(4d^2) (independent of radius), so
+    // shrinking a radius at fixed intensity preserves room brightness; the light
+    // just casts slightly sharper shadows/highlights.
     result.lights = {
-        // Ceiling light — warm overhead, bedroom ceiling fixture
-        // Intensity in candela-like units (inverse-square needs higher values)
-        {"CeilingLight", {0.0f, S * 0.9f, 2.0f}, {1.0f, 0.92f, 0.82f}, 800.0f, 3.0f},
-        // Window light — cool daylight from the right
-        {"WindowLight", {S * 0.8f, 3.0f, 5.0f}, {0.85f, 0.9f, 1.0f}, 600.0f, 4.0f},
-        // Bedside lamp — warm point light on the nightstand
+        // Ceiling light — warm overhead, bedroom ceiling fixture.
+        // y*0.85=12.75, r=1.2 -> sphere y[11.55,13.95], clear of ceiling y=15.
+        // Intensity in candela-like units (inverse-square needs higher values).
+        {"CeilingLight", {0.0f, S * 0.85f, 2.0f}, {1.0f, 0.92f, 0.82f}, 800.0f, 1.2f},
+        // Window light — cool daylight from the right.
+        // x=12, r=1.5 -> sphere x[10.5,13.5], clear of right wall x=15.
+        {"WindowLight", {S * 0.8f, 3.0f, 5.0f}, {0.85f, 0.9f, 1.0f}, 600.0f, 1.5f},
+        // Bedside lamp — warm point light on the nightstand (already interior).
         {"BedsideLamp", {S * 0.55f, -S + 6.0f, -S + 2.0f}, {1.0f, 0.85f, 0.65f}, 200.0f, 1.0f},
-        // Fill — subtle front fill to see the face
-        {"FrontFill", {0.0f, 0.0f, S * 0.9f}, {1.0f, 0.95f, 0.9f}, 150.0f, 3.0f},
+        // Fill — subtle front fill to see the face.
+        // z*0.85=12.75, r=1.2 -> sphere z[11.55,13.95], clear of front wall z=15.
+        {"FrontFill", {0.0f, 0.0f, S * 0.85f}, {1.0f, 0.95f, 0.9f}, 150.0f, 1.2f},
     };
 
     return result;
