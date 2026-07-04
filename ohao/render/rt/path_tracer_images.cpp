@@ -258,6 +258,51 @@ bool PathTracer::createImages() {
     }
     m_shadingHistoryWriteIndex = 0;
 
+    // --- ReSTIR GI reservoir ping-pong: 3 RGBA32F planes × 2 (curr/prev) ---
+    for (uint32_t plane = 0; plane < 3; ++plane) {
+        for (uint32_t i = 0; i < 2; ++i) {
+            VkImageCreateInfo imageInfo{};
+            imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            imageInfo.extent = {m_width, m_height, 1};
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            if (vkCreateImage(m_device, &imageInfo, nullptr, &m_giReservoirImages[plane][i]) != VK_SUCCESS) return false;
+
+            VkMemoryRequirements memReqs;
+            vkGetImageMemoryRequirements(m_device, m_giReservoirImages[plane][i], &memReqs);
+
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memReqs.size;
+            allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+            if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_giReservoirMemory[plane][i]) != VK_SUCCESS) return false;
+            vkBindImageMemory(m_device, m_giReservoirImages[plane][i], m_giReservoirMemory[plane][i], 0);
+
+            VkImageViewCreateInfo viewInfo{};
+            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewInfo.image = m_giReservoirImages[plane][i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.layerCount = 1;
+
+            if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_giReservoirViews[plane][i]) != VK_SUCCESS) return false;
+        }
+    }
+    m_giReservoirInitialized[0] = false;
+    m_giReservoirInitialized[1] = false;
+    m_giReservoirWriteIndex = 0;
+
     // ---- Feature 3.A: Motion vector AOV (RG16F) ----
     {
         VkImageCreateInfo imageInfo{};
@@ -1013,6 +1058,18 @@ void PathTracer::destroyImages() {
     }
     m_surfaceHistoryWriteIndex = 0;
     m_shadingHistoryWriteIndex = 0;
+
+    // ReSTIR GI reservoir ping-pong
+    for (uint32_t plane = 0; plane < 3; ++plane) {
+        for (uint32_t i = 0; i < 2; ++i) {
+            if (m_giReservoirViews[plane][i])  { vkDestroyImageView(m_device, m_giReservoirViews[plane][i], nullptr);  m_giReservoirViews[plane][i]  = VK_NULL_HANDLE; }
+            if (m_giReservoirImages[plane][i]) { vkDestroyImage(m_device, m_giReservoirImages[plane][i], nullptr);     m_giReservoirImages[plane][i] = VK_NULL_HANDLE; }
+            if (m_giReservoirMemory[plane][i]) { vkFreeMemory(m_device, m_giReservoirMemory[plane][i], nullptr);       m_giReservoirMemory[plane][i] = VK_NULL_HANDLE; }
+        }
+    }
+    m_giReservoirInitialized[0] = false;
+    m_giReservoirInitialized[1] = false;
+    m_giReservoirWriteIndex = 0;
 }
 
 // ─── Material buffer ─────────────────────────────────────────────────
