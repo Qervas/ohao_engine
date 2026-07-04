@@ -125,7 +125,9 @@ void main() {
     ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
     uint frameIdx = pc.params.z;
     uint historyFrameCount = pc.control.y;
-    uint maxBounces = pc.params.w;
+    // params.w low 16 bits = maxBounces; high 16 bits carry samplesPerFrame
+    // (only the realtime raygen loops on it). Mask so the count never bleeds in.
+    uint maxBounces = pc.params.w & 0xFFFFu;
     bool enableAOVs = (pc.control.x & PT_FLAG_ENABLE_AOVS) != 0u;
     bool enableInternalDenoise = (pc.control.x & PT_FLAG_ENABLE_INTERNAL_DENOISE) != 0u;
     bool enableFireflyClamp = (pc.control.x & PT_FLAG_ENABLE_FIREFLY_CLAMP) != 0u;

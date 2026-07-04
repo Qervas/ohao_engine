@@ -67,6 +67,14 @@ struct RTRenderSettings {
     // wrapped-lighting SSS into the diffuse NEE term — kills the
     // "plastic skin" failure on un-SSS-aware materials.
     float subsurfaceStrength{0.0f};       // [0, 1] — 0 = lambertian (off)
+    // Realtime/DLSS: GENUINE per-frame sample count. The realtime raygen traces
+    // this many decorrelated paths per pixel in ONE render() dispatch and
+    // averages them, so DLSS/SVGF receive a clean N-spp image before denoising
+    // (quality that survives camera motion). Driven by the interactive '+'/'-'
+    // keys. 1 = one path per dispatch (legacy behavior). Packed into the high
+    // 16 bits of the params.w push constant (the block is already at the 256-byte
+    // device max, so no field can be appended).
+    uint32_t samplesPerFrame{1};          // [1, 64]
 };
 
 struct PathTracerShaderSet {

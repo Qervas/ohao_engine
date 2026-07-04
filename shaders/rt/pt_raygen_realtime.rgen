@@ -132,7 +132,12 @@ void main() {
     uint frameIdx = pc.params.z;
     uint historyFrameCount = pc.control.y;
     bool viewChanged = pc.control.z != 0u;
-    uint maxBounces = pc.params.w;
+    // params.w low 16 bits = maxBounces, high 16 bits = samplesPerFrame (packed
+    // by path_tracer_render.cpp; push-constant block is already at the 256-byte
+    // device max so we cannot append a field — see report).
+    uint maxBounces = pc.params.w & 0xFFFFu;
+    // GENUINE per-frame sample count: N decorrelated paths per pixel per dispatch.
+    uint samplesPerFrame = max(pc.params.w >> 16, 1u);
     bool enableAOVs = (pc.control.x & PT_FLAG_ENABLE_AOVS) != 0u;
     bool enableInternalDenoise = (pc.control.x & PT_FLAG_ENABLE_INTERNAL_DENOISE) != 0u;
     bool enableFireflyClamp = (pc.control.x & PT_FLAG_ENABLE_FIREFLY_CLAMP) != 0u;
@@ -192,6 +197,46 @@ void main() {
     // OHAO_PI provided by includes/rt/env_sampling.glsl (now included for env-IS).
 
     // ================================================================
+    // GENUINE per-frame sample loop. Trace N decorrelated paths per pixel in
+    // ONE dispatch and average radiance + demod diffuse/specular AOVs, so the
+    // frame handed to DLSS/SVGF is a clean N-spp image BEFORE denoising —
+    // quality that survives camera motion. The pixel position (uv/ndc/rayDir)
+    // is FIXED across all N samples (computed once above) — only the PATH
+    // randomness varies — so DLSS/NRD still see exactly one jitter offset per
+    // frame. Geometric/material AOVs are written once, from the primary hit
+    // (s==0). N=1 is byte-identical to the pre-loop single-sample path.
+    // ================================================================
+    vec3  radianceTotal    = vec3(0.0);
+    vec3  diffTotal        = vec3(0.0);
+    vec3  specTotal        = vec3(0.0);
+    float diffHitDistTotal = 0.0;
+    float specHitDistTotal = 0.0;
+
+    for (uint s = 0u; s < samplesPerFrame; ++s) {
+    bool primarySample = (s == 0u);
+    // Decorrelate the N paths: fold s into the sample index. For N=1, s=0 this
+    // is samplerInit(pixel, frameIdx) — same seed as before. dims 0..1 stay
+    // reserved for the fixed per-frame pixel jitter consumed above, so path
+    // sampling resumes at dim 2 exactly as the single-sample path did.
+    samplerInit(uvec2(pixel), frameIdx * samplesPerFrame + s);
+    dimIdx = 2u;
+
+    // Reset per-sample accumulators + first-hit capture.
+    radiance           = vec3(0.0);
+    diffContrib        = vec3(0.0);
+    specContrib        = vec3(0.0);
+    specHitDist        = 0.0;
+    specChainActive    = true;
+    diffHitDist        = 0.0;
+    diffHitRecorded    = false;
+    firstHitPos        = vec3(0.0);
+    firstHitNormal     = vec3(0.0, 0.0, 1.0);
+    firstHitDist       = -1.0;
+    firstHitRoughness  = 1.0;
+    firstHitDiffAlbedo = vec3(0.0);
+    firstHitSpecColor  = vec3(0.04);
+
+    // ================================================================
     // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
     // ================================================================
     payload.hitDist = -1.0;
@@ -220,7 +265,7 @@ void main() {
                 motion = currPix - prevPix;
             }
         }
-        imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
+        if (primarySample) imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
 
         // Sub-plan 3.B: depth (view-space Z) + roughness AOVs on first-hit
         float depth = 1e30;
@@ -241,20 +286,22 @@ void main() {
             if (rough >= 10.0) rough -= 10.0;
             rough = clamp(rough, 0.01, 1.0);
         }
-        imageStore(depthAOV,     pixel, vec4(depth, 0.0, 0.0, 0.0));
-        imageStore(roughnessAOV, pixel, vec4(rough, 0.0, 0.0, 0.0));
+        if (primarySample) {
+            imageStore(depthAOV,     pixel, vec4(depth, 0.0, 0.0, 0.0));
+            imageStore(roughnessAOV, pixel, vec4(rough, 0.0, 0.0, 0.0));
+        }
     }
 
     if (payload.hitDist < 0.0) {
         // Primary miss: beauty = env radiance. Both diff/spec channels stay zero.
         radiance = payload.color;  // throughput is 1 at primary ray
-        if (enableAOVs) {
+        if (enableAOVs && primarySample) {
             imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
             imageStore(normalAOV, pixel, vec4(0));
         }
         // Sub-plan 4.F T3: in accumulate mode we skipped zero-init for N>0, so we
         // must explicitly blend the current (miss=zero) sample into the demod AOVs.
-        if (accumulateAOVs && pc.params.z > 0u) {
+        if (accumulateAOVs && pc.params.z > 0u && primarySample) {
             AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV,   pixel, vec4(0.0));
             AOV_ACCUMULATE_WRITE(specColorAOV,       pixel, vec4(0.0));
             AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, vec4(0.0));
@@ -267,7 +314,7 @@ void main() {
         vec3 emissive = payload.color;
 
         // First-hit AOVs
-        if (enableAOVs) {
+        if (enableAOVs && primarySample) {
             imageStore(albedoAOV, pixel, vec4(albedo, 1.0));
             imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));
         }
@@ -284,7 +331,7 @@ void main() {
         // normal/roughness guide buffer DLSS Ray Reconstruction expects
         // (NVSDK_NGX_DLSS_Roughness_Mode_Packed). Gated on DLSSRR mode so every
         // other denoiser (which reads normalAOV as N*0.5+0.5) stays byte-identical.
-        if ((pc.control.x & PT_FLAG_DLSSRR) != 0u) {
+        if ((pc.control.x & PT_FLAG_DLSSRR) != 0u && primarySample) {
             imageStore(normalAOV, pixel, vec4(N, roughness));
         }
 
@@ -298,11 +345,15 @@ void main() {
         // must NOT re-apply it (that double-darkened metals to near-black in NRD).
         firstHitSpecColor  = isMetal ? vec3(1.0) : F0;
         // Sub-plan 4.F T3: running-average in NRD accumulate mode, overwrite otherwise.
-        AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
-        AOV_ACCUMULATE_WRITE(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
+        // Geometric/material AOVs are identical across the N samples (deterministic
+        // primary hit), so write them once from the primary sample.
+        if (primarySample) {
+            AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
+            AOV_ACCUMULATE_WRITE(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
 
-        // Sub-plan 4.B (fix): pack via NRD canonical encoder for REBLUR IN_NORMAL_ROUGHNESS
-        AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, nrdPackNormalRoughness(N, roughness));
+            // Sub-plan 4.B (fix): pack via NRD canonical encoder for REBLUR IN_NORMAL_ROUGHNESS
+            AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, nrdPackNormalRoughness(N, roughness));
+        }
 
         // Emissive at primary hit → diffuse channel (3.C.6 convention)
         if (length(emissive) > 0.001) {
@@ -1139,6 +1190,23 @@ void main() {
         }
 
     } // end of firstHitDist >= 0 else-branch
+
+        // Accumulate this sample's path integral into the N-spp totals.
+        radianceTotal    += radiance;
+        diffTotal        += diffContrib;
+        specTotal        += specContrib;
+        diffHitDistTotal += diffHitDist;
+        specHitDistTotal += specHitDist;
+    } // end per-frame sample loop
+
+    // Average the N samples → clean N-spp beauty + demod diffuse/specular
+    // radiance AOVs, BEFORE any temporal accumulation or denoise.
+    float invSamples = 1.0 / float(samplesPerFrame);
+    radiance    = radianceTotal    * invSamples;
+    diffContrib = diffTotal        * invSamples;
+    specContrib = specTotal        * invSamples;
+    diffHitDist = diffHitDistTotal * invSamples;
+    specHitDist = specHitDistTotal * invSamples;
 
     if (enableFireflyClamp && pc.tuning.x > 0.0) {
         float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));

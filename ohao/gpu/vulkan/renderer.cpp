@@ -1,4 +1,5 @@
 #include "renderer_impl.hpp"
+#include <algorithm>
 #include <cstring>
 #include "render/camera/camera.hpp"
 #include "render/rt/denoise/oidn_denoise.hpp"
@@ -461,6 +462,10 @@ void VulkanRenderer::applyRTRenderSettings() {
         // so the tracer must see denoiseMode==DLSSRR to run its NGX init/feature path.
         m_rtSettings.denoiseMode = m_denoiseMode;
     }
+    // Re-inject the interactive per-frame sample count: prepareRTSceneForFrame
+    // resets m_rtSettings to the pipeline default (samplesPerFrame=1) each frame,
+    // so restore the user's choice here (same pattern as aniso/SSS preservation).
+    m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->setRenderSettings(m_rtSettings);
     }
@@ -646,6 +651,16 @@ void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
     if (mode != m_denoiseMode) {
         m_denoiseMode = mode;
         m_denoiseCacheValid = false;
+    }
+}
+
+void VulkanRenderer::setRealtimeSamplesPerFrame(uint32_t n) {
+    m_realtimeSamplesPerFrame = std::clamp(n, 1u, 64u);
+    // Push immediately so the value takes effect even outside the per-frame
+    // prepareRTSceneForFrame path; the next frame re-injects it anyway.
+    m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->setRenderSettings(m_rtSettings);
     }
 }
 

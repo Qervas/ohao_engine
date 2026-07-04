@@ -142,6 +142,14 @@ public:
     void        setDenoiseMode(DenoiseMode mode);
     DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
 
+    // Realtime/DLSS: genuine per-frame sample count. The realtime raygen traces
+    // N decorrelated paths per pixel in ONE render() dispatch and averages them,
+    // so DLSS/SVGF get a clean N-spp image before denoising. Driven by the
+    // interactive '+'/'-' keys. Clamped to [1, 64]. Survives the per-frame RT
+    // settings reset (re-injected in applyRTRenderSettings).
+    void        setRealtimeSamplesPerFrame(uint32_t n);
+    uint32_t    getRealtimeSamplesPerFrame() const { return m_realtimeSamplesPerFrame; }
+
     // Returns the motion vector AOV image view from the active RT profile,
     // or VK_NULL_HANDLE if no RT profile is active.
     VkImageView getMotionVectorAOV() const;
@@ -420,6 +428,10 @@ private:
     // Denoise state
     DenoiseMode                  m_denoiseMode{DenoiseMode::None};
     bool                         m_denoiseModeOverridden{false}; // true = setDenoiseMode() called; blocks applyRTRenderSettings from resetting it
+    // Realtime per-frame sample count (interactive '+'/'-'). Re-injected into
+    // m_rtSettings each frame in applyRTRenderSettings so the per-frame reset in
+    // prepareRTSceneForFrame doesn't clobber it (same pattern as aniso/SSS).
+    uint32_t                     m_realtimeSamplesPerFrame{1};
     mutable std::vector<uint8_t> m_denoisedPixelBuffer;
     mutable bool                 m_denoiseCacheValid{false};
 
