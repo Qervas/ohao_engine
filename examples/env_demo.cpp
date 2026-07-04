@@ -72,6 +72,14 @@ int main(int argc, char* argv[]) {
     std::string dumpHitDistDiffusePath;
     std::string dumpHitDistSpecularPath;
     float panX = 0.0f;
+    // Debug capture: --seq=<K> renders K consecutive realtime frames and writes
+    // EACH frame's getPixels() to OUT_%03d.png (zero-padded), advancing the
+    // sampler/temporal naturally between frames (no reset). Behind the flag so
+    // default single-PNG behavior is unchanged. Used to difference the temporal
+    // "blinking light blob". If --pan-x is set in seq mode, the camera is
+    // translated +X by panX EACH frame (continuous pan) so motion is present in
+    // every captured frame.
+    int seqCount = 0;
     for (int i = 5; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
@@ -104,6 +112,8 @@ int main(int argc, char* argv[]) {
             dumpHitDistSpecularPath = arg.substr(25);
         } else if (arg.rfind("--pan-x=", 0) == 0) {
             panX = std::stof(arg.substr(8));
+        } else if (arg.rfind("--seq=", 0) == 0) {
+            seqCount = std::atoi(arg.substr(6).c_str());
         } else if (arg.rfind("--ground=", 0) == 0) {
             std::string v = arg.substr(9);
             groundEnabled = (v == "on" || v == "true" || v == "1");
@@ -439,6 +449,47 @@ int main(int argc, char* argv[]) {
                       << " rotation=" << anisoRotation << " rad" << std::endl;
         if (sssStrength > 0.0f)
             std::cout << "Subsurface scattering: strength=" << sssStrength << std::endl;
+    }
+
+    // ---- Debug: consecutive per-frame capture (--seq=K) ----
+    // Renders K consecutive frames, dumping each frame's getPixels() to a
+    // zero-padded OUT_%03d.png. Sampler/temporal advance naturally (no reset).
+    // Continuous pan: when panX != 0, translate camera +X by panX each frame.
+    if (seqCount > 0 && rtMode == RenderMode::RTRealtime) {
+        // Build the "OUT_%03d.png" template from `output` by inserting the
+        // frame index before the extension (falls back to appending if no dot).
+        std::string base = output, suffix;
+        auto extDot = output.find_last_of('.');
+        if (extDot != std::string::npos && extDot > output.find_last_of('/') + 0) {
+            base = output.substr(0, extDot);
+            suffix = output.substr(extDot);  // includes the dot, e.g. ".png"
+        } else {
+            suffix = ".png";
+        }
+        std::cout << "[seq] Capturing " << seqCount << " consecutive RTRealtime frames"
+                  << (panX != 0.0f ? " (continuous pan)" : " (static camera)") << std::endl;
+        auto seqStart = std::chrono::high_resolution_clock::now();
+        for (int f = 0; f < seqCount; f++) {
+            if (panX != 0.0f) {
+                auto pos = camera.getPosition();
+                camera.setPosition({pos.x + panX, pos.y, pos.z});
+            }
+            renderer.render();
+            const uint8_t* px = renderer.getPixels();
+            char nameBuf[1024];
+            std::snprintf(nameBuf, sizeof(nameBuf), "%s_%03d%s",
+                          base.c_str(), f, suffix.c_str());
+            if (px) {
+                stbi_write_png(nameBuf, W, H, 4, px, W * 4);
+                std::cout << "[seq] frame " << f << " -> " << nameBuf << std::endl;
+            } else {
+                std::cerr << "[seq] frame " << f << " getPixels() returned null\n";
+            }
+        }
+        auto seqMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::high_resolution_clock::now() - seqStart).count();
+        std::cout << "[seq] Done: " << seqCount << " frames in " << seqMs << " ms" << std::endl;
+        return 0;
     }
 
     std::cout << "Rendering (" << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << ")..." << std::endl;
