@@ -326,6 +326,16 @@ int main(int argc, char* argv[]) {
             glEnd();
         }
 
+        // Periodic frame dump for headless inspection. Set OHAO_DUMP_EVERY=<N>
+        // to write the CURRENT frame to OHAO_DUMP_PATH (default /tmp/ohao_live.png)
+        // every N frames — lets an agent Read the live view while you drive.
+        static const int   s_dumpEvery = [](){ const char* e = getenv("OHAO_DUMP_EVERY"); return e ? atoi(e) : 0; }();
+        static const char* s_dumpPath  = [](){ const char* p = getenv("OHAO_DUMP_PATH");  return p ? p : "/tmp/ohao_live.png"; }();
+        static long        s_dumpN      = 0;
+        if (s_dumpEvery > 0 && pixels && (s_dumpN++ % s_dumpEvery == 0)) {
+            stbi_write_png(s_dumpPath, W, H, 4, pixels, W * 4);
+        }
+
         glfwSwapBuffers(window);
 
         // FPS counter
