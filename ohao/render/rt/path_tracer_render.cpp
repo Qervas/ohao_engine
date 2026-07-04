@@ -5,6 +5,7 @@
 #include "path_tracer.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -33,6 +34,11 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 // Phase 5: DLSSRR mode — raygen repurposes normalAOV (binding 7) as the packed
 // (worldN, roughness) guide DLSS Ray Reconstruction consumes.
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
+// ReSTIR GI (Phase 1) toggles — driven by env vars for A/B and measurement.
+// Must stay in sync with PT_FLAG_RESTIRGI_* in pt_raygen_realtime.rgen.
+constexpr uint32_t kPTFlagRestirGiOff    = 1u << 5;  // OHAO_RESTIRGI_OFF=1    → no temporal reuse (M=1 anchor)
+constexpr uint32_t kPTFlagRestirGiGiOnly = 1u << 6;  // OHAO_RESTIRGI_GIONLY=1 → write GI-only into diffuseRadiance
+constexpr uint32_t kPTFlagRestirGiLegacy = 1u << 7;  // OHAO_RESTIRGI_LEGACY=1 → original multi-bounce Stage C
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
@@ -158,7 +164,19 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[29] = {};
+    // ReSTIR GI reservoir ping-pong: bind prev planes (read) to 29-31, curr
+    // planes (write) to 32-34, backed by the [plane][pingpong] image arrays.
+    const uint32_t prevGIReservoirIndex = 1u - m_giReservoirWriteIndex;
+    VkDescriptorImageInfo prevGIReservoirInfo[3]{};
+    VkDescriptorImageInfo currGIReservoirInfo[3]{};
+    for (uint32_t p = 0; p < 3; ++p) {
+        prevGIReservoirInfo[p].imageView   = m_giReservoirViews[p][prevGIReservoirIndex];
+        prevGIReservoirInfo[p].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        currGIReservoirInfo[p].imageView   = m_giReservoirViews[p][m_giReservoirWriteIndex];
+        currGIReservoirInfo[p].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+
+    VkWriteDescriptorSet writes[40] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -471,6 +489,26 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[writeCount].pImageInfo      = &outSpecInfo;
     writeCount++;
 
+    // Bindings 29-34: ReSTIR GI reservoir (prev read 29-31, curr write 32-34)
+    for (uint32_t p = 0; p < 3; ++p) {
+        writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[writeCount].dstSet          = m_descriptorSet;
+        writes[writeCount].dstBinding      = 29u + p;
+        writes[writeCount].descriptorCount = 1;
+        writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[writeCount].pImageInfo      = &prevGIReservoirInfo[p];
+        writeCount++;
+    }
+    for (uint32_t p = 0; p < 3; ++p) {
+        writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[writeCount].dstSet          = m_descriptorSet;
+        writes[writeCount].dstBinding      = 32u + p;
+        writes[writeCount].descriptorCount = 1;
+        writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[writeCount].pImageInfo      = &currGIReservoirInfo[p];
+        writeCount++;
+    }
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -678,6 +716,33 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             0, 0, nullptr, 0, nullptr, 2, historyBarriers);
     }
 
+    // --- Transition ReSTIR GI reservoir images to GENERAL (3 prev read + 3 curr write) ---
+    {
+        const uint32_t prevGIIdx = 1u - m_giReservoirWriteIndex;
+        VkImageMemoryBarrier giBarriers[6] = {};
+        for (uint32_t p = 0; p < 3; ++p) {
+            // prev plane (read)
+            giBarriers[p].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            giBarriers[p].srcAccessMask = m_giReservoirInitialized[prevGIIdx] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+            giBarriers[p].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            giBarriers[p].oldLayout     = m_giReservoirInitialized[prevGIIdx] ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+            giBarriers[p].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            giBarriers[p].image         = m_giReservoirImages[p][prevGIIdx];
+            giBarriers[p].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            // curr plane (write)
+            giBarriers[3 + p].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            giBarriers[3 + p].srcAccessMask = m_giReservoirInitialized[m_giReservoirWriteIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+            giBarriers[3 + p].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            giBarriers[3 + p].oldLayout     = m_giReservoirInitialized[m_giReservoirWriteIndex] ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+            giBarriers[3 + p].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            giBarriers[3 + p].image         = m_giReservoirImages[p][m_giReservoirWriteIndex];
+            giBarriers[3 + p].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+            0, 0, nullptr, 0, nullptr, 6, giBarriers);
+    }
+
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -719,6 +784,18 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // Also raise the DLSSRR flag so the raygen writes the packed normal/roughness guide.
     const bool dlssMode = (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR);
     if (dlssMode) pc.control.x |= kPTFlagDLSSRR;
+    // ReSTIR GI (Phase 1) env toggles — read once, cached. Default = ReSTIR GI ON
+    // (temporal reuse enabled). OHAO_RESTIRGI_OFF disables temporal reuse (M=1
+    // anchor); OHAO_RESTIRGI_GIONLY writes the isolated GI term into diffuseRadiance;
+    // OHAO_RESTIRGI_LEGACY restores the original multi-bounce Stage C.
+    {
+        static const bool kRestirGiOff    = (std::getenv("OHAO_RESTIRGI_OFF")    != nullptr);
+        static const bool kRestirGiGiOnly = (std::getenv("OHAO_RESTIRGI_GIONLY") != nullptr);
+        static const bool kRestirGiLegacy = (std::getenv("OHAO_RESTIRGI_LEGACY") != nullptr);
+        if (kRestirGiOff)    pc.control.x |= kPTFlagRestirGiOff;
+        if (kRestirGiGiOnly) pc.control.x |= kPTFlagRestirGiGiOnly;
+        if (kRestirGiLegacy) pc.control.x |= kPTFlagRestirGiLegacy;
+    }
     pc.control.y = (svgfMode || dlssMode) ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
@@ -1288,6 +1365,8 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     m_surfaceHistoryWriteIndex = 1u - m_surfaceHistoryWriteIndex;
     m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] = true;
     m_shadingHistoryWriteIndex = 1u - m_shadingHistoryWriteIndex;
+    m_giReservoirInitialized[m_giReservoirWriteIndex] = true;
+    m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;
 }
 
 } // namespace ohao

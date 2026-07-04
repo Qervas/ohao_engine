@@ -448,6 +448,15 @@ private:
     bool m_shadingHistoryInitialized[2] = {false, false};
     uint32_t m_shadingHistoryWriteIndex = 0;
 
+    // ReSTIR GI reservoir ping-pong (Phase 1). 3 RGBA32F planes per pixel:
+    //   plane0 xyz=x_s w=M | plane1 xyz=n_s w=W | plane2 xyz=Lo w=valid.
+    // [plane][pingpong]. Bindings 29-31 (prev/read), 32-34 (curr/write).
+    VkImage        m_giReservoirImages[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
+    VkDeviceMemory m_giReservoirMemory[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
+    VkImageView    m_giReservoirViews[3][2]    = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
+    bool           m_giReservoirInitialized[2] = {false, false};
+    uint32_t       m_giReservoirWriteIndex     = 0;
+
     // Material buffer (per-instance albedo, vec4 SSBO)
     VkBuffer m_materialBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_materialMemory = VK_NULL_HANDLE;
