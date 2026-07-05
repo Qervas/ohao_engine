@@ -180,6 +180,8 @@ private:
     VkPipeline            m_tmPipeline = VK_NULL_HANDLE;
     VkDescriptorPool      m_tmDescriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet       m_tmDescriptorSet = VK_NULL_HANDLE;
+    uint32_t              m_tmFrame = 0;          // animated-grain counter
+    float                 m_gradeStrength = -1.0f; // cinematic grade master (-1 = uncached; OHAO_GRADE)
 };
 
 }  // namespace ohao
