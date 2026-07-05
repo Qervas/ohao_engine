@@ -54,10 +54,6 @@ public:
     const glm::vec3& getEdge1() const { return edge1; }
     const glm::vec3& getEdge2() const { return edge2; }
 
-    // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
-
 private:
     LightType lightType = LightType::Sphere;
     glm::vec3 lightColor{1.0f};

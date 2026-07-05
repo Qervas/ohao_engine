@@ -16,7 +16,6 @@ target_link_libraries(renderer_test PRIVATE
     ohao_renderer
     ohao_gpu_vulkan
     ohao_scene
-    ohao_animation
     ohao_physics
     ohao_audio
     ohao_core
@@ -47,3 +46,31 @@ add_custom_command(TARGET renderer_test POST_BUILD
 )
 
 message(STATUS "Standalone renderer test configured")
+
+# Env CDF unit test
+add_executable(env_cdf_test env_cdf_test.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp
+)
+target_include_directories(env_cdf_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+target_link_libraries(env_cdf_test PRIVATE gtest gtest_main pthread)
+include(GoogleTest)
+gtest_discover_tests(env_cdf_test)
+
+# Sobol + Owen scramble unit tests (Feature 1.2)
+add_executable(sobol_test sobol_test.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/sobol_generator.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
+)
+target_include_directories(sobol_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+target_link_libraries(sobol_test PRIVATE gtest gtest_main pthread)
+include(GoogleTest)
+gtest_discover_tests(sobol_test)
+
+# Denoise parse unit test (Denoiser Sub-plan 1)
+add_executable(denoise_parse_test denoise_parse_test.cpp
+    ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
+)
+target_include_directories(denoise_parse_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
+target_link_libraries(denoise_parse_test PRIVATE gtest gtest_main pthread)
+include(GoogleTest)
+gtest_discover_tests(denoise_parse_test)

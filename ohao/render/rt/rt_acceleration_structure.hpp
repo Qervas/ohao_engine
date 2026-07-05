@@ -78,6 +78,15 @@ public:
     // Destroy a specific BLAS
     void destroyBLAS(BlasHandle handle);
 
+    // Create a new BLAS from tightly-packed vec3 positions (stride=12).
+    // For per-frame animated mesh BLAS — uses PREFER_FAST_BUILD.
+    // If cmd is provided, records the build on that command buffer (caller submits).
+    // If cmd is VK_NULL_HANDLE, uses single-time commands (submit + wait internally).
+    BlasHandle createBLASFromPositions(VkBuffer positionBuffer, uint32_t vertexCount,
+                                       VkBuffer indexBuffer, uint32_t indexCount,
+                                       VkDeviceSize indexByteOffset,
+                                       VkCommandBuffer cmd = VK_NULL_HANDLE);
+
     // === TLAS management ===
 
     // Clear all instances (call before re-adding for a new frame)
@@ -90,6 +99,12 @@ public:
     // Build/rebuild the TLAS from current instances.
     // Call once per frame after addInstance() calls.
     void buildTLAS(VkCommandBuffer cmd);
+
+    // Pre-allocate scratch buffer (call before multi-BLAS rebuilds to avoid mid-recording realloc)
+    void ensureScratchBuffer(VkDeviceSize requiredSize);
+
+    // Force full TLAS rebuild (not update) on next buildTLAS call
+    void forceTlasRebuild() { m_forceTlasRebuild = true; }
 
     // === Getters ===
 
@@ -130,6 +145,7 @@ private:
 
     // TLAS
     VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
+    bool m_forceTlasRebuild{false};
     VkBuffer m_tlasBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_tlasMemory = VK_NULL_HANDLE;
 
@@ -150,7 +166,6 @@ private:
                       VkBuffer& buffer, VkDeviceMemory& memory);
     void destroyBuffer(VkBuffer& buffer, VkDeviceMemory& memory);
     VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer);
-    void ensureScratchBuffer(VkDeviceSize requiredSize);
     void ensureInstanceBuffer(uint32_t requiredCount);
 
     // One-shot command helpers

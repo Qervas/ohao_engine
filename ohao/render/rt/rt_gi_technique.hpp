@@ -28,7 +28,8 @@ public:
     void setSampleCount(int samples) { m_sampleCount = samples; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
-    void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
+    void setMaterialAlbedos(const std::vector<glm::vec3>& albedos,
+                            const std::vector<float>& flags = {});
 
 private:
     bool createOutputImage();
@@ -43,10 +44,15 @@ private:
     uint32_t m_width = 0, m_height = 0;
     int m_sampleCount = 4;
 
-    // Output
+    // Output (current frame)
     VkImage m_giOutput = VK_NULL_HANDLE;
     VkDeviceMemory m_giOutputMemory = VK_NULL_HANDLE;
     VkImageView m_giOutputView = VK_NULL_HANDLE;
+
+    // Temporal history (previous frame, blended)
+    VkImage m_giHistory = VK_NULL_HANDLE;
+    VkDeviceMemory m_giHistoryMemory = VK_NULL_HANDLE;
+    VkImageView m_giHistoryView = VK_NULL_HANDLE;
 
     // RT Pipeline
     VkPipeline m_rtPipeline = VK_NULL_HANDLE;

@@ -1,0 +1,115 @@
+#version 460
+
+// SVGF Pass 2 — Variance-guided à-trous wavelet filter.
+//
+// Extends the plain 5x5 B3-spline à-trous (rt_atrous.comp) with the SVGF
+// variance-guided luminance edge-stopping function. The key difference vs the
+// plain filter: the color/luminance weight denominator scales with the local
+// luminance standard deviation (sqrt of the temporally-estimated variance).
+//
+//   w_l = exp( -|l_center - l_tap| / (sigmaL * sqrt(Var) + eps) )
+//
+// Low variance (a converged / already-clean pixel) => tiny denominator => any
+// luminance difference drives w_l -> 0 => NO cross-pixel blur => detail stays
+// SHARP. High variance (still-noisy pixel) => large denominator => tolerant =>
+// the filter averages neighbours and removes Monte-Carlo noise. This is what
+// lets SVGF preserve high-frequency detail that a plain à-trous over-blurs.
+//
+// Variance is filtered alongside color each iteration (with weight^2, SVGF
+// standard) so later, wider iterations use the progressively smoothed variance.
+// The normal + linear-depth edge stops are retained from the plain filter.
+//
+// Host ping-pongs over 5 iterations (step 1,2,4,8,16). Intermediate iterations
+// write the RGBA16F output (binding 1); the final iteration writes the RGBA8
+// beauty (binding 6) for readback/blit — isFinal selects which.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly  image2D inColor;     // prev-iter / accum color
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outColor16;  // this-iter color (intermediate)
+layout(set = 0, binding = 2, rgba32f) uniform readonly  image2D normalAOV;   // world normal, N*0.5+0.5
+layout(set = 0, binding = 3, r32f)    uniform readonly  image2D depthAOV;    // linear view Z
+layout(set = 0, binding = 4, r16f)    uniform readonly  image2D inVar;       // variance in
+layout(set = 0, binding = 5, r16f)    uniform writeonly image2D outVar;      // variance out (filtered)
+layout(set = 0, binding = 6, rgba8)   uniform writeonly image2D outColorLDR; // final-iter beauty
+
+layout(push_constant) uniform PushConstants {
+    int   stepSize;     // 1, 2, 4, 8, 16 per iteration
+    float sigmaL;       // luminance weight sensitivity (variance-guided)
+    float sigmaNormal;  // normal weight sensitivity
+    float sigmaDepth;   // depth weight sensitivity
+    int   isFinal;      // 1 => write outColorLDR (RGBA8), else outColor16 (RGBA16F)
+} pc;
+
+// 5x5 B3-spline kernel weights (normalized)
+const float kernel[5] = float[](1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+void main() {
+    ivec2 pix  = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(inColor);
+    if (pix.x >= size.x || pix.y >= size.y) return;
+
+    vec3  cColor = imageLoad(inColor,   pix).rgb;
+    vec3  cN     = imageLoad(normalAOV, pix).rgb * 2.0 - 1.0;
+    float cD     = imageLoad(depthAOV,  pix).r;
+    float cL     = luma(cColor);
+
+    // 3x3 gaussian prefilter of variance for the luminance edge-stopper. The
+    // raw per-pixel variance is itself noisy; smoothing it stabilises the
+    // weight function (SVGF standard).
+    const float gk[3] = float[](0.25, 0.5, 0.25);
+    float gVar = 0.0, gW = 0.0;
+    for (int dy = -1; dy <= 1; ++dy)
+    for (int dx = -1; dx <= 1; ++dx) {
+        ivec2 q = clamp(pix + ivec2(dx, dy), ivec2(0), size - 1);
+        float w = gk[dx + 1] * gk[dy + 1];
+        gVar += w * imageLoad(inVar, q).r;
+        gW   += w;
+    }
+    float centerVar = (gW > 0.0) ? gVar / gW : imageLoad(inVar, pix).r;
+    float sqrtVar   = sqrt(max(centerVar, 1e-8));
+
+    vec3  sum     = vec3(0.0);
+    float weightSum = 0.0;
+    float varSum  = 0.0;
+
+    for (int dy = -2; dy <= 2; ++dy)
+    for (int dx = -2; dx <= 2; ++dx) {
+        ivec2 q = pix + ivec2(dx, dy) * pc.stepSize;
+        q = clamp(q, ivec2(0), size - 1);
+
+        vec3  sColor = imageLoad(inColor,   q).rgb;
+        vec3  sN     = imageLoad(normalAOV, q).rgb * 2.0 - 1.0;
+        float sD     = imageLoad(depthAOV,  q).r;
+        float sVar   = imageLoad(inVar,     q).r;
+
+        // B3-spline kernel weight.
+        float w = kernel[dx + 2] * kernel[dy + 2];
+
+        // Variance-guided luminance weight. Converged (low var) => sharp;
+        // noisy (high var) => filters.
+        float sL = luma(sColor);
+        w *= exp(-abs(cL - sL) / (sqrtVar * pc.sigmaL + 1e-6));
+
+        // Normal weight — stop at geometric edges.
+        float normalDist = max(1.0 - dot(cN, sN), 0.0);
+        w *= exp(-normalDist / (pc.sigmaNormal * pc.sigmaNormal + 1e-4));
+
+        // Depth weight — stop at silhouettes (linear-Z background is 1e30).
+        float depthDist = abs(cD - sD);
+        w *= exp(-depthDist / (pc.sigmaDepth * pc.sigmaDepth + 1e-4));
+
+        sum       += sColor * w;
+        weightSum += w;
+        varSum    += w * w * sVar;   // variance filtered with weight^2 (SVGF standard)
+    }
+
+    vec3  outC = (weightSum > 1e-6) ? sum / weightSum : cColor;
+    float outV = (weightSum > 1e-6) ? varSum / (weightSum * weightSum) : centerVar;
+
+    if (pc.isFinal != 0) imageStore(outColorLDR, pix, vec4(outC, 1.0));
+    else                 imageStore(outColor16,  pix, vec4(outC, 1.0));
+    imageStore(outVar, pix, vec4(outV, 0.0, 0.0, 0.0));
+}

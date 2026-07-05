@@ -80,6 +80,10 @@ struct GIInput {
     uint32_t frameIndex;           // for temporal accumulation
 
     RTAccelerationStructure* accel = nullptr;
+
+    // Light info for indirect bounce calculation
+    glm::vec3 lightPos{0.0f, 4.5f, 0.0f};
+    float lightIntensity{10.0f};
 };
 
 struct GIOutput {

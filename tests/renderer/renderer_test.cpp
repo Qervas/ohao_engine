@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
     std::cout << "PASS: scene buffers" << std::endl;
 
     // 3. Render
-    renderer.setRenderMode(RenderMode::PathTraced);
+    renderer.setRenderMode(RenderMode::RTOffline);
     renderer.render();
     std::cout << "PASS: render frame" << std::endl;
 

@@ -1,0 +1,31 @@
+#version 460
+
+// Sub-plan 4.D: remodulation compositor.
+// Combines NRD's denoised diffuse + specular radiance with demodulated
+// albedo + specular-color AOVs to produce HDR beauty:
+//   composed = denoisedDiff.rgb * diffAlbedo.rgb
+//            + denoisedSpec.rgb * specColor.rgb
+// Alpha of denoised radiance (hit-distance) is dropped.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly  image2D inDiffRad;     // denoised diffuse  (PT 27)
+layout(set = 0, binding = 1, rgba32f) uniform readonly  image2D inSpecRad;     // denoised specular (PT 28)
+layout(set = 0, binding = 2, rgba8)   uniform readonly  image2D inDiffAlbedo;  // demod albedo      (PT 24)
+layout(set = 0, binding = 3, rgba8)   uniform readonly  image2D inSpecColor;   // demod F0/color    (PT 25)
+layout(set = 0, binding = 4, rgba32f) uniform writeonly image2D outComposed;   // new binding       (PT 29)
+
+void main() {
+    ivec2 p    = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outComposed);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    vec3 diffRad    = imageLoad(inDiffRad,    p).rgb;
+    vec3 specRad    = imageLoad(inSpecRad,    p).rgb;
+    vec3 diffAlbedo = imageLoad(inDiffAlbedo, p).rgb;
+    vec3 specColor  = imageLoad(inSpecColor,  p).rgb;
+
+    vec3 composed = diffRad * diffAlbedo + specRad * specColor;
+
+    imageStore(outComposed, p, vec4(composed, 1.0));
+}

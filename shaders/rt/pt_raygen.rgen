@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_GOOGLE_include_directive : require
 
 // Brute-force path tracer — simplest possible correct implementation.
 // No NEE, no tricks. Just trace rays, bounce off surfaces, hit the light.
@@ -24,12 +25,51 @@ layout(set = 0, binding = 11) readonly buffer LightBuffer {
     GPULight lights[];
 } lightBuf;
 
+layout(set = 0, binding = 17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
+layout(set = 0, binding = 18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+layout(set = 0, binding = 19, rg16f) uniform image2D motionVector;
+layout(set = 0, binding = 20, r32f) uniform image2D depthAOV;
+layout(set = 0, binding = 21, r16f)  uniform image2D roughnessAOV;
+layout(set = 0, binding = 22, rgba32f) uniform image2D diffuseRadiance;
+layout(set = 0, binding = 23, rgba32f) uniform image2D specularRadiance;
+layout(set = 0, binding = 24, rgba8) uniform image2D diffuseAlbedoAOV;
+layout(set = 0, binding = 25, rgba8) uniform image2D specColorAOV;
+layout(set = 0, binding = 26, rgb10_a2) uniform image2D normalRoughnessAOV;
+
 layout(push_constant) uniform PushConstants {
     mat4 invView;
     mat4 invProj;
     mat4 prevViewProj;          // for temporal reprojection
-    uvec4 params;  // x=width, y=height, z=frameIndex, w=maxBounces
+    uvec4 params;  // x=width, y=height, z=sampleIndex, w=maxBounces
+    uvec4 control;
+    vec4 tuning;
+    vec4 jitter;                // 4.F T4: xy = Halton(2,3) sub-pixel offset (0 outside NRD mode)
 } pc;
+
+#include "includes/rt/mis.glsl"
+#include "includes/rt/env_sampling.glsl"
+#include "includes/rt/sampler_api.glsl"
+#include "includes/material/ggx_aniso.glsl"
+
+const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
+const uint PT_FLAG_ENABLE_INTERNAL_DENOISE = 1u << 1;
+const uint PT_FLAG_ENABLE_FIREFLY_CLAMP = 1u << 2;
+const uint PT_FLAG_ACCUMULATE_AOVS = 1u << 3;  // Sub-plan 4.F T3: N-spp running mean on NRD AOVs
+const uint PT_FLAG_DLSSRR = 1u << 4;  // Phase 5: repurpose normalAOV → (worldN, roughness) for DLSS-RR
+
+// Sub-plan 4.F T3: running-average helper for NRD AOV bindings (22/23/24/25/26).
+// When accumulateAOVs is set AND sampleIdx>0, blend `current` with previous image value
+// via 1/(n+1) weight so the image holds the mean of samples 0..sampleIdx. Sample 0 hits
+// the overwrite branch (equivalent to old behavior); realtime (N=1) always uses overwrite.
+#define AOV_ACCUMULATE_WRITE(img, pix, currentExpr) do {                 \
+    vec4 _ohaoAovCur = (currentExpr);                                    \
+    if (accumulateAOVs && pc.params.z > 0u) {                            \
+        vec4 _ohaoAovPrev = imageLoad(img, pix);                         \
+        float _ohaoAovN = float(pc.params.z + 1u);                       \
+        _ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);   \
+    }                                                                    \
+    imageStore(img, pix, _ohaoAovCur);                                   \
+} while(false)
 
 struct RayPayload {
     vec3 color;
@@ -39,29 +79,18 @@ struct RayPayload {
     vec3 hitAlbedo;
     float hitDist;
     uint hitInstance;
+    float envPdf;       // set by miss shader when env map sampled; used for MIS weighting
 };
 
 layout(location = 0) rayPayloadEXT RayPayload payload;
 
-// PCG random
-uint rngState;
-void rngInit(uvec2 pixel, uint frame) {
-    rngState = pixel.x * 1973u + pixel.y * 9277u + frame * 26699u + 1u;
-}
-uint rngNext() {
-    rngState = rngState * 747796405u + 2891336453u;
-    uint w = ((rngState >> ((rngState >> 28u) + 4u)) ^ rngState) * 277803737u;
-    return (w >> 22u) ^ w;
-}
-float rand01() { return float(rngNext()) / 4294967296.0; }
-
 // Cosine-weighted hemisphere sample
-vec3 cosineHemisphere(vec3 N) {
+vec3 cosineHemisphere(vec3 N, vec2 u) {
     vec3 up = abs(N.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
     vec3 T = normalize(cross(up, N));
     vec3 B = cross(N, T);
-    float r = sqrt(rand01());
-    float phi = 6.2831853 * rand01();
+    float r = sqrt(u.x);
+    float phi = 6.2831853 * u.y;
     return normalize(T * r * cos(phi) + B * r * sin(phi) + N * sqrt(max(0.0, 1.0 - r*r)));
 }
 
@@ -70,16 +99,52 @@ vec3 ACES(vec3 x) {
     return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0);
 }
 
+// Sub-plan 4.B (fix): NRD-canonical rotated oct + sign-in-roughness packing for
+// IN_NORMAL_ROUGHNESS (NRD_NORMAL_ENCODING=2, R10G10B10A2_UNORM).
+// Ported verbatim from build/_deps/nrd-src/Shaders/NRD.hlsli::_NRD_EncodeNormalRoughness101010.
+// NRD_ROUGHNESS_ENCODING=1 (LINEAR): roughness stored as-is (no sqrt/square).
+vec4 nrdPackNormalRoughness(vec3 n, float roughness) {
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+
+    vec3 r;
+    r.y = n.y * 0.5 + 0.5;
+    r.x = n.x * 0.5 + r.y;
+    r.y -= n.x * 0.5;
+
+    // Encode roughness + n.z sign into z-channel ( 10-bits is too much for roughness, linear at least ).
+    // Clamp roughness away from 0 so the smuggled n.z sign bit survives.
+    roughness = max(roughness, 1.5 / 512.0);
+    float s = (n.z < 0.0) ? -roughness : roughness;
+    r.z = s * 0.5 + 0.5;
+
+    // materialID bits (A2): 0 = default slot. NRD decoder: materialID = p.w * 3.0.
+    return vec4(r, 0.0);
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
     uint frameIdx = pc.params.z;
-    uint maxBounces = pc.params.w;
+    uint historyFrameCount = pc.control.y;
+    // params.w low 16 bits = maxBounces; high 16 bits carry samplesPerFrame
+    // (only the realtime raygen loops on it). Mask so the count never bleeds in.
+    uint maxBounces = pc.params.w & 0xFFFFu;
+    bool enableAOVs = (pc.control.x & PT_FLAG_ENABLE_AOVS) != 0u;
+    bool enableInternalDenoise = (pc.control.x & PT_FLAG_ENABLE_INTERNAL_DENOISE) != 0u;
+    bool enableFireflyClamp = (pc.control.x & PT_FLAG_ENABLE_FIREFLY_CLAMP) != 0u;
+    bool accumulateAOVs = (pc.control.x & PT_FLAG_ACCUMULATE_AOVS) != 0u;
 
-    rngInit(uvec2(pixel), frameIdx);
+    samplerInit(uvec2(pixel), frameIdx);
+    uint dimIdx = 0u;
 
     // Camera ray with sub-pixel jitter
-    vec2 jitter = vec2(rand01(), rand01()) - 0.5;
-    vec2 uv = (vec2(pixel) + 0.5 + jitter) / vec2(pc.params.xy);
+    vec2 jitter = getSample2D(dimIdx) - 0.5;
+    dimIdx += 2u;
+    // 4.F T4: TAA-style Halton jitter (pc.jitter.xy) shifts the pixel grid so
+    // NRD's temporal accumulation integrates over a wider footprint. Added on
+    // top of the sampler's random jitter — sampler jitter still provides
+    // within-pixel decorrelation for anti-aliasing; Halton provides the
+    // frame-to-frame grid shift. Zero outside NRD mode (preserves parity).
+    vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);
     vec2 ndc = uv * 2.0 - 1.0;
 
     // Pinhole camera from invView
@@ -95,84 +160,152 @@ void main() {
     vec3 rayDir = normalize(fwd + right * ndc.x * tanFovX - up * ndc.y * tanFovY);  // -Y for Vulkan NDC
     vec3 rayOrigin = camPos;
 
-    // Path trace — pure brute force
+    // Path trace — dual-ray bounce-0 split (Sub-plan 3.C.7)
     vec3 radiance = vec3(0.0);
-    vec3 throughput = vec3(1.0);
     vec3 firstHitPos = vec3(0.0);
     float firstHitDist = -1.0;
 
-    for (uint bounce = 0u; bounce <= maxBounces; bounce++) {
-        payload.hitDist = -1.0;
-        traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
-                     rayOrigin, 0.001, rayDir, 10000.0, 0);
+    // Sub-plan 3.C: diffuse + specular radiance split (demodulated)
+    vec3 diffContrib        = vec3(0.0);
+    vec3 specContrib        = vec3(0.0);
+    vec3 firstHitDiffAlbedo = vec3(0.0);  // diffuse albedo at bounce 0 (metals: 0)
+    vec3 firstHitSpecColor  = vec3(0.04); // F0 at bounce 0 (dielectric default)
 
-        // Store first hit for temporal reprojection
-        if (bounce == 0u) {
-            firstHitPos = payload.hitPos;
-            firstHitDist = payload.hitDist;
-        }
+    // Sub-plan 3.D: hit-distance per NRD REBLUR convention
+    float specHitDist      = 0.0;   // accumulated along specular chain
+    bool  specChainActive  = true;  // true until first diffuse sample at bounce >=2 breaks the chain
+    float diffHitDist      = 0.0;   // single-segment: first secondary hit
+    bool  diffHitRecorded  = false; // latch set once on first Stage-C bounce-1 hit
 
-        if (payload.hitDist < 0.0) {
-            // miss — escaped scene, add environment contribution
-            radiance += throughput * payload.color;  // env map sampled in miss shader
-            if (bounce == 0u) {
-                imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
-                imageStore(normalAOV, pixel, vec4(0));
+    // Sub-plan 3.C.6: zero-init demod AOVs; bounce-0 first-hit overwrites on hit.
+    // Sub-plan 4.F T3: in accumulate mode for sample N>0, skip the zero-init so the
+    // previous running mean survives and we blend the current sample in at the hit
+    // or miss branch below.
+    if (!accumulateAOVs || pc.params.z == 0u) {
+        imageStore(diffuseAlbedoAOV, pixel, vec4(0.0));
+        imageStore(specColorAOV,     pixel, vec4(0.0));
+        // Sub-plan 4.B: zero-init normal+roughness AOV for miss pixels
+        imageStore(normalRoughnessAOV, pixel, vec4(0.0));
+    }
+
+    // ================================================================
+    // STAGE A: Primary ray + first-hit capture + AOVs + analytic direct
+    // ================================================================
+    payload.hitDist = -1.0;
+    traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+                 rayOrigin, 0.001, rayDir, 10000.0, 0);
+    firstHitPos  = payload.hitPos;
+    firstHitDist = payload.hitDist;
+
+    // Sub-plan 3.A: motion vector on first-hit
+    {
+        vec2 motion = vec2(0.0);
+        // First frame: prevViewProj is stale — force zero MV
+        if (firstHitDist > 0.0 && historyFrameCount > 0u) {
+            // Derive currViewProj in-shader from push-constant inverses.
+            // Cost: 2 mat4 inverts per raygen thread on bounce 0.
+            // CameraUBO refactor (out of scope) removes this.
+            mat4 currViewProj = inverse(pc.invProj) * inverse(pc.invView);
+
+            vec4 currClip = currViewProj    * vec4(firstHitPos, 1.0);
+            vec4 prevClip = pc.prevViewProj * vec4(firstHitPos, 1.0);
+            if (currClip.w > 0.0 && prevClip.w > 0.0) {
+                vec2 currNDC = currClip.xy / currClip.w;
+                vec2 prevNDC = prevClip.xy / prevClip.w;
+                vec2 currPix = (currNDC * 0.5 + 0.5) * vec2(pc.params.xy);
+                vec2 prevPix = (prevNDC * 0.5 + 0.5) * vec2(pc.params.xy);
+                motion = currPix - prevPix;
             }
-            break;
         }
+        imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
 
-        vec3 hitPos = payload.hitPos;
-        vec3 N = payload.hitNormal;
-        vec3 albedo = payload.hitAlbedo;
-        vec3 emissive = payload.color;  // emissive from closest-hit shader
+        // Sub-plan 3.B: depth (view-space Z) + roughness AOVs on first-hit
+        float depth = 1e30;
+        float rough = 1.0;
+        if (firstHitDist > 0.0) {
+            // View-space Z: right-handed → camera looks down -Z, so -viewPos.z = forward distance.
+            // Reuses inverse(pc.invView) which Sub-plan 3.A already computes in this block —
+            // reading `currViewProj`'s intermediate isn't exposed, so recompute the view inverse.
+            mat4 viewMat = inverse(pc.invView);
+            vec4 viewPos = viewMat * vec4(firstHitPos, 1.0);
+            depth = -viewPos.z;
 
-        // Add emissive contribution (self-glowing surfaces)
-        if (length(emissive) > 0.001) {
-            radiance += throughput * emissive;
+            // Roughness: unpack from payload.attenuation.x — encoding matches pt_closesthit.rchit.
+            // Magic-number form: sign bit → metal flag, magnitude → roughness; values >= 10 are
+            // shifted (historic encoding from Feature 1.1 era).
+            float packed = payload.attenuation.x;
+            rough = abs(packed);
+            if (rough >= 10.0) rough -= 10.0;
+            rough = clamp(rough, 0.01, 1.0);
         }
+        imageStore(depthAOV,     pixel, vec4(depth, 0.0, 0.0, 0.0));
+        imageStore(roughnessAOV, pixel, vec4(rough, 0.0, 0.0, 0.0));
+    }
 
-        // Write first-hit AOVs for denoiser guide buffers
-        if (bounce == 0u) {
+    if (payload.hitDist < 0.0) {
+        // Primary miss: beauty = env radiance. Both diff/spec channels stay zero.
+        radiance = payload.color;  // throughput is 1 at primary ray
+        if (enableAOVs) {
+            imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));
+            imageStore(normalAOV, pixel, vec4(0));
+        }
+        // Sub-plan 4.F T3: in accumulate mode we skipped zero-init for N>0, so we
+        // must explicitly blend the current (miss=zero) sample into the demod AOVs.
+        if (accumulateAOVs && pc.params.z > 0u) {
+            AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV,   pixel, vec4(0.0));
+            AOV_ACCUMULATE_WRITE(specColorAOV,       pixel, vec4(0.0));
+            AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, vec4(0.0));
+        }
+    } else {
+        // ==== First-hit material decode ====
+        vec3 hitPos   = payload.hitPos;
+        vec3 N        = payload.hitNormal;
+        vec3 albedo   = payload.hitAlbedo;
+        vec3 emissive = payload.color;
+
+        // First-hit AOVs
+        if (enableAOVs) {
             imageStore(albedoAOV, pixel, vec4(albedo, 1.0));
             imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));
         }
 
-        // === Emissive surface check ===
-        uint inst = payload.hitInstance;
-        if (inst == 4u && payload.hitPos.y > 3.0) {
-            // Cornell box ceiling light panel
-            vec3 hp = payload.hitPos;
-            if (abs(hp.x) < 2.0 && abs(hp.z) < 2.0) {
-                if (bounce == 0u) {
-                    // Primary ray sees the light directly — full emission
-                    radiance += throughput * vec3(1.0, 0.98, 0.92) * 1.5;
-                }
-                // bounce > 0: NEE already handles direct light, skip to avoid double-count
-            }
-            break;
-        }
-        // GLTF scene lights (invisible to primary rays)
-        if (inst >= 2u && inst <= 4u && inst != 4u) {
-            if (bounce == 0u) break;
-            float intensity = (inst == 2u) ? 2.5 : 1.0;
-            radiance += throughput * vec3(1.0) * intensity;
-            break;
-        }
-
-        // === Decode material ===
         float packedRoughness = payload.attenuation.x;
-        bool isMetal = (packedRoughness < 0.0);
+        bool  isMetal = (packedRoughness < 0.0);
         float roughness = abs(packedRoughness);
         if (roughness >= 10.0) roughness -= 10.0;
         roughness = max(roughness, 0.01);
-
-        // F0: dielectric = 0.04, metal = albedo
         vec3 F0 = isMetal ? albedo : vec3(0.04);
 
-        // === NEE: uniform random light selection ===
+        // Phase 5 (DLSS-RR): overwrite normalAOV (binding 7) with WORLD-space
+        // normal xyz in [-1,1] + perceptual roughness in w — the packed
+        // normal/roughness guide buffer DLSS Ray Reconstruction expects
+        // (NVSDK_NGX_DLSS_Roughness_Mode_Packed). Gated on DLSSRR mode so every
+        // other denoiser (which reads normalAOV as N*0.5+0.5) stays byte-identical.
+        if ((pc.control.x & PT_FLAG_DLSSRR) != 0u) {
+            imageStore(normalAOV, pixel, vec4(N, roughness));
+        }
+
+        // Sub-plan 3.C.6: capture demod factors + write demod AOVs
+        firstHitDiffAlbedo = isMetal ? vec3(0.0) : albedo;
+        firstHitSpecColor  = F0;
+        // Sub-plan 4.F T3: running-average in NRD accumulate mode, overwrite otherwise.
+        AOV_ACCUMULATE_WRITE(diffuseAlbedoAOV, pixel, vec4(firstHitDiffAlbedo, 1.0));
+        AOV_ACCUMULATE_WRITE(specColorAOV,     pixel, vec4(firstHitSpecColor,  1.0));
+
+        // Sub-plan 4.B (fix): pack via NRD canonical encoder for REBLUR IN_NORMAL_ROUGHNESS
+        AOV_ACCUMULATE_WRITE(normalRoughnessAOV, pixel, nrdPackNormalRoughness(N, roughness));
+
+        // Emissive at primary hit → diffuse channel (3.C.6 convention)
+        if (length(emissive) > 0.001) {
+            vec3 emissiveContribution = emissive;  // throughput=1
+            radiance    += emissiveContribution;
+            diffContrib += emissiveContribution;
+        }
+
+        // ==== Analytic direct NEE at bounce 0 ====
         if (lightBuf.lightCount > 0u) {
-            uint selectedLightIdx = uint(rand01() * float(lightBuf.lightCount));
+            uint selectedLightIdx = uint(getSample1D(dimIdx) * float(lightBuf.lightCount));
+            dimIdx += 1u;
             selectedLightIdx = min(selectedLightIdx, lightBuf.lightCount - 1u);
 
             GPULight light = lightBuf.lights[selectedLightIdx];
@@ -183,17 +316,18 @@ void main() {
             float lightIntensity = light.colorAndIntensity.w;
             float lightRadius = light.dirAndParam.w;
 
-            // Sample light and compute contribution based on type
             vec3 lightDir = normalize(light.dirAndParam.xyz);
             float outerAngle = light.extra.w;
-            vec3 Le = lightColor * lightIntensity;
+            float r = max(lightRadius, 0.01);
+            float area = 4.0 * 3.14159 * r * r;
+            vec3 Le = lightColor * lightIntensity / max(area, 0.01);
             vec3 L;
             float shadowDist;
-            float weight;  // geometric term * area / PDF
+            float weight;
 
             if (lightType < 0.5) {
-                // === Sphere light ===
-                float u1 = rand01(), u2 = rand01();
+                vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = u12.x; float u2 = u12.y;
                 float cosTheta = 1.0 - 2.0 * u1;
                 float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
                 float phi = 6.2831853 * u2;
@@ -208,17 +342,14 @@ void main() {
                 float lightArea = 4.0 * 3.14159 * r * r;
                 weight = lightCos * lightArea / (lightDist * lightDist);
                 shadowDist = lightDist - 0.02;
-
             } else if (lightType < 1.5) {
-                // === Directional light === (no distance falloff)
                 L = -lightDir;
-                weight = 1.0;  // no geometric falloff for directional
+                weight = 1.0;
                 shadowDist = 10000.0;
-
             } else if (lightType < 2.5) {
-                // === Spot light === (sphere + cone falloff)
                 float r = max(lightRadius, 0.01);
-                float u1 = rand01(), u2 = rand01();
+                vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = u12.x; float u2 = u12.y;
                 float cosTheta = 1.0 - 2.0 * u1;
                 float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
                 float phi = 6.2831853 * u2;
@@ -229,24 +360,20 @@ void main() {
                 L = toLight / lightDist;
                 shadowDist = lightDist - 0.02;
 
-                // Cone falloff: smooth between inner and outer angle
                 float cosAngle = dot(-L, lightDir);
-                float innerCos = cos(radians(light.dirAndParam.w));  // reuse radius slot for inner angle... actually use dirAndParam.w
+                float innerCos = cos(radians(light.dirAndParam.w));
                 float outerCos = cos(radians(outerAngle));
                 float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
-                spotFactor *= spotFactor;  // quadratic falloff
+                spotFactor *= spotFactor;
 
                 float lightArea = 4.0 * 3.14159 * r * r;
                 weight = lightArea / (lightDist * lightDist) * spotFactor;
-
             } else {
-                // === Area rect light ===
-                // position = corner, extra.xyz = edge1, extra2.xyz = edge2
                 vec3 edge1 = light.extra.xyz;
                 vec3 edge2 = light.extra2.xyz;
                 float area = light.extra2.w;
-                // Random point on parallelogram
-                vec3 lightPoint = lightCenter + edge1 * rand01() + edge2 * rand01();
+                vec2 areaUV = getSample2D(dimIdx); dimIdx += 2u;
+                vec3 lightPoint = lightCenter + edge1 * areaUV.x + edge2 * areaUV.y;
                 vec3 lightNormal = normalize(cross(edge1, edge2));
                 vec3 toLight = lightPoint - hitPos;
                 float lightDist = length(toLight);
@@ -259,7 +386,6 @@ void main() {
             float NdotL = max(dot(N, L), 0.0);
 
             if (NdotL > 0.0 && weight > 0.0) {
-                // Shadow ray
                 payload.hitDist = 999.0;
                 traceRayEXT(topLevelAS,
                     gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
@@ -267,17 +393,13 @@ void main() {
                     hitPos + N * 0.01, 0.001, L, shadowDist, 0);
 
                 if (payload.hitDist < 0.0) {
-                    // Cook-Torrance BRDF
                     vec3 V = normalize(-rayDir);
                     vec3 H = normalize(L + V);
                     float NdotH = max(dot(N, H), 0.001);
                     float NdotV = max(dot(N, V), 0.001);
                     float VdotH = max(dot(V, H), 0.001);
 
-                    float a = roughness * roughness;
-                    float a2 = a * a;
-                    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                    float D = a2 / (3.14159 * denom * denom + 0.0001);
+                    float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
 
                     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
 
@@ -289,56 +411,746 @@ void main() {
                     vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
                     vec3 diff = kD * albedo / 3.14159;
 
-                    // NdotL * weight * numLights (uniform selection correction)
-                    radiance += throughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                    // throughput=1 at bounce 0
+                    vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float contribLum = dot(directContribution, vec3(0.2126, 0.7152, 0.0722));
+                        if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
+                    }
+                    radiance += directContribution;
+
+                    // Bounce-0 analytic split: diff/spec BRDF terms routed to their channels
+                    vec3 neeCommon = Le * NdotL * weight * float(lightBuf.lightCount);
+                    vec3 neeDiffuse  = neeCommon * diff;
+                    vec3 neeSpecular = neeCommon * spec;
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float lumD = dot(neeDiffuse,  vec3(0.2126, 0.7152, 0.0722));
+                        float lumS = dot(neeSpecular, vec3(0.2126, 0.7152, 0.0722));
+                        if (lumD > pc.tuning.x) neeDiffuse  *= pc.tuning.x / lumD;
+                        if (lumS > pc.tuning.x) neeSpecular *= pc.tuning.x / lumS;
+                    }
+                    diffContrib += neeDiffuse;
+                    specContrib += neeSpecular;
                 }
             }
         }
 
-        // === Russian roulette ===
-        if (bounce > 1u) {
-            float p = max(throughput.r, max(throughput.g, throughput.b));
-            if (p < 0.01 || rand01() > p) break;
-            throughput /= p;
+        // ==== Analytic direct env-MIS at bounce 0 ====
+        if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+            vec2 envU = getSample2D(dimIdx); dimIdx += 2u;
+            float u1 = envU.x; float u2 = envU.y;
+            vec3 envDir;
+            float envPdf;
+            sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+            float NdotL_env = max(dot(N, envDir), 0.0);
+            if (NdotL_env > 0.0 && envPdf > 0.0) {
+                payload.hitDist = 999.0;
+                traceRayEXT(topLevelAS,
+                    gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                    0xFF, 0, 0, 0,
+                    hitPos + N * 0.01, 0.001, envDir, 10000.0, 0);
+
+                if (payload.hitDist < 0.0) {
+                    vec3 envRadiance = payload.color;
+
+                    vec3 V = normalize(-rayDir);
+                    vec3 H = normalize(envDir + V);
+                    float NdotH = max(dot(N, H), 0.001);
+                    float NdotV = max(dot(N, V), 0.001);
+                    float VdotH = max(dot(V, H), 0.001);
+                    float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
+                    vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+                    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+                    float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                            * (NdotV / (NdotV * (1.0 - k) + k));
+                    vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                    vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                    vec3 diff = kD * albedo / OHAO_PI;
+                    vec3 brdf = diff + spec;
+
+                    float cosI = abs(dot(normalize(rayDir), N));
+                    vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
+                    float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
+                    if (isMetal) specProbMIS = 1.0;
+                    float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                    float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                    float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                    float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                    // throughput=1 at bounce 0
+                    vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;
+
+                    vec3 envCommon  = envRadiance * NdotL_env * w / envPdf;
+                    vec3 envDiffuse  = envCommon * diff;
+                    vec3 envSpecular = envCommon * spec;
+
+                    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                        float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                        if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        float lumD = dot(envDiffuse,  vec3(0.2126, 0.7152, 0.0722));
+                        float lumS = dot(envSpecular, vec3(0.2126, 0.7152, 0.0722));
+                        if (lumD > pc.tuning.x) envDiffuse  *= pc.tuning.x / lumD;
+                        if (lumS > pc.tuning.x) envSpecular *= pc.tuning.x / lumS;
+                    }
+                    radiance    += envContribution;
+                    diffContrib += envDiffuse;
+                    specContrib += envSpecular;
+                }
+            }
         }
 
-        // === BRDF sampling for next bounce ===
-        float cosI = abs(dot(normalize(rayDir), N));
-        vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
-        float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
-        // Rough surfaces: suppress specular — diffuse dominates
-        specProb *= (1.0 - roughness * 0.9);
-        if (isMetal) specProb = 1.0;
+        // ================================================================
+        // STAGE B: Specular-sampled indirect path (bounces 1..maxBounces)
+        // ================================================================
+        vec3 specDir;
+        vec3 specThroughput;
+        float specLastBsdfPdf;
+        bool  specLastBounceWasDelta;
+        {
+            float cosI = abs(dot(normalize(rayDir), N));
+            vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
+            float specProb = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
+            if (isMetal) specProb = 1.0;
 
-        if (rand01() < specProb || roughness < 0.05) {
-            // Specular bounce
+            vec3 inDir = rayDir;
             vec3 reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
-                vec3 jitter = cosineHemisphere(reflected) * roughness;
-                reflected = normalize(reflected + jitter);
-                if (dot(reflected, N) < 0.0) reflected = cosineHemisphere(N);
+                vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
+                vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;
+                reflected = normalize(reflected + jitVec);
+                if (dot(reflected, N) < 0.0) {
+                    vec2 fallbackU = getSample2D(dimIdx); dimIdx += 2u;
+                    reflected = cosineHemisphere(N, fallbackU);
+                }
             }
-            rayDir = reflected;
-            rayOrigin = hitPos + N * 0.01;
-            throughput *= isMetal ? albedo : vec3(1.0);
-            throughput /= max(specProb, 0.01);
-        } else {
-            // Diffuse bounce
-            rayDir = cosineHemisphere(N);
-            rayOrigin = hitPos + N * 0.01;
-            throughput *= albedo;
-            throughput /= max(1.0 - specProb, 0.01);
+            specDir = reflected;
+            // Dual-ray: each path is deterministic, no stochastic selection to correct for.
+            // Material throughput factor (f*cos/pdf for the specular lobe, simplified).
+            specThroughput = isMetal ? albedo : vec3(1.0);
+
+            if (roughness < 0.05) {
+                specLastBsdfPdf = 1.0;
+                specLastBounceWasDelta = true;
+            } else {
+                vec3 Hspec = normalize(-inDir + specDir);
+                float NdotH_s = max(dot(N, Hspec), 0.001);
+                float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                float D_s = ggxD_anisoOrIso(N, Hspec, NdotH_s, roughness, pc.jitter.z, pc.jitter.w);
+                float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)
+                specLastBounceWasDelta = false;
+            }
         }
-    }
+
+        vec3 specRayOrigin = hitPos + N * 0.01;
+        vec3 specRayDir = specDir;
+
+        for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
+            payload.hitDist = -1.0;
+            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+                         specRayOrigin, 0.001, specRayDir, 10000.0, 0);
+
+            // Sub-plan 3.D: accumulate specular hit-distance while the specular chain is unbroken
+            if (payload.hitDist >= 0.0 && specChainActive) {
+                specHitDist += payload.hitDist;
+            }
+
+            if (payload.hitDist < 0.0) {
+                float envMisWeight = 1.0;
+                if (payload.envPdf > 0.0 && pc.control.w > 0u && !specLastBounceWasDelta) {
+                    envMisWeight = misBalanceHeuristic(specLastBsdfPdf, payload.envPdf);
+                }
+                vec3 envMissContribution = specThroughput * payload.color * envMisWeight;
+                radiance    += envMissContribution;
+                specContrib += envMissContribution;
+                break;
+            }
+
+            vec3 bHitPos = payload.hitPos;
+            vec3 bN = payload.hitNormal;
+            vec3 bAlbedo = payload.hitAlbedo;
+            vec3 bEmissive = payload.color;
+
+            if (length(bEmissive) > 0.001) {
+                vec3 ec = specThroughput * bEmissive;
+                radiance    += ec;
+                specContrib += ec;
+            }
+
+            float bPackedRoughness = payload.attenuation.x;
+            bool  bIsMetal = (bPackedRoughness < 0.0);
+            float bRoughness = abs(bPackedRoughness);
+            if (bRoughness >= 10.0) bRoughness -= 10.0;
+            bRoughness = max(bRoughness, 0.01);
+            vec3 bF0 = bIsMetal ? bAlbedo : vec3(0.04);
+
+            // === NEE at bounce>=1 (single attribution target: specContrib) ===
+            if (lightBuf.lightCount > 0u) {
+                uint selectedLightIdx = uint(getSample1D(dimIdx) * float(lightBuf.lightCount));
+                dimIdx += 1u;
+                selectedLightIdx = min(selectedLightIdx, lightBuf.lightCount - 1u);
+
+                GPULight light = lightBuf.lights[selectedLightIdx];
+
+                float lightType = light.positionAndType.w;
+                vec3 lightCenter = light.positionAndType.xyz;
+                vec3 lightColor = light.colorAndIntensity.rgb;
+                float lightIntensity = light.colorAndIntensity.w;
+                float lightRadius = light.dirAndParam.w;
+
+                vec3 lightDir = normalize(light.dirAndParam.xyz);
+                float outerAngle = light.extra.w;
+                float r = max(lightRadius, 0.01);
+                float area = 4.0 * 3.14159 * r * r;
+                vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                vec3 L;
+                float shadowDist;
+                float weight;
+
+                if (lightType < 0.5) {
+                    vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                    float u1 = u12.x; float u2 = u12.y;
+                    float cosTheta = 1.0 - 2.0 * u1;
+                    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                    float phi = 6.2831853 * u2;
+                    float r = max(lightRadius, 0.01);
+                    vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * r;
+                    vec3 lightPoint = lightCenter + offset;
+                    vec3 lightNormal = normalize(offset);
+                    vec3 toLight = lightPoint - bHitPos;
+                    float lightDist = length(toLight);
+                    L = toLight / lightDist;
+                    float lightCos = max(dot(-L, lightNormal), 0.0);
+                    float lightArea = 4.0 * 3.14159 * r * r;
+                    weight = lightCos * lightArea / (lightDist * lightDist);
+                    shadowDist = lightDist - 0.02;
+                } else if (lightType < 1.5) {
+                    L = -lightDir;
+                    weight = 1.0;
+                    shadowDist = 10000.0;
+                } else if (lightType < 2.5) {
+                    float r = max(lightRadius, 0.01);
+                    vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                    float u1 = u12.x; float u2 = u12.y;
+                    float cosTheta = 1.0 - 2.0 * u1;
+                    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                    float phi = 6.2831853 * u2;
+                    vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * r;
+                    vec3 lightPoint = lightCenter + offset;
+                    vec3 toLight = lightPoint - bHitPos;
+                    float lightDist = length(toLight);
+                    L = toLight / lightDist;
+                    shadowDist = lightDist - 0.02;
+
+                    float cosAngle = dot(-L, lightDir);
+                    float innerCos = cos(radians(light.dirAndParam.w));
+                    float outerCos = cos(radians(outerAngle));
+                    float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
+                    spotFactor *= spotFactor;
+
+                    float lightArea = 4.0 * 3.14159 * r * r;
+                    weight = lightArea / (lightDist * lightDist) * spotFactor;
+                } else {
+                    vec3 edge1 = light.extra.xyz;
+                    vec3 edge2 = light.extra2.xyz;
+                    float area = light.extra2.w;
+                    vec2 areaUV = getSample2D(dimIdx); dimIdx += 2u;
+                    vec3 lightPoint = lightCenter + edge1 * areaUV.x + edge2 * areaUV.y;
+                    vec3 lightNormal = normalize(cross(edge1, edge2));
+                    vec3 toLight = lightPoint - bHitPos;
+                    float lightDist = length(toLight);
+                    L = toLight / lightDist;
+                    float lightCos = max(dot(-L, lightNormal), 0.0);
+                    weight = lightCos * area / (lightDist * lightDist);
+                    shadowDist = lightDist - 0.02;
+                }
+
+                float NdotL = max(dot(bN, L), 0.0);
+
+                if (NdotL > 0.0 && weight > 0.0) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        bHitPos + bN * 0.01, 0.001, L, shadowDist, 0);
+
+                    if (payload.hitDist < 0.0) {
+                        vec3 V = normalize(-specRayDir);
+                        vec3 H = normalize(L + V);
+                        float NdotH = max(dot(bN, H), 0.001);
+                        float NdotV = max(dot(bN, V), 0.001);
+                        float VdotH = max(dot(V, H), 0.001);
+
+                        float a = bRoughness * bRoughness;
+                        float a2 = a * a;
+                        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (3.14159 * denom * denom + 0.0001);
+
+                        vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
+
+                        float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
+                        float G = (NdotL / (NdotL * (1.0 - k) + k))
+                                * (NdotV / (NdotV * (1.0 - k) + k));
+
+                        vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
+                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 diff = kD * bAlbedo / 3.14159;
+
+                        vec3 directContribution = specThroughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                        if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                            float contribLum = dot(directContribution, vec3(0.2126, 0.7152, 0.0722));
+                            if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
+                        }
+                        radiance    += directContribution;
+                        specContrib += directContribution;
+                    }
+                }
+            }
+
+            // === Env MIS at bounce>=1 (single attribution target: specContrib) ===
+            if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+                vec2 envU = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = envU.x; float u2 = envU.y;
+                vec3 envDir;
+                float envPdf;
+                sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+                float NdotL_env = max(dot(bN, envDir), 0.0);
+                if (NdotL_env > 0.0 && envPdf > 0.0) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
+
+                    if (payload.hitDist < 0.0) {
+                        vec3 envRadiance = payload.color;
+
+                        vec3 V = normalize(-specRayDir);
+                        vec3 H = normalize(envDir + V);
+                        float NdotH = max(dot(bN, H), 0.001);
+                        float NdotV = max(dot(bN, V), 0.001);
+                        float VdotH = max(dot(V, H), 0.001);
+                        float a = bRoughness * bRoughness;
+                        float a2 = a * a;
+                        float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                        vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
+                        float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
+                        float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                                * (NdotV / (NdotV * (1.0 - k) + k));
+                        vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 diff = kD * bAlbedo / OHAO_PI;
+                        vec3 brdf = diff + spec;
+
+                        float cosI = abs(dot(normalize(specRayDir), bN));
+                        vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
+                        float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - bRoughness * 0.9);
+                        if (bIsMetal) specProbMIS = 1.0;
+                        float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                        float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                        float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                        float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                        vec3 envContribution = specThroughput * envRadiance * brdf * NdotL_env * w / envPdf;
+
+                        if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                            float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                            if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        }
+                        radiance    += envContribution;
+                        specContrib += envContribution;
+                    }
+                }
+            }
+
+            // === Russian roulette ===
+            if (bounce > 1u) {
+                float p = max(specThroughput.r, max(specThroughput.g, specThroughput.b));
+                float rrRand = getSample1D(dimIdx); dimIdx += 1u;
+                if (p < 0.01 || rrRand > p) break;
+                specThroughput /= p;
+            }
+
+            // === BRDF sampling for next bounce (bounces 2+) ===
+            {
+                float cosI = abs(dot(normalize(specRayDir), bN));
+                vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
+                float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
+                specProb *= (1.0 - bRoughness * 0.9);
+                if (bIsMetal) specProb = 1.0;
+
+                float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
+                if (bsdfChoice < specProb || bRoughness < 0.05) {
+                    vec3 inDir = specRayDir;
+                    vec3 reflected = reflect(specRayDir, bN);
+                    if (bRoughness > 0.01) {
+                        vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
+                        vec3 jitVec = cosineHemisphere(reflected, jitU) * bRoughness;
+                        reflected = normalize(reflected + jitVec);
+                        if (dot(reflected, bN) < 0.0) {
+                            vec2 fallbackU = getSample2D(dimIdx); dimIdx += 2u;
+                            reflected = cosineHemisphere(bN, fallbackU);
+                        }
+                    }
+                    specRayDir = reflected;
+                    specRayOrigin = bHitPos + bN * 0.01;
+                    specThroughput *= bIsMetal ? bAlbedo : vec3(1.0);
+                    specThroughput /= max(specProb, 0.01);
+
+                    if (bRoughness < 0.05) {
+                        specLastBsdfPdf = 1.0;
+                        specLastBounceWasDelta = true;
+                    } else {
+                        vec3 Hspec = normalize(-inDir + specRayDir);
+                        float NdotH_s = max(dot(bN, Hspec), 0.001);
+                        float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                        float as = bRoughness * bRoughness;
+                        float as2 = as * as;
+                        float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
+                        float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                        float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                        specLastBsdfPdf = specProb * pdf_spec;
+                        specLastBounceWasDelta = false;
+                    }
+                } else {
+                    // Sub-plan 3.D: specular chain broken by a diffuse bounce; stop accumulating hit-distance
+                    specChainActive = false;
+                    vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
+                    specRayDir = cosineHemisphere(bN, diffU);
+                    specRayOrigin = bHitPos + bN * 0.01;
+                    specThroughput *= bAlbedo;
+                    specThroughput /= max(1.0 - specProb, 0.01);
+
+                    specLastBsdfPdf = (1.0 - specProb) * max(dot(specRayDir, bN), 0.0) / OHAO_PI;
+                    specLastBounceWasDelta = false;
+                }
+            }
+        }
+
+        // ================================================================
+        // STAGE C: Diffuse-sampled indirect path (bounces 1..maxBounces)
+        // ================================================================
+        vec3 diffDir;
+        vec3 diffThroughput;
+        float diffLastBsdfPdf;
+        bool  diffLastBounceWasDelta;
+        {
+            float cosI = abs(dot(normalize(rayDir), N));
+            vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
+            float specProb = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
+            if (isMetal) specProb = 1.0;
+
+            vec2 diffU = getSample2D(dimIdx); dimIdx += 2u;
+            diffDir = cosineHemisphere(N, diffU);
+            // Dual-ray: each path is deterministic, no stochastic selection to correct for.
+            // Material throughput factor (f*cos/pdf for the diffuse lobe = albedo).
+            diffThroughput = albedo;
+            // MIS PDF for env-miss weighting: pure cosine-hemisphere PDF (no lobe-mix factor).
+            diffLastBsdfPdf = max(dot(diffDir, N), 0.0) / OHAO_PI;
+            diffLastBounceWasDelta = false;
+        }
+
+        vec3 diffRayOrigin = hitPos + N * 0.01;
+        vec3 diffRayDir = diffDir;
+
+        for (uint bounce = 1u; bounce <= maxBounces; bounce++) {
+            payload.hitDist = -1.0;
+            traceRayEXT(topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0,
+                         diffRayOrigin, 0.001, diffRayDir, 10000.0, 0);
+
+            // Sub-plan 3.D: capture first secondary diffuse hit distance (single segment)
+            if (!diffHitRecorded && payload.hitDist >= 0.0) {
+                diffHitDist = payload.hitDist;
+                diffHitRecorded = true;
+            }
+
+            if (payload.hitDist < 0.0) {
+                float envMisWeight = 1.0;
+                if (payload.envPdf > 0.0 && pc.control.w > 0u && !diffLastBounceWasDelta) {
+                    envMisWeight = misBalanceHeuristic(diffLastBsdfPdf, payload.envPdf);
+                }
+                vec3 envMissContribution = diffThroughput * payload.color * envMisWeight;
+                radiance    += envMissContribution;
+                diffContrib += envMissContribution;
+                break;
+            }
+
+            vec3 bHitPos = payload.hitPos;
+            vec3 bN = payload.hitNormal;
+            vec3 bAlbedo = payload.hitAlbedo;
+            vec3 bEmissive = payload.color;
+
+            if (length(bEmissive) > 0.001) {
+                vec3 ec = diffThroughput * bEmissive;
+                radiance    += ec;
+                diffContrib += ec;
+            }
+
+            float bPackedRoughness = payload.attenuation.x;
+            bool  bIsMetal = (bPackedRoughness < 0.0);
+            float bRoughness = abs(bPackedRoughness);
+            if (bRoughness >= 10.0) bRoughness -= 10.0;
+            bRoughness = max(bRoughness, 0.01);
+            vec3 bF0 = bIsMetal ? bAlbedo : vec3(0.04);
+
+            // === NEE at bounce>=1 (single attribution target: diffContrib) ===
+            if (lightBuf.lightCount > 0u) {
+                uint selectedLightIdx = uint(getSample1D(dimIdx) * float(lightBuf.lightCount));
+                dimIdx += 1u;
+                selectedLightIdx = min(selectedLightIdx, lightBuf.lightCount - 1u);
+
+                GPULight light = lightBuf.lights[selectedLightIdx];
+
+                float lightType = light.positionAndType.w;
+                vec3 lightCenter = light.positionAndType.xyz;
+                vec3 lightColor = light.colorAndIntensity.rgb;
+                float lightIntensity = light.colorAndIntensity.w;
+                float lightRadius = light.dirAndParam.w;
+
+                vec3 lightDir = normalize(light.dirAndParam.xyz);
+                float outerAngle = light.extra.w;
+                float r = max(lightRadius, 0.01);
+                float area = 4.0 * 3.14159 * r * r;
+                vec3 Le = lightColor * lightIntensity / max(area, 0.01);
+                vec3 L;
+                float shadowDist;
+                float weight;
+
+                if (lightType < 0.5) {
+                    vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                    float u1 = u12.x; float u2 = u12.y;
+                    float cosTheta = 1.0 - 2.0 * u1;
+                    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                    float phi = 6.2831853 * u2;
+                    float r = max(lightRadius, 0.01);
+                    vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * r;
+                    vec3 lightPoint = lightCenter + offset;
+                    vec3 lightNormal = normalize(offset);
+                    vec3 toLight = lightPoint - bHitPos;
+                    float lightDist = length(toLight);
+                    L = toLight / lightDist;
+                    float lightCos = max(dot(-L, lightNormal), 0.0);
+                    float lightArea = 4.0 * 3.14159 * r * r;
+                    weight = lightCos * lightArea / (lightDist * lightDist);
+                    shadowDist = lightDist - 0.02;
+                } else if (lightType < 1.5) {
+                    L = -lightDir;
+                    weight = 1.0;
+                    shadowDist = 10000.0;
+                } else if (lightType < 2.5) {
+                    float r = max(lightRadius, 0.01);
+                    vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+                    float u1 = u12.x; float u2 = u12.y;
+                    float cosTheta = 1.0 - 2.0 * u1;
+                    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+                    float phi = 6.2831853 * u2;
+                    vec3 offset = vec3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta) * r;
+                    vec3 lightPoint = lightCenter + offset;
+                    vec3 toLight = lightPoint - bHitPos;
+                    float lightDist = length(toLight);
+                    L = toLight / lightDist;
+                    shadowDist = lightDist - 0.02;
+
+                    float cosAngle = dot(-L, lightDir);
+                    float innerCos = cos(radians(light.dirAndParam.w));
+                    float outerCos = cos(radians(outerAngle));
+                    float spotFactor = clamp((cosAngle - outerCos) / (innerCos - outerCos + 0.001), 0.0, 1.0);
+                    spotFactor *= spotFactor;
+
+                    float lightArea = 4.0 * 3.14159 * r * r;
+                    weight = lightArea / (lightDist * lightDist) * spotFactor;
+                } else {
+                    vec3 edge1 = light.extra.xyz;
+                    vec3 edge2 = light.extra2.xyz;
+                    float area = light.extra2.w;
+                    vec2 areaUV = getSample2D(dimIdx); dimIdx += 2u;
+                    vec3 lightPoint = lightCenter + edge1 * areaUV.x + edge2 * areaUV.y;
+                    vec3 lightNormal = normalize(cross(edge1, edge2));
+                    vec3 toLight = lightPoint - bHitPos;
+                    float lightDist = length(toLight);
+                    L = toLight / lightDist;
+                    float lightCos = max(dot(-L, lightNormal), 0.0);
+                    weight = lightCos * area / (lightDist * lightDist);
+                    shadowDist = lightDist - 0.02;
+                }
+
+                float NdotL = max(dot(bN, L), 0.0);
+
+                if (NdotL > 0.0 && weight > 0.0) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        bHitPos + bN * 0.01, 0.001, L, shadowDist, 0);
+
+                    if (payload.hitDist < 0.0) {
+                        vec3 V = normalize(-diffRayDir);
+                        vec3 H = normalize(L + V);
+                        float NdotH = max(dot(bN, H), 0.001);
+                        float NdotV = max(dot(bN, V), 0.001);
+                        float VdotH = max(dot(V, H), 0.001);
+
+                        float a = bRoughness * bRoughness;
+                        float a2 = a * a;
+                        float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (3.14159 * denom * denom + 0.0001);
+
+                        vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
+
+                        float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
+                        float G = (NdotL / (NdotL * (1.0 - k) + k))
+                                * (NdotV / (NdotV * (1.0 - k) + k));
+
+                        vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
+                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 diff = kD * bAlbedo / 3.14159;
+
+                        vec3 directContribution = diffThroughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
+                        if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                            float contribLum = dot(directContribution, vec3(0.2126, 0.7152, 0.0722));
+                            if (contribLum > pc.tuning.x) directContribution *= pc.tuning.x / contribLum;
+                        }
+                        radiance    += directContribution;
+                        diffContrib += directContribution;
+                    }
+                }
+            }
+
+            // === Env MIS at bounce>=1 (single attribution target: diffContrib) ===
+            if (pc.control.w > 0u && pc.tuning.y > 0.0) {
+                vec2 envU = getSample2D(dimIdx); dimIdx += 2u;
+                float u1 = envU.x; float u2 = envU.y;
+                vec3 envDir;
+                float envPdf;
+                sampleEnvMap(u1, u2, pc.control.w, uint(pc.tuning.y), pc.tuning.z, envDir, envPdf);
+
+                float NdotL_env = max(dot(bN, envDir), 0.0);
+                if (NdotL_env > 0.0 && envPdf > 0.0) {
+                    payload.hitDist = 999.0;
+                    traceRayEXT(topLevelAS,
+                        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+                        0xFF, 0, 0, 0,
+                        bHitPos + bN * 0.01, 0.001, envDir, 10000.0, 0);
+
+                    if (payload.hitDist < 0.0) {
+                        vec3 envRadiance = payload.color;
+
+                        vec3 V = normalize(-diffRayDir);
+                        vec3 H = normalize(envDir + V);
+                        float NdotH = max(dot(bN, H), 0.001);
+                        float NdotV = max(dot(bN, V), 0.001);
+                        float VdotH = max(dot(V, H), 0.001);
+                        float a = bRoughness * bRoughness;
+                        float a2 = a * a;
+                        float denomGGX = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                        float D = a2 / (OHAO_PI * denomGGX * denomGGX + 0.0001);
+                        vec3 F = bF0 + (1.0 - bF0) * pow(1.0 - VdotH, 5.0);
+                        float k = (bRoughness + 1.0) * (bRoughness + 1.0) / 8.0;
+                        float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
+                                * (NdotV / (NdotV * (1.0 - k) + k));
+                        vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
+                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 diff = kD * bAlbedo / OHAO_PI;
+                        vec3 brdf = diff + spec;
+
+                        float cosI = abs(dot(normalize(diffRayDir), bN));
+                        vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
+                        float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - bRoughness * 0.9);
+                        if (bIsMetal) specProbMIS = 1.0;
+                        float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+                        float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+                        float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
+
+                        float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+                        vec3 envContribution = diffThroughput * envRadiance * brdf * NdotL_env * w / envPdf;
+
+                        if (enableFireflyClamp && pc.tuning.x > 0.0) {
+                            float contribLum = dot(envContribution, vec3(0.2126, 0.7152, 0.0722));
+                            if (contribLum > pc.tuning.x) envContribution *= pc.tuning.x / contribLum;
+                        }
+                        radiance    += envContribution;
+                        diffContrib += envContribution;
+                    }
+                }
+            }
+
+            // === Russian roulette ===
+            if (bounce > 1u) {
+                float p = max(diffThroughput.r, max(diffThroughput.g, diffThroughput.b));
+                float rrRand = getSample1D(dimIdx); dimIdx += 1u;
+                if (p < 0.01 || rrRand > p) break;
+                diffThroughput /= p;
+            }
+
+            // === BRDF sampling for next bounce (bounces 2+) ===
+            {
+                float cosI = abs(dot(normalize(diffRayDir), bN));
+                vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
+                float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
+                specProb *= (1.0 - bRoughness * 0.9);
+                if (bIsMetal) specProb = 1.0;
+
+                float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
+                if (bsdfChoice < specProb || bRoughness < 0.05) {
+                    vec3 inDir = diffRayDir;
+                    vec3 reflected = reflect(diffRayDir, bN);
+                    if (bRoughness > 0.01) {
+                        vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
+                        vec3 jitVec = cosineHemisphere(reflected, jitU) * bRoughness;
+                        reflected = normalize(reflected + jitVec);
+                        if (dot(reflected, bN) < 0.0) {
+                            vec2 fallbackU = getSample2D(dimIdx); dimIdx += 2u;
+                            reflected = cosineHemisphere(bN, fallbackU);
+                        }
+                    }
+                    diffRayDir = reflected;
+                    diffRayOrigin = bHitPos + bN * 0.01;
+                    diffThroughput *= bIsMetal ? bAlbedo : vec3(1.0);
+                    diffThroughput /= max(specProb, 0.01);
+
+                    if (bRoughness < 0.05) {
+                        diffLastBsdfPdf = 1.0;
+                        diffLastBounceWasDelta = true;
+                    } else {
+                        vec3 Hspec = normalize(-inDir + diffRayDir);
+                        float NdotH_s = max(dot(bN, Hspec), 0.001);
+                        float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                        float as = bRoughness * bRoughness;
+                        float as2 = as * as;
+                        float denomGGX = NdotH_s * NdotH_s * (as2 - 1.0) + 1.0;
+                        float D_s = as2 / (OHAO_PI * denomGGX * denomGGX + 1e-4);
+                        float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
+                        diffLastBsdfPdf = specProb * pdf_spec;
+                        diffLastBounceWasDelta = false;
+                    }
+                } else {
+                    vec2 diffU2 = getSample2D(dimIdx); dimIdx += 2u;
+                    diffRayDir = cosineHemisphere(bN, diffU2);
+                    diffRayOrigin = bHitPos + bN * 0.01;
+                    diffThroughput *= bAlbedo;
+                    diffThroughput /= max(1.0 - specProb, 0.01);
+
+                    diffLastBsdfPdf = (1.0 - specProb) * max(dot(diffRayDir, bN), 0.0) / OHAO_PI;
+                    diffLastBounceWasDelta = false;
+                }
+            }
+        }
+
+    } // end of firstHitDist >= 0 else-branch
 
     // Firefly clamp — cap extreme outlier samples
-    float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
-    if (lum > 10.0) radiance *= 10.0 / lum;
+    if (enableFireflyClamp && pc.tuning.x > 0.0) {
+        float lum = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > pc.tuning.x) radiance *= pc.tuning.x / lum;
+    }
 
     // Temporal accumulation with reprojection
     vec3 acc;
     float count;
-    if (pc.params.z == 0u) {
+    if (historyFrameCount == 0u) {
         // First frame after reset — no history
         acc = radiance;
         count = 1.0;
@@ -369,24 +1181,21 @@ void main() {
             prevPixel = clamp(prevPixel, ivec2(0), ivec2(pc.params.xy) - 1);
             vec4 history = imageLoad(accumBuffer, prevPixel);
 
-            // Blend: exponential moving average
-            // More history weight = smoother but more ghosting
-            // Less = noisier but more responsive
-            float alpha = 0.1;  // 10% new, 90% history
-            acc = mix(history.rgb, radiance, alpha);
-            count = min(history.w + 1.0, 64.0);  // cap accumulation
+            // Progressive accumulation — proper running average, never overexposes
+            count = history.w + 1.0;
+            acc = (history.rgb * history.w + radiance) / count;
         } else {
-            // Disoccluded or first frame — use progressive accumulation
+            // Disoccluded or first frame — start fresh accumulation
             count = prev.w + 1.0;
             acc = (prev.rgb * prev.w + radiance) / count;
         }
     }
     imageStore(accumBuffer, pixel, vec4(acc, count));
 
-    // Multi-scale edge-aware spatial denoise (A-Trous-like bilateral filter)
-    // Runs at ALL sample counts — adaptive strength based on local variance
     vec3 denoised = acc;
-    {
+    if (enableInternalDenoise && enableAOVs) {
+        // Multi-scale edge-aware spatial denoise (A-Trous-like bilateral filter)
+        // Intended for the real-time profile, not the offline/reference path.
         vec3 centerNormal = imageLoad(normalAOV, pixel).rgb;
 
         // Estimate local variance from 3x3 neighborhood
@@ -447,8 +1256,22 @@ void main() {
         }
     }
 
-    // Tonemap + gamma
+    if (enableInternalDenoise) {
+        // Luminance-preserving denoise: rescale denoised to match accumulated luminance
+        // This prevents the denoiser from changing brightness between moving/static states
+        float accLum = dot(acc, vec3(0.2126, 0.7152, 0.0722));
+        float denLum = dot(denoised, vec3(0.2126, 0.7152, 0.0722));
+        if (denLum > 0.001 && accLum > 0.001) {
+            denoised *= accLum / denLum;
+        }
+    }
+
+    // Tonemap + gamma (same exposure as deferred pipeline)
     vec3 ldr = ACES(denoised * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
+    // Sub-plan 3.C.6 + 3.D: RAW radiance in RGB, hit-distance in alpha (for NRD REBLUR filter sizing)
+    // Sub-plan 4.F T3: running-average across N samples when NRD mode is active.
+    AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));
+    AOV_ACCUMULATE_WRITE(specularRadiance, pixel, vec4(specContrib, specHitDist));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

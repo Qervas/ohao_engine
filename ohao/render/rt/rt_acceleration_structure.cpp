@@ -319,6 +319,91 @@ void RTAccelerationStructure::destroyBLAS(BlasHandle handle) {
     entry.deviceAddress = 0;
 }
 
+BlasHandle RTAccelerationStructure::createBLASFromPositions(
+        VkBuffer positionBuffer, uint32_t vertexCount,
+        VkBuffer indexBuffer, uint32_t indexCount,
+        VkDeviceSize indexByteOffset, VkCommandBuffer cmd) {
+    if (!m_supported) return INVALID_BLAS;
+
+    uint32_t primitiveCount = indexCount / 3;
+
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
+    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.vertexData.deviceAddress = getBufferDeviceAddress(positionBuffer);
+    triangles.vertexStride = 12;
+    triangles.maxVertex = vertexCount - 1;
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress = getBufferDeviceAddress(indexBuffer);
+
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geometry.geometry.triangles = triangles;
+
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
+
+    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
+    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                                             &buildInfo, &primitiveCount, &sizeInfo);
+
+    BlasEntry entry{};
+    entry.vertexCount = vertexCount;
+    entry.indexCount = indexCount;
+
+    if (!createBuffer(sizeInfo.accelerationStructureSize,
+                      VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                      entry.buffer, entry.memory)) {
+        return INVALID_BLAS;
+    }
+
+    VkAccelerationStructureCreateInfoKHR createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+    createInfo.buffer = entry.buffer;
+    createInfo.size = sizeInfo.accelerationStructureSize;
+    createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+    if (vkCreateAccelerationStructureKHR(m_device, &createInfo, nullptr, &entry.handle) != VK_SUCCESS) {
+        destroyBuffer(entry.buffer, entry.memory);
+        return INVALID_BLAS;
+    }
+
+    VkAccelerationStructureDeviceAddressInfoKHR addressInfo{};
+    addressInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    addressInfo.accelerationStructure = entry.handle;
+    entry.deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(m_device, &addressInfo);
+
+    ensureScratchBuffer(sizeInfo.buildScratchSize);
+
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.dstAccelerationStructure = entry.handle;
+    buildInfo.scratchData.deviceAddress = getBufferDeviceAddress(m_scratchBuffer);
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+    rangeInfo.primitiveCount = primitiveCount;
+    rangeInfo.primitiveOffset = static_cast<uint32_t>(indexByteOffset);
+
+    const VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &rangeInfo;
+
+    bool ownCmd = (cmd == VK_NULL_HANDLE);
+    if (ownCmd) cmd = beginSingleTimeCommands();
+    vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
+    if (ownCmd) endSingleTimeCommands(cmd);
+
+    BlasHandle handle = static_cast<BlasHandle>(m_blasEntries.size());
+    m_blasEntries.push_back(entry);
+    return handle;
+}
+
 // === TLAS ===
 
 void RTAccelerationStructure::clearInstances() {
@@ -388,8 +473,9 @@ void RTAccelerationStructure::buildTLAS(VkCommandBuffer cmd) {
     vkGetAccelerationStructureBuildSizesKHR(m_device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                                              &buildInfo, &instanceCount, &sizeInfo);
 
-    // Recreate TLAS if needed
-    bool needsRebuild = (m_tlas == VK_NULL_HANDLE);
+    // Force full rebuild when BLAS references change (e.g., animated BLAS replaced)
+    bool needsRebuild = (m_tlas == VK_NULL_HANDLE) || m_forceTlasRebuild;
+    m_forceTlasRebuild = false;
     if (needsRebuild) {
         // Destroy old
         if (m_tlas != VK_NULL_HANDLE) {
@@ -444,8 +530,6 @@ void RTAccelerationStructure::buildTLAS(VkCommandBuffer cmd) {
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
 
     if (ownCmd) endSingleTimeCommands(cmd);
-
-    std::cout << "[RT] TLAS built: " << instanceCount << " instances" << std::endl;
 }
 
 // === Cleanup ===

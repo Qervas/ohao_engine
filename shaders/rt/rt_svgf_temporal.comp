@@ -1,0 +1,126 @@
+#version 460
+
+// SVGF Pass 1 — Temporal accumulation + moment/variance estimation.
+//
+// Upgrades the plain à-trous denoiser (DenoiseMode::Atrous) to full SVGF
+// (Schied et al. 2017). This pass reprojects the previous frame's denoised
+// color + luminance moments into the current frame, rejects history on
+// disocclusion (out-of-bounds reproject, depth/normal mismatch, or a reset
+// signal), and blends the current beauty in with an exponential moving
+// average whose weight shrinks as the per-pixel history length grows.
+//
+// The path tracer feeds this pass a FRESH per-frame (independent-noise) beauty
+// for DenoiseMode::Atrous (the host passes raygen historyFrameCount=0 so the
+// engine's naive accumBuffer averaging is bypassed). SVGF's own temporal
+// accumulation replaces it, which is what makes the per-pixel luminance
+// variance meaningful — the whole basis of the variance-guided spatial filter
+// in Pass 2.
+//
+// Motion vectors (binding 1) are in PIXEL units and encode (current-previous),
+// so prevPixel = pixel - motion (matches pt_raygen.rgen). Depth (binding 2) is
+// linear view-space Z with background = 1e30 (clamped to fp16 range in geom
+// history). Normals (binding 3) are stored N*0.5+0.5.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0,  rgba8)   uniform readonly  image2D curBeauty;   // current LDR beauty (fresh sample)
+layout(set = 0, binding = 1,  rg16f)   uniform readonly  image2D motionVec;   // pixel-space (cur - prev)
+layout(set = 0, binding = 2,  r32f)    uniform readonly  image2D curDepth;    // linear view Z, bg = 1e30
+layout(set = 0, binding = 3,  rgba32f) uniform readonly  image2D curNormal;   // world normal, N*0.5+0.5
+layout(set = 0, binding = 4,  rgba16f) uniform readonly  image2D prevColor;   // previous denoised history color
+layout(set = 0, binding = 5,  rgba16f) uniform readonly  image2D prevMoments; // (m1, m2, len, _)
+layout(set = 0, binding = 6,  rgba16f) uniform readonly  image2D prevGeom;    // (viewZ, nx, ny, nz)
+layout(set = 0, binding = 7,  rgba16f) uniform writeonly image2D outColor;    // accumColor -> Pass 2 input
+layout(set = 0, binding = 8,  rgba16f) uniform writeonly image2D outMoments;  // (m1, m2, len, _) for next frame
+layout(set = 0, binding = 9,  r16f)    uniform writeonly image2D outVariance; // per-pixel luminance variance
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D outGeom;     // (viewZ, nx, ny, nz) for next frame
+
+layout(push_constant) uniform PushConstants {
+    int width;
+    int height;
+    int reset;   // 1 => discard all history (first frame / view changed / resize)
+    int pad;
+} pc;
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+void main() {
+    ivec2 p    = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(pc.width, pc.height);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    vec3  cur  = imageLoad(curBeauty, p).rgb;
+    float curL = luma(cur);
+    float curZ = imageLoad(curDepth, p).r;
+    vec3  curN = imageLoad(curNormal, p).rgb * 2.0 - 1.0;
+    curN = (dot(curN, curN) > 1e-8) ? normalize(curN) : vec3(0.0, 0.0, 1.0);
+
+    // Clamp Z so it survives fp16 geom-history storage and background (1e30)
+    // vs foreground compares cleanly at silhouettes.
+    float curZc = min(curZ, 1.0e4);
+
+    // --- Reproject to previous frame ---
+    vec2  mv       = imageLoad(motionVec, p).rg;   // pixel-space (cur - prev)
+    vec2  prevPixF = vec2(p) - mv;                 // prevPixel = pixel - motion
+    ivec2 prevP    = ivec2(floor(prevPixF + 0.5)); // nearest
+
+    bool valid = (pc.reset == 0);
+    if (prevP.x < 0 || prevP.y < 0 || prevP.x >= size.x || prevP.y >= size.y)
+        valid = false;
+
+    // --- Disocclusion test against previous geometry (depth + normal) ---
+    if (valid) {
+        vec4  g     = imageLoad(prevGeom, prevP);   // (viewZ, nx, ny, nz)
+        float prevZ = g.r;
+        vec3  prevN = g.gba;
+        float zrel  = abs(curZc - prevZ) / max(max(abs(curZc), abs(prevZ)), 1e-3);
+        float ndot  = dot(curN, prevN);
+        if (zrel > 0.1 || ndot < 0.9) valid = false;
+    }
+
+    float prevLen = 0.0;
+    vec3  prevCol = cur;
+    float prevM1  = curL;
+    float prevM2  = curL * curL;
+    if (valid) {
+        vec4 hc  = imageLoad(prevColor,   prevP);
+        vec4 hm  = imageLoad(prevMoments, prevP);
+        prevCol  = hc.rgb;
+        prevM1   = hm.r;
+        prevM2   = hm.g;
+        prevLen  = hm.b;
+    }
+
+    // Accumulate. Longer history => smaller alpha (more temporal smoothing),
+    // clamped to a floor so lighting can still adapt (SVGF standard).
+    float newLen = valid ? min(prevLen + 1.0, 32.0) : 1.0;
+    float alpha  = max(1.0 / newLen, 0.05);
+
+    vec3  accumCol = mix(prevCol, cur,       alpha);
+    float m1       = mix(prevM1,  curL,      alpha);
+    float m2       = mix(prevM2,  curL*curL, alpha);
+
+    float variance = max(0.0, m2 - m1 * m1);
+
+    // Bootstrap: for a short history the temporal moments are unreliable, so
+    // fall back to a spatial 3x3 luminance variance of the current beauty
+    // (SVGF standard). This is what drives the filter on freshly disoccluded
+    // pixels and the first few frames.
+    if (newLen < 4.0) {
+        float s = 0.0, s2 = 0.0;
+        int   cnt = 0;
+        for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 q  = clamp(p + ivec2(dx, dy), ivec2(0), size - 1);
+            float lq = luma(imageLoad(curBeauty, q).rgb);
+            s += lq; s2 += lq * lq; ++cnt;
+        }
+        float mm = s / float(cnt);
+        variance = max(variance, max(0.0, s2 / float(cnt) - mm * mm));
+    }
+
+    imageStore(outColor,    p, vec4(accumCol, 1.0));
+    imageStore(outMoments,  p, vec4(m1, m2, newLen, 0.0));
+    imageStore(outVariance, p, vec4(variance, 0.0, 0.0, 0.0));
+    imageStore(outGeom,     p, vec4(curZc, curN));  // (viewZ, nx, ny, nz) for next frame's disocclusion test
+}

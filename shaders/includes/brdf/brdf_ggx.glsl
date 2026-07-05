@@ -94,16 +94,15 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
     float NdotH = max(dot(N, H), 0.0);
     float HdotV = max(dot(H, V), 0.0);
 
-    // Cook-Torrance components
+    // Cook-Torrance components — height-correlated Smith-GGX (Frostbite/Blender)
     float D = distributionGGX(NdotH, roughness);
-    float G = geometrySmith(NdotV, NdotL, roughness);
-    F = fresnelSchlick(HdotV, F0);
+    float V_term = geometrySmithCorrelated(NdotV, NdotL, roughness);
+    // Roughness-aware Fresnel: limits grazing angle boost for rough surfaces.
+    // At roughness=0.95, max Fresnel = max(0.05, F0) ≈ F0 (no boost).
+    // This matches EEVEE's integrated reflectance from BRDF LUT behavior.
+    F = fresnelSchlickRoughness(HdotV, F0, roughness);
 
-    // Cook-Torrance specular BRDF
-    vec3 numerator = D * G * F;
-    float denominator = 4.0 * NdotV * NdotL;
-
-    return numerator / max(denominator, EPSILON);
+    return D * V_term * F;
 }
 
 // Evaluate the complete PBR BRDF (diffuse + specular)
@@ -113,6 +112,18 @@ vec3 evaluateSpecularBRDF(vec3 N, vec3 V, vec3 L, float roughness, vec3 F0, out 
 //   lightDir: light direction (from surface to light)
 //   lightColor: light color (pre-multiplied with intensity and attenuation)
 // Returns: final lit color contribution from this light
+// Approximate directional albedo E(cosTheta, roughness) for single-scatter GGX.
+// Polynomial fit from Turquin 2019 — no LUT needed.
+// Returns the fraction of energy that single-scatter GGX preserves.
+float GGX_E(float cosTheta, float roughness) {
+    float a = roughness;
+    float a2 = a * a;
+    float mu = cosTheta;
+    float e = 1.0 - (1.0 - mu) * (0.4022 * a2 + 0.7278 * a)
+            - mu * (0.1412 * a2 + 0.1100 * a);
+    return clamp(e, 0.0, 1.0);
+}
+
 vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
     vec3 N = surface.normal;
     vec3 V = surface.viewDir;
@@ -125,15 +136,34 @@ vec3 evaluateBRDF(BRDFSurface surface, vec3 lightDir, vec3 lightColor) {
         return vec3(0.0);
     }
 
-    // Evaluate specular BRDF
+    float NdotV = max(dot(N, V), EPSILON);
+
+    // Single-scatter specular BRDF
     vec3 F;
     vec3 specular = evaluateSpecularBRDF(N, V, L, surface.roughness, surface.F0, F);
 
-    // Energy conservation: diffuse = 1 - Fresnel (what's not reflected is diffused)
+    // Energy conservation: diffuse gets what specular doesn't reflect
     vec3 kD = (vec3(1.0) - F) * (1.0 - surface.metallic);
 
-    // Diffuse BRDF (Lambertian)
-    vec3 diffuse = kD * surface.albedo * INV_PI;
+    // Burley/Disney diffuse (matches Blender's Principled BSDF)
+    vec3 H = normalize(V + L);
+    float LdotH = max(dot(L, H), 0.0);
+    vec3 diffuse = kD * burleyDiffuse(surface.albedo, surface.roughness, NdotV, NdotL, LdotH);
+
+    // Multi-scatter GGX energy compensation (Kulla-Conty 2017, Turquin 2019)
+    // Single-scatter GGX loses energy at high roughness. The lost energy is
+    // redistributed as additional diffuse-like scattering, making the specular
+    // peak relatively less prominent. This matches Blender Cycles' multi-scatter GGX.
+    float E_o = GGX_E(NdotV, surface.roughness);   // energy preserved at view angle
+    float E_i = GGX_E(NdotL, surface.roughness);   // energy preserved at light angle
+    float Ems = (1.0 - E_o) * (1.0 - E_i);        // energy lost by single scatter
+    vec3 Favg = surface.F0 + (1.0 - surface.F0) / 21.0;  // average Fresnel
+    vec3 fms = Favg * Ems / max(vec3(1.0) - Favg * (1.0 - E_o), vec3(0.001));
+
+    // Add multi-scatter as diffuse-like lobe (already energy-conserving)
+    diffuse += fms * INV_PI * (1.0 - surface.metallic) * surface.albedo;
+    // For metals, multi-scatter adds colored specular energy
+    specular += fms * surface.metallic;
 
     // Combined BRDF * cosTheta * lightColor
     return (diffuse + specular) * lightColor * NdotL;

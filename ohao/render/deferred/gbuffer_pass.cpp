@@ -6,12 +6,85 @@
 #include "scene/component/material_component.hpp"
 #include "../../scene/asset/model.hpp"
 #include <stdexcept>
+#include <algorithm>
 #include <array>
 #include <iostream>
 #include <cstring>
 #include <cfloat>
+#include <vector>
 
 namespace ohao {
+
+namespace {
+
+struct MaterialDrawRange {
+    uint32_t materialIndex;
+    uint32_t firstIndex;
+    uint32_t indexCount;
+};
+
+std::vector<MaterialDrawRange> buildMaterialDrawRanges(const Model& model, const MeshBufferInfo& bufferInfo) {
+    std::vector<MaterialDrawRange> ranges;
+    const uint32_t triangleCount = bufferInfo.indexCount / 3;
+    if (triangleCount == 0) return ranges;
+
+    if (model.materialPerTriangle.empty()) {
+        ranges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
+        return ranges;
+    }
+
+    const uint32_t cappedTriangleCount = std::min<uint32_t>(
+        triangleCount, static_cast<uint32_t>(model.materialPerTriangle.size()));
+    if (cappedTriangleCount == 0) {
+        ranges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
+        return ranges;
+    }
+
+    uint32_t runMaterial = model.materialPerTriangle[0];
+    uint32_t runStartTriangle = 0;
+
+    for (uint32_t tri = 1; tri < cappedTriangleCount; ++tri) {
+        const uint32_t materialIndex = model.materialPerTriangle[tri];
+        if (materialIndex == runMaterial) continue;
+
+        ranges.push_back({
+            runMaterial,
+            bufferInfo.indexOffset + runStartTriangle * 3,
+            (tri - runStartTriangle) * 3
+        });
+        runMaterial = materialIndex;
+        runStartTriangle = tri;
+    }
+
+    ranges.push_back({
+        runMaterial,
+        bufferInfo.indexOffset + runStartTriangle * 3,
+        (cappedTriangleCount - runStartTriangle) * 3
+    });
+
+    if (cappedTriangleCount < triangleCount) {
+        ranges.push_back({
+            0u,
+            bufferInfo.indexOffset + cappedTriangleCount * 3,
+            (triangleCount - cappedTriangleCount) * 3
+        });
+    }
+
+    return ranges;
+}
+
+uint32_t findMaterialTextureIndex(BindlessTextureManager* textureManager,
+                                  const Actor& actor,
+                                  const char* suffix,
+                                  uint32_t materialIndex) {
+    if (!textureManager) return UINT32_MAX;
+
+    const std::string textureName = actor.getName() + "_" + suffix + "_" + std::to_string(materialIndex);
+    const auto handle = textureManager->findTexture(textureName);
+    return handle.valid() ? handle.index : UINT32_MAX;
+}
+
+}
 
 GBufferPass::~GBufferPass() {
     cleanup();
@@ -30,11 +103,6 @@ bool GBufferPass::initialize(VkDevice device, VkPhysicalDevice physicalDevice) {
     if (!createFramebuffer()) return false;
     if (!createDescriptors()) return false;
     if (!createPipeline()) return false;
-    if (!createBoneMatrixResources()) return false;
-    if (!createSkinnedPipeline()) {
-        std::cerr << "GBufferPass: Skinned pipeline failed (non-fatal)" << std::endl;
-        // Non-fatal - skinned rendering just won't work
-    }
 
     return true;
 }
@@ -43,32 +111,6 @@ void GBufferPass::cleanup() {
     if (m_device == VK_NULL_HANDLE) return;
 
     vkDeviceWaitIdle(m_device);
-
-    // Skinned pipeline resources
-    if (m_skinnedPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_device, m_skinnedPipeline, nullptr);
-        m_skinnedPipeline = VK_NULL_HANDLE;
-    }
-    if (m_skinnedPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_device, m_skinnedPipelineLayout, nullptr);
-        m_skinnedPipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_boneMatrixBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(m_device, m_boneMatrixBuffer, nullptr);
-        m_boneMatrixBuffer = VK_NULL_HANDLE;
-    }
-    if (m_boneMatrixMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_device, m_boneMatrixMemory, nullptr);
-        m_boneMatrixMemory = VK_NULL_HANDLE;
-    }
-    if (m_boneDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(m_device, m_boneDescriptorPool, nullptr);
-        m_boneDescriptorPool = VK_NULL_HANDLE;
-    }
-    if (m_boneDescriptorLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_device, m_boneDescriptorLayout, nullptr);
-        m_boneDescriptorLayout = VK_NULL_HANDLE;
-    }
 
     if (m_wireframePipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_wireframePipeline, nullptr);
@@ -111,9 +153,9 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
 
     // Begin render pass
     std::array<VkClearValue, GBUFFER_COUNT> clearValues{};
-    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position
-    clearValues[1].color = {{0.5f, 0.5f, 1.0f, 0.0f}}; // Normal (up = 0.5, 0.5, 1.0)
-    clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // Albedo
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)
+    clearValues[1].color = {{0.5f, 0.5f, 0.5f, 0.0f}}; // OctNormal (rg) + Roughness (b) + Emissive (a)
+    clearValues[2].color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // Albedo (rgb) + AO (a)
     clearValues[3].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Velocity
     clearValues[4].depthStencil = {1.0f, 0};           // Depth
 
@@ -143,20 +185,6 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     scissor.extent = {m_width, m_height};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Bind pipeline (wireframe or fill)
-    VkPipeline activePipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
-                                    ? m_wireframePipeline : m_pipeline;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activePipeline);
-
-    // Bind bindless texture descriptor set (set 0) if available
-    if (m_textureManager) {
-        VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
-        if (texSet != VK_NULL_HANDLE) {
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
-        }
-    }
-
     // Bind vertex and index buffers if available
     if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
         VkBuffer vertexBuffers[] = {m_vertexBuffer};
@@ -168,6 +196,11 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
     // Build view frustum for culling
     Frustum frustum;
     frustum.extractFromViewProj(m_projection * m_view);
+
+    // Track which pipeline is currently bound to avoid redundant switches
+    VkPipeline currentPipeline = VK_NULL_HANDLE;
+    VkPipeline staticPipeline = (m_wireframeEnabled && m_wireframePipeline != VK_NULL_HANDLE)
+                                    ? m_wireframePipeline : m_pipeline;
 
     // Iterate through scene actors and render meshes
     if (m_meshBufferMap) {
@@ -199,11 +232,20 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 }
             }
 
-            // Get material (optional) - extract properties from Material struct
-            auto materialComp = actor->getComponent<MaterialComponent>();
-            glm::vec3 albedo = materialComp ? materialComp->getMaterial().baseColor : glm::vec3(0.8f);
-            float metallic = materialComp ? materialComp->getMaterial().metallic : 0.0f;
-            float roughness = materialComp ? materialComp->getMaterial().roughness : 0.5f;
+            // Static geometry only (skeletal animation removed)
+            if (currentPipeline != staticPipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, staticPipeline);
+                currentPipeline = staticPipeline;
+
+                // Bind bindless textures for static pipeline (set 0)
+                if (m_textureManager) {
+                    VkDescriptorSet texSet = m_textureManager->getDescriptorSet();
+                    if (texSet != VK_NULL_HANDLE) {
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                                m_pipelineLayout, 0, 1, &texSet, 0, nullptr);
+                    }
+                }
+            }
 
             // Find buffer info for this actor
             auto it = m_meshBufferMap->find(actorId);
@@ -211,66 +253,93 @@ void GBufferPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
 
             const MeshBufferInfo& bufferInfo = it->second;
 
-            // Get AO from material if available
-            float ao = materialComp ? materialComp->getMaterial().ao : 1.0f;
+            auto packIdx = [](uint32_t idx) -> float {
+                float f; memcpy(&f, &idx, sizeof(float)); return f;
+            };
+            auto materialComp = actor->getComponent<MaterialComponent>();
 
-            // Look up texture indices for bindless rendering
-            uint32_t albedoTexIdx = UINT32_MAX;
-            uint32_t normalTexIdx = UINT32_MAX;
-            uint32_t roughMetalTexIdx = UINT32_MAX;
-            if (m_textureManager && materialComp) {
-                const auto& mat = materialComp->getMaterial();
-                if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.albedoTexture);
-                    if (handle.valid()) albedoTexIdx = handle.index;
-                }
-                if (mat.useNormalTexture && !mat.normalTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.normalTexture);
-                    if (handle.valid()) normalTexIdx = handle.index;
-                }
-                if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.roughnessTexture);
-                    if (handle.valid()) roughMetalTexIdx = handle.index;
-                }
+            std::vector<MaterialDrawRange> drawRanges;
+            if (model && !model->materialColors.empty()) {
+                drawRanges = buildMaterialDrawRanges(*model, bufferInfo);
+            }
+            if (drawRanges.empty()) {
+                drawRanges.push_back({0u, bufferInfo.indexOffset, bufferInfo.indexCount});
             }
 
-            // Pack texture indices as uint bits
-            float packedAlbedoIdx, packedNormalIdx, packedRoughMetalIdx;
-            memcpy(&packedAlbedoIdx, &albedoTexIdx, sizeof(float));
-            memcpy(&packedNormalIdx, &normalTexIdx, sizeof(float));
-            memcpy(&packedRoughMetalIdx, &roughMetalTexIdx, sizeof(float));
+            VkPipelineLayout activeLayout = m_pipelineLayout;
+            const glm::mat4 viewProj = m_projection * m_view;
+            const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;
 
-            // materialParams.z = roughMetalTexIdx (overloads AO slot)
-            // If no roughMetal texture, pack AO value instead (shader checks for 0xFFFFFFFF)
-            float aoOrRoughMetal = (roughMetalTexIdx != UINT32_MAX) ? packedRoughMetalIdx : ao;
+            for (const MaterialDrawRange& range : drawRanges) {
+                glm::vec3 albedo(0.8f);
+                float metallic = 0.0f;
+                float roughness = 0.5f;
+                uint32_t albedoTexIdx = UINT32_MAX;
+                uint32_t normalTexIdx = UINT32_MAX;
+                uint32_t roughMetalTexIdx = UINT32_MAX;
+                uint32_t emissiveTexIdx = UINT32_MAX;
+                float emissiveStrength = 0.0f;
 
-            GBufferUBO ubo{};
-            ubo.model = modelMatrix;
-            ubo.viewProj = m_projection * m_view;
-            ubo.prevMVP = m_prevViewProj * modelMatrix;
-            // Emissive texture index
-            uint32_t emissiveTexIdx = UINT32_MAX;
-            if (m_textureManager && materialComp) {
-                const auto& mat = materialComp->getMaterial();
-                if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
-                    auto handle = m_textureManager->getTextureByPath(mat.emissiveTexture);
-                    if (handle.valid()) emissiveTexIdx = handle.index;
+                const bool hasModelMaterial =
+                    model &&
+                    range.materialIndex < model->materialColors.size();
+
+                if (hasModelMaterial) {
+                    const uint32_t materialIndex = range.materialIndex;
+                    albedo = glm::vec3(model->materialColors[materialIndex]);
+                    roughness = model->materialColors[materialIndex].w;
+                    if (materialIndex < model->materialMetallic.size()) {
+                        metallic = model->materialMetallic[materialIndex];
+                    }
+
+                    albedoTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "albedo", materialIndex);
+                    normalTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "normal", materialIndex);
+                    roughMetalTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "roughmetal", materialIndex);
+                    emissiveTexIdx = findMaterialTextureIndex(m_textureManager, *actor, "emissive", materialIndex);
+                    if (emissiveTexIdx != UINT32_MAX) {
+                        emissiveStrength = 1.0f;
+                    }
+                } else if (materialComp) {
+                    const auto& mat = materialComp->getMaterial();
+                    albedo = mat.baseColor;
+                    metallic = mat.metallic;
+                    roughness = mat.roughness;
+
+                    if (m_textureManager) {
+                        if (mat.useAlbedoTexture && !mat.albedoTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.albedoTexture);
+                            if (handle.valid()) albedoTexIdx = handle.index;
+                        }
+                        if (mat.useNormalTexture && !mat.normalTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.normalTexture);
+                            if (handle.valid()) normalTexIdx = handle.index;
+                        }
+                        if (mat.useRoughnessTexture && !mat.roughnessTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.roughnessTexture);
+                            if (handle.valid()) roughMetalTexIdx = handle.index;
+                        }
+                        if (mat.useEmissiveTexture && !mat.emissiveTexture.empty()) {
+                            auto handle = m_textureManager->findTexture(mat.emissiveTexture);
+                            if (handle.valid()) emissiveTexIdx = handle.index;
+                            emissiveStrength = glm::length(mat.emissive) > 0.01f ? 1.0f : 0.0f;
+                        }
+                    }
                 }
+
+                GBufferUBO ubo{};
+                ubo.model = modelMatrix;
+                ubo.viewProj = viewProj;
+                ubo.prevMVP = prevMVP;
+                ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));
+                ubo.albedoColor = glm::vec4(albedo, packIdx(normalTexIdx));
+                ubo.emissiveParams = glm::vec4(packIdx(emissiveTexIdx), emissiveStrength, 0.0f, 0.0f);
+
+                vkCmdPushConstants(cmd, activeLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(GBufferUBO), &ubo);
+
+                vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
             }
-            float packedEmissiveIdx;
-            memcpy(&packedEmissiveIdx, &emissiveTexIdx, sizeof(float));
-
-            ubo.materialParams = glm::vec4(metallic, roughness, aoOrRoughMetal, packedAlbedoIdx);
-            ubo.albedoColor = glm::vec4(albedo, packedNormalIdx);
-            ubo.emissiveParams = glm::vec4(packedEmissiveIdx, 3.0f, 0, 0);  // strength = 3.0
-
-            vkCmdPushConstants(cmd, m_pipelineLayout,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(GBufferUBO), &ubo);
-
-            // Draw indexed
-            vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
-                            bufferInfo.indexOffset, 0, 0);
         }
     }
 
@@ -324,7 +393,7 @@ bool GBufferPass::createGBuffer() {
 
     std::array<GBufferFormat, GBUFFER_COUNT> formats = {{
         {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
-        {VK_FORMAT_A2R10G10B10_UNORM_PACK32, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
+        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_R16G16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT},
         {VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT}
@@ -411,7 +480,7 @@ bool GBufferPass::createRenderPass() {
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     // Normal + Roughness
-    attachments[1].format = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+    attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;
     attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -781,245 +850,5 @@ bool GBufferPass::createPipeline() {
     return true;
 }
 
-bool GBufferPass::createBoneMatrixResources() {
-    // Create bone matrix UBO buffer (host-visible for fast updates)
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = sizeof(BoneMatrixUBO);
-    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_boneMatrixBuffer) != VK_SUCCESS) {
-        return false;
-    }
-
-    VkMemoryRequirements memReqs;
-    vkGetBufferMemoryRequirements(m_device, m_boneMatrixBuffer, &memReqs);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_boneMatrixMemory) != VK_SUCCESS) {
-        return false;
-    }
-
-    vkBindBufferMemory(m_device, m_boneMatrixBuffer, m_boneMatrixMemory, 0);
-    vkMapMemory(m_device, m_boneMatrixMemory, 0, sizeof(BoneMatrixUBO), 0, &m_boneMatrixMapped);
-
-    // Initialize with identity matrices
-    BoneMatrixUBO initialData{};
-    for (uint32_t i = 0; i < MAX_BONES; ++i) {
-        initialData.boneMatrices[i] = glm::mat4(1.0f);
-    }
-    initialData.boneCount = 0;
-    memcpy(m_boneMatrixMapped, &initialData, sizeof(BoneMatrixUBO));
-
-    // Create descriptor set layout for bone matrices
-    VkDescriptorSetLayoutBinding boneBinding{};
-    boneBinding.binding = 0;
-    boneBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    boneBinding.descriptorCount = 1;
-    boneBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-    boneBinding.pImmutableSamplers = nullptr;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &boneBinding;
-
-    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_boneDescriptorLayout) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Create descriptor pool for bone matrix set
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = 1;
-
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = 1;
-
-    if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_boneDescriptorPool) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Allocate bone descriptor set
-    VkDescriptorSetAllocateInfo dsAllocInfo{};
-    dsAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    dsAllocInfo.descriptorPool = m_boneDescriptorPool;
-    dsAllocInfo.descriptorSetCount = 1;
-    dsAllocInfo.pSetLayouts = &m_boneDescriptorLayout;
-
-    if (vkAllocateDescriptorSets(m_device, &dsAllocInfo, &m_boneDescriptorSet) != VK_SUCCESS) {
-        return false;
-    }
-
-    // Write descriptor
-    VkDescriptorBufferInfo boneBufferInfo{};
-    boneBufferInfo.buffer = m_boneMatrixBuffer;
-    boneBufferInfo.offset = 0;
-    boneBufferInfo.range = sizeof(BoneMatrixUBO);
-
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = m_boneDescriptorSet;
-    write.dstBinding = 0;
-    write.dstArrayElement = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    write.descriptorCount = 1;
-    write.pBufferInfo = &boneBufferInfo;
-
-    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-
-    return true;
-}
-
-bool GBufferPass::createSkinnedPipeline() {
-    // Load skinned vertex shader + same fragment shader
-    VkShaderModule vertShader = loadShaderModule("core_gbuffer_skinned.vert.spv");
-    VkShaderModule fragShader = loadShaderModule("core_gbuffer.frag.spv");
-
-    if (vertShader == VK_NULL_HANDLE || fragShader == VK_NULL_HANDLE) {
-        if (vertShader != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, vertShader, nullptr);
-        if (fragShader != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, fragShader, nullptr);
-        return false;
-    }
-
-    std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages{};
-    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    shaderStages[0].module = vertShader;
-    shaderStages[0].pName = "main";
-
-    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    shaderStages[1].module = fragShader;
-    shaderStages[1].pName = "main";
-
-    auto bindingDescs = Vertex::getBindingDescriptions();
-    auto attributeDescs = Vertex::getAttributeDescriptions();
-
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescs.size());
-    vertexInputInfo.pVertexBindingDescriptions = bindingDescs.data();
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescs.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescs.data();
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_NONE;  // Disable culling — matches forward pipeline
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo depthStencil{};
-    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
-
-    std::array<VkPipelineColorBlendAttachmentState, 4> colorBlendAttachments{};
-    for (auto& att : colorBlendAttachments) {
-        att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        att.blendEnable = VK_FALSE;
-    }
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = static_cast<uint32_t>(colorBlendAttachments.size());
-    colorBlending.pAttachments = colorBlendAttachments.data();
-
-    std::array<VkDynamicState, 2> dynamicStates = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dynamicState{};
-    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
-    dynamicState.pDynamicStates = dynamicStates.data();
-
-    // Push constants (same as static pipeline)
-    VkPushConstantRange pushConstant{};
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(GBufferUBO);
-
-    // Skinned pipeline layout includes bone descriptor (set 0) + bindless textures (set 1)
-    std::vector<VkDescriptorSetLayout> skinnedLayouts;
-    skinnedLayouts.push_back(m_boneDescriptorLayout);
-    if (m_textureManager && m_textureManager->getDescriptorSetLayout() != VK_NULL_HANDLE) {
-        skinnedLayouts.push_back(m_textureManager->getDescriptorSetLayout());
-    }
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(skinnedLayouts.size());
-    pipelineLayoutInfo.pSetLayouts = skinnedLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
-
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &m_skinnedPipelineLayout) != VK_SUCCESS) {
-        vkDestroyShaderModule(m_device, vertShader, nullptr);
-        vkDestroyShaderModule(m_device, fragShader, nullptr);
-        return false;
-    }
-
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
-    pipelineInfo.pStages = shaderStages.data();
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = &depthStencil;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.pDynamicState = &dynamicState;
-    pipelineInfo.layout = m_skinnedPipelineLayout;
-    pipelineInfo.renderPass = m_renderPass;
-    pipelineInfo.subpass = 0;
-
-    VkResult result = vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo,
-                                                nullptr, &m_skinnedPipeline);
-
-    vkDestroyShaderModule(m_device, vertShader, nullptr);
-    vkDestroyShaderModule(m_device, fragShader, nullptr);
-
-    return result == VK_SUCCESS;
-}
-
-void GBufferPass::uploadBoneMatrices(const std::vector<glm::mat4>& matrices) {
-    if (!m_boneMatrixMapped || matrices.empty()) return;
-
-    BoneMatrixUBO ubo{};
-    ubo.boneCount = std::min(static_cast<int>(matrices.size()), static_cast<int>(MAX_BONES));
-    for (int i = 0; i < ubo.boneCount; ++i) {
-        ubo.boneMatrices[i] = matrices[i];
-    }
-    // Fill remaining with identity
-    for (int i = ubo.boneCount; i < static_cast<int>(MAX_BONES); ++i) {
-        ubo.boneMatrices[i] = glm::mat4(1.0f);
-    }
-    memcpy(m_boneMatrixMapped, &ubo, sizeof(BoneMatrixUBO));
-}
 
 } // namespace ohao

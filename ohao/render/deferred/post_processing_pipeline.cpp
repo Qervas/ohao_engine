@@ -269,9 +269,9 @@ void PostProcessingPipeline::updateTonemapDescriptors() {
     if (m_tonemapDescSet == VK_NULL_HANDLE || m_sampler == VK_NULL_HANDLE) return;
     if (m_hdrInputView == VK_NULL_HANDLE) return;
 
-    // Always write BOTH bindings (Vulkan requires all declared bindings to be written)
-    std::array<VkDescriptorImageInfo, 2> imageInfos{};
-    std::array<VkWriteDescriptorSet, 2> writes{};
+    // Write all 3 bindings: HDR input, bloom, SSR
+    std::array<VkDescriptorImageInfo, 3> imageInfos{};
+    std::array<VkWriteDescriptorSet, 3> writes{};
 
     // Binding 0: HDR input
     imageInfos[0].sampler = m_sampler;
@@ -285,7 +285,7 @@ void PostProcessingPipeline::updateTonemapDescriptors() {
     writes[0].descriptorCount = 1;
     writes[0].pImageInfo = &imageInfos[0];
 
-    // Binding 1: Bloom texture — use HDR input as fallback when bloom is unavailable
+    // Binding 1: Bloom texture — use HDR input as fallback
     VkImageView bloomView = m_bloomPass ? m_bloomPass->getBloomOutput() : VK_NULL_HANDLE;
     imageInfos[1].sampler = m_sampler;
     imageInfos[1].imageView = bloomView != VK_NULL_HANDLE ? bloomView : m_hdrInputView;
@@ -298,7 +298,19 @@ void PostProcessingPipeline::updateTonemapDescriptors() {
     writes[1].descriptorCount = 1;
     writes[1].pImageInfo = &imageInfos[1];
 
-    vkUpdateDescriptorSets(m_device, 2, writes.data(), 0, nullptr);
+    // Binding 2: SSR texture — use HDR input as fallback (zero reflections)
+    imageInfos[2].sampler = m_sampler;
+    imageInfos[2].imageView = m_ssrView != VK_NULL_HANDLE ? m_ssrView : m_hdrInputView;
+    imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_tonemapDescSet;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &imageInfos[2];
+
+    vkUpdateDescriptorSets(m_device, 3, writes.data(), 0, nullptr);
 }
 
 bool PostProcessingPipeline::createFinalOutput() {
@@ -414,8 +426,8 @@ bool PostProcessingPipeline::createTonemappingPass() {
         return false;
     }
 
-    // Descriptor layout: HDR input + bloom texture
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+    // Descriptor layout: HDR input + bloom + SSR
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[0].descriptorCount = 1;
@@ -425,6 +437,11 @@ bool PostProcessingPipeline::createTonemappingPass() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -438,7 +455,7 @@ bool PostProcessingPipeline::createTonemappingPass() {
     // Descriptor pool
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 2;
+    poolSize.descriptorCount = 3;  // HDR + bloom + SSR
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

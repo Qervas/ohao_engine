@@ -1,6 +1,8 @@
 # OHAO Render Library — rendering algorithms, passes, RT
 # GPU abstraction lives in gpu/vulkan/
 
+find_package(OpenImageDenoise REQUIRED)
+
 file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
@@ -22,8 +24,37 @@ target_include_directories(ohao_renderer PUBLIC
 target_link_libraries(ohao_renderer PUBLIC
     ohao_gpu_vulkan
     ohao_scene
-    ohao_animation
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}
+    OpenImageDenoise
 )
+
+# Conditional NRD support (Sub-plan 4.A). nrd_denoise.cpp is always in
+# RENDERER_SOURCES via the glob; its body is guarded by OHAO_NRD_ENABLED
+# so it compiles to an empty TU when OHAO_NRD=OFF.
+if(OHAO_NRD)
+    target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_ENABLED)
+    target_link_libraries(ohao_renderer PRIVATE NRD)
+    # Sub-plan 4.C T3a: our own NRDIntegration static lib is named
+    # OhaoNRDIntegration to avoid clash with NRD's upstream INTERFACE target
+    # (which points at nrd-src/Integration/ and carries no symbols).
+    if(TARGET OhaoNRDIntegration)
+        target_link_libraries(ohao_renderer PRIVATE OhaoNRDIntegration)
+        target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_INTEGRATION_AVAILABLE)
+    endif()
+endif()
+
+# Conditional DLSS Ray Reconstruction (NGX) support (Phase 5). dlss_rr.cpp is
+# always in RENDERER_SOURCES via the glob; its body is guarded by
+# OHAO_DLSS_ENABLED so it compiles to an empty TU when OHAO_DLSS=OFF.
+# OHAO_DLSS_SNIPPET_DIR/APPDATA_DIR are baked in as string macros so the DlssRR
+# wrapper can locate the dlssd snippet + a writable NGX appdata dir at runtime.
+# ${CMAKE_DL_LIBS} satisfies the static NGX wrapper's dlopen() of the driver.
+if(OHAO_DLSS AND TARGET ngx_dlss)
+    target_compile_definitions(ohao_renderer PRIVATE
+        OHAO_DLSS_ENABLED
+        OHAO_DLSS_SNIPPET_DIR="${CMAKE_SOURCE_DIR}/external/DLSS/lib/Linux_x86_64/rel"
+        OHAO_DLSS_APPDATA_DIR="${CMAKE_BINARY_DIR}/ngx_appdata")
+    target_link_libraries(ohao_renderer PRIVATE ngx_dlss ${CMAKE_DL_LIBS})
+endif()

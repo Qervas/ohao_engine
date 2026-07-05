@@ -1,0 +1,84 @@
+#version 460
+
+// Sub-plan 4.G T1: bloom blur + downsample pass.
+//
+// Reads bloom mip N (rgba16f, src extent), downsamples 2x with a 13-tap
+// box+cross filter (Karis), and writes bloom mip N+1 (rgba16f, dst extent).
+// Combined downsample + Gaussian-equivalent blur in a single dispatch — the
+// 13-tap pattern gives a wide blur footprint that approximates a separable
+// Gaussian without ping-pong buffers.
+//
+// Reference: ACM SIGGRAPH 2014 "Next Generation Post-Processing in Call of
+// Duty Advanced Warfare" (Jorge Jimenez), Section "Bloom" — 13-tap downsample.
+//
+// Layout:
+//   group size 8x8, dispatched over the OUTPUT mip extent
+//   each invocation reads 13 taps from the input mip and averages them
+//   with the standard 4-corner + 4-cardinal + 4-center weights.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly  image2D inMip;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outMip;
+
+layout(push_constant) uniform BloomBlurPC {
+    vec2 srcExtent;
+    vec2 dstExtent;
+} pc;
+
+vec3 sampleClamped(ivec2 p, ivec2 maxXY) {
+    p = clamp(p, ivec2(0), maxXY);
+    return imageLoad(inMip, p).rgb;
+}
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    if (dst.x >= int(pc.dstExtent.x) || dst.y >= int(pc.dstExtent.y)) return;
+
+    // Map dst pixel to the center of a 2x2 block in src (the source mip is
+    // 2x larger in each axis). We sample on a 4x4 grid around that center.
+    ivec2 c    = dst * 2;
+    ivec2 maxXY = ivec2(pc.srcExtent) - 1;
+
+    // Karis 13-tap pattern: 4 inner box samples + 4 outer cardinal box samples
+    // + 5 corner samples. Coefficients sum to 1.
+    //
+    //  o . . . o      ← outer corners (weight 0.03125 each)
+    //  . O O O .      ← outer cardinals (weight 0.0625 each in clusters)
+    //  . O X O .      ← inner box (weight 0.125 each)
+    //  . O O O .
+    //  o . . . o
+
+    vec3 a = sampleClamped(c + ivec2(-2, -2), maxXY);
+    vec3 b = sampleClamped(c + ivec2( 0, -2), maxXY);
+    vec3 cv= sampleClamped(c + ivec2( 2, -2), maxXY);
+    vec3 d = sampleClamped(c + ivec2(-1, -1), maxXY);
+    vec3 e = sampleClamped(c + ivec2( 1, -1), maxXY);
+    vec3 f = sampleClamped(c + ivec2(-2,  0), maxXY);
+    vec3 g = sampleClamped(c + ivec2( 0,  0), maxXY);
+    vec3 h = sampleClamped(c + ivec2( 2,  0), maxXY);
+    vec3 i = sampleClamped(c + ivec2(-1,  1), maxXY);
+    vec3 j = sampleClamped(c + ivec2( 1,  1), maxXY);
+    vec3 k = sampleClamped(c + ivec2(-2,  2), maxXY);
+    vec3 l = sampleClamped(c + ivec2( 0,  2), maxXY);
+    vec3 m = sampleClamped(c + ivec2( 2,  2), maxXY);
+
+    // Karis weights:
+    //   inner box (d, e, i, j)      : weight 0.5 / 4 each = 0.125
+    //   outer center (g)            : weight 0.125 / 4 + 0.5 / 4 (overlap) — handled in summation
+    //
+    // Simplified per Jimenez 2014:
+    //   center box      (d+e+i+j)*0.5   ÷ 4  = (d+e+i+j) * 0.125
+    //   upper-left box  (a+b+f+g)*0.125 ÷ 4
+    //   upper-right box (b+cv+g+h)*0.125 ÷ 4
+    //   lower-left box  (f+g+k+l)*0.125 ÷ 4
+    //   lower-right box (g+h+l+m)*0.125 ÷ 4
+    vec3 sum = vec3(0.0);
+    sum += (d + e + i + j) * (0.5 / 4.0);
+    sum += (a + b + f + g) * (0.125 / 4.0);
+    sum += (b + cv + g + h) * (0.125 / 4.0);
+    sum += (f + g + k + l) * (0.125 / 4.0);
+    sum += (g + h + l + m) * (0.125 / 4.0);
+
+    imageStore(outMip, dst, vec4(sum, 1.0));
+}

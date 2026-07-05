@@ -216,14 +216,6 @@ const char* TransformComponent::getTypeName() const {
     return "TransformComponent";
 }
 
-void TransformComponent::serialize(class Serializer& serializer) const {
-    // TODO: Implement serialization
-}
-
-void TransformComponent::deserialize(class Deserializer& deserializer) {
-    // TODO: Implement deserialization
-}
-
 void TransformComponent::updateLocalMatrix() {
     if (dirty) {
         // Build transform matrix: scale -> rotate -> translate

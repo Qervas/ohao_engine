@@ -12,6 +12,7 @@ layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;
 layout(set = 0, binding = 3) uniform sampler2D gBufferNormal;
 layout(set = 0, binding = 4) uniform sampler2D gBufferAlbedo;
 layout(set = 0, binding = 5) uniform sampler2D directLighting;        // current frame's direct light
+layout(set = 0, binding = 7) uniform sampler2D giHistory;             // previous frame GI (for temporal blend)
 
 layout(push_constant) uniform PushConstants {
     mat4 invView;
@@ -79,15 +80,18 @@ void main() {
     vec3 indirectLight = vec3(0.0);
     uint rayFlags = gl_RayFlagsOpaqueEXT;
 
+    // Only hit static geometry — animated instances have bit 0 clear
+    uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)
+
     for (uint s = 0u; s < sampleCount; s++) {
         // Per-sample random direction (cosine-weighted around normal)
         vec2 rng = hash2(vec2(pixel) + vec2(float(s) * 7.13 + float(frameIndex) * 1.618, float(s) * 13.37));
         vec3 dir = cosineSampleHemisphere(rng, N);
 
-        // Trace indirect ray
+        // Trace indirect ray against static geometry only
         giPayload = vec4(0.0, 0.0, 0.0, -1.0);  // miss = black
 
-        traceRayEXT(topLevelAS, rayFlags, 0xFF,
+        traceRayEXT(topLevelAS, rayFlags, rayMask,
                      0,     // SBT offset (uses hit group 0 — closest hit)
                      0,     // SBT stride
                      0,     // miss index
@@ -120,5 +124,12 @@ void main() {
     // Modulate by the receiving surface's albedo (diffuse reflection)
     indirectLight *= albedo;
 
-    imageStore(giOutput, pixel, vec4(indirectLight, 1.0));
+    // Temporal accumulation: blend with previous frame's GI.
+    // Higher blend factor = less history = noisier but no ghosting.
+    // 0.3 balances smoothing vs ghosting for animated scenes.
+    vec3 history = texture(giHistory, uv).rgb;
+    float blendFactor = (frameIndex == 0u) ? 1.0 : 0.3;
+    vec3 accumulated = mix(history, indirectLight, blendFactor);
+
+    imageStore(giOutput, pixel, vec4(accumulated, 1.0));
 }

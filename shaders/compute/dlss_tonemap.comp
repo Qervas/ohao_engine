@@ -1,0 +1,83 @@
+#version 460
+// Phase 5 (DLSS-RR) final pass: DLSS Ray Reconstruction writes a denoised
+// HDR-linear image (COLOR_OUT, RGBA16F). This compute pass tonemaps it to the
+// RGBA8 beauty AND applies the cinematic post stack (grade + vignette + grain +
+// chromatic aberration) — the "CoD look" layer. Purely a display-space effect;
+// it never touches the render, so the path tracer stays unbiased.
+//
+// Strength is a single master via push constant (OHAO_GRADE env, default 1.0;
+// 0.0 = pure ACES tonemap, identical to the pre-cinematic behaviour).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly  image2D hdrIn;   // DLSS COLOR_OUT (HDR linear)
+layout(set = 0, binding = 1, rgba8)   uniform writeonly image2D ldrOut;  // m_outputImage (RGBA8)
+
+layout(push_constant) uniform PC {
+    uint  frame;      // for animated grain
+    float strength;   // 0 = bypass, 1 = full cinematic grade
+} pc;
+
+// ACES filmic tonemap — matches shaders/rt/pt_raygen*.rgen.
+vec3 ACES(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+void main() {
+    ivec2 pix  = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(hdrIn);
+    if (pix.x >= size.x || pix.y >= size.y) return;
+
+    vec2  uv = (vec2(pix) + 0.5) / vec2(size);
+    vec2  d  = uv - 0.5;              // centred, [-0.5..0.5]
+    float r2 = dot(d, d);            // squared radius from centre
+    float s  = clamp(pc.strength, 0.0, 1.0);
+
+    // --- Chromatic aberration: split R/B along the radial dir, stronger at edges ---
+    // Offset is in PIXELS (~1.5px max at the corner) — subtle lens fringing, not glitch.
+    ivec2 off = ivec2(d * s * r2 * 6.0);
+    vec3  hdr;
+    hdr.r = imageLoad(hdrIn, clamp(pix + off, ivec2(0), size - 1)).r;
+    hdr.g = imageLoad(hdrIn, pix).g;
+    hdr.b = imageLoad(hdrIn, clamp(pix - off, ivec2(0), size - 1)).b;
+    hdr   = max(hdr, vec3(0.0));
+
+    // --- Tonemap (ACES) → sRGB display ---
+    vec3 ldr = ACES(hdr * 0.5);
+    ldr = pow(ldr, vec3(1.0 / 2.2));
+
+    if (s > 0.0) {
+        // Contrast around 0.5 pivot — punchier, crushes the flat mids.
+        float contrast = mix(1.0, 1.16, s);
+        ldr = clamp((ldr - 0.5) * contrast + 0.5, 0.0, 1.0);
+
+        // Split-tone: warm highlights for contrast, barely-cool shadows. Kept gentle
+        // because outdoor HDRIs are already blue — a strong teal would over-cool it.
+        float L = luma(ldr);
+        vec3 shadowTint    = vec3(0.98, 1.00, 1.03);   // whisper of teal
+        vec3 highlightTint = vec3(1.06, 1.01, 0.93);   // warm/orange
+        vec3 tint = mix(shadowTint, highlightTint, smoothstep(0.15, 0.85, L));
+        ldr = mix(ldr, ldr * tint, s * 0.35);
+
+        // Saturation lift.
+        float sat = mix(1.0, 1.10, s);
+        ldr = clamp(mix(vec3(luma(ldr)), ldr, sat), 0.0, 1.0);
+
+        // Vignette — subtle corner falloff for focus.
+        float vig = 1.0 - s * 0.45 * smoothstep(0.10, 0.85, r2);
+        ldr *= vig;
+
+        // Animated film grain — filmic texture + hides banding.
+        float g = hash12(vec2(pix) + float(pc.frame % 2048u) * 1.7) - 0.5;
+        ldr += g * s * 0.035;
+    }
+
+    ldr = clamp(ldr, 0.0, 1.0);
+    imageStore(ldrOut, pix, vec4(ldr, 1.0));
+}

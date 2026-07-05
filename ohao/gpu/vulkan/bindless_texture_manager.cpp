@@ -334,7 +334,7 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(const std::string& pat
     uint32_t width, height;
     VkFormat format;
 
-    if (!loadTextureData(path, data, width, height, format)) {
+    if (!loadTextureData(path, type, data, width, height, format)) {
         std::cerr << "Failed to load texture: " << path << std::endl;
         return getDefaultTexture(type);
     }
@@ -483,6 +483,20 @@ const BindlessTextureInfo* BindlessTextureManager::getTextureInfo(BindlessTextur
     return &m_textures[handle.index];
 }
 
+BindlessTextureHandle BindlessTextureManager::findTexture(const std::string& key) const {
+    if (key.empty()) return BindlessTextureHandle{UINT32_MAX};
+    
+    // Check name map first (used by deferred texture bridge)
+    auto it = m_nameToHandle.find(key);
+    if (it != m_nameToHandle.end()) return it->second;
+    
+    // Check path map (used by normal loading)
+    it = m_pathToHandle.find(key);
+    if (it != m_pathToHandle.end()) return it->second;
+    
+    return BindlessTextureHandle{UINT32_MAX};
+}
+
 BindlessTextureHandle BindlessTextureManager::getTextureByName(const std::string& name) const {
     auto it = m_nameToHandle.find(name);
     return it != m_nameToHandle.end() ? it->second : BindlessTextureHandle{UINT32_MAX};
@@ -514,28 +528,28 @@ BindlessTextureHandle BindlessTextureManager::getDefaultTexture(BindlessTextureT
 
 void BindlessTextureManager::updateDescriptorSet() {
     std::vector<VkDescriptorImageInfo> imageInfos;
-    imageInfos.reserve(m_loadedCount);
-
     std::vector<VkWriteDescriptorSet> writes;
+    imageInfos.reserve(m_textures.size());
+    writes.reserve(m_textures.size());
 
     for (uint32_t i = 0; i < m_textures.size(); ++i) {
-        if (m_textures[i].view != VK_NULL_HANDLE) {
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.sampler = m_defaultSampler;
-            imageInfo.imageView = m_textures[i].view;
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfos.push_back(imageInfo);
+        if (m_textures[i].view == VK_NULL_HANDLE) continue;
 
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = m_descriptorSet;
-            write.dstBinding = 0;
-            write.dstArrayElement = i;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &imageInfos.back();
-            writes.push_back(write);
-        }
+        imageInfos.push_back(VkDescriptorImageInfo{
+            m_defaultSampler,
+            m_textures[i].view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        });
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_descriptorSet;
+        write.dstBinding = 0;
+        write.dstArrayElement = i;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfos.back();
+        writes.push_back(write);
     }
 
     if (!writes.empty()) {
@@ -543,7 +557,7 @@ void BindlessTextureManager::updateDescriptorSet() {
     }
 }
 
-bool BindlessTextureManager::loadTextureData(const std::string& path, std::vector<uint8_t>& outData,
+bool BindlessTextureManager::loadTextureData(const std::string& path, BindlessTextureType type, std::vector<uint8_t>& outData,
                                                uint32_t& width, uint32_t& height, VkFormat& format) {
     int w, h, channels;
     stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
@@ -554,7 +568,13 @@ bool BindlessTextureManager::loadTextureData(const std::string& path, std::vecto
 
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
-    format = VK_FORMAT_R8G8B8A8_SRGB;
+    
+    // Albedo and Emissive textures are usually sRGB, while others (normal, roughness, etc.) are linear
+    if (type == BindlessTextureType::Albedo || type == BindlessTextureType::Emissive) {
+        format = VK_FORMAT_R8G8B8A8_SRGB;
+    } else {
+        format = VK_FORMAT_R8G8B8A8_UNORM;
+    }
 
     size_t size = width * height * 4;
     outData.resize(size);

@@ -13,6 +13,7 @@ struct RayPayload {
     vec3 hitAlbedo;
     float hitDist;
     uint hitInstance;
+    float envPdf;       // set by miss shader when env map sampled; used for MIS weighting
 };
 
 layout(location = 0) rayPayloadInEXT RayPayload payload;
@@ -62,9 +63,10 @@ void main() {
     vec3 n2 = normalBuf.normals[i2].xyz;
     vec3 interpolated = w * n0 + u * n1 + v * n2;
 
+    mat3 normalMatrix = transpose(inverse(mat3(gl_ObjectToWorldEXT)));
     vec3 worldNormal;
     if (dot(interpolated, interpolated) > 0.0001) {
-        worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * normalize(interpolated));
+        worldNormal = normalize(normalMatrix * normalize(interpolated));
     } else {
         vec3 hitLocal = gl_ObjectRayOriginEXT + gl_ObjectRayDirectionEXT * gl_HitTEXT;
         vec3 al = abs(hitLocal);
@@ -72,12 +74,23 @@ void main() {
         if (al.x >= al.y && al.x >= al.z) localN = vec3(sign(hitLocal.x), 0, 0);
         else if (al.y >= al.z) localN = vec3(0, sign(hitLocal.y), 0);
         else localN = vec3(0, 0, sign(hitLocal.z));
-        worldNormal = normalize(mat3(gl_ObjectToWorldEXT) * localN);
+        worldNormal = normalize(normalMatrix * localN);
     }
 
     bool isThinGeometry = (dot(interpolated, interpolated) <= 0.0001);
     if (isThinGeometry && dot(worldNormal, gl_WorldRayDirectionEXT) > 0.0)
         worldNormal = -worldNormal;
+
+    // 4.M: per-pixel curvature proxy from vertex-normal variance. High when
+    // the 3 vertex normals diverge (corners, edges, ears, nostrils); near zero
+    // on flat or smoothly-curved regions. Used by SSS in raygen to modulate
+    // Gaussian wrap width — high curvature = thinner geometry = more bleed.
+    // We can't use screen-space derivatives in RT, this is the cheap analog.
+    vec3 nn0 = normalize(n0);
+    vec3 nn1 = normalize(n1);
+    vec3 nn2 = normalize(n2);
+    float curv = (1.0 - dot(nn0, nn1)) + (1.0 - dot(nn1, nn2)) + (1.0 - dot(nn0, nn2));
+    curv = clamp(curv * 8.0, 0.0, 1.0);  // scale so typical face values land 0..1
 
     // === Material lookup — 3 vec4s per material ===
     uint matID = matIDBuf.matIDs[globalTriID];
@@ -92,17 +105,17 @@ void main() {
     uint roughMetalTexIdx = floatBitsToUint(matParams2.x);
 
     // === Albedo: sample diffuse texture or use base color ===
-    vec3 albedo;
+    vec3 albedo = matColor.rgb;
     if (diffuseTexIdx != 0xFFFFFFFFu) {
-        albedo = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).rgb;
-    } else {
-        albedo = matColor.rgb;
+        vec3 sampled = texture(textures[nonuniformEXT(diffuseTexIdx)], texUV).rgb;
+        // RT texture array is UNORM, manual sRGB to Linear conversion
+        albedo *= pow(sampled, vec3(2.2));
     }
 
     // === Normal mapping via Frisvad basis (constructs TBN from normal alone) ===
     if (normalTexIdx != 0xFFFFFFFFu) {
         vec3 mapN = texture(textures[nonuniformEXT(normalTexIdx)], texUV).rgb;
-        mapN = mapN * 2.0 - 1.0;  // [0,1] → [-1,1]
+        mapN = normalize(mapN * 2.0 - 1.0);  // [0,1] → [-1,1] and normalize for stability
 
         // Frisvad orthonormal basis from single normal vector
         vec3 T, B;
@@ -125,19 +138,25 @@ void main() {
     // === PBR params: per-pixel from texture or scalar fallback ===
     float roughness = matParams.x;
     float metallic  = matParams.y;
+    float ao        = 1.0;
     if (roughMetalTexIdx != 0xFFFFFFFFu) {
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], texUV);
-        roughness = rm.r;  // R channel = roughness (repacked from GLTF G channel)
-        metallic  = rm.g;  // G channel = metallic (repacked from GLTF B channel)
+        ao        *= rm.r;  // R channel = AO
+        roughness *= rm.g;  // G channel = Roughness
+        metallic  *= rm.b;  // B channel = Metallic
     }
+    roughness = max(roughness, 0.04);
 
     // === Emissive ===
     vec3 emissive = vec3(0.0);
     if (emissiveTexIdx != 0xFFFFFFFFu) {
-        emissive = texture(textures[nonuniformEXT(emissiveTexIdx)], texUV).rgb;
+        vec3 sampled = texture(textures[nonuniformEXT(emissiveTexIdx)], texUV).rgb;
+        // RT texture array is UNORM, manual sRGB to Linear conversion
+        emissive = pow(sampled, vec3(2.2));
     }
     payload.color = emissive;
 
-    // Pack roughness + metallic for raygen
-    payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, 0.0);
+    // Pack roughness + metallic + curvature for raygen.
+    // .x = roughness (signed for metal flag), .z = per-pixel curvature [0,1].
+    payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, curv);
 }

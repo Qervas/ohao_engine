@@ -100,7 +100,8 @@ void main() {
         if (dot(N, L) <= 0.0) continue;
 
         shadowPayload = 0.0;
-        traceRayEXT(topLevelAS, rayFlags, 0xFF, 0, 0, 0,
+        // Only trace against static geometry (RT_RAY_MASK_STATIC, see rt_visibility.hpp)
+        traceRayEXT(topLevelAS, rayFlags, 0x01 /*RT_RAY_MASK_STATIC*/, 0, 0, 0,
                      origin, 0.001, L, tMax, 0);
 
         visibility += shadowPayload;
