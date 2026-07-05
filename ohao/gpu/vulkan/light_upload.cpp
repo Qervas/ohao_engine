@@ -4,6 +4,7 @@
 #include "scene/scene.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/rt/gpu_light.hpp"
+#include "render/rt/env_cdf.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "stb_image.h"
 #include "scene/actor/actor.hpp"
@@ -85,9 +86,25 @@ void VulkanRenderer::uploadDeferredTextures() {
                 const auto& rmtd = model->roughMetalTextures[rmIdx];
                 if (rmtd.pixels.empty()) continue;
 
+                // REPACK: Assimp gives raw GLTF (R=unused/AO, G=Roughness, B=Metallic)
+                // We must ensure the Bindless texture matches our shader layout (R=AO, G=Roughness, B=Metallic)
+                // If it's already 4 channels, we'll verify/swizzle it to be safe.
+                std::vector<uint8_t> repacked;
+                repacked.resize(rmtd.width * rmtd.height * 4);
+                for (int p = 0; p < rmtd.width * rmtd.height; p++) {
+                    // Assimp usually provides 4 channels if we requested it, but the order is raw
+                    uint8_t r = rmtd.pixels[p*4+0]; // AO (or 255)
+                    uint8_t g = rmtd.pixels[p*4+1]; // Roughness
+                    uint8_t b = rmtd.pixels[p*4+2]; // Metallic
+                    repacked[p*4+0] = r;   // R = AO
+                    repacked[p*4+1] = g;   // G = Roughness
+                    repacked[p*4+2] = b;   // B = Metallic
+                    repacked[p*4+3] = 255;
+                }
+
                 std::string texName = actor->getName() + "_roughmetal_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
-                    rmtd.pixels.data(), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
+                    repacked.data(), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
                     BindlessTextureType::Roughness);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
@@ -107,7 +124,7 @@ void VulkanRenderer::uploadDeferredTextures() {
                 std::string texName = actor->getName() + "_emissive_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
                     etd.pixels.data(), etd.width, etd.height, VK_FORMAT_R8G8B8A8_SRGB,
-                    BindlessTextureType::Custom);
+                    BindlessTextureType::Emissive);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
                     matComp->getMaterial().useEmissiveTexture = true;
@@ -136,7 +153,11 @@ void VulkanRenderer::uploadLightBuffer() {
             auto pos = actor->getTransform()->getPosition();
             gl.positionAndType = glm::vec4(pos, static_cast<float>(lc->getLightType()));
             gl.colorAndIntensity = glm::vec4(lc->getColor(), lc->getIntensity());
-            gl.dirAndParam = glm::vec4(lc->getDirection(), lc->getRadius());
+            float dirParam = lc->getRadius();
+            if (lc->getLightType() == LightType::Spot) {
+                dirParam = lc->getInnerConeAngle();
+            }
+            gl.dirAndParam = glm::vec4(lc->getDirection(), dirParam);
 
             if (lc->getLightType() == LightType::AreaRect) {
                 glm::vec3 e1 = lc->getEdge1(), e2 = lc->getEdge2();
@@ -214,6 +235,7 @@ void VulkanRenderer::uploadLightBuffer() {
         // Destroy old buffer
         if (m_rtLightBuffer) { vkDestroyBuffer(m_device, m_rtLightBuffer, nullptr); m_rtLightBuffer = VK_NULL_HANDLE; }
         if (m_rtLightMemory) { vkFreeMemory(m_device, m_rtLightMemory, nullptr); m_rtLightMemory = VK_NULL_HANDLE; }
+        m_rtLightCount = 0;
 
         if (!gpuLights.empty()) {
             // Buffer layout: uint32 lightCount + 12 bytes padding + GPULight[] lights
@@ -239,6 +261,7 @@ void VulkanRenderer::uploadLightBuffer() {
             vkMapMemory(m_device, m_rtLightMemory, 0, bufSize, 0, &mapped);
             memset(mapped, 0xFF, 16);  // init header to 0xFFFFFFFF (no env map by default)
             uint32_t count = static_cast<uint32_t>(gpuLights.size());
+            m_rtLightCount = count;
             memcpy(mapped, &count, sizeof(uint32_t));
             // envMapTexIdx at offset 4 — set by env map loader, default 0xFFFFFFFF (none)
             memcpy(static_cast<uint8_t*>(mapped) + lightDataOffset, gpuLights.data(), gpuLights.size() * sizeof(GPULight));
@@ -299,7 +322,6 @@ void VulkanRenderer::uploadLightBuffer() {
                     vkMapMemory(m_device, stagingMem, 0, pixelSize, 0, &sm);
                     memcpy(sm, hdrPixels, pixelSize);
                     vkUnmapMemory(m_device, stagingMem);
-                    stbi_image_free(hdrPixels);
 
                     // Copy to image
                     VkCommandBuffer uploadCmd;
@@ -365,13 +387,58 @@ void VulkanRenderer::uploadLightBuffer() {
                     vkCreateImageView(m_device, &viewInfo, nullptr, &envView);
                     m_envMapImageView = envView;  // store for deferred pipeline
 
+                    // === Build env map CDF for MIS ===
+                    EnvCDF envCDF;
+                    envCDF.build(hdrPixels, ew, eh);
+
+                    auto uploadCDFBuffer = [&](const std::vector<float>& data,
+                                                VkBuffer& outBuf, VkDeviceMemory& outMem) {
+                        VkDeviceSize sz = data.size() * sizeof(float);
+                        VkBufferCreateInfo bci{};
+                        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                        bci.size = sz;
+                        bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                        vkCreateBuffer(m_device, &bci, nullptr, &outBuf);
+                        VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, outBuf, &mr);
+                        VkMemoryAllocateInfo ai{};
+                        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                        ai.allocationSize = mr.size;
+                        ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                        vkAllocateMemory(m_device, &ai, nullptr, &outMem);
+                        vkBindBufferMemory(m_device, outBuf, outMem, 0);
+                        void* dp; vkMapMemory(m_device, outMem, 0, sz, 0, &dp);
+                        memcpy(dp, data.data(), sz);
+                        vkUnmapMemory(m_device, outMem);
+                    };
+
+                    uploadCDFBuffer(envCDF.marginalCDF(),
+                                    m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
+                    uploadCDFBuffer(envCDF.conditionalCDF(),
+                                    m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
+
+                    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                        renderer.setEnvCDFBuffers(
+                            m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
+                            uint32_t(ew), uint32_t(eh), envCDF.integral());
+                    });
+                    std::cout << "[RT] Env CDF built: " << ew << "x" << eh
+                              << " integral=" << envCDF.integral() << std::endl;
+
+                    stbi_image_free(hdrPixels);
+
                     // Add to bindless textures
-                    auto views = m_pathTracer->getBindlessImageViews();
-                    auto samplers = m_pathTracer->getBindlessSamplers();
+                    auto views = m_rtOfflineRenderer ? m_rtOfflineRenderer->getBindlessImageViews()
+                                                     : std::vector<VkImageView>{};
+                    auto samplers = m_rtOfflineRenderer ? m_rtOfflineRenderer->getBindlessSamplers()
+                                                        : std::vector<VkSampler>{};
                     uint32_t envTexIdx = static_cast<uint32_t>(views.size());
                     views.push_back(envView);
                     samplers.push_back(m_rtTextureSampler);
-                    m_pathTracer->setBindlessTextures(views, samplers);
+                    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                        renderer.setBindlessTextures(views, samplers);
+                    });
 
                     // Write env map index to light buffer header (offset 4)
                     void* lm;
@@ -379,14 +446,49 @@ void VulkanRenderer::uploadLightBuffer() {
                     memcpy(static_cast<uint8_t*>(lm) + 4, &envTexIdx, sizeof(uint32_t));
                     vkUnmapMemory(m_device, m_rtLightMemory);
 
+                    // Sub-plan 4.F T1: expose env view+sampler to path tracers
+                    // for the NRD tonemap's sky composite branch.
+                    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                        renderer.setEnvMapResource(envView, m_rtTextureSampler);
+                    });
+
                     std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
                               << " (bindless idx=" << envTexIdx << ")" << std::endl;
                 }
             }
 
-            if (m_pathTracer) {
-                m_pathTracer->setLightBuffer(m_rtLightBuffer, count);
+            // Ensure CDF bindings are valid even without an env map
+            if (!m_envMarginalCDFBuffer || !m_envConditionalCDFBuffer) {
+                auto createDummyCDF = [&](VkBuffer& outBuf, VkDeviceMemory& outMem) {
+                    VkBufferCreateInfo bci{};
+                    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                    bci.size = sizeof(float);
+                    bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                    vkCreateBuffer(m_device, &bci, nullptr, &outBuf);
+                    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, outBuf, &mr);
+                    VkMemoryAllocateInfo ai{};
+                    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    ai.allocationSize = mr.size;
+                    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                    vkAllocateMemory(m_device, &ai, nullptr, &outMem);
+                    vkBindBufferMemory(m_device, outBuf, outMem, 0);
+                    void* dp; vkMapMemory(m_device, outMem, 0, sizeof(float), 0, &dp);
+                    float v = 1.0f; memcpy(dp, &v, sizeof(float));
+                    vkUnmapMemory(m_device, outMem);
+                };
+                if (!m_envMarginalCDFBuffer)    createDummyCDF(m_envMarginalCDFBuffer, m_envMarginalCDFMemory);
+                if (!m_envConditionalCDFBuffer) createDummyCDF(m_envConditionalCDFBuffer, m_envConditionalCDFMemory);
+                forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                    renderer.setEnvCDFBuffers(m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
+                                              0, 0, 0.0f);
+                });
             }
+
+            forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                renderer.setLightBuffer(m_rtLightBuffer, count);
+            });
 
             std::cout << "[RT] Light buffer: " << count << " lights" << std::endl;
         }

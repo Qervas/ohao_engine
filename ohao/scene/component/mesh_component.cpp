@@ -109,13 +109,6 @@ void MeshComponent::destroy() {
     }
 }
 
-void MeshComponent::serialize(class Serializer& serializer) const {
-    // TODO: Implement serialization
-}
-
-void MeshComponent::deserialize(class Deserializer& deserializer) {
-    // TODO: Implement deserialization
-}
 
 // Registration moved to central file
 

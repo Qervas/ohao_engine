@@ -20,6 +20,16 @@ endif()
 # Include FetchContent module
 include(FetchContent)
 
+# GoogleTest
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG        v1.14.0
+)
+# Prevent overriding parent project's compiler/linker settings on Windows
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -27,6 +37,23 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ---- NRD (NVIDIA RayTracingDenoiser) for realtime RT denoise (Sub-plan 4.A) ----
+# Hard dependency when enabled. -DOHAO_NRD=OFF opts out cleanly (no fetch,
+# no link, nrd_denoise.cpp is compiled empty via OHAO_NRD_ENABLED guard).
+option(OHAO_NRD "Enable NRD (NVIDIA RayTracingDenoiser) integration" ON)
+
+# ---- DLSS Ray Reconstruction (NGX "dlssd") for realtime RT denoise (Phase 5) ----
+# Defaults ON only when the vendored NGX static wrapper is present. -DOHAO_DLSS=OFF
+# opts out cleanly: no include, no link, dlss_rr.cpp compiles empty via the
+# OHAO_DLSS_ENABLED guard, and denoise parsing falls back to None for "dlssrr".
+set(OHAO_DLSS_STATIC_LIB "${CMAKE_SOURCE_DIR}/external/DLSS/lib/Linux_x86_64/libnvsdk_ngx.a")
+if(EXISTS "${OHAO_DLSS_STATIC_LIB}")
+    set(OHAO_DLSS_DEFAULT ON)
+else()
+    set(OHAO_DLSS_DEFAULT OFF)
+endif()
+option(OHAO_DLSS "Enable NVIDIA DLSS Ray Reconstruction (NGX) integration" ${OHAO_DLSS_DEFAULT})
 
 # Find Vulkan package
 find_package(Vulkan REQUIRED)

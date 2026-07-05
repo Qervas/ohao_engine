@@ -5,6 +5,8 @@
 #include "scene/asset/model.hpp"
 #include "render/deferred/deferred_renderer.hpp"
 #include "scene/scene.hpp"
+#include "scene/actor/actor.hpp"
+#include "render/rt/rt_visibility.hpp"
 
 namespace ohao {
 
@@ -34,9 +36,11 @@ void VulkanRenderer::renderDeferred() {
     m_deferredRenderer->setScene(m_scene);
     m_deferredRenderer->setCameraData(view, proj, camPos, 0.1f, 1000.0f);
 
-    // Pass RT acceleration structure to deferred renderer for RT shadows
+    // Skeletal animation removed — all meshes are static.
+
     if (m_rtAccel && m_rtAccel->isSupported()) {
         m_deferredRenderer->setAccelerationStructure(m_rtAccel.get());
+        m_deferredRenderer->setRTShadowsEnabled(true);
     }
 
     // Pass env map to deferred renderer for reflections
@@ -124,8 +128,9 @@ void VulkanRenderer::renderDeferred() {
     m_currentFrame = FrameResourceManager::nextFrame(m_currentFrame);
 }
 
-void VulkanRenderer::renderPathTraced() {
-    if (!m_pathTracer || !m_rtAccel) return;
+void VulkanRenderer::renderRTPipeline(const IRTRenderPipeline& pipeline) {
+    auto* rtRenderer = getRTRenderer(m_renderMode);
+    if (!rtRenderer || !m_rtAccel) return;
 
     FrameResources& frame = m_frameResources.getFrame(m_currentFrame);
     m_frameResources.waitForFrame(m_currentFrame);
@@ -140,6 +145,9 @@ void VulkanRenderer::renderPathTraced() {
     glm::mat4 view = m_camera->getViewMatrix();
     glm::mat4 proj = m_camera->getProjectionMatrix();
 
+    // Skeletal animation removed — all meshes are static (no dynamic BLAS).
+    prepareRTSceneForFrame(pipeline, false);
+
     VkCommandBuffer cmd = frame.commandBuffer;
     vkResetCommandBuffer(cmd, 0);
 
@@ -148,18 +156,19 @@ void VulkanRenderer::renderPathTraced() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    // Use the engine camera's view/projection matrices directly
+    // PT needs unflipped projection (ray generation handles Y internally).
+    // Use same FOV/aspect as deferred for consistent framing.
     float aspect = float(m_width) / float(m_height);
     glm::mat4 ptView = m_camera->getViewMatrix();
-    glm::mat4 ptProj = glm::perspectiveRH_ZO(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
+    glm::mat4 ptProj = glm::perspective(glm::radians(m_camera->getFov()), aspect, 0.1f, 1000.0f);
 
     // Sphere light: position, intensity, color, radius
-    m_pathTracer->render(cmd, m_rtAccel.get(), ptView, ptProj,
-                         glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
-                         glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
+    rtRenderer->render(cmd, m_rtAccel.get(), ptView, ptProj,
+                       glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,
+                       glm::vec3(1.0f, 0.98f, 0.92f), 1.0f);
 
     // Copy path tracer output to staging buffer for CPU readback
-    VkImage ptOutput = m_pathTracer->getOutputImage();
+    VkImage ptOutput = rtRenderer->getOutputImage();
     if (ptOutput != VK_NULL_HANDLE && frame.stagingBuffer != VK_NULL_HANDLE) {
         // Output is already in TRANSFER_SRC_OPTIMAL from render()
         VkBufferImageCopy copyRegion{};
@@ -522,8 +531,9 @@ bool VulkanRenderer::readTerrainHeights(std::vector<float>& outData, uint32_t& o
 }
 
 bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
-                                            std::vector<float>& normal, uint32_t& w, uint32_t& h) {
-    if (!m_pathTracer) return false;
+                                        std::vector<float>& normal, uint32_t& w, uint32_t& h) {
+    const auto* rtRenderer = getRTRenderer(m_renderMode);
+    if (!rtRenderer) return false;
     w = m_width; h = m_height;
 
     auto readbackImage = [&](VkImage image, std::vector<float>& outBuf) -> bool {
@@ -606,9 +616,9 @@ bool VulkanRenderer::readbackHDRBuffers(std::vector<float>& beauty, std::vector<
     };
 
     vkDeviceWaitIdle(m_device);
-    bool ok = readbackImage(m_pathTracer->getAccumImage(), beauty);
-    ok &= readbackImage(m_pathTracer->getAlbedoAOV(), albedo);
-    ok &= readbackImage(m_pathTracer->getNormalAOV(), normal);
+    bool ok = readbackImage(rtRenderer->getAccumImage(), beauty);
+    ok &= readbackImage(rtRenderer->getAlbedoAOV(), albedo);
+    ok &= readbackImage(rtRenderer->getNormalAOV(), normal);
     return ok;
 }
 

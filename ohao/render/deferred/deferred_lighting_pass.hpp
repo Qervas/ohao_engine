@@ -118,22 +118,23 @@ private:
 
     // Push constants (must stay <= 256 bytes — NVIDIA limit)
     struct LightingParams {
-        glm::mat4 invViewProj;  // 64
-        glm::mat4 view;         // 64  — for cascade depth selection
-        glm::vec3 cameraPos;    // 12
-        float padding1;         // 4
-        glm::vec2 screenSize;   // 8
-        uint32_t lightCount;    // 4
-        uint32_t flags;         // 4  — Bit 0: IBL, Bit 1: SSAO, Bit 2: shadows, Bit 3: SSGI
-        float wetness;          // 4  — 0=dry, 1=fully wet (rain accumulation)
-        float paddingW;         // 4
-        float snowCover;        // 4  — 0=bare, 1=snow-covered (blizzard accumulation)
-        float paddingS;         // 4
-        float frostCover;       // 4  — 0=bare, 1=frost/ice coated (forms above snow threshold)
-        float paddingF;         // 4  -> 184
-        glm::vec2 cloudShadowCenter; // 8  — world XZ center of cloud shadow map
-        glm::vec2 cloudShadowExtent; // 8  — half-size in world units
-    };                          // Total: 200 bytes
+        glm::mat4 invViewProj{1.0f};
+        glm::mat4 view{1.0f};
+        glm::vec3 cameraPos{0.0f};
+        float padding1{0.0f};
+        glm::vec2 screenSize{0.0f};
+        uint32_t lightCount{0};
+        uint32_t flags{0};
+        float wetness{0.0f};      // Default to dry
+        float paddingW{0.0f};
+        float snowCover{0.0f};    // Default to clear
+        float paddingS{0.0f};
+        float frostCover{0.0f};   // Default to no frost
+        float paddingF{0.0f};
+        glm::vec2 cloudShadowCenter{0.0f};
+        glm::vec2 cloudShadowExtent{100.0f};
+    };
+                          // Total: 200 bytes
 
     LightingParams m_params{};
 };

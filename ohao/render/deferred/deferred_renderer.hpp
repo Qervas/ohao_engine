@@ -8,6 +8,8 @@
 #include "gizmo_pass.hpp"
 #include "sky_pass.hpp"
 #include "render/particles/particle_system.hpp"
+#include "ssr_pass.hpp"
+#include "sss_pass.hpp"
 #include "render/rt/rt_shadow_technique.hpp"
 #include "render/rt/rt_gi_technique.hpp"
 #include "render/graph/render_graph.hpp"
@@ -135,6 +137,8 @@ private:
     std::unique_ptr<RTGITechnique> m_rtGI;
     bool m_useRTGI{false};
     std::unique_ptr<DeferredLightingPass> m_lightingPass;
+    std::unique_ptr<SSRPass> m_ssrPass;
+    std::unique_ptr<SSSPass> m_sssPass;
     std::unique_ptr<PostProcessingPipeline> m_postProcessing;
     std::unique_ptr<GizmoPass> m_gizmoPass;
     std::unique_ptr<SkyPass>   m_skyPass;

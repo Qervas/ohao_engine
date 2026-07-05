@@ -8,6 +8,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <algorithm>
+#include <iostream>
+#include <array>
 
 namespace ohao {
 
@@ -126,9 +128,6 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
         scissor.extent = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        // Bind pipeline
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-
         // Bind vertex and index buffers if available
         if (m_vertexBuffer != VK_NULL_HANDLE && m_indexBuffer != VK_NULL_HANDLE) {
             VkBuffer vertexBuffers[] = {m_vertexBuffer};
@@ -136,6 +135,9 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
             vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
             vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
         }
+
+        // Track currently bound pipeline to avoid redundant switches
+        VkPipeline currentPipeline = VK_NULL_HANDLE;
 
         // Iterate through scene objects and render to shadow map
         if (m_meshBufferMap) {
@@ -151,6 +153,15 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 auto transformComp = actor->getComponent<TransformComponent>();
                 glm::mat4 modelMatrix = transformComp ? transformComp->getWorldMatrix() : glm::mat4(1.0f);
 
+                // Static geometry only (skeletal animation removed)
+                VkPipeline targetPipeline = m_pipeline;
+                VkPipelineLayout targetLayout = m_pipelineLayout;
+
+                if (currentPipeline != targetPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
+                    currentPipeline = targetPipeline;
+                }
+
                 // Find buffer info for this actor
                 auto it = m_meshBufferMap->find(actorId);
                 if (it == m_meshBufferMap->end()) continue;
@@ -161,11 +172,11 @@ void CSMPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {
                 ShadowPushConstant push{};
                 push.model = modelMatrix;
                 push.cascadeIndex = cascade;
-                vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                vkCmdPushConstants(cmd, targetLayout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT,
                                    0, sizeof(ShadowPushConstant), &push);
 
                 // Draw indexed
-                // vertexOffset=0 because indices are already pre-adjusted in updateSceneBuffers()
                 vkCmdDrawIndexed(cmd, bufferInfo.indexCount, 1,
                                 bufferInfo.indexOffset, 0, 0);
             }

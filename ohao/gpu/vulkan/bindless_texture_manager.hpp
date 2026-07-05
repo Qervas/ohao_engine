@@ -83,6 +83,9 @@ public:
 
     // Query texture info
     const BindlessTextureInfo* getTextureInfo(BindlessTextureHandle handle) const;
+    // Unified lookup (checks name first, then path)
+    BindlessTextureHandle findTexture(const std::string& key) const;
+
     BindlessTextureHandle getTextureByName(const std::string& name) const;
     BindlessTextureHandle getTextureByPath(const std::string& path) const;
 
@@ -130,7 +133,7 @@ private:
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
 
-    bool loadTextureData(const std::string& path, std::vector<uint8_t>& outData,
+    bool loadTextureData(const std::string& path, BindlessTextureType type, std::vector<uint8_t>& outData,
                           uint32_t& width, uint32_t& height, VkFormat& format);
 
     bool createTextureImage(const void* data, uint32_t width, uint32_t height,

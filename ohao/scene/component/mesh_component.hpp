@@ -40,11 +40,7 @@ public:
     void initialize() override;
     void render() override;
     void destroy() override;
-    
-    // Serialization
-    void serialize(class Serializer& serializer) const override;
-    void deserialize(class Deserializer& deserializer) override;
-    
+
     // Buffer management (used by renderer)
     void setBufferOffsets(uint32_t vertexOffset, uint32_t indexOffset, uint32_t indexCount);
     uint32_t getVertexOffset() const { return vertexOffset; }

@@ -4,8 +4,6 @@
 #include "tiny_gltf.h"
 
 #include "scene/asset/model.hpp"
-#include "animation/skeleton.hpp"
-#include "animation/animation_clip.hpp"
 #include <iostream>
 #include <filesystem>
 
@@ -478,7 +476,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
                 if (texIdx >= 0 && texIdx < static_cast<int>(gltfModel.images.size())) {
                     const auto& img = gltfModel.images[texIdx];
                     if (!img.image.empty() && img.width > 0 && img.height > 0) {
-                        // Repack: GLTF (R=AO, G=roughness, B=metallic) → our (R=roughness, G=metallic, B=0, A=255)
+                        // Repack: GLTF (R=AO, G=roughness, B=metallic) → standard order (R=AO, G=Roughness, B=Metallic, A=255)
                         TextureData td;
                         td.width = img.width;
                         td.height = img.height;
@@ -486,11 +484,12 @@ bool Model::loadFromGLTF(const std::string& filename) {
                         td.pixels.resize(img.width * img.height * 4);
                         int comp = img.component;
                         for (int p = 0; p < img.width * img.height; p++) {
+                            uint8_t ao        = (comp >= 1) ? img.image[p * comp + 0] : 255;  // R channel
                             uint8_t roughness = (comp >= 2) ? img.image[p * comp + 1] : 128;  // G channel
                             uint8_t metallic  = (comp >= 3) ? img.image[p * comp + 2] : 0;    // B channel
-                            td.pixels[p*4+0] = roughness;
-                            td.pixels[p*4+1] = metallic;
-                            td.pixels[p*4+2] = 0;
+                            td.pixels[p*4+0] = ao;
+                            td.pixels[p*4+1] = roughness;
+                            td.pixels[p*4+2] = metallic;
                             td.pixels[p*4+3] = 255;
                         }
                         rmTexFound = static_cast<int>(roughMetalTextures.size());
@@ -556,195 +555,8 @@ bool Model::loadFromGLTF(const std::string& filename) {
               << gltfModel.images.size() << " images, "
               << gltfModel.textures.size() << " gltf textures)" << std::endl;
 
-    // Load skins (skeleton data)
-    if (!gltfModel.skins.empty()) {
-        const auto& gltfSkin = gltfModel.skins[0]; // Use first skin
-        skeleton = std::make_shared<Skeleton>();
-
-        skeleton->joints.resize(gltfSkin.joints.size());
-
-        // Parse inverse bind matrices
-        std::vector<glm::mat4> inverseBindMatrices(gltfSkin.joints.size(), glm::mat4(1.0f));
-        if (gltfSkin.inverseBindMatrices >= 0) {
-            const auto& accessor = gltfModel.accessors[gltfSkin.inverseBindMatrices];
-            const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
-            const auto& buffer = gltfModel.buffers[bufferView.buffer];
-            const float* matData = reinterpret_cast<const float*>(
-                buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
-
-            for (size_t i = 0; i < accessor.count && i < gltfSkin.joints.size(); ++i) {
-                // GLTF stores matrices in column-major order (same as GLM)
-                memcpy(&inverseBindMatrices[i], matData + i * 16, sizeof(glm::mat4));
-            }
-        }
-
-        // Build joint hierarchy
-        // First, create a map from node index to joint index
-        std::unordered_map<int, int> nodeToJoint;
-        for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
-            nodeToJoint[gltfSkin.joints[i]] = static_cast<int>(i);
-        }
-
-        for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
-            int nodeIndex = gltfSkin.joints[i];
-            const auto& node = gltfModel.nodes[nodeIndex];
-
-            Joint& joint = skeleton->joints[i];
-            joint.name = node.name.empty() ? "joint_" + std::to_string(i) : node.name;
-            joint.inverseBindMatrix = inverseBindMatrices[i];
-
-            // Find parent: walk the node hierarchy
-            joint.parentIndex = -1; // Default: root
-            for (size_t j = 0; j < gltfSkin.joints.size(); ++j) {
-                if (j == i) continue;
-                int parentNodeIndex = gltfSkin.joints[j];
-                const auto& parentNode = gltfModel.nodes[parentNodeIndex];
-                for (int child : parentNode.children) {
-                    if (child == nodeIndex) {
-                        joint.parentIndex = static_cast<int>(j);
-                        break;
-                    }
-                }
-                if (joint.parentIndex >= 0) break;
-            }
-
-            // Set local transform from node
-            if (node.matrix.size() == 16) {
-                for (int r = 0; r < 4; ++r)
-                    for (int c = 0; c < 4; ++c)
-                        joint.localTransform[c][r] = static_cast<float>(node.matrix[c * 4 + r]);
-            } else {
-                glm::vec3 translation(0.0f);
-                glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
-                glm::vec3 scale(1.0f);
-
-                if (node.translation.size() == 3) {
-                    translation = glm::vec3(
-                        static_cast<float>(node.translation[0]),
-                        static_cast<float>(node.translation[1]),
-                        static_cast<float>(node.translation[2]));
-                }
-                if (node.rotation.size() == 4) {
-                    rotation = glm::quat(
-                        static_cast<float>(node.rotation[3]),  // w
-                        static_cast<float>(node.rotation[0]),  // x
-                        static_cast<float>(node.rotation[1]),  // y
-                        static_cast<float>(node.rotation[2])); // z
-                }
-                if (node.scale.size() == 3) {
-                    scale = glm::vec3(
-                        static_cast<float>(node.scale[0]),
-                        static_cast<float>(node.scale[1]),
-                        static_cast<float>(node.scale[2]));
-                }
-
-                joint.localTransform = glm::translate(glm::mat4(1.0f), translation) *
-                                       glm::mat4_cast(rotation) *
-                                       glm::scale(glm::mat4(1.0f), scale);
-            }
-        }
-
-        // Compute initial joint matrices
-        skeleton->computeJointMatrices();
-
-        std::cout << "GLTF skin loaded: " << gltfSkin.joints.size() << " joints" << std::endl;
-    }
-
-    // Load animations
-    for (const auto& gltfAnim : gltfModel.animations) {
-        auto clip = std::make_shared<AnimationClip>();
-        clip->name = gltfAnim.name.empty() ? "animation_" + std::to_string(animations.size()) : gltfAnim.name;
-        clip->duration = 0.0f;
-
-        // Build node-to-joint map from skin (needed to map animation targets to joints)
-        std::unordered_map<int, int> nodeToJoint;
-        if (!gltfModel.skins.empty()) {
-            const auto& gltfSkin = gltfModel.skins[0];
-            for (size_t i = 0; i < gltfSkin.joints.size(); ++i) {
-                nodeToJoint[gltfSkin.joints[i]] = static_cast<int>(i);
-            }
-        }
-
-        for (const auto& gltfChannel : gltfAnim.channels) {
-            AnimationChannel channel;
-
-            // Map node index to joint index
-            auto jointIt = nodeToJoint.find(gltfChannel.target_node);
-            if (jointIt == nodeToJoint.end()) continue; // Not a joint we care about
-            channel.targetJoint = jointIt->second;
-
-            // Property
-            if (gltfChannel.target_path == "translation") {
-                channel.property = AnimationProperty::TRANSLATION;
-            } else if (gltfChannel.target_path == "rotation") {
-                channel.property = AnimationProperty::ROTATION;
-            } else if (gltfChannel.target_path == "scale") {
-                channel.property = AnimationProperty::SCALE;
-            } else {
-                continue; // Unsupported property (e.g., weights for morph targets)
-            }
-
-            // Sampler data
-            const auto& sampler = gltfAnim.samplers[gltfChannel.sampler];
-
-            // Interpolation type
-            if (sampler.interpolation == "STEP") {
-                channel.interpolation = InterpolationType::STEP;
-            } else if (sampler.interpolation == "CUBICSPLINE") {
-                channel.interpolation = InterpolationType::CUBIC_SPLINE;
-            } else {
-                channel.interpolation = InterpolationType::LINEAR;
-            }
-
-            // Timestamps (input)
-            {
-                const auto& accessor = gltfModel.accessors[sampler.input];
-                const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
-                const auto& buffer = gltfModel.buffers[bufferView.buffer];
-                const float* timeData = reinterpret_cast<const float*>(
-                    buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
-
-                channel.timestamps.resize(accessor.count);
-                for (size_t i = 0; i < accessor.count; ++i) {
-                    channel.timestamps[i] = timeData[i];
-                    clip->duration = std::max(clip->duration, timeData[i]);
-                }
-            }
-
-            // Values (output)
-            {
-                const auto& accessor = gltfModel.accessors[sampler.output];
-                const auto& bufferView = gltfModel.bufferViews[accessor.bufferView];
-                const auto& buffer = gltfModel.buffers[bufferView.buffer];
-                const float* valData = reinterpret_cast<const float*>(
-                    buffer.data.data() + bufferView.byteOffset + accessor.byteOffset);
-
-                channel.values.resize(accessor.count);
-                int components = (channel.property == AnimationProperty::ROTATION) ? 4 : 3;
-                for (size_t i = 0; i < accessor.count; ++i) {
-                    if (components == 4) {
-                        channel.values[i] = glm::vec4(
-                            valData[i * 4 + 0], valData[i * 4 + 1],
-                            valData[i * 4 + 2], valData[i * 4 + 3]);
-                    } else {
-                        channel.values[i] = glm::vec4(
-                            valData[i * 3 + 0], valData[i * 3 + 1],
-                            valData[i * 3 + 2], 0.0f);
-                    }
-                }
-            }
-
-            clip->channels.push_back(std::move(channel));
-        }
-
-        if (!clip->channels.empty()) {
-            animations.push_back(std::move(clip));
-        }
-    }
-
-    if (!animations.empty()) {
-        std::cout << "GLTF animations loaded: " << animations.size() << " clips" << std::endl;
-    }
+    // Skeletal animation removed — skins and animations are no longer loaded.
+    // Bone weights remain in the Vertex struct as inert data.
 
     std::cout << "GLTF loaded: " << filename << " (" << vertices.size() << " vertices, "
               << indices.size() << " indices, " << materials.size() << " materials)" << std::endl;

@@ -6,6 +6,7 @@
 //   Mouse — look around (hold right click)
 //   +/-   — increase/decrease spp per frame
 //   F12   — save screenshot
+//   M     — dump motion vector AOV (encoded RGB: +X→red, +Y→green)
 //   ESC   — quit
 
 #include <GL/gl.h>
@@ -17,24 +18,33 @@
 #include "stb_image_write.h"
 
 #include "gpu/vulkan/renderer.hpp"
+#include "scene/asset/model_loader.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
+#include "render/camera/scene_framer.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
 
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <cstring>
+#include <thread>
+#include <atomic>
+#include <algorithm>
+#include <optional>
+#include <vector>
 #include <cmath>
 
 using namespace ohao;
 
 struct CameraState {
     float yaw = -90.0f, pitch = 0.0f;
-    glm::vec3 position = {0, 0, 8};
-    float speed = 5.0f;
+    glm::vec3 position = {0, 0, 12};  // inside the room (room Z range: -S to +S)
+    float speed = 8.0f;
     float sensitivity = 0.15f;
     bool rightMouseDown = false;
     double lastMouseX = 0, lastMouseY = 0;
@@ -42,7 +52,7 @@ struct CameraState {
 };
 
 static CameraState g_cam;
-static int g_spp = 1;
+static int g_spp = [](){ const char* e = getenv("OHAO_SPP"); int v = e ? atoi(e) : 1; return v < 1 ? 1 : (v > 64 ? 64 : v); }();
 
 void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
@@ -97,6 +107,16 @@ int main(int argc, char* argv[]) {
     std::string modelPath = argc > 1 ? argv[1] : "";
     std::string envPath = argc > 2 ? argv[2] : "";
     uint32_t W = 1280, H = 720;
+    RenderMode rtMode = RenderMode::RTRealtime;
+    std::optional<ohao::DenoiseMode> denoiseOverride;
+    for (int i = 3; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
+        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
+        else if (arg.rfind("--denoise=", 0) == 0) {
+            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
+        }
+    }
 
     // Init GLFW with OpenGL (for pixel display)
     if (!glfwInit()) { std::cerr << "GLFW init failed" << std::endl; return 1; }
@@ -122,62 +142,144 @@ int main(int argc, char* argv[]) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
     std::cout << "=== OHAO Interactive Path Tracer ===" << std::endl;
-    std::cout << "WASD=move  RightMouse=look  +/-=spp  F12=screenshot  ESC=quit" << std::endl;
+    std::cout << "WASD=move  RightMouse=look  +/-=spp  F12=screenshot  M=dumpMV  ESC=quit" << std::endl;
 
     // Init Vulkan renderer (offscreen)
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
 
-    if (!envPath.empty()) renderer.setEnvironmentMap(envPath);
-
-    // Build scene
-    auto scene = std::make_unique<Scene>("Interactive");
-
-    if (!modelPath.empty()) {
-        auto model = std::make_shared<Model>();
-        bool loaded = false;
-        auto dot = modelPath.find_last_of('.');
-        std::string ext = (dot != std::string::npos) ? modelPath.substr(dot + 1) : "";
-        if (ext == "obj") loaded = model->loadFromOBJ(modelPath);
-        else loaded = model->loadFromGLTF(modelPath);
-
-        if (loaded) {
-            glm::vec3 bmin(FLT_MAX), bmax(-FLT_MAX);
-            for (const auto& v : model->vertices) {
-                bmin = glm::min(bmin, v.position);
-                bmax = glm::max(bmax, v.position);
-            }
-            glm::vec3 extent = bmax - bmin;
-            bool isYUp = (extent.y >= extent.z);
-            float modelHeight = isYUp ? extent.y : extent.z;
-            float scale = 4.0f / modelHeight;
-
-            auto actor = scene->createActor("Model");
-            if (isYUp)
-                actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(0, 180, 0))));
-            else
-                actor->getTransform()->setRotation(glm::quat(glm::radians(glm::vec3(-90, 0, 0))));
-            actor->getTransform()->setScale(glm::vec3(scale));
-            glm::vec3 center = (bmin + bmax) * 0.5f;
-            actor->getTransform()->setPosition({-center.x*scale, -center.y*scale, -center.z*scale});
-            auto mesh = actor->addComponent<MeshComponent>();
-            mesh->setModel(model); mesh->setVisible(true);
-            actor->addComponent<MaterialComponent>();
-            std::cout << "Model: " << model->vertices.size() << " verts" << std::endl;
-        }
+    if (denoiseOverride.has_value()) {
+        renderer.setDenoiseMode(*denoiseOverride);
+        std::cout << "Denoise mode (CLI override): "
+                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+    } else {
+        std::cout << "Denoise mode (preset): "
+                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
 
-    auto keyLight = scene->createActor("Key");
-    auto kl = keyLight->addComponent<LightComponent>();
-    kl->setLightType(LightType::Sphere);
-    kl->setColor({1, 0.95f, 0.9f});
-    kl->setIntensity(15.0f);
-    kl->setRadius(1.0f);
-    keyLight->getTransform()->setPosition({4, 3, 4});
+    // "outdoor" (3rd arg): a clean HDRI-lit scene — ground plane + model + sky,
+    // NO enclosure and NO studio lights (the HDRI is the only light). Far simpler
+    // than the bedroom (one dominant sun + sky fill), and the flicker-free showcase.
+    // Default (no "outdoor"): the enclosed bedroom with interior lights, env skipped.
+    bool outdoor = (argc > 3 && std::string(argv[3]) == "outdoor");
+    if (!envPath.empty() && outdoor) {
+        renderer.setEnvironmentMap(envPath);
+    }
+
+    // Load model
+    auto model = modelPath.empty() ? nullptr : ModelLoader::load(modelPath);
+    FrameResult frame;
+    if (model) {
+        frame = SceneFramer::computeFraming(model->vertices);
+        std::cout << "Model: " << model->vertices.size() << " verts, scale=" << frame.modelScale << std::endl;
+    } else {
+        frame.roomHalfSize = 15.0f;
+        frame.modelScale = 1.0f;
+        frame.modelPosition = glm::vec3(0);
+        frame.modelRotation = glm::quat(1, 0, 0, 0);
+        frame.cameraPosition = {0, 0, 25};
+        frame.cameraFov = 45.0f;
+    }
+    float S = frame.roomHalfSize;
+
+    // Build bedroom scene
+    auto scene = std::make_unique<Scene>("Interactive");
+
+    auto addQuad = [&](const std::string& name, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
+                       glm::vec3 normal, glm::vec3 color, float roughness) {
+        auto actor = scene->createActor(name);
+        auto m = std::make_shared<Model>();
+        auto mkv = [&](glm::vec3 pos) {
+            Vertex v{}; v.position = pos; v.normal = normal; v.color = color;
+            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+            return v;
+        };
+        m->vertices = {mkv(a), mkv(b), mkv(c), mkv(d)};
+        m->indices = {0,1,2, 0,2,3};
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(m); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = color;
+        mat->getMaterial().roughness = roughness;
+    };
+
+    auto addBox = [&](const std::string& name, glm::vec3 lo, glm::vec3 hi,
+                      glm::vec3 color, float roughness) {
+        auto actor = scene->createActor(name);
+        auto m = std::make_shared<Model>();
+        auto mkv = [&](glm::vec3 pos, glm::vec3 n) {
+            Vertex v{}; v.position = pos; v.normal = n; v.color = color;
+            v.texCoord = {0,0}; v.tangent = {1,0,0,1};
+            v.boneIndices = glm::ivec4(0); v.boneWeights = {1,0,0,0};
+            return v;
+        };
+        glm::vec3 c[8] = {
+            {lo.x,lo.y,lo.z},{hi.x,lo.y,lo.z},{hi.x,hi.y,lo.z},{lo.x,hi.y,lo.z},
+            {lo.x,lo.y,hi.z},{hi.x,lo.y,hi.z},{hi.x,hi.y,hi.z},{lo.x,hi.y,hi.z}
+        };
+        int faces[6][4] = {{4,5,6,7},{1,0,3,2},{0,4,7,3},{5,1,2,6},{3,7,6,2},{0,1,5,4}};
+        glm::vec3 normals[6] = {{0,0,1},{0,0,-1},{-1,0,0},{1,0,0},{0,1,0},{0,-1,0}};
+        for (int f = 0; f < 6; f++) {
+            uint32_t base = (uint32_t)m->vertices.size();
+            for (int k = 0; k < 4; k++) m->vertices.push_back(mkv(c[faces[f][k]], normals[f]));
+            m->indices.insert(m->indices.end(), {base,base+1,base+2, base,base+2,base+3});
+        }
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(m); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = color;
+        mat->getMaterial().roughness = roughness;
+    };
+
+    if (outdoor) {
+        // Outdoor: a single large ground plane, lit purely by the HDRI (sun + sky).
+        // No walls, no ceiling, no enclosure — nothing for stray GI rays to leak
+        // through, and one dominant directional light instead of 4 overlapping ones.
+        float G = S * 6.0f;
+        addQuad("Ground", {-G,-S,-G},{G,-S,-G},{G,-S,G},{-G,-S,G}, {0,1,0}, {0.40f,0.40f,0.42f}, 0.8f);
+    } else {
+    // Bedroom walls/floor
+    glm::vec3 wallColor(0.55f, 0.50f, 0.45f);   // muted warm gray walls
+    glm::vec3 floorColor(0.18f, 0.10f, 0.05f);  // dark walnut wood
+    glm::vec3 ceilColor(0.60f, 0.58f, 0.55f);   // gray ceiling
+    // Walls extend 0.1 past corners to prevent ray leaks at seams
+    float E = 0.1f;
+    addQuad("Back",   {-S-E,-S-E,-S},{S+E,-S-E,-S},{S+E,S+E,-S},{-S-E,S+E,-S}, {0,0,1},  wallColor, 0.9f);
+    addQuad("Front",  {S+E,-S-E,S},{-S-E,-S-E,S},{-S-E,S+E,S},{S+E,S+E,S},     {0,0,-1}, wallColor, 0.9f);
+    addQuad("Left",   {-S,-S-E,-S-E},{-S,-S-E,S+E},{-S,S+E,S+E},{-S,S+E,-S-E}, {1,0,0},  wallColor, 0.9f);
+    addQuad("Right",  {S,-S-E,S+E},{S,-S-E,-S-E},{S,S+E,-S-E},{S,S+E,S+E},     {-1,0,0}, wallColor, 0.9f);
+    addQuad("Floor",  {-S-E,-S,-S-E},{S+E,-S,-S-E},{S+E,-S,S+E},{-S-E,-S,S+E}, {0,1,0},  floorColor, 0.6f);
+    addQuad("Ceiling",{-S-E,S,-S-E},{S+E,S,-S-E},{S+E,S,S+E},{-S-E,S,S+E},     {0,-1,0}, ceilColor, 0.9f);
+
+    // Bed + furniture
+    float bedW = S*0.8f, bedH = S*0.25f, bedD = S*0.6f;
+    addBox("BedFrame", {-bedW,-S,-S}, {bedW,-S+bedH*0.4f,-S+bedD}, {0.20f,0.12f,0.06f}, 0.5f);
+    addBox("Mattress", {-bedW+0.2f,-S+bedH*0.4f,-S+0.2f}, {bedW-0.2f,-S+bedH,-S+bedD-0.2f}, {0.85f,0.82f,0.78f}, 0.95f);
+    addBox("Headboard", {-bedW,-S,-S}, {bedW,-S+bedH*2.5f,-S+0.3f}, {0.20f,0.12f,0.06f}, 0.4f);
+    addBox("Pillow", {-bedW*0.4f,-S+bedH,-S+0.4f}, {bedW*0.4f,-S+bedH+1.0f,-S+bedD*0.4f}, {0.92f,0.90f,0.88f}, 0.95f);
+    addBox("Nightstand", {S*0.55f,-S,-S}, {S*0.55f+3.0f,-S+bedH*1.5f,-S+3.0f}, {0.22f,0.14f,0.07f}, 0.45f);
+    }  // end indoor bedroom enclosure
+
+    // Place model
+    if (model) {
+        auto actor = scene->createActor("Model");
+        actor->getTransform()->setRotation(frame.modelRotation);
+        actor->getTransform()->setScale(glm::vec3(frame.modelScale));
+        actor->getTransform()->setPosition(frame.modelPosition);
+        auto mesh = actor->addComponent<MeshComponent>();
+        mesh->setModel(model); mesh->setVisible(true);
+        auto mat = actor->addComponent<MaterialComponent>();
+        mat->getMaterial().baseColor = {0.8f, 0.7f, 0.6f};
+        mat->getMaterial().roughness = 0.5f;
+    }
+
+    // Indoor bedroom lights only — outdoor is lit entirely by the HDRI sun + sky.
+    if (!outdoor)
+        SceneFramer::applyLights(scene.get(), frame);
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
-    renderer.setRenderMode(RenderMode::PathTraced);
+    renderer.setRenderMode(rtMode);
 
     // Main loop
     auto lastTime = std::chrono::high_resolution_clock::now();
@@ -198,18 +300,32 @@ int main(int argc, char* argv[]) {
         camera.setRotation(g_cam.pitch, g_cam.yaw);
         camera.setFov(45.0f);
 
+        // 4.F T2: on any camera movement (mouse drag, WASD, QE), tell the
+        // renderer the view changed. VulkanRenderer::notifyCameraChanged →
+        // PathTracer::notifyViewChanged, which (a) resets accumulation and
+        // (b) tells NRD to bootstrap (frameIndex=0 + prev V/P := current
+        // V/P) so reprojection doesn't smear stale history into the new
+        // camera pose.
         if (g_cam.moved) {
-            renderer.resetAccumulation();
+            renderer.notifyCameraChanged();
             g_cam.moved = false;
         }
 
-        // Path trace
-        for (int i = 0; i < g_spp; i++)
-            renderer.render();
+        // Path trace: ONE dispatch per displayed frame. g_spp now drives a
+        // GENUINE in-raygen per-frame sample loop (N decorrelated paths per
+        // pixel, averaged) instead of N separate temporally-accumulated frames —
+        // so DLSS/SVGF receive a clean N-spp image that survives camera motion.
+        renderer.setRealtimeSamplesPerFrame(static_cast<uint32_t>(g_spp));
+        renderer.render();
 
         // Blit pixels to OpenGL texture → screen
         const uint8_t* pixels = renderer.getPixels();
         if (pixels) {
+            // Match GL viewport to actual framebuffer size (handles HiDPI/Wayland scaling)
+            int fbW, fbH;
+            glfwGetFramebufferSize(window, &fbW, &fbH);
+            glViewport(0, 0, fbW, fbH);
+
             glBindTexture(GL_TEXTURE_2D, displayTex);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
@@ -221,6 +337,28 @@ int main(int argc, char* argv[]) {
             glTexCoord2f(1, 0); glVertex2f( 1,  1);
             glTexCoord2f(0, 0); glVertex2f(-1,  1);
             glEnd();
+        }
+
+        // Periodic frame dump for headless inspection. Set OHAO_DUMP_EVERY=<N>
+        // to write the CURRENT frame to OHAO_DUMP_PATH (default /tmp/ohao_live.png)
+        // every N frames — lets an agent Read the live view while you drive.
+        static const int   s_dumpEvery = [](){ const char* e = getenv("OHAO_DUMP_EVERY"); return e ? atoi(e) : 0; }();
+        static const char* s_dumpPath  = [](){ const char* p = getenv("OHAO_DUMP_PATH");  return p ? p : "/tmp/ohao_live.png"; }();
+        static long        s_dumpN      = 0;
+        static std::atomic<bool> s_dumpBusy{false};
+        // Async: the PNG encode+write (~30-50ms) runs on a DETACHED thread so it
+        // never blocks the render loop. A synchronous write here shows up as a
+        // frozen frame every N frames while panning — invisible when still, a
+        // visible hitch in motion. Copy pixels first (getPixels reuses its buffer);
+        // skip this dump if a prior write is still in flight.
+        if (s_dumpEvery > 0 && pixels && (s_dumpN++ % s_dumpEvery == 0) && !s_dumpBusy.exchange(true)) {
+            auto* buf = new uint8_t[(size_t)W * H * 4];
+            std::memcpy(buf, pixels, (size_t)W * H * 4);
+            std::thread([buf, W, H]() {
+                stbi_write_png(s_dumpPath, W, H, 4, buf, W * 4);
+                delete[] buf;
+                s_dumpBusy.store(false);
+            }).detach();
         }
 
         glfwSwapBuffers(window);
@@ -235,8 +373,20 @@ int main(int argc, char* argv[]) {
             snprintf(title, sizeof(title), "OHAO Interactive RT | %.1f fps | %d spp/frame | %d total spp",
                      fps, g_spp, totalSpp);
             glfwSetWindowTitle(window, title);
+            // Transient stderr echo so headless perf runs can capture fps + median
+            // frame time without a window manager. Prints once per second.
+            std::fprintf(stderr, "[perf] %.2f fps | %.3f ms/frame\n", fps, 1000.0f / fps);
             frameCount = 0;
             fpsTimer = 0;
+        }
+
+        // Headless auto-exit: OHAO_EXIT_AFTER=<seconds> closes the window so a
+        // scripted perf run terminates and its stderr [perf] lines can be parsed.
+        static const float s_exitAfter = [](){ const char* e = getenv("OHAO_EXIT_AFTER"); return e ? (float)atof(e) : 0.0f; }();
+        static float s_elapsed = 0.0f;
+        s_elapsed += dt;
+        if (s_exitAfter > 0.0f && s_elapsed >= s_exitAfter) {
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
         // Screenshot
@@ -249,6 +399,41 @@ int main(int argc, char* argv[]) {
             }
         }
         if (glfwGetKey(window, GLFW_KEY_F12) == GLFW_RELEASE) f12Pressed = false;
+
+        // Motion vector dump (M) — encodes MV AOV as RGB debug PNG
+        static bool mPressed = false;
+        if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !mPressed) {
+            mPressed = true;
+            std::vector<uint16_t> mvRaw;
+            uint32_t mw = 0, mh = 0;
+            if (!renderer.readbackMotionVector(mvRaw, mw, mh)) {
+                std::cerr << "[MV dump] readback failed (no RT profile active?)\n";
+            } else {
+                auto half2float = [](uint16_t h) -> float {
+                    uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+                    uint32_t f;
+                    if (e == 0) { if (m == 0) f = s << 31; else {
+                        e = 1; while (!(m & 0x400)) { m <<= 1; e--; } m &= 0x3ff;
+                        f = (s << 31) | ((e + 112) << 23) | (m << 13);
+                    }} else if (e == 0x1f) f = (s << 31) | (0xff << 23) | (m << 13);
+                    else f = (s << 31) | ((e + 112) << 23) | (m << 13);
+                    float out; std::memcpy(&out, &f, 4); return out;
+                };
+                std::vector<uint8_t> rgb(static_cast<size_t>(mw) * mh * 3, 128);
+                const float scale = 0.02f;
+                for (uint32_t i = 0; i < mw * mh; i++) {
+                    float dx = half2float(mvRaw[i * 2 + 0]);
+                    float dy = half2float(mvRaw[i * 2 + 1]);
+                    float r01 = std::max(-1.0f, std::min(1.0f, dx * scale));
+                    float g01 = std::max(-1.0f, std::min(1.0f, dy * scale));
+                    rgb[i * 3 + 0] = static_cast<uint8_t>(128.0f + r01 * 127.0f);
+                    rgb[i * 3 + 1] = static_cast<uint8_t>(128.0f + g01 * 127.0f);
+                }
+                stbi_write_png("renders/mv_interactive.png", mw, mh, 3, rgb.data(), mw * 3);
+                std::cout << "MV dumped: renders/mv_interactive.png" << std::endl;
+            }
+        }
+        if (glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) mPressed = false;
     }
 
     scene.reset();  // destroy scene before renderer to avoid cleanup crash

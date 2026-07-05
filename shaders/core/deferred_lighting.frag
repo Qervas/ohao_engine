@@ -39,6 +39,9 @@ layout(set = 0, binding = 5) uniform LightingUBO {
 // Shadow map — CSM array (4 cascades)
 layout(set = 0, binding = 6) uniform sampler2DArray shadowMap;
 
+// IBL resources
+layout(set = 0, binding = 9) uniform sampler2D brdfLUT;
+
 // SSGI texture (binding 11) — half-res indirect lighting
 layout(set = 0, binding = 11) uniform sampler2D ssgiTexture;
 
@@ -55,10 +58,10 @@ layout(set = 0, binding = 12) uniform CascadeUBO {
 // Cloud shadow map (binding 13) — R16F, [0..1], 0=shadowed, 1=clear
 layout(set = 0, binding = 13) uniform sampler2D cloudShadowMap;
 
-// RT shadow mask (binding 14)
+// RT shadow mask (binding 14) — R8, 0=shadowed, 1=lit. Written by vkCmdTraceRaysKHR.
 layout(set = 0, binding = 14) uniform sampler2D rtShadowMask;
 
-// HDR environment map (binding 15) — equirectangular
+// HDR environment map (binding 15) — kept for descriptor layout compatibility
 layout(set = 0, binding = 15) uniform sampler2D envMap;
 
 // Push constants (matches C++ LightingParams — 184 bytes, under NVIDIA 256-byte limit)
@@ -86,9 +89,12 @@ layout(push_constant) uniform PushConstants {
 // Calculate attenuation for point/spot lights
 float calculateAttenuation(vec3 lightPos, vec3 fragPos, float range) {
     float distance = length(lightPos - fragPos);
-    float attenuation = 1.0 / (1.0 + distance * distance / (range * range));
-    float falloff = clamp(1.0 - (distance / range), 0.0, 1.0);
-    return attenuation * falloff * falloff;
+    // Physically-correct inverse-square falloff with smooth range cutoff
+    // Matches Blender/UE5 light attenuation
+    float d2 = distance * distance;
+    float invSq = 1.0 / max(d2, 0.01);  // inverse-square (physical)
+    float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);
+    return invSq * windowing * windowing;
 }
 
 // Spot light cone attenuation
@@ -157,7 +163,7 @@ void main() {
 
     vec3 N = decodeNormalOctahedron(gBuffer1Sample.xy);
     float roughness = gBuffer1Sample.b;
-    float emissiveLuminance = gBuffer1Sample.a;  // from GBuffer, emissive texture sampled there
+    float emissiveLuminance = gBuffer1Sample.a;  // stored by GBuffer pass
 
     vec3 albedo = gBuffer2Sample.rgb;
     float ao = gBuffer2Sample.a;
@@ -249,52 +255,46 @@ void main() {
         Lo += evaluateBRDF(surface, L, radiance) * shadow;
     }
 
-    // Ambient lighting with GI color bleeding approximation
-    // Tint ambient based on position relative to colored walls (Cornell box hack)
-    vec3 ambientColor = vec3(1.0);
-    float redInfluence = max(0.0, 1.0 - (fragPos.x + 5.0) / 5.0) * 0.12;  // subtle red from left wall
-    float greenInfluence = max(0.0, (fragPos.x - 0.0) / 5.0) * 0.12;      // subtle green from right wall
-    ambientColor += vec3(redInfluence, -redInfluence*0.5, -redInfluence*0.5);
-    ambientColor += vec3(-greenInfluence*0.5, greenInfluence, -greenInfluence*0.3);
-    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao * ambientColor;
+    // Ambient lighting
+    vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;
 
     // Add SSGI indirect lighting when enabled (flag bit 3)
+    // Note: RTGI output already includes surface albedo modulation — don't double-multiply
     if ((pc.flags & 8u) != 0u) {
         vec3 ssgiColor = texture(ssgiTexture, inTexCoord).rgb;
-        ambient += ssgiColor * albedo * ao;
+        ambient += ssgiColor * ao;
     }
 
-    // Environment reflection — sample HDR env map in reflection direction
-    vec3 viewDir = normalize(pc.cameraPos - fragPos);
-    vec3 R = reflect(-viewDir, N);
+    // Image-based lighting — only when env map is loaded.
+    // No env map = no IBL (direct lights + RTGI handle ambient instead).
+    if ((pc.flags & 1u) != 0u && textureSize(envMap, 0).x > 1) {
+        vec3 V = normalize(pc.cameraPos - fragPos);
+        vec3 R = reflect(-V, N);
+        float NdotV = max(dot(N, V), 0.0);
 
-    // Convert reflection direction to equirectangular UV
-    float phi = atan(R.z, R.x);
-    float theta = asin(clamp(R.y, -1.0, 1.0));
-    vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
+        float phi = atan(R.z, R.x);
+        float theta = asin(clamp(R.y, -1.0, 1.0));
+        vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
 
-    // Sample env map — blur based on roughness (mip-like approximation)
-    vec3 envColor = texture(envMap, envUV).rgb;
+        // Approximate IBL from the equirect environment map.
+        // Use the BRDF LUT to keep specular from behaving like a mirror on skin.
+        float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512
+        vec3 prefilteredColor = textureLod(envMap, envUV, lod).rgb;
+        vec3 irradiance = textureLod(envMap, envUV, 9.0).rgb;
 
-    // For rough surfaces, blend toward average env color (fake blur)
-    vec3 avgEnv = vec3(0.3, 0.35, 0.4);  // approximate average sky
-    envColor = mix(envColor, avgEnv, roughness * roughness);
+        vec3 F = fresnelSchlickRoughness(NdotV, surface.F0, roughness);
+        vec3 kS = F;
+        vec3 kD = 1.0 - kS;
+        kD *= 1.0 - metallic;
+        vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
 
-    // Fresnel for reflection intensity
-    vec3 F0 = mix(vec3(0.04), albedo, metallic);
-    float NdotV = max(dot(N, viewDir), 0.0);
-    vec3 F = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - NdotV, 5.0);
+        vec3 specularAmbient = prefilteredColor * (F * brdf.x + brdf.y);
+        vec3 diffuseAmbient = kD * albedo * irradiance;
 
-    // Reflection: strong on metallic + glossy, subtle on dielectric
-    vec3 envReflection = envColor * F * (1.0 - roughness * roughness);
+        ambient += (specularAmbient + diffuseAmbient) * ao;
+    }
 
-    // Diffuse ambient from env map (irradiance approximation)
-    vec2 diffEnvUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
-    vec3 irradiance = texture(envMap, diffEnvUV).rgb * 0.3;  // rough approximation
-    vec3 kD = (1.0 - F) * (1.0 - metallic);
-    ambient += envReflection + kD * irradiance * albedo;
-
-    // Emissive contribution — self-illuminating surfaces
+    // Emissive — self-illuminating surfaces (glow independent of lighting)
     vec3 emissive = albedo * emissiveLuminance;
 
     // Final color

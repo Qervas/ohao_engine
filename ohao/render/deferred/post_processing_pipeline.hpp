@@ -13,7 +13,8 @@ enum class TonemapOperator : uint32_t {
     ACES = 0,
     Reinhard = 1,
     Uncharted2 = 2,
-    Neutral = 3
+    Neutral = 3,
+    Filmic = 4        // Soft highlights, good mid-tone contrast (Hejl filmic curve)
 };
 
 // Post-processing pipeline that orchestrates all post-processing passes
@@ -34,6 +35,7 @@ public:
     void setDepthBuffer(VkImageView depth);
     void setNormalBuffer(VkImageView normal);
     void setVelocityBuffer(VkImageView velocity);
+    void setSSRView(VkImageView ssr) { m_ssrView = ssr; }
 
     // Feature toggles
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
@@ -104,6 +106,7 @@ private:
 
     // Input views
     VkImageView m_hdrInputView{VK_NULL_HANDLE};
+    VkImageView m_ssrView{VK_NULL_HANDLE};
 
     // Dimensions
     uint32_t m_width{0};

@@ -1,5 +1,8 @@
 #include "deferred_renderer.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
+#include "scene/scene.hpp"
+#include "scene/component/light_component.hpp"
+#include "scene/actor/actor.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <array>
@@ -55,6 +58,26 @@ bool DeferredRenderer::initialize(VkDevice device, VkPhysicalDevice physicalDevi
     m_lightingPass->setShadowMap(m_csmPass->getShadowMapArrayView(),
                                   m_csmPass->getShadowSampler());
     m_lightingPass->setCascadeBuffer(m_csmPass->getCascadeBuffer());
+
+    // Initialize SSS pass (separable subsurface scattering blur)
+    m_sssPass = std::make_unique<SSSPass>();
+    if (m_sssPass->initialize(device, physicalDevice)) {
+        m_sssPass->setGBufferPass(m_gbufferPass.get());
+        std::cout << "DeferredRenderer: SSSPass OK" << std::endl;
+    } else {
+        std::cerr << "DeferredRenderer: SSSPass failed (non-fatal)" << std::endl;
+        m_sssPass.reset();
+    }
+
+    // Initialize SSR pass
+    m_ssrPass = std::make_unique<SSRPass>();
+    if (m_ssrPass->initialize(device, physicalDevice)) {
+        m_ssrPass->setGBufferPass(m_gbufferPass.get());
+        std::cout << "DeferredRenderer: SSRPass OK" << std::endl;
+    } else {
+        std::cerr << "DeferredRenderer: SSRPass failed (non-fatal)" << std::endl;
+        m_ssrPass.reset();
+    }
 
     // Initialize post-processing pipeline
     m_postProcessing = std::make_unique<PostProcessingPipeline>();
@@ -409,7 +432,23 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
                 gi.height = m_height;
                 gi.frameIndex = static_cast<uint32_t>(m_totalTime * 60.0f);
                 gi.accel = m_rtAccel;
-                m_rtGI->setSampleCount(4);
+
+                // GI material albedos updated in render_dispatch (matches TLAS instance order)
+
+                // Find brightest scene light for GI bounce
+                if (m_scene) {
+                    float bestIntensity = 0.0f;
+                    for (const auto& [id, actor] : m_scene->getAllActors()) {
+                        auto lc = actor->getComponent<LightComponent>();
+                        if (!lc) continue;
+                        if (lc->getIntensity() > bestIntensity) {
+                            gi.lightPos = actor->getTransform()->getPosition();
+                            gi.lightIntensity = lc->getIntensity();
+                            bestIntensity = lc->getIntensity();
+                        }
+                    }
+                }
+                m_rtGI->setSampleCount(32); // quality over speed
                 m_rtGI->render(c, gi);
 
                 // Feed GI output to lighting pass via SSGI binding (11)
@@ -484,6 +523,28 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
         }
     };
 
+    // 4.5. SSS — separable subsurface scattering blur on skin
+    VkImageView litOutput = m_lightingPass ? m_lightingPass->getOutputView() : VK_NULL_HANDLE;
+    if (m_sssPass && litOutput) {
+        timerBegin("SSS");
+        m_sssPass->setLitSceneView(litOutput);
+        m_sssPass->execute(cmd, frameIndex);
+        litOutput = m_sssPass->getOutputView();  // downstream uses blurred output
+        timerEnd();
+    }
+
+    // 4.6. SSR — screen-space reflections on glossy surfaces
+    if (m_ssrPass && litOutput) {
+        timerBegin("SSR");
+        m_ssrPass->setCameraData(m_proj * m_view, m_cameraPos);
+        m_ssrPass->setLitSceneView(litOutput);
+        m_ssrPass->execute(cmd, frameIndex);
+        if (m_postProcessing) {
+            m_postProcessing->setSSRView(m_ssrPass->getOutputView());
+        }
+        timerEnd();
+    }
+
     // 4.6. Sky pass — fills sky pixels with Preetham sky
     if (m_skyPass && m_skyEnabled) {
         timerBegin("SkyPass");
@@ -555,8 +616,12 @@ void DeferredRenderer::render(VkCommandBuffer cmd, uint32_t frameIndex) {
     // 5. Post-processing (bloom, TAA, SSAO, tonemapping)
     timerBegin("PostProcessing");
     if (m_postProcessing && m_lightingPass) {
-        m_postProcessing->setHDRInputWithImage(m_lightingPass->getOutputView(),
-                                               m_lightingPass->getOutputImage());
+        // Use SSS output if available (blurred skin), otherwise raw lighting
+        VkImageView hdrView = (m_sssPass && m_sssPass->getOutputView()) ?
+            m_sssPass->getOutputView() : m_lightingPass->getOutputView();
+        VkImage hdrImage = (m_sssPass && m_sssPass->getOutputImage()) ?
+            m_sssPass->getOutputImage() : m_lightingPass->getOutputImage();
+        m_postProcessing->setHDRInputWithImage(hdrView, hdrImage);
         m_postProcessing->setDeltaTime(m_deltaTime);
         m_postProcessing->execute(cmd, frameIndex);
     }
@@ -596,6 +661,7 @@ void DeferredRenderer::onResize(uint32_t width, uint32_t height) {
     m_height = height;
 
     if (m_gbufferPass) m_gbufferPass->onResize(width, height);
+    if (m_rtGI) m_rtGI->resize(width, height);
     if (m_lightingPass) m_lightingPass->onResize(width, height);
     if (m_postProcessing) m_postProcessing->onResize(width, height);
     if (m_gizmoPass) m_gizmoPass->onResize(width, height);

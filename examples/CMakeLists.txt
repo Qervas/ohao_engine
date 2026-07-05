@@ -4,7 +4,7 @@
 add_executable(cornell_box cornell_box.cpp)
 target_include_directories(cornell_box PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(cornell_box PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
+    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
     ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
 if(MSVC)
     target_link_options(cornell_box PRIVATE /FORCE:MULTIPLE)
@@ -16,11 +16,11 @@ if(TARGET Jolt)
 endif()
 
 # Model Viewer (with OIDN denoising)
-add_executable(model_viewer model_viewer.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/oidn_denoise.cpp)
+add_executable(model_viewer model_viewer.cpp)
 target_include_directories(model_viewer PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(model_viewer PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator OpenImageDenoise)
+    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
 if(MSVC)
     target_link_options(model_viewer PRIVATE /FORCE:MULTIPLE)
 else()
@@ -34,7 +34,7 @@ endif()
 add_executable(env_demo env_demo.cpp)
 target_include_directories(env_demo PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(env_demo PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
+    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
     ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
 if(MSVC)
     target_link_options(env_demo PRIVATE /FORCE:MULTIPLE)
@@ -52,7 +52,7 @@ if(glfw3_FOUND)
     target_include_directories(interactive PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
     find_package(OpenGL REQUIRED)
     target_link_libraries(interactive PRIVATE
-        -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
+        -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
         ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator glfw OpenGL::GL)
     if(MSVC)
         target_link_options(interactive PRIVATE /FORCE:MULTIPLE)
@@ -66,11 +66,11 @@ if(glfw3_FOUND)
 endif()
 
 # Turntable Recorder (with OIDN)
-add_executable(turntable turntable.cpp ${CMAKE_SOURCE_DIR}/ohao/render/rt/oidn_denoise.cpp)
+add_executable(turntable turntable.cpp)
 target_include_directories(turntable PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
 target_link_libraries(turntable PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_animation ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator OpenImageDenoise)
+    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
+    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
 if(MSVC)
     target_link_options(turntable PRIVATE /FORCE:MULTIPLE)
 else()

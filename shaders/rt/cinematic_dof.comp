@@ -1,0 +1,98 @@
+#version 460
+
+// Sub-plan 4.J — Camera Depth-of-Field (gather-based bokeh blur)
+//
+// Realistic lens defocus: pixels far from the focal plane get blurred by a
+// circle-of-confusion proportional to defocus distance. Single-pass gather:
+// each output pixel samples a poisson-disk pattern around itself, weighted
+// by the source pixel's CoC. Equivalent to "scatter as gather" formulation
+// commonly used in game engines (e.g. UE's Diaphragm DOF).
+//
+// Input:  binding 0 = final LDR (post-tonemap) RGBA8
+// Input:  binding 1 = depth AOV R32F (linear view-space depth, sky = 1e30)
+// Output: binding 2 = DoF-applied LDR RGBA8
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba8) uniform readonly  image2D inLDR;
+layout(set = 0, binding = 1, r32f)  uniform readonly  image2D inDepth;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outLDR;
+
+layout(push_constant) uniform DoFPushConstants {
+    float focusDistance;   // distance in view-space units where things are in focus
+    float aperture;        // larger = stronger blur (analog to f-stop reciprocal)
+    float maxCoCPixels;    // upper bound on blur radius in pixels
+    float _pad;
+} pc;
+
+// 16-sample Poisson disk
+const vec2 kPoissonDisk[16] = vec2[](
+    vec2( 0.000,  0.000),
+    vec2( 0.400,  0.250),
+    vec2(-0.250,  0.400),
+    vec2(-0.400, -0.250),
+    vec2( 0.250, -0.400),
+    vec2( 0.700,  0.700),
+    vec2(-0.700,  0.700),
+    vec2(-0.700, -0.700),
+    vec2( 0.700, -0.700),
+    vec2( 0.950,  0.000),
+    vec2( 0.000,  0.950),
+    vec2(-0.950,  0.000),
+    vec2( 0.000, -0.950),
+    vec2( 0.500,  0.866),
+    vec2(-0.500,  0.866),
+    vec2(-0.500, -0.866)
+);
+
+float computeCoC(float depth) {
+    if (depth >= 1e20) {
+        // Sky / miss — historically returned max CoC (infinity-defocus). That
+        // bled dark sky into subject silhouettes. Real cameras DO blur the
+        // background, but in studio mode (black background) the sky has no
+        // detail to blur into bokeh. Cap at a moderate value so we don't
+        // smear black halos onto in-focus subjects.
+        return min(pc.maxCoCPixels * 0.4, 8.0);
+    }
+    float defocus = abs(depth - pc.focusDistance);
+    // Linear ramp by defocus distance, scaled by aperture, clamped
+    return clamp(defocus * pc.aperture, 0.0, pc.maxCoCPixels);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outLDR);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    float centerDepth = imageLoad(inDepth, p).r;
+    float centerCoC = computeCoC(centerDepth);
+
+    // Tap the Poisson disk scaled by CoC
+    vec3 colorSum = vec3(0.0);
+    float weightSum = 0.0;
+
+    for (int i = 0; i < 16; ++i) {
+        vec2 offset = kPoissonDisk[i] * centerCoC;
+        ivec2 tap = p + ivec2(offset);
+        tap = clamp(tap, ivec2(0), size - ivec2(1));
+
+        vec3 sampleColor = imageLoad(inLDR, tap).rgb;
+        float sampleDepth = imageLoad(inDepth, tap).r;
+        float sampleCoC = computeCoC(sampleDepth);
+
+        // Weight: tap contributes more if its OWN CoC is large enough to reach
+        // this pixel (proper scatter-as-gather). Prevents in-focus pixels from
+        // smearing onto out-of-focus background.
+        float taprad = length(offset);
+        float w = smoothstep(taprad - 0.5, taprad + 0.5, sampleCoC);
+
+        colorSum += sampleColor * w;
+        weightSum += w;
+    }
+
+    vec3 result = weightSum > 0.001
+                  ? colorSum / weightSum
+                  : imageLoad(inLDR, p).rgb;
+
+    imageStore(outLDR, p, vec4(result, 1.0));
+}

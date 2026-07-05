@@ -24,10 +24,6 @@ public:
     virtual void render() {}
     virtual void destroy() {}
     
-    // Serialization interface
-    virtual void serialize(class Serializer& serializer) const {}
-    virtual void deserialize(class Deserializer& deserializer) {}
-    
     // Owner management
     void setOwner(Actor* owner);
     Actor* getOwner() const;

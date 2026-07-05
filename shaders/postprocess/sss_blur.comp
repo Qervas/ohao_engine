@@ -1,0 +1,105 @@
+#version 450
+
+// Separable Subsurface Scattering Blur
+// Blurs the diffuse lighting on skin pixels, weighted by depth.
+// Red light travels further than green/blue (skin is more translucent to red).
+// Run twice: horizontal (direction=vec2(1,0)) then vertical (direction=vec2(0,1)).
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D litScene;       // HDR lighting
+layout(set = 0, binding = 1) uniform sampler2D gBufferPosition; // world position + metallic
+layout(set = 0, binding = 2) uniform sampler2D gBufferNormal;   // normal + roughness
+layout(set = 0, binding = 3) uniform sampler2D gBufferAlbedo;   // albedo + AO
+layout(set = 0, binding = 4, rgba16f) writeonly uniform image2D sssOutput;
+
+layout(push_constant) uniform PushConstants {
+    vec2 direction;     // (1,0) for horizontal, (0,1) for vertical
+    vec2 screenSize;
+    float sssWidth;     // blur width in pixels
+    float padding;
+};
+
+// Subsurface scattering kernel — 7 samples, RGB-weighted
+// Based on "Separable Subsurface Scattering" (Jimenez et al. 2015)
+// Red travels furthest, blue least (skin chromatic scattering)
+const int KERNEL_SIZE = 7;
+const float kernelOffsets[KERNEL_SIZE] = float[](
+    -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0
+);
+// Per-channel weights: red spreads wider than blue
+const vec3 kernelWeightsR[KERNEL_SIZE] = vec3[](
+    vec3(0.006, 0.002, 0.001),
+    vec3(0.044, 0.015, 0.006),
+    vec3(0.178, 0.090, 0.040),
+    vec3(0.544, 0.786, 0.906),  // center sample — most weight
+    vec3(0.178, 0.090, 0.040),
+    vec3(0.044, 0.015, 0.006),
+    vec3(0.006, 0.002, 0.001)
+);
+
+// Detect skin material (same heuristic as lighting shader)
+// No roughness dependency — works with any PBR values
+float detectSkin(float metallic, vec3 albedo) {
+    return (1.0 - metallic) *
+           smoothstep(0.1, 0.35, albedo.r) *              // has red component
+           step(albedo.g, albedo.r) *                       // red > green (warm tone)
+           (1.0 - smoothstep(0.6, 0.9, albedo.b / max(albedo.r, 0.01))); // not blue
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(screenSize.x) || pixel.y >= int(screenSize.y)) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / screenSize;
+
+    // Read center pixel
+    vec3 centerColor = texture(litScene, uv).rgb;
+    vec4 posSample = texture(gBufferPosition, uv);
+    vec4 normSample = texture(gBufferNormal, uv);
+    vec3 albedo = texture(gBufferAlbedo, uv).rgb;
+    float metallic = posSample.a;
+    float roughness = normSample.b;
+
+    // Check if this pixel is skin
+    float skinFactor = detectSkin(metallic, albedo);
+
+    // Non-skin pixels: pass through unchanged
+    if (skinFactor < 0.01) {
+        imageStore(sssOutput, pixel, vec4(centerColor, 1.0));
+        return;
+    }
+
+    // Depth of center pixel (for edge-aware blur)
+    float centerDepth = length(posSample.rgb);
+
+    // Separable blur with depth-weighted kernel
+    vec2 step = direction / screenSize * sssWidth;
+    vec3 blurred = vec3(0.0);
+    vec3 totalWeight = vec3(0.0);
+
+    for (int i = 0; i < KERNEL_SIZE; i++) {
+        vec2 sampleUV = uv + step * kernelOffsets[i];
+
+        // Clamp to screen
+        sampleUV = clamp(sampleUV, vec2(0.001), vec2(0.999));
+
+        vec3 sampleColor = texture(litScene, sampleUV).rgb;
+        float sampleDepth = length(texture(gBufferPosition, sampleUV).rgb);
+
+        // Depth-aware weight: reject samples at very different depths (edges)
+        float depthDiff = abs(centerDepth - sampleDepth);
+        float depthWeight = exp(-depthDiff * depthDiff * 100.0);
+
+        vec3 w = kernelWeightsR[i] * depthWeight;
+        blurred += sampleColor * w;
+        totalWeight += w;
+    }
+
+    blurred /= max(totalWeight, vec3(0.001));
+
+    // Blend: skin gets blurred, non-skin stays sharp
+    vec3 result = mix(centerColor, blurred, skinFactor);
+
+    imageStore(sssOutput, pixel, vec4(result, 1.0));
+}

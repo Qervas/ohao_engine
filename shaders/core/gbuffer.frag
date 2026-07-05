@@ -8,8 +8,10 @@ layout(location = 0) in vec3 fragWorldPos;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragColor;
 layout(location = 3) in vec2 fragTexCoord;
-layout(location = 4) in vec4 fragCurrentPos;
-layout(location = 5) in vec4 fragPrevPos;
+layout(location = 4) in vec2 fragTexCoord1;
+layout(location = 5) in vec4 fragTangent;
+layout(location = 6) in vec4 fragCurrentPos;
+layout(location = 7) in vec4 fragPrevPos;
 
 // G-Buffer outputs
 // GBuffer0: World Position (rgb) + Metallic (a) - R16G16B16A16_SFLOAT
@@ -68,18 +70,23 @@ void main() {
     // Check for bindless normal map
     uint normalTexIdx = floatBitsToUint(pc.albedoColor.a);
     if (normalTexIdx != 0xFFFFFFFFu) {
-        // Sample normal map and perturb geometric normal
-        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], fragTexCoord).rgb;
+        vec2 normalUV = fragTexCoord;  // Standardize on UV0 for now, same as RT path
+        vec3 tangentNormal = texture(textures[nonuniformEXT(normalTexIdx)], normalUV).rgb;
         tangentNormal = tangentNormal * 2.0 - 1.0;
 
-        // Compute TBN from derivatives (no explicit tangent attribute needed)
-        vec3 dPdx = dFdx(fragWorldPos);
-        vec3 dPdy = dFdy(fragWorldPos);
-        vec2 dUVdx = dFdx(fragTexCoord);
-        vec2 dUVdy = dFdy(fragTexCoord);
-
-        vec3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
-        vec3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+        vec3 T;
+        vec3 B;
+        if (dot(fragTangent.xyz, fragTangent.xyz) > 1e-6) {
+            T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));
+            B = normalize(cross(N, T)) * fragTangent.w;
+        } else {
+            vec3 dPdx = dFdx(fragWorldPos);
+            vec3 dPdy = dFdy(fragWorldPos);
+            vec2 dUVdx = dFdx(normalUV);
+            vec2 dUVdy = dFdy(normalUV);
+            T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);
+            B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);
+        }
         mat3 TBN = mat3(T, B, N);
 
         N = normalize(TBN * tangentNormal);
@@ -88,16 +95,19 @@ void main() {
     // Per-pixel roughness/metallic from texture (if available)
     float metallic = pc.materialParams.x;
     float roughness = pc.materialParams.y;
-    float ao = pc.materialParams.z;
+    float ao = 1.0;
 
     uint roughMetalTexIdx = floatBitsToUint(pc.materialParams.z);
-    if (roughMetalTexIdx < 4096u) {  // valid bindless index (not AO float or 0xFFFFFFFF)
-        // GLTF convention: G=roughness, B=metallic (already repacked to R=rough, G=metal)
+    if (roughMetalTexIdx < 4096u) {
+        // GLTF metallicRoughness texture — use UV0 to match RT path and standard models
         vec4 rm = texture(textures[nonuniformEXT(roughMetalTexIdx)], fragTexCoord);
-        roughness = rm.r;
-        metallic = rm.g;
-        ao = 1.0;  // no AO texture — default to 1.0
+        ao *= rm.r;         // R channel = AO
+        roughness *= rm.g;  // G channel = Roughness
+        metallic *= rm.b;   // B channel = Metallic
     }
+
+    // Safety: don't allow roughness to be absolute zero (causes mirror artifacts)
+    roughness = max(roughness, 0.04);
 
     // GBuffer0: World Position + Metallic
     outGBuffer0 = vec4(fragWorldPos, metallic);

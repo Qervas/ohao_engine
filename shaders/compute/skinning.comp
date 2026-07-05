@@ -1,0 +1,92 @@
+#version 450
+
+// GPU Compute Skinning — transforms bind-pose vertices with bone matrices.
+// Output goes to a separate buffer used for BLAS rebuild each frame.
+
+layout(local_size_x = 256) in;
+
+// Input: original bind-pose vertices (read-only)
+struct Vertex {
+    vec3 position;       // 12
+    vec3 color;          // 12
+    vec3 normal;         // 12
+    vec2 texCoord;       // 8
+    vec4 tangent;        // 16
+    ivec4 boneIndices;   // 16
+    vec4 boneWeights;    // 16
+};
+// Total: 92 bytes — but GLSL std430 will pad vec3 to 16 bytes
+// We need to match C++ Vertex layout exactly, so use raw float arrays
+
+layout(set = 0, binding = 0) readonly buffer InputVertices {
+    float inVerts[];  // packed as raw floats (28 floats per vertex = 112 bytes)
+};
+
+layout(set = 0, binding = 1) writeonly buffer OutputPositions {
+    float outPos[];   // 3 floats per vertex (just positions for BLAS)
+};
+
+layout(set = 0, binding = 2) writeonly buffer OutputNormals {
+    float outNorm[];  // 3 floats per vertex (transformed normals for RT)
+};
+
+layout(set = 0, binding = 3) uniform BoneMatrices {
+    mat4 bones[128];
+    int boneCount;
+};
+
+layout(push_constant) uniform PushConstants {
+    uint vertexCount;
+    uint vertexStride;  // in floats (23 for our Vertex struct = 92 bytes / 4)
+    uint vertexOffset;  // offset in vertices into source buffer
+    uint outputOffset;  // offset in vertices into output buffer (for global buffer)
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= vertexCount) return;
+
+    uint base = (vertexOffset + idx) * vertexStride;
+
+    // Read position (offset 0)
+    vec3 pos = vec3(inVerts[base + 0], inVerts[base + 1], inVerts[base + 2]);
+
+    // Read normal (float offset 6: pos[3]+color[3])
+    vec3 norm = vec3(inVerts[base + 6], inVerts[base + 7], inVerts[base + 8]);
+
+    // Read bone indices (float offset 15: pos[3]+color[3]+normal[3]+texCoord[2]+tangent[4])
+    ivec4 boneIdx = ivec4(
+        floatBitsToInt(inVerts[base + 15]),
+        floatBitsToInt(inVerts[base + 16]),
+        floatBitsToInt(inVerts[base + 17]),
+        floatBitsToInt(inVerts[base + 18])
+    );
+
+    // Read bone weights (float offset 19)
+    vec4 weights = vec4(
+        inVerts[base + 19], inVerts[base + 20],
+        inVerts[base + 21], inVerts[base + 22]
+    );
+
+    // Compute skin matrix (clamp indices to valid range to prevent OOB reads)
+    ivec4 clampedIdx = clamp(boneIdx, ivec4(0), ivec4(127));
+    mat4 skinMatrix =
+        bones[clampedIdx.x] * weights.x +
+        bones[clampedIdx.y] * weights.y +
+        bones[clampedIdx.z] * weights.z +
+        bones[clampedIdx.w] * weights.w;
+
+    // Write to global buffer at correct offset (matches global index buffer)
+    uint outIdx = outputOffset + idx;
+
+    vec4 skinnedPos = skinMatrix * vec4(pos, 1.0);
+    outPos[outIdx * 3 + 0] = skinnedPos.x;
+    outPos[outIdx * 3 + 1] = skinnedPos.y;
+    outPos[outIdx * 3 + 2] = skinnedPos.z;
+
+    mat3 normalMatrix = mat3(skinMatrix);
+    vec3 skinnedNorm = normalize(normalMatrix * norm);
+    outNorm[outIdx * 3 + 0] = skinnedNorm.x;
+    outNorm[outIdx * 3 + 1] = skinnedNorm.y;
+    outNorm[outIdx * 3 + 2] = skinnedNorm.z;
+}

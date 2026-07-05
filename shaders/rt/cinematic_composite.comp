@@ -1,0 +1,208 @@
+#version 460
+
+// Sub-plan 4.G T1: cinematic composite pass — replaces nrd_tonemap.comp.
+//
+// Reads NRD's composed HDR + depth AOV + env map (for sky composite) + the
+// 3-level bloom mip chain. Combines HDR + bloom, applies AgX filmic tonemap,
+// vignette, and a subtle color grade. Writes the final RGBA8 result to
+// binding 30.
+//
+// Layout:
+//   group size 8x8, dispatched over the output extent (full-res)
+//
+// Bindings:
+//   0 (storage image RGBA32F readonly)  — composed HDR             (PT binding 29)
+//   1 (storage image RGBA8   writeonly) — final LDR out            (PT binding 30)
+//   2 (storage image R32F    readonly)  — view-space depth AOV     (PT binding 20)
+//   3 (combined image sampler2D)        — equirectangular env map
+//   4 (combined image sampler2D)        — bloom mip 0 (half-res)
+//   5 (combined image sampler2D)        — bloom mip 1 (quarter-res)
+//   6 (combined image sampler2D)        — bloom mip 2 (eighth-res)
+//
+// Sky path (preserved from 4.F T1): depth >= 1e20 means a miss-ray pixel;
+// reconstruct a world-space direction from pixel center via pc.invProj /
+// pc.invView and sample the env map. Surface pixels read inHDR directly.
+//
+// AgX reference: Troy Sobotka's AgX (MIT). The compact no-LUT path with
+// polynomial contrast curve (Default Contrast Approximation Polynomial).
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly  image2D inHDR;
+layout(set = 0, binding = 1, rgba8)   uniform writeonly image2D outLDR;
+layout(set = 0, binding = 2, r32f)    uniform readonly  image2D inDepth;
+layout(set = 0, binding = 3)          uniform sampler2D envMap;
+layout(set = 0, binding = 4)          uniform sampler2D bloomMip0;
+layout(set = 0, binding = 5)          uniform sampler2D bloomMip1;
+layout(set = 0, binding = 6)          uniform sampler2D bloomMip2;
+
+layout(push_constant) uniform CinematicPC {
+    mat4  invView;         // 64  bytes — for sky reconstruction
+    mat4  invProj;         // 64
+    vec2  extent;          //  8
+    float envIntensity;    //  4
+    float exposure;        //  4
+    float bloomStrength;   //  4
+    float vignetteStrength;//  4
+    float saturation;      //  4
+    float contrast;        //  4
+    vec3  tint;            // 12
+    float _pad;            //  4
+} pc;
+
+// total = 64+64+8+4+4+4+4+4+4+12+4 = 176 bytes (within 256 limit on RTX 5070)
+
+const float PI = 3.14159265359;
+
+vec3 sampleEnv(vec3 dir) {
+    float phi   = atan(dir.z, dir.x);
+    float theta = asin(clamp(dir.y, -1.0, 1.0));
+    vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);
+    return texture(envMap, uv).rgb * pc.envIntensity;
+}
+
+// ─── AgX (Troy Sobotka) — compact, no-LUT version ────────────────────
+// Reference: https://github.com/sobotka/AgX-S2O3
+// Inset matrix (compresses Rec.709 toward neutral for log space)
+const mat3 AgX_inset = mat3(
+    0.856627153315983, 0.137318972929847, 0.11189821299995,
+    0.0951212405381588, 0.761241990602591, 0.0767994186031903,
+    0.0482516061458583, 0.101439036467562, 0.811302368396859);
+
+// Outset matrix (inverse of inset, post-tonemap)
+const mat3 AgX_outset = mat3(
+    1.1271005818144368, -0.1413297634984383, -0.14132976349843826,
+   -0.11060664309660323, 1.157823702216272, -0.11060664309660294,
+   -0.016493938717834573, -0.016493938717834257, 1.2519364065950405);
+
+// Iolite-engine "minimal AgX" reference range. These values match the
+// polynomial fit used in agx_default_contrast() below — they MUST be paired
+// (the polynomial is the closed-form fit of the Sobotka contrast sigmoid
+// evaluated over exactly this log-range).
+const float AgX_minEV = -12.47393;
+const float AgX_maxEV =   4.026069;
+
+// AgX default contrast — 6th-order polynomial fit to the Sobotka sigmoid
+// (https://iolite-engine.com/blog_posts/minimal_agx_implementation).
+vec3 agx_default_contrast(vec3 x) {
+    vec3 x2 = x * x;
+    vec3 x4 = x2 * x2;
+    return + 15.5     * x4 * x2
+           - 40.14    * x4 * x
+           + 31.96    * x4
+           -  6.868   * x2 * x
+           +  0.4298  * x2
+           +  0.1191  * x
+           -  0.00232;
+}
+
+// Apply AgX in two stages so the outset (chromaticity restore) can run in
+// LINEAR display space — matching the iolite-engine reference and Sobotka's
+// reference order. The polynomial fit's output is sRGB-encoded display so we
+// undo that with pow(2.2) before the outset, then re-encode with pow(1/2.2)
+// after grade.
+
+// Apply AgX as a single pass that returns sRGB-display-encoded values, then
+// the host caller (main) re-decodes to linear before grade + vignette, and
+// re-encodes for the final UNORM write. This matches the iolite reference
+// order exactly.
+
+vec3 agx(vec3 col) {
+    // 1. Inset matrix in scene-linear.
+    col = AgX_inset * col;
+    // 2. Log encoding into [0,1] over [AgX_minEV, AgX_maxEV].
+    col = clamp(log2(max(col, vec3(1e-10))), vec3(AgX_minEV), vec3(AgX_maxEV));
+    col = (col - AgX_minEV) / (AgX_maxEV - AgX_minEV);
+    // 3. Default contrast polynomial (output: sRGB-display-encoded).
+    col = agx_default_contrast(col);
+    return clamp(col, vec3(0.0), vec3(1.0));
+}
+
+// ─── Color grade helpers ──────────────────────────────────────────────
+
+vec3 saturationAdjust(vec3 c, float s) {
+    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    return mix(vec3(luma), c, s);
+}
+
+// ─── Bloom sampling (3-mip weighted upsample) ─────────────────────────
+
+vec3 sampleBloom(vec2 uv) {
+    vec3 m0 = texture(bloomMip0, uv).rgb;
+    vec3 m1 = texture(bloomMip1, uv).rgb;
+    vec3 m2 = texture(bloomMip2, uv).rgb;
+    // Weights favor lower-frequency mips for soft glow without losing
+    // some highlight definition from mip 0.
+    return m0 * 0.5 + m1 * 0.35 + m2 * 0.15;
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────
+
+void main() {
+    ivec2 p    = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outLDR);
+    if (p.x >= size.x || p.y >= size.y) return;
+
+    vec2 uv = (vec2(p) + 0.5) / vec2(size);
+
+    // 1. Source HDR (surface or sky).
+    vec3  hdr;
+    float depth = imageLoad(inDepth, p).r;
+    if (depth >= 1e20) {
+        vec2 ndc = uv * 2.0 - 1.0;
+        ndc.y    = -ndc.y;
+        vec4 target = pc.invProj * vec4(ndc, 1.0, 1.0);
+        vec4 world  = pc.invView * vec4(normalize(target.xyz), 0.0);
+        hdr = sampleEnv(normalize(world.xyz));
+    } else {
+        hdr = imageLoad(inHDR, p).rgb;
+    }
+
+    // 2. Exposure (EV multiplier).
+    hdr *= pc.exposure;
+
+    // 3. Add bloom (still in HDR).
+    vec3 bloom = sampleBloom(uv);
+    hdr += bloom * pc.bloomStrength;
+
+    // 4. Tonemap — Khronos PBR Neutral (the asset-visualization industry
+    //    standard adopted by glTF Sample Viewer, Blender, three.js). Preserves
+    //    color fidelity in midtones (unlike AgX which shifts greys toward
+    //    magenta via outset matrix). Designed specifically for PBR asset
+    //    rendering — exactly our use case. https://github.com/KhronosGroup/ToneMapping
+    //
+    //    Formula: gentle desaturation in highlights, no chromatic shift in shadows,
+    //    no aggressive contrast crush. Closer to "real camera" response than AgX.
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+    float x = min(hdr.r, min(hdr.g, hdr.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    vec3 color = hdr - offset;
+    float peak = max(color.r, max(color.g, color.b));
+    vec3 mapped;
+    if (peak < startCompression) {
+        mapped = color;
+    } else {
+        const float d = 1.0 - startCompression;
+        float newPeak = 1.0 - d * d / (peak + d - startCompression);
+        mapped = color * (newPeak / peak);
+        float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+        mapped = mix(mapped, vec3(newPeak), g);
+    }
+
+    // 5. sRGB gamma encode.
+    vec3 graded = pow(clamp(mapped, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2));
+
+    // 6. Subtle grade (much less aggressive than v1-v6 AgX path).
+    graded = saturationAdjust(graded, pc.saturation);
+    graded = clamp((graded - 0.5) * pc.contrast + 0.5, vec3(0.0), vec3(1.0));
+    graded *= pc.tint;
+
+    // 7. Vignette — VERY subtle (real lenses have only mild fall-off).
+    vec2  cuv     = uv - vec2(0.5);
+    float dist    = length(cuv) * 1.4142;
+    float vig     = 1.0 - smoothstep(0.7, 1.1, dist) * pc.vignetteStrength;
+    graded *= vig;
+
+    imageStore(outLDR, p, vec4(clamp(graded, vec3(0.0), vec3(1.0)), 1.0));
+}

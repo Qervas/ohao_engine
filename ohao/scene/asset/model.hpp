@@ -10,16 +10,13 @@
 
 namespace ohao{
 
-// Forward declarations for animation types
-struct Skeleton;
-struct AnimationClip;
-
 struct Vertex{
 
     glm::vec3 position;
     glm::vec3 color;
     glm::vec3 normal;
     glm::vec2 texCoord;
+    glm::vec2 texCoord1{0.0f, 0.0f};    // Second UV set (GLTF texCoord: 1)
     glm::vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};       // xyz = tangent direction, w = handedness (+1/-1)
     glm::ivec4 boneIndices{0, 0, 0, 0};  // Up to 4 bone influences per vertex
     glm::vec4 boneWeights{1.0f, 0.0f, 0.0f, 0.0f};   // Corresponding weights (sum to 1.0)
@@ -105,10 +102,6 @@ public:
     std::vector<int> materialRoughMetalTexIndex;
     std::vector<int> materialEmissiveTexIndex;
 
-    // Animation data (populated by GLTF loader for skinned meshes)
-    std::shared_ptr<Skeleton> skeleton;
-    std::vector<std::shared_ptr<AnimationClip>> animations;
-
     // LOD levels (index 0 = highest detail, each subsequent = lower detail)
     // Empty means no LOD support (always use main vertices/indices)
     std::vector<LODLevel> lodLevels;
@@ -126,10 +119,10 @@ public:
 
     bool loadFromOBJ(const std::string& filename);
     bool loadFromGLTF(const std::string& filename);
+    bool loadFromFBX(const std::string& filename);  // Assimp-based (FBX, Collada, etc.)
     bool loadMTL(const std::string& filename);
     void setupDefaultMaterial();
 
-    bool hasSkeleton() const { return skeleton.get() != nullptr; }
     bool hasLOD() const { return !lodLevels.empty(); }
 
     const std::string& getSourcePath() const { return sourcePath; }

@@ -25,7 +25,7 @@ Vertex::getBindingDescriptions(){
 
 std::vector<VkVertexInputAttributeDescription>
 Vertex::getAttributeDescriptions(){
-    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(7);
+    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(8);
 
     // position
     attributeDescriptions[0].binding = 0;
@@ -45,29 +45,35 @@ Vertex::getAttributeDescriptions(){
     attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributeDescriptions[2].offset = offsetof(Vertex, normal);
 
-    // TexCoord
+    // TexCoord (UV set 0)
     attributeDescriptions[3].binding = 0;
     attributeDescriptions[3].location = 3;
     attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[3].offset = offsetof(Vertex, texCoord);
 
-    // Tangent (vec4: xyz = direction, w = handedness)
+    // TexCoord1 (UV set 1)
     attributeDescriptions[4].binding = 0;
     attributeDescriptions[4].location = 4;
-    attributeDescriptions[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attributeDescriptions[4].offset = offsetof(Vertex, tangent);
+    attributeDescriptions[4].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[4].offset = offsetof(Vertex, texCoord1);
 
-    // Bone indices (ivec4)
+    // Tangent (vec4: xyz = direction, w = handedness)
     attributeDescriptions[5].binding = 0;
     attributeDescriptions[5].location = 5;
-    attributeDescriptions[5].format = VK_FORMAT_R32G32B32A32_SINT;
-    attributeDescriptions[5].offset = offsetof(Vertex, boneIndices);
+    attributeDescriptions[5].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attributeDescriptions[5].offset = offsetof(Vertex, tangent);
 
-    // Bone weights (vec4)
+    // Bone indices (ivec4)
     attributeDescriptions[6].binding = 0;
     attributeDescriptions[6].location = 6;
-    attributeDescriptions[6].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    attributeDescriptions[6].offset = offsetof(Vertex, boneWeights);
+    attributeDescriptions[6].format = VK_FORMAT_R32G32B32A32_SINT;
+    attributeDescriptions[6].offset = offsetof(Vertex, boneIndices);
+
+    // Bone weights (vec4)
+    attributeDescriptions[7].binding = 0;
+    attributeDescriptions[7].location = 7;
+    attributeDescriptions[7].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attributeDescriptions[7].offset = offsetof(Vertex, boneWeights);
 
     return attributeDescriptions;
 }
@@ -270,6 +276,61 @@ bool Model::loadFromOBJ(const std::string& filename) {
                     std::cout << "  OBJ Material " << idx << " (" << name << "): color=("
                               << mat.diffuse.r << "," << mat.diffuse.g << "," << mat.diffuse.b << ")" << std::endl;
                 }
+
+                // 4.L v4: auto-discover normal + gloss maps next to the diff
+                // map. Convention used by 3ds Max / Photoshop exports:
+                //   {name}_norm_*.{jpg,png}   → tangent-space normal map
+                //   {name}_gloss_*.{jpg,png}  → grayscale glossiness (1-rough)
+                // Roughness packed into G channel of roughMetalTexture, R=AO=1,
+                // B=metal=0 so the existing closesthit sampler (rm.g) works.
+                int normalIdx = -1;
+                int roughMetalIdx = -1;
+                if (fs::exists(texDir)) {
+                    for (const auto& entry : fs::directory_iterator(texDir)) {
+                        std::string fname = entry.path().filename().string();
+                        // Normal map
+                        if (normalIdx < 0 && fname.find(name + "_norm_") != std::string::npos) {
+                            int w, h, ch;
+                            stbi_uc* pixels = stbi_load(entry.path().string().c_str(), &w, &h, &ch, STBI_rgb_alpha);
+                            if (pixels) {
+                                TextureData td; td.width = w; td.height = h;
+                                td.materialIndex = static_cast<int>(idx);
+                                td.pixels.assign(pixels, pixels + w * h * 4);
+                                stbi_image_free(pixels);
+                                normalIdx = static_cast<int>(normalTextures.size());
+                                normalTextures.push_back(std::move(td));
+                                std::cout << "  OBJ Material " << idx << " (" << name
+                                          << "): normal " << w << "x" << h << " from " << fname << std::endl;
+                            }
+                        }
+                        // Gloss map → repack as (1, 1-gloss, 0, 255) into roughMetal slot
+                        if (roughMetalIdx < 0 && fname.find(name + "_gloss_") != std::string::npos) {
+                            int w, h, ch;
+                            stbi_uc* pixels = stbi_load(entry.path().string().c_str(), &w, &h, &ch, STBI_rgb_alpha);
+                            if (pixels) {
+                                std::vector<uint8_t> packed(w * h * 4);
+                                for (int i = 0; i < w * h; i++) {
+                                    uint8_t gloss = pixels[i * 4 + 0];  // grayscale → R channel
+                                    packed[i * 4 + 0] = 255;             // AO
+                                    packed[i * 4 + 1] = 255 - gloss;     // roughness = 1 - gloss
+                                    packed[i * 4 + 2] = 0;               // metallic
+                                    packed[i * 4 + 3] = 255;
+                                }
+                                stbi_image_free(pixels);
+                                TextureData td; td.width = w; td.height = h;
+                                td.materialIndex = static_cast<int>(idx);
+                                td.pixels = std::move(packed);
+                                roughMetalIdx = static_cast<int>(roughMetalTextures.size());
+                                roughMetalTextures.push_back(std::move(td));
+                                std::cout << "  OBJ Material " << idx << " (" << name
+                                          << "): gloss→rough " << w << "x" << h << " from " << fname << std::endl;
+                            }
+                        }
+                    }
+                }
+                materialNormalTexIndex.push_back(normalIdx);
+                materialRoughMetalTexIndex.push_back(roughMetalIdx);
+                materialEmissiveTexIndex.push_back(-1);  // no emissive auto-discovery for OBJ yet
             }
             // Per-triangle material index
             materialPerTriangle.resize(materialAssignments.size());

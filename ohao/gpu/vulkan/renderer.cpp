@@ -1,5 +1,8 @@
 #include "renderer_impl.hpp"
+#include <algorithm>
+#include <cstring>
 #include "render/camera/camera.hpp"
+#include "render/rt/denoise/oidn_denoise.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include "scene/component/mesh_component.hpp"
 #include "scene/asset/model.hpp"
@@ -7,6 +10,33 @@
 #include "scene/scene.hpp"
 
 namespace ohao {
+
+namespace {
+// IEEE 754 binary16 → binary32 (for R16F AOV readback).
+inline float half_to_float(uint16_t h) {
+    uint32_t sign = (h >> 15) & 0x1;
+    uint32_t exp  = (h >> 10) & 0x1f;
+    uint32_t mant = h & 0x3ff;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) {
+            f = sign << 31;
+        } else {
+            exp = 1;
+            while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+            mant &= 0x3ff;
+            f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1f) {
+        f = (sign << 31) | (0xff << 23) | (mant << 13);
+    } else {
+        f = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+    }
+    float out;
+    std::memcpy(&out, &f, 4);
+    return out;
+}
+}  // namespace
 
 // Helper function implementation
 uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
@@ -173,13 +203,20 @@ bool VulkanRenderer::initialize() {
         if (m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool)) {
             std::cout << "Ray tracing: available" << std::endl;
 
-            // Initialize path tracer
-            m_pathTracer = std::make_unique<PathTracer>();
-            if (m_pathTracer->init(m_device, m_physicalDevice, m_width, m_height)) {
-                std::cout << "Path tracer: available" << std::endl;
-            } else {
-                std::cout << "Path tracer: init failed" << std::endl;
-                m_pathTracer.reset();
+            m_rtRealtimeRenderer = std::make_unique<RTRealtimeRenderer>();
+            if (!m_rtRealtimeRenderer->init(m_device, m_physicalDevice, m_width, m_height,
+                                             m_instance, m_graphicsQueueFamily,
+                                             m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
+                std::cout << "RT realtime renderer: init failed" << std::endl;
+                m_rtRealtimeRenderer.reset();
+            }
+
+            m_rtOfflineRenderer = std::make_unique<RTOfflineRenderer>();
+            if (!m_rtOfflineRenderer->init(m_device, m_physicalDevice, m_width, m_height,
+                                            m_instance, m_graphicsQueueFamily,
+                                            m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
+                std::cout << "RT offline renderer: init failed" << std::endl;
+                m_rtOfflineRenderer.reset();
             }
         } else {
             std::cout << "Ray tracing: not available (continuing without RT)" << std::endl;
@@ -187,6 +224,7 @@ bool VulkanRenderer::initialize() {
         }
 
         m_initialized = true;
+
         std::cout << "VulkanRenderer initialized: " << m_width << "x" << m_height << std::endl;
         std::cout << "Shadow mapping: " << (m_shadowsEnabled ? "enabled" : "disabled") << std::endl;
         std::cout << "Multi-frame rendering: " << (m_frameResources.isInitialized() ? "enabled" : "disabled") << std::endl;
@@ -207,10 +245,8 @@ void VulkanRenderer::shutdown() {
         vkDeviceWaitIdle(m_device);
 
         // Cleanup RT resources BEFORE device destruction
-        if (m_pathTracer) {
-            m_pathTracer->destroy();
-            m_pathTracer.reset();
-        }
+        if (m_rtRealtimeRenderer) { m_rtRealtimeRenderer->destroy(); m_rtRealtimeRenderer.reset(); }
+        if (m_rtOfflineRenderer) { m_rtOfflineRenderer->destroy(); m_rtOfflineRenderer.reset(); }
         if (m_rtAccel) {
             m_rtAccel->destroy();
             m_rtAccel.reset();
@@ -267,6 +303,12 @@ void VulkanRenderer::shutdown() {
         if (m_lightBufferMemory != VK_NULL_HANDLE) {
             vkFreeMemory(m_device, m_lightBufferMemory, nullptr);
         }
+
+        // Cleanup env CDF buffers
+        if (m_envMarginalCDFBuffer)    { vkDestroyBuffer(m_device, m_envMarginalCDFBuffer, nullptr); m_envMarginalCDFBuffer = VK_NULL_HANDLE; }
+        if (m_envMarginalCDFMemory)    { vkFreeMemory(m_device, m_envMarginalCDFMemory, nullptr);    m_envMarginalCDFMemory = VK_NULL_HANDLE; }
+        if (m_envConditionalCDFBuffer) { vkDestroyBuffer(m_device, m_envConditionalCDFBuffer, nullptr); m_envConditionalCDFBuffer = VK_NULL_HANDLE; }
+        if (m_envConditionalCDFMemory) { vkFreeMemory(m_device, m_envConditionalCDFMemory, nullptr);    m_envConditionalCDFMemory = VK_NULL_HANDLE; }
 
         // Cleanup descriptor pool
         if (m_descriptorPool != VK_NULL_HANDLE) {
@@ -348,13 +390,16 @@ void VulkanRenderer::render() {
     if (!m_initialized) return;
 
     // Check render mode
-    if (m_renderMode == RenderMode::PathTraced && m_pathTracer && m_rtAccel) {
-        renderPathTraced();
+    if (const auto* rtPipeline = getRTPipeline(m_renderMode);
+        rtPipeline && getRTRenderer(m_renderMode) && m_rtAccel) {
+        renderRTPipeline(*rtPipeline);
+        m_denoiseCacheValid = false;
         return;
     }
 
     if (m_renderMode == RenderMode::Deferred && m_deferredRenderer) {
         renderDeferred();
+        m_denoiseCacheValid = false;
         return;
     }
 
@@ -364,6 +409,7 @@ void VulkanRenderer::render() {
     } else {
         renderLegacy();
     }
+    m_denoiseCacheValid = false;
 }
 
 void VulkanRenderer::setRenderMode(RenderMode mode) {
@@ -371,13 +417,215 @@ void VulkanRenderer::setRenderMode(RenderMode mode) {
         std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
         return;
     }
-    if (mode == RenderMode::PathTraced && (!m_pathTracer || !m_rtAccel)) {
+    const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
+    if (rtPipeline && (!getRTRenderer(mode) || !m_rtAccel)) {
         std::cerr << "Path tracing not available, staying in current mode" << std::endl;
         return;
     }
+
+    if (rtPipeline) {
+        m_rtSettings = rtPipeline->getDefaultSettings();
+        applyRTRenderSettings();
+    }
+
     m_renderMode = mode;
-    const char* names[] = {"Forward", "Deferred", "PathTraced"};
+    const char* names[] = {"Forward", "Deferred", "RTRealtime", "RTOffline"};
     std::cout << "Render mode set to: " << names[static_cast<int>(mode)] << std::endl;
+}
+
+void VulkanRenderer::setRTRenderSettings(const RTRenderSettings& settings) {
+    m_rtSettings = settings;
+    applyRTRenderSettings();
+
+    const char* profileName = (m_rtSettings.profile == RTRenderProfile::Realtime) ? "Realtime" : "Offline";
+    std::cout << "RT profile set to: " << profileName
+              << " (maxBounces=" << m_rtSettings.maxBounces
+              << ", accumulation=" << (m_rtSettings.preferAccumulation ? "preferred" : "reduced")
+              << ", AOVs=" << (m_rtSettings.enableAuxiliaryAOVs ? "on" : "off")
+              << ", externalDenoiser=" << (m_rtSettings.allowExternalDenoiser ? "allowed" : "off")
+              << ")" << std::endl;
+}
+
+void VulkanRenderer::setRTRenderProfile(RTRenderProfile profile) {
+    setRTRenderSettings(profile == RTRenderProfile::Realtime ? kRealtimeRTSettings : kOfflineRTSettings);
+}
+
+void VulkanRenderer::applyRTRenderSettings() {
+    // Atrous is a GPU-side, in-place beauty denoiser dispatched by the RT
+    // pipeline itself, so the PathTracer must see denoiseMode==Atrous to run
+    // it. The profile default (reset each frame) doesn't carry the user's
+    // --denoise override, so inject it here. Scoped to Atrous ONLY — None,
+    // OIDN, and NRD keep their profile-default denoiseMode untouched.
+    if (m_denoiseModeOverridden &&
+        (m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR)) {
+        // DLSSRR (Phase 5) is dispatched GPU-side by the PathTracer, same as Atrous,
+        // so the tracer must see denoiseMode==DLSSRR to run its NGX init/feature path.
+        m_rtSettings.denoiseMode = m_denoiseMode;
+    }
+    // Re-inject the interactive per-frame sample count: prepareRTSceneForFrame
+    // resets m_rtSettings to the pipeline default (samplesPerFrame=1) each frame,
+    // so restore the user's choice here (same pattern as aniso/SSS preservation).
+    m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->setRenderSettings(m_rtSettings);
+    }
+    // Sync denoiser mode from the active render profile settings,
+    // but only when the caller hasn't issued an explicit setDenoiseMode() override.
+    if (!m_denoiseModeOverridden && m_denoiseMode != m_rtSettings.denoiseMode) {
+        m_denoiseMode = m_rtSettings.denoiseMode;
+        m_denoiseCacheValid = false;
+    }
+}
+
+bool VulkanRenderer::updateAnimatedActorsForRT() {
+    // Skeletal animation removed — no animated actors. Always static.
+    return false;
+}
+
+void VulkanRenderer::prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS) {
+    auto* rtRenderer = getRTRenderer(m_renderMode);
+    if (!rtRenderer) return;
+
+    // Keep the active RT pipeline authoritative over path tracer behavior.
+    // Preserve user-set anisotropy overrides (4.K) across the per-frame reset —
+    // pipeline defaults always have aniso=0, so a non-zero strength means the
+    // caller explicitly opted in via setRTRenderSettings.
+    float preservedAnisoStrength = m_rtSettings.anisotropyStrength;
+    float preservedAnisoRotation = m_rtSettings.anisotropyRotation;
+    float preservedSssStrength   = m_rtSettings.subsurfaceStrength;  // 4.L
+    m_rtSettings = pipeline.getDefaultSettings();
+    m_rtSettings.anisotropyStrength = preservedAnisoStrength;
+    m_rtSettings.anisotropyRotation = preservedAnisoRotation;
+    m_rtSettings.subsurfaceStrength = preservedSssStrength;
+    applyRTRenderSettings();
+
+    updateLightBuffer();
+    if (m_rtLightBuffer != VK_NULL_HANDLE) {
+        rtRenderer->setLightBuffer(m_rtLightBuffer, std::max(1u, m_rtLightCount));
+    }
+
+    (void)hasDynamicBLAS;  // dynamic BLAS removed with skeletal animation
+
+    if (m_rtNormalBuffer != VK_NULL_HANDLE && m_rtIndexBuffer != VK_NULL_HANDLE) {
+        rtRenderer->setNormalBuffer(m_rtNormalBuffer, m_rtIndexBuffer, m_vertexCount);
+    }
+}
+
+const IRTRenderPipeline* VulkanRenderer::getRTPipeline(RenderMode mode) const {
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        return &m_rtRealtimePipeline;
+    case RenderMode::RTOffline:
+        return &m_rtOfflinePipeline;
+    default:
+        return nullptr;
+    }
+}
+
+IRTRendererProfile* VulkanRenderer::getRTRenderer(RenderMode mode) {
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        return m_rtRealtimeRenderer.get();
+    case RenderMode::RTOffline:
+        return m_rtOfflineRenderer.get();
+    default:
+        return nullptr;
+    }
+}
+
+const IRTRendererProfile* VulkanRenderer::getRTRenderer(RenderMode mode) const {
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        return m_rtRealtimeRenderer.get();
+    case RenderMode::RTOffline:
+        return m_rtOfflineRenderer.get();
+    default:
+        return nullptr;
+    }
+}
+
+void VulkanRenderer::forEachRTRenderer(const std::function<void(IRTRendererProfile&)>& fn) {
+    if (m_rtOfflineRenderer) {
+        fn(*m_rtOfflineRenderer);
+    }
+    if (m_rtRealtimeRenderer) {
+        fn(*m_rtRealtimeRenderer);
+    }
+}
+
+void VulkanRenderer::resetAccumulation() {
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->resetAccumulation();
+    }
+}
+
+void VulkanRenderer::notifyCameraChanged() {
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->notifyViewChanged();
+    }
+}
+
+uint32_t VulkanRenderer::getPathTracerFrameIndex() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getFrameIndex();
+    }
+    return 0;
+}
+
+VkImageView VulkanRenderer::getMotionVectorAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getMotionVectorAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getDepthAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getDepthAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getRoughnessAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getRoughnessAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getDiffuseRadianceAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getDiffuseRadianceAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getSpecularRadianceAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getSpecularRadianceAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getDiffAlbedoAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getDiffAlbedoAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getSpecColorAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getSpecColorAOV();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImageView VulkanRenderer::getNormalRoughnessAOV() const {
+    if (const auto* renderer = getRTRenderer(m_renderMode)) {
+        return renderer->getNormalRoughnessAOV();
+    }
+    return VK_NULL_HANDLE;
 }
 
 bool VulkanRenderer::initializeDeferredRenderer() {
@@ -398,5 +646,1269 @@ bool VulkanRenderer::initializeDeferredRenderer() {
     return true;
 }
 
+void VulkanRenderer::setDenoiseMode(DenoiseMode mode) {
+    m_denoiseModeOverridden = true;
+    if (mode != m_denoiseMode) {
+        m_denoiseMode = mode;
+        m_denoiseCacheValid = false;
+    }
+}
+
+void VulkanRenderer::setRealtimeSamplesPerFrame(uint32_t n) {
+    m_realtimeSamplesPerFrame = std::clamp(n, 1u, 64u);
+    // Push immediately so the value takes effect even outside the per-frame
+    // prepareRTSceneForFrame path; the next frame re-injects it anyway.
+    m_rtSettings.samplesPerFrame = m_realtimeSamplesPerFrame;
+    if (auto* renderer = getRTRenderer(m_renderMode)) {
+        renderer->setRenderSettings(m_rtSettings);
+    }
+}
+
+const uint8_t* VulkanRenderer::getPixels() const {
+    // Atrous denoises the beauty (m_outputImage) in place on the GPU, so
+    // m_pixelBuffer already holds the denoised result — same readback path as
+    // None. Do NOT route it through the NRD/OIDN CPU paths below.
+    // Phase 1: DLSSRR does not yet dispatch denoising (foundation only) — the
+    // beauty in m_pixelBuffer is the raw RT output, same readback path as None.
+    if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||
+        m_denoiseMode == DenoiseMode::DLSSRR) {
+        return m_pixelBuffer.data();
+    }
+    if (m_denoiseCacheValid) {
+        return m_denoisedPixelBuffer.data();
+    }
+
+    // Sub-plan 4.E T1: NRD is GPU-side. Readback the tonemapped binding 30.
+    if (m_denoiseMode == DenoiseMode::NRD) {
+        std::vector<uint8_t> rgba;
+        uint32_t rw = 0, rh = 0;
+        (void)rw; (void)rh;  // readback fills them; size is implicit in the buffer.
+        auto* self = const_cast<VulkanRenderer*>(this);
+        if (!self->readbackNrdTonemapped(rgba, rw, rh)) {
+            std::cerr << "[Denoise] NRD readback failed — returning noisy pixels\n";
+            return m_pixelBuffer.data();
+        }
+        m_denoisedPixelBuffer = std::move(rgba);
+        m_denoiseCacheValid = true;
+        return m_denoisedPixelBuffer.data();
+    }
+
+    // Shared readback + float3 conversion for any denoiser backend.
+    // readbackHDRBuffers is non-const and has device-global side effects
+    // (allocates a command buffer, submits it, waits idle). Functionally
+    // safe after render() completes in a single-threaded game loop.
+    // TODO: make readbackHDRBuffers const by factoring the staging-buffer
+    // machinery behind a mutable cache.
+    std::vector<float> beautyRGBA, albedoRGBA, normalRGBA;
+    uint32_t rw = 0, rh = 0;
+    auto* self = const_cast<VulkanRenderer*>(this);
+    if (!self->readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {
+        std::cerr << "[Denoise] readbackHDRBuffers failed — returning noisy pixels\n";
+        return m_pixelBuffer.data();
+    }
+    auto beauty3 = ohao::rgba32fToFloat3(beautyRGBA.data(), rw, rh);
+    auto albedo3 = ohao::rgba32fToFloat3(albedoRGBA.data(), rw, rh);
+    auto normal3 = ohao::rgba32fToFloat3(normalRGBA.data(), rw, rh);
+
+    bool denoised = false;
+
+    // OIDN is the offline denoiser backend.
+    if (!denoised) {
+        denoised = ohao::oidnDenoise(beauty3.data(), albedo3.data(), normal3.data(),
+                                      rw, rh, /*hdr*/ true);
+        if (!denoised) {
+            std::cerr << "[Denoise] OIDN failed — returning noisy pixels\n";
+            return m_pixelBuffer.data();
+        }
+    }
+
+    m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);
+    m_denoiseCacheValid = true;
+    return m_denoisedPixelBuffer.data();
+}
+
+VkImage VulkanRenderer::getMotionVectorImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getMotionVectorImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getMotionVectorImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getDepthAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getDepthAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getDepthAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getRoughnessAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getRoughnessAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getRoughnessAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getDiffuseRadianceAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getDiffuseRadianceAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getDiffuseRadianceAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getSpecularRadianceAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getSpecularRadianceAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getSpecularRadianceAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getDiffAlbedoAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getDiffAlbedoAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getDiffAlbedoAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getSpecColorAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getSpecColorAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getSpecColorAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getNormalRoughnessAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getNormalRoughnessAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getNormalRoughnessAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getOutDiffRadianceAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getOutDiffRadianceAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getOutDiffRadianceAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getOutSpecRadianceAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getOutSpecRadianceAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getOutSpecRadianceAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getNrdComposedAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getNrdComposedAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getNrdComposedAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+VkImage VulkanRenderer::getNrdTonemappedAOVImage() const {
+    if (m_renderMode == RenderMode::RTOffline && m_rtOfflineRenderer) {
+        return m_rtOfflineRenderer->getNrdTonemappedAOVImage();
+    }
+    if (m_renderMode == RenderMode::RTRealtime && m_rtRealtimeRenderer) {
+        return m_rtRealtimeRenderer->getNrdTonemappedAOVImage();
+    }
+    return VK_NULL_HANDLE;
+}
+
+bool VulkanRenderer::readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height) {
+    VkImage mvImage = getMotionVectorImage();
+    if (mvImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4; // RG16F = 4 bytes/pixel
+    mvRaw.resize(static_cast<size_t>(width) * height * 2);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition MV image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = mvImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, mvImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition MV image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = mvImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(mvRaw.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height) {
+    VkImage depthImage = getDepthAOVImage();
+    if (depthImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4; // R32F = 4 bytes/pixel
+    depthData.resize(static_cast<size_t>(width) * height);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition depth image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = depthImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, depthImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition depth image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = depthImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(depthData.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height) {
+    VkImage roughImage = getRoughnessAOVImage();
+    if (roughImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 2; // R16F = 2 bytes/pixel
+    roughData.resize(static_cast<size_t>(width) * height);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition roughness image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = roughImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, roughImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition roughness image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = roughImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    const uint16_t* halfs = reinterpret_cast<const uint16_t*>(mapped);
+    for (uint32_t i = 0; i < width * height; i++) {
+        roughData[i] = half_to_float(halfs[i]);
+    }
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getDiffuseRadianceAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition diffuse radiance image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition diffuse radiance image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getSpecularRadianceAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition specular radiance image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition specular radiance image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackDenoisedDiffuse(std::vector<float>& data, uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getOutDiffRadianceAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition denoised diffuse image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition denoised diffuse image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getOutSpecRadianceAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition denoised specular image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition denoised specular image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackNrdComposed(std::vector<float>& data,
+                                          uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getNrdComposedAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 16; // RGBA32F = 16 bytes
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size        = byteCount;
+    bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize  = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool        = m_commandPool;
+    cbi.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image            = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent      = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            stagingBuf, 1, &region);
+
+    VkImageMemoryBarrier toGen{};
+    toGen.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image            = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackNrdTonemapped(std::vector<uint8_t>& data,
+                                            uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getNrdTonemappedAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4; // RGBA8 = 4 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size        = byteCount;
+    bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize  = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool        = m_commandPool;
+    cbi.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image            = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent      = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            stagingBuf, 1, &region);
+
+    VkImageMemoryBarrier toGen{};
+    toGen.sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout        = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image            = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask    = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask    = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getDiffAlbedoAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4; // RGBA8 = 4 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition diff albedo image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition diff albedo image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
+
+bool VulkanRenderer::readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height) {
+    VkImage srcImage = getSpecColorAOVImage();
+    if (srcImage == VK_NULL_HANDLE) return false;
+
+    width  = m_width;
+    height = m_height;
+    const VkDeviceSize byteCount = static_cast<VkDeviceSize>(width) * height * 4; // RGBA8 = 4 bytes/pixel
+    data.resize(static_cast<size_t>(width) * height * 4);
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = byteCount;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_device, &bci, nullptr, &stagingBuf) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(m_device, stagingBuf, &mr);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = findMemoryType(m_physicalDevice, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_device, &ai, nullptr, &stagingMem) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuf, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuf, stagingMem, 0);
+
+    // One-shot command buffer
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo cbi{};
+    cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbi.commandPool = m_commandPool;
+    cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbi.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cbi, &cmd);
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &begin);
+
+    // Transition spec color image to TRANSFER_SRC
+    VkImageMemoryBarrier toSrc{};
+    toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toSrc.image = srcImage;
+    toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           stagingBuf, 1, &region);
+
+    // Transition spec color image back to GENERAL
+    VkImageMemoryBarrier toGen{};
+    toGen.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toGen.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    toGen.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGen.image = srcImage;
+    toGen.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    toGen.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toGen.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         0, 0, nullptr, 0, nullptr, 1, &toGen);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &cmd;
+    vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMem, 0, byteCount, 0, &mapped);
+    std::memcpy(data.data(), mapped, byteCount);
+    vkUnmapMemory(m_device, stagingMem);
+
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuf, nullptr);
+    vkFreeMemory(m_device, stagingMem, nullptr);
+    return true;
+}
 
 } // namespace ohao

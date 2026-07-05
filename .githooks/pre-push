@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# OHAO pre-push hook — golden-image regression gate (renovation Phase 0).
+#
+# Install once (per clone):   git config core.hooksPath .githooks
+#
+# Renders the golden manifest on the LOCAL GPU and blocks the push if any scene
+# drifts beyond tolerance. Cloud CI cannot do this (no GPU), so the GPU safety
+# net lives here.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+# If the engine isn't built (docs-only checkout), warn but don't block.
+if [ ! -x build/cornell_box ]; then
+    echo "[pre-push] build/cornell_box not found — skipping golden checks."
+    echo "[pre-push] build the engine to enable the regression gate."
+    exit 0
+fi
+
+echo "[pre-push] golden-image regression checks..."
+python3 tests/golden/render_golden.py tests/golden/manifest.json
