@@ -514,6 +514,18 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         writeCount++;
     }
 
+    // Binding 35: DLSS-RR specular hit-distance guide (R32F)
+    VkDescriptorImageInfo specHitDistInfo{};
+    specHitDistInfo.imageView   = m_specHitDistView;
+    specHitDistInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[writeCount].dstSet          = m_descriptorSet;
+    writes[writeCount].dstBinding      = 35;
+    writes[writeCount].descriptorCount = 1;
+    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[writeCount].pImageInfo      = &specHitDistInfo;
+    writeCount++;
+
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -551,7 +563,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition AOV images to GENERAL for storage write ---
     if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[12] = {};
+        VkImageMemoryBarrier aovBarriers[13] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         aovBarriers[0].srcAccessMask = 0;
@@ -661,9 +673,19 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         aovBarriers[11].image = m_outSpecRadianceImage;
         aovBarriers[11].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
+        // DLSS-RR: specular hit-distance guide (binding 35) — UNDEFINED→GENERAL so
+        // the raygen can imageStore the world-space specular ray length into it.
+        aovBarriers[12].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        aovBarriers[12].srcAccessMask = 0;
+        aovBarriers[12].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        aovBarriers[12].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        aovBarriers[12].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        aovBarriers[12].image = m_specHitDistImage;
+        aovBarriers[12].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 12, aovBarriers);
+            0, 0, nullptr, 0, nullptr, 13, aovBarriers);
     }
 
     // --- Transition surface history images to GENERAL ---
@@ -803,7 +825,12 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         if (kRestirGiLegacy)    pc.control.x |= kPTFlagRestirGiLegacy;
         if (kRestirGiNoSpatial) pc.control.x |= kPTFlagRestirGiNoSpatial;
     }
-    pc.control.y = (svgfMode || dlssMode) ? 0u : m_historyFrameCount;
+    // OHAO_FRESH_1SPP (measurement only): force fresh, independent 1-spp beauty
+    // every frame in ANY denoise mode (no temporal running-mean). Lets an offline
+    // A/B measure the raw glossy-sampler variance + converged mean directly,
+    // without a denoiser's temporal accumulation masking the input variance.
+    static const bool kFresh1Spp = (std::getenv("OHAO_FRESH_1SPP") != nullptr);
+    pc.control.y = (svgfMode || dlssMode || kFresh1Spp) ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,
@@ -910,6 +937,22 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         ei.diffAlbedoImage  = m_diffAlbedoImage;   ei.diffAlbedoView  = m_diffAlbedoView;   ei.diffAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
         ei.specAlbedoImage  = m_specColorImage;    ei.specAlbedoView  = m_specColorView;    ei.specAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
         ei.normalRoughImage = m_normalAOV;         ei.normalRoughView = m_normalAOVView;    ei.normalRoughFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+        // Specular hit-distance guide (world-space ray length). A/B toggle: set
+        // OHAO_NO_SPEC_HITDIST=1 to omit it (leaves DLSS reprojecting reflections as
+        // if attached to the primary surface — the pre-fix flicker) for measurement.
+        {
+            static const bool kNoSpecHitDist = (std::getenv("OHAO_NO_SPEC_HITDIST") != nullptr);
+            if (!kNoSpecHitDist) {
+                ei.specHitDistImage = m_specHitDistImage; ei.specHitDistView = m_specHitDistView; ei.specHitDistFormat = VK_FORMAT_R32_SFLOAT;
+            }
+            static bool s_specHitDistLogged = false;
+            if (!s_specHitDistLogged) {
+                std::cerr << "[DLSS-RR] specular hit-distance guide: "
+                          << (kNoSpecHitDist ? "DISABLED (OHAO_NO_SPEC_HITDIST)" : "ENABLED (binding 35 R32F world-units)")
+                          << std::endl;
+                s_specHitDistLogged = true;
+            }
+        }
         ei.depthImage       = m_depthAOVImage;     ei.depthView       = m_depthAOVView;     ei.depthFormat       = VK_FORMAT_R32_SFLOAT;
         ei.motionImage      = m_motionVectorImage; ei.motionView      = m_motionVectorView; ei.motionFormat      = VK_FORMAT_R16G16_SFLOAT;
         ei.renderW = m_width; ei.renderH = m_height;   // guide-buffer (input) res

@@ -18,7 +18,7 @@ bool PathTracer::createDescriptorResources() {
     //   5: Index buffer SSBO (uint per index)      — CLOSEST_HIT
     //   6: Albedo AOV (storage image)              — RAYGEN   (RGBA32F)
     //   7: Normal AOV (storage image)              — RAYGEN   (RGBA32F)
-    VkDescriptorSetLayoutBinding bindings[35] = {};
+    VkDescriptorSetLayoutBinding bindings[36] = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -196,22 +196,29 @@ bool PathTracer::createDescriptorResources() {
         bindings[b].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
     }
 
+    // Binding 35: DLSS-RR specular hit-distance guide (R32F storage image).
+    // Written by the realtime raygen; read by DLSS-RR eval (pInSpecularHitDistance).
+    bindings[35].binding         = 35;
+    bindings[35].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    bindings[35].descriptorCount = 1;
+    bindings[35].stageFlags      = VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+
     // Enable bindless: variable count on the LAST binding only
-    VkDescriptorBindingFlags bindingFlags[35] = {};
+    VkDescriptorBindingFlags bindingFlags[36] = {};
     bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT
                      | VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
                      | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
 
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
-    flagsInfo.bindingCount = 35;
+    flagsInfo.bindingCount = 36;
     flagsInfo.pBindingFlags = bindingFlags;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     layoutInfo.pNext = &flagsInfo;
     layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-    layoutInfo.bindingCount = 35;
+    layoutInfo.bindingCount = 36;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS)
@@ -220,7 +227,7 @@ bool PathTracer::createDescriptorResources() {
     // Pool — allocate enough for bindless textures
     VkDescriptorPoolSize poolSizes[] = {
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 24},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B), +2 denoised out (4.C), +6 ReSTIR GI reservoir (29-34)
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B), +2 denoised out (4.C), +6 ReSTIR GI reservoir (29-34), +1 spec hit-dist (35)
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 9},  // +2 for env CDF marginal + conditional
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_maxBindlessTextures},
     };

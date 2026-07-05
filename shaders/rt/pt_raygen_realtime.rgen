@@ -34,6 +34,14 @@ layout(set = 0, binding = 32, rgba32f) uniform writeonly image2D currGIReservoir
 layout(set = 0, binding = 33, rgba32f) uniform writeonly image2D currGIReservoir1;
 layout(set = 0, binding = 34, rgba32f) uniform writeonly image2D currGIReservoir2;
 
+// DLSS-RR specular hit-distance guide (R32F, world-space ray length). DLSS reads
+// the specular hit distance from the .x channel of a DEDICATED image — OHAO's
+// specularRadiance (binding 23) carries the same value in its .a channel, but DLSS
+// cannot read it from there, so we mirror it into this .x-channel image. Without
+// this guide DLSS treats reflections as attached to the primary surface and cannot
+// reproject them → the glossy metal reflection flickers frame-to-frame.
+layout(set = 0, binding = 35, r32f) uniform image2D specHitDistAOV;
+
 struct GPULight {
     vec4 positionAndType;
     vec4 colorAndIntensity;
@@ -677,7 +685,13 @@ void main() {
                     float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
                     if (isMetal) specProbMIS = 1.0;
                     float pdfDiffuseMIS = NdotL_env / OHAO_PI;
+#ifdef OHAO_CRUDE_GLOSSY
                     float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
+#else
+                    // Match the VNDF pdf the specular BSDF sampler now uses, so the
+                    // env-IS ↔ BSDF-miss MIS partition stays consistent (unbiased).
+                    float pdfSpecMIS = smithG1GGX(NdotV, roughness * roughness) * D / (4.0 * NdotV + 1e-4);
+#endif
                     float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
 
                     float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
@@ -711,13 +725,21 @@ void main() {
         float specLastBsdfPdf;         // for env-miss MIS weighting (ported from offline)
         bool  specLastBounceWasDelta;
         {
-            float cosI = abs(dot(normalize(rayDir), N));
-            vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
-            float specProb = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
-            if (isMetal) specProb = 1.0;
+            // ---- GGX VNDF importance-sampled first glossy bounce ----
+            // The old sampler jittered the mirror direction with a cosine lobe
+            // scaled by roughness — high variance, not the GGX lobe, so the
+            // 1-spp metal reflection flickered. We now draw the half-vector H
+            // from the visible-normal distribution (Heitz 2018) and reflect the
+            // view about H. The estimator weight f*cos/pdf collapses to the
+            // Fresnel term times the Smith ratio G2/G1 — low variance, unbiased.
+            vec3 V     = normalize(-rayDir);
+            float NdotV = max(dot(N, V), 1e-4);
+            float alpha = roughness * roughness;
 
-            vec3 inDir = rayDir;
-            vec3 reflected = reflect(rayDir, N);
+            vec3 reflected;
+#ifdef OHAO_CRUDE_GLOSSY
+            // A/B baseline: original crude cosine-scatter sampler (flicker source).
+            reflected = reflect(rayDir, N);
             if (roughness > 0.01) {
                 vec2 jitU = getSample2D(dimIdx); dimIdx += 2u;
                 vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;
@@ -728,22 +750,59 @@ void main() {
                 }
             }
             specDir = reflected;
-            // Dual-ray: each path is deterministic, no stochastic selection to correct for.
-            // Material throughput factor (f*cos/pdf for the specular lobe, simplified).
             specThroughput = isMetal ? albedo : vec3(1.0);
-
             if (roughness < 0.05) {
                 specLastBsdfPdf = 1.0;
                 specLastBounceWasDelta = true;
             } else {
-                vec3 Hspec = normalize(-inDir + specDir);
+                vec3 Hspec = normalize(V + specDir);
                 float NdotH_s = max(dot(N, Hspec), 0.001);
-                float VdotH_s = max(dot(-inDir, Hspec), 0.001);
+                float VdotH_s = max(dot(V, Hspec), 0.001);
                 float D_s = ggxD_anisoOrIso(N, Hspec, NdotH_s, roughness, pc.jitter.z, pc.jitter.w);
-                float pdf_spec = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
-                specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)
+                specLastBsdfPdf = D_s * NdotH_s / (4.0 * VdotH_s + 1e-4);
                 specLastBounceWasDelta = false;
             }
+#else
+            if (roughness < 0.02) {
+                // Near-mirror delta: perfect reflection. VNDF weight → F(N·V).
+                reflected = reflect(rayDir, N);
+                vec3 F = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
+                specDir = reflected;
+                specThroughput = F;
+                specLastBsdfPdf = 1.0;
+                specLastBounceWasDelta = true;
+            } else {
+                vec3 T, B;
+                ggxBuildBasis(N, T, B);
+                vec3 Vloc = vec3(dot(V, T), dot(V, B), dot(V, N));
+                vec2 u = getSample2D(dimIdx); dimIdx += 2u;
+                vec3 Hloc = sampleGGXVNDF(Vloc, alpha, alpha, u);
+                vec3 H = normalize(Hloc.x * T + Hloc.y * B + Hloc.z * N);
+                reflected = reflect(-V, H);         // reflect view about sampled H
+                if (dot(reflected, N) <= 0.0) {
+                    // Rare VNDF tail below the horizon — snap to the mirror lobe.
+                    reflected = reflect(rayDir, N);
+                    H = N;
+                }
+                reflected = normalize(reflected);
+                specDir = reflected;
+
+                float NdotL = max(dot(N, reflected), 1e-4);
+                float NdotH = max(dot(N, H), 1e-4);
+                float VdotH = max(dot(V, H), 1e-4);
+                vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
+                // Estimator weight f*cos/pdf for a VNDF-sampled reflection:
+                //   pdf(L) = G1(V)*D(H) / (4 N·V),  f = D*F*G2 / (4 N·V N·L)
+                //   f*cos/pdf = F * G2(V,L)/G1(V)   (height-correlated Smith)
+                specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);
+
+                // Exact VNDF pdf of the sampled direction, for env-miss MIS.
+                float D  = ggxDiso(NdotH, alpha);
+                float G1V = smithG1GGX(NdotV, alpha);
+                specLastBsdfPdf = G1V * D / (4.0 * NdotV) + 1e-6;
+                specLastBounceWasDelta = false;
+            }
+#endif
         }
 
         vec3 specRayOrigin = hitPos + N * 0.01;
@@ -1865,5 +1924,10 @@ void main() {
     vec3 diffOut = restirGiGiOnly ? giDiffuseTermOut : diffContrib;
     AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffOut, diffHitDist));
     AOV_ACCUMULATE_WRITE(specularRadiance, pixel, vec4(specContrib, specHitDist));
+    // DLSS-RR specular hit-distance guide: the SAME world-space ray length carried
+    // in specularRadiance.a, mirrored into a dedicated R32F image's .x channel so
+    // DLSS Ray Reconstruction can reproject the glossy reflection (kills the flicker
+    // on metal). specHitDist is already the N-spp average (see specHitDistTotal).
+    imageStore(specHitDistAOV, pixel, vec4(specHitDist, 0.0, 0.0, 0.0));
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }
