@@ -53,12 +53,16 @@ bool PathTracer::createImages() {
     }
 
     // --- Output image: RGBA8 for tonemapped final output ---
+    // Sized to the OUTPUT/display resolution (m_outW/m_outH), NOT the render res:
+    // in a DLSS upscaling preset this is the full-res target the DLSS tonemap
+    // writes; the raygen's own beauty write (render res) into it is discarded.
+    // In every non-upscaling mode render==output so it is identical to before.
     {
         VkImageCreateInfo imageInfo{};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.extent = {m_outW, m_outH, 1};
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -920,7 +924,9 @@ bool PathTracer::createImages() {
         imageInfo.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType     = VK_IMAGE_TYPE_2D;
         imageInfo.format        = VK_FORMAT_R16G16B16A16_SFLOAT;
-        imageInfo.extent        = {m_width, m_height, 1};
+        // OUTPUT/display resolution: DLSS-RR upscales the render-res guide buffers
+        // into this full-res target, which the tonemap pass reads.
+        imageInfo.extent        = {m_outW, m_outH, 1};
         imageInfo.mipLevels     = 1;
         imageInfo.arrayLayers   = 1;
         imageInfo.samples       = VK_SAMPLE_COUNT_1_BIT;

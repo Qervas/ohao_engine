@@ -228,7 +228,11 @@ public:
 
     // Config
     void setMaxBounces(uint32_t bounces) { m_maxBounces = bounces; }
-    void setRenderSettings(const RTRenderSettings& settings) { m_renderSettings = settings; }
+    // Out-of-line: switching to/from DLSSRR (or a different OHAO_DLSS_QUALITY)
+    // changes the internal RENDER resolution, which requires reallocating the
+    // render-target images. Done here (between frames, device-idle safe) rather
+    // than mid-command-buffer.
+    void setRenderSettings(const RTRenderSettings& settings);
     const RTRenderSettings& getRenderSettings() const { return m_renderSettings; }
     uint32_t getFrameIndex() const { return m_historyFrameCount; }
 
@@ -242,10 +246,22 @@ private:
 
     void destroyImages();
 
+    // Compute the internal RENDER resolution (m_width/m_height) from the OUTPUT
+    // resolution (m_outW/m_outH). In DLSSRR mode the render res is scaled down by
+    // the OHAO_DLSS_QUALITY preset (Performance ⇒ 0.5 linear ⇒ ~4x fewer traced
+    // pixels); every other mode renders at output res (scale 1.0). Aligns to even.
+    void computeRenderResolution();
+
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+    // m_width/m_height are the INTERNAL RENDER resolution (what raygen traces and
+    // every AOV/reservoir is sized to). m_outW/m_outH are the OUTPUT/display
+    // resolution — only m_outputImage + the DLSS COLOR_OUT are sized to it.
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    uint32_t m_outW = 0;
+    uint32_t m_outH = 0;
+    float    m_dlssRenderScale = 1.0f;   // cached scale used for the current render res
 
     // Sub-plan 4.C: replaces 4.B scoped probe.
     // Member is unconditional (not guarded by OHAO_NRD_ENABLED) so the class

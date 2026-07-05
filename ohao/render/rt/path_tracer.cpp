@@ -1,6 +1,8 @@
 #include "path_tracer.hpp"
 
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 
 // Always include: nrd_denoise.hpp is header-only safe regardless of
 // OHAO_NRD_ENABLED (just declares the class). PathTracer holds an
@@ -76,8 +78,14 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
                        const std::vector<const char*>& deviceExtensions) {
     m_device = device;
     m_physicalDevice = physicalDevice;
-    m_width = width;
-    m_height = height;
+    // `width`/`height` from the caller are the OUTPUT/display resolution. The
+    // internal render resolution is derived from it (== output unless a DLSS
+    // upscaling preset is active — which it is NOT at init(), since the denoise
+    // mode is still the profile default here; DLSSRR is applied later via
+    // setRenderSettings(), which recomputes + reallocates if the scale changes).
+    m_outW = width;
+    m_outH = height;
+    computeRenderResolution();   // sets m_width/m_height (render res)
     m_sampleIndex = 0;
     m_historyFrameCount = 0;
 
@@ -114,12 +122,15 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     std::cout << "[PathTracer] Initialized (" << width << "x" << height << ")" << std::endl;
 
 #ifdef OHAO_NRD_ENABLED
+    // NRD / à-trous / cinematic passes are sized to OUTPUT res: they only run in
+    // non-upscaling modes (render==output), and this keeps them valid even if a
+    // later switch to a DLSS upscaling preset shrinks the internal render res.
     m_nrdDenoiser = std::make_unique<NrdDenoiser>();
     if (instance != VK_NULL_HANDLE &&
         m_nrdDenoiser->initialize(instance, m_device, m_physicalDevice,
                                    graphicsQueueFamilyIndex,
                                    instanceExtensions, deviceExtensions,
-                                   m_width, m_height)) {
+                                   m_outW, m_outH)) {
         // Sub-plan 4.F T4: apply NVIDIA's reference REBLUR tuning for 1-4spp input.
         // Stock NRD defaults target 0.25spp game-style input with SHARC/ReSTIR; our
         // path tracer feeds N-spp averaged AOVs (see 4.F T3), so longer accumulation
@@ -139,12 +150,12 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
         m_nrdDenoiser.reset();
     }
     m_nrdCompositor = std::make_unique<NrdCompositor>();
-    if (!m_nrdCompositor->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+    if (!m_nrdCompositor->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
         std::cerr << "[NRD compose] init FAILED — compose pass will be skipped" << std::endl;
         m_nrdCompositor.reset();
     }
     m_cinematicPost = std::make_unique<NrdCinematicPost>();
-    if (!m_cinematicPost->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+    if (!m_cinematicPost->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
         std::cerr << "[NRD cinematic] init FAILED — cinematic pass will be skipped" << std::endl;
         m_cinematicPost.reset();
     }
@@ -157,7 +168,7 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
     // Cheap to keep resident; only dispatched when the active denoise mode is
     // Atrous, so None/OIDN/NRD are unaffected.
     m_atrousDenoiser = std::make_unique<AtrousDenoiser>();
-    if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+    if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
         std::cerr << "[atrous] init FAILED — --denoise=atrous will pass through noisy beauty\n";
         m_atrousDenoiser.reset();
     }
@@ -202,20 +213,33 @@ void PathTracer::resetAccumulation() {
 // ─── Resize ──────────────────────────────────────────────────────────
 
 void PathTracer::resize(uint32_t width, uint32_t height) {
-    if (width == m_width && height == m_height) return;
-    m_width = width;
-    m_height = height;
+    // width/height are the OUTPUT resolution. Recompute the internal render res
+    // (may be smaller under a DLSS upscaling preset) and reallocate.
+    if (width == m_outW && height == m_outH) return;
+    m_outW = width;
+    m_outH = height;
+    computeRenderResolution();
 
     // Recreate both images at new resolution
     destroyImages();
     createImages();
 
+#ifdef OHAO_DLSS_ENABLED
+    // Render/output res changed → the DLSS feature (created for the old dims) is
+    // stale. Release it so the next DLSSRR frame recreates it at the new dims.
+    if (m_dlssRR) {
+        m_dlssRR->releaseFeature();
+    }
+    m_dlssInitAttempted = false;
+    m_dlssColorOutFirstFrame = true;
+#endif
+
     // SVGF (DenoiseMode::Atrous) owns persistent history images sized to the
     // framebuffer — recreate them so they match the new resolution. The
-    // first-frame layout latch + resetHistory path handle re-bootstrapping.
+    // first-frame latch + resetHistory path handle re-bootstrapping.
     if (m_atrousDenoiser) {
         m_atrousDenoiser->shutdown();
-        if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_width, m_height)) {
+        if (!m_atrousDenoiser->initialize(m_device, m_physicalDevice, m_outW, m_outH)) {
             std::cerr << "[svgf] resize re-init FAILED — atrous will pass through noisy beauty\n";
             m_atrousDenoiser.reset();
         }
@@ -241,6 +265,83 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     m_jitterCurrent = glm::vec2(0.0f);
     m_jitterPrev    = glm::vec2(0.0f);
     m_haltonIndex   = 0;
+}
+
+// ─── Render-resolution derivation (DLSS upscaling) ───────────────────
+//
+// Decouples the internal RENDER resolution from the OUTPUT/display resolution.
+// Only DLSSRR mode with an upscaling preset (Quality/Balanced/Performance/
+// UltraPerformance) shrinks the render res; every other mode renders 1:1. The
+// raygen traces at m_width×m_height and DLSS-RR reconstructs to m_outW×m_outH.
+void PathTracer::computeRenderResolution() {
+    float scale = 1.0f;
+#ifdef OHAO_DLSS_ENABLED
+    if (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) {
+        scale = dlssRenderScale(dlssQualityFromEnv());
+    }
+#endif
+    m_dlssRenderScale = scale;
+
+    if (scale >= 0.999f) {
+        // Native res — no upscale. Keep render == output exactly.
+        m_width  = m_outW;
+        m_height = m_outH;
+        return;
+    }
+
+    // Round to the nearest even number (DLSS prefers even render dims), clamp ≥2.
+    auto evenScale = [](uint32_t out, float s) -> uint32_t {
+        uint32_t v = static_cast<uint32_t>(std::lround(static_cast<float>(out) * s));
+        v &= ~1u;                 // align down to even
+        return v < 2u ? 2u : v;
+    };
+    m_width  = evenScale(m_outW, scale);
+    m_height = evenScale(m_outH, scale);
+}
+
+// ─── Render settings ─────────────────────────────────────────────────
+//
+// Switching to/from DLSSRR (or a different OHAO_DLSS_QUALITY) changes the
+// internal render resolution, which requires reallocating every render-target
+// image. This happens between frames (setRenderSettings is called from the
+// renderer's per-frame prep, outside the command buffer), so a device-idle +
+// destroy/create is safe here. The per-frame descriptor rewrite in render()
+// rebinds all image views, so no stale descriptors survive.
+void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
+    m_renderSettings = settings;
+
+    // If images haven't been created yet (pre-init), just store the settings.
+    if (m_device == VK_NULL_HANDLE || m_outW == 0 || m_outH == 0) return;
+
+    const uint32_t prevW = m_width, prevH = m_height;
+    computeRenderResolution();
+    if (m_width == prevW && m_height == prevH) return;   // render res unchanged — nothing to do
+
+    // Render resolution changed (e.g. first switch into a DLSS upscaling preset).
+    // Reallocate the render-target images at the new render res.
+    vkDeviceWaitIdle(m_device);
+    destroyImages();
+    createImages();
+
+#ifdef OHAO_DLSS_ENABLED
+    // The DLSS feature (if any) was created for the old dims — force a fresh
+    // lazy re-init at the new render/output dims on the next DLSSRR frame.
+    if (m_dlssRR) {
+        m_dlssRR->releaseFeature();
+    }
+    m_dlssInitAttempted      = false;
+    m_dlssColorOutFirstFrame = true;
+#endif
+
+    // Buffer dimensions changed → restart accumulation + temporal history.
+    resetAccumulation();
+    m_giReservoirInitialized[0] = false;
+    m_giReservoirInitialized[1] = false;
+    m_giReservoirWriteIndex     = 0;
+
+    std::cout << "[PathTracer] render res " << m_width << "x" << m_height
+              << " → output " << m_outW << "x" << m_outH
+              << " (scale " << m_dlssRenderScale << ")" << std::endl;
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────────────

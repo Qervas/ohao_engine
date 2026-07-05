@@ -61,7 +61,11 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         if (m_dlssInstance != VK_NULL_HANDLE &&
             m_dlssRR->initialize(m_dlssInstance, m_physicalDevice, m_device,
                                  OHAO_DLSS_SNIPPET_DIR, OHAO_DLSS_APPDATA_DIR)) {
-            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_width, m_height) ||
+            // In (guide) resolution = m_width/m_height (render res); target
+            // resolution = m_outW/m_outH (output res). For DLAA render==output;
+            // for an upscaling preset render<output and DLSS reconstructs up.
+            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_outW, m_outH,
+                                         dlssQualityFromEnv()) ||
                 !m_dlssRR->createTonemapPipeline()) {
                 m_dlssRR->shutdown();
                 m_dlssRR.reset();
@@ -908,7 +912,8 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         ei.normalRoughImage = m_normalAOV;         ei.normalRoughView = m_normalAOVView;    ei.normalRoughFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
         ei.depthImage       = m_depthAOVImage;     ei.depthView       = m_depthAOVView;     ei.depthFormat       = VK_FORMAT_R32_SFLOAT;
         ei.motionImage      = m_motionVectorImage; ei.motionView      = m_motionVectorView; ei.motionFormat      = VK_FORMAT_R16G16_SFLOAT;
-        ei.renderW = m_width; ei.renderH = m_height;
+        ei.renderW = m_width; ei.renderH = m_height;   // guide-buffer (input) res
+        ei.outW = m_outW; ei.outH = m_outH;            // COLOR_OUT (target) res — DLSS upscales into it
         ei.jitterX = m_jitterCurrent.x; ei.jitterY = m_jitterCurrent.y;
         ei.mvScaleX = -1.0f; ei.mvScaleY = -1.0f;   // OHAO writes currPix-prevPix; DLSS wants prevPix-currPix
         ei.worldToView = glm::value_ptr(viewM);
@@ -940,8 +945,10 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0, 0, nullptr, 0, nullptr, 2, post);
 
-            // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (ACES+gamma, matches None).
-            m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_width, m_height);
+            // 5) Tonemap DLSS HDR COLOR_OUT (OUTPUT res) → RGBA8 beauty (OUTPUT
+            //    res). ACES+gamma, matches the "None" curve. Dispatch spans the
+            //    full output resolution (the shader is resolution-agnostic).
+            m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_outW, m_outH);
             dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
         }
     }
