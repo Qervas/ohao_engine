@@ -19,7 +19,55 @@ I started this in November 2024 to learn how a modern hybrid renderer is wired e
 | GPU/Vulkan layer | 9,021 LOC, 19 files |
 | Physics (Jolt) | 10,989 LOC, 51 files |
 | Scene graph | 7,042 LOC, 35 files |
-| Denoise backends | 3 (Intel OIDN, NVIDIA OptiX, NVIDIA NRD) |
+| Denoise backends | 4 (Intel OIDN, NVIDIA OptiX, NVIDIA NRD, NVIDIA DLSS-RR) |
+
+## Real-time path tracing — and the firefly that taught me the most
+
+The most recent stretch pushed the interactive viewer from noisy preview to real-time path tracing at 67 fps (1 spp, 720p), denoised with NVIDIA DLSS Ray Reconstruction and stabilized with ReSTIR GI. The fix I got the most out of, though, was the smallest one.
+
+![Outdoor HDRI scene, graded](docs/images/hero_outdoor_graded.jpg)
+
+### The 1-spp firefly storm — importance sampling + MIS
+
+**Symptom.** At one sample per pixel, metal and ground sparkled: bright pixels flashing at random every frame. Denoising couldn't touch it — the denoiser was being fed garbage.
+
+**Cause.** The real-time integrator reached the bright HDRI environment *only* through random BSDF bounces. A rare ray that happened to land on the sun returned `radiance / (tiny pdf)` — a colossal spike. That's unbounded Monte-Carlo variance, by construction. The offline path already importance-sampled the environment; the real-time fork I'd split off didn't.
+
+**Fix.** Importance-sample the environment by its own luminance (marginal + conditional CDF), shadow-trace, and MIS-weight against BSDF sampling with the balance heuristic:
+
+```glsl
+// shaders/rt/pt_raygen_realtime.rgen
+sampleEnvMap(u1, u2, ..., out envDir, out envPdf);   // sample the sky where it's bright
+if (dot(N, envDir) > 0.0 && envPdf > 0.0) {
+    traceRayEXT(...);                                 // visibility toward the sampled dir
+    if (payload.hitDist < 0.0) {                      // ray escaped -> it saw the env
+        float w = misBalanceHeuristic(envPdf, bsdfPdfAtEnv);
+        radiance += envRadiance * (diff + spec) * NdotL * w / envPdf;   // /envPdf cancels the spike
+    }
+}
+```
+
+**Lesson.** Variance isn't noise you denoise away — it's a sampling problem you solve at the source. A denoiser can only reconstruct a signal whose variance is already low. Every later win was the same move: cut variance *before* the denoiser, not after.
+
+### The flicker that wasn't where it looked
+
+Chrome on a test helmet flickered frame to frame. I built two plausible fixes — feeding DLSS the specular hit-distance guide, then swapping the glossy sampler for GGX VNDF importance sampling (Heitz 2018) — measured both with a drift-controlled A/B, and both came back *not* fixing it. The control gave it away: a diffuse wall that should read a temporal std of ~3 measured ~27. The ReSTIR-GI reservoir was still boiling, and the metal was just reflecting it — and a reflection is view-dependent, so the denoiser can't reproject the boil away the way it does on the walls.
+
+| scene | metal flicker (temporal std) | fps (1 spp) |
+|---|---|---|
+| enclosed room | ~15 | ~35 |
+| open HDRI scene | **0.69** | **67** |
+
+The fix was the scene, not the sampler: an open environment reflects a stable sky instead of boiling GI, and one importance-sampled HDRI replaces four noisy area lights — ~20× less flicker and ~2× faster. Same lesson: ask *what* the pixel reflects before *how* the ray is aimed.
+
+<p>
+  <img src="docs/images/flicker_map.jpg" width="49%" alt="per-pixel temporal variance map — metal bright, diffuse walls dark">
+  <img src="docs/images/indoor_before.jpg" width="49%" alt="the enclosed room the flicker came from">
+</p>
+
+*Left: a per-pixel temporal-standard-deviation map — bright = flickering. The metal glows; the diffuse walls are black, which is what pointed at the reflection. Right: the enclosed room the flicker came from.*
+
+I also tried **ReSTIR DI** for the direct lighting and reverted it — the weight calculation introduced more noise than it removed. Measuring that honestly and backing it out was the right call; ReSTIR GI on the indirect bounce stayed, and does the real variance reduction (3.2× less boil, unbiased).
 
 ## Architecture
 
@@ -131,7 +179,7 @@ All examples accept `--denoise=oidn|optix|nrd|none`. The interactive viewer uses
 
 ## Project status
 
-`CHANGELOG.md` and `devlog/` track the progression. Most recent milestone: Sub-plan 4.F (Apr 2026) shipped the NRD quality pass with env composite in tonemap, view-change bootstrap, multi-spp AOV accumulation, and Halton jitter. `--denoise=nrd` is shippable-realtime quality. Open gaps that I've called out honestly in `CLAUDE.md`: ReSTIR DI, DLSS Ray Reconstruction, and RT BLAS rebuild for skinned meshes in the path tracer.
+`CHANGELOG.md` and `devlog/` track the progression. Most recent milestone: Sub-plan 4.F (Apr 2026) shipped the NRD quality pass with env composite in tonemap, view-change bootstrap, multi-spp AOV accumulation, and Halton jitter. `--denoise=nrd` is shippable-realtime quality. The newest work (see [Real-time path tracing](#real-time-path-tracing--and-the-firefly-that-taught-me-the-most) above) adds `--denoise=dlssrr` (DLSS Ray Reconstruction), ReSTIR GI, DLSS upscaling, and an outdoor HDRI showcase scene — closing two of the gaps I'd previously called out. ReSTIR DI was tried and reverted (added more noise than it removed). The remaining path-tracer gap in `CLAUDE.md` is RT BLAS rebuild for skinned meshes.
 
 For deeper docs see `docs/INDEX.md`, `docs/render.md`, `docs/architecture/`, and the per-bug write-ups in `docs/bugs_solved/`.
 
