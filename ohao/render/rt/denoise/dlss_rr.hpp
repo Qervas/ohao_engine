@@ -123,6 +123,10 @@ public:
         VkImage specAlbedoImage = VK_NULL_HANDLE; VkImageView specAlbedoView = VK_NULL_HANDLE; VkFormat specAlbedoFormat = VK_FORMAT_UNDEFINED;
         // NORMAL+ROUGHNESS packed (world normal xyz [-1,1], perceptual roughness w).
         VkImage normalRoughImage = VK_NULL_HANDLE; VkImageView normalRoughView = VK_NULL_HANDLE; VkFormat normalRoughFormat = VK_FORMAT_UNDEFINED;
+        // SPECULAR_HIT_DISTANCE (R32F, world-space specular ray length in .x). Optional —
+        // when set, fed as pInSpecularHitDistance so DLSS-RR can reproject glossy
+        // reflections (fixes flicker on metal). Leave null to omit the guide.
+        VkImage specHitDistImage = VK_NULL_HANDLE; VkImageView specHitDistView = VK_NULL_HANDLE; VkFormat specHitDistFormat = VK_FORMAT_UNDEFINED;
         // LINEARDEPTH (R32F view-space Z, positive with distance).
         VkImage depthImage = VK_NULL_HANDLE;     VkImageView depthView = VK_NULL_HANDLE;     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
         // MOTION (RG16F, pixel-space; MVScale flips OHAO's sign to DLSS convention).

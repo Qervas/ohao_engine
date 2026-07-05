@@ -632,6 +632,49 @@ bool PathTracer::createImages() {
         if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_normalRoughnessView) != VK_SUCCESS) return false;
     }
 
+    // ---- DLSS-RR: specular hit-distance guide (R32F, world-space ray length) ----
+    // At RENDER resolution (m_width/m_height) — matches the other DLSS guide buffers.
+    // Written by the realtime raygen (binding 35) each frame; read by DLSS-RR eval as
+    // pInSpecularHitDistance so it can reproject the glossy reflection stably.
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = VK_FORMAT_R32_SFLOAT;
+        imageInfo.extent = {m_width, m_height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(m_device, &imageInfo, nullptr, &m_specHitDistImage) != VK_SUCCESS) return false;
+
+        VkMemoryRequirements memReqs;
+        vkGetImageMemoryRequirements(m_device, m_specHitDistImage, &memReqs);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReqs.size;
+        allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocInfo.memoryTypeIndex == UINT32_MAX) return false;
+
+        if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_specHitDistMemory) != VK_SUCCESS) return false;
+        vkBindImageMemory(m_device, m_specHitDistImage, m_specHitDistMemory, 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_specHitDistImage;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R32_SFLOAT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_device, &viewInfo, nullptr, &m_specHitDistView) != VK_SUCCESS) return false;
+    }
+
     // ---- Sub-plan 4.C: NRD denoised diffuse output (RGBA32F) at binding 27 ----
     {
         VkImageCreateInfo imageInfo{};
@@ -1017,6 +1060,10 @@ void PathTracer::destroyImages() {
     if (m_normalRoughnessView)   { vkDestroyImageView(m_device, m_normalRoughnessView, nullptr);  m_normalRoughnessView = VK_NULL_HANDLE; }
     if (m_normalRoughnessImage)  { vkDestroyImage(m_device, m_normalRoughnessImage, nullptr);     m_normalRoughnessImage = VK_NULL_HANDLE; }
     if (m_normalRoughnessMemory) { vkFreeMemory(m_device, m_normalRoughnessMemory, nullptr);      m_normalRoughnessMemory = VK_NULL_HANDLE; }
+
+    if (m_specHitDistView)   { vkDestroyImageView(m_device, m_specHitDistView, nullptr);  m_specHitDistView = VK_NULL_HANDLE; }
+    if (m_specHitDistImage)  { vkDestroyImage(m_device, m_specHitDistImage, nullptr);     m_specHitDistImage = VK_NULL_HANDLE; }
+    if (m_specHitDistMemory) { vkFreeMemory(m_device, m_specHitDistMemory, nullptr);      m_specHitDistMemory = VK_NULL_HANDLE; }
 
     if (m_outDiffRadianceView)    { vkDestroyImageView(m_device, m_outDiffRadianceView, nullptr);   m_outDiffRadianceView = VK_NULL_HANDLE; }
     if (m_outDiffRadianceImage)   { vkDestroyImage(m_device, m_outDiffRadianceImage, nullptr);      m_outDiffRadianceImage = VK_NULL_HANDLE; }

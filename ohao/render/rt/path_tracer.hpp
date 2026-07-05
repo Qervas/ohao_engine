@@ -159,6 +159,9 @@ public:
     VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
     VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
     VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
+    // DLSS-RR specular hit-distance guide (R32F, binding 35).
+    VkImageView getSpecHitDistAOV()      const { return m_specHitDistView; }
+    VkImage     getSpecHitDistAOVImage() const { return m_specHitDistImage; }
     VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
     VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
     VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
@@ -394,6 +397,13 @@ private:
     VkImage        m_normalRoughnessImage = VK_NULL_HANDLE;
     VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
     VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
+
+    // DLSS-RR: dedicated specular hit-distance guide (R32F, world-space ray length,
+    // binding 35). Mirrors specularRadiance.a into .x — DLSS reads spec hit-dist from
+    // a dedicated image's .x channel, which it needs to reproject glossy reflections.
+    VkImage        m_specHitDistImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_specHitDistMemory = VK_NULL_HANDLE;
+    VkImageView    m_specHitDistView   = VK_NULL_HANDLE;
 
     // Feature 4.C: NRD denoised diffuse output (RGBA32F)
     VkImage        m_outDiffRadianceImage  = VK_NULL_HANDLE;

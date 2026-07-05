@@ -253,6 +253,12 @@ bool DlssRR::evaluate(VkCommandBuffer cmd, const EvalInputs& in) {
     NVSDK_NGX_Resource_VK normRough = wrap(in.normalRoughView,in.normalRoughImage,in.normalRoughFormat,in.renderW, in.renderH, false);
     NVSDK_NGX_Resource_VK depth     = wrap(in.depthView,      in.depthImage,      in.depthFormat,      in.renderW, in.renderH, false);
     NVSDK_NGX_Resource_VK motion    = wrap(in.motionView,     in.motionImage,     in.motionFormat,     in.renderW, in.renderH, false);
+    // Optional specular hit-distance guide (world-space ray length, .x channel).
+    NVSDK_NGX_Resource_VK specHitDist{};
+    const bool haveSpecHitDist = (in.specHitDistView != VK_NULL_HANDLE);
+    if (haveSpecHitDist) {
+        specHitDist = wrap(in.specHitDistView, in.specHitDistImage, in.specHitDistFormat, in.renderW, in.renderH, false);
+    }
 
     NVSDK_NGX_VK_DLSSD_Eval_Params evalParams = {};
     evalParams.pInColor          = &colorIn;
@@ -266,6 +272,14 @@ bool DlssRR::evaluate(VkCommandBuffer cmd, const EvalInputs& in) {
     evalParams.pInRoughness = &normRough;
     evalParams.pInDepth          = &depth;
     evalParams.pInMotionVectors  = &motion;
+    // Specular hit-distance guide (world-space ray length). Without it DLSS-RR
+    // treats reflections as attached to the primary surface and cannot reproject
+    // them → the glossy metal reflection flickers frame-to-frame. OHAO carries this
+    // value in specularRadiance.a, but DLSS reads it from a dedicated image's .x, so
+    // the raygen mirrors it into m_specHitDistImage which we feed here.
+    if (haveSpecHitDist) {
+        evalParams.pInSpecularHitDistance = &specHitDist;
+    }
 
     // Jitter offset must be in input/render pixel space; DLSS wants the negative
     // of the projection jitter (per nvpro-samples vk_denoise_dlssrr).
