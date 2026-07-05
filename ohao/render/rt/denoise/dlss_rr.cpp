@@ -161,7 +161,8 @@ bool DlssRR::initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
 
 bool DlssRR::createFeature(VkCommandBuffer cmd,
                            uint32_t renderW, uint32_t renderH,
-                           uint32_t outW, uint32_t outH) {
+                           uint32_t outW, uint32_t outH,
+                           DlssQuality quality) {
     if (!m_initialized || !m_ngxParams) {
         std::cerr << "[DLSS-RR] createFeature called before successful initialize()\n";
         return false;
@@ -169,6 +170,17 @@ bool DlssRR::createFeature(VkCommandBuffer cmd,
     if (m_featureHandle) return true;  // already created
 
     auto* params = static_cast<NVSDK_NGX_Parameter*>(m_ngxParams);
+
+    // Map the engine's DlssQuality preset to the NGX perf/quality value. DLAA is
+    // native-res (render==out); the others are upscaling presets (render<out).
+    NVSDK_NGX_PerfQuality_Value ngxPerf = NVSDK_NGX_PerfQuality_Value_DLAA;
+    switch (quality) {
+        case DlssQuality::DLAA:             ngxPerf = NVSDK_NGX_PerfQuality_Value_DLAA;             break;
+        case DlssQuality::Quality:          ngxPerf = NVSDK_NGX_PerfQuality_Value_MaxQuality;       break;
+        case DlssQuality::Balanced:         ngxPerf = NVSDK_NGX_PerfQuality_Value_Balanced;         break;
+        case DlssQuality::Performance:      ngxPerf = NVSDK_NGX_PerfQuality_Value_MaxPerf;          break;
+        case DlssQuality::UltraPerformance: ngxPerf = NVSDK_NGX_PerfQuality_Value_UltraPerformance; break;
+    }
 
     NVSDK_NGX_DLSSD_Create_Params createParams = {};
     createParams.InDenoiseMode   = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;   // required for Ray Reconstruction
@@ -182,8 +194,8 @@ bool DlssRR::createFeature(VkCommandBuffer cmd,
     createParams.InHeight        = renderH;
     createParams.InTargetWidth   = outW;
     createParams.InTargetHeight  = outH;
-    // DLAA == native-resolution (no upscale) — correct for a pure denoiser where render==out.
-    createParams.InPerfQualityValue = NVSDK_NGX_PerfQuality_Value_DLAA;
+    // Selected preset: DLAA (native) or an upscaling preset (render<out).
+    createParams.InPerfQualityValue = ngxPerf;
     // Phase 1: HDR radiance input. MVLowRes is REQUIRED by the DLSS-D model
     // ("Low resolution Motion Vectors required" at create otherwise); for a
     // native-res denoiser (render==out) low-res MVs equal full-res MVs, so this
@@ -206,7 +218,8 @@ bool DlssRR::createFeature(VkCommandBuffer cmd,
     m_featureHandle = handle;
     m_renderW = renderW; m_renderH = renderH; m_outW = outW; m_outH = outH;
     std::cout << "[DLSS-RR] feature created " << renderW << "x" << renderH
-              << " (out " << outW << "x" << outH << ")" << std::endl;
+              << " (out " << outW << "x" << outH << ", preset " << dlssQualityName(quality) << ")"
+              << std::endl;
     return true;
 }
 
@@ -227,8 +240,14 @@ bool DlssRR::evaluate(VkCommandBuffer cmd, const EvalInputs& in) {
         return NVSDK_NGX_Create_ImageView_Resource_VK(view, image, range, fmt, w, h, readWrite);
     };
 
+    // Guide buffers are read at RENDER res; COLOR_OUT is written at OUTPUT
+    // (target) res so DLSS upscales into it. outW/outH==0 means "same as render"
+    // (DLAA / pure denoise), so fall back to render dims there.
+    const uint32_t ow = in.outW ? in.outW : in.renderW;
+    const uint32_t oh = in.outH ? in.outH : in.renderH;
+
     NVSDK_NGX_Resource_VK colorIn   = wrap(in.colorInView,    in.colorInImage,    in.colorInFormat,    in.renderW, in.renderH, false);
-    NVSDK_NGX_Resource_VK colorOut  = wrap(in.colorOutView,   in.colorOutImage,   in.colorOutFormat,   in.renderW, in.renderH, true);
+    NVSDK_NGX_Resource_VK colorOut  = wrap(in.colorOutView,   in.colorOutImage,   in.colorOutFormat,   ow,         oh,         true);
     NVSDK_NGX_Resource_VK diffAlb   = wrap(in.diffAlbedoView, in.diffAlbedoImage, in.diffAlbedoFormat, in.renderW, in.renderH, false);
     NVSDK_NGX_Resource_VK specAlb   = wrap(in.specAlbedoView, in.specAlbedoImage, in.specAlbedoFormat, in.renderW, in.renderH, false);
     NVSDK_NGX_Resource_VK normRough = wrap(in.normalRoughView,in.normalRoughImage,in.normalRoughFormat,in.renderW, in.renderH, false);
@@ -422,7 +441,7 @@ namespace ohao {
 DlssRR::DlssRR() = default;
 DlssRR::~DlssRR() = default;
 bool DlssRR::initialize(VkInstance, VkPhysicalDevice, VkDevice, const char*, const char*) { return false; }
-bool DlssRR::createFeature(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
+bool DlssRR::createFeature(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t, DlssQuality) { return false; }
 bool DlssRR::evaluate(VkCommandBuffer, const EvalInputs&) { return false; }
 bool DlssRR::createTonemapPipeline() { return false; }
 void DlssRR::tonemap(VkCommandBuffer, VkImageView, VkImageView, uint32_t, uint32_t) {}

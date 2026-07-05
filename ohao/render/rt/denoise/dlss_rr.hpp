@@ -1,8 +1,72 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <cstdint>
+#include <cstdlib>
 
 namespace ohao {
+
+/// DLSS quality preset — selects the internal RENDER scale (fraction of the
+/// output/display resolution the path tracer actually traces) and the matching
+/// NGX NVSDK_NGX_PerfQuality_Value. DLAA = native res (no upscale); the rest
+/// render at a lower res and let DLSS-RR reconstruct to the output res.
+enum class DlssQuality : uint32_t {
+    DLAA = 0,          // 1.0   — native res, pure denoise (no upscale, no perf win)
+    Quality,           // 0.667 — MaxQuality
+    Balanced,          // 0.58  — Balanced
+    Performance,       // 0.5   — MaxPerf (half linear res → ~4x fewer traced pixels)
+    UltraPerformance,  // 0.333 — UltraPerformance
+};
+
+/// Render-resolution scale (linear, per-axis) for each preset.
+inline float dlssRenderScale(DlssQuality q) {
+    switch (q) {
+        case DlssQuality::DLAA:             return 1.0f;
+        case DlssQuality::Quality:          return 0.667f;
+        case DlssQuality::Balanced:         return 0.58f;
+        case DlssQuality::Performance:      return 0.5f;
+        case DlssQuality::UltraPerformance: return 0.333f;
+    }
+    return 1.0f;
+}
+
+inline const char* dlssQualityName(DlssQuality q) {
+    switch (q) {
+        case DlssQuality::DLAA:             return "dlaa";
+        case DlssQuality::Quality:          return "quality";
+        case DlssQuality::Balanced:         return "balanced";
+        case DlssQuality::Performance:      return "performance";
+        case DlssQuality::UltraPerformance: return "ultraperf";
+    }
+    return "dlaa";
+}
+
+// Portable case-insensitive compare (avoids strcasecmp/_stricmp header split).
+inline bool dlssIEq(const char* a, const char* b) {
+    if (!a || !b) return false;
+    for (; *a && *b; ++a, ++b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? char(*a + 32) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? char(*b + 32) : *b;
+        if (ca != cb) return false;
+    }
+    return *a == *b;
+}
+
+inline DlssQuality parseDlssQuality(const char* s) {
+    if (!s || !*s) return DlssQuality::DLAA;
+    if (dlssIEq(s, "quality"))                            return DlssQuality::Quality;
+    if (dlssIEq(s, "balanced"))                           return DlssQuality::Balanced;
+    if (dlssIEq(s, "performance") || dlssIEq(s, "perf"))  return DlssQuality::Performance;
+    if (dlssIEq(s, "ultraperf") || dlssIEq(s, "ultra") ||
+        dlssIEq(s, "ultraperformance"))                   return DlssQuality::UltraPerformance;
+    return DlssQuality::DLAA;   // "dlaa" or anything unrecognized
+}
+
+/// Reads OHAO_DLSS_QUALITY once (cached for the process). Default DLAA so the
+/// existing native-res behavior is unchanged unless the env var is set.
+inline DlssQuality dlssQualityFromEnv() {
+    static const DlssQuality q = parseDlssQuality(std::getenv("OHAO_DLSS_QUALITY"));
+    return q;
+}
 
 /// DlssRR — NVIDIA DLSS Ray Reconstruction (NGX feature "dlssd") wrapper.
 ///
@@ -34,13 +98,17 @@ public:
     bool initialize(VkInstance instance, VkPhysicalDevice physicalDevice,
                     VkDevice device, const char* snippetDir, const char* appDataDir);
 
-    /// Create the DLSS-RR feature at the given resolution. For a pure denoiser
-    /// (no upscale) pass render==out resolution. The NGX create records GPU
-    /// setup work into `cmd`; the CALLER owns submitting that command buffer.
-    /// Returns false (+ decoded result) on failure. Stores the feature handle.
+    /// Create the DLSS-RR feature. render==out (DlssQuality::DLAA) is a pure
+    /// denoiser; render<out (Quality/Balanced/Performance/UltraPerformance)
+    /// enables DLSS upscaling — the guide buffers are read at render res and
+    /// COLOR_OUT is written at out res. `quality` selects the matching NGX
+    /// NVSDK_NGX_PerfQuality_Value. The NGX create records GPU setup work into
+    /// `cmd`; the CALLER owns submitting that command buffer. Returns false
+    /// (+ decoded result) on failure. Stores the feature handle.
     bool createFeature(VkCommandBuffer cmd,
                        uint32_t renderW, uint32_t renderH,
-                       uint32_t outW, uint32_t outH);
+                       uint32_t outW, uint32_t outH,
+                       DlssQuality quality = DlssQuality::DLAA);
 
     /// Guide buffers + camera state for one DLSS-RR denoise dispatch. Plain
     /// Vulkan handles only — keeps this header free of NGX includes. Every image
@@ -60,8 +128,9 @@ public:
         // MOTION (RG16F, pixel-space; MVScale flips OHAO's sign to DLSS convention).
         VkImage motionImage = VK_NULL_HANDLE;    VkImageView motionView = VK_NULL_HANDLE;    VkFormat motionFormat = VK_FORMAT_UNDEFINED;
 
-        uint32_t renderW = 0, renderH = 0;
-        float    jitterX = 0.0f, jitterY = 0.0f;   // sub-pixel jitter (pixels); negated inside.
+        uint32_t renderW = 0, renderH = 0;         // guide-buffer (input) resolution
+        uint32_t outW = 0, outH = 0;               // COLOR_OUT (target) resolution; 0 ⇒ same as render
+        float    jitterX = 0.0f, jitterY = 0.0f;   // sub-pixel jitter (render-res pixels); negated inside.
         float    mvScaleX = 1.0f, mvScaleY = 1.0f;
         const float* worldToView = nullptr;        // column-major glm view (world→view)
         const float* viewToClip  = nullptr;        // column-major glm proj (view→clip)

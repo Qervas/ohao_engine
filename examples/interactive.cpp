@@ -50,7 +50,7 @@ struct CameraState {
 };
 
 static CameraState g_cam;
-static int g_spp = 1;
+static int g_spp = [](){ const char* e = getenv("OHAO_SPP"); int v = e ? atoi(e) : 1; return v < 1 ? 1 : (v > 64 ? 64 : v); }();
 
 void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
@@ -348,8 +348,20 @@ int main(int argc, char* argv[]) {
             snprintf(title, sizeof(title), "OHAO Interactive RT | %.1f fps | %d spp/frame | %d total spp",
                      fps, g_spp, totalSpp);
             glfwSetWindowTitle(window, title);
+            // Transient stderr echo so headless perf runs can capture fps + median
+            // frame time without a window manager. Prints once per second.
+            std::fprintf(stderr, "[perf] %.2f fps | %.3f ms/frame\n", fps, 1000.0f / fps);
             frameCount = 0;
             fpsTimer = 0;
+        }
+
+        // Headless auto-exit: OHAO_EXIT_AFTER=<seconds> closes the window so a
+        // scripted perf run terminates and its stderr [perf] lines can be parsed.
+        static const float s_exitAfter = [](){ const char* e = getenv("OHAO_EXIT_AFTER"); return e ? (float)atof(e) : 0.0f; }();
+        static float s_elapsed = 0.0f;
+        s_elapsed += dt;
+        if (s_exitAfter > 0.0f && s_elapsed >= s_exitAfter) {
+            glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
         // Screenshot
