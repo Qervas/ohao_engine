@@ -32,6 +32,8 @@
 #include <string>
 #include <chrono>
 #include <cstring>
+#include <thread>
+#include <atomic>
 #include <algorithm>
 #include <optional>
 #include <vector>
@@ -343,8 +345,20 @@ int main(int argc, char* argv[]) {
         static const int   s_dumpEvery = [](){ const char* e = getenv("OHAO_DUMP_EVERY"); return e ? atoi(e) : 0; }();
         static const char* s_dumpPath  = [](){ const char* p = getenv("OHAO_DUMP_PATH");  return p ? p : "/tmp/ohao_live.png"; }();
         static long        s_dumpN      = 0;
-        if (s_dumpEvery > 0 && pixels && (s_dumpN++ % s_dumpEvery == 0)) {
-            stbi_write_png(s_dumpPath, W, H, 4, pixels, W * 4);
+        static std::atomic<bool> s_dumpBusy{false};
+        // Async: the PNG encode+write (~30-50ms) runs on a DETACHED thread so it
+        // never blocks the render loop. A synchronous write here shows up as a
+        // frozen frame every N frames while panning — invisible when still, a
+        // visible hitch in motion. Copy pixels first (getPixels reuses its buffer);
+        // skip this dump if a prior write is still in flight.
+        if (s_dumpEvery > 0 && pixels && (s_dumpN++ % s_dumpEvery == 0) && !s_dumpBusy.exchange(true)) {
+            auto* buf = new uint8_t[(size_t)W * H * 4];
+            std::memcpy(buf, pixels, (size_t)W * H * 4);
+            std::thread([buf, W, H]() {
+                stbi_write_png(s_dumpPath, W, H, 4, buf, W * 4);
+                delete[] buf;
+                s_dumpBusy.store(false);
+            }).detach();
         }
 
         glfwSwapBuffers(window);
