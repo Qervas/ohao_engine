@@ -15,6 +15,7 @@
 #include <nvsdk_ngx_params_dlssd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -331,10 +332,18 @@ bool DlssRR::createTonemapPipeline() {
         return false;
     }
 
+    // Push constant: { uint frame; float strength; } for the cinematic grade.
+    VkPushConstantRange pcRange{};
+    pcRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcRange.offset     = 0;
+    pcRange.size       = 8;  // uint + float
+
     VkPipelineLayoutCreateInfo plInfo{};
-    plInfo.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plInfo.setLayoutCount = 1;
-    plInfo.pSetLayouts    = &m_tmSetLayout;
+    plInfo.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plInfo.setLayoutCount         = 1;
+    plInfo.pSetLayouts            = &m_tmSetLayout;
+    plInfo.pushConstantRangeCount = 1;
+    plInfo.pPushConstantRanges    = &pcRange;
     if (vkCreatePipelineLayout(m_device, &plInfo, nullptr, &m_tmPipelineLayout) != VK_SUCCESS) {
         std::cerr << "[DLSS-RR] tonemap: vkCreatePipelineLayout failed\n";
         return false;
@@ -419,6 +428,16 @@ void DlssRR::tonemap(VkCommandBuffer cmd, VkImageView hdrInView, VkImageView ldr
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tmPipelineLayout, 0, 1,
                             &m_tmDescriptorSet, 0, nullptr);
+
+    // Cinematic grade strength (OHAO_GRADE, default 1.0; 0 = pure ACES). Cached once.
+    if (m_gradeStrength < 0.0f) {
+        const char* g = std::getenv("OHAO_GRADE");
+        float v = g ? (float)std::atof(g) : 1.0f;
+        m_gradeStrength = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    }
+    struct { uint32_t frame; float strength; } pcData{ m_tmFrame++, m_gradeStrength };
+    vkCmdPushConstants(cmd, m_tmPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pcData), &pcData);
+
     vkCmdDispatch(cmd, (width + 7u) / 8u, (height + 7u) / 8u, 1);
 }
 
