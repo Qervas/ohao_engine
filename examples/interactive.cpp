@@ -155,10 +155,12 @@ int main(int argc, char* argv[]) {
                   << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
 
-    // Env map: skip for indoor bedroom scene — interior lights only.
-    // Outdoor HDR penetrates wall gaps and overexposes the room.
-    // Pass "outdoor" as 3rd arg to force env map loading.
-    if (!envPath.empty() && argc > 3 && std::string(argv[3]) == "outdoor") {
+    // "outdoor" (3rd arg): a clean HDRI-lit scene — ground plane + model + sky,
+    // NO enclosure and NO studio lights (the HDRI is the only light). Far simpler
+    // than the bedroom (one dominant sun + sky fill), and the flicker-free showcase.
+    // Default (no "outdoor"): the enclosed bedroom with interior lights, env skipped.
+    bool outdoor = (argc > 3 && std::string(argv[3]) == "outdoor");
+    if (!envPath.empty() && outdoor) {
         renderer.setEnvironmentMap(envPath);
     }
 
@@ -228,6 +230,13 @@ int main(int argc, char* argv[]) {
         mat->getMaterial().roughness = roughness;
     };
 
+    if (outdoor) {
+        // Outdoor: a single large ground plane, lit purely by the HDRI (sun + sky).
+        // No walls, no ceiling, no enclosure — nothing for stray GI rays to leak
+        // through, and one dominant directional light instead of 4 overlapping ones.
+        float G = S * 6.0f;
+        addQuad("Ground", {-G,-S,-G},{G,-S,-G},{G,-S,G},{-G,-S,G}, {0,1,0}, {0.40f,0.40f,0.42f}, 0.8f);
+    } else {
     // Bedroom walls/floor
     glm::vec3 wallColor(0.55f, 0.50f, 0.45f);   // muted warm gray walls
     glm::vec3 floorColor(0.18f, 0.10f, 0.05f);  // dark walnut wood
@@ -248,6 +257,7 @@ int main(int argc, char* argv[]) {
     addBox("Headboard", {-bedW,-S,-S}, {bedW,-S+bedH*2.5f,-S+0.3f}, {0.20f,0.12f,0.06f}, 0.4f);
     addBox("Pillow", {-bedW*0.4f,-S+bedH,-S+0.4f}, {bedW*0.4f,-S+bedH+1.0f,-S+bedD*0.4f}, {0.92f,0.90f,0.88f}, 0.95f);
     addBox("Nightstand", {S*0.55f,-S,-S}, {S*0.55f+3.0f,-S+bedH*1.5f,-S+3.0f}, {0.22f,0.14f,0.07f}, 0.45f);
+    }  // end indoor bedroom enclosure
 
     // Place model
     if (model) {
@@ -262,8 +272,9 @@ int main(int argc, char* argv[]) {
         mat->getMaterial().roughness = 0.5f;
     }
 
-    // Bedroom lights
-    SceneFramer::applyLights(scene.get(), frame);
+    // Indoor bedroom lights only — outdoor is lit entirely by the HDRI sun + sky.
+    if (!outdoor)
+        SceneFramer::applyLights(scene.get(), frame);
 
     renderer.setScene(scene.get());
     renderer.setRenderMode(rtMode);
