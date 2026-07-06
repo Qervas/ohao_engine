@@ -3,14 +3,12 @@
 A solo Vulkan 1.3 renderer with a hybrid pipeline: KHR ray tracing for path-traced reference and indirect lighting, deferred raster for real-time. Pure C++, no editor framework.
 
 <p align="center">
-  <video src="https://github.com/Qervas/ohao_engine/raw/master/docs/media/helmet_orbit.mp4"
-         poster="docs/images/hero_outdoor_graded.jpg"
-         autoplay loop muted playsinline width="880">
-    <img src="docs/images/hero_outdoor_graded.jpg" width="880" alt="OHAO Engine — real-time path-traced helmet in an outdoor HDRI scene" />
-  </video>
+  <a href="docs/media/helmet_orbit.mp4">
+    <img src="docs/media/helmet_orbit.gif" width="640" alt="OHAO Engine — real-time path-traced helmet orbiting in an outdoor HDRI scene" />
+  </a>
 </p>
 
-<p align="center"><sub><em>Real-time path tracing at ~67 fps — DLSS Ray Reconstruction · ReSTIR GI · cinematic grade. A full 360° orbit, rendered live. (<a href="docs/media/helmet_orbit.mp4">▶ full-quality MP4</a> — if the clip doesn't autoplay in your browser.)</em></sub></p>
+<p align="center"><sub><em>Real-time path tracing at ~67 fps — DLSS Ray Reconstruction · ReSTIR GI · cinematic grade. A full 360° orbit, rendered live — click for the <a href="docs/media/helmet_orbit.mp4">▶ full-quality MP4</a>.</em></sub></p>
 
 ## What it is
 
