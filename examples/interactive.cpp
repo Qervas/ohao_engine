@@ -281,6 +281,31 @@ int main(int argc, char* argv[]) {
     renderer.setScene(scene.get());
     renderer.setRenderMode(rtMode);
 
+    // --- Scripted orbit recording: OHAO_ORBIT=<seconds> drives a fixed-timestep
+    // orbit around the model, dumping numbered frames to OHAO_ORBIT_DIR (default
+    // /tmp/orbit) for offline encoding into a video. Fixed dt → the clip length is
+    // exactly OHAO_ORBIT seconds at OHAO_ORBIT_FPS, independent of render speed.
+    const float orbitSecs = [](){ const char* e = getenv("OHAO_ORBIT"); return e ? (float)atof(e) : 0.0f; }();
+    const int   orbitFps  = [](){ const char* e = getenv("OHAO_ORBIT_FPS"); return e ? atoi(e) : 30; }();
+    const char* orbitDir  = [](){ const char* e = getenv("OHAO_ORBIT_DIR"); return e ? e : "/tmp/orbit"; }();
+    const bool  orbitMode = orbitSecs > 0.0f;
+    const int   orbitTotal  = (int)(orbitSecs * (float)orbitFps);
+    const int   orbitWarmup = orbitFps / 2;   // ~0.5s convergence before recording starts
+    long        orbitFrame  = 0;
+    glm::vec3   orbitCenter = frame.modelPosition;
+    float orbitRadius = 25.0f, orbitHeight = 0.0f, orbitStartAng = 0.0f;
+    if (orbitMode) {
+        glm::vec3 toCam = frame.cameraPosition - orbitCenter;
+        orbitRadius   = std::sqrt(toCam.x * toCam.x + toCam.z * toCam.z);
+        if (orbitRadius < 1.0f) orbitRadius = glm::length(toCam);
+        orbitHeight   = toCam.y;
+        orbitStartAng = std::atan2(toCam.z, toCam.x);
+        g_spp = std::max(g_spp, 4);   // a few spp/frame → cleaner video than 1-spp realtime
+        std::cout << "[orbit] " << orbitSecs << "s @ " << orbitFps << "fps = "
+                  << orbitTotal << " frames -> " << orbitDir
+                  << "  (radius=" << orbitRadius << ", spp=" << g_spp << ")\n";
+    }
+
     // Main loop
     auto lastTime = std::chrono::high_resolution_clock::now();
     int frameCount = 0;
@@ -292,7 +317,18 @@ int main(int argc, char* argv[]) {
         lastTime = now;
 
         glfwPollEvents();
-        processInput(window, dt);
+        if (orbitMode) {
+            int rec = (int)orbitFrame - orbitWarmup;   // <0 during warmup
+            float ang = orbitStartAng;
+            if (rec >= 0) ang = orbitStartAng + 6.2831853f * (float)rec / (float)orbitTotal;
+            g_cam.position = orbitCenter + glm::vec3(orbitRadius * std::cos(ang), orbitHeight, orbitRadius * std::sin(ang));
+            glm::vec3 look = glm::normalize(orbitCenter - g_cam.position);
+            g_cam.yaw   = glm::degrees(std::atan2(look.z, look.x));
+            g_cam.pitch = glm::degrees(std::asin(std::clamp(look.y, -1.0f, 1.0f)));
+            g_cam.moved = (orbitFrame == 0);   // bootstrap DLSS once, then let it reproject the smooth path
+        } else {
+            processInput(window, dt);
+        }
 
         // Update camera
         auto& camera = renderer.getCamera();
@@ -359,6 +395,18 @@ int main(int argc, char* argv[]) {
                 delete[] buf;
                 s_dumpBusy.store(false);
             }).detach();
+        }
+
+        // Scripted orbit: write numbered frames (after warmup), then close.
+        if (orbitMode) {
+            int rec = (int)orbitFrame - orbitWarmup;
+            if (rec >= 0 && pixels) {
+                char opath[512];
+                snprintf(opath, sizeof(opath), "%s/frame_%04d.png", orbitDir, rec);
+                stbi_write_png(opath, W, H, 4, pixels, W * 4);
+            }
+            orbitFrame++;
+            if (rec + 1 >= orbitTotal) glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
         glfwSwapBuffers(window);
