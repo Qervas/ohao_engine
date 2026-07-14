@@ -6,6 +6,13 @@ All notable changes to OHAO Engine are documented here. Newest first.
 
 Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
+### Inverse rendering (Phase 1)
+
+- **`inverse_fit`** example: recover left-wall albedo so path-traced image matches a target.
+- Finite-difference gradients + projected GD on MSE (masked to wall region).
+- Headers in `ohao/inverse/` (`image_loss`, `param_space`).
+- Self-test mode writes `renders/inverse/{target,init,recovered}.png`.
+
 ### Refactored to C++20
 
 - **Language standard**: codebase targets **C++20** (`CMAKE_CXX_STANDARD 20`).
