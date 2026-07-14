@@ -1,57 +1,60 @@
 # Changelog
 
-All notable changes to OHAO Engine will be documented in this file.
+All notable changes to OHAO Engine are documented here. Newest first.
 
-## [0.2.0] - 2025-01-16
+## Current — C++20 hybrid Vulkan renderer
 
-### Major Architecture Change: Godot Integration
+Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
-OHAO Engine has transitioned from a standalone GLFW/ImGui application to a **GDExtension plugin** for Godot 4.x. This enables integration with Godot's mature editor, scene system, and tooling.
+### Refactored to C++20
 
-### Added
-- **GDExtension Integration**: OHAO now runs as a Godot 4.x plugin
-- **OhaoViewport**: Custom viewport panel in Godot Editor displaying OHAO's Vulkan renderer
-- **VulkanRenderer**: Headless Vulkan rendering pipeline that outputs to a CPU-readable pixel buffer
-- **macOS Support**: Full support for macOS via MoltenVK
-- **Camera Controls**: Orbit, pan, and zoom controls in the OHAO viewport
+- **Language standard**: codebase targets **C++20** (`CMAKE_CXX_STANDARD 20`).
+- **Core**: `Result` / error handling, concepts, layout traits, `[[nodiscard]]`, `string_view` / `span` APIs.
+- **Modules**: subsystem entry headers (`core`, `gpu`, `render`, `rt`, `scene`, `physics`, `audio`) with shared RT settings / denoise policy metaprogramming.
+- **Examples**: shared `examples/example_cli.hpp` for denoise/mode/spp parsing across demos.
 
-### Deprecated
-- **ImGui**: Removed Dear ImGui - Godot Editor now provides all UI
-- **GLFW**: Removed GLFW window management - Godot handles windowing
-- **Standalone Executable**: The `ohao_engine` standalone app has been removed
-- **Legacy VulkanContext**: The old GLFW-based rendering context moved to legacy
+### Rendering & RT
 
-### Removed
-- `external/imgui/` - Dear ImGui library
-- `src/renderer/legacy/` - GLFW-based VulkanContext and related code
-- `src/engine/input/` - GLFW input handling (Godot handles input)
-- `src/engine/serialization/` - Custom serialization (Godot handles scene files)
-- `src/main.cpp` - Standalone application entry point
-- `src/tests/` - Test directory (testing done via Godot integration)
+- Path tracer (offline + realtime profiles), MIS, env-map importance sampling, Sobol/PCG samplers.
+- Denoisers: OIDN, OptiX (optional), NRD REBLUR, DLSS Ray Reconstruction.
+- ReSTIR GI (realtime), DLSS-RR upscaling, NRD cinematic post (bloom / grade / DoF).
+- Deferred pipeline: G-buffer, CSM, SSAO, SSR, SSS, TAA, bloom, ACES.
+- Hybrid: RT shadows + 1-bounce RT GI on the deferred path.
 
-### Changed
-- **Build System**: Now uses SCons for GDExtension alongside CMake for engine libraries
-- **Rendering**: VulkanRenderer replaces VulkanContext for Godot integration
-- **Scene Management**: Scene system retained but serialization handled by Godot
+### Reliability
 
-### Migration Notes
+- Golden-image harness (`tests/golden/`) + pre-push hook.
+- Lazy PathTracer profile init (avoids dual full-res OOM on 8 GiB GPUs).
+- Restored PathTracer output-res / AOV / reservoir members required by the offline/realtime image path.
+- `model_viewer` default resolution **1920×1080** (was 4K).
 
-If upgrading from an earlier version:
+### Demos (unchanged set)
 
-1. The standalone executable no longer exists - use Godot Editor instead
-2. Build the GDExtension with SCons: `cd godot_editor && scons platform=macos arch=arm64`
-3. Open `godot_editor/project` in Godot 4.x to access the OHAO viewport
-4. Custom scenes should be created using Godot's scene system
+| Binary | Role |
+|--------|------|
+| `cornell_box` | Offline / hybrid reference |
+| `model_viewer` | GLB/OBJ in framed room |
+| `env_demo` | Model + HDRI |
+| `turntable` | Orbit frame sequences |
+| `interactive` | Live GLFW viewer |
+
+### Build
+
+```bash
+cmake -B build -S . -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+cmake --build build -j$(nproc)
+```
+
+Requires CMake 3.20+, Vulkan 1.3+ with RT extensions, a **C++20** compiler.
 
 ---
 
-## [0.1.0] - 2024-12-xx
+## Earlier eras (archived)
 
-### Initial Release
-- Vulkan-based rendering with PBR materials
-- Custom physics simulation
-- Actor-component system
-- ImGui-based editor interface
-- OBJ model loading
-- Shadow mapping
-- Multi-light support
+### [0.2.0] — Godot GDExtension phase
+
+Transitioned to a Godot 4.x GDExtension plugin (`OhaoViewport`, editor integration). That host path is no longer the primary product line; the tree is the standalone Vulkan hybrid above.
+
+### [0.1.0] — Initial standalone
+
+Vulkan PBR, custom physics experiments, actor-component scene, ImGui editor, OBJ, shadows, multi-light.
