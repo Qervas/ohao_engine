@@ -1,12 +1,12 @@
-// inverse_fit — Phase A inverse renderer (dual-budget, high-quality SHOW).
+// inverse_fit — Phase A inverse renderer (dual-budget, grain-free SHOW).
 //
-// FIT  = mid-res / solid spp for FD gradients (you don't have to look at these)
-// SHOW = 1080p+ / high spp for target / init / recovered stills (default: high)
+// FIT  = raw MC (noise is a feature for FD / inverse) — denoise NEVER on
+// SHOW = high-res stills, OIDN by default so outputs are grain-free
 //
 // Usage:
 //   ./inverse_fit --selftest --quality high
-//   ./inverse_fit --selftest --quality draft    # faster while hacking
-//   ./inverse_fit --selftest --quality cinema   # 4K SHOW
+//   ./inverse_fit --selftest --show-denoise=none   # raw SHOW
+//   ./inverse_fit --selftest --show-denoise=oidn   # default
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -83,6 +83,8 @@ struct FitConfig {
     uint32_t seed{1};
     std::string outDir{"renders/inverse"};
     bool useAdam{true};
+    // SHOW: grain-free for humans. FIT always forces DenoiseMode::None.
+    DenoiseMode showDenoise{DenoiseMode::OIDN};
 };
 
 struct CliArgs {
@@ -130,13 +132,22 @@ CliArgs parseArgs(int argc, char** argv) {
             a.cfg.seed = static_cast<uint32_t>(std::atoi(need("--seed")));
         } else if (s == "--gd") {
             a.cfg.useAdam = false;
+        } else if (s.starts_with("--show-denoise=")) {
+            a.cfg.showDenoise = parseDenoiseMode(s.substr(std::string_view("--show-denoise=").size()));
+            // Restrict SHOW denoisers to static offline backends
+            if (a.cfg.showDenoise != DenoiseMode::None && a.cfg.showDenoise != DenoiseMode::OIDN) {
+                std::cerr << "SHOW denoise: use none or oidn (got "
+                          << denoiseModeName(a.cfg.showDenoise) << ")\n";
+                std::exit(2);
+            }
         } else if (s == "--out-dir") {
             a.cfg.outDir = need("--out-dir");
         } else if (s == "--help" || s == "-h") {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--quality draft|high|ultra|cinema]\n"
-                << "  --fit-width/height/spp   internal FD budget\n"
+                << "  --fit-width/height/spp   internal FD budget (always raw MC)\n"
                 << "  --show-width/height/spp  presentation stills (default high=1080p@1024)\n"
+                << "  --show-denoise=oidn|none  grain-free SHOW (default oidn); FIT never denoises\n"
                 << "  --iters --lr --eps --mask-x --seed --gd --out-dir\n";
             std::exit(0);
         } else {
@@ -211,10 +222,14 @@ bool savePNG(const ImageRGBA8& img, const std::filesystem::path& path) {
 }
 
 ImageRGBA8 renderBudget(VulkanRenderer& renderer, InverseScene& inv,
-                        const RenderBudget& budget, uint32_t seed) {
+                        const RenderBudget& budget, uint32_t seed,
+                        DenoiseMode denoise) {
     if (renderer.getWidth() != budget.width || renderer.getHeight() != budget.height) {
         renderer.resize(budget.width, budget.height);
     }
+    // FIT: always raw (white noise is a feature for inverse / FD).
+    // SHOW: OIDN (or none) for grain-free stills humans actually open.
+    renderer.setDenoiseMode(denoise);
     renderer.setRenderSeed(seed);
     renderer.setScene(inv.scene.get());
     renderer.resetAccumulation();
@@ -236,7 +251,9 @@ int main(int argc, char** argv) {
               << "  SHOW " << cfg.show.width << "x" << cfg.show.height << " @" << cfg.show.spp
               << " spp\n";
     std::cout << "  iters=" << cfg.iters << " lr=" << cfg.lr << " seed=" << cfg.seed
-              << " optimizer=" << (cfg.useAdam ? "adam" : "gd") << "\n";
+              << " optimizer=" << (cfg.useAdam ? "adam" : "gd")
+              << "  SHOW denoise=" << denoiseModeName(cfg.showDenoise)
+              << "  FIT denoise=none (raw MC)\n";
 
     // Create at SHOW size so first still is correct; FIT will resize down.
     VulkanRenderer renderer(cfg.show.width, cfg.show.height);
@@ -257,30 +274,32 @@ int main(int argc, char** argv) {
     camera.setRotation(0.0f, -90.0f);
 
     renderer.setRenderMode(RenderMode::RTOffline);
-    renderer.setDenoiseMode(DenoiseMode::None);
     renderer.setRenderSeed(cfg.seed);
 
     const glm::vec3 truth{0.65f, 0.05f, 0.05f};
     const glm::vec3 initGuess{0.2f, 0.5f, 0.7f};
     const auto outDir = std::filesystem::path(cfg.outDir);
 
-    // ── SHOW: target (high quality) ───────────────────────────────────
+    // ── SHOW: target (grain-free if OIDN) ─────────────────────────────
     std::cout << "SHOW target (truth) " << cfg.show.width << "x" << cfg.show.height
-              << " @" << cfg.show.spp << " spp...\n";
+              << " @" << cfg.show.spp << " spp  denoise="
+              << denoiseModeName(cfg.showDenoise) << "...\n";
     inv.setLeftAlbedo(truth);
     auto t0 = std::chrono::steady_clock::now();
-    const ImageRGBA8 targetShow = renderBudget(renderer, inv, cfg.show, cfg.seed);
+    const ImageRGBA8 targetShow =
+        renderBudget(renderer, inv, cfg.show, cfg.seed, cfg.showDenoise);
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "  done in "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
               << " ms → target_show.png\n";
     savePNG(targetShow, outDir / "target_show.png");
 
-    // ── FIT: target buffer (same seed family as optim) ────────────────
+    // ── FIT: target buffer — always raw MC (noise helps inverse/FD) ───
     std::cout << "FIT target " << cfg.fit.width << "x" << cfg.fit.height << " @"
-              << cfg.fit.spp << " spp...\n";
+              << cfg.fit.spp << " spp (raw)...\n";
     inv.setLeftAlbedo(truth);
-    const ImageRGBA8 targetFit = renderBudget(renderer, inv, cfg.fit, cfg.seed);
+    const ImageRGBA8 targetFit =
+        renderBudget(renderer, inv, cfg.fit, cfg.seed, DenoiseMode::None);
 
     ParamSpace space;
     space.add("left.R", initGuess.r, 0.0, 1.0);
@@ -294,14 +313,16 @@ int main(int argc, char** argv) {
 
     auto lossAt = [&](const std::vector<double>& th) -> double {
         applyTheta(th);
-        const ImageRGBA8 img = renderBudget(renderer, inv, cfg.fit, cfg.seed);
+        const ImageRGBA8 img =
+            renderBudget(renderer, inv, cfg.fit, cfg.seed, DenoiseMode::None);
         return mseRGB(img, targetFit, cfg.maskX);
     };
 
     // ── SHOW: init ────────────────────────────────────────────────────
     std::cout << "SHOW init (wrong guess)...\n";
     applyTheta(space.values);
-    const ImageRGBA8 initShow = renderBudget(renderer, inv, cfg.show, cfg.seed);
+    const ImageRGBA8 initShow =
+        renderBudget(renderer, inv, cfg.show, cfg.seed, cfg.showDenoise);
     savePNG(initShow, outDir / "init_show.png");
 
     double loss = lossAt(space.values);
@@ -342,10 +363,11 @@ int main(int argc, char** argv) {
     traj.close();
     const auto fitEnd = std::chrono::steady_clock::now();
 
-    // ── SHOW: recovered ───────────────────────────────────────────────
+    // ── SHOW: recovered (grain-free) ──────────────────────────────────
     std::cout << "SHOW recovered...\n";
     applyTheta(space.values);
-    const ImageRGBA8 recoveredShow = renderBudget(renderer, inv, cfg.show, cfg.seed);
+    const ImageRGBA8 recoveredShow =
+        renderBudget(renderer, inv, cfg.show, cfg.seed, cfg.showDenoise);
     savePNG(recoveredShow, outDir / "recovered_show.png");
 
     const std::vector<double> truthV{truth.r, truth.g, truth.b};
