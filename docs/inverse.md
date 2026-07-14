@@ -4,12 +4,17 @@ Recover scene parameters \(\theta\) so offline path tracing matches a target ima
 
 ## Dual budget
 
-| Mode | Role | Default (`--quality high`) |
-|------|------|----------------------------|
-| **FIT** | FD gradients / loss only | 640×360 @ 128 spp |
-| **SHOW** | Human-facing stills | **1920×1080 @ 1024 spp** |
+| Mode | Role | Default (`--quality high`) | Denoise |
+|------|------|----------------------------|---------|
+| **FIT** | FD gradients / loss only | 640×360 @ 128 spp | **Always none** (raw MC — white noise is a feature for inverse) |
+| **SHOW** | Human-facing stills | **1920×1080 @ 1024 spp** | **OIDN by default** (grain-free) |
 
-You never have to stare at FIT frames. Showcase files are always SHOW quality.
+You never have to stare at FIT frames. Showcase files are SHOW quality and grain-free.
+
+```bash
+--show-denoise=oidn   # default: clean stills
+--show-denoise=none   # raw SHOW (if you want noise in docs)
+```
 
 ## Run
 
@@ -35,7 +40,7 @@ Outputs under `renders/inverse/`:
 4. Finite-difference + Adam (or `--gd`) on masked MSE (left wall).  
 5. SHOW-render recovered → `recovered_show.png`.  
 
-**Denoisers stay off** in the FIT path (determinism). Optional pretty denoise is not mixed into gradients.
+**FIT never denoises** (determinism + unbiased FD; grain is OK). **SHOW uses OIDN** so you get grain-free stills without polluting the inverse loop.
 
 ## Seed
 
