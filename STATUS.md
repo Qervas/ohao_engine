@@ -60,9 +60,25 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).
 4. **Skinned RT BLAS** — animation subsystem removed; gap is moot until reintroduced.
 
+## Inverse rendering (Phase 1)
+
+| Item | State |
+|------|--------|
+| **Goal** | Recover scene params θ so R(θ) ≈ target image |
+| **Wedge** | Left-wall **albedo RGB** via offline PT + finite-diff GD |
+| **CLI** | `./build/inverse_fit --selftest` |
+| **Lib** | `ohao/inverse/` — `image_loss`, `param_space`, FD gradient |
+| **Evidence** | Selftest recovers truth albedo L2 < 0.2 from wrong init (masked MSE on left wall) |
+| **Not yet** | Autodiff / adjoint PT, multi-param materials, lighting fit, real photos |
+
+```bash
+./build/inverse_fit --selftest --spp 8 --iters 20 --lr 10 --mask-x 0.4
+# writes renders/inverse/{target,init,recovered}.png
+```
+
 ## Next actions
 
-1. Expand golden corpus (env helmet, deferred cornell).
-2. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
-3. Decide product fork: realtime portfolio polish vs offline renovation (unified integrator).
+1. Inverse Phase 2: roughness more params (roughness) + multi-view / lighting fit; optional Adam.
+2. Expand golden corpus (env helmet, deferred cornell).
+3. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
 4. Keep this file honest after each meaningful change.
