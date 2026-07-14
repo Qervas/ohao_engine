@@ -60,20 +60,23 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).
 4. **Skinned RT BLAS** — animation subsystem removed; gap is moot until reintroduced.
 
-## Inverse rendering (Phase 1)
+## Inverse rendering (Phase A — dual budget)
 
 | Item | State |
 |------|--------|
 | **Goal** | Recover scene params θ so R(θ) ≈ target image |
-| **Wedge** | Left-wall **albedo RGB** via offline PT + finite-diff GD |
-| **CLI** | `./build/inverse_fit --selftest` |
-| **Lib** | `ohao/inverse/` — `image_loss`, `param_space`, FD gradient |
-| **Evidence** | Selftest recovers truth albedo L2 < 0.2 from wrong init (masked MSE on left wall) |
-| **Not yet** | Autodiff / adjoint PT, multi-param materials, lighting fit, real photos |
+| **Wedge** | Left-wall **albedo RGB** via offline PT + finite-diff **Adam** |
+| **CLI** | `./build/inverse_fit --selftest --quality high` |
+| **Lib** | `ohao/inverse/` — loss, params, Adam, quality presets |
+| **SHOW default** | **1920×1080 @ 1024 spp** (clean stills) |
+| **FIT default** | 640×360 @ 128 spp (gradients only) |
+| **Seed** | `VulkanRenderer::setRenderSeed` → PT sample base |
+| **Docs** | `docs/inverse.md` |
+| **Not yet** | Autodiff, multi-param, real photos |
 
 ```bash
-./build/inverse_fit --selftest --spp 8 --iters 20 --lr 10 --mask-x 0.4
-# writes renders/inverse/{target,init,recovered}.png
+./build/inverse_fit --selftest --quality high
+# → renders/inverse/{target,init,recovered}_show.png + trajectory.json
 ```
 
 ## Next actions

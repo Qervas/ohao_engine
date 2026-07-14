@@ -80,6 +80,7 @@ public:
     virtual void setRenderSettings(const RTRenderSettings& settings) = 0;
     virtual void notifyViewChanged() = 0;
     virtual void resetAccumulation() = 0;
+    virtual void setRenderSeed(uint32_t seed) = 0;
     virtual uint32_t getFrameIndex() const = 0;
     virtual bool resetsAccumulationOnViewChange() const = 0;
 };
@@ -184,6 +185,10 @@ public:
         m_pathTracer.notifyViewChanged();
     }
     void resetAccumulation() override { m_pathTracer.resetAccumulation(); }
+    void setRenderSeed(uint32_t seed) override {
+        m_pathTracer.setRenderSeed(seed);
+        m_pathTracer.resetAccumulation();
+    }
     uint32_t getFrameIndex() const override { return m_pathTracer.getFrameIndex(); }
 
 protected:

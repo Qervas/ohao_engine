@@ -8,4 +8,6 @@
 // First wedge: material albedo recovery (fixed geometry + lights + camera).
 
 #include "inverse/image_loss.hpp"
+#include "inverse/optimizer.hpp"
 #include "inverse/param_space.hpp"
+#include "inverse/quality.hpp"

@@ -187,7 +187,7 @@ bool PathTracer::init(VkDevice device, VkPhysicalDevice physicalDevice,
 // ─── Accumulation reset ──────────────────────────────────────────────
 
 void PathTracer::resetAccumulation() {
-    m_sampleIndex = 0;
+    m_sampleIndex = m_renderSeed;
     m_historyFrameCount = 0;
     m_viewChangedThisFrame = false;
     m_surfaceHistoryWriteIndex = 0;
@@ -246,9 +246,7 @@ void PathTracer::resize(uint32_t width, uint32_t height) {
     }
 
     // Reset accumulation since the buffer dimensions changed
-    m_sampleIndex = 0;
-    m_historyFrameCount = 0;
-    m_viewChangedThisFrame = false;
+    resetAccumulation();
     m_surfaceHistoryWriteIndex = 0;
     m_surfaceHistoryInitialized[0] = false;
     m_surfaceHistoryInitialized[1] = false;

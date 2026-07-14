@@ -1,13 +1,12 @@
-// inverse_fit — Phase 1 inverse renderer: recover material albedo by image match.
+// inverse_fit — Phase A inverse renderer (dual-budget, high-quality SHOW).
 //
-// Self-test (default):
-//   1. Render Cornell-like scene with known left-wall RGB (target I*).
-//   2. Start from a wrong initial albedo.
-//   3. Finite-difference GD on MSE(R(θ), I*) until recovered or max iters.
+// FIT  = mid-res / solid spp for FD gradients (you don't have to look at these)
+// SHOW = 1080p+ / high spp for target / init / recovered stills (default: high)
 //
 // Usage:
-//   ./inverse_fit [--selftest] [--spp N] [--iters N] [--width W] [--height H]
-//                 [--lr F] [--eps F] [--out-dir DIR]
+//   ./inverse_fit --selftest --quality high
+//   ./inverse_fit --selftest --quality draft    # faster while hacking
+//   ./inverse_fit --selftest --quality cinema   # 4K SHOW
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -28,6 +27,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -53,21 +53,13 @@ void addQuad(std::vector<Vertex>& verts, std::vector<uint32_t>& inds,
         v.boneWeights = {1, 0, 0, 0};
         return v;
     };
-    verts.push_back(mk(a));
-    verts.push_back(mk(b));
-    verts.push_back(mk(c));
-    verts.push_back(mk(d));
-    inds.push_back(base + 0);
-    inds.push_back(base + 1);
-    inds.push_back(base + 2);
-    inds.push_back(base + 0);
-    inds.push_back(base + 2);
-    inds.push_back(base + 3);
+    verts = {mk(a), mk(b), mk(c), mk(d)};
+    inds = {base + 0, base + 1, base + 2, base + 0, base + 2, base + 3};
 }
 
 void addWall(Scene* scene, std::string_view name,
              glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
-             glm::vec3 normal, glm::vec3 color, float roughness = 0.95f) {
+             glm::vec3 normal, glm::vec3 color) {
     auto actor = scene->createActor(name);
     auto model = std::make_shared<Model>();
     addQuad(model->vertices, model->indices, a, b, c, d, normal, color);
@@ -76,24 +68,25 @@ void addWall(Scene* scene, std::string_view name,
     mesh->setVisible(true);
     auto mat = actor->addComponent<MaterialComponent>();
     mat->getMaterial().baseColor = color;
-    mat->getMaterial().roughness = roughness;
+    mat->getMaterial().roughness = 0.95f;
     mat->getMaterial().metallic = 0.0f;
 }
 
 struct FitConfig {
-    uint32_t width{320};
-    uint32_t height{180};
-    int spp{8};
+    QualityPreset quality{kQualityHigh};
+    RenderBudget fit{kQualityHigh.fit};
+    RenderBudget show{kQualityHigh.show};
     int iters{25};
-    double lr{8.0};      // gradients on masked wall are small; need large step
-    double eps{0.06};
-    double maskX{0.38};  // left-wall image fraction for loss
+    double lr{0.08};     // Adam learning rate
+    double eps{0.05};    // FD step
+    double maskX{0.40};
+    uint32_t seed{1};
     std::string outDir{"renders/inverse"};
+    bool useAdam{true};
 };
 
 struct CliArgs {
     FitConfig cfg;
-    bool selftest{true};
 };
 
 CliArgs parseArgs(int argc, char** argv) {
@@ -108,29 +101,43 @@ CliArgs parseArgs(int argc, char** argv) {
             return argv[++i];
         };
         if (s == "--selftest") {
-            a.selftest = true;
-        } else if (s == "--spp") {
-            a.cfg.spp = std::max(1, std::atoi(need("--spp")));
+            continue;
+        } else if (s == "--quality") {
+            a.cfg.quality = qualityFromName(need("--quality"));
+            a.cfg.fit = a.cfg.quality.fit;
+            a.cfg.show = a.cfg.quality.show;
+        } else if (s == "--fit-width") {
+            a.cfg.fit.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--fit-width"))));
+        } else if (s == "--fit-height") {
+            a.cfg.fit.height = static_cast<uint32_t>(std::max(16, std::atoi(need("--fit-height"))));
+        } else if (s == "--fit-spp") {
+            a.cfg.fit.spp = std::max(1, std::atoi(need("--fit-spp")));
+        } else if (s == "--show-width") {
+            a.cfg.show.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--show-width"))));
+        } else if (s == "--show-height") {
+            a.cfg.show.height = static_cast<uint32_t>(std::max(16, std::atoi(need("--show-height"))));
+        } else if (s == "--show-spp") {
+            a.cfg.show.spp = std::max(1, std::atoi(need("--show-spp")));
         } else if (s == "--iters") {
             a.cfg.iters = std::max(1, std::atoi(need("--iters")));
-        } else if (s == "--width") {
-            a.cfg.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--width"))));
-        } else if (s == "--height") {
-            a.cfg.height = static_cast<uint32_t>(std::max(16, std::atoi(need("--height"))));
         } else if (s == "--lr") {
             a.cfg.lr = std::atof(need("--lr"));
         } else if (s == "--eps") {
             a.cfg.eps = std::atof(need("--eps"));
         } else if (s == "--mask-x") {
             a.cfg.maskX = std::atof(need("--mask-x"));
+        } else if (s == "--seed") {
+            a.cfg.seed = static_cast<uint32_t>(std::atoi(need("--seed")));
+        } else if (s == "--gd") {
+            a.cfg.useAdam = false;
         } else if (s == "--out-dir") {
             a.cfg.outDir = need("--out-dir");
         } else if (s == "--help" || s == "-h") {
             std::cout
-                << "Usage: inverse_fit [--selftest] [--spp N] [--iters N]\n"
-                << "                   [--width W] [--height H] [--lr F] [--eps F]\n"
-                << "                   [--mask-x F] [--out-dir DIR]\n"
-                << "Phase 1 inverse renderer: recover left-wall albedo via FD + masked MSE.\n";
+                << "Usage: inverse_fit [--selftest] [--quality draft|high|ultra|cinema]\n"
+                << "  --fit-width/height/spp   internal FD budget\n"
+                << "  --show-width/height/spp  presentation stills (default high=1080p@1024)\n"
+                << "  --iters --lr --eps --mask-x --seed --gd --out-dir\n";
             std::exit(0);
         } else {
             std::cerr << "unknown arg: " << s << "\n";
@@ -140,7 +147,6 @@ CliArgs parseArgs(int argc, char** argv) {
     return a;
 }
 
-// Minimal Cornell box: 5 walls + 1 sphere + 1 ceiling light (stable FD).
 struct InverseScene {
     std::unique_ptr<Scene> scene;
     Actor* leftWall{nullptr};
@@ -151,10 +157,8 @@ struct InverseScene {
         s.scene = std::make_unique<Scene>("Inverse Cornell");
         const float S = 5.0f;
         const glm::vec3 white(0.73f), red(0.65f, 0.05f, 0.05f), green(0.12f, 0.45f, 0.15f);
-
         glm::vec3 LBB(-S, -S, -S), RBB(S, -S, -S), LTB(-S, S, -S), RTB(S, S, -S);
         glm::vec3 LBF(-S, -S, S), RBF(S, -S, S), LTF(-S, S, S), RTF(S, S, S);
-
         addWall(s.scene.get(), "Back", LBB, RBB, RTB, LTB, {0, 0, 1}, white);
         addWall(s.scene.get(), "Left", LBB, LTB, LTF, LBF, {1, 0, 0}, red);
         addWall(s.scene.get(), "Right", RBB, RBF, RTF, RTB, {-1, 0, 0}, green);
@@ -167,7 +171,6 @@ struct InverseScene {
         auto sm = sphere->getComponent<MaterialComponent>();
         sm->getMaterial().baseColor = {0.8f, 0.8f, 0.8f};
         sm->getMaterial().roughness = 0.4f;
-        sm->getMaterial().metallic = 0.0f;
 
         auto light = s.scene->createActor("KeyLight");
         auto lc = light->addComponent<LightComponent>();
@@ -177,7 +180,6 @@ struct InverseScene {
         lc->setRadius(0.6f);
         light->getTransform()->setPosition({0.0f, S - 0.5f, 0.0f});
 
-        s.leftWall = nullptr;
         s.scene->forEachActor([&](Actor& a) {
             if (a.getName() == "Left") {
                 s.leftWall = &a;
@@ -190,32 +192,15 @@ struct InverseScene {
     void setLeftAlbedo(glm::vec3 rgb) {
         if (!leftMat) return;
         leftMat->getMaterial().baseColor = rgb;
-        // Keep vertex colors in sync (some paths sample mesh color).
-        if (auto mesh = leftWall->getComponent<MeshComponent>()) {
-            if (auto model = mesh->getModel()) {
-                for (auto& v : model->vertices) {
-                    v.color = rgb;
+        if (leftWall) {
+            if (auto mesh = leftWall->getComponent<MeshComponent>()) {
+                if (auto model = mesh->getModel()) {
+                    for (auto& v : model->vertices) v.color = rgb;
                 }
             }
         }
     }
-
-    [[nodiscard]] glm::vec3 leftAlbedo() const {
-        return leftMat ? leftMat->getMaterial().baseColor : glm::vec3(0);
-    }
 };
-
-ImageRGBA8 renderOnce(VulkanRenderer& renderer, InverseScene& inv, int spp) {
-    // Material / mesh edits need a full scene re-upload into RT buffers.
-    renderer.setScene(inv.scene.get());
-    renderer.resetAccumulation();
-    const int frames = spp + 3;
-    for (int i = 0; i < frames; ++i) {
-        renderer.render();
-    }
-    const auto px = renderer.getPixelSpan();
-    return ImageRGBA8::fromSpan(renderer.getWidth(), renderer.getHeight(), px);
-}
 
 bool savePNG(const ImageRGBA8& img, const std::filesystem::path& path) {
     if (img.empty()) return false;
@@ -225,18 +210,36 @@ bool savePNG(const ImageRGBA8& img, const std::filesystem::path& path) {
                           static_cast<int>(img.width * 4)) != 0;
 }
 
+ImageRGBA8 renderBudget(VulkanRenderer& renderer, InverseScene& inv,
+                        const RenderBudget& budget, uint32_t seed) {
+    if (renderer.getWidth() != budget.width || renderer.getHeight() != budget.height) {
+        renderer.resize(budget.width, budget.height);
+    }
+    renderer.setRenderSeed(seed);
+    renderer.setScene(inv.scene.get());
+    renderer.resetAccumulation();
+    const int frames = budget.spp + 3;
+    for (int i = 0; i < frames; ++i) renderer.render();
+    return ImageRGBA8::fromSpan(renderer.getWidth(), renderer.getHeight(),
+                                renderer.getPixelSpan());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     const CliArgs args = parseArgs(argc, argv);
     const FitConfig& cfg = args.cfg;
 
-    std::cout << "OHAO inverse_fit — Phase 1 material recovery (FD + image MSE)\n";
-    std::cout << "  resolution " << cfg.width << "x" << cfg.height
-              << "  spp=" << cfg.spp << "  iters=" << cfg.iters
-              << "  lr=" << cfg.lr << "  eps=" << cfg.eps << "\n";
+    std::cout << "OHAO inverse_fit — dual-budget material recovery\n";
+    std::cout << "  quality=" << cfg.quality.name
+              << "  FIT " << cfg.fit.width << "x" << cfg.fit.height << " @" << cfg.fit.spp << " spp"
+              << "  SHOW " << cfg.show.width << "x" << cfg.show.height << " @" << cfg.show.spp
+              << " spp\n";
+    std::cout << "  iters=" << cfg.iters << " lr=" << cfg.lr << " seed=" << cfg.seed
+              << " optimizer=" << (cfg.useAdam ? "adam" : "gd") << "\n";
 
-    VulkanRenderer renderer(cfg.width, cfg.height);
+    // Create at SHOW size so first still is correct; FIT will resize down.
+    VulkanRenderer renderer(cfg.show.width, cfg.show.height);
     if (!renderer.initialize()) {
         std::cerr << "FATAL: renderer init failed\n";
         return 1;
@@ -244,7 +247,7 @@ int main(int argc, char** argv) {
 
     InverseScene inv = InverseScene::build();
     if (!inv.leftMat) {
-        std::cerr << "FATAL: left wall material missing\n";
+        std::cerr << "FATAL: left wall missing\n";
         return 1;
     }
 
@@ -255,25 +258,30 @@ int main(int argc, char** argv) {
 
     renderer.setRenderMode(RenderMode::RTOffline);
     renderer.setDenoiseMode(DenoiseMode::None);
+    renderer.setRenderSeed(cfg.seed);
 
-    // Ground-truth parameters (what we want to recover).
     const glm::vec3 truth{0.65f, 0.05f, 0.05f};
-    const glm::vec3 initGuess{0.2f, 0.5f, 0.7f};  // deliberately wrong (blue-ish)
-
-    inv.setLeftAlbedo(truth);
-    std::cout << "Rendering target (truth albedo "
-              << truth.r << "," << truth.g << "," << truth.b << ")...\n";
-    auto t0 = std::chrono::steady_clock::now();
-    const ImageRGBA8 target = renderOnce(renderer, inv, cfg.spp);
-    auto t1 = std::chrono::steady_clock::now();
-    std::cout << "  target done in "
-              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
-              << " ms\n";
-
+    const glm::vec3 initGuess{0.2f, 0.5f, 0.7f};
     const auto outDir = std::filesystem::path(cfg.outDir);
-    savePNG(target, outDir / "target.png");
 
-    // Optimizable θ = left wall albedo RGB.
+    // ── SHOW: target (high quality) ───────────────────────────────────
+    std::cout << "SHOW target (truth) " << cfg.show.width << "x" << cfg.show.height
+              << " @" << cfg.show.spp << " spp...\n";
+    inv.setLeftAlbedo(truth);
+    auto t0 = std::chrono::steady_clock::now();
+    const ImageRGBA8 targetShow = renderBudget(renderer, inv, cfg.show, cfg.seed);
+    auto t1 = std::chrono::steady_clock::now();
+    std::cout << "  done in "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
+              << " ms → target_show.png\n";
+    savePNG(targetShow, outDir / "target_show.png");
+
+    // ── FIT: target buffer (same seed family as optim) ────────────────
+    std::cout << "FIT target " << cfg.fit.width << "x" << cfg.fit.height << " @"
+              << cfg.fit.spp << " spp...\n";
+    inv.setLeftAlbedo(truth);
+    const ImageRGBA8 targetFit = renderBudget(renderer, inv, cfg.fit, cfg.seed);
+
     ParamSpace space;
     space.add("left.R", initGuess.r, 0.0, 1.0);
     space.add("left.G", initGuess.g, 0.0, 1.0);
@@ -286,64 +294,81 @@ int main(int argc, char** argv) {
 
     auto lossAt = [&](const std::vector<double>& th) -> double {
         applyTheta(th);
-        const ImageRGBA8 img = renderOnce(renderer, inv, cfg.spp);
-        return mseRGB(img, target, cfg.maskX);
+        const ImageRGBA8 img = renderBudget(renderer, inv, cfg.fit, cfg.seed);
+        return mseRGB(img, targetFit, cfg.maskX);
     };
 
+    // ── SHOW: init ────────────────────────────────────────────────────
+    std::cout << "SHOW init (wrong guess)...\n";
     applyTheta(space.values);
-    ImageRGBA8 current = renderOnce(renderer, inv, cfg.spp);
-    savePNG(current, outDir / "init.png");
-    double loss = mseRGB(current, target, cfg.maskX);
-    std::cout << "  init loss (MSE)=" << loss << "  θ=["
+    const ImageRGBA8 initShow = renderBudget(renderer, inv, cfg.show, cfg.seed);
+    savePNG(initShow, outDir / "init_show.png");
+
+    double loss = lossAt(space.values);
+    std::cout << "  init FIT loss (masked MSE)=" << loss << "  θ=["
               << space.values[0] << "," << space.values[1] << "," << space.values[2] << "]\n";
+
+    AdamState adam;
+    adam.resize(space.size());
+    std::ofstream traj(outDir / "trajectory.json");
+    traj << "{\n  \"quality\": \"" << cfg.quality.name << "\",\n  \"iters\": [\n";
 
     const auto fitStart = std::chrono::steady_clock::now();
     for (int it = 0; it < cfg.iters; ++it) {
         const auto g = finiteDiffGradient(space, cfg.eps, lossAt);
-        gdStep(space, g, cfg.lr);
-        applyTheta(space.values);
-        current = renderOnce(renderer, inv, cfg.spp);
-        loss = mseRGB(current, target, cfg.maskX);
+        if (cfg.useAdam) {
+            adam.step(space, g, cfg.lr);
+        } else {
+            gdStep(space, g, cfg.lr * 50.0); // GD needs larger scale
+        }
+        loss = lossAt(space.values);
 
         std::cout << "  iter " << (it + 1) << "/" << cfg.iters
                   << "  loss=" << loss
                   << "  θ=[" << space.values[0] << "," << space.values[1] << ","
-                  << space.values[2] << "]"
-                  << "  ∇=[" << g[0] << "," << g[1] << "," << g[2] << "]\n";
+                  << space.values[2] << "]\n";
 
-        if (loss < 1e-4) {
-            std::cout << "  early stop (loss < 1e-4)\n";
+        if (it > 0) traj << ",\n";
+        traj << "    {\"i\":" << (it + 1) << ",\"loss\":" << loss
+             << ",\"r\":" << space.values[0] << ",\"g\":" << space.values[1]
+             << ",\"b\":" << space.values[2] << "}";
+
+        if (loss < 5e-5) {
+            std::cout << "  early stop\n";
             break;
         }
     }
+    traj << "\n  ]\n}\n";
+    traj.close();
     const auto fitEnd = std::chrono::steady_clock::now();
 
-    savePNG(current, outDir / "recovered.png");
+    // ── SHOW: recovered ───────────────────────────────────────────────
+    std::cout << "SHOW recovered...\n";
+    applyTheta(space.values);
+    const ImageRGBA8 recoveredShow = renderBudget(renderer, inv, cfg.show, cfg.seed);
+    savePNG(recoveredShow, outDir / "recovered_show.png");
 
     const std::vector<double> truthV{truth.r, truth.g, truth.b};
     const double paramErr = space.l2To(truthV);
-    const double finalLoss = loss;
-    const double maxPix = maxAbsRGB(current, target);
+    const double showRmse = rmseRGB(recoveredShow, targetShow);
 
     std::cout << "\n=== inverse_fit result ===\n";
     std::cout << "  truth     RGB = [" << truth.r << ", " << truth.g << ", " << truth.b << "]\n";
     std::cout << "  recovered RGB = [" << space.values[0] << ", " << space.values[1] << ", "
               << space.values[2] << "]\n";
     std::cout << "  param L2 error = " << paramErr << "\n";
-    std::cout << "  final image MSE = " << finalLoss << "  max|Δ|px = " << maxPix << "\n";
+    std::cout << "  final FIT loss = " << loss << "\n";
+    std::cout << "  SHOW RMSE (full frame) = " << showRmse << "\n";
     std::cout << "  fit wall time = "
               << std::chrono::duration_cast<std::chrono::seconds>(fitEnd - fitStart).count()
               << " s\n";
-    std::cout << "  wrote " << (outDir / "target.png") << ", init.png, recovered.png\n";
+    std::cout << "  wrote " << outDir
+              << "/{target_show,init_show,recovered_show}.png + trajectory.json\n";
 
-    // Success criteria for Phase 1 self-test: albedo within ~0.20 L2 (noisy FD).
-    constexpr double kParamTol = 0.20;
+    constexpr double kParamTol = 0.12;
     const bool ok = paramErr < kParamTol;
-    if (ok) {
-        std::cout << "SELFTEST PASS (param L2 < " << kParamTol << ")\n";
-    } else {
-        std::cout << "SELFTEST FAIL (param L2 " << paramErr << " >= " << kParamTol << ")\n";
-    }
+    std::cout << (ok ? "SELFTEST PASS" : "SELFTEST FAIL") << " (param L2 "
+              << paramErr << (ok ? " < " : " >= ") << kParamTol << ")\n";
 
     inv.scene.reset();
     return ok ? 0 : 1;
