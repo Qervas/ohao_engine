@@ -193,6 +193,7 @@ void VulkanRenderer::uploadRTMaterialBuffers() {
         if (m_rtMatIDMemory) { vkFreeMemory(m_device, m_rtMatIDMemory, nullptr); m_rtMatIDMemory = VK_NULL_HANDLE; }
         if (m_rtMatColorBuffer) { vkDestroyBuffer(m_device, m_rtMatColorBuffer, nullptr); m_rtMatColorBuffer = VK_NULL_HANDLE; }
         if (m_rtMatColorMemory) { vkFreeMemory(m_device, m_rtMatColorMemory, nullptr); m_rtMatColorMemory = VK_NULL_HANDLE; }
+        m_rtMatCount = 0;
 
         // Collect material IDs and colors from all actors' models
         std::vector<uint32_t> allMatIDs;
@@ -302,10 +303,88 @@ void VulkanRenderer::uploadRTMaterialBuffers() {
         memcpy(mapped, allMatColors.data(), matColorSize);
         vkUnmapMemory(m_device, m_rtMatColorMemory);
 
+        m_rtMatCount = static_cast<uint32_t>(allMatColors.size() / 3);
         std::cout << "[RT] Material buffers created: " << allMatIDs.size() << " triangles, "
-                  << (allMatColors.size() / 3) << " materials (3 vec4s each)" << std::endl;
+                  << m_rtMatCount << " materials (3 vec4s each)" << std::endl;
     }
 
+}
+
+bool VulkanRenderer::updateRTMaterialParams() {
+    if (!m_scene || !m_rtMatColorMemory || m_rtMatCount == 0) {
+        return false;
+    }
+
+    // Patch baseColor.rgb (and rough/metal for MaterialComponent-only slots)
+    // while preserving packed texture indices already written into the buffer.
+    void* mapped = nullptr;
+    const VkDeviceSize matColorSize = static_cast<VkDeviceSize>(m_rtMatCount) * 3 * sizeof(glm::vec4);
+    if (vkMapMemory(m_device, m_rtMatColorMemory, 0, matColorSize, 0, &mapped) != VK_SUCCESS) {
+        return false;
+    }
+    auto* matColors = static_cast<glm::vec4*>(mapped);
+
+    uint32_t matIdx = 0;
+    std::vector<glm::vec4> instanceMats;
+    instanceMats.reserve(m_rtMatCount);
+
+    for (const auto& [actorId, actor] : m_scene->getAllActors()) {
+        auto mc = actor->getComponent<MeshComponent>();
+        if (!mc || !mc->getModel() || !mc->isVisible()) continue;
+        auto model = mc->getModel();
+
+        auto matComp = actor->getComponent<MaterialComponent>();
+        glm::vec3 instAlbedo(0.73f);
+        float instRough = 0.95f;
+        float instMetal = 0.0f;
+        if (matComp) {
+            instAlbedo = matComp->getMaterial().baseColor;
+            instRough = matComp->getMaterial().roughness;
+            instMetal = matComp->getMaterial().metallic;
+        }
+
+        if (!model->materialColors.empty()) {
+            for (size_t mi = 0; mi < model->materialColors.size(); ++mi) {
+                if (matIdx >= m_rtMatCount) break;
+                const auto& mc2 = model->materialColors[mi];
+                // Keep texture index in .a
+                matColors[matIdx * 3 + 0].x = mc2.x;
+                matColors[matIdx * 3 + 0].y = mc2.y;
+                matColors[matIdx * 3 + 0].z = mc2.z;
+                const float metallic =
+                    (mi < model->materialMetallic.size()) ? model->materialMetallic[mi] : 0.0f;
+                matColors[matIdx * 3 + 1].x = mc2.w; // roughness packed in .w of materialColors
+                matColors[matIdx * 3 + 1].y = metallic;
+                ++matIdx;
+            }
+        } else {
+            if (matIdx >= m_rtMatCount) break;
+            matColors[matIdx * 3 + 0].x = instAlbedo.r;
+            matColors[matIdx * 3 + 0].y = instAlbedo.g;
+            matColors[matIdx * 3 + 0].z = instAlbedo.b;
+            matColors[matIdx * 3 + 1].x = instRough;
+            matColors[matIdx * 3 + 1].y = instMetal;
+            ++matIdx;
+        }
+
+        // Path-tracer per-instance material (one entry per BLAS instance)
+        float packed = instMetal > 0.5f ? -(instRough + 0.001f) : instRough;
+        bool isSphereShape = model->vertices.size() > 100;
+        if (isSphereShape) packed += (packed >= 0 ? 10.0f : -10.0f);
+        instanceMats.push_back(glm::vec4(instAlbedo, packed));
+    }
+
+    vkUnmapMemory(m_device, m_rtMatColorMemory);
+
+    forEachRTRenderer([&](IRTRendererProfile& renderer) {
+        if (!instanceMats.empty()) {
+            renderer.setMaterialData(instanceMats);
+        }
+        if (m_rtMatIDBuffer && m_rtMatColorBuffer) {
+            renderer.setMaterialBuffers(m_rtMatIDBuffer, m_rtMatColorBuffer);
+        }
+    });
+    return true;
 }
 
 void VulkanRenderer::uploadRTTextureArray() {

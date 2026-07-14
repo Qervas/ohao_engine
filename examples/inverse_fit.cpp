@@ -2,7 +2,9 @@
 //
 // Gradual roadmap (no ML yet):
 //   A) dual-budget + grain-free SHOW (OIDN)
-//   B) better scene (studio helmet + HDRI), multi-view loss, relight showcase
+//   B) product-studio scene (Lantern + pedestal + cyclorama + HDRI),
+//      multi-view loss, relight showcase
+//   C) ML priors later (not this binary)
 //
 // FIT  = raw MC (noise is a feature for FD) — denoise NEVER on
 // SHOW = grain-free stills (OIDN default)
@@ -65,10 +67,31 @@ struct FitConfig {
     DenoiseMode showDenoise{DenoiseMode::OIDN};
     std::string scene{"studio"}; // studio | cornell
     int numViews{3};
-    std::string modelPath{"assets/test_models/DamagedHelmet.glb"};
+    // Prefer showcase Lantern when present; fall back to tracked test assets.
+    std::string modelPath{"assets/showcase_objects/Lantern.glb"};
     std::string envPath{"assets/hdri/brown_photostudio_02_2k.hdr"};
     std::string relightEnvPath{"assets/hdri/kloofendal_43d_clear_puresky_2k.hdr"};
 };
+
+// Resolve missing optional showcase assets to tracked test_models copies.
+void resolveAssetFallbacks(FitConfig& cfg) {
+    auto pick = [](std::string& path, std::initializer_list<const char*> alts) {
+        if (std::filesystem::exists(path)) return;
+        for (const char* a : alts) {
+            if (std::filesystem::exists(a)) {
+                path = a;
+                return;
+            }
+        }
+    };
+    pick(cfg.modelPath, {"assets/showcase_objects/Lantern.glb",
+                         "assets/test_models/DamagedHelmet.glb"});
+    pick(cfg.envPath, {"assets/hdri/brown_photostudio_02_2k.hdr",
+                       "assets/test_models/env_studio.hdr"});
+    pick(cfg.relightEnvPath, {"assets/hdri/kloofendal_43d_clear_puresky_2k.hdr",
+                              "assets/test_models/env_outdoor.hdr",
+                              "assets/test_models/env_studio.hdr"});
+}
 
 struct CliArgs {
     FitConfig cfg;
@@ -263,52 +286,20 @@ struct InverseScene {
 
     static InverseScene buildStudio(const FitConfig& cfg) {
         InverseScene s;
-        s.scene = std::make_unique<Scene>("Inverse Studio");
+        s.scene = std::make_unique<Scene>("Inverse Product Studio");
         s.envPath = cfg.envPath;
         s.relightEnvPath = cfg.relightEnvPath;
-        s.truthAlbedo = {0.72f, 0.55f, 0.42f}; // warm concrete / clay floor
-        s.initGuess = {0.20f, 0.45f, 0.70f};   // cool wrong floor
+        // Warm clay / maple floor (readable under soft studio + HDRI).
+        s.truthAlbedo = {0.72f, 0.55f, 0.42f};
+        s.initGuess = {0.20f, 0.45f, 0.70f}; // cool wrong floor for clear before/after
 
-        // Load hero model
-        auto model = ModelLoader::load(cfg.modelPath);
-        float groundY = -2.0f;
-        if (model && !model->vertices.empty()) {
-            glm::vec3 bmin(1e30f), bmax(-1e30f);
-            for (const auto& v : model->vertices) {
-                bmin = glm::min(bmin, v.position);
-                bmax = glm::max(bmax, v.position);
-            }
-            const glm::vec3 extent = bmax - bmin;
-            const glm::vec3 center = (bmin + bmax) * 0.5f;
-            const float maxExtent = std::max({extent.x, extent.y, extent.z});
-            const float scale = 3.2f / std::max(maxExtent, 0.001f);
-            const bool isYUp = (extent.y >= extent.z);
+        const float groundY = 0.0f;
+        const float pedestalH = 0.35f;
+        const float pedestalHalf = 1.35f;
 
-            auto actor = s.scene->createActor("Hero");
-            if (!isYUp) {
-                const bool posZIsUp = (bmax.z > 0.01f);
-                actor->getTransform()->setRotation(
-                    glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0))));
-            }
-            actor->getTransform()->setScale(glm::vec3(scale));
-            actor->getTransform()->setPosition(
-                {-center.x * scale, -center.y * scale, -center.z * scale});
-            auto mesh = actor->addComponent<MeshComponent>();
-            mesh->setModel(model);
-            mesh->setVisible(true);
-            auto mat = actor->addComponent<MaterialComponent>();
-            mat->getMaterial().roughness = 0.45f;
-            groundY = -3.2f * 0.5f - 0.002f;
-            std::cout << "  loaded hero: " << cfg.modelPath << " (" << model->vertices.size()
-                      << " verts)\n";
-        } else {
-            std::cerr << "  WARN: could not load " << cfg.modelPath
-                      << " — studio ground-only scene\n";
-        }
-
-        // Large studio ground (optimizable)
+        // ── Optimizable ground (large cyclorama floor) ─────────────────
         {
-            const float half = 12.0f;
+            const float half = 14.0f;
             auto ground = s.scene->createActor("Ground");
             auto gm = std::make_shared<Model>();
             addQuad(gm->vertices, gm->indices,
@@ -320,13 +311,108 @@ struct InverseScene {
             gmesh->setVisible(true);
             auto gmat = ground->addComponent<MaterialComponent>();
             gmat->getMaterial().baseColor = s.truthAlbedo;
-            gmat->getMaterial().roughness = 0.65f;
+            gmat->getMaterial().roughness = 0.55f;
             gmat->getMaterial().metallic = 0.0f;
             s.targetActor = ground.get();
             s.targetMat = gmat.get();
         }
 
-        // Soft key + fill (studio) so indoor relight still works without env
+        // ── Soft vertical backdrop (product-shot cyclorama) ────────────
+        {
+            const float halfW = 14.0f;
+            const float h = 8.0f;
+            const float z = -6.5f;
+            const glm::vec3 backdropCol(0.82f, 0.84f, 0.88f);
+            auto wall = s.scene->createActor("Backdrop");
+            auto wm = std::make_shared<Model>();
+            addQuad(wm->vertices, wm->indices,
+                    {-halfW, groundY, z}, {halfW, groundY, z},
+                    {halfW, groundY + h, z}, {-halfW, groundY + h, z},
+                    {0, 0, 1}, backdropCol);
+            auto mesh = wall->addComponent<MeshComponent>();
+            mesh->setModel(wm);
+            mesh->setVisible(true);
+            auto mat = wall->addComponent<MaterialComponent>();
+            mat->getMaterial().baseColor = backdropCol;
+            mat->getMaterial().roughness = 0.85f;
+            mat->getMaterial().metallic = 0.0f;
+        }
+
+        // ── Pedestal under hero (matte dark slate — not optimizable) ───
+        {
+            const float y0 = groundY + 0.002f;
+            const float y1 = groundY + pedestalH;
+            const float h = pedestalHalf;
+            const glm::vec3 slate(0.18f, 0.19f, 0.21f);
+            auto makeFace = [&](const char* name, glm::vec3 a, glm::vec3 b, glm::vec3 c,
+                                glm::vec3 d, glm::vec3 n) {
+                auto actor = s.scene->createActor(name);
+                auto m = std::make_shared<Model>();
+                addQuad(m->vertices, m->indices, a, b, c, d, n, slate);
+                auto mesh = actor->addComponent<MeshComponent>();
+                mesh->setModel(m);
+                mesh->setVisible(true);
+                auto mat = actor->addComponent<MaterialComponent>();
+                mat->getMaterial().baseColor = slate;
+                mat->getMaterial().roughness = 0.4f;
+                mat->getMaterial().metallic = 0.05f;
+            };
+            // Top
+            makeFace("PedestalTop", {-h, y1, -h}, {h, y1, -h}, {h, y1, h}, {-h, y1, h},
+                     {0, 1, 0});
+            // Front / back / left / right
+            makeFace("PedestalFront", {-h, y0, h}, {h, y0, h}, {h, y1, h}, {-h, y1, h},
+                     {0, 0, 1});
+            makeFace("PedestalBack", {h, y0, -h}, {-h, y0, -h}, {-h, y1, -h}, {h, y1, -h},
+                     {0, 0, -1});
+            makeFace("PedestalLeft", {-h, y0, -h}, {-h, y0, h}, {-h, y1, h}, {-h, y1, -h},
+                     {-1, 0, 0});
+            makeFace("PedestalRight", {h, y0, h}, {h, y0, -h}, {h, y1, -h}, {h, y1, h},
+                     {1, 0, 0});
+        }
+
+        // ── Hero model on pedestal ─────────────────────────────────────
+        // Bake model so local origin is bottom-center (Y-up glTF), then scale
+        // and sit on the pedestal. Avoids float-above-plinth from bad bmin math.
+        auto model = ModelLoader::load(cfg.modelPath);
+        if (model && !model->vertices.empty()) {
+            glm::vec3 bmin(1e30f), bmax(-1e30f);
+            for (const auto& v : model->vertices) {
+                bmin = glm::min(bmin, v.position);
+                bmax = glm::max(bmax, v.position);
+            }
+            const glm::vec3 extent = bmax - bmin;
+            const glm::vec3 centerXZ{(bmin.x + bmax.x) * 0.5f, 0.0f, (bmin.z + bmax.z) * 0.5f};
+            // Shift vertices: bottom on y=0, centered in XZ.
+            for (auto& v : model->vertices) {
+                v.position.x -= centerXZ.x;
+                v.position.y -= bmin.y;
+                v.position.z -= centerXZ.z;
+            }
+            const float maxExtent = std::max({extent.x, extent.y, extent.z});
+            // Fit hero height to ~2.0 world units (product shot).
+            const float scale = 2.0f / std::max(extent.y > 0.01f ? extent.y : maxExtent, 0.001f);
+
+            auto actor = s.scene->createActor("Hero");
+            actor->getTransform()->setRotation(
+                glm::quat(glm::radians(glm::vec3(0.0f, 22.0f, 0.0f))));
+            actor->getTransform()->setScale(glm::vec3(scale));
+            // Local bottom is y=0 → world bottom = pos.y (yaw keeps Y).
+            actor->getTransform()->setPosition({0.0f, groundY + pedestalH + 0.002f, 0.0f});
+
+            auto mesh = actor->addComponent<MeshComponent>();
+            mesh->setModel(model);
+            mesh->setVisible(true);
+            auto mat = actor->addComponent<MaterialComponent>();
+            mat->getMaterial().roughness = 0.35f;
+            std::cout << "  loaded hero: " << cfg.modelPath << " (" << model->vertices.size()
+                      << " verts, scale=" << scale << ", h=" << (extent.y * scale) << ")\n";
+        } else {
+            std::cerr << "  WARN: could not load " << cfg.modelPath
+                      << " — product studio without hero\n";
+        }
+
+        // Soft key + fill + rim (works with or without env for relight demos)
         auto addLight = [&](const char* name, glm::vec3 pos, glm::vec3 col, float I, float r) {
             auto a = s.scene->createActor(name);
             auto lc = a->addComponent<LightComponent>();
@@ -336,15 +422,15 @@ struct InverseScene {
             lc->setRadius(r);
             a->getTransform()->setPosition(pos);
         };
-        addLight("Key", {3.5f, 4.0f, 4.0f}, {1.0f, 0.98f, 0.95f}, 18.0f, 0.8f);
-        addLight("Fill", {-3.0f, 2.5f, 3.0f}, {0.85f, 0.90f, 1.0f}, 8.0f, 1.2f);
-        addLight("Rim", {0.0f, 3.0f, -4.0f}, {1.0f, 1.0f, 1.0f}, 6.0f, 0.6f);
+        addLight("Key", {4.0f, 5.0f, 4.5f}, {1.0f, 0.97f, 0.92f}, 22.0f, 1.0f);
+        addLight("Fill", {-3.5f, 3.0f, 3.5f}, {0.75f, 0.85f, 1.0f}, 9.0f, 1.4f);
+        addLight("Rim", {-0.5f, 3.5f, -4.5f}, {1.0f, 0.95f, 0.9f}, 10.0f, 0.7f);
 
-        // Multi-view orbit around origin (hero + ground)
+        // Multi-view product orbit — pulled back so full hero + pedestal are in frame.
         s.views = {
-            {"front", {0.0f, 1.6f, 7.5f}, -8.0f, -90.0f},
-            {"three_quarter", {5.2f, 1.8f, 5.8f}, -10.0f, -50.0f},
-            {"opposite", {-5.0f, 1.5f, 5.5f}, -8.0f, -130.0f},
+            {"front", {0.0f, 1.35f, 7.2f}, -8.0f, -90.0f},
+            {"three_quarter", {5.0f, 1.55f, 5.6f}, -10.0f, -48.0f},
+            {"opposite", {-4.8f, 1.35f, 5.4f}, -8.0f, -128.0f},
         };
         return s;
     }
@@ -389,8 +475,11 @@ struct RenderSession {
             renderer.setScene(inv.scene.get());
             bound = true;
         } else {
-            // Material edits only — still rebuilds RT mats, but not env HDR from disk.
-            (void)renderer.updateSceneBuffers();
+            // Material edits only — patch mat-color buffer, never rebuild BLAS/env.
+            // Full updateSceneBuffers was thrashing VRAM and dropping the hero mesh.
+            if (!renderer.updateRTMaterialParams()) {
+                (void)renderer.updateSceneBuffers();
+            }
         }
         renderer.resetAccumulation();
         const int frames = budget.spp + 3;
@@ -410,6 +499,7 @@ struct RenderSession {
 int main(int argc, char** argv) {
     const CliArgs args = parseArgs(argc, argv);
     FitConfig cfg = args.cfg;
+    resolveAssetFallbacks(cfg);
 
     const bool studio = (cfg.scene != "cornell");
     if (studio && cfg.maskYMin <= 0.0) cfg.maskYMin = 0.45;
@@ -508,6 +598,12 @@ int main(int argc, char** argv) {
     std::cout << "  init multi-view FIT loss=" << loss << "  θ=["
               << space.values[0] << "," << space.values[1] << "," << space.values[2] << "]\n";
 
+    // Keep best-θ (Adam/FD noise can overshoot after the min).
+    std::vector<double> bestTheta = space.values;
+    double bestLoss = loss;
+    int bestIter = 0;
+    int worseStreak = 0;
+
     AdamState adam;
     adam.resize(space.size());
     std::ofstream traj(outDir / "trajectory.json");
@@ -528,17 +624,34 @@ int main(int argc, char** argv) {
         traj << "    {\"i\":" << (it + 1) << ",\"loss\":" << loss
              << ",\"r\":" << space.values[0] << ",\"g\":" << space.values[1]
              << ",\"b\":" << space.values[2] << "}";
+
+        if (loss + 1e-9 < bestLoss) {
+            bestLoss = loss;
+            bestTheta = space.values;
+            bestIter = it + 1;
+            worseStreak = 0;
+        } else {
+            ++worseStreak;
+        }
         if (loss < 5e-5) {
-            std::cout << "  early stop\n";
+            std::cout << "  early stop (loss floor)\n";
+            break;
+        }
+        // Noisy FD plateaus: stop if we leave the best basin for a while.
+        if (worseStreak >= 4 && bestLoss < 1e-3) {
+            std::cout << "  early stop (best @ iter " << bestIter << ", loss=" << bestLoss << ")\n";
             break;
         }
     }
-    traj << "\n  ]\n}\n";
+    traj << "\n  ],\n  \"best_iter\": " << bestIter << ",\n  \"best_loss\": " << bestLoss
+         << "\n}\n";
     traj.close();
+    space.values = bestTheta;
+    loss = bestLoss;
     const auto fitEnd = std::chrono::steady_clock::now();
 
     // ── Recovered SHOW multi-view ─────────────────────────────────────
-    std::cout << "SHOW recovered (all views)...\n";
+    std::cout << "SHOW recovered (all views, best θ from iter " << bestIter << ")...\n";
     applyTheta(space.values);
     ImageRGBA8 recoveredPrimary;
     for (int v = 0; v < nViews; ++v) {
@@ -561,7 +674,8 @@ int main(int argc, char** argv) {
             }
         });
         applyTheta(space.values);
-        session.bound = false; // re-upload lights
+        // One full re-upload so light intensities hit the GPU (BLAS rebuilt once).
+        session.bound = false;
         const ImageRGBA8 relightRec =
             session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
         savePNG(relightRec, outDir / "recovered_relight.png");
