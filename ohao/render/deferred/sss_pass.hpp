@@ -13,23 +13,23 @@ public:
     SSSPass() = default;
     ~SSSPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "SSSPass"; }
+    [[nodiscard]] const char* getName() const override { return "SSSPass"; }
 
     void setGBufferPass(GBufferPass* gbuffer) { m_gbuffer = gbuffer; }
     void setLitSceneView(VkImageView view) { m_litSceneView = view; }
     void setSSSWidth(float w) { m_sssWidth = w; }
 
-    VkImageView getOutputView() const { return m_outputView; }
-    VkImage getOutputImage() const { return m_output; }
+    [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
+    [[nodiscard]] VkImage getOutputImage() const { return m_output; }
 
 private:
-    bool createImages();
-    bool createComputePipeline();
-    bool createDescriptors();
+    [[nodiscard]] bool createImages();
+    [[nodiscard]] bool createComputePipeline();
+    [[nodiscard]] bool createDescriptors();
     void executePass(VkCommandBuffer cmd, VkImageView input, VkImage inputImg,
                      VkImageView output, VkImage outputImg, glm::vec2 direction);
 

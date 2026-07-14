@@ -1,83 +1,38 @@
 # OHAO Examples — standalone programs that link against the engine
 
-# Cornell Box
-add_executable(cornell_box cornell_box.cpp)
-target_include_directories(cornell_box PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
-target_link_libraries(cornell_box PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
-if(MSVC)
-    target_link_options(cornell_box PRIVATE /FORCE:MULTIPLE)
-else()
-    target_link_options(cornell_box PRIVATE -Wl,--allow-multiple-definition)
-endif()
-if(TARGET Jolt)
-    target_link_libraries(cornell_box PRIVATE Jolt)
-endif()
+function(ohao_example name)
+    add_executable(${name} ${name}.cpp)
+    target_include_directories(${name} PRIVATE
+        ${CMAKE_SOURCE_DIR}/ohao
+        ${CMAKE_SOURCE_DIR}/examples
+        ${Vulkan_INCLUDE_DIRS}
+        ${stb_SOURCE_DIR})
+    target_compile_features(${name} PRIVATE cxx_std_20)
+    target_link_libraries(${name} PRIVATE
+        -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
+        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+    if(MSVC)
+        target_link_options(${name} PRIVATE /FORCE:MULTIPLE)
+    else()
+        target_link_options(${name} PRIVATE -Wl,--allow-multiple-definition)
+    endif()
+    if(TARGET Jolt)
+        target_link_libraries(${name} PRIVATE Jolt)
+    endif()
+endfunction()
 
-# Model Viewer (with OIDN denoising)
-add_executable(model_viewer model_viewer.cpp)
-target_include_directories(model_viewer PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
-target_link_libraries(model_viewer PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
-if(MSVC)
-    target_link_options(model_viewer PRIVATE /FORCE:MULTIPLE)
-else()
-    target_link_options(model_viewer PRIVATE -Wl,--allow-multiple-definition)
-endif()
-if(TARGET Jolt)
-    target_link_libraries(model_viewer PRIVATE Jolt)
-endif()
-
-# Environment Demo
-add_executable(env_demo env_demo.cpp)
-target_include_directories(env_demo PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
-target_link_libraries(env_demo PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
-if(MSVC)
-    target_link_options(env_demo PRIVATE /FORCE:MULTIPLE)
-else()
-    target_link_options(env_demo PRIVATE -Wl,--allow-multiple-definition)
-endif()
-if(TARGET Jolt)
-    target_link_libraries(env_demo PRIVATE Jolt)
-endif()
+ohao_example(cornell_box)
+ohao_example(model_viewer)
+ohao_example(env_demo)
+ohao_example(turntable)
 
 # Interactive Viewer (requires GLFW)
 find_package(glfw3 QUIET)
 if(glfw3_FOUND)
-    add_executable(interactive interactive.cpp)
-    target_include_directories(interactive PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
+    ohao_example(interactive)
     find_package(OpenGL REQUIRED)
-    target_link_libraries(interactive PRIVATE
-        -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
-        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator glfw OpenGL::GL)
-    if(MSVC)
-        target_link_options(interactive PRIVATE /FORCE:MULTIPLE)
-    else()
-        target_link_options(interactive PRIVATE -Wl,--allow-multiple-definition)
-    endif()
-    if(TARGET Jolt)
-        target_link_libraries(interactive PRIVATE Jolt)
-    endif()
+    target_link_libraries(interactive PRIVATE glfw OpenGL::GL)
     message(STATUS "Interactive viewer enabled (GLFW found)")
-endif()
-
-# Turntable Recorder (with OIDN)
-add_executable(turntable turntable.cpp)
-target_include_directories(turntable PRIVATE ${CMAKE_SOURCE_DIR}/ohao ${Vulkan_INCLUDE_DIRS} ${stb_SOURCE_DIR})
-target_link_libraries(turntable PRIVATE
-    -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
-    ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
-if(MSVC)
-    target_link_options(turntable PRIVATE /FORCE:MULTIPLE)
-else()
-    target_link_options(turntable PRIVATE -Wl,--allow-multiple-definition)
-endif()
-if(TARGET Jolt)
-    target_link_libraries(turntable PRIVATE Jolt)
 else()
     message(STATUS "Interactive viewer disabled (GLFW not found)")
 endif()

@@ -1,6 +1,7 @@
 #include "material_component.hpp"
 #include "scene/actor/actor.hpp"
 #include "core/console_widget.hpp"
+#include <string>
 // Registration moved to central file
 
 namespace ohao {
@@ -28,33 +29,33 @@ const Material& MaterialComponent::getMaterial() const {
     return material;
 }
 
-void MaterialComponent::setAlbedoTexture(const std::string& path) {
-    material.setAlbedoTexture(path);
+void MaterialComponent::setAlbedoTexture(std::string_view path) {
+    material.setAlbedoTexture(std::string(path));
     updateTextureUsage();
 }
 
-void MaterialComponent::setNormalTexture(const std::string& path) {
-    material.setNormalTexture(path);
+void MaterialComponent::setNormalTexture(std::string_view path) {
+    material.setNormalTexture(std::string(path));
     updateTextureUsage();
 }
 
-void MaterialComponent::setMetallicTexture(const std::string& path) {
-    material.setMetallicTexture(path);
+void MaterialComponent::setMetallicTexture(std::string_view path) {
+    material.setMetallicTexture(std::string(path));
     updateTextureUsage();
 }
 
-void MaterialComponent::setRoughnessTexture(const std::string& path) {
-    material.setRoughnessTexture(path);
+void MaterialComponent::setRoughnessTexture(std::string_view path) {
+    material.setRoughnessTexture(std::string(path));
     updateTextureUsage();
 }
 
-void MaterialComponent::setAoTexture(const std::string& path) {
-    material.setAoTexture(path);
+void MaterialComponent::setAoTexture(std::string_view path) {
+    material.setAoTexture(std::string(path));
     updateTextureUsage();
 }
 
-void MaterialComponent::setEmissiveTexture(const std::string& path) {
-    material.setEmissiveTexture(path);
+void MaterialComponent::setEmissiveTexture(std::string_view path) {
+    material.setEmissiveTexture(std::string(path));
     updateTextureUsage();
 }
 

@@ -5,10 +5,15 @@
 #include <memory>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <span>
 #include <unordered_map>
 #include <functional>
 #include <glm/glm.hpp>
+#include "gpu/vulkan/vk_utils.hpp"
 #include "core/common_types.hpp"
+#include "core/concepts.hpp"
+#include "gpu/layout_meta.hpp"
 #include "render/frame/frame_resources.hpp"
 #include "gpu/vulkan/bindless_texture_manager.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
@@ -32,18 +37,28 @@ enum class RenderMode {
     RTOffline     // Path tracing tuned for reference/offline rendering
 };
 
+[[nodiscard]] constexpr bool isRTRenderMode(RenderMode m) noexcept {
+    return m == RenderMode::RTRealtime || m == RenderMode::RTOffline;
+}
+
+[[nodiscard]] constexpr bool isRasterRenderMode(RenderMode m) noexcept {
+    return m == RenderMode::Forward || m == RenderMode::Deferred;
+}
+
 // Simple vertex structure for basic rendering (Phase 1 triangle)
 struct SimpleVertex {
-    glm::vec3 position;
-    glm::vec3 color;
+    glm::vec3 position{};
+    glm::vec3 color{};
 };
+static_assert(GpuPod<SimpleVertex>, "SimpleVertex must be GPU POD");
 
 // Camera uniform buffer (view/proj matrices + view position)
 struct CameraUniformBuffer {
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
-    alignas(16) glm::vec3 viewPos;
+    alignas(16) glm::mat4 view{1.0f};
+    alignas(16) glm::mat4 proj{1.0f};
+    alignas(16) glm::vec3 viewPos{0.0f};
 };
+static_assert(GpuPod<CameraUniformBuffer>, "CameraUniformBuffer must be GPU POD");
 
 // Per-object push constants (matches GBuffer pass shader layout)
 struct ObjectPushConstants {
@@ -70,6 +85,9 @@ constexpr uint32_t MAX_LIGHTS = 8;
 
 // Shadow map configuration
 constexpr uint32_t SHADOW_MAP_SIZE = 2048;
+
+OHAO_ASSERT_GPU_LAYOUT(ObjectPushConstants, layout::kObjectPushConstantsBytes);
+OHAO_ASSERT_GPU_LAYOUT(LightData, layout::kLightDataBytes);
 
 // Light uniform buffer
 struct LightUniformBuffer {
@@ -98,7 +116,7 @@ public:
     ~VulkanRenderer();
 
     // Lifecycle
-    bool initialize();
+    [[nodiscard]] bool initialize();
     void shutdown();
 
     // Rendering
@@ -107,40 +125,40 @@ public:
 
     // Scene management
     void setScene(Scene* scene);
-    Scene* getScene() const { return m_scene; }
+    [[nodiscard]] Scene* getScene() const { return m_scene; }
 
     // Camera
-    Camera& getCamera() { return *m_camera; }
-    const Camera& getCamera() const { return *m_camera; }
+    [[nodiscard]] Camera& getCamera() { return *m_camera; }
+    [[nodiscard]] const Camera& getCamera() const { return *m_camera; }
 
     // Render mode
     void setRenderMode(RenderMode mode);
-    RenderMode getRenderMode() const { return m_renderMode; }
+    [[nodiscard]] RenderMode getRenderMode() const { return m_renderMode; }
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
-    const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
-    void setEnvironmentMap(const std::string& path) { m_envMapPath = path; }
+    [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
+    void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
     void notifyCameraChanged();
     void resetAccumulation();
-    uint32_t getPathTracerFrameIndex() const;
+    [[nodiscard]] uint32_t getPathTracerFrameIndex() const;
 
     // Read back HDR buffers for OIDN denoising
-    bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
+    [[nodiscard]] bool readbackHDRBuffers(std::vector<float>& beauty, std::vector<float>& albedo,
                             std::vector<float>& normal, uint32_t& w, uint32_t& h);
 
     // Deferred renderer access (for configuration)
-    DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
+    [[nodiscard]] DeferredRenderer* getDeferredRenderer() { return m_deferredRenderer.get(); }
 
     // Texture manager access
-    BindlessTextureManager* getTextureManager() { return m_textureManager.get(); }
+    [[nodiscard]] BindlessTextureManager* getTextureManager() { return m_textureManager.get(); }
 
     // RT acceleration structure access
-    RTAccelerationStructure* getRT() { return m_rtAccel.get(); }
-    bool isRTSupported() const { return m_rtAccel && m_rtAccel->isSupported(); }
+    [[nodiscard]] RTAccelerationStructure* getRT() { return m_rtAccel.get(); }
+    [[nodiscard]] bool isRTSupported() const { return m_rtAccel && m_rtAccel->isSupported(); }
 
     // Denoiser control
     void        setDenoiseMode(DenoiseMode mode);
-    DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
+    [[nodiscard]] DenoiseMode getDenoiseMode() const { return m_denoiseMode; }
 
     // Realtime/DLSS: genuine per-frame sample count. The realtime raygen traces
     // N decorrelated paths per pixel in ONE render() dispatch and averages them,
@@ -148,125 +166,134 @@ public:
     // interactive '+'/'-' keys. Clamped to [1, 64]. Survives the per-frame RT
     // settings reset (re-injected in applyRTRenderSettings).
     void        setRealtimeSamplesPerFrame(uint32_t n);
-    uint32_t    getRealtimeSamplesPerFrame() const { return m_realtimeSamplesPerFrame; }
+    [[nodiscard]] uint32_t    getRealtimeSamplesPerFrame() const { return m_realtimeSamplesPerFrame; }
 
     // Returns the motion vector AOV image view from the active RT profile,
     // or VK_NULL_HANDLE if no RT profile is active.
-    VkImageView getMotionVectorAOV() const;
+    [[nodiscard]] VkImageView getMotionVectorAOV() const;
 
     // Returns the motion vector AOV VkImage (needed for vkCmdCopyImageToBuffer).
-    VkImage getMotionVectorImage() const;
+    [[nodiscard]] VkImage getMotionVectorImage() const;
 
     // Returns the depth / roughness AOV image views and images from the active
     // RT profile, or VK_NULL_HANDLE if no RT profile is active.
-    VkImageView getDepthAOV()         const;
-    VkImage     getDepthAOVImage()    const;
-    VkImageView getRoughnessAOV()     const;
-    VkImage     getRoughnessAOVImage() const;
-    VkImageView getDiffuseRadianceAOV()      const;
-    VkImage     getDiffuseRadianceAOVImage() const;
-    VkImageView getSpecularRadianceAOV()      const;
-    VkImage     getSpecularRadianceAOVImage() const;
-    VkImageView getDiffAlbedoAOV()      const;
-    VkImage     getDiffAlbedoAOVImage() const;
-    VkImageView getSpecColorAOV()       const;
-    VkImage     getSpecColorAOVImage()  const;
-    VkImageView getNormalRoughnessAOV()      const;
-    VkImage     getNormalRoughnessAOVImage() const;
+    [[nodiscard]] VkImageView getDepthAOV()         const;
+    [[nodiscard]] VkImage     getDepthAOVImage()    const;
+    [[nodiscard]] VkImageView getRoughnessAOV()     const;
+    [[nodiscard]] VkImage     getRoughnessAOVImage() const;
+    [[nodiscard]] VkImageView getDiffuseRadianceAOV()      const;
+    [[nodiscard]] VkImage     getDiffuseRadianceAOVImage() const;
+    [[nodiscard]] VkImageView getSpecularRadianceAOV()      const;
+    [[nodiscard]] VkImage     getSpecularRadianceAOVImage() const;
+    [[nodiscard]] VkImageView getDiffAlbedoAOV()      const;
+    [[nodiscard]] VkImage     getDiffAlbedoAOVImage() const;
+    [[nodiscard]] VkImageView getSpecColorAOV()       const;
+    [[nodiscard]] VkImage     getSpecColorAOVImage()  const;
+    [[nodiscard]] VkImageView getNormalRoughnessAOV()      const;
+    [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const;
     // Sub-plan 4.C: NRD denoised outputs (RGBA32F)
-    VkImage     getOutDiffRadianceAOVImage() const;
-    VkImage     getOutSpecRadianceAOVImage() const;
+    [[nodiscard]] VkImage     getOutDiffRadianceAOVImage() const;
+    [[nodiscard]] VkImage     getOutSpecRadianceAOVImage() const;
     // Sub-plan 4.D: NRD composed HDR output (RGBA32F)
-    VkImage     getNrdComposedAOVImage() const;
+    [[nodiscard]] VkImage     getNrdComposedAOVImage() const;
     // Sub-plan 4.E: NRD tonemapped output (RGBA8 UNORM)
-    VkImage     getNrdTonemappedAOVImage() const;
+    [[nodiscard]] VkImage     getNrdTonemappedAOVImage() const;
 
     // Debug: readback the motion vector AOV as raw uint16_t pairs (RG16F interleaved).
     // One 2-half pair per pixel; total = 2 * width * height values.
     // Returns false if no RT profile is active or readback fails.
-    bool readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackMotionVector(std::vector<uint16_t>& mvRaw, uint32_t& width, uint32_t& height);
 
     // Debug: readback the depth AOV as raw float buffer (1 float per pixel).
-    bool readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackDepthAOV(std::vector<float>& depthData, uint32_t& width, uint32_t& height);
 
     // Debug: readback R16F roughness AOV as native float (decoded from half in-helper).
-    bool readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackRoughnessAOV(std::vector<float>& roughData, uint32_t& width, uint32_t& height);
 
     // Debug: readback RGBA32F diffuse radiance AOV (4 floats per pixel, native).
-    bool readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackDiffuseRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
 
     // Debug: readback RGBA32F specular radiance AOV (4 floats per pixel, native).
-    bool readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackSpecularRadiance(std::vector<float>& data, uint32_t& width, uint32_t& height);
 
     // Sub-plan 4.C: NRD denoised output readback (RGBA32F)
-    bool readbackDenoisedDiffuse(std::vector<float>& data, uint32_t& width, uint32_t& height);
-    bool readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackDenoisedDiffuse(std::vector<float>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackDenoisedSpecular(std::vector<float>& data, uint32_t& width, uint32_t& height);
     // Sub-plan 4.D: NRD composed HDR output readback (RGBA32F)
-    bool readbackNrdComposed(std::vector<float>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackNrdComposed(std::vector<float>& data, uint32_t& width, uint32_t& height);
     // Sub-plan 4.E T1: NRD tonemapped output readback (RGBA8 UNORM, 4 bytes/pixel)
-    bool readbackNrdTonemapped(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackNrdTonemapped(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
 
     // Debug: readback RGBA8 diffuse albedo AOV (4 bytes per pixel).
-    bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackDiffAlbedoAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
 
     // Debug: readback RGBA8 specular color AOV (4 bytes per pixel).
-    bool readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
+    [[nodiscard]] bool readbackSpecColorAOV(std::vector<uint8_t>& data, uint32_t& width, uint32_t& height);
 
     // Returns pointer to RGBA8 tonemapped pixels. If denoiseMode != None,
     // the buffer is lazily denoised on the first call after render();
     // subsequent calls return the cached result until the next render().
-    const uint8_t* getPixels() const;
-    uint32_t getWidth() const { return m_width; }
-    uint32_t getHeight() const { return m_height; }
-    size_t getPixelBufferSize() const { return m_pixelBuffer.size(); }
+    [[nodiscard]] const uint8_t* getPixels() const;
+    /// Non-owning view of the same buffer as getPixels() (RGBA8).
+    [[nodiscard]] std::span<const uint8_t> getPixelSpan() const {
+        const uint8_t* p = getPixels();
+        if (!p) return {};
+        return std::span<const uint8_t>{p, m_pixelBuffer.size()};
+    }
+    [[nodiscard]] uint32_t getWidth() const noexcept { return m_width; }
+    [[nodiscard]] uint32_t getHeight() const noexcept { return m_height; }
+    [[nodiscard]] size_t getPixelBufferSize() const noexcept { return m_pixelBuffer.size(); }
+    [[nodiscard]] VkExtent2D getExtent() const noexcept {
+        return VkExtent2D{.width = m_width, .height = m_height};
+    }
 
     // Physics
     void updatePhysics(float deltaTime);
 
     // Scene buffer management (call after modifying scene)
-    bool updateSceneBuffers();
+    [[nodiscard]] bool updateSceneBuffers();
 
     // Check if scene has renderable meshes
-    bool hasSceneMeshes() const { return m_hasSceneMeshes; }
+    [[nodiscard]] bool hasSceneMeshes() const { return m_hasSceneMeshes; }
 
     // Read GPU terrain heightmap back to CPU (blocking — one-time call at setup).
     // Returns false if no procedural terrain exists. outRes = square resolution.
-    bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
+    [[nodiscard]] bool readTerrainHeights(std::vector<float>& outData, uint32_t& outRes);
 
 private:
     // Vulkan setup (no window required)
-    bool createInstance();
-    bool pickPhysicalDevice();
-    bool createLogicalDevice();
-    bool createCommandPool();
-    bool createOffscreenFramebuffer();
-    bool createRenderPass();
-    bool createPipeline();
-    bool createSyncObjects();
+    [[nodiscard]] bool createInstance();
+    [[nodiscard]] bool pickPhysicalDevice();
+    [[nodiscard]] bool createLogicalDevice();
+    [[nodiscard]] bool createCommandPool();
+    [[nodiscard]] bool createOffscreenFramebuffer();
+    [[nodiscard]] bool createRenderPass();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createSyncObjects();
 
     // Shadow mapping
-    bool createShadowResources();
-    bool createShadowRenderPass();
-    bool createShadowPipeline();
+    [[nodiscard]] bool createShadowResources();
+    [[nodiscard]] bool createShadowRenderPass();
+    [[nodiscard]] bool createShadowPipeline();
     void renderShadowPass(VkCommandBuffer cmd, VkDescriptorSet descriptorSet);
     glm::mat4 calculateLightSpaceMatrix(const LightData& light);
     void cleanupShadowResources();
 
     // Phase 1: Rendering pipeline setup
-    bool createDescriptorSetLayout();
-    bool createDescriptorPool();
-    bool createDescriptorSets();
-    bool createUniformBuffer();
-    bool createLightBuffer();   // Phase 3: Light uniform buffer
-    bool createVertexBuffer();  // Creates demo triangle
-    bool initializeFrameResources();  // Multi-frame resource initialization
-    VkShaderModule loadShaderModule(const std::string& filepath);
+    [[nodiscard]] bool createDescriptorSetLayout();
+    [[nodiscard]] bool createDescriptorPool();
+    [[nodiscard]] bool createDescriptorSets();
+    [[nodiscard]] bool createUniformBuffer();
+    [[nodiscard]] bool createLightBuffer();   // Phase 3: Light uniform buffer
+    [[nodiscard]] bool createVertexBuffer();  // Creates demo triangle
+    [[nodiscard]] bool initializeFrameResources();  // Multi-frame resource initialization
+    [[nodiscard]] VkShaderModule loadShaderModule(std::string_view filepath);
     void updateUniformBuffer();
     void updateUniformBuffer(uint32_t frameIndex);  // Per-frame version
     void updateLightBuffer();   // Phase 3: Collect and update lights
     void updateLightBuffer(uint32_t frameIndex);    // Per-frame version
     void cacheEmissiveLights(); // Scan emissive materials → cached LightData (called once per scene change)
-    bool updateAnimatedActorsForRT();
+    [[nodiscard]] bool updateAnimatedActorsForRT();
     void prepareRTSceneForFrame(const IRTRenderPipeline& pipeline, bool hasDynamicBLAS);
 
     // Phase 2: Scene mesh rendering
@@ -467,7 +494,7 @@ private:
     std::unique_ptr<BindlessTextureManager> m_textureManager;
 
     // Deferred rendering methods
-    bool initializeDeferredRenderer();
+    [[nodiscard]] bool initializeDeferredRenderer();
     void applyRTRenderSettings();
     void renderDeferred();
     void copyDeferredOutputToPixelBuffer(VkCommandBuffer cmd);

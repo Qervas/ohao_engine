@@ -3,10 +3,12 @@
 
 namespace ohao {
 
-uint64_t Component::nextComponentID = 1;
+std::uint64_t Component::nextComponentID = 1;
 
-Component::Component() 
-    : owner(nullptr), enabled(true), componentID(nextComponentID++) 
+Component::Component()
+    : owner(nullptr)
+    , enabled(true)
+    , componentID(nextComponentID++)
 {
 }
 

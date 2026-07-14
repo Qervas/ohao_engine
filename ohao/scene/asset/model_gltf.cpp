@@ -6,20 +6,24 @@
 #include "scene/asset/model.hpp"
 #include <iostream>
 #include <filesystem>
+#include <string>
+#include <string_view>
 
 namespace ohao {
 
-bool Model::loadFromGLTF(const std::string& filename) {
+bool Model::loadFromGLTF(std::string_view filename) {
     tinygltf::Model gltfModel;
     tinygltf::TinyGLTF loader;
     std::string err, warn;
+    const std::string path{filename};
 
     bool loaded = false;
-    std::string ext = filename.substr(filename.find_last_of('.'));
+    auto dot = path.find_last_of('.');
+    std::string ext = (dot != std::string::npos) ? path.substr(dot) : "";
     if (ext == ".glb" || ext == ".GLB") {
-        loaded = loader.LoadBinaryFromFile(&gltfModel, &err, &warn, filename);
+        loaded = loader.LoadBinaryFromFile(&gltfModel, &err, &warn, path);
     } else {
-        loaded = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, filename);
+        loaded = loader.LoadASCIIFromFile(&gltfModel, &err, &warn, path);
     }
 
     if (!warn.empty()) {
@@ -29,17 +33,17 @@ bool Model::loadFromGLTF(const std::string& filename) {
         std::cerr << "GLTF Error: " << err << std::endl;
     }
     if (!loaded) {
-        std::cerr << "Failed to load GLTF: " << filename << std::endl;
+        std::cerr << "Failed to load GLTF: " << path << std::endl;
         return false;
     }
 
-    sourcePath = filename;
+    sourcePath = path;
     vertices.clear();
     indices.clear();
     materials.clear();
 
     // Load materials
-    std::string basePath = std::filesystem::path(filename).parent_path().string();
+    std::string basePath = std::filesystem::path(path).parent_path().string();
     for (const auto& gltfMat : gltfModel.materials) {
         MaterialData mat{};
         mat.name = gltfMat.name.empty() ? "gltf_material" : gltfMat.name;
@@ -548,7 +552,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
         materialEmissiveTexIndex.push_back(-1);
     }
 
-    std::cout << "GLTF loaded: " << filename
+    std::cout << "GLTF loaded: " << path
               << " (" << vertices.size() << " vertices, " << indices.size() << " indices, "
               << materialColors.size() << " materials, "
               << albedoTextures.size() << " textures, "
@@ -558,7 +562,7 @@ bool Model::loadFromGLTF(const std::string& filename) {
     // Skeletal animation removed — skins and animations are no longer loaded.
     // Bone weights remain in the Vertex struct as inert data.
 
-    std::cout << "GLTF loaded: " << filename << " (" << vertices.size() << " vertices, "
+    std::cout << "GLTF loaded: " << path << " (" << vertices.size() << " vertices, "
               << indices.size() << " indices, " << materials.size() << " materials)" << std::endl;
 
     return !vertices.empty();

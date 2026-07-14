@@ -225,40 +225,40 @@ static physics::backend::ShapeInfo collisionShapeToShapeInfo(
     switch (shape->getType()) {
         case physics::collision::ShapeType::BOX: {
             auto box = static_cast<const physics::collision::BoxShape*>(shape);
-            info.type = physics::backend::ShapeInfo::BOX;
+            info.type = physics::backend::ShapeInfo::Type::BOX;
             info.halfExtents = box->getHalfExtents();
             break;
         }
         case physics::collision::ShapeType::SPHERE: {
             auto sphere = static_cast<const physics::collision::SphereShape*>(shape);
-            info.type = physics::backend::ShapeInfo::SPHERE;
+            info.type = physics::backend::ShapeInfo::Type::SPHERE;
             info.radius = sphere->getRadius();
             break;
         }
         case physics::collision::ShapeType::CAPSULE: {
             auto capsule = static_cast<const physics::collision::CapsuleShape*>(shape);
-            info.type = physics::backend::ShapeInfo::CAPSULE;
+            info.type = physics::backend::ShapeInfo::Type::CAPSULE;
             info.radius = capsule->getRadius();
             info.height = capsule->getHeight();
             break;
         }
         case physics::collision::ShapeType::CYLINDER: {
             auto cyl = static_cast<const physics::collision::CylinderShape*>(shape);
-            info.type = physics::backend::ShapeInfo::CYLINDER;
+            info.type = physics::backend::ShapeInfo::Type::CYLINDER;
             info.radius = cyl->getRadius();
             info.height = cyl->getHeight();
             break;
         }
         case physics::collision::ShapeType::PLANE: {
             auto plane = static_cast<const physics::collision::PlaneShape*>(shape);
-            info.type = physics::backend::ShapeInfo::PLANE;
+            info.type = physics::backend::ShapeInfo::Type::PLANE;
             info.planeNormal = plane->getNormal();
             info.planeDistance = plane->getDistance();
             break;
         }
         default:
             // Default to box for unsupported types
-            info.type = physics::backend::ShapeInfo::BOX;
+            info.type = physics::backend::ShapeInfo::Type::BOX;
             info.halfExtents = glm::vec3(0.5f);
             break;
     }

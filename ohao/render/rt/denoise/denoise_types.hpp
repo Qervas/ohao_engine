@@ -1,13 +1,12 @@
 #pragma once
 
-// DenoiseMode — selects the denoiser backend used by the offline path tracer.
-//
-// Sub-plan 1 ships OIDN. Later sub-plans add NRD, DLSS RR.
-// The enum + parse helpers live here so every backend can share them and
-// the CLI surface stays consistent across examples.
+// DenoiseMode — selects the denoiser backend used by the path tracer.
+// Trait queries live in render/rt/rt_meta.hpp (denoiseNeedsMotionVectors, …).
+
+#include "core/concepts.hpp"
 
 #include <cstdint>
-#include <string>
+#include <string_view>
 
 namespace ohao {
 
@@ -15,15 +14,27 @@ enum class DenoiseMode : uint32_t {
     None   = 0,
     OIDN   = 1,
     NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)
-    Atrous = 4,   // À-trous (SVGF-style) edge-aware filter on the RT beauty image
-    DLSSRR = 5,   // NVIDIA DLSS Ray Reconstruction / NGX "dlssd" (Phase 5)
+    Atrous = 4,   // À-trous / SVGF-style
+    DLSSRR = 5,   // DLSS Ray Reconstruction / NGX "dlssd"
 };
 
-// Parse a CLI string (case-insensitive). Unknown values return None and
-// log a warning to stderr.
-DenoiseMode parseDenoiseMode(const std::string& s);
+[[nodiscard]] DenoiseMode parseDenoiseMode(std::string_view s);
+[[nodiscard]] const char* denoiseModeName(DenoiseMode mode);
 
-// Human-readable lowercase name. Stable, safe for CLI round-trip.
-const char* denoiseModeName(DenoiseMode mode);
+[[nodiscard]] constexpr int denoiseModeIndex(DenoiseMode mode) noexcept {
+    return static_cast<int>(to_underlying(mode));
+}
+
+[[nodiscard]] constexpr bool isValidDenoiseMode(DenoiseMode mode) noexcept {
+    switch (mode) {
+        case DenoiseMode::None:
+        case DenoiseMode::OIDN:
+        case DenoiseMode::NRD:
+        case DenoiseMode::Atrous:
+        case DenoiseMode::DLSSRR:
+            return true;
+    }
+    return false;
+}
 
 } // namespace ohao

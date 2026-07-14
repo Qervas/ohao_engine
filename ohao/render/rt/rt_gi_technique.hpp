@@ -7,6 +7,7 @@
 
 #include "render_technique.hpp"
 #include "rt_acceleration_structure.hpp"
+#include "render/rt/rt_meta.hpp"
 #include <vector>
 
 namespace ohao {
@@ -92,5 +93,7 @@ private:
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer);
 };
+
+static_assert(GITechniqueLike<RTGITechnique>);
 
 } // namespace ohao

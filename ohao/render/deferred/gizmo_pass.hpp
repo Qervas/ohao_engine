@@ -13,28 +13,28 @@ public:
     GizmoPass() = default;
     ~GizmoPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "GizmoPass"; }
+    [[nodiscard]] const char* getName() const override { return "GizmoPass"; }
 
     // Configure what to render
     void setEnabled(bool enabled) { m_enabled = enabled; }
-    bool isEnabled() const { return m_enabled; }
+    [[nodiscard]] bool isEnabled() const { return m_enabled; }
     void setGizmoMode(GizmoMode mode);
     void setGizmoTransform(const glm::mat4& model);
     void setViewProjection(const glm::mat4& viewProj);
     void setHighlightedAxis(GizmoAxis axis) { m_highlightedAxis = axis; }
-    GizmoMode getGizmoMode() const { return m_currentMode; }
+    [[nodiscard]] GizmoMode getGizmoMode() const { return m_currentMode; }
 
     // Set the target image to composite gizmos onto.
     // The gizmo pass will create its own framebuffer from this image view.
     void setTargetImage(VkImage image, VkImageView imageView);
 
 private:
-    bool createPipeline();
-    bool createVertexBuffers();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createVertexBuffers();
     void destroyVertexBuffers();
     void updateGizmoBuffers();
     void destroyFramebuffer();

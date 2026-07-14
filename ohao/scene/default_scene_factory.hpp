@@ -15,17 +15,17 @@ public:
      * Create a default scene similar to Blender's startup scene
      * Contains: Default sphere (with physics), ground plane, directional light
      */
-    static std::unique_ptr<Scene> createBlenderLikeScene();
+    [[nodiscard]] static std::unique_ptr<Scene> createBlenderLikeScene();
     
     /**
      * Create an empty scene with just basic lighting
      */
-    static std::unique_ptr<Scene> createEmptyScene();
+    [[nodiscard]] static std::unique_ptr<Scene> createEmptyScene();
     
     /**
      * Create a physics test scene with multiple objects for testing
      */
-    static std::unique_ptr<Scene> createPhysicsTestScene();
+    [[nodiscard]] static std::unique_ptr<Scene> createPhysicsTestScene();
     
 private:
     static void setupDefaultLighting(Scene* scene);

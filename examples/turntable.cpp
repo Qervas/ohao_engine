@@ -10,6 +10,7 @@
 
 #include "gpu/vulkan/renderer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "example_cli.hpp"
 #include "scene/scene.hpp"
 #include "scene/actor/actor.hpp"
 #include "scene/component/mesh_component.hpp"
@@ -24,6 +25,11 @@
 #include <cstdio>
 
 using namespace ohao;
+using ohao::examples::parseRenderFlags;
+using ohao::examples::parseSpp;
+using ohao::examples::argOr;
+using ohao::examples::applyDenoiseOverride;
+using ohao::examples::resolveMode;
 
 void addWall(Scene* scene, const std::string& name,
              glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
@@ -48,29 +54,22 @@ void addWall(Scene* scene, const std::string& name,
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
-        std::cout << "Usage: turntable <model.glb> <cornell|dark|env> [spp] [frames]" << std::endl;
+        std::cout << "Usage: turntable <model.glb> <cornell|dark|env> [spp] [frames] [--denoise=…]\n";
         return 1;
     }
 
-    std::string modelPath = argv[1];
-    std::string mode = argv[2];
-    int spp = argc > 3 ? std::atoi(argv[3]) : 64;
-    int totalFrames = argc > 4 ? std::atoi(argv[4]) : 120;  // 4 sec at 30fps
-    RenderMode rtMode = RenderMode::RTOffline;
-    std::optional<ohao::DenoiseMode> denoiseOverride;
-    for (int i = 5; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
-        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
-        else if (arg.rfind("--denoise=", 0) == 0) {
-            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
-        }
-    }
+    const std::string modelPath{argOr(argc, argv, 1, "")};
+    const std::string mode{argOr(argc, argv, 2, "cornell")};
+    const int spp = parseSpp(argc > 3 ? argv[3] : nullptr, 64);
+    const int totalFrames = parseSpp(argc > 4 ? argv[4] : nullptr, 120);
+    const auto cli = parseRenderFlags(argc, argv, 5);
+    const RenderMode rtMode = resolveMode(cli);
 
-    uint32_t W = 1280, H = 720;
+    const uint32_t W = 1280, H = 720;
 
     std::cout << "OHAO Turntable — " << mode << " mode, " << spp << " spp, " << totalFrames
-              << " frames, " << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << std::endl;
+              << " frames, "
+              << (rtMode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline") << "\n";
 
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) return 1;
@@ -193,15 +192,9 @@ int main(int argc, char* argv[]) {
 
     renderer.setScene(scene.get());
     renderer.setRenderMode(rtMode);
+    applyDenoiseOverride(renderer, cli);
 
-    if (denoiseOverride.has_value()) {
-        renderer.setDenoiseMode(*denoiseOverride);
-        std::cout << "Denoise mode (CLI override): "
-                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
-    } else {
-        std::cout << "Denoise mode (preset): "
-                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
-    }
+    std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
 
     // Render turntable orbit — adjust radius per mode
     float orbitRadius = (mode == "env") ? 8.0f : (mode == "mirror") ? 4.5f : 4.2f;
@@ -231,9 +224,11 @@ int main(int argc, char* argv[]) {
         char filename[256];
         snprintf(filename, sizeof(filename), "renders/turntable/%s_%04d.png", mode.c_str(), frame);
 
-        // getPixels() handles OIDN transparently if denoiseMode != None
-        const uint8_t* pixels = renderer.getPixels();
-        if (pixels) stbi_write_png(filename, W, H, 4, pixels, W * 4);
+        const auto pixels = renderer.getPixelSpan();
+        if (!pixels.empty()) {
+            stbi_write_png(filename, static_cast<int>(W), static_cast<int>(H), 4,
+                           pixels.data(), static_cast<int>(W * 4));
+        }
 
         printf("\rFrame %d/%d (%.0f%%)", frame + 1, totalFrames, (frame + 1) * 100.0f / totalFrames);
         fflush(stdout);

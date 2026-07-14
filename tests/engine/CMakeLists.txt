@@ -10,6 +10,8 @@ target_include_directories(engine_tests PRIVATE
     ${Vulkan_INCLUDE_DIRS}
 )
 
+target_compile_features(engine_tests PRIVATE cxx_std_20)
+
 target_link_libraries(engine_tests PRIVATE
     ohao_scene
     ohao_physics

@@ -13,6 +13,8 @@
 
 #include <iostream>
 #include <filesystem>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <functional>
 #include <algorithm>
@@ -33,12 +35,14 @@ static glm::vec3 toGlm(const ufbx_vec3& v) { return {float(v.x), float(v.y), flo
 static glm::vec2 toGlm2(const ufbx_vec2& v) { return {float(v.x), float(v.y)}; }
 
 // Load texture from file relative to model directory
-static bool loadTextureFile(const std::string& path, const std::string& modelDir,
+static bool loadTextureFile(std::string_view path, std::string_view modelDir,
                             Model::TextureData& td) {
+    const std::string pathStr{path};
+    const std::string dir{modelDir};
     std::vector<std::string> candidates = {
-        path,
-        modelDir + "/" + path,
-        modelDir + "/" + std::filesystem::path(path).filename().string(),
+        pathStr,
+        dir + "/" + pathStr,
+        dir + "/" + std::filesystem::path(pathStr).filename().string(),
     };
     for (const auto& c : candidates) {
         if (!std::filesystem::exists(c)) continue;
@@ -56,7 +60,7 @@ static bool loadTextureFile(const std::string& path, const std::string& modelDir
 
 // Load a ufbx texture (embedded or file) into a TextureData vector.
 // Returns the index into the vector, or -1 if not found.
-static int loadUfbxTexture(const ufbx_material_map& map, const std::string& modelDir,
+static int loadUfbxTexture(const ufbx_material_map& map, std::string_view modelDir,
                             std::vector<Model::TextureData>& textures) {
     if (!map.texture) return -1;
     const ufbx_texture* tex = map.texture;
@@ -76,7 +80,7 @@ static int loadUfbxTexture(const ufbx_material_map& map, const std::string& mode
             return idx;
         }
     } else if (tex->filename.length > 0) {
-        if (loadTextureFile(tex->filename.data, modelDir, td)) {
+        if (loadTextureFile(std::string_view(tex->filename.data, tex->filename.length), modelDir, td)) {
             int idx = static_cast<int>(textures.size());
             textures.push_back(std::move(td));
             return idx;
@@ -85,20 +89,21 @@ static int loadUfbxTexture(const ufbx_material_map& map, const std::string& mode
     return -1;
 }
 
-bool Model::loadFromFBX(const std::string& filename) {
+bool Model::loadFromFBX(std::string_view filename) {
     ufbx_load_opts opts = {};
     opts.target_axes = ufbx_axes_right_handed_y_up;    // Convert to Y-up
     opts.target_unit_meters = 1.0f;                     // Convert to meters
 
+    const std::string path{filename};
     ufbx_error error;
-    ufbx_scene* scene = ufbx_load_file(filename.c_str(), &opts, &error);
+    ufbx_scene* scene = ufbx_load_file(path.c_str(), &opts, &error);
     if (!scene) {
         std::cerr << "ufbx error: " << error.description.data << std::endl;
         return false;
     }
 
-    sourcePath = filename;
-    std::string modelDir = std::filesystem::path(filename).parent_path().string();
+    sourcePath = path;
+    std::string modelDir = std::filesystem::path(path).parent_path().string();
 
     std::cout << "FBX: " << scene->meshes.count << " meshes, "
               << scene->materials.count << " materials, "
@@ -302,7 +307,7 @@ bool Model::loadFromFBX(const std::string& filename) {
     (void)nextJointIdx;
     ufbx_free_scene(scene);
 
-    std::cout << "FBX loaded: " << filename << " ("
+    std::cout << "FBX loaded: " << path << " ("
               << vertices.size() << " vertices, "
               << indices.size() << " indices, "
               << numMats << " materials, "

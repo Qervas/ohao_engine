@@ -16,28 +16,33 @@ class Camera;
 struct Vertex;
 
 struct FrameResult {
-    float roomHalfSize;       // room S value
-    float modelScale;         // uniform scale applied to model
-    glm::vec3 modelPosition;  // translation to center model in room
-    glm::quat modelRotation;  // rotation to face camera (Y-up correction)
-    glm::vec3 cameraPosition; // camera world position
-    float cameraFov;          // camera FOV in degrees
+    float roomHalfSize{0.f};
+    float modelScale{1.f};
+    glm::vec3 modelPosition{0.f};
+    glm::quat modelRotation{1.f, 0.f, 0.f, 0.f};
+    glm::vec3 cameraPosition{0.f};
+    float cameraFov{45.f};
 
     struct LightSetup {
         std::string name;
-        glm::vec3 position;
-        glm::vec3 color;
-        float intensity;
-        float radius;
+        glm::vec3 position{0.f};
+        glm::vec3 color{1.f};
+        float intensity{1.f};
+        float radius{0.5f};
     };
     std::vector<LightSetup> lights;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return roomHalfSize > 0.f && modelScale > 0.f && cameraFov > 0.f;
+    }
 };
 
 class SceneFramer {
 public:
     // Compute framing for a model based on its vertex data
     // forceYUp: set true for formats that guarantee Y-up (GLB/glTF)
-    static FrameResult computeFraming(const std::vector<Vertex>& vertices, bool forceYUp = false);
+    [[nodiscard]] static FrameResult computeFraming(const std::vector<Vertex>& vertices,
+                                                    bool forceYUp = false);
 
     // Apply lights from a FrameResult to a scene
     static void applyLights(Scene* scene, const FrameResult& result);

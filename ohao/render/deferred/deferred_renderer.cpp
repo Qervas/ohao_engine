@@ -1129,7 +1129,7 @@ nlohmann::json DeferredRenderer::getPerfStats() const {
 // Hot-reload — runtime shader swap for MCP AI agents
 // ---------------------------------------------------------------------------
 
-bool DeferredRenderer::reloadShaderForPass(const std::string& passName, const std::string& spvPath) {
+bool DeferredRenderer::reloadShaderForPass(std::string_view passName, std::string_view spvPath) {
     // Map pass names to pass pointers
     struct PassEntry {
         const char* name;

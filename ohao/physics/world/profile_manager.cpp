@@ -8,34 +8,36 @@ namespace physics {
 ProfileManager::ProfileManager() {
 }
 
-SimulationProfile* ProfileManager::createProfile(const std::string& name,
+SimulationProfile* ProfileManager::createProfile(std::string_view name,
                                                   const std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies) {
+    std::string key(name);
+
     // Check if profile with this name already exists
-    if (profileExists(name)) {
-        OHAO_LOG("Error: Profile '" + name + "' already exists");
+    if (profileExists(key)) {
+        OHAO_LOG("Error: Profile '" + key + "' already exists");
         return nullptr;
     }
 
     // Create new profile
-    auto profile = std::make_unique<SimulationProfile>(name);
+    auto profile = std::make_unique<SimulationProfile>(key);
     profile->capture(bodies);
 
     // Store profile and update active pointer
     auto* profilePtr = profile.get();
-    m_profiles[name] = std::move(profile);
+    m_profiles[key] = std::move(profile);
     m_activeProfile = profilePtr;
 
     // Rebuild cached name list
     rebuildProfileNamesList();
 
-    OHAO_LOG("Created profile: " + name);
+    OHAO_LOG("Created profile: " + key);
     return profilePtr;
 }
 
-bool ProfileManager::deleteProfile(const std::string& name) {
-    auto it = m_profiles.find(name);
+bool ProfileManager::deleteProfile(std::string_view name) {
+    auto it = m_profiles.find(std::string(name));
     if (it == m_profiles.end()) {
-        OHAO_LOG("Warning: Cannot delete non-existent profile '" + name + "'");
+        OHAO_LOG("Warning: Cannot delete non-existent profile '" + std::string(name) + "'");
         return false;
     }
 
@@ -47,49 +49,52 @@ bool ProfileManager::deleteProfile(const std::string& name) {
     m_profiles.erase(it);
     rebuildProfileNamesList();
 
-    OHAO_LOG("Deleted profile: " + name);
+    OHAO_LOG("Deleted profile: " + std::string(name));
     return true;
 }
 
-bool ProfileManager::renameProfile(const std::string& oldName, const std::string& newName) {
+bool ProfileManager::renameProfile(std::string_view oldName, std::string_view newName) {
+    std::string oldKey(oldName);
+    std::string newKey(newName);
+
     // Check if old profile exists
-    auto it = m_profiles.find(oldName);
+    auto it = m_profiles.find(oldKey);
     if (it == m_profiles.end()) {
-        OHAO_LOG("Error: Profile '" + oldName + "' not found");
+        OHAO_LOG("Error: Profile '" + oldKey + "' not found");
         return false;
     }
 
     // Check if new name already exists
-    if (profileExists(newName)) {
-        OHAO_LOG("Error: Profile '" + newName + "' already exists");
+    if (profileExists(newKey)) {
+        OHAO_LOG("Error: Profile '" + newKey + "' already exists");
         return false;
     }
 
     // Update profile name
-    it->second->setName(newName);
+    it->second->setName(newKey);
 
     // Move to new key in map
     auto profile = std::move(it->second);
     m_profiles.erase(it);
-    m_profiles[newName] = std::move(profile);
+    m_profiles[newKey] = std::move(profile);
 
     // Rebuild cached name list
     rebuildProfileNamesList();
 
-    OHAO_LOG("Renamed profile: '" + oldName + "' -> '" + newName + "'");
+    OHAO_LOG("Renamed profile: '" + oldKey + "' -> '" + newKey + "'");
     return true;
 }
 
-void ProfileManager::setActiveProfile(const std::string& name) {
-    auto it = m_profiles.find(name);
+void ProfileManager::setActiveProfile(std::string_view name) {
+    auto it = m_profiles.find(std::string(name));
     if (it == m_profiles.end()) {
-        OHAO_LOG("Warning: Cannot set active profile to non-existent '" + name + "'");
+        OHAO_LOG("Warning: Cannot set active profile to non-existent '" + std::string(name) + "'");
         m_activeProfile = nullptr;
         return;
     }
 
     m_activeProfile = it->second.get();
-    OHAO_LOG("Active profile set to: " + name);
+    OHAO_LOG("Active profile set to: " + std::string(name));
 }
 
 void ProfileManager::captureToActive(const std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies) {
@@ -110,24 +115,24 @@ void ProfileManager::restoreFromActive(std::vector<std::shared_ptr<dynamics::Rig
     m_activeProfile->restore(bodies);
 }
 
-SimulationProfile* ProfileManager::getProfile(const std::string& name) {
-    auto it = m_profiles.find(name);
+SimulationProfile* ProfileManager::getProfile(std::string_view name) {
+    auto it = m_profiles.find(std::string(name));
     if (it == m_profiles.end()) {
         return nullptr;
     }
     return it->second.get();
 }
 
-const SimulationProfile* ProfileManager::getProfile(const std::string& name) const {
-    auto it = m_profiles.find(name);
+const SimulationProfile* ProfileManager::getProfile(std::string_view name) const {
+    auto it = m_profiles.find(std::string(name));
     if (it == m_profiles.end()) {
         return nullptr;
     }
     return it->second.get();
 }
 
-bool ProfileManager::profileExists(const std::string& name) const {
-    return m_profiles.find(name) != m_profiles.end();
+bool ProfileManager::profileExists(std::string_view name) const {
+    return m_profiles.find(std::string(name)) != m_profiles.end();
 }
 
 std::string ProfileManager::generateUniqueName() const {

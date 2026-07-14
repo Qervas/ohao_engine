@@ -53,11 +53,11 @@ public:
 
     // Initialize — must be called before anything else.
     // Returns false if RT extensions are not available.
-    bool init(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice,
               VkQueue graphicsQueue, uint32_t queueFamily, VkCommandPool commandPool);
 
     // Check if RT is supported on this device
-    bool isSupported() const { return m_supported; }
+    [[nodiscard]] bool isSupported() const noexcept { return m_supported; }
 
     // Get RT pipeline properties (for SBT sizing, etc.)
     const VkPhysicalDeviceRayTracingPipelinePropertiesKHR& getPipelineProperties() const {

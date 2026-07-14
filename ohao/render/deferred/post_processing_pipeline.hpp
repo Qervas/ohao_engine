@@ -17,17 +17,21 @@ enum class TonemapOperator : uint32_t {
     Filmic = 4        // Soft highlights, good mid-tone contrast (Hejl filmic curve)
 };
 
+[[nodiscard]] constexpr uint32_t tonemapOperatorIndex(TonemapOperator op) noexcept {
+    return static_cast<uint32_t>(op);
+}
+
 // Post-processing pipeline that orchestrates all post-processing passes
 class PostProcessingPipeline : public RenderPassBase {
 public:
     PostProcessingPipeline() = default;
     ~PostProcessingPipeline() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "PostProcessingPipeline"; }
+    [[nodiscard]] const char* getName() const override { return "PostProcessingPipeline"; }
 
     // Input configuration
     void setHDRInput(VkImageView hdrInput);
@@ -41,7 +45,7 @@ public:
     void setBloomEnabled(bool enabled) { m_bloomEnabled = enabled; }
     void setTAAEnabled(bool enabled) { m_taaEnabled = enabled; }
     void setSSAOEnabled(bool enabled) { m_ssaoEnabled = enabled; }
-    bool getSSAOEnabled() const { return m_ssaoEnabled; }
+    [[nodiscard]] bool getSSAOEnabled() const { return m_ssaoEnabled; }
     void setTonemappingEnabled(bool enabled) { m_tonemappingEnabled = enabled; }
 
     // Tonemapping configuration
@@ -57,7 +61,7 @@ public:
 
     // TAA configuration
     void setTAABlendFactor(float factor);
-    glm::vec2 getJitterOffset(uint32_t frameIndex) const;
+    [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
     // SSAO configuration
     void setSSAORadius(float radius);
@@ -70,16 +74,16 @@ public:
     void executeSSAO(VkCommandBuffer cmd, uint32_t frameIndex);
 
     // Get final output
-    VkImageView getOutputView() const { return m_finalOutputView; }
-    VkImage getOutputImage() const { return m_finalOutput; }
-    bool didExecute() const { return m_didExecute; }
-    VkImageView getSSAOOutput() const;
-    VkImage getSSAOImage() const;
-    VkSampler getSSAOSampler() const;
+    [[nodiscard]] VkImageView getOutputView() const { return m_finalOutputView; }
+    [[nodiscard]] VkImage getOutputImage() const { return m_finalOutput; }
+    [[nodiscard]] bool didExecute() const { return m_didExecute; }
+    [[nodiscard]] VkImageView getSSAOOutput() const;
+    [[nodiscard]] VkImage getSSAOImage() const;
+    [[nodiscard]] VkSampler getSSAOSampler() const;
 
 private:
-    bool createTonemappingPass();
-    bool createFinalOutput();
+    [[nodiscard]] bool createTonemappingPass();
+    [[nodiscard]] bool createFinalOutput();
     void destroyFinalOutput();
     void updateTonemapDescriptors();
     void updateTonemapInput(VkImageView input);

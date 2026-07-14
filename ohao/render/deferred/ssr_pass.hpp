@@ -13,22 +13,22 @@ public:
     SSRPass() = default;
     ~SSRPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "SSRPass"; }
+    [[nodiscard]] const char* getName() const override { return "SSRPass"; }
 
     void setGBufferPass(GBufferPass* gbuffer) { m_gbuffer = gbuffer; }
     void setLitSceneView(VkImageView view) { m_litSceneView = view; }
     void setCameraData(const glm::mat4& viewProj, const glm::vec3& cameraPos);
 
-    VkImageView getOutputView() const { return m_outputView; }
+    [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
 
 private:
-    bool createOutputImage();
-    bool createComputePipeline();
-    bool createDescriptors();
+    [[nodiscard]] bool createOutputImage();
+    [[nodiscard]] bool createComputePipeline();
+    [[nodiscard]] bool createDescriptors();
 
     GBufferPass* m_gbuffer{nullptr};
     VkImageView m_litSceneView{VK_NULL_HANDLE};

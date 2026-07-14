@@ -200,7 +200,7 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
         JPH::ContactSettings& /*ioSettings*/) override
     {
         ContactEvent event;
-        event.type = ContactEvent::BEGIN;
+        event.type = ContactEvent::Type::BEGIN;
         event.body1 = backend->lookupHandle(inBody1.GetID());
         event.body2 = backend->lookupHandle(inBody2.GetID());
         if (inManifold.mRelativeContactPointsOn1.size() > 0) {
@@ -220,7 +220,7 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
         JPH::ContactSettings& /*ioSettings*/) override
     {
         ContactEvent event;
-        event.type = ContactEvent::PERSIST;
+        event.type = ContactEvent::Type::PERSIST;
         event.body1 = backend->lookupHandle(inBody1.GetID());
         event.body2 = backend->lookupHandle(inBody2.GetID());
         if (inManifold.mRelativeContactPointsOn1.size() > 0) {
@@ -235,7 +235,7 @@ struct JoltPhysicsBackend::JoltContactListenerImpl : public JPH::ContactListener
 
     void OnContactRemoved(const JPH::SubShapeIDPair& inSubShapePair) override {
         ContactEvent event;
-        event.type = ContactEvent::END;
+        event.type = ContactEvent::Type::END;
         event.body1 = backend->lookupHandle(inSubShapePair.GetBody1ID());
         event.body2 = backend->lookupHandle(inSubShapePair.GetBody2ID());
         backend->pushContactEvent(event);
@@ -421,11 +421,10 @@ void JoltPhysicsBackend::step(float deltaTime) {
 
         // Check constraint breaking thresholds
         m_brokenConstraints.clear();
-        for (auto it = m_constraints.begin(); it != m_constraints.end(); ) {
-            auto& data = it->second;
+        std::erase_if(m_constraints, [&](auto& entry) {
+            auto& data = entry.second;
             if (data.breakingForce <= 0.0f && data.breakingTorque <= 0.0f) {
-                ++it;
-                continue;
+                return false;
             }
             JPH::Constraint* c = data.constraint.GetPtr();
             float linearImpulse  = 0.0f;
@@ -476,13 +475,12 @@ void JoltPhysicsBackend::step(float deltaTime) {
             bool broken = (data.breakingForce  > 0.0f && linearImpulse  > data.breakingForce) ||
                           (data.breakingTorque > 0.0f && angularImpulse > data.breakingTorque);
             if (broken) {
-                m_brokenConstraints.push_back(it->first);
+                m_brokenConstraints.push_back(entry.first);
                 m_physicsSystem->RemoveConstraint(data.constraint);
-                it = m_constraints.erase(it);
-            } else {
-                ++it;
+                return true;
             }
-        }
+            return false;
+        });
 
         // Dispatch contact events to user listener
         if (m_userContactListener) {
@@ -494,9 +492,9 @@ void JoltPhysicsBackend::step(float deltaTime) {
             }
             for (const auto& event : events) {
                 switch (event.type) {
-                    case ContactEvent::BEGIN:   m_userContactListener->onContactBegin(event); break;
-                    case ContactEvent::PERSIST: m_userContactListener->onContactPersist(event); break;
-                    case ContactEvent::END:     m_userContactListener->onContactEnd(event); break;
+                    case ContactEvent::Type::BEGIN:   m_userContactListener->onContactBegin(event); break;
+                    case ContactEvent::Type::PERSIST: m_userContactListener->onContactPersist(event); break;
+                    case ContactEvent::Type::END:     m_userContactListener->onContactEnd(event); break;
                 }
             }
         }
@@ -1475,37 +1473,37 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
     JPH::ShapeSettings::ShapeResult result;
 
     switch (info.type) {
-        case ShapeInfo::BOX: {
+        case ShapeInfo::Type::BOX: {
             // Use minimal convex radius so collision box matches visual box exactly
             JPH::BoxShapeSettings settings(toJolt(info.halfExtents), 0.001f);
             result = settings.Create();
             break;
         }
-        case ShapeInfo::SPHERE: {
+        case ShapeInfo::Type::SPHERE: {
             JPH::SphereShapeSettings settings(info.radius);
             result = settings.Create();
             break;
         }
-        case ShapeInfo::CAPSULE: {
+        case ShapeInfo::Type::CAPSULE: {
             float halfCylinderHeight = (info.height - 2.0f * info.radius) * 0.5f;
             if (halfCylinderHeight < 0.001f) halfCylinderHeight = 0.001f;
             JPH::CapsuleShapeSettings settings(halfCylinderHeight, info.radius);
             result = settings.Create();
             break;
         }
-        case ShapeInfo::CYLINDER: {
+        case ShapeInfo::Type::CYLINDER: {
             float halfHeight = info.height * 0.5f;
             JPH::CylinderShapeSettings settings(halfHeight, info.radius, 0.001f);
             result = settings.Create();
             break;
         }
-        case ShapeInfo::PLANE: {
+        case ShapeInfo::Type::PLANE: {
             // Very thin box as ground plane
             JPH::BoxShapeSettings settings(JPH::Vec3(100.0f, 0.01f, 100.0f));
             result = settings.Create();
             break;
         }
-        case ShapeInfo::MESH: {
+        case ShapeInfo::Type::MESH: {
             if (info.meshVertices && info.meshIndices && info.meshVertexCount > 0 && info.meshIndexCount >= 3) {
                 JPH::TriangleList triangles;
                 triangles.reserve(info.meshIndexCount / 3);
@@ -1527,7 +1525,7 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
             }
             break;
         }
-        case ShapeInfo::HEIGHTFIELD: {
+        case ShapeInfo::Type::HEIGHTFIELD: {
             if (info.heightfieldData && info.heightfieldSizeX > 1 && info.heightfieldSizeZ > 1) {
                 // Jolt HeightFieldShape expects a square grid, size must be power-of-2 + 1
                 // We'll use the X dimension and scale appropriately
@@ -1550,7 +1548,7 @@ JPH::ShapeRefC JoltPhysicsBackend::createJoltShape(const ShapeInfo& info) const 
             }
             break;
         }
-        case ShapeInfo::CONVEX_HULL: {
+        case ShapeInfo::Type::CONVEX_HULL: {
             if (info.meshVertices && info.meshVertexCount > 0) {
                 JPH::Array<JPH::Vec3> points;
                 points.reserve(info.meshVertexCount);

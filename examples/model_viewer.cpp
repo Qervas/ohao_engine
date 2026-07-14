@@ -17,14 +17,20 @@
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "example_cli.hpp"
 
 #include <iostream>
-#include <optional>
 #include <string>
+#include <string_view>
 #include <chrono>
 #include <filesystem>
 
 using namespace ohao;
+using ohao::examples::parseRenderFlags;
+using ohao::examples::parseSpp;
+using ohao::examples::argOr;
+using ohao::examples::applyDenoiseOverride;
+using ohao::examples::resolveMode;
 
 void addWall(Scene* scene, const std::string& name,
              glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
@@ -49,37 +55,35 @@ void addWall(Scene* scene, const std::string& name,
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples] [deferred|rt_realtime|rt_offline] [flip] [video]" << std::endl;
+        std::cout << "Usage: model_viewer <model.glb|.obj> [output.png] [samples] "
+                     "[deferred|rt_realtime|rt_offline] [flip] [video] [--denoise=…]\n";
         return 1;
     }
 
-    std::string modelPath = argv[1];
-    std::string output = argc > 2 ? argv[2] : "model_output.png";
-    int samples = argc > 3 ? std::atoi(argv[3]) : 1024;
-    uint32_t W = 3840, H = 2160;
+    const std::string modelPath{argOr(argc, argv, 1, "")};
+    const std::string output{argOr(argc, argv, 2, "model_output.png")};
+    const int samples = parseSpp(argc > 3 ? argv[3] : nullptr, 1024);
+    const uint32_t W = 3840, H = 2160;
+    auto cli = parseRenderFlags(argc, argv, 4);
 
-    std::cout << "OHAO Model Viewer — " << modelPath << std::endl;
-    std::cout << W << "x" << H << " @ " << samples << " spp" << std::endl;
-
-    bool useDeferred = false;
-    RenderMode rtMode = RenderMode::RTOffline;
-    std::optional<ohao::DenoiseMode> denoiseOverride;
-    for (int i = 4; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "deferred") useDeferred = true;
-        else if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
-        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
-        else if (arg.rfind("--denoise=", 0) == 0) {
-            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
-        }
-    }
+    std::cout << "OHAO Model Viewer — " << modelPath << "\n";
+    std::cout << W << "x" << H << " @ " << samples << " spp\n";
 
     VulkanRenderer renderer(W, H);
-    if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
+    if (!renderer.initialize()) {
+        std::cerr << "FATAL: renderer init failed\n";
+        return 1;
+    }
 
-    // Load model first — room size adapts to model
-    auto model = ModelLoader::load(modelPath);
-    bool loaded = (model != nullptr);
+    // Load model first — room size adapts to model (Result API)
+    std::shared_ptr<Model> model;
+    bool loaded = false;
+    if (auto loadedModel = ModelLoader::loadResult(modelPath)) {
+        model = std::move(loadedModel.value());
+        loaded = true;
+    } else {
+        std::cerr << "[ModelLoader] " << loadedModel.error() << "\n";
+    }
 
     // Compute framing (room size, camera, lights) from model bounds
     FrameResult frame;
@@ -296,33 +300,23 @@ int main(int argc, char* argv[]) {
     auto& camera = renderer.getCamera();
     SceneFramer::applyCamera(camera, frame);
 
-    // Check any arg for "flip" — rotates model 180° Y (for models facing away)
-    for (int i = 4; i < argc; i++) {
-        if (std::string(argv[i]) == "flip") {
-            glm::quat flipRot = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
-            for (const auto& [id, actor] : scene->getAllActors()) {
-                if (actor->getName().find("Mesh_") == 0 || actor->getName() == "Model")
-                    actor->getTransform()->setRotation(flipRot);
+    // "flip" — rotate model 180° Y (models facing away from camera)
+    if (cli.flipY) {
+        const glm::quat flipRot = glm::quat(glm::radians(glm::vec3(0, 180, 0)));
+        scene->forEachActor([&](Actor& actor) {
+            if (actor.getName().find("Mesh_") == 0 || actor.getName() == "Model") {
+                actor.getTransform()->setRotation(flipRot);
             }
-            break;
-        }
-    }
-    // Mode: "deferred" for hybrid RT, anything else for path traced
-    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : rtMode);
-
-    if (denoiseOverride.has_value()) {
-        renderer.setDenoiseMode(*denoiseOverride);
-        std::cout << "Denoise mode (CLI override): "
-                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
-    } else {
-        std::cout << "Denoise mode (preset): "
-                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
+        });
     }
 
-    // Enable all deferred quality features
-    if (useDeferred && renderer.getDeferredRenderer()) {
-        auto* pp = renderer.getDeferredRenderer()->getPostProcessing();
-        if (pp) {
+    const RenderMode mode = resolveMode(cli);
+    renderer.setRenderMode(mode);
+    applyDenoiseOverride(renderer, cli);
+    std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
+
+    if (cli.useDeferred && renderer.getDeferredRenderer()) {
+        if (auto* pp = renderer.getDeferredRenderer()->getPostProcessing()) {
             pp->setBloomEnabled(true);
             pp->setTAAEnabled(true);
             pp->setSSAOEnabled(true);
@@ -330,65 +324,58 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    const char* rtLabel = (rtMode == RenderMode::RTRealtime) ? "RTRealtime" : "RTOffline";
-    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : rtLabel) << ")..." << std::endl;
+    std::cout << "Rendering ("
+              << (cli.useDeferred ? "Deferred+RT"
+                                  : (mode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline"))
+              << ")...\n";
     auto start = std::chrono::high_resolution_clock::now();
-    int frames = useDeferred ? 30 : (samples + 3);
+    const int frames = cli.useDeferred ? 30 : (samples + 3);
 
-    // If 5th arg is "video", render a frame sequence for ffmpeg
-    bool renderVideo = false;
-    for (int i = 4; i < argc; i++) {
-        if (std::string(argv[i]) == "video") {
-            renderVideo = true;
-            break;
-        }
-    }
-    if (renderVideo && useDeferred) {
-        int fps = 30;
-        int seconds = 3;
-        int totalFrames = fps * seconds;
-        std::string videoDir = output.substr(0, output.find_last_of('.'));
+    if (cli.video && cli.useDeferred) {
+        constexpr int fps = 30;
+        constexpr int seconds = 3;
+        const int totalFrames = fps * seconds;
+        const std::string videoDir = output.substr(0, output.find_last_of('.'));
         std::filesystem::create_directories(videoDir);
 
-        // Warm up the pipeline (triple-buffer flush)
         for (int i = 0; i < 5; i++) renderer.render();
 
-        std::cout << "Recording " << totalFrames << " frames to " << videoDir << "/" << std::endl;
+        std::cout << "Recording " << totalFrames << " frames to " << videoDir << "/\n";
         for (int i = 0; i < totalFrames; i++) {
             renderer.render();
-            const uint8_t* px = renderer.getPixels();
-            if (px) {
+            const auto px = renderer.getPixelSpan();
+            if (!px.empty()) {
                 char fname[256];
                 snprintf(fname, sizeof(fname), "%s/frame_%04d.png", videoDir.c_str(), i);
-                stbi_write_png(fname, W, H, 4, px, W * 4);
+                stbi_write_png(fname, static_cast<int>(W), static_cast<int>(H), 4,
+                               px.data(), static_cast<int>(W * 4));
             }
-            if (i % 30 == 0) std::cout << "  frame " << i << "/" << totalFrames << std::endl;
+            if (i % 30 == 0) std::cout << "  frame " << i << "/" << totalFrames << "\n";
         }
 
-        // Encode with ffmpeg
-        std::string mp4 = videoDir + ".mp4";
-        std::string cmd = "ffmpeg -y -framerate " + std::to_string(fps)
+        const std::string mp4 = videoDir + ".mp4";
+        const std::string cmd = "ffmpeg -y -framerate " + std::to_string(fps)
             + " -i " + videoDir + "/frame_%04d.png"
             + " -c:v libx264 -pix_fmt yuv420p -crf 18 " + mp4 + " 2>/dev/null";
-        std::cout << "Encoding: " << mp4 << std::endl;
+        std::cout << "Encoding: " << mp4 << "\n";
         system(cmd.c_str());
-        std::cout << "Video saved: " << mp4 << std::endl;
+        std::cout << "Video saved: " << mp4 << "\n";
         scene.reset();
         return 0;
     }
 
     for (int i = 0; i < frames; i++) renderer.render();
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
-    std::cout << "Done: " << ms << " ms" << std::endl;
+    std::cout << "Done: " << ms << " ms\n";
 
-    // getPixels() handles OIDN transparently if denoiseMode != None
-    const uint8_t* pixels = renderer.getPixels();
-    if (pixels) {
-        stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
+    const auto pixels = renderer.getPixelSpan();
+    if (!pixels.empty()) {
+        stbi_write_png(output.c_str(), static_cast<int>(W), static_cast<int>(H), 4,
+                       pixels.data(), static_cast<int>(W * 4));
         std::cout << "Saved"
-                  << (renderer.getDenoiseMode() == ohao::DenoiseMode::None ? "" : " (denoised)")
-                  << ": " << output << std::endl;
+                  << (renderer.getDenoiseMode() == DenoiseMode::None ? "" : " (denoised)")
+                  << ": " << output << "\n";
     }
 
     scene.reset();

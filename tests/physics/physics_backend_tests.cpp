@@ -137,7 +137,7 @@ static BodyHandle createDynamicBox(const glm::vec3& pos, float mass = 1.0f) {
     info.position = pos;
     info.motionType = MotionType::DYNAMIC;
     info.mass = mass;
-    info.shape.type = ShapeInfo::BOX;
+    info.shape.type = ShapeInfo::Type::BOX;
     info.shape.halfExtents = glm::vec3(0.5f);
     return g_backend->createBody(info);
 }
@@ -147,7 +147,7 @@ static BodyHandle createStaticBox(const glm::vec3& pos) {
     BodyCreationInfo info;
     info.position = pos;
     info.motionType = MotionType::STATIC;
-    info.shape.type = ShapeInfo::BOX;
+    info.shape.type = ShapeInfo::Type::BOX;
     info.shape.halfExtents = glm::vec3(0.5f);
     return g_backend->createBody(info);
 }
@@ -157,7 +157,7 @@ static BodyHandle createFloor() {
     BodyCreationInfo info;
     info.position = glm::vec3(0, -0.5f, 0);
     info.motionType = MotionType::STATIC;
-    info.shape.type = ShapeInfo::BOX;
+    info.shape.type = ShapeInfo::Type::BOX;
     info.shape.halfExtents = glm::vec3(50.0f, 0.5f, 50.0f);
     info.layer = CollisionLayer::STATIC;
     return g_backend->createBody(info);
@@ -365,7 +365,7 @@ bool testShapeTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 5, 0);
         info.motionType = MotionType::DYNAMIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(1, 1, 1);
         auto h = g_backend->createBody(info);
         EXPECT_NE(h, INVALID_BODY);
@@ -377,7 +377,7 @@ bool testShapeTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 5, 0);
         info.motionType = MotionType::DYNAMIC;
-        info.shape.type = ShapeInfo::SPHERE;
+        info.shape.type = ShapeInfo::Type::SPHERE;
         info.shape.radius = 0.5f;
         auto h = g_backend->createBody(info);
         EXPECT_NE(h, INVALID_BODY);
@@ -389,7 +389,7 @@ bool testShapeTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 5, 0);
         info.motionType = MotionType::DYNAMIC;
-        info.shape.type = ShapeInfo::CAPSULE;
+        info.shape.type = ShapeInfo::Type::CAPSULE;
         info.shape.radius = 0.3f;
         info.shape.height = 1.8f;
         auto h = g_backend->createBody(info);
@@ -402,7 +402,7 @@ bool testShapeTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 5, 0);
         info.motionType = MotionType::DYNAMIC;
-        info.shape.type = ShapeInfo::CYLINDER;
+        info.shape.type = ShapeInfo::Type::CYLINDER;
         info.shape.radius = 0.5f;
         info.shape.height = 2.0f;
         auto h = g_backend->createBody(info);
@@ -422,7 +422,7 @@ bool testMotionTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 5, 0);
         info.motionType = MotionType::DYNAMIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(0.5f);
         auto h = g_backend->createBody(info);
         EXPECT_NE(h, INVALID_BODY);
@@ -434,7 +434,7 @@ bool testMotionTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 0, 0);
         info.motionType = MotionType::STATIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(10, 0.5f, 10);
         auto h = g_backend->createBody(info);
         EXPECT_NE(h, INVALID_BODY);
@@ -446,7 +446,7 @@ bool testMotionTypes() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 3, 0);
         info.motionType = MotionType::KINEMATIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(1, 0.1f, 1);
         auto h = g_backend->createBody(info);
         EXPECT_NE(h, INVALID_BODY);
@@ -468,7 +468,7 @@ bool testCCDCreation() {
     BodyCreationInfo info;
     info.position = glm::vec3(0, 5, 0);
     info.motionType = MotionType::DYNAMIC;
-    info.shape.type = ShapeInfo::SPHERE;
+    info.shape.type = ShapeInfo::Type::SPHERE;
     info.shape.radius = 0.1f;
     info.useCCD = true;
     info.mass = 0.5f;
@@ -564,7 +564,7 @@ bool testAutoLayerAssignment() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 5, 0);
         info.motionType = MotionType::DYNAMIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(0.5f);
         info.layer = 0; // Auto-assign
         auto h = g_backend->createBody(info);
@@ -578,7 +578,7 @@ bool testAutoLayerAssignment() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 0, 0);
         info.motionType = MotionType::STATIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(10, 0.5f, 10);
         info.layer = 0; // Auto-assign
         auto h = g_backend->createBody(info);
@@ -592,7 +592,7 @@ bool testAutoLayerAssignment() {
         BodyCreationInfo info;
         info.position = glm::vec3(0, 3, 0);
         info.motionType = MotionType::KINEMATIC;
-        info.shape.type = ShapeInfo::BOX;
+        info.shape.type = ShapeInfo::Type::BOX;
         info.shape.halfExtents = glm::vec3(1, 0.1f, 1);
         info.layer = 0; // Auto-assign
         auto h = g_backend->createBody(info);
@@ -694,7 +694,7 @@ bool testRaycastLayerFilter() {
     BodyCreationInfo info;
     info.position = glm::vec3(0, 0, 0);
     info.motionType = MotionType::STATIC;
-    info.shape.type = ShapeInfo::BOX;
+    info.shape.type = ShapeInfo::Type::BOX;
     info.shape.halfExtents = glm::vec3(0.5f);
     info.layer = CollisionLayer::PROJECTILE;
     auto box = g_backend->createBody(info);
@@ -1253,7 +1253,7 @@ bool testNullBackend() {
 
     // Create body — should return valid handle
     BodyCreationInfo info;
-    info.shape.type = ShapeInfo::BOX;
+    info.shape.type = ShapeInfo::Type::BOX;
     auto h = null.createBody(info);
     EXPECT_NE(h, INVALID_BODY);
     EXPECT_TRUE(null.isValidBody(h));
@@ -1445,7 +1445,7 @@ bool testForceVolume() {
     world->flushPendingBodies();
 
     // Box volume centered at origin, force = +Y 500
-    world->createForceVolumeBox(glm::vec3(0,0,0), glm::vec3(5,5,5), glm::vec3(0,500,0));
+    (void)world->createForceVolumeBox(glm::vec3(0,0,0), glm::vec3(5,5,5), glm::vec3(0,500,0));
 
     for (int i = 0; i < 30; i++) world->stepOnce();
 
@@ -1603,7 +1603,7 @@ bool testGravityScaleCreation() {
     if (!g_joltAvailable) { TEST_SKIP("Jolt not available"); return true; }
 
     BodyCreationInfo info;
-    info.shape.type = ShapeInfo::BOX;
+    info.shape.type = ShapeInfo::Type::BOX;
     info.shape.halfExtents = glm::vec3(0.5f);
     info.motionType = MotionType::DYNAMIC;
     info.position = glm::vec3(0, 10, 0);

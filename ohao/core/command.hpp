@@ -1,47 +1,41 @@
 #pragma once
 
-#include <string>
-#include <memory>
-#include <vector>
+/**
+ * Undoable command stack — AI- and editor-friendly mutation history.
+ *
+ * Art notes:
+ *   - Command is virtual (type-erased undo stack). CommandLike documents the surface.
+ *   - LambdaCommand takes owned std::string + move-only callables via std::function.
+ *   - execute() rejects null; undo/redo are [[nodiscard]] bool.
+ */
+
+#include "core/concepts.hpp"
+
+#include <cstddef>
 #include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace ohao {
 
-/**
- * Command - Base class for undoable operations
- *
- * Every scene mutation goes through a Command so it can be undone.
- * AI agents can experiment with changes and rollback if needed.
- */
 class Command {
 public:
     virtual ~Command() = default;
 
-    // Execute the command (first time or redo)
     virtual void execute() = 0;
-
-    // Undo the command
     virtual void undo() = 0;
 
-    // Human-readable description for history display
-    virtual std::string getDescription() const = 0;
+    [[nodiscard]] virtual std::string getDescription() const = 0;
 };
 
 using CommandPtr = std::unique_ptr<Command>;
 
-/**
- * LambdaCommand - Quick command from two lambdas (execute + undo)
- *
- * Usage:
- *   auto cmd = std::make_unique<LambdaCommand>(
- *       "Move Box1 to (1,2,3)",
- *       [=]() { actor->setPosition(newPos); },
- *       [=]() { actor->setPosition(oldPos); }
- *   );
- *   CommandHistory::instance().execute(std::move(cmd));
- */
 class LambdaCommand : public Command {
 public:
+    /// Takes owned description (const char* / string convert via std::string).
     LambdaCommand(std::string description,
                   std::function<void()> doFunc,
                   std::function<void()> undoFunc)
@@ -49,9 +43,15 @@ public:
         , m_doFunc(std::move(doFunc))
         , m_undoFunc(std::move(undoFunc)) {}
 
-    void execute() override { m_doFunc(); }
-    void undo() override { m_undoFunc(); }
-    std::string getDescription() const override { return m_description; }
+    void execute() override {
+        if (m_doFunc) m_doFunc();
+    }
+
+    void undo() override {
+        if (m_undoFunc) m_undoFunc();
+    }
+
+    [[nodiscard]] std::string getDescription() const override { return m_description; }
 
 private:
     std::string m_description;
@@ -59,51 +59,67 @@ private:
     std::function<void()> m_undoFunc;
 };
 
+static_assert(CommandLike<LambdaCommand>);
+
 /**
- * CommandHistory - Undo/redo stack
- *
- * Manages a history of executed commands with undo/redo support.
- * Thread-safe singleton.
+ * Build a LambdaCommand from any two nullary callables (lambdas, function ptrs).
+ */
+template<NullaryCallable DoF, NullaryCallable UndoF>
+[[nodiscard]] CommandPtr make_lambda_command(std::string_view description,
+                                             DoF&& doFunc,
+                                             UndoF&& undoFunc) {
+    return std::make_unique<LambdaCommand>(
+        std::string(description),
+        std::function<void()>(std::forward<DoF>(doFunc)),
+        std::function<void()>(std::forward<UndoF>(undoFunc)));
+}
+
+/**
+ * CommandHistory — undo/redo stack (process-wide singleton).
+ * Not thread-safe for concurrent mutate; UI/main thread only.
  */
 class CommandHistory {
 public:
-    static CommandHistory& instance();
+    [[nodiscard]] static CommandHistory& instance();
 
-    // Execute a command and push it onto the history stack.
-    // Clears any redo history.
+    /// Execute and push. No-op if cmd is null.
     void execute(CommandPtr cmd);
 
-    // Undo the last command. Returns false if nothing to undo.
-    bool undo();
+    /// Factory: construct LambdaCommand and execute it.
+    template<NullaryCallable DoF, NullaryCallable UndoF>
+    void execute_lambda(std::string_view description, DoF&& doFunc, UndoF&& undoFunc) {
+        execute(make_lambda_command(description,
+                                    std::forward<DoF>(doFunc),
+                                    std::forward<UndoF>(undoFunc)));
+    }
 
-    // Redo the last undone command. Returns false if nothing to redo.
-    bool redo();
+    [[nodiscard]] bool undo();
+    [[nodiscard]] bool redo();
 
-    // Check if undo/redo is possible
-    bool canUndo() const;
-    bool canRedo() const;
+    [[nodiscard]] bool canUndo() const noexcept;
+    [[nodiscard]] bool canRedo() const noexcept;
 
-    // Get description of what would be undone/redone
-    std::string undoDescription() const;
-    std::string redoDescription() const;
+    [[nodiscard]] std::string undoDescription() const;
+    [[nodiscard]] std::string redoDescription() const;
 
-    // Get full history for display
-    const std::vector<CommandPtr>& getHistory() const { return m_undoStack; }
-    size_t getUndoCount() const { return m_undoStack.size(); }
-    size_t getRedoCount() const { return m_redoStack.size(); }
+    [[nodiscard]] const std::vector<CommandPtr>& getHistory() const noexcept { return m_undoStack; }
+    [[nodiscard]] std::size_t getUndoCount() const noexcept { return m_undoStack.size(); }
+    [[nodiscard]] std::size_t getRedoCount() const noexcept { return m_redoStack.size(); }
+    [[nodiscard]] std::size_t maxHistory() const noexcept { return m_maxHistory; }
 
-    // Clear all history
-    void clear();
+    void clear() noexcept;
 
-    // Set max history size (0 = unlimited)
-    void setMaxHistory(size_t max) { m_maxHistory = max; }
+    /// 0 = unlimited
+    void setMaxHistory(std::size_t max) noexcept { m_maxHistory = max; }
 
 private:
     CommandHistory() = default;
 
+    void trimUndoStack();
+
     std::vector<CommandPtr> m_undoStack;
     std::vector<CommandPtr> m_redoStack;
-    size_t m_maxHistory = 100;
+    std::size_t m_maxHistory = 100;
 };
 
 } // namespace ohao

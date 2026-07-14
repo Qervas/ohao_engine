@@ -216,18 +216,12 @@ void PhysicsWorld::removeRigidBody(std::shared_ptr<dynamics::RigidBody> body) {
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
 
     // Remove from component mapping
-    for (auto it = m_componentToBody.begin(); it != m_componentToBody.end(); ++it) {
-        if (it->second == body) {
-            m_componentToBody.erase(it);
-            break;
-        }
-    }
+    std::erase_if(m_componentToBody, [&](const auto& entry) {
+        return entry.second == body;
+    });
 
     // Remove from bodies list
-    m_rigidBodies.erase(
-        std::remove(m_rigidBodies.begin(), m_rigidBodies.end(), body),
-        m_rigidBodies.end()
-    );
+    std::erase(m_rigidBodies, body);
 
     updateActiveBodyPointers();
 }
@@ -241,23 +235,17 @@ void PhysicsWorld::removeRigidBody(dynamics::RigidBody* body) {
         body->setBackendHandle(backend::INVALID_BODY);
     }
 
-    // Find the shared_ptr and remove it
     std::lock_guard<std::mutex> lock(m_bodiesMutex);
-    for (auto it = m_rigidBodies.begin(); it != m_rigidBodies.end(); ++it) {
-        if (it->get() == body) {
-            // Remove from component mapping first
-            for (auto mapIt = m_componentToBody.begin(); mapIt != m_componentToBody.end(); ++mapIt) {
-                if (mapIt->second == *it) {
-                    m_componentToBody.erase(mapIt);
-                    break;
-                }
-            }
 
-            m_rigidBodies.erase(it);
-            updateActiveBodyPointers();
-            break;
-        }
-    }
+    std::erase_if(m_componentToBody, [&](const auto& entry) {
+        return entry.second && entry.second.get() == body;
+    });
+
+    std::erase_if(m_rigidBodies, [&](const auto& sp) {
+        return sp.get() == body;
+    });
+
+    updateActiveBodyPointers();
 }
 
 void PhysicsWorld::addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> body) {
@@ -377,21 +365,17 @@ size_t PhysicsWorld::getMemoryUsage() const {
 
 void PhysicsWorld::compactMemory() {
     // Remove null pointers and optimize memory layout
-    m_rigidBodies.erase(
-        std::remove_if(m_rigidBodies.begin(), m_rigidBodies.end(), 
-                       [](const std::weak_ptr<dynamics::RigidBody>& weak) {
-                           return weak.expired();
-                       }),
-        m_rigidBodies.end()
-    );
-    
+    std::erase_if(m_rigidBodies, [](const auto& body) {
+        return !body;
+    });
+
     m_rigidBodies.shrink_to_fit();
     m_activeBodyPointers.shrink_to_fit();
 }
 
 // === FORCE SYSTEM INTEGRATION ===
-size_t PhysicsWorld::registerForce(std::unique_ptr<forces::ForceGenerator> generator, 
-                                  const std::string& name,
+size_t PhysicsWorld::registerForce(std::unique_ptr<forces::ForceGenerator> generator,
+                                  std::string_view name,
                                   const std::vector<dynamics::RigidBody*>& targetBodies) {
     return m_forceRegistry.registerForce(std::move(generator), name, targetBodies);
 }
@@ -596,46 +580,46 @@ backend::BodyCreationInfo PhysicsWorld::buildCreationInfo(const dynamics::RigidB
         switch (shape->getType()) {
             case collision::ShapeType::BOX: {
                 auto* box = static_cast<const collision::BoxShape*>(shape.get());
-                info.shape.type = backend::ShapeInfo::BOX;
+                info.shape.type = backend::ShapeInfo::Type::BOX;
                 info.shape.halfExtents = box->getHalfExtents();
                 break;
             }
             case collision::ShapeType::SPHERE: {
                 auto* sphere = static_cast<const collision::SphereShape*>(shape.get());
-                info.shape.type = backend::ShapeInfo::SPHERE;
+                info.shape.type = backend::ShapeInfo::Type::SPHERE;
                 info.shape.radius = sphere->getRadius();
                 break;
             }
             case collision::ShapeType::CAPSULE: {
                 auto* capsule = static_cast<const collision::CapsuleShape*>(shape.get());
-                info.shape.type = backend::ShapeInfo::CAPSULE;
+                info.shape.type = backend::ShapeInfo::Type::CAPSULE;
                 info.shape.radius = capsule->getRadius();
                 info.shape.height = capsule->getHeight();
                 break;
             }
             case collision::ShapeType::CYLINDER: {
                 auto* cylinder = static_cast<const collision::CylinderShape*>(shape.get());
-                info.shape.type = backend::ShapeInfo::CYLINDER;
+                info.shape.type = backend::ShapeInfo::Type::CYLINDER;
                 info.shape.radius = cylinder->getRadius();
                 info.shape.height = cylinder->getHeight();
                 break;
             }
             case collision::ShapeType::PLANE: {
-                info.shape.type = backend::ShapeInfo::PLANE;
+                info.shape.type = backend::ShapeInfo::Type::PLANE;
                 info.shape.planeNormal = glm::vec3(0, 1, 0);
                 break;
             }
             case collision::ShapeType::TRIANGLE_MESH: {
-                info.shape.type = backend::ShapeInfo::MESH;
+                info.shape.type = backend::ShapeInfo::Type::MESH;
                 // Mesh data is transient - backend must copy during createBody
                 // For now, fall back to box
-                info.shape.type = backend::ShapeInfo::BOX;
+                info.shape.type = backend::ShapeInfo::Type::BOX;
                 info.shape.halfExtents = shape->getSize() * 0.5f;
                 break;
             }
             default: {
                 // Default to box with the shape's size
-                info.shape.type = backend::ShapeInfo::BOX;
+                info.shape.type = backend::ShapeInfo::Type::BOX;
                 info.shape.halfExtents = shape->getSize() * 0.5f;
                 break;
             }
@@ -921,11 +905,14 @@ void PhysicsWorld::updateCharacter(backend::CharacterHandle handle, float deltaT
 // Terrain Heightfield
 // ============================================================================
 
-backend::BodyHandle PhysicsWorld::addTerrainHeightfield(const float* heights,
+backend::BodyHandle PhysicsWorld::addTerrainHeightfield(std::span<const float> heights,
                                                          uint32_t resolution,
                                                          float worldSize,
                                                          float heightScale) {
-    if (!m_backend || !heights || resolution < 2) return backend::INVALID_BODY;
+    if (!m_backend || heights.empty() || resolution < 2) return backend::INVALID_BODY;
+    if (heights.size() < static_cast<size_t>(resolution) * static_cast<size_t>(resolution)) {
+        return backend::INVALID_BODY;
+    }
 
     // Remove any existing terrain body first
     removeTerrainBody();
@@ -933,8 +920,8 @@ backend::BodyHandle PhysicsWorld::addTerrainHeightfield(const float* heights,
     float sampleStep = worldSize / static_cast<float>(resolution - 1);
 
     backend::ShapeInfo shape;
-    shape.type                 = backend::ShapeInfo::HEIGHTFIELD;
-    shape.heightfieldData      = heights;
+    shape.type                 = backend::ShapeInfo::Type::HEIGHTFIELD;
+    shape.heightfieldData      = heights.data();
     shape.heightfieldSizeX     = resolution;
     shape.heightfieldSizeZ     = resolution;
     shape.heightfieldScale     = glm::vec3(sampleStep, heightScale, sampleStep);

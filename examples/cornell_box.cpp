@@ -13,14 +13,20 @@
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
 #include "render/camera/camera.hpp"
+#include "render/rt/denoise/denoise_types.hpp"
+#include "example_cli.hpp"
 
 #include <iostream>
-#include <optional>
 #include <string>
+#include <string_view>
 #include <chrono>
-#include "render/rt/denoise/denoise_types.hpp"
 
 using namespace ohao;
+using ohao::examples::parseRenderFlags;
+using ohao::examples::parseSpp;
+using ohao::examples::argOr;
+using ohao::examples::applyDenoiseOverride;
+using ohao::examples::resolveMode;
 
 // Create a single quad (2 triangles)
 void addQuad(std::vector<Vertex>& verts, std::vector<uint32_t>& inds,
@@ -46,10 +52,11 @@ void addQuad(std::vector<Vertex>& verts, std::vector<uint32_t>& inds,
     inds.push_back(base+0); inds.push_back(base+2); inds.push_back(base+3);
 }
 
-void addWall(Scene* scene, const std::string& name,
+void addWall(Scene* scene, std::string_view name,
              glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d,
              glm::vec3 normal, glm::vec3 color) {
     auto actor = scene->createActor(name);
+    actor->addTag("cornell_wall");
     auto model = std::make_shared<Model>();
     addQuad(model->vertices, model->indices, a, b, c, d, normal, color);
     auto mesh = actor->addComponent<MeshComponent>();
@@ -61,26 +68,18 @@ void addWall(Scene* scene, const std::string& name,
 }
 
 int main(int argc, char* argv[]) {
-    std::string output = argc > 1 ? argv[1] : "cornell_box.png";
-    int samples = argc > 2 ? std::atoi(argv[2]) : 1024;
-    uint32_t W = 1920, H = 1080;
-    RenderMode rtMode = RenderMode::RTOffline;
-    bool useDeferred = false;
-    std::optional<ohao::DenoiseMode> denoiseOverride;
-    for (int i = 3; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "deferred") useDeferred = true;
-        else if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
-        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
-        else if (arg.rfind("--denoise=", 0) == 0) {
-            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
-        }
-    }
+    const std::string output{argOr(argc, argv, 1, "cornell_box.png")};
+    const int samples = parseSpp(argc > 2 ? argv[2] : nullptr, 1024);
+    const uint32_t W = 1920, H = 1080;
+    const auto cli = parseRenderFlags(argc, argv, 3);
 
-    std::cout << "OHAO Cornell Box — " << W << "x" << H << " @ " << samples << " spp" << std::endl;
+    std::cout << "OHAO Cornell Box — " << W << "x" << H << " @ " << samples << " spp\n";
 
     VulkanRenderer renderer(W, H);
-    if (!renderer.initialize()) { std::cerr << "FATAL: renderer init failed" << std::endl; return 1; }
+    if (!renderer.initialize()) {
+        std::cerr << "FATAL: renderer init failed\n";
+        return 1;
+    }
 
     // Build the classic Cornell box
     auto scene = std::make_unique<Scene>("Cornell Box");
@@ -151,35 +150,34 @@ int main(int argc, char* argv[]) {
     camera.setFov(38.0f);
     camera.setRotation(0.0f, -90.0f);
 
-    renderer.setRenderMode(useDeferred ? RenderMode::Deferred : rtMode);
+    const RenderMode mode = resolveMode(cli);
+    renderer.setRenderMode(mode);
+    applyDenoiseOverride(renderer, cli);
 
-    if (denoiseOverride.has_value()) {
-        renderer.setDenoiseMode(*denoiseOverride);
-        std::cout << "Denoise mode (CLI override): "
-                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
-    } else {
-        std::cout << "Denoise mode (preset): "
-                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
-    }
+    std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
+    std::cout << "Rendering ("
+              << (isRTRenderMode(mode) ? (mode == RenderMode::RTRealtime ? "RTRealtime" : "RTOffline")
+                                       : "Deferred")
+              << ")...\n";
 
-    const char* rtLabel = (rtMode == RenderMode::RTRealtime) ? "RTRealtime" : "RTOffline";
-    std::cout << "Rendering (" << (useDeferred ? "Deferred+RT" : rtLabel) << ")..." << std::endl;
     auto start = std::chrono::high_resolution_clock::now();
-    int frames = useDeferred ? 10 : (samples + 3);
+    const int frames = cli.useDeferred ? 10 : (samples + 3);
     for (int i = 0; i < frames; i++) renderer.render();
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start).count();
-    std::cout << "Done: " << ms << " ms" << std::endl;
+    std::cout << "Done: " << ms << " ms\n";
 
-    // getPixels() handles OIDN transparently if denoiseMode != None
-    const uint8_t* pixels = renderer.getPixels();
-    if (pixels) {
-        stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
+    // getPixelSpan() — same buffer as getPixels(); OIDN applied when denoise != None
+    const auto pixels = renderer.getPixelSpan();
+    if (!pixels.empty()) {
+        stbi_write_png(output.c_str(), static_cast<int>(W), static_cast<int>(H), 4,
+                       pixels.data(), static_cast<int>(W * 4));
         std::cout << "Saved"
-                  << (renderer.getDenoiseMode() == ohao::DenoiseMode::None ? "" : " (denoised)")
-                  << ": " << output << std::endl;
+                  << (renderer.getDenoiseMode() == DenoiseMode::None ? "" : " (denoised)")
+                  << ": " << output << "\n";
     }
 
-    // Destroy scene before renderer to avoid Vulkan/Jolt cleanup order crash
+    // Destroy scene before renderer (Vulkan/Jolt teardown order)
     scene.reset();
+    return 0;
 }

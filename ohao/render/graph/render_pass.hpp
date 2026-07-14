@@ -3,6 +3,7 @@
 #include "resource_handle.hpp"
 #include <vulkan/vulkan.h>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <functional>
 #include <memory>
@@ -20,21 +21,21 @@ public:
     explicit PassBuilder(RenderGraph& graph, uint32_t passIndex);
 
     // Color attachment outputs
-    TextureHandle createColorAttachment(const std::string& name, uint32_t width, uint32_t height,
-                                         VkFormat format = VK_FORMAT_R8G8B8A8_SRGB);
+    [[nodiscard]] TextureHandle createColorAttachment(std::string_view name, uint32_t width, uint32_t height,
+                                                      VkFormat format = VK_FORMAT_R8G8B8A8_SRGB);
 
-    TextureHandle createHdrColorAttachment(const std::string& name, uint32_t width, uint32_t height);
+    [[nodiscard]] TextureHandle createHdrColorAttachment(std::string_view name, uint32_t width, uint32_t height);
 
     // Depth attachment outputs
-    TextureHandle createDepthAttachment(const std::string& name, uint32_t width, uint32_t height,
-                                         VkFormat format = VK_FORMAT_D32_SFLOAT);
+    [[nodiscard]] TextureHandle createDepthAttachment(std::string_view name, uint32_t width, uint32_t height,
+                                                      VkFormat format = VK_FORMAT_D32_SFLOAT);
 
     // Shadow map output
-    TextureHandle createShadowMap(const std::string& name, uint32_t size);
+    [[nodiscard]] TextureHandle createShadowMap(std::string_view name, uint32_t size);
 
     // G-Buffer outputs for deferred rendering
-    TextureHandle createGBufferAttachment(const std::string& name, uint32_t width, uint32_t height,
-                                           VkFormat format);
+    [[nodiscard]] TextureHandle createGBufferAttachment(std::string_view name, uint32_t width, uint32_t height,
+                                                        VkFormat format);
 
     // Read a texture as shader input
     void readTexture(TextureHandle handle, VkPipelineStageFlags stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
@@ -50,7 +51,7 @@ public:
     void useDepthAttachment(TextureHandle handle);
 
     // Buffer operations
-    BufferHandle createBuffer(const std::string& name, VkDeviceSize size, BufferUsage usage);
+    [[nodiscard]] BufferHandle createBuffer(std::string_view name, VkDeviceSize size, BufferUsage usage);
     void readBuffer(BufferHandle handle, BufferUsage usage);
     void writeBuffer(BufferHandle handle);
 
@@ -131,8 +132,8 @@ public:
     explicit PassCommandBuffer(VkCommandBuffer cmd, const RenderPassDef& pass)
         : m_cmd(cmd), m_pass(pass) {}
 
-    VkCommandBuffer get() const { return m_cmd; }
-    const RenderPassDef& getPass() const { return m_pass; }
+    [[nodiscard]] VkCommandBuffer get() const { return m_cmd; }
+    [[nodiscard]] const RenderPassDef& getPass() const { return m_pass; }
 
     // Pipeline binding
     void bindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline) {

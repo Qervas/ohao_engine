@@ -10,6 +10,7 @@
 
 #include <iostream>
 #include <cmath>
+#include <string_view>
 
 #include "audio/audio_system.hpp"
 
@@ -164,10 +165,36 @@ bool testCategoryVolume() {
 }
 
 bool testSoundHandleConstants() {
-    TEST_BEGIN("Sound handle constants");
+    TEST_BEGIN("Sound handle constants + category helpers");
 
     EXPECT_EQ(INVALID_SOUND_HANDLE, 0u);
+    EXPECT_FALSE(isValidSoundHandle(INVALID_SOUND_HANDLE));
+    EXPECT_TRUE(isValidSoundHandle(1u));
+    EXPECT_TRUE(isValidSoundCategory(SoundCategory::SFX));
+    EXPECT_FALSE(isValidSoundCategory(SoundCategory::Count));
+    EXPECT_EQ(soundCategoryName(SoundCategory::Music), std::string_view("music"));
+    EXPECT_EQ(soundCategoryIndex(SoundCategory::Ambient), 2);
 
+    TEST_PASS();
+    return true;
+}
+
+bool testVolumeClamp() {
+    TEST_BEGIN("Master/category volume clamp to [0,1]");
+
+    AudioSystem audio;
+    bool ok = audio.initialize();
+    if (!ok) { TEST_SKIP("No audio device"); return true; }
+
+    audio.setMasterVolume(2.5f);
+    EXPECT_NEAR(audio.getMasterVolume(), 1.0f, 0.001f);
+    audio.setMasterVolume(-1.0f);
+    EXPECT_NEAR(audio.getMasterVolume(), 0.0f, 0.001f);
+    audio.setCategoryVolume(SoundCategory::SFX, 5.0f);
+    EXPECT_NEAR(audio.getCategoryVolume(SoundCategory::SFX), 1.0f, 0.001f);
+    EXPECT_EQ(audio.activeSoundCount(), 0u);
+
+    audio.shutdown();
     TEST_PASS();
     return true;
 }
@@ -301,6 +328,7 @@ void runAllTests() {
     std::cout << "\n\033[1m--- Volume Control ---\033[0m" << std::endl;
     testMasterVolume();
     testCategoryVolume();
+    testVolumeClamp();
 
     std::cout << "\n\033[1m--- Handle Safety ---\033[0m" << std::endl;
     testSoundHandleConstants();

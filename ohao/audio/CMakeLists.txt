@@ -8,7 +8,10 @@ target_include_directories(ohao_audio PUBLIC
     ${CMAKE_SOURCE_DIR}/ohao
 )
 
+target_compile_features(ohao_audio PUBLIC cxx_std_20)
+
 target_link_libraries(ohao_audio PUBLIC
+    ohao_core
     miniaudio
     glm
 )

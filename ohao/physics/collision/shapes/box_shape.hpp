@@ -14,8 +14,8 @@ public:
     ~BoxShape() override = default;
     
     // Accessors
-    const glm::vec3& getHalfExtents() const { return m_halfExtents; }
-    void setHalfExtents(const glm::vec3& halfExtents) { m_halfExtents = halfExtents; }
+    [[nodiscard]] const glm::vec3& getHalfExtents() const noexcept { return m_halfExtents; }
+    void setHalfExtents(const glm::vec3& halfExtents) noexcept { m_halfExtents = halfExtents; }
     
     // CollisionShape interface
     math::AABB getAABB(const glm::vec3& worldPosition, const glm::quat& worldRotation) const override {

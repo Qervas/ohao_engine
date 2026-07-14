@@ -40,7 +40,7 @@ glm::mat4 Transform::getLocalMatrix() const {
     return localMatrix;
 }
 
-void Transform::setDirty() {
+void Transform::setDirty() noexcept {
     dirty = true;
 }
 

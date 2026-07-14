@@ -8,8 +8,8 @@ namespace ohao {
 namespace physics {
 namespace forces {
 
-size_t ForceRegistry::registerForce(std::unique_ptr<ForceGenerator> generator, 
-                                   const std::string& name,
+size_t ForceRegistry::registerForce(std::unique_ptr<ForceGenerator> generator,
+                                   std::string_view name,
                                    const std::vector<dynamics::RigidBody*>& targetBodies) {
     if (!generator) {
         return 0; // Invalid registration
@@ -43,15 +43,10 @@ bool ForceRegistry::unregisterForce(size_t registrationId) {
     return true;
 }
 
-void ForceRegistry::unregisterForcesByName(const std::string& name) {
-    auto it = m_forceRegistrations.begin();
-    while (it != m_forceRegistrations.end()) {
-        if (it->second->name == name) {
-            it = m_forceRegistrations.erase(it);
-        } else {
-            ++it;
-        }
-    }
+void ForceRegistry::unregisterForcesByName(std::string_view name) {
+    std::erase_if(m_forceRegistrations, [&](const auto& entry) {
+        return entry.second && entry.second->name == name;
+    });
     invalidateSortedCache();
 }
 
@@ -97,7 +92,7 @@ bool ForceRegistry::setForceEnabled(size_t registrationId, bool enabled) {
     return true;
 }
 
-void ForceRegistry::setForcesEnabledByName(const std::string& name, bool enabled) {
+void ForceRegistry::setForcesEnabledByName(std::string_view name, bool enabled) {
     for (auto& [id, registration] : m_forceRegistrations) {
         if (registration->name == name) {
             registration->enabled = enabled;
@@ -153,7 +148,7 @@ const ForceRegistration* ForceRegistry::getForceRegistration(size_t registration
     return (it != m_forceRegistrations.end()) ? it->second.get() : nullptr;
 }
 
-std::vector<ForceRegistration*> ForceRegistry::getForceRegistrationsByName(const std::string& name) {
+std::vector<ForceRegistration*> ForceRegistry::getForceRegistrationsByName(std::string_view name) {
     std::vector<ForceRegistration*> result;
     for (auto& [id, registration] : m_forceRegistrations) {
         if (registration->name == name) {
@@ -250,7 +245,7 @@ void ForceRegistry::applyForceRegistration(ForceRegistration& registration,
         }
         
         if (!targetedBodies.empty()) {
-            globalForce->applyForceToMultiple(targetedBodies.data(), targetedBodies.size(), deltaTime);
+            globalForce->applyForceToMultiple(targetedBodies, deltaTime);
         }
     }
     // Handle single body forces

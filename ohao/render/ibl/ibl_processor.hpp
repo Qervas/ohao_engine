@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ohao {
@@ -14,27 +15,27 @@ public:
     IBLProcessor() = default;
     ~IBLProcessor();
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
                     VkCommandPool commandPool, VkQueue graphicsQueue);
     void cleanup();
 
     // Load and process an HDR environment map
     // This performs: equirect->cubemap, prefilter specular, generate irradiance
-    bool loadEnvironmentMap(const std::string& hdrPath);
+    [[nodiscard]] bool loadEnvironmentMap(std::string_view hdrPath);
 
     // Generate BRDF LUT (call once, reusable for all environments)
-    bool generateBRDFLUT();
+    [[nodiscard]] bool generateBRDFLUT();
 
     // Get processed textures for rendering
-    VkImageView getEnvironmentCubemapView() const { return m_envCubemapView; }
-    VkImageView getIrradianceCubemapView() const { return m_irradianceView; }
-    VkImageView getPrefilteredCubemapView() const { return m_prefilteredView; }
-    VkImageView getBRDFLUTView() const { return m_brdfLUTView; }
-    VkSampler getCubemapSampler() const { return m_cubemapSampler; }
-    VkSampler getBRDFSampler() const { return m_brdfSampler; }
+    [[nodiscard]] VkImageView getEnvironmentCubemapView() const { return m_envCubemapView; }
+    [[nodiscard]] VkImageView getIrradianceCubemapView() const { return m_irradianceView; }
+    [[nodiscard]] VkImageView getPrefilteredCubemapView() const { return m_prefilteredView; }
+    [[nodiscard]] VkImageView getBRDFLUTView() const { return m_brdfLUTView; }
+    [[nodiscard]] VkSampler getCubemapSampler() const { return m_cubemapSampler; }
+    [[nodiscard]] VkSampler getBRDFSampler() const { return m_brdfSampler; }
 
     // Check if IBL is ready
-    bool isReady() const { return m_envCubemapView != VK_NULL_HANDLE; }
+    [[nodiscard]] bool isReady() const { return m_envCubemapView != VK_NULL_HANDLE; }
 
     // Cubemap size configuration
     static constexpr uint32_t ENV_CUBEMAP_SIZE = 512;
@@ -44,13 +45,13 @@ public:
     static constexpr uint32_t BRDF_LUT_SIZE = 512;
 
 private:
-    bool loadHDRImage(const std::string& path, std::vector<float>& pixels,
+    [[nodiscard]] bool loadHDRImage(std::string_view path, std::vector<float>& pixels,
                       uint32_t& width, uint32_t& height);
-    bool createEquirectTexture(const std::vector<float>& pixels,
+    [[nodiscard]] bool createEquirectTexture(const std::vector<float>& pixels,
                                uint32_t width, uint32_t height);
-    bool createCubemapImages();
-    bool createComputePipelines();
-    bool createDescriptors();
+    [[nodiscard]] bool createCubemapImages();
+    [[nodiscard]] bool createComputePipelines();
+    [[nodiscard]] bool createDescriptors();
 
     void executeEquirectToCubemap();
     void executeIrradianceConvolution();
@@ -59,7 +60,7 @@ private:
     void updateDescriptorSet(VkDescriptorSet descSet, VkImageView inputView,
                              VkSampler sampler, VkImageView outputView);
 
-    VkShaderModule loadShaderModule(const std::string& path);
+    [[nodiscard]] VkShaderModule loadShaderModule(std::string_view path);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     void transitionImageLayout(VkImage image, VkFormat format,
                                VkImageLayout oldLayout, VkImageLayout newLayout,

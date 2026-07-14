@@ -27,6 +27,7 @@
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "example_cli.hpp"
 
 #include <iostream>
 #include <string>
@@ -38,6 +39,11 @@
 #include <cmath>
 
 using namespace ohao;
+using ohao::examples::parseRenderFlags;
+using ohao::examples::parseSpp;
+using ohao::examples::argOr;
+using ohao::examples::applyDenoiseOverride;
+using ohao::examples::resolveMode;
 
 struct CameraState {
     float yaw = -90.0f, pitch = 0.0f;
@@ -102,19 +108,14 @@ void processInput(GLFWwindow* window, float dt) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string modelPath = argc > 1 ? argv[1] : "";
-    std::string envPath = argc > 2 ? argv[2] : "";
-    uint32_t W = 1280, H = 720;
-    RenderMode rtMode = RenderMode::RTRealtime;
-    std::optional<ohao::DenoiseMode> denoiseOverride;
-    for (int i = 3; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
-        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
-        else if (arg.rfind("--denoise=", 0) == 0) {
-            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
-        }
+    const std::string modelPath{argOr(argc, argv, 1, "")};
+    const std::string envPath{argOr(argc, argv, 2, "")};
+    const uint32_t W = 1280, H = 720;
+    auto cli = parseRenderFlags(argc, argv, 3);
+    if (!cli.useDeferred && cli.rtMode == RenderMode::RTOffline && argc <= 3) {
+        cli.rtMode = RenderMode::RTRealtime;  // interactive default
     }
+    RenderMode rtMode = cli.rtMode;
 
     // Init GLFW with OpenGL (for pixel display)
     if (!glfwInit()) { std::cerr << "GLFW init failed" << std::endl; return 1; }
@@ -146,24 +147,29 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
 
-    if (denoiseOverride.has_value()) {
-        renderer.setDenoiseMode(*denoiseOverride);
+    applyDenoiseOverride(renderer, cli);
+    if (cli.denoiseOverride) {
         std::cout << "Denoise mode (CLI override): "
-                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+                  << denoiseModeName(*cli.denoiseOverride) << std::endl;
     } else {
         std::cout << "Denoise mode (preset): "
                   << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
 
-    // Env map: skip for indoor bedroom scene — interior lights only.
-    // Outdoor HDR penetrates wall gaps and overexposes the room.
-    // Pass "outdoor" as 3rd arg to force env map loading.
-    if (!envPath.empty() && argc > 3 && std::string(argv[3]) == "outdoor") {
+    // Env map: skip for indoor bedroom unless outdoor flag is set.
+    if (!envPath.empty() && cli.outdoor) {
         renderer.setEnvironmentMap(envPath);
     }
 
-    // Load model
-    auto model = modelPath.empty() ? nullptr : ModelLoader::load(modelPath);
+    // Load model (Result API)
+    std::shared_ptr<Model> model;
+    if (!modelPath.empty()) {
+        if (auto r = ModelLoader::loadResult(modelPath)) {
+            model = std::move(r.value());
+        } else {
+            std::cerr << "[ModelLoader] " << r.error() << "\n";
+        }
+    }
     FrameResult frame;
     if (model) {
         frame = SceneFramer::computeFraming(model->vertices);
