@@ -1,30 +1,39 @@
 # OHAO Engine
 
-A solo Vulkan 1.3 renderer with a hybrid pipeline: KHR ray tracing for path-traced reference and indirect lighting, deferred raster for real-time. Pure C++, no editor framework.
+A solo **Vulkan 1.3** hybrid renderer in **C++20**: KHR path tracing for ground truth and indirect light, deferred raster for real-time, shared scene / materials / TLAS. No editor host.
 
 <p align="center">
-  <a href="docs/media/helmet_orbit.mp4">
-    <img src="docs/media/helmet_orbit.gif" width="640" alt="OHAO Engine — real-time path-traced helmet orbiting in an outdoor HDRI scene" />
+  <!-- GitHub README strips <video>; animated GIF autoplays inline. Click opens the full MP4 on GitHub's video player. -->
+  <a href="https://github.com/Qervas/ohao_engine/blob/master/docs/media/helmet_orbit.mp4">
+    <img src="docs/media/helmet_orbit.gif" width="640" alt="OHAO Engine — real-time path-traced helmet orbiting in an outdoor HDRI scene (click for full MP4)" />
   </a>
 </p>
 
-<p align="center"><sub><em>Real-time path tracing at ~67 fps — DLSS Ray Reconstruction · ReSTIR GI · cinematic grade. A full 360° orbit, rendered live — click for the <a href="docs/media/helmet_orbit.mp4">▶ full-quality MP4</a>.</em></sub></p>
+<p align="center">
+  <a href="https://github.com/Qervas/ohao_engine/blob/master/docs/media/helmet_orbit.mp4">
+    <strong>▶ Play full-quality orbit (MP4)</strong>
+  </a>
+  &nbsp;·&nbsp;
+  <sub><em>Real-time path tracing ~67 fps — DLSS Ray Reconstruction · ReSTIR GI · cinematic grade. GIF loops above; the button opens the repo MP4 in GitHub’s player.</em></sub>
+</p>
 
 ## What it is
 
-I started this in November 2024 to learn how a modern hybrid renderer is wired end to end. 18 months later it's 52K lines of C++ and 14K lines of GLSL across 121 shaders, with two pipelines that share scene, materials, and acceleration structures. No engine SDK, no editor host. Path tracer is for ground truth. Deferred is for interactive iteration. The hybrid mode runs RT shadows and 1-bounce RT GI on top of the deferred G-buffer.
+Built to learn how a modern hybrid renderer is wired end to end. ~52K lines of **C++20** and ~14K lines of GLSL across 121 shaders, with two pipelines that share scene, materials, and acceleration structures. No engine SDK, no editor host. Path tracer is for ground truth. Deferred is for interactive iteration. The hybrid mode runs RT shadows and 1-bounce RT GI on top of the deferred G-buffer.
+
+**Recent focus:** refactored the engine surface to **C++20** (concepts, `span`/`string_view`, `Result`, RT denoise-policy traits, subsystem module headers) while keeping the hybrid RT + deferred stack and golden-image regression net.
 
 ## Headline numbers
 
 | Metric | Value |
 |---|---|
-| Commits | 501 (Nov 2024 - Apr 2026, solo) |
-| C++ source | 52,594 LOC across `ohao/` |
-| GLSL shaders | 14,738 LOC across 121 files |
-| Render code | 23,780 LOC, 89 files |
-| GPU/Vulkan layer | 9,021 LOC, 19 files |
-| Physics (Jolt) | 10,989 LOC, 51 files |
-| Scene graph | 7,042 LOC, 35 files |
+| Language | **C++20** |
+| C++ source | ~52K LOC across `ohao/` |
+| GLSL shaders | ~14K LOC across 121 files |
+| Render code | ~24K LOC |
+| GPU/Vulkan layer | ~9K LOC |
+| Physics (Jolt) | ~11K LOC |
+| Scene graph | ~7K LOC |
 | Denoise backends | 4 (Intel OIDN, NVIDIA OptiX, NVIDIA NRD, NVIDIA DLSS-RR) |
 
 ## Real-time path tracing — and the firefly that taught me the most
@@ -185,9 +194,15 @@ All examples accept `--denoise=oidn|optix|nrd|none`. The interactive viewer uses
 
 ## Project status
 
-`CHANGELOG.md` and `devlog/` track the progression. Most recent milestone: Sub-plan 4.F (Apr 2026) shipped the NRD quality pass with env composite in tonemap, view-change bootstrap, multi-spp AOV accumulation, and Halton jitter. `--denoise=nrd` is shippable-realtime quality. The newest work (see [Real-time path tracing](#real-time-path-tracing--and-the-firefly-that-taught-me-the-most) above) adds `--denoise=dlssrr` (DLSS Ray Reconstruction), ReSTIR GI, DLSS upscaling, and an outdoor HDRI showcase scene — closing two of the gaps I'd previously called out. ReSTIR DI was tried and reverted (added more noise than it removed). The remaining path-tracer gap in `CLAUDE.md` is RT BLAS rebuild for skinned meshes.
+See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, golden harness). High points:
 
-For deeper docs see `docs/INDEX.md`, `docs/render.md`, `docs/architecture/`, and the per-bug write-ups in `docs/bugs_solved/`.
+- Real-time path tracing with **DLSS-RR**, **ReSTIR GI**, and outdoor HDRI showcase (see [above](#real-time-path-tracing--and-the-firefly-that-taught-me-the-most)).
+- **NRD** REBLUR + cinematic post is shippable for interactive quality (`--denoise=nrd`).
+- Pre-push **golden-image** regression (`tests/golden/`).
+- ReSTIR DI was tried and reverted (added more noise than it removed).
+- Remaining path-tracer gap: RT BLAS rebuild for skinned meshes (see `CLAUDE.md`).
+
+Deeper docs: `docs/INDEX.md`, `docs/render.md`, `docs/architecture/`, `docs/bugs_solved/`, and `devlog/`.
 
 ## Known build gotchas
 
