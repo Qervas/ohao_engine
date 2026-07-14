@@ -78,6 +78,7 @@ layout(push_constant) uniform PushConstants {
 #include "includes/rt/mis.glsl"
 #include "includes/rt/env_sampling.glsl"
 #include "includes/rt/sampler_api.glsl"
+#include "includes/rt/nrd_frontend.glsl"
 #include "includes/material/ggx_aniso.glsl"
 
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
@@ -318,6 +319,7 @@ void main() {
     vec3 firstHitNormal = vec3(0.0, 0.0, 1.0);
     float firstHitDist = -1.0;
     float firstHitRoughness = 1.0;
+    float firstHitViewZ = 1e30;
 
     // Sub-plan 3.C: diffuse + specular radiance split (demodulated)
     vec3 diffContrib        = vec3(0.0);
@@ -433,27 +435,25 @@ void main() {
         if (primarySample) imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
 
         // Sub-plan 3.B: depth (view-space Z) + roughness AOVs on first-hit
-        float depth = 1e30;
-        float rough = 1.0;
         if (firstHitDist > 0.0) {
             // View-space Z: right-handed → camera looks down -Z, so -viewPos.z = forward distance.
             // Reuses inverse(pc.invView) which Sub-plan 3.A already computes in this block —
             // reading `currViewProj`'s intermediate isn't exposed, so recompute the view inverse.
             mat4 viewMat = inverse(pc.invView);
             vec4 viewPos = viewMat * vec4(firstHitPos, 1.0);
-            depth = -viewPos.z;
+            firstHitViewZ = -viewPos.z;
 
             // Roughness: unpack from payload.attenuation.x — encoding matches pt_closesthit.rchit.
             // Magic-number form: sign bit → metal flag, magnitude → roughness; values >= 10 are
             // shifted (historic encoding from Feature 1.1 era).
             float packed = payload.attenuation.x;
-            rough = abs(packed);
-            if (rough >= 10.0) rough -= 10.0;
-            rough = clamp(rough, 0.01, 1.0);
+            firstHitRoughness = abs(packed);
+            if (firstHitRoughness >= 10.0) firstHitRoughness -= 10.0;
+            firstHitRoughness = clamp(firstHitRoughness, 0.01, 1.0);
         }
         if (primarySample) {
-            imageStore(depthAOV,     pixel, vec4(depth, 0.0, 0.0, 0.0));
-            imageStore(roughnessAOV, pixel, vec4(rough, 0.0, 0.0, 0.0));
+            imageStore(depthAOV,     pixel, vec4(firstHitViewZ, 0.0, 0.0, 0.0));
+            imageStore(roughnessAOV, pixel, vec4(firstHitRoughness, 0.0, 0.0, 0.0));
         }
     }
 
@@ -1917,13 +1917,16 @@ void main() {
 
     vec3 ldr = ACES(denoised * 0.5);
     ldr = pow(ldr, vec3(1.0/2.2));
-    // Sub-plan 3.C.6 + 3.D: RAW radiance in RGB, hit-distance in alpha (for NRD REBLUR filter sizing)
-    // Sub-plan 4.F T3: running-average across N samples when NRD mode is active.
+    // Sub-plan 3.C.6 + 3.D + NRD front-end: demodulate diffuse, pack YCoCg +
+    // normalized hit-distance (see NRD.hlsli REBLUR_FrontEnd_PackRadianceAndNormHitDist).
     // GIONLY (measurement): write ONLY the ReSTIR diffuse-GI term so the host can
     // read back the isolated GI signal (its frame-to-frame variance = the "boil").
     vec3 diffOut = restirGiGiOnly ? giDiffuseTermOut : diffContrib;
-    AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffOut, diffHitDist));
-    AOV_ACCUMULATE_WRITE(specularRadiance, pixel, vec4(specContrib, specHitDist));
+    vec3 diffDemod = diffOut / max(firstHitDiffAlbedo, vec3(0.03));
+    vec4 diffPacked = nrdPackRadianceHitDist(diffDemod,   diffHitDist, firstHitViewZ, firstHitRoughness);
+    vec4 specPacked = nrdPackRadianceHitDist(specContrib, specHitDist, firstHitViewZ, firstHitRoughness);
+    AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, diffPacked);
+    AOV_ACCUMULATE_WRITE(specularRadiance, pixel, specPacked);
     // DLSS-RR specular hit-distance guide: the SAME world-space ray length carried
     // in specularRadiance.a, mirrored into a dedicated R32F image's .x channel so
     // DLSS Ray Reconstruction can reproject the glossy reflection (kills the flicker

@@ -276,20 +276,33 @@ void main() {
         float theta = asin(clamp(R.y, -1.0, 1.0));
         vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);
 
-        // Approximate IBL from the equirect environment map.
-        // Use the BRDF LUT to keep specular from behaving like a mirror on skin.
+        // Approximate IBL from the equirect environment map (no prefiltered
+        // cubemap when only setEnvMap was used). LOD is a rough roughness proxy.
         float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512
         vec3 prefilteredColor = textureLod(envMap, envUV, lod).rgb;
-        vec3 irradiance = textureLod(envMap, envUV, 9.0).rgb;
+        // Diffuse irradiance: average a few directions around N (equirect has no
+        // pre-convolved low mips unless generated). Single sample at N is a floor.
+        vec2 nUV = vec2(atan(N.z, N.x) / 6.2831853 + 0.5, asin(clamp(N.y, -1.0, 1.0)) / 3.1415926 + 0.5);
+        vec3 irradiance = textureLod(envMap, nUV, 9.0).rgb;
 
         vec3 F = fresnelSchlickRoughness(NdotV, surface.F0, roughness);
         vec3 kS = F;
         vec3 kD = 1.0 - kS;
         kD *= 1.0 - metallic;
         vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
+        // When no real BRDF LUT is bound (1×1 dummy / black), split-sum goes to
+        // zero and metals read pure black. Fall back to a rough analytical scale.
+        if (brdf.x + brdf.y < 1e-4) {
+            brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);
+        }
 
         vec3 specularAmbient = prefilteredColor * (F * brdf.x + brdf.y);
         vec3 diffuseAmbient = kD * albedo * irradiance;
+        // Metals with dark baseColor need an extra F0-weighted ambient floor so
+        // they don't crush to pure black when the env sample is dim.
+        if (metallic > 0.5) {
+            specularAmbient += surface.F0 * max(prefilteredColor, vec3(lighting.ambientIntensity * 4.0));
+        }
 
         ambient += (specularAmbient + diffuseAmbient) * ao;
     }
