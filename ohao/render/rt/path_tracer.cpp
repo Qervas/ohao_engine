@@ -308,7 +308,9 @@ void PathTracer::computeRenderResolution() {
 // destroy/create is safe here. The per-frame descriptor rewrite in render()
 // rebinds all image views, so no stale descriptors survive.
 void PathTracer::setRenderSettings(const RTRenderSettings& settings) {
-    m_renderSettings = settings;
+    m_renderSettings = applyDenoisePolicy(settings);
+    m_renderSettings.samplesPerFrame = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
+    m_maxBounces = m_renderSettings.maxBounces;
 
     // If images haven't been created yet (pre-init), just store the settings.
     if (m_device == VK_NULL_HANDLE || m_outW == 0 || m_outH == 0) return;

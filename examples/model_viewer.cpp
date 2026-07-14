@@ -63,7 +63,9 @@ int main(int argc, char* argv[]) {
     const std::string modelPath{argOr(argc, argv, 1, "")};
     const std::string output{argOr(argc, argv, 2, "model_output.png")};
     const int samples = parseSpp(argc > 3 ? argv[3] : nullptr, 1024);
-    const uint32_t W = 3840, H = 2160;
+    // 1080p default: dual PathTracer (realtime+offline) at 4K OOMs on 8 GiB cards
+    // and the golden harness only needs a stable offline frame. Override later if needed.
+    const uint32_t W = 1920, H = 1080;
     auto cli = parseRenderFlags(argc, argv, 4);
 
     std::cout << "OHAO Model Viewer — " << modelPath << "\n";
