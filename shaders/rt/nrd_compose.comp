@@ -5,7 +5,10 @@
 // albedo + specular-color AOVs to produce HDR beauty:
 //   composed = denoisedDiff.rgb * diffAlbedo.rgb
 //            + denoisedSpec.rgb * specColor.rgb
-// Alpha of denoised radiance (hit-distance) is dropped.
+// REBLUR OUT is YCoCg (NRD.hlsli Pack/Unpack) — must convert to linear first.
+
+#extension GL_GOOGLE_include_directive : require
+#include "includes/rt/nrd_frontend.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -20,8 +23,9 @@ void main() {
     ivec2 size = imageSize(outComposed);
     if (p.x >= size.x || p.y >= size.y) return;
 
-    vec3 diffRad    = imageLoad(inDiffRad,    p).rgb;
-    vec3 specRad    = imageLoad(inSpecRad,    p).rgb;
+    // Back-end unpack: REBLUR writes YCoCg in .rgb (see REBLUR_BackEnd_UnpackRadianceAndNormHitDist).
+    vec3 diffRad    = nrdYCoCgToLinear(imageLoad(inDiffRad,    p).rgb);
+    vec3 specRad    = nrdYCoCgToLinear(imageLoad(inSpecRad,    p).rgb);
     vec3 diffAlbedo = imageLoad(inDiffAlbedo, p).rgb;
     vec3 specColor  = imageLoad(inSpecColor,  p).rgb;
 

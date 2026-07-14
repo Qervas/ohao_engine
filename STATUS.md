@@ -3,96 +3,66 @@
 > Single source of truth for "what actually works." Updated by running the
 > examples and looking at the pixels, not by reading commit messages.
 
-**Last verified:** 2026-06-24
-**Branch verified:** `animation` (227 commits ahead of `master` — see Integration Debt)
-**Build:** ✅ green — all 5 examples + `engine_tests` compile and link (`cmake --build build -j8`, exit 0)
+**Last verified:** after C++20 + golden unbreak + NRD YCoCg / deferred IBL fixes  
+**Branch verified:** `master` (single trunk)  
+**Build:** ✅ green — all 5 examples compile and link; pre-push goldens PASS
 
-## Renovation log — 2026-06-24 (subsystem removals)
+## Snapshot
 
-Pre-renovation cleanup. Each removed independently, rebuilt + render-verified green:
-
-- ❌ **Skeletal animation** — removed entirely (`ohao/animation/`, RT gpu-skinning + animated-RT manager, skinned GBuffer/CSM pipelines, `*_skinned.vert`, ~18 consumer files unwired). Static rendering verified correct (MetalRoughSpheres PT conformance unchanged). Inert `boneIndices`/`boneWeights` left in `Vertex` (stride unchanged, low-risk).
-- ❌ **OptiX denoiser** — removed (was segfaulting on shutdown). `--denoise=optix` now degrades gracefully to OIDN.
-- ❌ **Godot `.tscn` loader** — removed (superseded by external godot-mcp work).
-- ❌ **Scene serialization** — removed (`SceneSerializer` + 5 component serialize/deserialize stubs + dead test). All were never-called stubs. Revisit with `.ohao` format later.
-- ✅ **Audio** — KEPT (per decision; small, harmless).
-
-Direction: re-architect toward a **differentiable, inverse-rendering, offline-first** engine (pbrt-style `.ohao` scene format, Slang shaders, one unified integrator). Net-before-surgery sequencing. These removals are step 1 (delete accidental/half-baked complexity).
-
-### Phase 0 — deterministic render contract + golden net (in progress, 2026-06-25)
-Spec: `docs/superpowers/specs/2026-06-24-renovation-phase0-foundation-design.md`
-- ✅ **Determinism fixed.** Root-caused the "3 runs → 3 hashes" non-determinism to a cross-invocation read-after-write race: the offline raygen's temporal reprojection read `accumBuffer` at a reprojected neighbor pixel that sibling threads concurrently write. Disabled reprojection for the static offline path. Now bit-identical run-to-run except an irreducible ~6px@1LSB GPU floating-point floor (averaged to 0 at compare-res).
-- ✅ **Golden harness** `tests/golden/render_golden.py` + `manifest.json` + downscaled goldens (~450 KB). Tolerance compare. Validated: passes vs goldens, self-test deterministic, catches a wrong-spp regression (exit 1).
-- ✅ **Pre-push hook** `.githooks/pre-push` (install: `git config core.hooksPath .githooks`). Cloud CI (build/unit/lint, no GPU) and trunk cleanup still TODO.
-
----
+- **Language:** C++20 (`CMAKE_CXX_STANDARD 20`)
+- **Trunk:** `master` only (renovation / RT / DLSS / ReSTIR GI landed)
+- **Goldens:** `tests/golden/` + `.githooks/pre-push` — cornell_box + metal_rough_spheres
+- **PathTracer:** lazy-init offline/realtime profiles; scene re-uploaded on first create
+- **model_viewer** default resolution **1920×1080** (4K dual-PT OOMs on 8 GiB)
 
 ## Feature matrix (evidence-based)
 
-Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimental/biased · ❓ untested
+Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimental · 🗑️ removed
 
 | Feature | State | Evidence / Notes |
 |---|---|---|
-| **Build (all targets)** | ✅ | Clean compile + link, exit 0 |
-| **Path tracer — Cornell box** | ✅ | Correct unbiased GI, color bleeding, glass + metal spheres (64 spp) |
-| **Path tracer — PBR material model** | ✅ | MetalRoughSpheres conformance render correct: metal/dielectric + roughness gradient reproduced |
-| **Path tracer — env map (env_demo)** | ⚠️ | Helmet renders correct metal/visor; studio HDR backdrop reads flat — verify exposure/compositing |
-| **Deferred — simple/untextured (Cornell)** | ✅ | Red/green walls, spheres, soft shading all correct |
-| **Deferred — metallic surfaces** | ❌ | **Metals crush to black** (DamagedHelmet, BoomBox). Dielectric/textured parts render fine. Bug #1 below. |
-| **Subsurface scattering (SSS)** | 🧪 | Biased: albedo-warmth gating + vertex-normal curvature proxy + Gaussian wrap. Tuned per-portrait, not a true BSSRDF. Violates "offline stays unbiased." |
-| **Denoiser — OIDN** | ✅ | Default everywhere; clean output across all PT renders |
-| **Denoiser — OptiX** | 🗑️ removed | Was: correct output but segfaulted on shutdown. Removed 2026-06-24; `optix`→`oidn` fallback. |
-| **Denoiser — NRD (realtime)** | ⚠️ | Runs; output dim + magenta/pink shadow cast (AgX outset + surface-only compose). Metals also dark (same as Bug #1). |
-| **Turntable video frames** | ✅ | Mirror Lantern in HDR sky, frames correct, saved to `renders/turntable/` |
-| **model_viewer + Fox.glb (RTOffline)** | ❌ | **Hangs** — builds 11 BLAS then never finishes render in 280s at 48spp. Bug #3. |
-| **Interactive viewer (GLFW)** | ❓ | `DISPLAY=:0` present but it's an interactive loop; can't meaningfully headless-test |
-| **FBX / skeletal animation** | 🗑️ removed | Removed 2026-06-24 (was broken). Static FBX/GLB geometry loading retained via Assimp/ufbx. |
+| **Build (all targets)** | ✅ | Clean compile + link |
+| **Path tracer — Cornell box** | ✅ | Unbiased GI; golden PASS |
+| **Path tracer — PBR (MetalRoughSpheres)** | ✅ | Golden PASS @ 16 spp |
+| **Path tracer — env map (env_demo)** | ✅ | Helmet + HDRI; OIDN clean |
+| **Path tracer — Fox.glb (model_viewer)** | ✅ | Was hang @ 4K; now 16–48 spp finishes in seconds @ 1080p |
+| **Deferred — dielectrics / room** | ✅ | Walls, floor, soft shading OK |
+| **Deferred — metallic + env** | ⚠️ | IBL flag + BRDF-LUT fallback enabled; equirect IBL is approximate (no prefilter cube / LUT). Still dimmer than PT room reflections |
+| **Denoiser — OIDN** | ✅ | Default offline path |
+| **Denoiser — OptiX** | 🗑️ | Removed; `optix` → OIDN fallback |
+| **Denoiser — NRD** | ✅ | Was magenta (linear RGB fed as YCoCg). Fixed: pack YCoCg + norm hit-dist in raygen; unpack in `nrd_compose` |
+| **DLSS-RR / ReSTIR GI** | ⚠️ | Interactive path; outdoor HDRI showcase works |
+| **Turntable / interactive** | ✅ / ❓ | Turntable frames OK; interactive needs display |
+| **Skeletal animation** | 🗑️ | Removed in renovation cleanup |
+| **SSS** | 🧪 | Biased look-dev hacks; not a true BSSRDF |
 
-Evidence images for this pass live in the session scratchpad (not committed):
-`cornell_pt.png`, `mv_pt.png`, `env_pt.png`, `cornell_deferred.png`, `mv_deferred.png`, `def_boombox.png`, `nrd_helmet.png`, `optix_helmet.png`, `renders/turntable/env_*.png`.
+## Bugs fixed (this pass)
 
----
+### Fox.glb hang (was Bug #3)
+- **Was:** model_viewer never finished at high spp / 4K.
+- **Now:** 1 spp ~0.1 s, 48 spp ~3.5 s @ 1080p with valid pixels.
+- **Cause:** dual PathTracer OOM + broken offline init at 4K; fixed by lazy PT + 1080p default.
 
-## Known bugs (concrete, with root cause)
+### NRD magenta / pink cast
+- **Was:** NRD beauty G/R ≈ 0.5 (purple helmet); raw pre-NRD AOVs neutral.
+- **Root cause:** REBLUR expects **YCoCg + normalized hit-distance** (`NRD.hlsli` Pack/Unpack). We wrote linear RGB + raw world hit-dist.
+- **Fix:** `shaders/includes/rt/nrd_frontend.glsl`; pack in offline/realtime raygen; unpack in `nrd_compose.comp`.
 
-### 1. ⚠️ Metals look near-black in deferred mode — KNOWN LIMITATION (not a code bug)
-- **Repro:** `./build/model_viewer assets/showcase_objects/BoomBox.glb out.png 1 deferred`
-- **Symptom:** metallic body is near-black except direct specular highlights; dielectric/textured parts fine.
-- **Real cause:** a metal's appearance IS its reflection. In deferred with **no env map and no SSR/RT reflections, there is nothing in the scene to reflect** — only a flat ambient constant. The path tracer is unaffected because it bounces real rays off the Cornell walls. This is a *fundamental limitation* of deferred-without-reflections, not a defect.
-- **Applied (Codex, 2026-06-24):** Fresnel-weighted flat-ambient fallback for metals when no env map is bound — lifts pure-black → dark-gray + faint wall reflections. Marginal; no regression to the env-present path. Kept.
-- **Real resolution:** the unified integrator (renovation Phase 2+) path-traces and reflects the room correctly. Do NOT invest further in the frozen deferred pipeline (would need a default env map or SSR — polishing code slated for replacement).
+### Deferred metals pure black (partial)
+- **Was:** IBL flag only when irradiance cube set; `setEnvMap()` alone never enabled IBL. BRDF LUT dummy zeroed split-sum.
+- **Fix:** enable IBL when env map bound; analytical BRDF-LUT fallback + metal ambient floor in `deferred_lighting.frag`.
+- **Remaining:** full `IblProcessor` prefilter + real BRDF LUT still not wired → PT room bounce still wins for chrome look.
 
-### Subsystem disposition (renovation, decided 2026-06-24)
-- **Deferred raster pipeline (`ohao/render/deferred/`)** — KEEP, frozen. It works; not deleted because the unified integrator that would replace it doesn't exist yet ("delete on replacement, not intention"). Bug #1 above handed to Codex.
-- **Physics (`ohao/physics/`)** — quarantine (orthogonal, works; not in the offline-differentiable critical path).
+## Known limitations (not open bugs)
 
-### 2. ⚠️ OptiX denoiser segfaults on shutdown
-- **Repro:** `./build/env_demo <model> <hdr> out.png 16 --denoise=optix`
-- **Symptom:** renders and saves correct denoised PNG, prints `[Jolt] Backend shut down`, then **core dumps** (exit 139).
-- **Likely cause:** teardown ordering — CUDA/OptiX resources freed after/around VkDevice or Jolt shutdown. Matches CLAUDE.md's documented "Shutdown order" class of bug.
-- **Fix direction:** audit OptiX denoiser destructor vs. device/Jolt teardown order. Output is fine; only exit is unsafe.
+1. **Deferred metals vs PT** — no multi-bounce room GI in deferred; equirect IBL is a floor, not parity with path tracing.
+2. **SSS** — biased; keep out of “offline ground truth” claims.
+3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).
+4. **Skinned RT BLAS** — animation subsystem removed; gap is moot until reintroduced.
 
-### 3. ❌ model_viewer hangs on Fox.glb (RTOffline)
-- **Repro:** `./build/model_viewer assets/test_models/Fox.glb out.png 48`
-- **Symptom:** loads scene (11 BLAS, bedroom set + model), prints `Rendering (RTOffline)...`, never completes in 280s at 48 spp for a small model.
-- **Status:** unconfirmed whether true hang (deadlock) or pathological slowness. Needs a single-spp + timed probe to localize.
-- **Fix direction:** investigate during the system fix — could be animated-mesh BLAS path, a degenerate light, or an infinite bounce loop.
+## Next actions
 
----
-
-## Integration debt (the thing that makes it *feel* broken)
-
-The code architecture is fine — the connective tissue isn't:
-
-- `animation` is **227 commits ahead of `master`.** Every recent feature (denoisers, SSS, cinematic, DoF) is stranded here; `master` is frozen at a `chore:` commit.
-- **5 live branches** diverged: `animation`, `dev`, `feat`, `scene_switching_fix`, `master`. No single source of truth in git.
-- **Tuning-driven development with no "done" bar:** `SSS v2→v5`, `cinematic v3→v6`, `DoF v2→v3`. Completion signal is "looks better on one face," so progress became unmeasurable.
-
----
-
-## Next actions (suggested order)
-
-1. **Fix metals-in-deferred** (highest value, well-scoped, isolated) — wire IBL specular into the deferred metallic term.
-2. **Decide SSS:** rip the biased hacks out of the offline path, or commit to a real BSSRDF. Keep look-dev hacks in *deferred*, not the reference renderer.
-3. **Branch reconciliation:** merge `animation` → `master`, audit/kill `dev`/`feat`/`scene_switching_fix`. Get back to one trunk.
-4. **Keep this file honest:** re-run the example sweep + update the matrix after each meaningful change.
+1. Expand golden corpus (env helmet, deferred cornell).
+2. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
+3. Decide product fork: realtime portfolio polish vs offline renovation (unified integrator).
+4. Keep this file honest after each meaningful change.

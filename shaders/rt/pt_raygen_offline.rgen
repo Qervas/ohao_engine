@@ -51,6 +51,7 @@ layout(push_constant) uniform PushConstants {
 #include "includes/rt/mis.glsl"
 #include "includes/rt/env_sampling.glsl"
 #include "includes/rt/sampler_api.glsl"
+#include "includes/rt/nrd_frontend.glsl"
 #include "includes/material/ggx_aniso.glsl"
 
 const uint PT_FLAG_ENABLE_AOVS = 1u << 0;
@@ -161,6 +162,8 @@ void main() {
     // Path trace — dual-ray bounce-0 split (Sub-plan 3.C.7)
     vec3 radiance = vec3(0.0);
     vec3 firstHitPos = vec3(0.0);
+    float firstHitViewZ = 1e30;
+    float firstHitRough = 1.0;
     float firstHitDist = -1.0;
 
     // Sub-plan 3.C: diffuse + specular radiance split (demodulated)
@@ -218,26 +221,25 @@ void main() {
         imageStore(motionVector, pixel, vec4(motion, 0.0, 0.0));
 
         // Sub-plan 3.B: depth (view-space Z) + roughness AOVs on first-hit
-        float depth = 1e30;
-        float rough = 1.0;
+        // (also stashed for NRD front-end hit-distance normalization at end of main)
         if (firstHitDist > 0.0) {
             // View-space Z: right-handed → camera looks down -Z, so -viewPos.z = forward distance.
             // Reuses inverse(pc.invView) which Sub-plan 3.A already computes in this block —
             // reading `currViewProj`'s intermediate isn't exposed, so recompute the view inverse.
             mat4 viewMat = inverse(pc.invView);
             vec4 viewPos = viewMat * vec4(firstHitPos, 1.0);
-            depth = -viewPos.z;
+            firstHitViewZ = -viewPos.z;
 
             // Roughness: unpack from payload.attenuation.x — encoding matches pt_closesthit.rchit.
             // Magic-number form: sign bit → metal flag, magnitude → roughness; values >= 10 are
             // shifted (historic encoding from Feature 1.1 era).
             float packed = payload.attenuation.x;
-            rough = abs(packed);
-            if (rough >= 10.0) rough -= 10.0;
-            rough = clamp(rough, 0.01, 1.0);
+            firstHitRough = abs(packed);
+            if (firstHitRough >= 10.0) firstHitRough -= 10.0;
+            firstHitRough = clamp(firstHitRough, 0.01, 1.0);
         }
-        imageStore(depthAOV,     pixel, vec4(depth, 0.0, 0.0, 0.0));
-        imageStore(roughnessAOV, pixel, vec4(rough, 0.0, 0.0, 0.0));
+        imageStore(depthAOV,     pixel, vec4(firstHitViewZ, 0.0, 0.0, 0.0));
+        imageStore(roughnessAOV, pixel, vec4(firstHitRough, 0.0, 0.0, 0.0));
     }
 
     if (payload.hitDist < 0.0) {
@@ -1352,8 +1354,12 @@ void main() {
     // it also double-darkened (compose re-applies diffAlbedo). Floor avoids div-by-0
     // on metals (diffAlbedo≈0). Only the NRD path reads these AOVs; beauty is separate.
     vec3 diffDemod = diffContrib / max(firstHitDiffAlbedo, vec3(0.03));
+    // NRD front-end: linear RGB → YCoCg + normalized hit-distance (NRD.hlsli Pack).
+    // Without this, REBLUR treats RGB as YCoCg and compose remodulates garbage → magenta.
+    vec4 diffPacked = nrdPackRadianceHitDist(diffDemod,   diffHitDist, firstHitViewZ, firstHitRough);
+    vec4 specPacked = nrdPackRadianceHitDist(specContrib, specHitDist, firstHitViewZ, firstHitRough);
     // Sub-plan 4.F T3: running-average across N samples when NRD mode is active.
-    AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffDemod,   diffHitDist));
-    AOV_ACCUMULATE_WRITE(specularRadiance, pixel, vec4(specContrib, specHitDist));
+    AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, diffPacked);
+    AOV_ACCUMULATE_WRITE(specularRadiance, pixel, specPacked);
     imageStore(outputImage, pixel, vec4(ldr, 1.0));
 }

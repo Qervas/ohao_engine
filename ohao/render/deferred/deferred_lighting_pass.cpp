@@ -161,7 +161,11 @@ void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/)
     m_params.screenSize = glm::vec2(m_width, m_height);
     m_params.lightCount = m_lightCount;
     m_params.flags = 0;
-    if (m_irradianceView != VK_NULL_HANDLE) m_params.flags |= 1; // IBL
+    // IBL path samples equirect envMap (binding 15). Enable when either a full
+    // irradiance cube is bound OR the raw HDR env is present — previously only
+    // irradiance gated the flag, so setEnvMap() alone left metals pure black.
+    if (m_irradianceView != VK_NULL_HANDLE || m_envMapView != VK_NULL_HANDLE)
+        m_params.flags |= 1; // IBL
     if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO
     if (m_rtShadowView != VK_NULL_HANDLE)
         m_params.flags |= 32;  // RT shadows (bit 5)
