@@ -203,21 +203,8 @@ bool VulkanRenderer::initialize() {
         if (m_rtAccel->init(m_device, m_physicalDevice, m_graphicsQueue, m_graphicsQueueFamily, m_commandPool)) {
             std::cout << "Ray tracing: available" << std::endl;
 
-            m_rtRealtimeRenderer = std::make_unique<RTRealtimeRenderer>();
-            if (!m_rtRealtimeRenderer->init(m_device, m_physicalDevice, m_width, m_height,
-                                             m_instance, m_graphicsQueueFamily,
-                                             m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
-                std::cout << "RT realtime renderer: init failed" << std::endl;
-                m_rtRealtimeRenderer.reset();
-            }
-
-            m_rtOfflineRenderer = std::make_unique<RTOfflineRenderer>();
-            if (!m_rtOfflineRenderer->init(m_device, m_physicalDevice, m_width, m_height,
-                                            m_instance, m_graphicsQueueFamily,
-                                            m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
-                std::cout << "RT offline renderer: init failed" << std::endl;
-                m_rtOfflineRenderer.reset();
-            }
+            // Lazy-create realtime/offline PathTracers on setRenderMode(). Eager dual
+            // init at 4K can OOM (each PT holds beauty + AOV images at full res).
         } else {
             std::cout << "Ray tracing: not available (continuing without RT)" << std::endl;
             m_rtAccel.reset();
@@ -412,18 +399,60 @@ void VulkanRenderer::render() {
     m_denoiseCacheValid = false;
 }
 
+bool VulkanRenderer::ensureRTRenderer(RenderMode mode) {
+    if (!m_rtAccel) {
+        return false;
+    }
+    if (getRTRenderer(mode)) {
+        return true;
+    }
+
+    const auto initProfile = [&](auto& slot, const char* label) -> bool {
+        slot = std::make_unique<std::remove_reference_t<decltype(*slot)>>();
+        if (!slot->init(m_device, m_physicalDevice, m_width, m_height,
+                        m_instance, m_graphicsQueueFamily,
+                        m_enabledInstanceExtensions, m_enabledDeviceExtensions)) {
+            std::cout << "RT " << label << " renderer: init failed" << std::endl;
+            slot.reset();
+            return false;
+        }
+        std::cout << "RT " << label << " renderer: ready" << std::endl;
+        return true;
+    };
+
+    bool created = false;
+    switch (mode) {
+    case RenderMode::RTRealtime:
+        created = initProfile(m_rtRealtimeRenderer, "realtime");
+        break;
+    case RenderMode::RTOffline:
+        created = initProfile(m_rtOfflineRenderer, "offline");
+        break;
+    default:
+        return false;
+    }
+
+    // setScene()/updateSceneBuffers() often run before any PathTracer exists.
+    // forEachRTRenderer was a no-op then — re-upload so materials, textures,
+    // lights, and AS buffers bind into the newly created profile.
+    if (created && m_scene && m_initialized) {
+        m_rtAccelDirty = true;
+        updateSceneBuffers();
+    }
+    return created;
+}
+
 void VulkanRenderer::setRenderMode(RenderMode mode) {
     if (mode == RenderMode::Deferred && !m_deferredRenderer) {
         std::cerr << "Deferred rendering not available, staying in Forward mode" << std::endl;
         return;
     }
     const IRTRenderPipeline* rtPipeline = getRTPipeline(mode);
-    if (rtPipeline && (!getRTRenderer(mode) || !m_rtAccel)) {
-        std::cerr << "Path tracing not available, staying in current mode" << std::endl;
-        return;
-    }
-
     if (rtPipeline) {
+        if (!m_rtAccel || !ensureRTRenderer(mode)) {
+            std::cerr << "Path tracing not available, staying in current mode" << std::endl;
+            return;
+        }
         m_rtSettings = rtPipeline->getDefaultSettings();
         applyRTRenderSettings();
     }

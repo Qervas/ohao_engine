@@ -107,6 +107,9 @@ public:
     [[nodiscard]] VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
     [[nodiscard]] VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
     [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
+    // DLSS-RR specular hit-distance guide (R32F, binding 35).
+    [[nodiscard]] VkImageView getSpecHitDistAOV()      const { return m_specHitDistView; }
+    [[nodiscard]] VkImage     getSpecHitDistAOVImage() const { return m_specHitDistImage; }
     [[nodiscard]] VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
     [[nodiscard]] VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
     [[nodiscard]] VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
@@ -183,12 +186,9 @@ public:
     // Config
     void setMaxBounces(uint32_t bounces) noexcept { m_maxBounces = bounces; }
 
-    /// Apply settings and enforce denoise-mode policy (AOVs / external denoise).
-    void setRenderSettings(const RTRenderSettings& settings) {
-        m_renderSettings = applyDenoisePolicy(settings);
-        m_renderSettings.samplesPerFrame = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
-        m_maxBounces = m_renderSettings.maxBounces;
-    }
+    /// Apply settings + denoise policy. Out-of-line: may reallocate images when
+    /// DLSS render scale changes.
+    void setRenderSettings(const RTRenderSettings& settings);
 
     template<RTRenderProfile Profile, DenoiseMode Mode>
     void setFeatureSettings() {
@@ -209,10 +209,19 @@ private:
 
     void destroyImages();
 
+    // Derive internal RENDER res (m_width/m_height) from OUTPUT res (m_outW/m_outH).
+    // DLSSRR may scale down; every other mode renders 1:1.
+    void computeRenderResolution();
+
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
+    // m_width/m_height = internal RENDER resolution (raygen + AOVs).
+    // m_outW/m_outH = OUTPUT/display resolution (beauty + DLSS COLOR_OUT).
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    uint32_t m_outW = 0;
+    uint32_t m_outH = 0;
+    float    m_dlssRenderScale = 1.0f;
 
     // Sub-plan 4.C: replaces 4.B scoped probe.
     // Member is unconditional (not guarded by OHAO_NRD_ENABLED) so the class
@@ -346,6 +355,11 @@ private:
     VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
     VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
 
+    // DLSS-RR: specular hit-distance guide (R32F, world-space ray length, binding 35).
+    VkImage        m_specHitDistImage  = VK_NULL_HANDLE;
+    VkDeviceMemory m_specHitDistMemory = VK_NULL_HANDLE;
+    VkImageView    m_specHitDistView   = VK_NULL_HANDLE;
+
     // Feature 4.C: NRD denoised diffuse output (RGBA32F)
     VkImage        m_outDiffRadianceImage  = VK_NULL_HANDLE;
     VkDeviceMemory m_outDiffRadianceMemory = VK_NULL_HANDLE;
@@ -414,6 +428,14 @@ private:
     VkImageView m_shadingHistoryViews[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     bool m_shadingHistoryInitialized[2] = {false, false};
     uint32_t m_shadingHistoryWriteIndex = 0;
+
+    // ReSTIR GI reservoir ping-pong. 3 RGBA32F planes × 2 (curr/prev):
+    //   plane0 xyz=x_s w=M | plane1 xyz=n_s w=W | plane2 xyz=Lo w=valid.
+    VkImage        m_giReservoirImages[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
+    VkDeviceMemory m_giReservoirMemory[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
+    VkImageView    m_giReservoirViews[3][2]    = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
+    bool           m_giReservoirInitialized[2] = {false, false};
+    uint32_t       m_giReservoirWriteIndex     = 0;
 
     // Material buffer (per-instance albedo, vec4 SSBO)
     VkBuffer m_materialBuffer = VK_NULL_HANDLE;

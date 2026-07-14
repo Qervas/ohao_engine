@@ -134,6 +134,8 @@ public:
     // Render mode
     void setRenderMode(RenderMode mode);
     [[nodiscard]] RenderMode getRenderMode() const { return m_renderMode; }
+    // Lazy-create the PathTracer for `mode` (avoids dual full-res OOM at 4K).
+    [[nodiscard]] bool ensureRTRenderer(RenderMode mode);
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
     [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
