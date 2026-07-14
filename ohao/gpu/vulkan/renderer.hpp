@@ -144,6 +144,7 @@ public:
         // Force reload on next scene upload when path changes.
         if (m_envMapPath != m_envMapLoadedPath) {
             m_envMapLoadedPath.clear();
+            m_envMapTexIdx = 0xFFFFFFFFu;
         }
     }
     void notifyCameraChanged();
@@ -262,6 +263,11 @@ public:
 
     // Scene buffer management (call after modifying scene)
     [[nodiscard]] bool updateSceneBuffers();
+
+    /// Inverse / live edit: rewrite material base colors into existing GPU
+    /// buffers without destroying geometry, textures, BLAS, or env map.
+    /// Returns false if RT materials are not yet uploaded (call updateSceneBuffers first).
+    [[nodiscard]] bool updateRTMaterialParams();
 
     // Check if scene has renderable meshes
     [[nodiscard]] bool hasSceneMeshes() const { return m_hasSceneMeshes; }
@@ -437,6 +443,7 @@ private:
     VkDeviceMemory m_rtMatIDMemory{VK_NULL_HANDLE};
     VkBuffer m_rtMatColorBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtMatColorMemory{VK_NULL_HANDLE};
+    uint32_t m_rtMatCount{0}; // materials in mat-color buffer (3 vec4s each)
     VkBuffer m_rtLightBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_rtLightMemory{VK_NULL_HANDLE};
     uint32_t m_rtLightCount{0};
@@ -447,6 +454,10 @@ private:
     std::string m_envMapPath;
     std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
+    uint32_t m_envMapTexIdx{0xFFFFFFFFu};           // bindless index in light header
+    uint32_t m_envMapWidth{0};
+    uint32_t m_envMapHeight{0};
+    float m_envMapIntegral{0.0f};
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
     VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};

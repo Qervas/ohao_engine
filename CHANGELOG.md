@@ -6,12 +6,14 @@ All notable changes to OHAO Engine are documented here. Newest first.
 
 Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
-### Inverse rendering (Phase A)
+### Inverse rendering (Phase A — physical, no ML)
 
 - **`inverse_fit`**: dual-budget material recovery (FIT for gradients, SHOW for stills).
+- Default scene is a **product studio** (Lantern/hero on pedestal + cyclorama + HDRI + multi-view + relight); `cornell` kept for fast regression.
 - Default **`--quality high`**: SHOW **1920×1080 @ 1024 spp**; FIT 640×360 @ 128 spp.
-- Presets: `draft` / `high` / `ultra` / `cinema` (4K SHOW).
-- Adam + finite differences; `setRenderSeed` for stable FD; `docs/inverse.md`.
+- Presets: `draft` / `high` / `ultra` / `cinema` (4K SHOW). SHOW defaults to **OIDN** (grain-free); FIT stays raw MC.
+- Env map loads once; material θ updates use `updateRTMaterialParams()` (no BLAS thrash).
+- Adam + FD with **best-θ** checkpoint; `setRenderSeed` for stable FD; `docs/inverse.md`.
 
 ### Refactored to C++20
 

@@ -20,10 +20,10 @@ You never have to stare at FIT frames. Showcase files are SHOW quality and grain
 
 | `--scene` | Content | Optimizes |
 |-----------|---------|-----------|
-| **`studio` (default)** | DamagedHelmet + ground + studio HDRI + 3-point lights | Ground albedo RGB |
+| **`studio` (default)** | Product shot: Lantern + pedestal + cyclorama + studio HDRI + 3-point lights | Ground albedo RGB |
 | `cornell` | Classic box (fast regression) | Left wall albedo RGB |
 
-Studio uses **multi-view** loss (default 2–3 cameras) and a **relight** still (hot key light) after recovery.
+Override hero with `--model assets/showcase_objects/Lantern.glb` (etc.). Studio uses **multi-view** loss (default 3 cameras) and a **relight** still (hot key light) after recovery.
 
 ## Run
 
@@ -49,11 +49,13 @@ Outputs under `renders/inverse/`:
 
 ## Pipeline
 
-1. Build **studio** (helmet + HDRI) or cornell.  
+1. Build **studio** (Lantern product shot + HDRI) or cornell.  
 2. Multi-view SHOW + FIT targets under truth ground albedo.  
 3. Finite-difference + Adam on **multi-view masked MSE** (ground band).  
 4. SHOW recovered multi-view (OIDN).  
 5. Relight: boost key light, re-render recovered vs truth.  
+
+**No ML** in this path — pure physical image match. ML priors are a later phase.
 
 **FIT never denoises** (white noise is a feature for inverse/FD). **SHOW uses OIDN** for grain-free stills.
 
@@ -72,8 +74,15 @@ ohao/inverse/
   inverse_module.hpp
 ```
 
+## Implementation notes
+
+- Env map loads **once**; later light-buffer rebuilds re-stamp `envMapTexIdx` (skip-reload).  
+- Material θ updates use `updateRTMaterialParams()` (no BLAS rebuild) so multi-iter FD does not OOM.  
+- Optimizer keeps **best-θ** by FIT loss (Adam can overshoot after the min).  
+
 ## Limits (not yet)
 
 - Autodiff / adjoint path tracer  
 - Multi-parameter materials / lighting fit  
 - Real photographs as targets  
+- ML priors (deferred — physical IR first)  

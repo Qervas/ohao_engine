@@ -270,7 +270,25 @@ void VulkanRenderer::uploadLightBuffer() {
 
             // Load environment map if set (once per path — reloading every
             // updateSceneBuffers was leaking multi-GB HDR images and OOM/segfault).
+            // On skip-reload we MUST still re-stamp envMapTexIdx into the newly
+            // allocated light buffer (header is memset to 0xFF each upload).
             if (!m_envMapPath.empty() && m_rtLightMemory &&
+                m_envMapPath == m_envMapLoadedPath &&
+                m_envMapImageView != VK_NULL_HANDLE &&
+                m_envMapTexIdx != 0xFFFFFFFFu) {
+                void* lm = nullptr;
+                vkMapMemory(m_device, m_rtLightMemory, 0, 16, 0, &lm);
+                memcpy(static_cast<uint8_t*>(lm) + 4, &m_envMapTexIdx, sizeof(uint32_t));
+                vkUnmapMemory(m_device, m_rtLightMemory);
+                forEachRTRenderer([&](IRTRendererProfile& renderer) {
+                    if (m_envMarginalCDFBuffer && m_envConditionalCDFBuffer) {
+                        renderer.setEnvCDFBuffers(
+                            m_envMarginalCDFBuffer, m_envConditionalCDFBuffer,
+                            m_envMapWidth, m_envMapHeight, m_envMapIntegral);
+                    }
+                    renderer.setEnvMapResource(m_envMapImageView, m_rtTextureSampler);
+                });
+            } else if (!m_envMapPath.empty() && m_rtLightMemory &&
                 m_envMapPath != m_envMapLoadedPath) {
                 int ew, eh, ec;
                 float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
@@ -454,6 +472,11 @@ void VulkanRenderer::uploadLightBuffer() {
                     forEachRTRenderer([&](IRTRendererProfile& renderer) {
                         renderer.setEnvMapResource(envView, m_rtTextureSampler);
                     });
+
+                    m_envMapTexIdx = envTexIdx;
+                    m_envMapWidth = static_cast<uint32_t>(ew);
+                    m_envMapHeight = static_cast<uint32_t>(eh);
+                    m_envMapIntegral = envCDF.integral();
 
                     std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
                               << " (bindless idx=" << envTexIdx << ")" << std::endl;
