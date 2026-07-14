@@ -15,11 +15,11 @@ public:
     BloomPass() = default;
     ~BloomPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "BloomPass"; }
+    [[nodiscard]] const char* getName() const override { return "BloomPass"; }
 
     // Configuration
     void setInputImage(VkImageView hdrInput);
@@ -29,13 +29,13 @@ public:
     void setFilterRadius(float radius) { m_filterRadius = radius; }
 
     // Get output (for compositing)
-    VkImageView getBloomOutput() const { return m_mipViews[0]; }
+    [[nodiscard]] VkImageView getBloomOutput() const { return m_mipViews[0]; }
 
 private:
-    bool createMipChain();
-    bool createRenderPasses();
-    bool createPipelines();
-    bool createDescriptors();
+    [[nodiscard]] bool createMipChain();
+    [[nodiscard]] bool createRenderPasses();
+    [[nodiscard]] bool createPipelines();
+    [[nodiscard]] bool createDescriptors();
     void destroyMipChain();
 
     void executeThreshold(VkCommandBuffer cmd);

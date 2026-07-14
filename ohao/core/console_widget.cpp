@@ -1,51 +1,60 @@
 #include "console_widget.hpp"
 
+#include <ostream>
+
 namespace ohao {
+namespace {
+
+std::ostream& stream_for(LogLevel level) {
+    return level == LogLevel::Error ? std::cerr : std::cout;
+}
+
+} // namespace
 
 void ConsoleWidget::setLogCallback(LogCallback callback) {
-    std::lock_guard<std::mutex> lock(mutex);
-    logCallback = callback;
+    std::lock_guard lock(m_mutex);
+    m_logCallback = std::move(callback);
 }
 
 void ConsoleWidget::clearLogCallback() {
-    std::lock_guard<std::mutex> lock(mutex);
-    logCallback = nullptr;
+    std::lock_guard lock(m_mutex);
+    m_logCallback = nullptr;
 }
 
-void ConsoleWidget::log(const std::string& message) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (logCallback) {
-        logCallback(LogLevel::Info, message);
-    } else {
-        std::cout << "[INFO] " << message << std::endl;
+void ConsoleWidget::log(std::string_view message, const std::source_location& loc) {
+    emit(LogLevel::Info, message, loc);
+}
+
+void ConsoleWidget::logWarning(std::string_view message, const std::source_location& loc) {
+    emit(LogLevel::Warning, message, loc);
+}
+
+void ConsoleWidget::logError(std::string_view message, const std::source_location& loc) {
+    emit(LogLevel::Error, message, loc);
+}
+
+void ConsoleWidget::logDebug(std::string_view message, const std::source_location& loc) {
+    emit(LogLevel::Debug, message, loc);
+}
+
+void ConsoleWidget::logAt(LogLevel level, std::string_view message, const std::source_location& loc) {
+    emit(level, message, loc);
+}
+
+void ConsoleWidget::emit(LogLevel level, std::string_view message, const std::source_location& loc) {
+    std::lock_guard lock(m_mutex);
+
+    if (m_logCallback) {
+        m_logCallback(level, message);
+        return;
     }
-}
 
-void ConsoleWidget::logWarning(const std::string& message) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (logCallback) {
-        logCallback(LogLevel::Warning, message);
-    } else {
-        std::cout << "[WARNING] " << message << std::endl;
+    auto& os = stream_for(level);
+    os << '[' << logLevelName(level) << "] ";
+    if (m_includeLocation) {
+        os << loc.file_name() << ':' << loc.line() << ": ";
     }
+    os << message << '\n';
 }
 
-void ConsoleWidget::logError(const std::string& message) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (logCallback) {
-        logCallback(LogLevel::Error, message);
-    } else {
-        std::cerr << "[ERROR] " << message << std::endl;
-    }
-}
-
-void ConsoleWidget::logDebug(const std::string& message) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (logCallback) {
-        logCallback(LogLevel::Debug, message);
-    } else {
-        std::cout << "[DEBUG] " << message << std::endl;
-    }
-}
-
-}
+} // namespace ohao

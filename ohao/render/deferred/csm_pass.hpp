@@ -18,10 +18,10 @@ public:
     CSMPass() = default;
     ~CSMPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
-    const char* getName() const override { return "CSMPass"; }
+    [[nodiscard]] const char* getName() const override { return "CSMPass"; }
 
     // Configuration
     void setScene(Scene* scene) { m_scene = scene; }
@@ -40,22 +40,22 @@ public:
     void setSplitLambda(float lambda) { m_splitLambda = lambda; }
 
     // Get shadow map for sampling
-    VkImageView getShadowMapArrayView() const { return m_shadowMapArrayView; }
-    VkSampler getShadowSampler() const { return m_shadowSampler; }
+    [[nodiscard]] VkImageView getShadowMapArrayView() const { return m_shadowMapArrayView; }
+    [[nodiscard]] VkSampler getShadowSampler() const { return m_shadowSampler; }
 
     // VkImage handle for render graph import
-    VkImage getShadowMapImage() const { return m_shadowMap; }
+    [[nodiscard]] VkImage getShadowMapImage() const { return m_shadowMap; }
 
     // Get cascade data for shader
-    const CascadeData& getCascadeData() const { return m_cascadeData; }
-    VkBuffer getCascadeBuffer() const { return m_cascadeBuffer; }
+    [[nodiscard]] const CascadeData& getCascadeData() const { return m_cascadeData; }
+    [[nodiscard]] VkBuffer getCascadeBuffer() const { return m_cascadeBuffer; }
 
 private:
-    bool createShadowMap();
-    bool createRenderPass();
-    bool createFramebuffers();
-    bool createPipeline();
-    bool createCascadeBuffer();
+    [[nodiscard]] bool createShadowMap();
+    [[nodiscard]] bool createRenderPass();
+    [[nodiscard]] bool createFramebuffers();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createCascadeBuffer();
 
     void calculateCascadeSplits();
     void updateCascadeMatrices();

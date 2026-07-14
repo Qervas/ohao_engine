@@ -18,11 +18,11 @@ public:
     GBufferPass() = default;
     ~GBufferPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "GBufferPass"; }
+    [[nodiscard]] const char* getName() const override { return "GBufferPass"; }
 
     // Setup for rendering
     void setScene(Scene* scene) { m_scene = scene; }
@@ -34,46 +34,46 @@ public:
     }
 
     // Get G-Buffer attachments for use by other passes
-    VkImageView getPositionView() const { return m_gbuffer[0].view; }
-    VkImageView getNormalView() const { return m_gbuffer[1].view; }
-    VkImageView getAlbedoView() const { return m_gbuffer[2].view; }
-    VkImageView getVelocityView() const { return m_gbuffer[3].view; }
-    VkImageView getDepthView() const { return m_gbuffer[4].view; }
+    [[nodiscard]] VkImageView getPositionView() const { return m_gbuffer[0].view; }
+    [[nodiscard]] VkImageView getNormalView() const { return m_gbuffer[1].view; }
+    [[nodiscard]] VkImageView getAlbedoView() const { return m_gbuffer[2].view; }
+    [[nodiscard]] VkImageView getVelocityView() const { return m_gbuffer[3].view; }
+    [[nodiscard]] VkImageView getDepthView() const { return m_gbuffer[4].view; }
 
     // VkImage handles for render graph import
-    VkImage getPositionImage() const { return m_gbuffer[0].image; }
-    VkImage getNormalImage() const { return m_gbuffer[1].image; }
-    VkImage getAlbedoImage() const { return m_gbuffer[2].image; }
-    VkImage getVelocityImage() const { return m_gbuffer[3].image; }
-    VkImage getDepthImage() const { return m_gbuffer[4].image; }
+    [[nodiscard]] VkImage getPositionImage() const { return m_gbuffer[0].image; }
+    [[nodiscard]] VkImage getNormalImage() const { return m_gbuffer[1].image; }
+    [[nodiscard]] VkImage getAlbedoImage() const { return m_gbuffer[2].image; }
+    [[nodiscard]] VkImage getVelocityImage() const { return m_gbuffer[3].image; }
+    [[nodiscard]] VkImage getDepthImage() const { return m_gbuffer[4].image; }
 
     // Format accessors for render graph import
-    VkFormat getPositionFormat() const { return m_gbuffer[0].format; }
-    VkFormat getNormalFormat() const { return m_gbuffer[1].format; }
-    VkFormat getAlbedoFormat() const { return m_gbuffer[2].format; }
-    VkFormat getVelocityFormat() const { return m_gbuffer[3].format; }
-    VkFormat getDepthFormat() const { return m_gbuffer[4].format; }
+    [[nodiscard]] VkFormat getPositionFormat() const { return m_gbuffer[0].format; }
+    [[nodiscard]] VkFormat getNormalFormat() const { return m_gbuffer[1].format; }
+    [[nodiscard]] VkFormat getAlbedoFormat() const { return m_gbuffer[2].format; }
+    [[nodiscard]] VkFormat getVelocityFormat() const { return m_gbuffer[3].format; }
+    [[nodiscard]] VkFormat getDepthFormat() const { return m_gbuffer[4].format; }
 
-    VkRenderPass getRenderPass() const { return m_renderPass; }
-    VkFramebuffer getFramebuffer() const { return m_framebuffer; }
+    [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
+    [[nodiscard]] VkFramebuffer getFramebuffer() const { return m_framebuffer; }
 
     // Texture manager for bindless textures
     void setTextureManager(BindlessTextureManager* texManager) { m_textureManager = texManager; }
 
     // Wireframe mode
     void setWireframeEnabled(bool enabled) { m_wireframeEnabled = enabled; }
-    bool getWireframeEnabled() const { return m_wireframeEnabled; }
+    [[nodiscard]] bool getWireframeEnabled() const { return m_wireframeEnabled; }
 
     // Descriptor set for deferred lighting
-    VkDescriptorSetLayout getGBufferLayout() const { return m_gbufferLayout; }
-    VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }
+    [[nodiscard]] VkDescriptorSetLayout getGBufferLayout() const { return m_gbufferLayout; }
+    [[nodiscard]] VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }
 
 private:
-    bool createRenderPass();
-    bool createFramebuffer();
-    bool createPipeline();
-    bool createGBuffer();
-    bool createDescriptors();
+    [[nodiscard]] bool createRenderPass();
+    [[nodiscard]] bool createFramebuffer();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createGBuffer();
+    [[nodiscard]] bool createDescriptors();
     void destroyGBuffer();
 
     // G-Buffer render targets

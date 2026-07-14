@@ -14,8 +14,8 @@ public:
     ~SphereShape() override = default;
     
     // Accessors
-    float getRadius() const { return m_radius; }
-    void setRadius(float radius) { m_radius = radius; }
+    [[nodiscard]] float getRadius() const noexcept { return m_radius; }
+    void setRadius(float radius) noexcept { m_radius = radius; }
     
     // CollisionShape interface
     math::AABB getAABB(const glm::vec3& worldPosition, const glm::quat& worldRotation) const override {

@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <array>
 
 namespace ohao {
@@ -32,8 +33,9 @@ public:
     DeferredRenderer() = default;
     ~DeferredRenderer();
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice);
     void cleanup();
+    [[nodiscard]] bool isInitialized() const noexcept { return m_device != VK_NULL_HANDLE; }
 
     // Main render function - call this once per frame
     void render(VkCommandBuffer cmd, uint32_t frameIndex);
@@ -55,9 +57,9 @@ public:
     // Light configuration
     void setDirectionalLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
     void setLightBuffer(VkBuffer lightBuffer, uint32_t lightCount);
-    glm::vec3 getLightDirection() const { return m_lightDirection; }
-    float getNightFactor() const { return m_nightFactor; }
-    glm::vec3 getMoonDirection() const { return m_moonDirection; }
+    [[nodiscard]] glm::vec3 getLightDirection() const { return m_lightDirection; }
+    [[nodiscard]] float getNightFactor() const { return m_nightFactor; }
+    [[nodiscard]] glm::vec3 getMoonDirection() const { return m_moonDirection; }
 
     // IBL configuration (optional)
     void setIBLTextures(VkImageView irradiance, VkImageView prefiltered,
@@ -67,15 +69,15 @@ public:
     void setTextureManager(BindlessTextureManager* texManager);
 
     // Post-processing configuration
-    PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
+    [[nodiscard]] PostProcessingPipeline* getPostProcessing() { return m_postProcessing.get(); }
 
     // Wireframe mode
     void setWireframeEnabled(bool enabled);
-    bool getWireframeEnabled() const { return m_wireframeEnabled; }
+    [[nodiscard]] bool getWireframeEnabled() const { return m_wireframeEnabled; }
 
     // Gizmo controls
     void setGizmoEnabled(bool enabled);
-    bool getGizmoEnabled() const { return m_gizmoEnabled; }
+    [[nodiscard]] bool getGizmoEnabled() const { return m_gizmoEnabled; }
     void setGizmoMode(GizmoMode mode);
     void setGizmoTransform(const glm::mat4& model);
     void setGizmoHighlightedAxis(GizmoAxis axis);
@@ -84,9 +86,9 @@ public:
     void setSkyEnabled(bool enabled);
 
     // RT shadows
-    RTGITechnique* getRT_GI() { return m_rtGI.get(); }
+    [[nodiscard]] RTGITechnique* getRT_GI() { return m_rtGI.get(); }
     void setRTShadowsEnabled(bool enabled) { m_useRTShadows = enabled; }
-    bool getRTShadowsEnabled() const { return m_useRTShadows; }
+    [[nodiscard]] bool getRTShadowsEnabled() const { return m_useRTShadows; }
     void setAccelerationStructure(RTAccelerationStructure* accel) { m_rtAccel = accel; }
     void setEnvMap(VkImageView view, VkSampler sampler);
 
@@ -94,7 +96,7 @@ private:
     // stored here for RT passes to access
     RTAccelerationStructure* m_rtAccel{nullptr};
 public:
-    bool getSkyEnabled() const { return m_skyEnabled; }
+    [[nodiscard]] bool getSkyEnabled() const { return m_skyEnabled; }
     void setSunDirection(const glm::vec3& dir);
     void setSkyTurbidity(float t);
     void setSkyIntensity(float i);
@@ -107,21 +109,21 @@ public:
     void setDeltaTime(float dt) { m_deltaTime = dt; }
 
     // Get final output for display/readback
-    VkImageView getFinalOutput() const;
-    VkImage getFinalOutputImage() const;
+    [[nodiscard]] VkImageView getFinalOutput() const;
+    [[nodiscard]] VkImage getFinalOutputImage() const;
 
     // Get SSAO output for deferred lighting
-    VkImageView getSSAOOutput() const;
+    [[nodiscard]] VkImageView getSSAOOutput() const;
 
     // Get jitter offset for TAA
-    glm::vec2 getJitterOffset(uint32_t frameIndex) const;
+    [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
     // === Introspection (MCP AI agent support) ===
-    nlohmann::json getPipelineInfo() const;
-    nlohmann::json getPerfStats() const;
+    [[nodiscard]] nlohmann::json getPipelineInfo() const;
+    [[nodiscard]] nlohmann::json getPerfStats() const;
 
     // === Hot-reload (runtime shader swap) ===
-    bool reloadShaderForPass(const std::string& passName, const std::string& spvPath);
+    [[nodiscard]] bool reloadShaderForPass(std::string_view passName, std::string_view spvPath);
 
 private:
     VkDevice m_device{VK_NULL_HANDLE};
@@ -190,8 +192,8 @@ private:
     float m_totalTime{0.0f};
     std::queue<ParticleEmitterConfig> m_pendingEmits;
 
-    bool createParticleRenderPass();
-    bool createParticleFramebuffer();
+    [[nodiscard]] bool createParticleRenderPass();
+    [[nodiscard]] bool createParticleFramebuffer();
 
     // Render graph for centralized barrier tracking
     RenderGraph m_renderGraph;
@@ -217,7 +219,7 @@ private:
     std::array<const char*, GPU_TIMER_COUNT> m_passTimingNames{};
     int m_passTimingCount{0};
 
-    bool initGpuTiming();
+    [[nodiscard]] bool initGpuTiming();
     void cleanupGpuTiming();
     void readbackGpuTimings();  // read previous frame's results
 };

@@ -3,6 +3,7 @@
 #include "scene/scene.hpp"
 #include "scene/asset/model.hpp"
 #include "core/console_widget.hpp"
+#include <string>
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
@@ -10,7 +11,7 @@ namespace ohao {
 
 std::shared_ptr<Actor> ComponentFactory::createActorWithComponents(
     Scene* scene, 
-    const std::string& name, 
+    std::string_view name, 
     PrimitiveType type
 ) {
     if (!scene) {
@@ -21,13 +22,13 @@ std::shared_ptr<Actor> ComponentFactory::createActorWithComponents(
     // Create the actor
     auto actor = scene->createActor(name);
     if (!actor) {
-        OHAO_LOG_ERROR("Failed to create actor: " + name);
+        OHAO_LOG_ERROR("Failed to create actor: " + std::string(name));
         return nullptr;
     }
     
     // Add components based on type
     if (!addComponentsToActor(actor, type)) {
-        OHAO_LOG_ERROR("Failed to add components to actor: " + name);
+        OHAO_LOG_ERROR("Failed to add components to actor: " + std::string(name));
         return nullptr;
     }
     
@@ -35,7 +36,7 @@ std::shared_ptr<Actor> ComponentFactory::createActorWithComponents(
     ComponentManager::connectComponentDependencies(actor);
     ComponentManager::initializeComponents(actor);
     
-    OHAO_LOG("Created actor '" + name + "' with automatic components for type: " + std::to_string(static_cast<int>(type)));
+    OHAO_LOG("Created actor '" + std::string(name) + "' with automatic components for type: " + std::to_string(static_cast<int>(type)));
     return actor;
 }
 

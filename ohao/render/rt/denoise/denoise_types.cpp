@@ -3,19 +3,20 @@
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <string>
 
 namespace ohao {
 
 namespace {
-std::string toLower(const std::string& s) {
+std::string toLower(std::string_view s) {
     std::string out(s);
     std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
 }
 } // namespace
 
-DenoiseMode parseDenoiseMode(const std::string& s) {
+DenoiseMode parseDenoiseMode(std::string_view s) {
     const std::string lower = toLower(s);
     if (lower == "none")  return DenoiseMode::None;
     if (lower == "oidn")  return DenoiseMode::OIDN;

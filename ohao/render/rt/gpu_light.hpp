@@ -1,4 +1,6 @@
 #pragma once
+#include "core/concepts.hpp"
+#include "gpu/layout_meta.hpp"
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -12,6 +14,7 @@ struct GPULight {
     glm::vec4 extra;              // spot: w=outerAngle, area: xyz=edge1
     glm::vec4 extra2;             // area: xyz=edge2, w=area
 };
+OHAO_ASSERT_GPU_LAYOUT(GPULight, layout::kGPULightBytes);
 
 static constexpr uint32_t MAX_GPU_LIGHTS = 64;
 

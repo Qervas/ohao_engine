@@ -1,4 +1,5 @@
 #include "material.hpp"
+#include <string>
 
 namespace ohao {
 
@@ -164,10 +165,10 @@ void Material::applyPreset() {
     }
 }
 
-Material Material::createTexturedMaterial(const std::string& albedoPath, 
-                                         const std::string& normalPath,
-                                         const std::string& roughnessPath,
-                                         const std::string& metallicPath) {
+Material Material::createTexturedMaterial(std::string_view albedoPath, 
+                                         std::string_view normalPath,
+                                         std::string_view roughnessPath,
+                                         std::string_view metallicPath) {
     Material mat;
     mat.type = Type::Custom;
     mat.name = "Textured Material";
@@ -188,33 +189,33 @@ Material Material::createTexturedMaterial(const std::string& albedoPath,
     return mat;
 }
 
-void Material::setAlbedoTexture(const std::string& path) {
-    albedoTexture = path;
+void Material::setAlbedoTexture(std::string_view path) {
+    albedoTexture = std::string(path);
     useAlbedoTexture = !path.empty();
 }
 
-void Material::setNormalTexture(const std::string& path) {
-    normalTexture = path;
+void Material::setNormalTexture(std::string_view path) {
+    normalTexture = std::string(path);
     useNormalTexture = !path.empty();
 }
 
-void Material::setMetallicTexture(const std::string& path) {
-    metallicTexture = path;
+void Material::setMetallicTexture(std::string_view path) {
+    metallicTexture = std::string(path);
     useMetallicTexture = !path.empty();
 }
 
-void Material::setRoughnessTexture(const std::string& path) {
-    roughnessTexture = path;
+void Material::setRoughnessTexture(std::string_view path) {
+    roughnessTexture = std::string(path);
     useRoughnessTexture = !path.empty();
 }
 
-void Material::setAoTexture(const std::string& path) {
-    aoTexture = path;
+void Material::setAoTexture(std::string_view path) {
+    aoTexture = std::string(path);
     useAoTexture = !path.empty();
 }
 
-void Material::setEmissiveTexture(const std::string& path) {
-    emissiveTexture = path;
+void Material::setEmissiveTexture(std::string_view path) {
+    emissiveTexture = std::string(path);
     useEmissiveTexture = !path.empty();
 }
 

@@ -8,6 +8,7 @@
 #include "scene/component/transform_component.hpp"
 #include "physics/dynamics/rigid_body.hpp"
 #include <memory>
+#include <string_view>
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -35,22 +36,54 @@ struct ComponentSet {
     bool needsPhysics = false;
     bool needsMaterial = false;
     bool needsLight = false;
-    
+
     // Physics settings
     physics::dynamics::RigidBodyType physicsType = physics::dynamics::RigidBodyType::DYNAMIC;
     float mass = 1.0f;
     float friction = 0.5f;
     float restitution = 0.3f;
-    
+
     // Default material settings
     glm::vec3 materialColor = glm::vec3(0.7f, 0.7f, 0.8f);
     float roughness = 0.5f;
     float metallic = 0.0f;
-    
+
     // Light settings (if needed)
     LightType lightType = LightType::Sphere;
     glm::vec3 lightColor = glm::vec3(1.0f);
     float intensity = 1.0f;
+
+    /// Designated-init friendly factories for common packs.
+    [[nodiscard]] static constexpr ComponentSet visualOnly() {
+        return ComponentSet{
+            .needsMesh = true,
+            .needsPhysics = false,
+            .needsMaterial = true,
+            .needsLight = false,
+        };
+    }
+
+    [[nodiscard]] static constexpr ComponentSet physicsObject() {
+        return ComponentSet{
+            .needsMesh = true,
+            .needsPhysics = true,
+            .needsMaterial = true,
+            .needsLight = false,
+            .physicsType = physics::dynamics::RigidBodyType::DYNAMIC,
+            .mass = 1.0f,
+        };
+    }
+
+    [[nodiscard]] static constexpr ComponentSet staticCollider() {
+        return ComponentSet{
+            .needsMesh = true,
+            .needsPhysics = true,
+            .needsMaterial = true,
+            .needsLight = false,
+            .physicsType = physics::dynamics::RigidBodyType::STATIC,
+            .mass = 0.0f,
+        };
+    }
 };
 
 /**
@@ -61,16 +94,16 @@ public:
     /**
      * Create an actor with appropriate components for the given primitive type
      */
-    static std::shared_ptr<Actor> createActorWithComponents(
+    [[nodiscard]] static std::shared_ptr<Actor> createActorWithComponents(
         Scene* scene, 
-        const std::string& name, 
+        std::string_view name, 
         PrimitiveType type
     );
     
     /**
      * Add default components to an existing actor based on primitive type
      */
-    static bool addComponentsToActor(
+    [[nodiscard]] static bool addComponentsToActor(
         std::shared_ptr<Actor> actor, 
         PrimitiveType type
     );
@@ -78,12 +111,12 @@ public:
     /**
      * Get the component configuration for a primitive type
      */
-    static ComponentSet getComponentSet(PrimitiveType type);
+    [[nodiscard]] static ComponentSet getComponentSet(PrimitiveType type);
     
     /**
      * Generate appropriate mesh for the primitive type
      */
-    static std::shared_ptr<Model> generateMeshForPrimitive(PrimitiveType type);
+    [[nodiscard]] static std::shared_ptr<Model> generateMeshForPrimitive(PrimitiveType type);
     
     /**
      * Create appropriate collision shape for physics component
@@ -97,11 +130,11 @@ public:
 
 private:
     // Mesh generation helpers
-    static std::shared_ptr<Model> generateCubeMesh();
-    static std::shared_ptr<Model> generateSphereMesh();
-    static std::shared_ptr<Model> generatePlatformMesh(float width = 2.0f, float height = 0.4f, float depth = 2.0f);
-    static std::shared_ptr<Model> generateCylinderMesh();
-    static std::shared_ptr<Model> generateConeMesh();
+    [[nodiscard]] static std::shared_ptr<Model> generateCubeMesh();
+    [[nodiscard]] static std::shared_ptr<Model> generateSphereMesh();
+    [[nodiscard]] static std::shared_ptr<Model> generatePlatformMesh(float width = 2.0f, float height = 0.4f, float depth = 2.0f);
+    [[nodiscard]] static std::shared_ptr<Model> generateCylinderMesh();
+    [[nodiscard]] static std::shared_ptr<Model> generateConeMesh();
     
     // Component setup helpers
     static void setupMeshComponent(MeshComponent* mesh, PrimitiveType type);
@@ -128,7 +161,7 @@ public:
     /**
      * Validate that all required components are present and properly configured
      */
-    static bool validateComponentSetup(std::shared_ptr<Actor> actor, PrimitiveType type);
+    [[nodiscard]] static bool validateComponentSetup(std::shared_ptr<Actor> actor, PrimitiveType type);
     
 private:
     static void connectPhysicsToTransform(std::shared_ptr<Actor> actor);

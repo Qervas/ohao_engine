@@ -11,7 +11,7 @@ namespace ohao {
 PassBuilder::PassBuilder(RenderGraph& graph, uint32_t passIndex)
     : m_graph(graph), m_passIndex(passIndex) {}
 
-TextureHandle PassBuilder::createColorAttachment(const std::string& name, uint32_t width,
+TextureHandle PassBuilder::createColorAttachment(std::string_view name, uint32_t width,
                                                    uint32_t height, VkFormat format) {
     TextureDesc desc = TextureDesc::colorTarget(name, width, height, format);
     TextureHandle handle = m_graph.createTexture(desc);
@@ -31,12 +31,12 @@ TextureHandle PassBuilder::createColorAttachment(const std::string& name, uint32
     return handle;
 }
 
-TextureHandle PassBuilder::createHdrColorAttachment(const std::string& name,
+TextureHandle PassBuilder::createHdrColorAttachment(std::string_view name,
                                                       uint32_t width, uint32_t height) {
     return createColorAttachment(name, width, height, VK_FORMAT_R16G16B16A16_SFLOAT);
 }
 
-TextureHandle PassBuilder::createDepthAttachment(const std::string& name, uint32_t width,
+TextureHandle PassBuilder::createDepthAttachment(std::string_view name, uint32_t width,
                                                    uint32_t height, VkFormat format) {
     TextureDesc desc = TextureDesc::depthTarget(name, width, height, format);
     TextureHandle handle = m_graph.createTexture(desc);
@@ -58,11 +58,11 @@ TextureHandle PassBuilder::createDepthAttachment(const std::string& name, uint32
     return handle;
 }
 
-TextureHandle PassBuilder::createShadowMap(const std::string& name, uint32_t size) {
+TextureHandle PassBuilder::createShadowMap(std::string_view name, uint32_t size) {
     return createDepthAttachment(name, size, size, VK_FORMAT_D32_SFLOAT);
 }
 
-TextureHandle PassBuilder::createGBufferAttachment(const std::string& name, uint32_t width,
+TextureHandle PassBuilder::createGBufferAttachment(std::string_view name, uint32_t width,
                                                      uint32_t height, VkFormat format) {
     return createColorAttachment(name, width, height, format);
 }
@@ -115,8 +115,13 @@ void PassBuilder::useDepthAttachment(TextureHandle handle) {
     m_graph.m_passes[m_passIndex].depthAttachment = handle;
 }
 
-BufferHandle PassBuilder::createBuffer(const std::string& name, VkDeviceSize size, BufferUsage usage) {
-    BufferDesc desc{name, size, usage, true};
+BufferHandle PassBuilder::createBuffer(std::string_view name, VkDeviceSize size, BufferUsage usage) {
+    BufferDesc desc{
+        .name = std::string(name),
+        .size = size,
+        .usage = usage,
+        .isTransient = true,
+    };
     return m_graph.createBuffer(desc);
 }
 
@@ -232,12 +237,12 @@ void RenderGraph::shutdown() {
     m_allocator = nullptr;
 }
 
-void RenderGraph::addPass(const std::string& name,
+void RenderGraph::addPass(std::string_view name,
                            std::function<void(PassBuilder&)> setup,
                            std::function<void(VkCommandBuffer)> execute) {
     uint32_t passIdx = static_cast<uint32_t>(m_passes.size());
     RenderPassDef pass{};
-    pass.name = name;
+    pass.name = std::string(name);
     pass.index = passIdx;
     pass.type = PassType::Graphics;
     pass.executeCallback = std::move(execute);
@@ -251,12 +256,12 @@ void RenderGraph::addPass(const std::string& name,
     m_compiled = false;
 }
 
-void RenderGraph::addComputePass(const std::string& name,
+void RenderGraph::addComputePass(std::string_view name,
                                    std::function<void(PassBuilder&)> setup,
                                    std::function<void(VkCommandBuffer)> execute) {
     uint32_t passIdx = static_cast<uint32_t>(m_passes.size());
     RenderPassDef pass{};
-    pass.name = name;
+    pass.name = std::string(name);
     pass.index = passIdx;
     pass.type = PassType::Compute;
     pass.executeCallback = std::move(execute);
@@ -269,22 +274,23 @@ void RenderGraph::addComputePass(const std::string& name,
     m_compiled = false;
 }
 
-TextureHandle RenderGraph::importTexture(const std::string& name, VkImage image,
+TextureHandle RenderGraph::importTexture(std::string_view name, VkImage image,
                                            VkImageView view, VkFormat format,
                                            uint32_t width, uint32_t height,
                                            VkImageLayout currentLayout) {
     TextureHandle handle{static_cast<uint32_t>(m_textureDescs.size())};
 
-    TextureDesc desc{};
-    desc.name = name;
-    desc.width = width;
-    desc.height = height;
-    desc.format = format;
-    desc.isExternal = true;
-    desc.isTransient = false;
+    TextureDesc desc{
+        .name = std::string(name),
+        .width = width,
+        .height = height,
+        .format = format,
+        .isTransient = false,
+        .isExternal = true,
+    };
 
     m_textureDescs.push_back(desc);
-    m_textureNameMap[name] = handle;
+    m_textureNameMap[std::string(name)] = handle;
 
     // Create physical texture entry
     PhysicalTexture physical{};
@@ -301,17 +307,18 @@ TextureHandle RenderGraph::importTexture(const std::string& name, VkImage image,
     return handle;
 }
 
-BufferHandle RenderGraph::importBuffer(const std::string& name, VkBuffer buffer,
+BufferHandle RenderGraph::importBuffer(std::string_view name, VkBuffer buffer,
                                          VkDeviceSize size, void* mapped) {
     BufferHandle handle{static_cast<uint32_t>(m_bufferDescs.size())};
 
-    BufferDesc desc{};
-    desc.name = name;
-    desc.size = size;
-    desc.isTransient = false;
+    BufferDesc desc{
+        .name = std::string(name),
+        .size = size,
+        .isTransient = false,
+    };
 
     m_bufferDescs.push_back(desc);
-    m_bufferNameMap[name] = handle;
+    m_bufferNameMap[std::string(name)] = handle;
 
     PhysicalBuffer physical{};
     physical.buffer = buffer;
@@ -330,14 +337,14 @@ void RenderGraph::setOutput(TextureHandle handle) {
 
 TextureHandle RenderGraph::createTexture(const TextureDesc& desc) {
     // Check if texture with this name already exists
-    auto it = m_textureNameMap.find(desc.name);
+    auto it = m_textureNameMap.find(std::string(desc.name));
     if (it != m_textureNameMap.end()) {
         return it->second;
     }
 
     TextureHandle handle{static_cast<uint32_t>(m_textureDescs.size())};
     m_textureDescs.push_back(desc);
-    m_textureNameMap[desc.name] = handle;
+    m_textureNameMap[std::string(desc.name)] = handle;
 
     // Physical resource will be allocated during compile()
     m_physicalTextures.push_back({});
@@ -346,14 +353,14 @@ TextureHandle RenderGraph::createTexture(const TextureDesc& desc) {
 }
 
 BufferHandle RenderGraph::createBuffer(const BufferDesc& desc) {
-    auto it = m_bufferNameMap.find(desc.name);
+    auto it = m_bufferNameMap.find(std::string(desc.name));
     if (it != m_bufferNameMap.end()) {
         return it->second;
     }
 
     BufferHandle handle{static_cast<uint32_t>(m_bufferDescs.size())};
     m_bufferDescs.push_back(desc);
-    m_bufferNameMap[desc.name] = handle;
+    m_bufferNameMap[std::string(desc.name)] = handle;
 
     m_physicalBuffers.push_back({});
 
@@ -448,13 +455,6 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
 
         // Execute pass
         if (pass.type == PassType::Graphics && pass.vulkanRenderPass != VK_NULL_HANDLE) {
-            VkRenderPassBeginInfo beginInfo{};
-            beginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            beginInfo.renderPass = pass.vulkanRenderPass;
-            beginInfo.framebuffer = pass.vulkanFramebuffer;
-            beginInfo.renderArea.offset = {0, 0};
-            beginInfo.renderArea.extent = {pass.viewportWidth, pass.viewportHeight};
-
             // Clear values for attachments
             std::vector<VkClearValue> clearValues;
             for (size_t i = 0; i < pass.colorAttachments.size(); ++i) {
@@ -468,24 +468,32 @@ void RenderGraph::execute(VkCommandBuffer cmd) {
                 clearValues.push_back(clear);
             }
 
-            beginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-            beginInfo.pClearValues = clearValues.data();
+            VkRenderPassBeginInfo beginInfo{
+                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                .renderPass = pass.vulkanRenderPass,
+                .framebuffer = pass.vulkanFramebuffer,
+                .renderArea = {{0, 0}, {pass.viewportWidth, pass.viewportHeight}},
+                .clearValueCount = static_cast<uint32_t>(clearValues.size()),
+                .pClearValues = clearValues.data(),
+            };
 
             vkCmdBeginRenderPass(cmd, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             // Set viewport and scissor
-            VkViewport viewport{};
-            viewport.x = 0.0f;
-            viewport.y = 0.0f;
-            viewport.width = static_cast<float>(pass.viewportWidth);
-            viewport.height = static_cast<float>(pass.viewportHeight);
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
+            VkViewport viewport{
+                .x = 0.0f,
+                .y = 0.0f,
+                .width = static_cast<float>(pass.viewportWidth),
+                .height = static_cast<float>(pass.viewportHeight),
+                .minDepth = 0.0f,
+                .maxDepth = 1.0f,
+            };
             vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-            VkRect2D scissor{};
-            scissor.offset = {0, 0};
-            scissor.extent = {pass.viewportWidth, pass.viewportHeight};
+            VkRect2D scissor{
+                .offset = {0, 0},
+                .extent = {pass.viewportWidth, pass.viewportHeight},
+            };
             vkCmdSetScissor(cmd, 0, 1, &scissor);
         }
 
@@ -716,18 +724,20 @@ void RenderGraph::createRenderPasses() {
             attachments.push_back(attachment);
         }
 
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
-        subpass.pColorAttachments = colorRefs.empty() ? nullptr : colorRefs.data();
-        subpass.pDepthStencilAttachment = depthRef.attachment == VK_ATTACHMENT_UNUSED ? nullptr : &depthRef;
+        VkSubpassDescription subpass{
+            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = static_cast<uint32_t>(colorRefs.size()),
+            .pColorAttachments = colorRefs.empty() ? nullptr : colorRefs.data(),
+            .pDepthStencilAttachment = depthRef.attachment == VK_ATTACHMENT_UNUSED ? nullptr : &depthRef,
+        };
 
-        VkRenderPassCreateInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-        renderPassInfo.pAttachments = attachments.data();
-        renderPassInfo.subpassCount = 1;
-        renderPassInfo.pSubpasses = &subpass;
+        VkRenderPassCreateInfo renderPassInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = static_cast<uint32_t>(attachments.size()),
+            .pAttachments = attachments.data(),
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+        };
 
         if (vkCreateRenderPass(m_device, &renderPassInfo, nullptr, &pass.vulkanRenderPass) != VK_SUCCESS) {
             std::cerr << "Failed to create render pass for: " << pass.name << std::endl;
@@ -751,14 +761,15 @@ void RenderGraph::createFramebuffers() {
             attachmentViews.push_back(m_physicalTextures[pass.depthAttachment.index].view);
         }
 
-        VkFramebufferCreateInfo framebufferInfo{};
-        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = pass.vulkanRenderPass;
-        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachmentViews.size());
-        framebufferInfo.pAttachments = attachmentViews.data();
-        framebufferInfo.width = pass.viewportWidth;
-        framebufferInfo.height = pass.viewportHeight;
-        framebufferInfo.layers = 1;
+        VkFramebufferCreateInfo framebufferInfo{
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = pass.vulkanRenderPass,
+            .attachmentCount = static_cast<uint32_t>(attachmentViews.size()),
+            .pAttachments = attachmentViews.data(),
+            .width = pass.viewportWidth,
+            .height = pass.viewportHeight,
+            .layers = 1,
+        };
 
         if (vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &pass.vulkanFramebuffer) != VK_SUCCESS) {
             std::cerr << "Failed to create framebuffer for: " << pass.name << std::endl;
@@ -778,18 +789,19 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
     VkImageUsageFlags usage = toVkImageUsage(desc.usage);
 
     // Create image
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = desc.format;
-    imageInfo.extent = {desc.width, desc.height, 1};
-    imageInfo.mipLevels = desc.mipLevels;
-    imageInfo.arrayLayers = desc.arrayLayers;
-    imageInfo.samples = desc.samples;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = usage;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageCreateInfo imageInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = desc.format,
+        .extent = {desc.width, desc.height, 1},
+        .mipLevels = desc.mipLevels,
+        .arrayLayers = desc.arrayLayers,
+        .samples = desc.samples,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
 
     if (vkCreateImage(m_device, &imageInfo, nullptr, &physical.image) != VK_SUCCESS) {
         std::cerr << "Failed to create image: " << desc.name << std::endl;
@@ -800,11 +812,12 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
     VkMemoryRequirements memReqs;
     vkGetImageMemoryRequirements(m_device, physical.image, &memReqs);
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memReqs.size,
+        .memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    };
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &physical.memory) != VK_SUCCESS) {
         std::cerr << "Failed to allocate image memory: " << desc.name << std::endl;
@@ -815,22 +828,24 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
 
     vkBindImageMemory(m_device, physical.image, physical.memory, 0);
 
-    // Create image view
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = physical.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = desc.format;
-
     bool isDepth = (desc.format == VK_FORMAT_D32_SFLOAT ||
                     desc.format == VK_FORMAT_D24_UNORM_S8_UINT ||
                     desc.format == VK_FORMAT_D16_UNORM);
 
-    viewInfo.subresourceRange.aspectMask = isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = desc.mipLevels;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = desc.arrayLayers;
+    // Create image view
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = physical.image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = desc.format,
+        .subresourceRange = {
+            .aspectMask = isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = desc.mipLevels,
+            .baseArrayLayer = 0,
+            .layerCount = desc.arrayLayers,
+        },
+    };
 
     if (vkCreateImageView(m_device, &viewInfo, nullptr, &physical.view) != VK_SUCCESS) {
         std::cerr << "Failed to create image view: " << desc.name << std::endl;
@@ -860,11 +875,12 @@ bool RenderGraph::allocateBuffer(BufferHandle handle) {
 
     VkBufferUsageFlags usage = toVkBufferUsage(desc.usage);
 
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = desc.size;
-    bufferInfo.usage = usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo bufferInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = desc.size,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
 
     if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &physical.buffer) != VK_SUCCESS) {
         std::cerr << "Failed to create buffer: " << desc.name << std::endl;
@@ -874,11 +890,12 @@ bool RenderGraph::allocateBuffer(BufferHandle handle) {
     VkMemoryRequirements memReqs;
     vkGetBufferMemoryRequirements(m_device, physical.buffer, &memReqs);
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
-                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memReqs.size,
+        .memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits,
+                                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    };
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &physical.memory) != VK_SUCCESS) {
         vkDestroyBuffer(m_device, physical.buffer, nullptr);

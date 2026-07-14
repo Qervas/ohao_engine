@@ -2,6 +2,7 @@
 
 #include "physics/dynamics/rigid_body.hpp"
 #include <string>
+#include <string_view>
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -42,7 +43,7 @@ public:
      * Constructor
      * @param name Profile name (e.g., "Gravity Test", "Rolling Sim")
      */
-    explicit SimulationProfile(const std::string& name);
+    explicit SimulationProfile(std::string_view name);
 
     /**
      * Capture current state of all bodies
@@ -57,8 +58,8 @@ public:
     void restore(std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies);
 
     // === METADATA ===
-    std::string getName() const { return m_name; }
-    void setName(const std::string& name) { m_name = name; }
+    [[nodiscard]] const std::string& getName() const { return m_name; }
+    void setName(std::string_view name) { m_name = name; }
 
     std::chrono::system_clock::time_point getCreationTime() const { return m_creationTime; }
     size_t getBodyCount() const { return m_bodySnapshots.size(); }

@@ -6,7 +6,7 @@
 namespace ohao {
 namespace physics {
 
-SimulationProfile::SimulationProfile(const std::string& name)
+SimulationProfile::SimulationProfile(std::string_view name)
     : m_name(name),
       m_creationTime(std::chrono::system_clock::now()) {
 }

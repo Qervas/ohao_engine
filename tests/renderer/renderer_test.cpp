@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
     mat->getMaterial().baseColor = {1, 0, 0};
 
     renderer.setScene(scene.get());
-    renderer.updateSceneBuffers();
+    (void)renderer.updateSceneBuffers();
     std::cout << "PASS: scene buffers" << std::endl;
 
     // 3. Render

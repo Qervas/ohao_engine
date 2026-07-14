@@ -21,8 +21,14 @@
 #include <cstring>
 #include <algorithm>
 #include "render/rt/denoise/denoise_types.hpp"
+#include "example_cli.hpp"
 
 using namespace ohao;
+using ohao::examples::parseRenderFlags;
+using ohao::examples::parseSpp;
+using ohao::examples::argOr;
+using ohao::examples::applyDenoiseOverride;
+using ohao::examples::resolveMode;
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
@@ -30,13 +36,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::string modelPath = argv[1];
-    std::string envPath = argv[2];
-    std::string output = argc > 3 ? argv[3] : "env_demo.png";
-    int samples = argc > 4 ? std::atoi(argv[4]) : 1024;
-    uint32_t W = 1920, H = 1080;
+    const std::string modelPath{argOr(argc, argv, 1, "")};
+    const std::string envPath{argOr(argc, argv, 2, "")};
+    const std::string output{argOr(argc, argv, 3, "env_demo.png")};
+    const int samples = parseSpp(argc > 4 ? argv[4] : nullptr, 1024);
+    const uint32_t W = 1920, H = 1080;
     RenderMode rtMode = RenderMode::RTOffline;
-    std::optional<ohao::DenoiseMode> denoiseOverride;
+    std::optional<DenoiseMode> denoiseOverride;
     // Sub-plan 4.H: scene composition flags.
     // --ground=on  → add procedural grey 50m floor under loaded model so it
     //                no longer floats in void (contact shadow + visible floor)
@@ -82,56 +88,56 @@ int main(int argc, char* argv[]) {
     // every captured frame.
     int seqCount = 0;
     for (int i = 5; i < argc; i++) {
-        std::string arg = argv[i];
+        const std::string_view arg{argv[i] ? argv[i] : ""};
         if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
         else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
-        else if (arg.rfind("--denoise=", 0) == 0) {
-            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
-        } else if (arg.rfind("--dump-mv=", 0) == 0) {
-            dumpMvPath = arg.substr(10);
-        } else if (arg.rfind("--dump-depth=", 0) == 0) {
-            dumpDepthPath = arg.substr(13);
-        } else if (arg.rfind("--dump-roughness=", 0) == 0) {
-            dumpRoughnessPath = arg.substr(17);
-        } else if (arg.rfind("--dump-diffuse=", 0) == 0) {
-            dumpDiffusePath = arg.substr(15);
-        } else if (arg.rfind("--dump-specular=", 0) == 0) {
-            dumpSpecularPath = arg.substr(16);
-        } else if (arg.rfind("--dump-nrd-diffuse=", 0) == 0) {
-            dumpNrdDiffusePath = arg.substr(19);
-        } else if (arg.rfind("--dump-nrd-specular=", 0) == 0) {
-            dumpNrdSpecularPath = arg.substr(20);
-        } else if (arg.rfind("--dump-nrd-composed=", 0) == 0) {
-            dumpNrdComposedPath = arg.substr(20);
-        } else if (arg.rfind("--dump-diff-albedo=", 0) == 0) {
-            dumpDiffAlbedoPath = arg.substr(19);
-        } else if (arg.rfind("--dump-spec-color=", 0) == 0) {
-            dumpSpecColorPath = arg.substr(18);
-        } else if (arg.rfind("--dump-hit-dist-diffuse=", 0) == 0) {
-            dumpHitDistDiffusePath = arg.substr(24);
-        } else if (arg.rfind("--dump-hit-dist-specular=", 0) == 0) {
-            dumpHitDistSpecularPath = arg.substr(25);
-        } else if (arg.rfind("--pan-x=", 0) == 0) {
-            panX = std::stof(arg.substr(8));
-        } else if (arg.rfind("--rot-y=", 0) == 0) {
-            rotY = std::stof(arg.substr(8));
-        } else if (arg.rfind("--seq=", 0) == 0) {
-            seqCount = std::atoi(arg.substr(6).c_str());
-        } else if (arg.rfind("--ground=", 0) == 0) {
-            std::string v = arg.substr(9);
+        else if (arg.starts_with("--denoise=")) {
+            denoiseOverride = parseDenoiseMode(arg.substr(10));
+        } else if (arg.starts_with("--dump-mv=")) {
+            dumpMvPath = std::string(arg.substr(10));
+        } else if (arg.starts_with("--dump-depth=")) {
+            dumpDepthPath = std::string(arg.substr(13));
+        } else if (arg.starts_with("--dump-roughness=")) {
+            dumpRoughnessPath = std::string(arg.substr(17));
+        } else if (arg.starts_with("--dump-diffuse=")) {
+            dumpDiffusePath = std::string(arg.substr(15));
+        } else if (arg.starts_with("--dump-specular=")) {
+            dumpSpecularPath = std::string(arg.substr(16));
+        } else if (arg.starts_with("--dump-nrd-diffuse=")) {
+            dumpNrdDiffusePath = std::string(arg.substr(19));
+        } else if (arg.starts_with("--dump-nrd-specular=")) {
+            dumpNrdSpecularPath = std::string(arg.substr(20));
+        } else if (arg.starts_with("--dump-nrd-composed=")) {
+            dumpNrdComposedPath = std::string(arg.substr(20));
+        } else if (arg.starts_with("--dump-diff-albedo=")) {
+            dumpDiffAlbedoPath = std::string(arg.substr(19));
+        } else if (arg.starts_with("--dump-spec-color=")) {
+            dumpSpecColorPath = std::string(arg.substr(18));
+        } else if (arg.starts_with("--dump-hit-dist-diffuse=")) {
+            dumpHitDistDiffusePath = std::string(arg.substr(24));
+        } else if (arg.starts_with("--dump-hit-dist-specular=")) {
+            dumpHitDistSpecularPath = std::string(arg.substr(25));
+        } else if (arg.starts_with("--pan-x=")) {
+            panX = std::stof(std::string(arg.substr(8)));
+        } else if (arg.starts_with("--rot-y=")) {
+            rotY = std::stof(std::string(arg.substr(8)));
+        } else if (arg.starts_with("--seq=")) {
+            seqCount = std::atoi(std::string(arg.substr(6)).c_str());
+        } else if (arg.starts_with("--ground=")) {
+            const auto v = arg.substr(9);
             groundEnabled = (v == "on" || v == "true" || v == "1");
-        } else if (arg.rfind("--lighting=", 0) == 0) {
-            std::string v = arg.substr(11);
+        } else if (arg.starts_with("--lighting=")) {
+            const auto v = arg.substr(11);
             if (v == "studio")       lightingMode = LightingMode::Studio;
             else if (v == "hdr-only" || v == "hdr") lightingMode = LightingMode::HdrOnly;
             else if (v == "none")    lightingMode = LightingMode::None;
             else if (v == "cinema")  lightingMode = LightingMode::Cinema;
-        } else if (arg.rfind("--aniso=", 0) == 0) {
-            anisoStrength = std::clamp(std::stof(arg.substr(8)), 0.0f, 0.95f);
-        } else if (arg.rfind("--aniso-rot=", 0) == 0) {
-            anisoRotation = std::stof(arg.substr(12));
-        } else if (arg.rfind("--sss=", 0) == 0) {
-            sssStrength = std::clamp(std::stof(arg.substr(6)), 0.0f, 1.0f);
+        } else if (arg.starts_with("--aniso=")) {
+            anisoStrength = std::clamp(std::stof(std::string(arg.substr(8))), 0.0f, 0.95f);
+        } else if (arg.starts_with("--aniso-rot=")) {
+            anisoRotation = std::stof(std::string(arg.substr(12)));
+        } else if (arg.starts_with("--sss=")) {
+            sssStrength = std::clamp(std::stof(std::string(arg.substr(6))), 0.0f, 1.0f);
         } else if (arg == "--crop=face") {
             faceCrop = true;
         } else if (arg == "--flip") {
@@ -432,14 +438,10 @@ int main(int argc, char* argv[]) {
     }
     renderer.setRenderMode(rtMode);
 
-    if (denoiseOverride.has_value()) {
+    if (denoiseOverride) {
         renderer.setDenoiseMode(*denoiseOverride);
-        std::cout << "Denoise mode (CLI override): "
-                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
-    } else {
-        std::cout << "Denoise mode (preset): "
-                  << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
+    std::cout << "Denoise mode: " << denoiseModeName(renderer.getDenoiseMode()) << "\n";
 
     if (anisoStrength > 0.0f || sssStrength > 0.0f) {
         auto settings = renderer.getRTRenderSettings();
@@ -516,13 +518,13 @@ int main(int argc, char* argv[]) {
         std::chrono::high_resolution_clock::now() - start).count();
     std::cout << "Done: " << ms << " ms" << std::endl;
 
-    // getPixels() handles OIDN transparently if denoiseMode != None
-    const uint8_t* pixels = renderer.getPixels();
-    if (pixels) {
-        stbi_write_png(output.c_str(), W, H, 4, pixels, W * 4);
+    const auto pixels = renderer.getPixelSpan();
+    if (!pixels.empty()) {
+        stbi_write_png(output.c_str(), static_cast<int>(W), static_cast<int>(H), 4,
+                       pixels.data(), static_cast<int>(W * 4));
         std::cout << "Saved"
-                  << (renderer.getDenoiseMode() == ohao::DenoiseMode::None ? "" : " (denoised)")
-                  << ": " << output << std::endl;
+                  << (renderer.getDenoiseMode() == DenoiseMode::None ? "" : " (denoised)")
+                  << ": " << output << "\n";
     }
 
     if (!dumpMvPath.empty()) {

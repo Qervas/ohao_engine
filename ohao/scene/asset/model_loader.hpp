@@ -1,8 +1,11 @@
 #pragma once
 
 #include "model.hpp"
-#include <string>
+#include "core/result.hpp"
+
 #include <memory>
+#include <string>
+#include <string_view>
 
 namespace ohao {
 
@@ -16,17 +19,21 @@ namespace ohao {
 // Static geometry only — skeletal animation has been removed.
 class ModelLoader {
 public:
-    // Load any supported model format. Returns nullptr on failure.
-    static std::shared_ptr<Model> load(const std::string& path);
+    /// Load any supported model format. Returns nullptr on failure.
+    [[nodiscard]] static std::shared_ptr<Model> load(std::string_view path);
+
+    /// Same as load(), with an error string on failure.
+    [[nodiscard]] static Result<std::shared_ptr<Model>> loadResult(std::string_view path);
+
+    /// Extension without leading dot, lowercased (e.g. "glb").
+    [[nodiscard]] static std::string getExtension(std::string_view path);
+
+    [[nodiscard]] static bool isSupportedExtension(std::string_view ext);
 
 private:
-    // Format-specific loaders
-    static std::shared_ptr<Model> loadFBX(const std::string& path);   // ufbx
-    static std::shared_ptr<Model> loadAssimp(const std::string& path); // GLB, GLTF, Collada
-    static std::shared_ptr<Model> loadOBJ(const std::string& path);   // native
-
-    // Detect format from extension
-    static std::string getExtension(const std::string& path);
+    [[nodiscard]] static std::shared_ptr<Model> loadFBX(std::string_view path);
+    [[nodiscard]] static std::shared_ptr<Model> loadAssimp(std::string_view path);
+    [[nodiscard]] static std::shared_ptr<Model> loadOBJ(std::string_view path);
 };
 
 } // namespace ohao

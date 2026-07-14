@@ -2,6 +2,8 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <string>
+#include <string_view>
 
 namespace ohao {
 
@@ -209,11 +211,12 @@ void MaterialManager::cleanup() {
 bool MaterialManager::createMaterialBuffer() {
     VkDeviceSize bufferSize = sizeof(PBRMaterialParams) * m_maxMaterials;
 
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = bufferSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo bufferInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = bufferSize,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
 
     if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &m_materialBuffer) != VK_SUCCESS) {
         std::cerr << "Failed to create material buffer" << std::endl;
@@ -236,10 +239,11 @@ bool MaterialManager::createMaterialBuffer() {
         }
     }
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = memTypeIndex;
+    VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memReqs.size,
+        .memoryTypeIndex = memTypeIndex,
+    };
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &m_materialMemory) != VK_SUCCESS) {
         std::cerr << "Failed to allocate material buffer memory" << std::endl;
@@ -256,16 +260,18 @@ bool MaterialManager::createMaterialBuffer() {
 
 bool MaterialManager::createDescriptorResources() {
     // Create descriptor set layout
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutBinding binding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+    };
 
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &binding,
+    };
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
         std::cerr << "Failed to create material descriptor set layout" << std::endl;
@@ -273,15 +279,17 @@ bool MaterialManager::createDescriptorResources() {
     }
 
     // Create descriptor pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 1;
+    VkDescriptorPoolSize poolSize{
+        .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1,
+    };
 
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         std::cerr << "Failed to create material descriptor pool" << std::endl;
@@ -289,11 +297,12 @@ bool MaterialManager::createDescriptorResources() {
     }
 
     // Allocate descriptor set
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_descriptorSetLayout;
+    VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = m_descriptorPool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &m_descriptorSetLayout,
+    };
 
     if (vkAllocateDescriptorSets(m_device, &allocInfo, &m_descriptorSet) != VK_SUCCESS) {
         std::cerr << "Failed to allocate material descriptor set" << std::endl;
@@ -322,21 +331,21 @@ void MaterialManager::updateDescriptorSet() {
     vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 }
 
-MaterialTemplate* MaterialManager::createTemplate(const std::string& name) {
+MaterialTemplate* MaterialManager::createTemplate(std::string_view name) {
     auto templ = std::make_unique<MaterialTemplate>();
-    templ->name = name;
+    templ->name = std::string(name);
     templ->defaultParams = m_defaultTemplate.defaultParams;
     templ->blendMode = BlendMode::Opaque;
     templ->renderQueue = RenderQueue::Geometry;
     templ->features = MaterialFeatures::ReceiveShadows | MaterialFeatures::CastShadows;
 
     MaterialTemplate* ptr = templ.get();
-    m_templates[name] = std::move(templ);
+    m_templates[std::string(name)] = std::move(templ);
     return ptr;
 }
 
-MaterialTemplate* MaterialManager::getTemplate(const std::string& name) {
-    auto it = m_templates.find(name);
+MaterialTemplate* MaterialManager::getTemplate(std::string_view name) {
+    auto it = m_templates.find(std::string(name));
     return it != m_templates.end() ? it->second.get() : nullptr;
 }
 
@@ -362,7 +371,7 @@ MaterialInstance* MaterialManager::createInstance(const MaterialTemplate* templ)
     return ptr;
 }
 
-MaterialInstance* MaterialManager::createInstance(const std::string& templateName) {
+MaterialInstance* MaterialManager::createInstance(std::string_view templateName) {
     const MaterialTemplate* templ = getTemplate(templateName);
     return createInstance(templ ? templ : &m_defaultTemplate);
 }

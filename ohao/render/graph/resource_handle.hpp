@@ -1,9 +1,13 @@
 #pragma once
 
+#include "core/concepts.hpp"
+
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <limits>
+#include <compare>
 
 namespace ohao {
 
@@ -15,21 +19,25 @@ namespace ohao {
 struct TextureHandle {
     uint32_t index{std::numeric_limits<uint32_t>::max()};
 
-    bool isValid() const { return index != std::numeric_limits<uint32_t>::max(); }
-    bool operator==(const TextureHandle& other) const { return index == other.index; }
-    bool operator!=(const TextureHandle& other) const { return index != other.index; }
+    [[nodiscard]] constexpr bool isValid() const noexcept {
+        return index != std::numeric_limits<uint32_t>::max();
+    }
+    [[nodiscard]] explicit constexpr operator bool() const noexcept { return isValid(); }
+    [[nodiscard]] constexpr auto operator<=>(const TextureHandle&) const noexcept = default;
 
-    static TextureHandle invalid() { return {}; }
+    [[nodiscard]] static constexpr TextureHandle invalid() noexcept { return {}; }
 };
 
 struct BufferHandle {
     uint32_t index{std::numeric_limits<uint32_t>::max()};
 
-    bool isValid() const { return index != std::numeric_limits<uint32_t>::max(); }
-    bool operator==(const BufferHandle& other) const { return index == other.index; }
-    bool operator!=(const BufferHandle& other) const { return index != other.index; }
+    [[nodiscard]] constexpr bool isValid() const noexcept {
+        return index != std::numeric_limits<uint32_t>::max();
+    }
+    [[nodiscard]] explicit constexpr operator bool() const noexcept { return isValid(); }
+    [[nodiscard]] constexpr auto operator<=>(const BufferHandle&) const noexcept = default;
 
-    static BufferHandle invalid() { return {}; }
+    [[nodiscard]] static constexpr BufferHandle invalid() noexcept { return {}; }
 };
 
 /**
@@ -47,16 +55,18 @@ enum class TextureUsage : uint32_t {
     Storage         = 1 << 7
 };
 
-inline TextureUsage operator|(TextureUsage a, TextureUsage b) {
-    return static_cast<TextureUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+[[nodiscard]] constexpr TextureUsage operator|(TextureUsage a, TextureUsage b) noexcept {
+    return static_cast<TextureUsage>(to_underlying(a) | to_underlying(b));
 }
-
-inline TextureUsage operator&(TextureUsage a, TextureUsage b) {
-    return static_cast<TextureUsage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+[[nodiscard]] constexpr TextureUsage operator&(TextureUsage a, TextureUsage b) noexcept {
+    return static_cast<TextureUsage>(to_underlying(a) & to_underlying(b));
 }
-
-inline bool hasFlag(TextureUsage usage, TextureUsage flag) {
-    return (static_cast<uint32_t>(usage) & static_cast<uint32_t>(flag)) != 0;
+constexpr TextureUsage& operator|=(TextureUsage& a, TextureUsage b) noexcept {
+    a = a | b;
+    return a;
+}
+[[nodiscard]] constexpr bool hasFlag(TextureUsage usage, TextureUsage flag) noexcept {
+    return (to_underlying(usage) & to_underlying(flag)) != 0;
 }
 
 /**
@@ -73,16 +83,18 @@ enum class BufferUsage : uint32_t {
     TransferDst   = 1 << 6
 };
 
-inline BufferUsage operator|(BufferUsage a, BufferUsage b) {
-    return static_cast<BufferUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+[[nodiscard]] constexpr BufferUsage operator|(BufferUsage a, BufferUsage b) noexcept {
+    return static_cast<BufferUsage>(to_underlying(a) | to_underlying(b));
 }
-
-inline BufferUsage operator&(BufferUsage a, BufferUsage b) {
-    return static_cast<BufferUsage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+[[nodiscard]] constexpr BufferUsage operator&(BufferUsage a, BufferUsage b) noexcept {
+    return static_cast<BufferUsage>(to_underlying(a) & to_underlying(b));
 }
-
-inline bool hasFlag(BufferUsage usage, BufferUsage flag) {
-    return (static_cast<uint32_t>(usage) & static_cast<uint32_t>(flag)) != 0;
+constexpr BufferUsage& operator|=(BufferUsage& a, BufferUsage b) noexcept {
+    a = a | b;
+    return a;
+}
+[[nodiscard]] constexpr bool hasFlag(BufferUsage usage, BufferUsage flag) noexcept {
+    return (to_underlying(usage) & to_underlying(flag)) != 0;
 }
 
 /**
@@ -105,30 +117,30 @@ struct TextureDesc {
     // External textures are managed outside the graph (e.g., swapchain images)
     bool isExternal{false};
 
-    static TextureDesc colorTarget(const std::string& name, uint32_t w, uint32_t h,
+    [[nodiscard]] static TextureDesc colorTarget(std::string_view name, uint32_t w, uint32_t h,
                                     VkFormat format = VK_FORMAT_R8G8B8A8_SRGB) {
-        return {name, w, h, 1, 1, 1, format, VK_SAMPLE_COUNT_1_BIT,
+        return {std::string(name), w, h, 1, 1, 1, format, VK_SAMPLE_COUNT_1_BIT,
                 TextureUsage::ColorAttachment | TextureUsage::ShaderRead, true, false};
     }
 
-    static TextureDesc depthTarget(const std::string& name, uint32_t w, uint32_t h,
+    [[nodiscard]] static TextureDesc depthTarget(std::string_view name, uint32_t w, uint32_t h,
                                     VkFormat format = VK_FORMAT_D32_SFLOAT) {
-        return {name, w, h, 1, 1, 1, format, VK_SAMPLE_COUNT_1_BIT,
+        return {std::string(name), w, h, 1, 1, 1, format, VK_SAMPLE_COUNT_1_BIT,
                 TextureUsage::DepthAttachment | TextureUsage::ShaderRead, true, false};
     }
 
-    static TextureDesc hdrTarget(const std::string& name, uint32_t w, uint32_t h) {
-        return {name, w, h, 1, 1, 1, VK_FORMAT_R16G16B16A16_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
+    [[nodiscard]] static TextureDesc hdrTarget(std::string_view name, uint32_t w, uint32_t h) {
+        return {std::string(name), w, h, 1, 1, 1, VK_FORMAT_R16G16B16A16_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
                 TextureUsage::ColorAttachment | TextureUsage::ShaderRead, true, false};
     }
 
-    static TextureDesc shadowMap(const std::string& name, uint32_t size) {
-        return {name, size, size, 1, 1, 1, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
+    [[nodiscard]] static TextureDesc shadowMap(std::string_view name, uint32_t size) {
+        return {std::string(name), size, size, 1, 1, 1, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
                 TextureUsage::DepthAttachment | TextureUsage::ShaderRead, true, false};
     }
 
-    static TextureDesc gbuffer(const std::string& name, uint32_t w, uint32_t h, VkFormat format) {
-        return {name, w, h, 1, 1, 1, format, VK_SAMPLE_COUNT_1_BIT,
+    [[nodiscard]] static TextureDesc gbuffer(std::string_view name, uint32_t w, uint32_t h, VkFormat format) {
+        return {std::string(name), w, h, 1, 1, 1, format, VK_SAMPLE_COUNT_1_BIT,
                 TextureUsage::ColorAttachment | TextureUsage::ShaderRead, true, false};
     }
 };
@@ -144,16 +156,16 @@ struct BufferDesc {
     // Transient buffers can have their memory aliased
     bool isTransient{true};
 
-    static BufferDesc uniform(const std::string& name, VkDeviceSize size) {
-        return {name, size, BufferUsage::UniformBuffer, true};
+    [[nodiscard]] static BufferDesc uniform(std::string_view name, VkDeviceSize size) {
+        return {std::string(name), size, BufferUsage::UniformBuffer, true};
     }
 
-    static BufferDesc storage(const std::string& name, VkDeviceSize size) {
-        return {name, size, BufferUsage::StorageBuffer, true};
+    [[nodiscard]] static BufferDesc storage(std::string_view name, VkDeviceSize size) {
+        return {std::string(name), size, BufferUsage::StorageBuffer, true};
     }
 
-    static BufferDesc indirect(const std::string& name, VkDeviceSize size) {
-        return {name, size, BufferUsage::IndirectBuffer, true};
+    [[nodiscard]] static BufferDesc indirect(std::string_view name, VkDeviceSize size) {
+        return {std::string(name), size, BufferUsage::IndirectBuffer, true};
     }
 };
 
@@ -171,14 +183,14 @@ struct ResourceAccess {
     VkAccessFlags accessMask{0};
     VkImageLayout imageLayout{VK_IMAGE_LAYOUT_UNDEFINED};
 
-    bool isRead() const {
+    [[nodiscard]] bool isRead() const noexcept {
         return hasFlag(textureUsage, TextureUsage::ShaderRead) ||
                hasFlag(bufferUsage, BufferUsage::UniformBuffer) ||
                hasFlag(bufferUsage, BufferUsage::VertexBuffer) ||
                hasFlag(bufferUsage, BufferUsage::IndexBuffer);
     }
 
-    bool isWrite() const {
+    [[nodiscard]] bool isWrite() const noexcept {
         return hasFlag(textureUsage, TextureUsage::ColorAttachment) ||
                hasFlag(textureUsage, TextureUsage::DepthAttachment) ||
                hasFlag(textureUsage, TextureUsage::ShaderWrite) ||

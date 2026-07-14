@@ -90,7 +90,7 @@ void IBLProcessor::cleanup() {
     destroyImage(m_brdfLUT, m_brdfLUTMemory, m_brdfLUTView);
 }
 
-bool IBLProcessor::loadEnvironmentMap(const std::string& hdrPath) {
+bool IBLProcessor::loadEnvironmentMap(std::string_view hdrPath) {
     std::vector<float> pixels;
     uint32_t width, height;
 
@@ -168,11 +168,12 @@ bool IBLProcessor::generateBRDFLUT() {
     return true;
 }
 
-bool IBLProcessor::loadHDRImage(const std::string& path, std::vector<float>& pixels,
+bool IBLProcessor::loadHDRImage(std::string_view path, std::vector<float>& pixels,
                                  uint32_t& width, uint32_t& height) {
+    const std::string pathStr(path);
     int w, h, channels;
     stbi_set_flip_vertically_on_load(true);
-    float* data = stbi_loadf(path.c_str(), &w, &h, &channels, 4);
+    float* data = stbi_loadf(pathStr.c_str(), &w, &h, &channels, 4);
 
     if (!data) {
         return false;
@@ -755,10 +756,11 @@ void IBLProcessor::executeBRDFIntegration() {
     endSingleTimeCommands(cmd);
 }
 
-VkShaderModule IBLProcessor::loadShaderModule(const std::string& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
+VkShaderModule IBLProcessor::loadShaderModule(std::string_view path) {
+    const std::string pathStr(path);
+    std::ifstream file(pathStr, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "Failed to open shader: " << path << std::endl;
+        std::cerr << "Failed to open shader: " << pathStr << std::endl;
         return VK_NULL_HANDLE;
     }
 
@@ -769,10 +771,11 @@ VkShaderModule IBLProcessor::loadShaderModule(const std::string& path) {
     file.read(reinterpret_cast<char*>(buffer.data()), fileSize);
     file.close();
 
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = buffer.size() * sizeof(uint32_t);
-    createInfo.pCode = buffer.data();
+    VkShaderModuleCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = buffer.size() * sizeof(uint32_t),
+        .pCode = buffer.data(),
+    };
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {

@@ -81,6 +81,23 @@ struct PhysicsConfig {
     bool enableDebugVisualization{false};
     bool logCollisions{false};
     bool validateInputs{true};
+
+    [[nodiscard]] static PhysicsConfig earth() {
+        return PhysicsConfig{};
+    }
+
+    [[nodiscard]] static PhysicsConfig moon() {
+        PhysicsConfig c;
+        c.gravity = glm::vec3(0.0f, -constants::GRAVITY_MOON, 0.0f);
+        return c;
+    }
+
+    [[nodiscard]] static PhysicsConfig space() {
+        PhysicsConfig c;
+        c.gravity = glm::vec3(0.0f);
+        c.enableGravity = false;
+        return c;
+    }
 };
 
 // === INERTIA TENSOR UTILITIES ===

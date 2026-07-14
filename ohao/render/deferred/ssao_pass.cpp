@@ -371,7 +371,7 @@ bool SSAOPass::createPipeline() {
                                   sizeof(SSAOParams), m_pipeline, m_pipelineLayout);
 }
 
-bool SSAOPass::reloadShader(const std::string& spvPath) {
+bool SSAOPass::reloadShader(std::string_view spvPath) {
     return reloadComputeShader(spvPath, m_descriptorLayout, sizeof(SSAOParams),
                                m_pipeline, m_pipelineLayout);
 }

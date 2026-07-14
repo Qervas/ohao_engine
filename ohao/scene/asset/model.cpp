@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include "stb_image.h"
@@ -78,9 +79,9 @@ Vertex::getAttributeDescriptions(){
     return attributeDescriptions;
 }
 
-bool Model::loadFromOBJ(const std::string& filename) {
+bool Model::loadFromOBJ(std::string_view filename) {
     try{
-        sourcePath = filename;
+        sourcePath = std::string(filename);
 
         vertices.clear();
         indices.clear();
@@ -95,9 +96,9 @@ bool Model::loadFromOBJ(const std::string& filename) {
         std::string mtlFilename;
         std::string currentMaterial;
 
-        std::ifstream file(filename);
+        std::ifstream file{sourcePath};
         if (!file.is_open()) {
-            std::cerr << "Failed to open file: " << filename << std::endl;
+            std::cerr << "Failed to open file: " << sourcePath << std::endl;
             return false;
         }
 
@@ -109,9 +110,9 @@ bool Model::loadFromOBJ(const std::string& filename) {
 
             if (type == "mtllib") {
                 iss >> mtlFilename;
-                size_t lastSlash = filename.find_last_of("/\\");
+                size_t lastSlash = sourcePath.find_last_of("/\\");
                 std::string directory = (lastSlash != std::string::npos) ?
-                    filename.substr(0, lastSlash + 1) : "";
+                    sourcePath.substr(0, lastSlash + 1) : "";
                 std::string fullMtlPath = directory + mtlFilename;
 
                 std::cout << "Loading material file: " << fullMtlPath << std::endl;
@@ -234,7 +235,7 @@ bool Model::loadFromOBJ(const std::string& filename) {
         {
             // Find textures directory relative to model
             namespace fs = std::filesystem;
-            fs::path modelDir = fs::path(filename).parent_path();
+            fs::path modelDir = fs::path(sourcePath).parent_path();
             fs::path texDir = modelDir / "textures";
             if (!fs::exists(texDir)) texDir = modelDir;
 
@@ -356,19 +357,19 @@ bool Model::loadFromOBJ(const std::string& filename) {
     }
 }
 
-uint32_t Model::getOrCreateVertex(const std::string& vertexStr, 
+uint32_t Model::getOrCreateVertex(std::string_view vertexStr, 
                                  const std::vector<glm::vec3>& positions,
                                  const std::vector<glm::vec3>& normals, 
                                  const std::vector<glm::vec2>& texCoords) {
     
-    // Check if we've already created this vertex
-    auto it = vertexMap.find(vertexStr);
+    // Check if we've already created this vertex (no transparent hashers)
+    auto it = vertexMap.find(std::string(vertexStr));
     if (it != vertexMap.end()) {
         return it->second;
     }
     
     // Parse the vertex string (format: "v/vt/vn" or "v//vn" or "v/vt" or "v")
-    std::istringstream viss(vertexStr);
+    std::istringstream viss{std::string(vertexStr)};
     std::string indexStr;
     std::vector<int> vertexIndices;
 
@@ -409,24 +410,25 @@ uint32_t Model::getOrCreateVertex(const std::string& vertexStr,
     // Add vertex to our list and map
     uint32_t index = static_cast<uint32_t>(vertices.size());
     vertices.push_back(vertex);
-    vertexMap[vertexStr] = index;
+    vertexMap[std::string(vertexStr)] = index;
     
     return index;
 }
 
-bool Model::loadMTL(const std::string& filename) {
+bool Model::loadMTL(std::string_view filename) {
     try{
+        const std::string path{filename};
 
-        std::ifstream file(filename);
+        std::ifstream file{path};
         if (!file.is_open()) {
-            std::cerr << "Failed to open material file: " << filename << std::endl;
+            std::cerr << "Failed to open material file: " << path << std::endl;
             return false;
         }
 
         MaterialData* currentMaterial = nullptr;
         std::string line;
 
-        std::cout << "Loading MTL file: " << filename << std::endl;
+        std::cout << "Loading MTL file: " << path << std::endl;
 
         while (std::getline(file, line)) {
             std::istringstream iss(line);

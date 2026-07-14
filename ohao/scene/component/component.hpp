@@ -1,6 +1,8 @@
 #pragma once
+#include "core/concepts.hpp"
 #include <memory>
 #include <string>
+#include <string_view>
 #include <typeinfo>
 #include <typeindex>
 #include <functional>
@@ -26,22 +28,22 @@ public:
     
     // Owner management
     void setOwner(Actor* owner);
-    Actor* getOwner() const;
+    [[nodiscard]] Actor* getOwner() const;
     
     // Enable/disable the component
     void setEnabled(bool enabled);
-    bool isEnabled() const;
+    [[nodiscard]] bool isEnabled() const;
     
     // Type information
-    virtual const char* getTypeName() const;
-    std::type_index getTypeIndex() const;
+    [[nodiscard]] virtual const char* getTypeName() const;
+    [[nodiscard]] std::type_index getTypeIndex() const;
     
     // Unique ID for component instance
-    std::uint64_t getID() const { return componentID; }
+    [[nodiscard]] std::uint64_t getID() const { return componentID; }
 
     // Stable GUID for map serialization
-    const std::string& getGuid() const { return guid; }
-    void setGuid(const std::string& g) { guid = g; }
+    [[nodiscard]] const std::string& getGuid() const { return guid; }
+    void setGuid(std::string_view g) { guid = std::string(g); }
     
 protected:
     virtual void onAttached() {}
@@ -57,17 +59,15 @@ private:
 };
 
 // Template function to check component type
-template<typename T>
-bool isComponentType(const Component* component) {
-    static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-    return typeid(*component) == typeid(T);
+template<ComponentType T>
+[[nodiscard]] bool isComponentType(const Component* component) {
+    return component != nullptr && typeid(*component) == typeid(T);
 }
 
 // Template function to cast component to derived type
-template<typename T>
-T* componentCast(Component* component) {
-    static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-    return (isComponentType<T>(component)) ? static_cast<T*>(component) : nullptr;
+template<ComponentType T>
+[[nodiscard]] T* componentCast(Component* component) {
+    return isComponentType<T>(component) ? static_cast<T*>(component) : nullptr;
 }
 
-} // namespace ohao 
+} // namespace ohao

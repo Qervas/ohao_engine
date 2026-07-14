@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include <string>
+#include <string_view>
 
 namespace ohao {
 
@@ -16,6 +17,10 @@ enum class ParticleType : uint32_t {
     FIRE          = 5,
     WATER_SPLASH  = 6   // upward cone of water droplets, blue-tinted
 };
+
+[[nodiscard]] constexpr uint32_t particleTypeIndex(ParticleType t) noexcept {
+    return static_cast<uint32_t>(t);
+}
 
 struct ParticleEmitterConfig {
     glm::vec3 position{0.0f};
@@ -40,9 +45,10 @@ public:
     ParticleSystem() = default;
     ~ParticleSystem();
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
                     uint32_t maxParticles = 65536);
     void cleanup();
+    [[nodiscard]] bool isInitialized() const noexcept { return m_device != VK_NULL_HANDLE; }
 
     // Emit particles with given configuration
     void emit(VkCommandBuffer cmd, const ParticleEmitterConfig& config, float time);
@@ -104,7 +110,7 @@ private:
 
     // Helper
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-    VkShaderModule loadShaderModule(const std::string& path);
+    [[nodiscard]] VkShaderModule loadShaderModule(std::string_view path);
 };
 
 } // namespace ohao
