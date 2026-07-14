@@ -142,6 +142,8 @@ public:
     void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
     void notifyCameraChanged();
     void resetAccumulation();
+    /// Offline/inverse: base sample index after accumulation reset (FD stability).
+    void setRenderSeed(uint32_t seed);
     [[nodiscard]] uint32_t getPathTracerFrameIndex() const;
 
     // Read back HDR buffers for OIDN denoising

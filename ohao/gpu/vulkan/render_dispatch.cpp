@@ -523,6 +523,9 @@ void VulkanRenderer::resize(uint32_t width, uint32_t height) {
         if (m_deferredRenderer) {
             m_deferredRenderer->onResize(width, height);
         }
+
+        // Resize RT path tracers (offline/realtime) to match framebuffer
+        forEachRTRenderer([&](IRTRendererProfile& r) { r.resize(width, height); });
     }
 }
 

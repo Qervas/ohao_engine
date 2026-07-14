@@ -180,6 +180,9 @@ public:
     // Reset accumulation — call when camera moves so the buffer restarts
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
     void resetAccumulation();
+    /// Base sample index after reset (inverse/FD stability). samplerInit uses m_sampleIndex.
+    void setRenderSeed(uint32_t seed) noexcept { m_renderSeed = seed; }
+    [[nodiscard]] uint32_t getRenderSeed() const noexcept { return m_renderSeed; }
 
     void destroy();
 
@@ -294,6 +297,7 @@ private:
     uint32_t m_textureArrayCount = 0;
     uint32_t m_normalVertexCount = 0;
     uint32_t m_sampleIndex = 0;
+    uint32_t m_renderSeed = 0;  // resetAccumulation() restores sample index to this
     uint32_t m_historyFrameCount = 0;
     bool m_viewChangedThisFrame = false;
 

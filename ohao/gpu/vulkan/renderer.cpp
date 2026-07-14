@@ -588,6 +588,10 @@ void VulkanRenderer::resetAccumulation() {
     }
 }
 
+void VulkanRenderer::setRenderSeed(uint32_t seed) {
+    forEachRTRenderer([&](IRTRendererProfile& r) { r.setRenderSeed(seed); });
+}
+
 void VulkanRenderer::notifyCameraChanged() {
     if (auto* renderer = getRTRenderer(m_renderMode)) {
         renderer->notifyViewChanged();
