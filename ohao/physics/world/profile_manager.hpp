@@ -2,6 +2,7 @@
 
 #include "simulation_profile.hpp"
 #include <string>
+#include <string_view>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -36,7 +37,7 @@ public:
      * @param bodies Current rigid bodies to snapshot
      * @return Pointer to created profile, or nullptr on failure
      */
-    SimulationProfile* createProfile(const std::string& name,
+    SimulationProfile* createProfile(std::string_view name,
                                      const std::vector<std::shared_ptr<dynamics::RigidBody>>& bodies);
 
     /**
@@ -44,7 +45,7 @@ public:
      * @param name Profile name to delete
      * @return true if profile was deleted, false if not found
      */
-    bool deleteProfile(const std::string& name);
+    [[nodiscard]] bool deleteProfile(std::string_view name);
 
     /**
      * Rename an existing profile
@@ -52,7 +53,7 @@ public:
      * @param newName New profile name
      * @return true if renamed successfully, false if profile not found or new name exists
      */
-    bool renameProfile(const std::string& oldName, const std::string& newName);
+    [[nodiscard]] bool renameProfile(std::string_view oldName, std::string_view newName);
 
     // === PROFILE SELECTION ===
 
@@ -60,7 +61,7 @@ public:
      * Set the active profile
      * @param name Profile name to make active
      */
-    void setActiveProfile(const std::string& name);
+    void setActiveProfile(std::string_view name);
 
     /**
      * Get the currently active profile
@@ -108,13 +109,13 @@ public:
     /**
      * Get a specific profile by name
      */
-    SimulationProfile* getProfile(const std::string& name);
-    const SimulationProfile* getProfile(const std::string& name) const;
+    [[nodiscard]] SimulationProfile* getProfile(std::string_view name);
+    [[nodiscard]] const SimulationProfile* getProfile(std::string_view name) const;
 
     /**
      * Check if a profile with given name exists
      */
-    bool profileExists(const std::string& name) const;
+    [[nodiscard]] bool profileExists(std::string_view name) const;
 
     /**
      * Generate a unique profile name (e.g., "Profile 1", "Profile 2")

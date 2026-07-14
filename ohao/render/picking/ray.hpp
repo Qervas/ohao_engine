@@ -1,6 +1,9 @@
 #pragma once
-#include <glm/glm.hpp>
+
 #include "render/culling.hpp"
+
+#include <glm/glm.hpp>
+#include <limits>
 
 namespace ohao {
 
@@ -12,13 +15,11 @@ struct Ray {
     Ray(const glm::vec3& orig, const glm::vec3& dir)
         : origin(orig), direction(glm::normalize(dir)) {}
 
-    // Get point along ray at distance t
-    glm::vec3 pointAt(float t) const {
+    [[nodiscard]] glm::vec3 pointAt(float t) const noexcept {
         return origin + direction * t;
     }
 };
 
-// Result of a picking operation
 struct PickResult {
     class Actor* actor = nullptr;
     float distance = std::numeric_limits<float>::max();
@@ -26,12 +27,11 @@ struct PickResult {
     glm::vec3 hitNormal{0.0f};
     bool hit = false;
 
-    // For sorting by distance
-    bool operator<(const PickResult& other) const {
+    [[nodiscard]] explicit operator bool() const noexcept { return hit; }
+
+    [[nodiscard]] bool operator<(const PickResult& other) const noexcept {
         return distance < other.distance;
     }
 };
-
-// AABB is now defined in renderer/culling.hpp
 
 } // namespace ohao

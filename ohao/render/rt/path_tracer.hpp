@@ -22,13 +22,18 @@
 //   pt.resize(newWidth, newHeight);
 
 #include "rt_acceleration_structure.hpp"
+#include "render/rt/rt_settings.hpp"
+#include "render/rt/rt_meta.hpp"
 #include "render/rt/sampler_types.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "core/concepts.hpp"
+#include "gpu/layout_meta.hpp"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <vector>
 #include <cstdint>
 #include <memory>
+#include <span>
 
 // Forward declaration kept unconditional (even when OHAO_NRD=OFF) so the
 // PathTracer class layout is identical across translation units. The
@@ -43,71 +48,14 @@ namespace ohao { class DlssRR; }             // DLSS Ray Reconstruction (Denoise
 
 namespace ohao {
 
-enum class RTRenderProfile {
-    Realtime,
-    Offline,
-};
-
-struct RTRenderSettings {
-    RTRenderProfile profile{RTRenderProfile::Offline};
-    uint32_t maxBounces{4};
-    bool preferAccumulation{true};
-    bool enableAuxiliaryAOVs{true};
-    bool allowExternalDenoiser{true};
-    bool enableInternalDenoise{false};
-    bool enableFireflyClamp{false};
-    float fireflyClampLuminance{10.0f};
-    SamplerType samplerType{SamplerType::Sobol};
-    DenoiseMode denoiseMode{DenoiseMode::None};
-    // Sub-plan 4.K: global anisotropic specular override (until KHR_materials_anisotropy
-    // is plumbed per-material). >0 enables D_GGX_Aniso with this strength on all hits.
-    float anisotropyStrength{0.0f};       // [0, 0.95] — 0 = isotropic (off)
-    float anisotropyRotation{0.0f};       // radians, rotates tangent frame around N
-    // Sub-plan 4.L: subsurface scattering override (skin). >0 blends
-    // wrapped-lighting SSS into the diffuse NEE term — kills the
-    // "plastic skin" failure on un-SSS-aware materials.
-    float subsurfaceStrength{0.0f};       // [0, 1] — 0 = lambertian (off)
-    // Realtime/DLSS: GENUINE per-frame sample count. The realtime raygen traces
-    // this many decorrelated paths per pixel in ONE render() dispatch and
-    // averages them, so DLSS/SVGF receive a clean N-spp image before denoising
-    // (quality that survives camera motion). Driven by the interactive '+'/'-'
-    // keys. 1 = one path per dispatch (legacy behavior). Packed into the high
-    // 16 bits of the params.w push constant (the block is already at the 256-byte
-    // device max, so no field can be appended).
-    uint32_t samplesPerFrame{1};          // [1, 64]
-};
+// RTRenderProfile / RTRenderSettings / kRealtimeRTSettings / kOfflineRTSettings
+// live in render/rt/rt_settings.hpp (shared with rt_meta traits).
 
 struct PathTracerShaderSet {
     const char* raygenSpv{"bin/shaders/rt_pt_raygen.rgen.spv"};
     const char* missSpv{"bin/shaders/rt_pt_miss.rmiss.spv"};
     const char* closestHitSpv{"bin/shaders/rt_pt_closesthit.rchit.spv"};
     const char* anyHitSpv{"bin/shaders/rt_pt_anyhit.rahit.spv"};
-};
-
-inline constexpr RTRenderSettings kRealtimeRTSettings{
-    RTRenderProfile::Realtime,
-    2,
-    true,
-    true,
-    false,
-    true,
-    true,
-    10.0f,
-    SamplerType::PCG,
-    DenoiseMode::None,    // realtime uses NRD/DLSS RR (Sub-plans 4-5), not OIDN
-};
-
-inline constexpr RTRenderSettings kOfflineRTSettings{
-    RTRenderProfile::Offline,
-    4,
-    true,
-    true,
-    true,
-    false,
-    false,
-    0.0f,
-    SamplerType::Sobol,
-    DenoiseMode::OIDN,    // offline default — matches Cycles
 };
 
 class PathTracer {
@@ -123,12 +71,12 @@ public:
     // family index + the exact instance/device-extension lists used at
     // vkCreateDevice / vkCreateInstance time. Defaults keep backward
     // compatibility for callers that don't use NRD.
-    bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              uint32_t width, uint32_t height,
-              VkInstance instance = VK_NULL_HANDLE,
-              uint32_t graphicsQueueFamilyIndex = 0,
-              const std::vector<const char*>& instanceExtensions = {},
-              const std::vector<const char*>& deviceExtensions = {});
+    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice,
+                            uint32_t width, uint32_t height,
+                            VkInstance instance = VK_NULL_HANDLE,
+                            uint32_t graphicsQueueFamilyIndex = 0,
+                            const std::vector<const char*>& instanceExtensions = {},
+                            const std::vector<const char*>& deviceExtensions = {});
     void setShaderSet(const PathTracerShaderSet& shaderSet) { m_shaderSet = shaderSet; }
 
     void render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
@@ -138,39 +86,36 @@ public:
 
     void resize(uint32_t width, uint32_t height);
 
-    VkImage getOutputImage() const { return m_outputImage; }
-    VkImage getAccumImage() const { return m_accumBuffer; }
-    VkImage getAlbedoAOV() const { return m_albedoAOV; }
-    VkImage getNormalAOV() const { return m_normalAOV; }
-    VkImageView getOutputView() const { return m_outputView; }
-    VkImageView getMotionVectorAOV() const { return m_motionVectorView; }
-    VkImage getMotionVectorImage() const { return m_motionVectorImage; }
-    VkImageView getDepthAOV()         const { return m_depthAOVView; }
-    VkImage     getDepthAOVImage()    const { return m_depthAOVImage; }
-    VkImageView getRoughnessAOV()     const { return m_roughnessAOVView; }
-    VkImage     getRoughnessAOVImage() const { return m_roughnessAOVImage; }
-    VkImageView getDiffuseRadianceAOV()      const { return m_diffuseRadianceView; }
-    VkImage     getDiffuseRadianceAOVImage() const { return m_diffuseRadianceImage; }
-    VkImageView getSpecularRadianceAOV()      const { return m_specularRadianceView; }
-    VkImage     getSpecularRadianceAOVImage() const { return m_specularRadianceImage; }
-    VkImageView getDiffAlbedoAOV()      const { return m_diffAlbedoView; }
-    VkImage     getDiffAlbedoAOVImage() const { return m_diffAlbedoImage; }
-    VkImageView getSpecColorAOV()       const { return m_specColorView; }
-    VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
-    VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
-    VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
-    // DLSS-RR specular hit-distance guide (R32F, binding 35).
-    VkImageView getSpecHitDistAOV()      const { return m_specHitDistView; }
-    VkImage     getSpecHitDistAOVImage() const { return m_specHitDistImage; }
-    VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
-    VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
-    VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
-    VkImage     getOutSpecRadianceAOVImage() const { return m_outSpecRadianceImage; }
-    VkImageView getNrdComposedAOV()      const { return m_nrdComposedView; }
-    VkImage     getNrdComposedAOVImage() const { return m_nrdComposedImage; }
+    [[nodiscard]] VkImage getOutputImage() const { return m_outputImage; }
+    [[nodiscard]] VkImage getAccumImage() const { return m_accumBuffer; }
+    [[nodiscard]] VkImage getAlbedoAOV() const { return m_albedoAOV; }
+    [[nodiscard]] VkImage getNormalAOV() const { return m_normalAOV; }
+    [[nodiscard]] VkImageView getOutputView() const { return m_outputView; }
+    [[nodiscard]] VkImageView getMotionVectorAOV() const { return m_motionVectorView; }
+    [[nodiscard]] VkImage getMotionVectorImage() const { return m_motionVectorImage; }
+    [[nodiscard]] VkImageView getDepthAOV()         const { return m_depthAOVView; }
+    [[nodiscard]] VkImage     getDepthAOVImage()    const { return m_depthAOVImage; }
+    [[nodiscard]] VkImageView getRoughnessAOV()     const { return m_roughnessAOVView; }
+    [[nodiscard]] VkImage     getRoughnessAOVImage() const { return m_roughnessAOVImage; }
+    [[nodiscard]] VkImageView getDiffuseRadianceAOV()      const { return m_diffuseRadianceView; }
+    [[nodiscard]] VkImage     getDiffuseRadianceAOVImage() const { return m_diffuseRadianceImage; }
+    [[nodiscard]] VkImageView getSpecularRadianceAOV()      const { return m_specularRadianceView; }
+    [[nodiscard]] VkImage     getSpecularRadianceAOVImage() const { return m_specularRadianceImage; }
+    [[nodiscard]] VkImageView getDiffAlbedoAOV()      const { return m_diffAlbedoView; }
+    [[nodiscard]] VkImage     getDiffAlbedoAOVImage() const { return m_diffAlbedoImage; }
+    [[nodiscard]] VkImageView getSpecColorAOV()       const { return m_specColorView; }
+    [[nodiscard]] VkImage     getSpecColorAOVImage()  const { return m_specColorImage; }
+    [[nodiscard]] VkImageView getNormalRoughnessAOV()      const { return m_normalRoughnessView; }
+    [[nodiscard]] VkImage     getNormalRoughnessAOVImage() const { return m_normalRoughnessImage; }
+    [[nodiscard]] VkImageView getOutDiffRadianceAOV()      const { return m_outDiffRadianceView; }
+    [[nodiscard]] VkImage     getOutDiffRadianceAOVImage() const { return m_outDiffRadianceImage; }
+    [[nodiscard]] VkImageView getOutSpecRadianceAOV()      const { return m_outSpecRadianceView; }
+    [[nodiscard]] VkImage     getOutSpecRadianceAOVImage() const { return m_outSpecRadianceImage; }
+    [[nodiscard]] VkImageView getNrdComposedAOV()      const { return m_nrdComposedView; }
+    [[nodiscard]] VkImage     getNrdComposedAOVImage() const { return m_nrdComposedImage; }
     // Sub-plan 4.E T1: tonemapped NRD output (RGBA8 UNORM, binding 30).
-    VkImageView getNrdTonemappedAOV()      const { return m_nrdTonemappedView; }
-    VkImage     getNrdTonemappedAOVImage() const { return m_nrdTonemappedImage; }
+    [[nodiscard]] VkImageView getNrdTonemappedAOV()      const { return m_nrdTonemappedView; }
+    [[nodiscard]] VkImage     getNrdTonemappedAOVImage() const { return m_nrdTonemappedImage; }
 
     // Set per-instance material albedo colors (must match TLAS instance order)
     void setMaterialAlbedos(const std::vector<glm::vec3>& albedos);
@@ -195,8 +140,14 @@ public:
         m_bindlessSamplers = samplers;
         m_bindlessTextureCount = static_cast<uint32_t>(views.size());
     }
-    std::vector<VkImageView> getBindlessImageViews() const { return m_bindlessImageViews; }
-    std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
+    void setBindlessTextures(std::span<const VkImageView> views,
+                             std::span<const VkSampler> samplers) {
+        m_bindlessImageViews.assign(views.begin(), views.end());
+        m_bindlessSamplers.assign(samplers.begin(), samplers.end());
+        m_bindlessTextureCount = static_cast<uint32_t>(views.size());
+    }
+    [[nodiscard]] std::vector<VkImageView> getBindlessImageViews() const { return m_bindlessImageViews; }
+    [[nodiscard]] std::vector<VkSampler> getBindlessSamplers() const { return m_bindlessSamplers; }
 
     // Shader contract: envWidth == 0 means "no env map loaded" — the shader
     // must skip env importance sampling in this case. The renderer provides
@@ -219,9 +170,9 @@ public:
         m_envMapView    = view;
         m_envMapSampler = sampler;
     }
-    VkImageView getEnvMapView()    const { return m_envMapView; }
-    VkSampler   getEnvMapSampler() const { return m_envMapSampler; }
-    float       getEnvCDFIntegral() const { return m_envCDFIntegral; }
+    [[nodiscard]] VkImageView getEnvMapView()    const { return m_envMapView; }
+    [[nodiscard]] VkSampler   getEnvMapSampler() const { return m_envMapSampler; }
+    [[nodiscard]] float       getEnvCDFIntegral() const { return m_envCDFIntegral; }
 
     // Reset accumulation — call when camera moves so the buffer restarts
     void notifyViewChanged() { m_viewChangedThisFrame = true; }
@@ -230,41 +181,38 @@ public:
     void destroy();
 
     // Config
-    void setMaxBounces(uint32_t bounces) { m_maxBounces = bounces; }
-    // Out-of-line: switching to/from DLSSRR (or a different OHAO_DLSS_QUALITY)
-    // changes the internal RENDER resolution, which requires reallocating the
-    // render-target images. Done here (between frames, device-idle safe) rather
-    // than mid-command-buffer.
-    void setRenderSettings(const RTRenderSettings& settings);
-    const RTRenderSettings& getRenderSettings() const { return m_renderSettings; }
-    uint32_t getFrameIndex() const { return m_historyFrameCount; }
+    void setMaxBounces(uint32_t bounces) noexcept { m_maxBounces = bounces; }
+
+    /// Apply settings and enforce denoise-mode policy (AOVs / external denoise).
+    void setRenderSettings(const RTRenderSettings& settings) {
+        m_renderSettings = applyDenoisePolicy(settings);
+        m_renderSettings.samplesPerFrame = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
+        m_maxBounces = m_renderSettings.maxBounces;
+    }
+
+    template<RTRenderProfile Profile, DenoiseMode Mode>
+    void setFeatureSettings() {
+        setRenderSettings(makeFeatureSettings<Profile, Mode>());
+    }
+
+    [[nodiscard]] const RTRenderSettings& getRenderSettings() const noexcept { return m_renderSettings; }
+    [[nodiscard]] DenoiseMode getDenoiseMode() const noexcept { return m_renderSettings.denoiseMode; }
+    [[nodiscard]] uint32_t getFrameIndex() const noexcept { return m_historyFrameCount; }
 
 private:
-    bool createImages();
-    bool createMaterialBuffer();
-    bool createDescriptorResources();
-    bool createRTPipeline();
-    bool createShaderBindingTable();
-    bool loadFunctionPointers();
+    [[nodiscard]] bool createImages();
+    [[nodiscard]] bool createMaterialBuffer();
+    [[nodiscard]] bool createDescriptorResources();
+    [[nodiscard]] bool createRTPipeline();
+    [[nodiscard]] bool createShaderBindingTable();
+    [[nodiscard]] bool loadFunctionPointers();
 
     void destroyImages();
 
-    // Compute the internal RENDER resolution (m_width/m_height) from the OUTPUT
-    // resolution (m_outW/m_outH). In DLSSRR mode the render res is scaled down by
-    // the OHAO_DLSS_QUALITY preset (Performance ⇒ 0.5 linear ⇒ ~4x fewer traced
-    // pixels); every other mode renders at output res (scale 1.0). Aligns to even.
-    void computeRenderResolution();
-
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-    // m_width/m_height are the INTERNAL RENDER resolution (what raygen traces and
-    // every AOV/reservoir is sized to). m_outW/m_outH are the OUTPUT/display
-    // resolution — only m_outputImage + the DLSS COLOR_OUT are sized to it.
     uint32_t m_width = 0;
     uint32_t m_height = 0;
-    uint32_t m_outW = 0;
-    uint32_t m_outH = 0;
-    float    m_dlssRenderScale = 1.0f;   // cached scale used for the current render res
 
     // Sub-plan 4.C: replaces 4.B scoped probe.
     // Member is unconditional (not guarded by OHAO_NRD_ENABLED) so the class
@@ -398,13 +346,6 @@ private:
     VkDeviceMemory m_normalRoughnessMemory = VK_NULL_HANDLE;
     VkImageView    m_normalRoughnessView = VK_NULL_HANDLE;
 
-    // DLSS-RR: dedicated specular hit-distance guide (R32F, world-space ray length,
-    // binding 35). Mirrors specularRadiance.a into .x — DLSS reads spec hit-dist from
-    // a dedicated image's .x channel, which it needs to reproject glossy reflections.
-    VkImage        m_specHitDistImage  = VK_NULL_HANDLE;
-    VkDeviceMemory m_specHitDistMemory = VK_NULL_HANDLE;
-    VkImageView    m_specHitDistView   = VK_NULL_HANDLE;
-
     // Feature 4.C: NRD denoised diffuse output (RGBA32F)
     VkImage        m_outDiffRadianceImage  = VK_NULL_HANDLE;
     VkDeviceMemory m_outDiffRadianceMemory = VK_NULL_HANDLE;
@@ -474,15 +415,6 @@ private:
     bool m_shadingHistoryInitialized[2] = {false, false};
     uint32_t m_shadingHistoryWriteIndex = 0;
 
-    // ReSTIR GI reservoir ping-pong (Phase 1). 3 RGBA32F planes per pixel:
-    //   plane0 xyz=x_s w=M | plane1 xyz=n_s w=W | plane2 xyz=Lo w=valid.
-    // [plane][pingpong]. Bindings 29-31 (prev/read), 32-34 (curr/write).
-    VkImage        m_giReservoirImages[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
-    VkDeviceMemory m_giReservoirMemory[3][2]   = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
-    VkImageView    m_giReservoirViews[3][2]    = {{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE},{VK_NULL_HANDLE, VK_NULL_HANDLE}};
-    bool           m_giReservoirInitialized[2] = {false, false};
-    uint32_t       m_giReservoirWriteIndex     = 0;
-
     // Material buffer (per-instance albedo, vec4 SSBO)
     VkBuffer m_materialBuffer = VK_NULL_HANDLE;
     VkDeviceMemory m_materialMemory = VK_NULL_HANDLE;
@@ -514,6 +446,7 @@ private:
         glm::vec4 tuning;               // x=fireflyClamp, y=envCDFHeight, z=envIntegral, w=unused
         glm::vec4 jitter;               // 4.F T4: xy=Halton(2,3) pixel offset (0 outside NRD mode), zw=pad
     };  // total = 256 bytes
+    OHAO_ASSERT_GPU_LAYOUT(PTPushConstants, layout::kPTPushConstantsBytes);
 
     glm::mat4 m_prevViewProj{1.0f};  // stored from last frame
 

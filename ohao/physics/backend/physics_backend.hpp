@@ -22,10 +22,14 @@
  *   - Character controller (CharacterVirtual-style, kinematic)
  */
 
+#include "core/concepts.hpp"
+
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
+#include <span>
 #include <memory>
 #include <cstdint>
 #include <functional>
@@ -50,6 +54,14 @@ constexpr ConstraintHandle INVALID_CONSTRAINT = UINT32_MAX;
 
 using CharacterHandle = uint32_t;
 constexpr CharacterHandle INVALID_CHARACTER = UINT32_MAX;
+
+[[nodiscard]] constexpr bool isValidBody(BodyHandle h) noexcept { return h != INVALID_BODY; }
+[[nodiscard]] constexpr bool isValidConstraint(ConstraintHandle h) noexcept {
+    return h != INVALID_CONSTRAINT;
+}
+[[nodiscard]] constexpr bool isValidCharacter(CharacterHandle h) noexcept {
+    return h != INVALID_CHARACTER;
+}
 
 // ============================================================================
 // Collision Layers (16-layer system)
@@ -81,7 +93,7 @@ namespace CollisionLayer {
 // ============================================================================
 
 struct ShapeInfo {
-    enum Type {
+    enum class Type {
         BOX,
         SPHERE,
         CAPSULE,
@@ -92,7 +104,7 @@ struct ShapeInfo {
         CONVEX_HULL
     };
 
-    Type type = BOX;
+    Type type = Type::BOX;
 
     // BOX
     glm::vec3 halfExtents{0.5f};
@@ -120,6 +132,29 @@ struct ShapeInfo {
     glm::vec3 heightfieldScale{1.0f, 1.0f, 1.0f}; // x, y(vertical), z
     float heightfieldMinHeight = 0.0f;
     float heightfieldMaxHeight = 1.0f;
+
+    // Span convenience (sets raw pointers; caller keeps storage alive)
+    void setMesh(std::span<const glm::vec3> vertices, std::span<const uint32_t> indices) noexcept {
+        meshVertices = vertices.data();
+        meshVertexCount = static_cast<uint32_t>(vertices.size());
+        meshIndices = indices.data();
+        meshIndexCount = static_cast<uint32_t>(indices.size());
+        type = Type::MESH;
+    }
+
+    void setHeightfield(std::span<const float> heights, uint32_t sizeX, uint32_t sizeZ) noexcept {
+        heightfieldData = heights.data();
+        heightfieldSizeX = sizeX;
+        heightfieldSizeZ = sizeZ;
+        type = Type::HEIGHTFIELD;
+    }
+
+    [[nodiscard]] std::span<const glm::vec3> meshVertexSpan() const noexcept {
+        return {meshVertices, meshVertexCount};
+    }
+    [[nodiscard]] std::span<const uint32_t> meshIndexSpan() const noexcept {
+        return {meshIndices, meshIndexCount};
+    }
 };
 
 // ============================================================================
@@ -166,6 +201,9 @@ struct RaycastHit {
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
     float fraction = 1.0f; // 0..1 along the ray
     uint16_t layer = 0;
+
+    [[nodiscard]] bool hit() const noexcept { return isValidBody(bodyHandle); }
+    [[nodiscard]] explicit operator bool() const noexcept { return hit(); }
 };
 
 struct ShapeCastResult {
@@ -180,8 +218,8 @@ struct ShapeCastResult {
 // ============================================================================
 
 struct ContactEvent {
-    enum Type { BEGIN, PERSIST, END };
-    Type type = BEGIN;
+    enum class Type { BEGIN, PERSIST, END };
+    Type type = Type::BEGIN;
     BodyHandle body1 = INVALID_BODY;
     BodyHandle body2 = INVALID_BODY;
     glm::vec3 contactPoint{0.0f};
@@ -317,17 +355,17 @@ public:
     virtual ~IPhysicsBackend() = default;
 
     // === LIFECYCLE ===
-    virtual bool initialize(const PhysicsWorldConfig& config) = 0;
+    [[nodiscard]] virtual bool initialize(const PhysicsWorldConfig& config) = 0;
     virtual void shutdown() = 0;
-    virtual bool isInitialized() const = 0;
+    [[nodiscard]] virtual bool isInitialized() const = 0;
 
     // === SIMULATION ===
     virtual void step(float deltaTime) = 0;
 
     // === BODY MANAGEMENT ===
-    virtual BodyHandle createBody(const BodyCreationInfo& info) = 0;
+    [[nodiscard]] virtual BodyHandle createBody(const BodyCreationInfo& info) = 0;
     virtual void destroyBody(BodyHandle handle) = 0;
-    virtual bool isValidBody(BodyHandle handle) const = 0;
+    [[nodiscard]] virtual bool isValidBody(BodyHandle handle) const = 0;
 
     // === BODY TRANSFORM ===
     virtual void setPosition(BodyHandle h, const glm::vec3& pos) = 0;
@@ -358,7 +396,7 @@ public:
 
     // === SLEEP ===
     virtual void setAwake(BodyHandle h, bool awake) = 0;
-    virtual bool isAwake(BodyHandle h) const = 0;
+    [[nodiscard]] virtual bool isAwake(BodyHandle h) const = 0;
 
     // === SHAPE ===
     virtual void setShape(BodyHandle h, const ShapeInfo& shape) = 0;
@@ -376,30 +414,30 @@ public:
     virtual void setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide) = 0;
 
     // === RAYCASTING & QUERIES ===
-    virtual bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+    [[nodiscard]] virtual bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                          RaycastHit& outHit, uint16_t layerMask = CollisionLayer::ALL_MASK) const = 0;
-    virtual std::vector<RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
+    [[nodiscard]] virtual std::vector<RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
                                                 float maxDistance, uint16_t layerMask = CollisionLayer::ALL_MASK) const = 0;
-    virtual bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
+    [[nodiscard]] virtual bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
                             float maxDistance, ShapeCastResult& outHit,
                             uint16_t layerMask = CollisionLayer::ALL_MASK) const = 0;
-    virtual bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
+    [[nodiscard]] virtual bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
                          const glm::quat& rotation, float maxDistance, ShapeCastResult& outHit,
                          uint16_t layerMask = CollisionLayer::ALL_MASK) const = 0;
-    virtual std::vector<BodyHandle> overlapSphere(const glm::vec3& center, float radius,
+    [[nodiscard]] virtual std::vector<BodyHandle> overlapSphere(const glm::vec3& center, float radius,
                                                    uint16_t layerMask = CollisionLayer::ALL_MASK) const = 0;
-    virtual std::vector<BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
+    [[nodiscard]] virtual std::vector<BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
                                                 const glm::quat& rotation,
                                                 uint16_t layerMask = CollisionLayer::ALL_MASK) const = 0;
 
     // === CONTACT CALLBACKS ===
     virtual void setContactListener(IContactListener* listener) = 0;
-    virtual std::vector<ContactEvent> getContactEvents() = 0;
+    [[nodiscard]] virtual std::vector<ContactEvent> getContactEvents() = 0;
 
     // === CONSTRAINTS ===
-    virtual ConstraintHandle createConstraint(const ConstraintSettings& settings) = 0;
+    [[nodiscard]] virtual ConstraintHandle createConstraint(const ConstraintSettings& settings) = 0;
     virtual void destroyConstraint(ConstraintHandle handle) = 0;
-    virtual bool isValidConstraint(ConstraintHandle handle) const = 0;
+    [[nodiscard]] virtual bool isValidConstraint(ConstraintHandle handle) const = 0;
     virtual void setConstraintEnabled(ConstraintHandle handle, bool enabled) = 0;
     virtual void setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) = 0;
     virtual void setConstraintLimits(ConstraintHandle handle, float min, float max) = 0;
@@ -409,9 +447,9 @@ public:
     virtual std::vector<ConstraintHandle> getAndClearBrokenConstraints() = 0;
 
     // === CHARACTER CONTROLLER ===
-    virtual CharacterHandle createCharacter(const CharacterCreationInfo& info) = 0;
+    [[nodiscard]] virtual CharacterHandle createCharacter(const CharacterCreationInfo& info) = 0;
     virtual void destroyCharacter(CharacterHandle handle) = 0;
-    virtual bool isValidCharacter(CharacterHandle handle) const = 0;
+    [[nodiscard]] virtual bool isValidCharacter(CharacterHandle handle) const = 0;
     virtual CharacterState getCharacterState(CharacterHandle handle) const = 0;
     virtual void setCharacterPosition(CharacterHandle handle, const glm::vec3& pos) = 0;
     virtual void setCharacterRotation(CharacterHandle handle, const glm::quat& rot) = 0;
@@ -431,15 +469,15 @@ public:
 
 class NullPhysicsBackend : public IPhysicsBackend {
 public:
-    bool initialize(const PhysicsWorldConfig&) override { m_initialized = true; return true; }
+    [[nodiscard]] bool initialize(const PhysicsWorldConfig&) override { m_initialized = true; return true; }
     void shutdown() override { m_initialized = false; }
-    bool isInitialized() const override { return m_initialized; }
+    [[nodiscard]] bool isInitialized() const override { return m_initialized; }
 
     void step(float) override {}
 
-    BodyHandle createBody(const BodyCreationInfo&) override { return m_nextHandle++; }
+    [[nodiscard]] BodyHandle createBody(const BodyCreationInfo&) override { return m_nextHandle++; }
     void destroyBody(BodyHandle) override {}
-    bool isValidBody(BodyHandle h) const override { return h < m_nextHandle; }
+    [[nodiscard]] bool isValidBody(BodyHandle h) const override { return h < m_nextHandle; }
 
     void setPosition(BodyHandle, const glm::vec3&) override {}
     glm::vec3 getPosition(BodyHandle) const override { return glm::vec3(0.0f); }
@@ -465,7 +503,7 @@ public:
     void setGravityScale(BodyHandle, float) override {}
 
     void setAwake(BodyHandle, bool) override {}
-    bool isAwake(BodyHandle) const override { return false; }
+    [[nodiscard]] bool isAwake(BodyHandle) const override { return false; }
 
     void setShape(BodyHandle, const ShapeInfo&) override {}
 
@@ -481,21 +519,21 @@ public:
     void setLayerCollision(uint16_t, uint16_t, bool) override {}
 
     // Raycasting
-    bool castRay(const glm::vec3&, const glm::vec3&, float, RaycastHit&, uint16_t) const override { return false; }
-    std::vector<RaycastHit> castRayAll(const glm::vec3&, const glm::vec3&, float, uint16_t) const override { return {}; }
-    bool castSphere(const glm::vec3&, const glm::vec3&, float, float, ShapeCastResult&, uint16_t) const override { return false; }
-    bool castBox(const glm::vec3&, const glm::vec3&, const glm::vec3&, const glm::quat&, float, ShapeCastResult&, uint16_t) const override { return false; }
-    std::vector<BodyHandle> overlapSphere(const glm::vec3&, float, uint16_t) const override { return {}; }
-    std::vector<BodyHandle> overlapBox(const glm::vec3&, const glm::vec3&, const glm::quat&, uint16_t) const override { return {}; }
+    [[nodiscard]] bool castRay(const glm::vec3&, const glm::vec3&, float, RaycastHit&, uint16_t) const override { return false; }
+    [[nodiscard]] std::vector<RaycastHit> castRayAll(const glm::vec3&, const glm::vec3&, float, uint16_t) const override { return {}; }
+    [[nodiscard]] bool castSphere(const glm::vec3&, const glm::vec3&, float, float, ShapeCastResult&, uint16_t) const override { return false; }
+    [[nodiscard]] bool castBox(const glm::vec3&, const glm::vec3&, const glm::vec3&, const glm::quat&, float, ShapeCastResult&, uint16_t) const override { return false; }
+    [[nodiscard]] std::vector<BodyHandle> overlapSphere(const glm::vec3&, float, uint16_t) const override { return {}; }
+    [[nodiscard]] std::vector<BodyHandle> overlapBox(const glm::vec3&, const glm::vec3&, const glm::quat&, uint16_t) const override { return {}; }
 
     // Contacts
     void setContactListener(IContactListener*) override {}
-    std::vector<ContactEvent> getContactEvents() override { return {}; }
+    [[nodiscard]] std::vector<ContactEvent> getContactEvents() override { return {}; }
 
     // Constraints
-    ConstraintHandle createConstraint(const ConstraintSettings&) override { return INVALID_CONSTRAINT; }
+    [[nodiscard]] ConstraintHandle createConstraint(const ConstraintSettings&) override { return INVALID_CONSTRAINT; }
     void destroyConstraint(ConstraintHandle) override {}
-    bool isValidConstraint(ConstraintHandle) const override { return false; }
+    [[nodiscard]] bool isValidConstraint(ConstraintHandle) const override { return false; }
     void setConstraintEnabled(ConstraintHandle, bool) override {}
     void setConstraintMotorState(ConstraintHandle, bool, float, float) override {}
     void setConstraintLimits(ConstraintHandle, float, float) override {}
@@ -504,9 +542,9 @@ public:
     std::vector<ConstraintHandle> getAndClearBrokenConstraints() override { return {}; }
 
     // Character controller
-    CharacterHandle createCharacter(const CharacterCreationInfo&) override { return INVALID_CHARACTER; }
+    [[nodiscard]] CharacterHandle createCharacter(const CharacterCreationInfo&) override { return INVALID_CHARACTER; }
     void destroyCharacter(CharacterHandle) override {}
-    bool isValidCharacter(CharacterHandle) const override { return false; }
+    [[nodiscard]] bool isValidCharacter(CharacterHandle) const override { return false; }
     CharacterState getCharacterState(CharacterHandle) const override { return {}; }
     void setCharacterPosition(CharacterHandle, const glm::vec3&) override {}
     void setCharacterRotation(CharacterHandle, const glm::quat&) override {}
@@ -526,7 +564,7 @@ private:
  * Factory function - creates the best available backend.
  * Tries Jolt first, falls back to null if unavailable.
  */
-std::unique_ptr<IPhysicsBackend> createPhysicsBackend(const std::string& preferred = "jolt");
+[[nodiscard]] std::unique_ptr<IPhysicsBackend> createPhysicsBackend(std::string_view preferred = "jolt");
 
 } // namespace backend
 } // namespace physics

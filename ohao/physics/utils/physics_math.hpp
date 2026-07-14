@@ -33,24 +33,25 @@ namespace constants {
 }
 
 // === VECTOR MATH ===
-inline float lengthSquared(const glm::vec3& v) {
+[[nodiscard]] inline float lengthSquared(const glm::vec3& v) noexcept {
     return glm::dot(v, v);
 }
 
-inline float length(const glm::vec3& v) {
+[[nodiscard]] inline float length(const glm::vec3& v) noexcept {
     return glm::sqrt(lengthSquared(v));
 }
 
-inline glm::vec3 safeNormalize(const glm::vec3& v, const glm::vec3& fallback = glm::vec3(0, 1, 0)) {
-    float lenSq = lengthSquared(v);
+[[nodiscard]] inline glm::vec3 safeNormalize(const glm::vec3& v,
+                                            const glm::vec3& fallback = glm::vec3(0, 1, 0)) noexcept {
+    const float lenSq = lengthSquared(v);
     if (lenSq > constants::EPSILON * constants::EPSILON) {
         return v / glm::sqrt(lenSq);
     }
     return fallback;
 }
 
-inline glm::vec3 clampLength(const glm::vec3& v, float maxLength) {
-    float lenSq = lengthSquared(v);
+[[nodiscard]] inline glm::vec3 clampLength(const glm::vec3& v, float maxLength) noexcept {
+    const float lenSq = lengthSquared(v);
     if (lenSq > maxLength * maxLength) {
         return v * (maxLength / glm::sqrt(lenSq));
     }

@@ -9,9 +9,12 @@ target_include_directories(ohao_physics PUBLIC
     ${Vulkan_INCLUDE_DIRS}
 )
 
+target_compile_features(ohao_physics PUBLIC cxx_std_20)
+
 target_compile_definitions(ohao_physics PUBLIC GLM_ENABLE_EXPERIMENTAL)
 
 target_link_libraries(ohao_physics PUBLIC
+    ohao_core
     glm
     nlohmann_json::nlohmann_json
 )

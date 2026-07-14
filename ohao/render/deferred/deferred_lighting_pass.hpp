@@ -11,11 +11,11 @@ public:
     DeferredLightingPass() = default;
     ~DeferredLightingPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "DeferredLightingPass"; }
+    [[nodiscard]] const char* getName() const override { return "DeferredLightingPass"; }
 
     // Configuration
     void setGBufferPass(GBufferPass* gbufferPass);
@@ -33,9 +33,9 @@ public:
     void updateDescriptorSets();
 
     // Get output
-    VkImageView getOutputView() const { return m_hdrOutput.view; }
-    VkImage getOutputImage() const { return m_hdrOutput.image; }
-    VkRenderPass getRenderPass() const { return m_renderPass; }
+    [[nodiscard]] VkImageView getOutputView() const { return m_hdrOutput.view; }
+    [[nodiscard]] VkImage getOutputImage() const { return m_hdrOutput.image; }
+    [[nodiscard]] VkRenderPass getRenderPass() const { return m_renderPass; }
 
     // Light management
     void setLightBuffer(VkBuffer lightBuffer) { m_lightBuffer = lightBuffer; }
@@ -55,11 +55,11 @@ public:
     void setFrostCover(float f) { m_params.frostCover = glm::clamp(f, 0.0f, 1.0f); }
 
 private:
-    bool createRenderPass();
-    bool createFramebuffer();
-    bool createPipeline();
-    bool createOutputImage();
-    bool createDescriptors();
+    [[nodiscard]] bool createRenderPass();
+    [[nodiscard]] bool createFramebuffer();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createOutputImage();
+    [[nodiscard]] bool createDescriptors();
 
     // G-Buffer reference
     GBufferPass* m_gbufferPass{nullptr};
@@ -109,7 +109,7 @@ private:
     VkBuffer m_dummyBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_dummyBufferMemory{VK_NULL_HANDLE};
     bool m_dummyImageTransitioned{false};
-    bool createDummyResources();
+    [[nodiscard]] bool createDummyResources();
     void destroyDummyResources();
 
     // Dimensions

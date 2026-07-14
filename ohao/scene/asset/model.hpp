@@ -1,8 +1,12 @@
 #pragma once
+#include "core/concepts.hpp"
 #include <cstdint>
+#include <cstddef>
+#include <span>
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <memory>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -12,19 +16,23 @@ namespace ohao{
 
 struct Vertex{
 
-    glm::vec3 position;
-    glm::vec3 color;
-    glm::vec3 normal;
-    glm::vec2 texCoord;
+    glm::vec3 position{};
+    glm::vec3 color{};
+    glm::vec3 normal{};
+    glm::vec2 texCoord{};
     glm::vec2 texCoord1{0.0f, 0.0f};    // Second UV set (GLTF texCoord: 1)
     glm::vec4 tangent{0.0f, 0.0f, 0.0f, 1.0f};       // xyz = tangent direction, w = handedness (+1/-1)
     glm::ivec4 boneIndices{0, 0, 0, 0};  // Up to 4 bone influences per vertex
     glm::vec4 boneWeights{1.0f, 0.0f, 0.0f, 0.0f};   // Corresponding weights (sum to 1.0)
 
-    static std::vector<VkVertexInputBindingDescription> getBindingDescriptions();
-    static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions();
+    [[nodiscard]] static std::vector<VkVertexInputBindingDescription> getBindingDescriptions();
+    [[nodiscard]] static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions();
 
 };
+static_assert(GpuPod<Vertex>, "Vertex must be GPU-uploadable POD");
+static_assert(offsetof(Vertex, position) == 0, "Vertex.position must be at offset 0");
+static_assert(offsetof(Vertex, color) == sizeof(glm::vec3), "Vertex.color offset");
+static_assert(offsetof(Vertex, normal) == 2 * sizeof(glm::vec3), "Vertex.normal offset");
 
 struct MaterialData{
     std::string name;
@@ -108,7 +116,7 @@ public:
 
     // Select appropriate LOD level based on distance to camera
     // Returns -1 for base mesh, or LOD level index
-    int selectLOD(float distanceToCamera) const {
+    [[nodiscard]] int selectLOD(float distanceToCamera) const {
         for (int i = 0; i < static_cast<int>(lodLevels.size()); i++) {
             if (lodLevels[i].maxDistance <= 0.0f || distanceToCamera <= lodLevels[i].maxDistance) {
                 return i;
@@ -117,20 +125,27 @@ public:
         return lodLevels.empty() ? -1 : static_cast<int>(lodLevels.size()) - 1;
     }
 
-    bool loadFromOBJ(const std::string& filename);
-    bool loadFromGLTF(const std::string& filename);
-    bool loadFromFBX(const std::string& filename);  // Assimp-based (FBX, Collada, etc.)
-    bool loadMTL(const std::string& filename);
+    [[nodiscard]] bool loadFromOBJ(std::string_view filename);
+    [[nodiscard]] bool loadFromGLTF(std::string_view filename);
+    [[nodiscard]] bool loadFromFBX(std::string_view filename);  // Assimp-based (FBX, Collada, etc.)
+    [[nodiscard]] bool loadMTL(std::string_view filename);
     void setupDefaultMaterial();
 
-    bool hasLOD() const { return !lodLevels.empty(); }
+    [[nodiscard]] bool hasLOD() const noexcept { return !lodLevels.empty(); }
+    [[nodiscard]] bool empty() const noexcept { return vertices.empty() || indices.empty(); }
+    [[nodiscard]] std::size_t triangleCount() const noexcept { return indices.size() / 3; }
 
-    const std::string& getSourcePath() const { return sourcePath; }
-    void setSourcePath(const std::string& path) { sourcePath = path; }
+    [[nodiscard]] std::span<const Vertex> vertexSpan() const noexcept { return vertices; }
+    [[nodiscard]] std::span<Vertex> vertexSpan() noexcept { return vertices; }
+    [[nodiscard]] std::span<const std::uint32_t> indexSpan() const noexcept { return indices; }
+    [[nodiscard]] std::span<std::uint32_t> indexSpan() noexcept { return indices; }
+
+    [[nodiscard]] const std::string& getSourcePath() const noexcept { return sourcePath; }
+    void setSourcePath(std::string_view path) { sourcePath = std::string(path); }
 
 private:
     void assignMaterialColors();
-    uint32_t getOrCreateVertex(const std::string& vertexStr,
+    [[nodiscard]] uint32_t getOrCreateVertex(std::string_view vertexStr,
                               const std::vector<glm::vec3>& positions,
                               const std::vector<glm::vec3>& normals,
                               const std::vector<glm::vec2>& texCoords);

@@ -1,49 +1,45 @@
 #pragma once
 
 // Env CDF — CPU-side 2D importance-sampling CDF builder for HDR environment maps.
-//
-// Given equirectangular float pixels, builds:
-//   - marginalCDF[y]      cumulative distribution over rows, weighted by sin(theta)
-//   - conditionalCDF[y*W+x]  per-row cumulative distribution over columns
-//
-// The sin(theta) weight accounts for the sphere's Jacobian: polar rows represent
-// less solid angle than equatorial rows. integral() returns the total luminance
-// integral (pre-normalization), used on the GPU to normalize sample PDFs.
-//
-// Usage:
-//   EnvCDF cdf;
-//   cdf.build(hdrPixels, width, height);
-//   upload cdf.marginalCDF(), cdf.conditionalCDF() to GPU storage buffers
 
+#include "core/concepts.hpp"
+
+#include <span>
 #include <vector>
 
 namespace ohao {
 
-// Builds 2D importance-sampling CDFs for an HDR environment map in equirectangular layout.
-//
-// After build(), call marginalCDF() / conditionalCDF() to access the upload-ready data:
-//   marginalCDF[y] in [0,1]      — CDF over rows (y index), weighted by sin(theta)
-//   conditionalCDF[y*W + x] in [0,1]  — CDF over columns within row y
-//
-// integral() returns the total luminance integral (used for PDF normalization on GPU).
 class EnvCDF {
 public:
-    // pixels: RGBA float, row-major, width*height*4 floats. Alpha ignored.
-    void build(const float* pixels, int width, int height);
+    /// pixels: RGBA float, row-major. Expects size >= width * height * 4.
+    void build(std::span<const float> pixels, int width, int height);
 
-    int width() const { return m_width; }
-    int height() const { return m_height; }
-    float integral() const { return m_integral; }
+    void build(const float* pixels, int width, int height) {
+        build(std::span<const float>(pixels,
+                                     static_cast<size_t>(width) * static_cast<size_t>(height) * 4u),
+              width, height);
+    }
 
-    const std::vector<float>& marginalCDF() const { return m_marginalCDF; }
-    const std::vector<float>& conditionalCDF() const { return m_conditionalCDF; }
+    [[nodiscard]] int width() const noexcept { return m_width; }
+    [[nodiscard]] int height() const noexcept { return m_height; }
+    [[nodiscard]] float integral() const noexcept { return m_integral; }
+    [[nodiscard]] bool valid() const noexcept {
+        return m_width > 0 && m_height > 0 && !m_marginalCDF.empty();
+    }
+    [[nodiscard]] bool empty() const noexcept { return !valid(); }
+
+    [[nodiscard]] const std::vector<float>& marginalCDF() const noexcept { return m_marginalCDF; }
+    [[nodiscard]] const std::vector<float>& conditionalCDF() const noexcept { return m_conditionalCDF; }
+
+    [[nodiscard]] std::span<const float> marginalSpan() const noexcept { return m_marginalCDF; }
+    [[nodiscard]] std::span<const float> conditionalSpan() const noexcept { return m_conditionalCDF; }
 
 private:
     int m_width = 0;
     int m_height = 0;
     float m_integral = 0.0f;
-    std::vector<float> m_marginalCDF;       // size = height
-    std::vector<float> m_conditionalCDF;    // size = width * height
+    std::vector<float> m_marginalCDF;
+    std::vector<float> m_conditionalCDF;
 };
 
 } // namespace ohao

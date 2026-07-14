@@ -20,7 +20,7 @@
 
 namespace ohao {
 
-Scene::Scene(const std::string& name)
+Scene::Scene(std::string_view name)
     : name(name)
     , needsBufferUpdate(false)
 {
@@ -41,21 +41,21 @@ Scene::~Scene() {
     destroy();
 }
 
-Actor::Ptr Scene::createActor(const std::string& name) {
+Actor::Ptr Scene::createActor(std::string_view name) {
     Actor::Ptr actor = std::make_shared<Actor>(name);
     addActor(actor);
     return actor;
 }
 
-Actor::Ptr Scene::createActorWithComponents(const std::string& name, PrimitiveType primitiveType) {
+Actor::Ptr Scene::createActorWithComponents(std::string_view name, PrimitiveType primitiveType) {
     // Use ComponentFactory to create actor with appropriate components
     auto actor = ComponentFactory::createActorWithComponents(this, name, primitiveType);
     
     if (actor) {
-        OHAO_LOG("Created actor '" + name + "' with components for primitive type: " + 
+        OHAO_LOG("Created actor '" + std::string(name) + "' with components for primitive type: " + 
                  std::to_string(static_cast<int>(primitiveType)));
     } else {
-        OHAO_LOG_ERROR("Failed to create actor '" + name + "' with components");
+        OHAO_LOG_ERROR("Failed to create actor '" + std::string(name) + "' with components");
     }
     
     return actor;
@@ -79,8 +79,8 @@ void Scene::removeActor(Actor::Ptr actor) {
     unregisterActorHierarchy(actor);
 }
 
-void Scene::removeActor(const std::string& name) {
-    auto it = actorsByName.find(name);
+void Scene::removeActor(std::string_view name) {
+    auto it = actorsByName.find(std::string(name));
     if (it != actorsByName.end()) {
         removeActor(it->second);
     }
@@ -111,8 +111,8 @@ void Scene::removeAllActors() {
     actorsByName.clear();
 }
 
-Actor::Ptr Scene::findActor(const std::string& name) const {
-    auto it = actorsByName.find(name);
+Actor::Ptr Scene::findActor(std::string_view name) const {
+    auto it = actorsByName.find(std::string(name));
     if (it != actorsByName.end()) {
         return it->second;
     }
@@ -127,31 +127,31 @@ Actor::Ptr Scene::findActor(uint64_t id) const {
     return nullptr;
 }
 
-std::vector<Actor::Ptr> Scene::findActorsByName(const std::string& partialName) const {
+std::vector<Actor::Ptr> Scene::findActorsByName(std::string_view partialName) const {
     std::vector<Actor::Ptr> result;
-    
-    for (const auto& [name, actor] : actorsByName) {
-        if (name.find(partialName) != std::string::npos) {
+    result.reserve(actorsByName.size());
+    for (const auto& [actorName, actor] : actorsByName) {
+        if (actor && actorName.find(partialName) != std::string::npos) {
             result.push_back(actor);
         }
     }
-    
     return result;
 }
 
-std::vector<Actor::Ptr> Scene::findActorsByTag(const std::string& tag) const {
-    // TODO: Implement tag system for actors
-    return {};
-}
-
-const std::unordered_map<uint64_t, Actor::Ptr>& Scene::getAllActors() const {
-    return actors;
+std::vector<Actor::Ptr> Scene::findActorsByTag(std::string_view tag) const {
+    std::vector<Actor::Ptr> result;
+    if (tag.empty()) return result;
+    result.reserve(actors.size());
+    for (const auto& [id, actor] : actors) {
+        if (actor && actor->hasTag(tag)) {
+            result.push_back(actor);
+        }
+    }
+    return result;
 }
 
 void Scene::onMeshComponentAdded(MeshComponent* component) {
     if (!component) return;
-    
-    // Add to mesh components list if not already there
     if (std::find(meshComponents.begin(), meshComponents.end(), component) == meshComponents.end()) {
         meshComponents.push_back(component);
         needsBufferUpdate = true;
@@ -160,11 +160,9 @@ void Scene::onMeshComponentAdded(MeshComponent* component) {
 
 void Scene::onMeshComponentRemoved(MeshComponent* component) {
     if (!component) return;
-    
-    // Remove from mesh components list
-    auto it = std::find(meshComponents.begin(), meshComponents.end(), component);
-    if (it != meshComponents.end()) {
-        meshComponents.erase(it);
+    const auto before = meshComponents.size();
+    std::erase(meshComponents, component);
+    if (meshComponents.size() != before) {
         needsBufferUpdate = true;
     }
 }
@@ -192,15 +190,7 @@ void Scene::onPhysicsComponentAdded(PhysicsComponent* component) {
 
 void Scene::onPhysicsComponentRemoved(PhysicsComponent* component) {
     if (!component) return;
-    
-    // Remove from physics components list
-    auto it = std::find(physicsComponents.begin(), physicsComponents.end(), component);
-    if (it != physicsComponents.end()) {
-        physicsComponents.erase(it);
-        std::cout << "Physics component removed from scene (remaining: " << physicsComponents.size() << ")" << std::endl;
-    }
-    
-    // Disconnect from physics world
+    std::erase(physicsComponents, component);
     component->setPhysicsWorld(nullptr);
 }
 
@@ -217,12 +207,12 @@ void Scene::updatePhysics(float deltaTime) {
     }
 }
 
-const std::string& Scene::getName() const {
+const std::string& Scene::getName() const noexcept {
     return name;
 }
 
-void Scene::setName(const std::string& newName) {
-    name = newName;
+void Scene::setName(std::string_view newName) {
+    name = std::string(newName);
 }
 
 
@@ -251,7 +241,7 @@ void Scene::destroy() {
     removeAllActors();
 }
 
-bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
+bool Scene::importModel(std::string_view filename, Actor::Ptr targetActor) {
     // Check if file exists
     if (!std::filesystem::exists(filename)) {
         std::cerr << "File not found: " << filename << std::endl;
@@ -260,7 +250,7 @@ bool Scene::importModel(const std::string& filename, Actor::Ptr targetActor) {
     
     // Create a model object
     auto model = std::make_shared<Model>();
-    if (!model->loadFromOBJ(filename)) {
+    if (!model->loadFromOBJ(std::string(filename))) {
         std::cerr << "Failed to load model: " << filename << std::endl;
         return false;
     }

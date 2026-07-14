@@ -1,5 +1,6 @@
 #include "physics/backend/physics_backend.hpp"
 #include <iostream>
+#include <string_view>
 
 #if OHAO_HAS_JOLT
 #include "physics/backend/jolt/jolt_backend.hpp"
@@ -9,7 +10,7 @@ namespace ohao {
 namespace physics {
 namespace backend {
 
-std::unique_ptr<IPhysicsBackend> createPhysicsBackend(const std::string& preferred) {
+std::unique_ptr<IPhysicsBackend> createPhysicsBackend(std::string_view preferred) {
 #if OHAO_HAS_JOLT
     if (preferred == "jolt" || preferred == "auto" || preferred.empty()) {
         try {

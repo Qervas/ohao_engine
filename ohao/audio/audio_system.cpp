@@ -2,11 +2,24 @@
 #include "miniaudio.h"
 
 #include "audio_system.hpp"
+
 #include <algorithm>
-#include <vector>
 #include <cstdio>
+#include <string>
 
 namespace ohao {
+
+void MaEngineDeleter::operator()(ma_engine* engine) const {
+    if (!engine) return;
+    ma_engine_uninit(engine);
+    delete engine;
+}
+
+void MaSoundDeleter::operator()(ma_sound* sound) const {
+    if (!sound) return;
+    ma_sound_uninit(sound);
+    delete sound;
+}
 
 AudioSystem::AudioSystem() = default;
 
@@ -17,20 +30,19 @@ AudioSystem::~AudioSystem() {
 bool AudioSystem::initialize() {
     if (m_initialized) return true;
 
-    m_engine = new ma_engine();
+    auto engine = MaEnginePtr(new ma_engine());
 
     ma_engine_config config = ma_engine_config_init();
     config.listenerCount = 1;
 
-    ma_result result = ma_engine_init(&config, m_engine);
+    const ma_result result = ma_engine_init(&config, engine.get());
     if (result != MA_SUCCESS) {
         fprintf(stderr, "[OHAO Audio] ma_engine_init FAILED: %d\n", result);
         fflush(stderr);
-        delete m_engine;
-        m_engine = nullptr;
         return false;
     }
 
+    m_engine = std::move(engine);
     m_initialized = true;
     return true;
 }
@@ -38,140 +50,136 @@ bool AudioSystem::initialize() {
 void AudioSystem::shutdown() {
     if (!m_initialized) return;
 
-    // Stop and free all sounds
-    for (auto& [handle, instance] : m_sounds) {
-        if (instance.sound) {
-            ma_sound_uninit(instance.sound);
-            delete instance.sound;
-        }
-    }
-    m_sounds.clear();
-
-    if (m_engine) {
-        ma_engine_uninit(m_engine);
-        delete m_engine;
-        m_engine = nullptr;
-    }
-
+    m_sounds.clear(); // MaSoundDeleter uninits each sound
+    m_engine.reset(); // MaEngineDeleter uninits the engine
     m_initialized = false;
 }
 
 void AudioSystem::setListenerPosition(const glm::vec3& pos, const glm::vec3& forward, const glm::vec3& up) {
-    if (!m_initialized) return;
+    if (!m_initialized || !m_engine) return;
 
-    ma_engine_listener_set_position(m_engine, 0, pos.x, pos.y, pos.z);
-    ma_engine_listener_set_direction(m_engine, 0, forward.x, forward.y, forward.z);
-    ma_engine_listener_set_world_up(m_engine, 0, up.x, up.y, up.z);
+    ma_engine_listener_set_position(m_engine.get(), 0, pos.x, pos.y, pos.z);
+    ma_engine_listener_set_direction(m_engine.get(), 0, forward.x, forward.y, forward.z);
+    ma_engine_listener_set_world_up(m_engine.get(), 0, up.x, up.y, up.z);
 }
 
-SoundHandle AudioSystem::playSound(const std::string& path, SoundCategory category,
-                                    bool loop, float volume) {
-    if (!m_initialized) return INVALID_SOUND_HANDLE;
+SoundHandle AudioSystem::playSound(std::string_view path, SoundCategory category,
+                                   bool loop, float volume) {
+    if (!m_initialized || !m_engine || path.empty()) return INVALID_SOUND_HANDLE;
+    if (!isValidSoundCategory(category)) category = SoundCategory::SFX;
+    volume = clampVolume(volume);
 
-    auto* sound = new ma_sound();
-    ma_uint32 flags = 0;
+    const std::string pathStr(path);
+    auto sound = MaSoundPtr(new ma_sound());
+    const ma_uint32 flags = 0;
 
-    ma_result result = ma_sound_init_from_file(m_engine, path.c_str(), flags, nullptr, nullptr, sound);
+    const ma_result result = ma_sound_init_from_file(
+        m_engine.get(), pathStr.c_str(), flags, nullptr, nullptr, sound.get());
     if (result != MA_SUCCESS) {
-        fprintf(stderr, "[OHAO Audio] Failed to load '%s' (error %d)\n", path.c_str(), result);
-        delete sound;
+        fprintf(stderr, "[OHAO Audio] Failed to load '%s' (error %d)\n", pathStr.c_str(), result);
         return INVALID_SOUND_HANDLE;
     }
 
-    // Non-spatial (2D) sound
-    ma_sound_set_spatialization_enabled(sound, MA_FALSE);
+    ma_sound_set_spatialization_enabled(sound.get(), MA_FALSE);
 
     if (loop) {
-        ma_sound_set_looping(sound, MA_TRUE);
+        ma_sound_set_looping(sound.get(), MA_TRUE);
     }
 
-    SoundHandle handle = nextHandle();
+    const SoundHandle handle = nextHandle();
+    ma_sound* raw = sound.get();
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard lock(m_mutex);
         SoundInstance instance;
-        instance.sound = sound;
+        instance.sound = std::move(sound);
         instance.category = category;
         instance.baseVolume = volume;
         instance.spatial = false;
-        m_sounds[handle] = instance;
         updateSoundVolume(instance);
+        m_sounds[handle] = std::move(instance);
     }
 
-    ma_sound_start(sound);
+    ma_sound_start(raw);
     return handle;
 }
 
-SoundHandle AudioSystem::playSoundAt(const std::string& path, const glm::vec3& position,
-                                      SoundCategory category, bool loop, float volume) {
-    if (!m_initialized) return INVALID_SOUND_HANDLE;
+SoundHandle AudioSystem::playSoundAt(std::string_view path, const glm::vec3& position,
+                                     SoundCategory category, bool loop, float volume) {
+    if (!m_initialized || !m_engine || path.empty()) return INVALID_SOUND_HANDLE;
+    if (!isValidSoundCategory(category)) category = SoundCategory::SFX;
+    volume = clampVolume(volume);
 
-    auto* sound = new ma_sound();
+    const std::string pathStr(path);
+    auto sound = MaSoundPtr(new ma_sound());
 
-    ma_result result = ma_sound_init_from_file(m_engine, path.c_str(), 0, nullptr, nullptr, sound);
+    const ma_result result = ma_sound_init_from_file(
+        m_engine.get(), pathStr.c_str(), 0, nullptr, nullptr, sound.get());
     if (result != MA_SUCCESS) {
-        fprintf(stderr, "[OHAO Audio] Failed to load '%s' (error %d)\n", path.c_str(), result);
-        delete sound;
+        fprintf(stderr, "[OHAO Audio] Failed to load '%s' (error %d)\n", pathStr.c_str(), result);
         return INVALID_SOUND_HANDLE;
     }
 
-    // 3D spatial sound
-    ma_sound_set_spatialization_enabled(sound, MA_TRUE);
-    ma_sound_set_position(sound, position.x, position.y, position.z);
-    ma_sound_set_min_distance(sound, 1.0f);
-    ma_sound_set_max_distance(sound, 50.0f);
-    ma_sound_set_attenuation_model(sound, ma_attenuation_model_inverse);
+    ma_sound_set_spatialization_enabled(sound.get(), MA_TRUE);
+    ma_sound_set_position(sound.get(), position.x, position.y, position.z);
+    ma_sound_set_min_distance(sound.get(), 1.0f);
+    ma_sound_set_max_distance(sound.get(), 50.0f);
+    ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);
 
     if (loop) {
-        ma_sound_set_looping(sound, MA_TRUE);
+        ma_sound_set_looping(sound.get(), MA_TRUE);
     }
 
-    SoundHandle handle = nextHandle();
+    const SoundHandle handle = nextHandle();
+    ma_sound* raw = sound.get();
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard lock(m_mutex);
         SoundInstance instance;
-        instance.sound = sound;
+        instance.sound = std::move(sound);
         instance.category = category;
         instance.baseVolume = volume;
         instance.spatial = true;
-        m_sounds[handle] = instance;
         updateSoundVolume(instance);
+        m_sounds[handle] = std::move(instance);
     }
 
-    ma_sound_start(sound);
+    ma_sound_start(raw);
     return handle;
 }
 
 void AudioSystem::stopSound(SoundHandle handle) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundHandle(handle)) return;
+    std::lock_guard lock(m_mutex);
     auto it = m_sounds.find(handle);
     if (it != m_sounds.end() && it->second.sound) {
-        ma_sound_stop(it->second.sound);
-        ma_sound_uninit(it->second.sound);
-        delete it->second.sound;
+        ma_sound_stop(it->second.sound.get());
         m_sounds.erase(it);
     }
 }
 
 void AudioSystem::pauseSound(SoundHandle handle) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundHandle(handle)) return;
+    std::lock_guard lock(m_mutex);
     auto it = m_sounds.find(handle);
     if (it != m_sounds.end() && it->second.sound) {
-        ma_sound_stop(it->second.sound);
+        ma_sound_stop(it->second.sound.get());
     }
 }
 
 void AudioSystem::resumeSound(SoundHandle handle) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundHandle(handle)) return;
+    std::lock_guard lock(m_mutex);
     auto it = m_sounds.find(handle);
     if (it != m_sounds.end() && it->second.sound) {
-        ma_sound_start(it->second.sound);
+        ma_sound_start(it->second.sound.get());
     }
 }
 
 void AudioSystem::setSoundVolume(SoundHandle handle, float volume) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundHandle(handle)) return;
+    volume = clampVolume(volume);
+    std::lock_guard lock(m_mutex);
     auto it = m_sounds.find(handle);
     if (it != m_sounds.end()) {
         it->second.baseVolume = volume;
@@ -180,20 +188,33 @@ void AudioSystem::setSoundVolume(SoundHandle handle, float volume) {
 }
 
 void AudioSystem::setSoundPosition(SoundHandle handle, const glm::vec3& position) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundHandle(handle)) return;
+    std::lock_guard lock(m_mutex);
     auto it = m_sounds.find(handle);
     if (it != m_sounds.end() && it->second.sound) {
-        ma_sound_set_position(it->second.sound, position.x, position.y, position.z);
+        ma_sound_set_position(it->second.sound.get(), position.x, position.y, position.z);
     }
 }
 
-void AudioSystem::setCategoryVolume(SoundCategory category, float volume) {
-    int idx = static_cast<int>(category);
-    if (idx < 0 || idx > 2) return;
-    m_categoryVolumes[idx] = std::clamp(volume, 0.0f, 1.0f);
+bool AudioSystem::isPlaying(SoundHandle handle) const {
+    if (!isValidSoundHandle(handle)) return false;
+    std::lock_guard lock(m_mutex);
+    auto it = m_sounds.find(handle);
+    if (it == m_sounds.end() || !it->second.sound) return false;
+    return ma_sound_is_playing(it->second.sound.get()) == MA_TRUE;
+}
 
-    // Update all sounds in this category
-    std::lock_guard<std::mutex> lock(m_mutex);
+std::size_t AudioSystem::activeSoundCount() const {
+    std::lock_guard lock(m_mutex);
+    return m_sounds.size();
+}
+
+void AudioSystem::setCategoryVolume(SoundCategory category, float volume) {
+    if (!isValidSoundCategory(category)) return;
+    const int idx = soundCategoryIndex(category);
+    m_categoryVolumes[static_cast<std::size_t>(idx)] = clampVolume(volume);
+
+    std::lock_guard lock(m_mutex);
     for (auto& [handle, instance] : m_sounds) {
         if (instance.category == category) {
             updateSoundVolume(instance);
@@ -202,62 +223,57 @@ void AudioSystem::setCategoryVolume(SoundCategory category, float volume) {
 }
 
 float AudioSystem::getCategoryVolume(SoundCategory category) const {
-    int idx = static_cast<int>(category);
-    if (idx < 0 || idx > 2) return 1.0f;
-    return m_categoryVolumes[idx];
+    if (!isValidSoundCategory(category)) return 1.0f;
+    return m_categoryVolumes[static_cast<std::size_t>(soundCategoryIndex(category))];
 }
 
 void AudioSystem::stopCategory(SoundCategory category) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    std::vector<SoundHandle> toRemove;
-    for (auto& [handle, instance] : m_sounds) {
+    if (!isValidSoundCategory(category)) return;
+    std::lock_guard lock(m_mutex);
+    std::erase_if(m_sounds, [&](auto& entry) {
+        auto& instance = entry.second;
         if (instance.category == category && instance.sound) {
-            ma_sound_stop(instance.sound);
-            ma_sound_uninit(instance.sound);
-            delete instance.sound;
-            toRemove.push_back(handle);
+            ma_sound_stop(instance.sound.get());
+            return true;
         }
-    }
-    for (auto h : toRemove) {
-        m_sounds.erase(h);
-    }
+        return false;
+    });
 }
 
 void AudioSystem::pauseCategory(SoundCategory category) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundCategory(category)) return;
+    std::lock_guard lock(m_mutex);
     for (auto& [handle, instance] : m_sounds) {
         if (instance.category == category && instance.sound) {
-            ma_sound_stop(instance.sound);
+            ma_sound_stop(instance.sound.get());
         }
     }
 }
 
 void AudioSystem::resumeCategory(SoundCategory category) {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!isValidSoundCategory(category)) return;
+    std::lock_guard lock(m_mutex);
     for (auto& [handle, instance] : m_sounds) {
         if (instance.category == category && instance.sound) {
-            ma_sound_start(instance.sound);
+            ma_sound_start(instance.sound.get());
         }
     }
 }
 
 void AudioSystem::setMasterVolume(float volume) {
-    m_masterVolume = std::clamp(volume, 0.0f, 1.0f);
+    m_masterVolume = clampVolume(volume);
 
-    // Update all sounds
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     for (auto& [handle, instance] : m_sounds) {
         updateSoundVolume(instance);
     }
 }
 
 void AudioSystem::stopAll() {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard lock(m_mutex);
     for (auto& [handle, instance] : m_sounds) {
         if (instance.sound) {
-            ma_sound_stop(instance.sound);
-            ma_sound_uninit(instance.sound);
-            delete instance.sound;
+            ma_sound_stop(instance.sound.get());
         }
     }
     m_sounds.clear();
@@ -266,27 +282,23 @@ void AudioSystem::stopAll() {
 void AudioSystem::update() {
     if (!m_initialized) return;
 
-    // Cleanup finished (non-looping) sounds
-    std::lock_guard<std::mutex> lock(m_mutex);
-    std::vector<SoundHandle> finished;
-    for (auto& [handle, instance] : m_sounds) {
-        if (instance.sound && !ma_sound_is_looping(instance.sound) && ma_sound_at_end(instance.sound)) {
-            finished.push_back(handle);
+    std::lock_guard lock(m_mutex);
+    std::erase_if(m_sounds, [](auto& entry) {
+        auto& instance = entry.second;
+        if (instance.sound && !ma_sound_is_looping(instance.sound.get())
+            && ma_sound_at_end(instance.sound.get())) {
+            return true;
         }
-    }
-    for (auto h : finished) {
-        auto& instance = m_sounds[h];
-        ma_sound_uninit(instance.sound);
-        delete instance.sound;
-        m_sounds.erase(h);
-    }
+        return false;
+    });
 }
 
 void AudioSystem::updateSoundVolume(SoundInstance& instance) {
     if (!instance.sound) return;
-    int catIdx = static_cast<int>(instance.category);
-    float finalVolume = instance.baseVolume * m_categoryVolumes[catIdx] * m_masterVolume;
-    ma_sound_set_volume(instance.sound, finalVolume);
+    const int catIdx = soundCategoryIndex(instance.category);
+    const float finalVolume =
+        instance.baseVolume * m_categoryVolumes[static_cast<std::size_t>(catIdx)] * m_masterVolume;
+    ma_sound_set_volume(instance.sound.get(), finalVolume);
 }
 
 SoundHandle AudioSystem::nextHandle() {

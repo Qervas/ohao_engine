@@ -24,11 +24,11 @@ public:
     void setScale(const glm::vec3& scale);
     void setLocalMatrix(const glm::mat4& matrix);
     
-    glm::vec3 getPosition() const;
-    glm::quat getRotation() const;
-    glm::vec3 getRotationEuler() const;
-    glm::vec3 getScale() const;
-    glm::mat4 getLocalMatrix() const;
+    [[nodiscard]] glm::vec3 getPosition() const;
+    [[nodiscard]] glm::quat getRotation() const;
+    [[nodiscard]] glm::vec3 getRotationEuler() const;
+    [[nodiscard]] glm::vec3 getScale() const;
+    [[nodiscard]] glm::mat4 getLocalMatrix() const;
     
     // Relative transformations
     void translate(const glm::vec3& offset);
@@ -37,30 +37,30 @@ public:
     void scaleBy(const glm::vec3& scaleFactors);
     
     // World transform
-    glm::mat4 getWorldMatrix() const;
-    glm::vec3 getWorldPosition() const;
-    glm::quat getWorldRotation() const;
-    glm::vec3 getWorldScale() const;
+    [[nodiscard]] glm::mat4 getWorldMatrix() const;
+    [[nodiscard]] glm::vec3 getWorldPosition() const;
+    [[nodiscard]] glm::quat getWorldRotation() const;
+    [[nodiscard]] glm::vec3 getWorldScale() const;
     
     // Directions
-    glm::vec3 getForward() const;
-    glm::vec3 getRight() const;
-    glm::vec3 getUp() const;
+    [[nodiscard]] glm::vec3 getForward() const;
+    [[nodiscard]] glm::vec3 getRight() const;
+    [[nodiscard]] glm::vec3 getUp() const;
     
     // Hierarchy
     void setParent(TransformComponent* parent);
-    TransformComponent* getParent() const;
+    [[nodiscard]] TransformComponent* getParent() const;
     void addChild(TransformComponent* child);
     void removeChild(TransformComponent* child);
-    const std::vector<TransformComponent*>& getChildren() const;
+    [[nodiscard]] const std::vector<TransformComponent*>& getChildren() const;
     
     // Mark the transform as dirty (needs recalculation)
     void setDirty();
-    bool isDirty() const;
+    [[nodiscard]] bool isDirty() const;
     void clearDirty();
     
     // Component interface
-    const char* getTypeName() const override;
+    [[nodiscard]] const char* getTypeName() const override;
 
 private:
     void updateLocalMatrix();
@@ -83,4 +83,4 @@ private:
     std::vector<TransformComponent*> children;
 };
 
-} // namespace ohao 
+} // namespace ohao

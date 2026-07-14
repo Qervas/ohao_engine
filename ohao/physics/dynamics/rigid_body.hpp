@@ -9,6 +9,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <string>
+#include <string_view>
 #include <atomic>
 
 namespace ohao {
@@ -150,10 +151,10 @@ public:
     
     // === FORCE SYSTEM INTEGRATION ===
     // These methods are used by the force registry system
-    void addForceGeneratorRef(const std::string& forceId) { m_activeForces.insert(forceId); }
-    void removeForceGeneratorRef(const std::string& forceId) { m_activeForces.erase(forceId); }
-    const std::unordered_set<std::string>& getActiveForces() const { return m_activeForces; }
-    size_t getActiveForceCount() const { return m_activeForces.size(); }
+    void addForceGeneratorRef(std::string_view forceId) { m_activeForces.emplace(forceId); }
+    void removeForceGeneratorRef(std::string_view forceId) { m_activeForces.erase(std::string(forceId)); }
+    [[nodiscard]] const std::unordered_set<std::string>& getActiveForces() const { return m_activeForces; }
+    [[nodiscard]] size_t getActiveForceCount() const { return m_activeForces.size(); }
     
     // Force application statistics (for debugging/profiling)
     struct ForceStats {
@@ -164,20 +165,20 @@ public:
         float maxTorqueThisFrame = 0.0f;
     };
     
-    const ForceStats& getForceStats() const { return m_forceStats; }
+    [[nodiscard]] const ForceStats& getForceStats() const { return m_forceStats; }
     void resetForceStats() { m_forceStats = ForceStats{}; }
     
     // Enhanced force application with tracking
-    void applyForceTracked(const glm::vec3& force, const glm::vec3& relativePos = glm::vec3(0.0f), const std::string& sourceId = "");
-    void applyTorqueTracked(const glm::vec3& torque, const std::string& sourceId = "");
+    void applyForceTracked(const glm::vec3& force, const glm::vec3& relativePos = glm::vec3(0.0f), std::string_view sourceId = "");
+    void applyTorqueTracked(const glm::vec3& torque, std::string_view sourceId = "");
     
     // User data for force generators
-    void setUserData(const std::string& key, float value) { m_userData[key] = value; }
-    float getUserData(const std::string& key, float defaultValue = 0.0f) const {
-        auto it = m_userData.find(key);
+    void setUserData(std::string_view key, float value) { m_userData[std::string(key)] = value; }
+    [[nodiscard]] float getUserData(std::string_view key, float defaultValue = 0.0f) const {
+        auto it = m_userData.find(std::string(key));
         return (it != m_userData.end()) ? it->second : defaultValue;
     }
-    bool hasUserData(const std::string& key) const { return m_userData.find(key) != m_userData.end(); }
+    [[nodiscard]] bool hasUserData(std::string_view key) const { return m_userData.find(std::string(key)) != m_userData.end(); }
     void clearUserData() { m_userData.clear(); }
 
     // === BACKEND INTEGRATION ===

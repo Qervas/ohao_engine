@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <memory>
 #include <vector>
@@ -12,33 +13,33 @@ namespace physics {
 // === PHYSICS MATERIAL CLASS ===
 class PhysicsMaterial {
 public:
-    PhysicsMaterial(const std::string& name = "Default");
+    PhysicsMaterial(std::string_view name = "Default");
     
     // === MATERIAL PROPERTIES ===
     
     // Density (kg/m³) - used for automatic mass calculation from volume
     void setDensity(float density) { m_density = glm::max(density, 0.001f); }
-    float getDensity() const { return m_density; }
+    [[nodiscard]] float getDensity() const noexcept { return m_density; }
     
     // Restitution (bounciness) - 0 = no bounce, 1 = perfect bounce
     void setRestitution(float restitution) { m_restitution = glm::clamp(restitution, 0.0f, 1.0f); }
-    float getRestitution() const { return m_restitution; }
+    [[nodiscard]] float getRestitution() const noexcept { return m_restitution; }
     
     // Static friction coefficient - resistance when not moving
     void setStaticFriction(float friction) { m_staticFriction = glm::max(friction, 0.0f); }
-    float getStaticFriction() const { return m_staticFriction; }
+    [[nodiscard]] float getStaticFriction() const noexcept { return m_staticFriction; }
     
     // Dynamic friction coefficient - resistance when sliding
     void setDynamicFriction(float friction) { m_dynamicFriction = glm::max(friction, 0.0f); }
-    float getDynamicFriction() const { return m_dynamicFriction; }
+    [[nodiscard]] float getDynamicFriction() const noexcept { return m_dynamicFriction; }
     
     // Surface properties
     void setRoughness(float roughness) { m_roughness = glm::clamp(roughness, 0.0f, 1.0f); }
-    float getRoughness() const { return m_roughness; }
+    [[nodiscard]] float getRoughness() const noexcept { return m_roughness; }
     
     // Material identification
-    const std::string& getName() const { return m_name; }
-    void setName(const std::string& name) { m_name = name; }
+    [[nodiscard]] const std::string& getName() const noexcept { return m_name; }
+    void setName(std::string_view name) { m_name = std::string(name); }
     
     // === MATERIAL COMBINATION RULES ===
     
@@ -91,9 +92,9 @@ public:
     void initializePredefinedMaterials();
     
     // Material management
-    std::shared_ptr<PhysicsMaterial> createMaterial(const std::string& name);
-    std::shared_ptr<PhysicsMaterial> getMaterial(const std::string& name);
-    bool hasMaterial(const std::string& name) const;
+    std::shared_ptr<PhysicsMaterial> createMaterial(std::string_view name);
+    [[nodiscard]] std::shared_ptr<PhysicsMaterial> getMaterial(std::string_view name);
+    [[nodiscard]] bool hasMaterial(std::string_view name) const;
     
     // Predefined material getters
     std::shared_ptr<PhysicsMaterial> getDefault() { return getMaterial("Default"); }
@@ -110,8 +111,8 @@ private:
     MaterialLibrary() = default;
     std::unordered_map<std::string, std::shared_ptr<PhysicsMaterial>> m_materials;
     
-    void createPredefinedMaterial(const std::string& name, float density, 
-                                 float restitution, float staticFriction, 
+    void createPredefinedMaterial(std::string_view name, float density,
+                                 float restitution, float staticFriction,
                                  float dynamicFriction, float roughness = 0.5f);
 };
 

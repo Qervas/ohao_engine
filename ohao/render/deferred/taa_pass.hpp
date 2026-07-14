@@ -11,11 +11,11 @@ public:
     TAAPass() = default;
     ~TAAPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "TAAPass"; }
+    [[nodiscard]] const char* getName() const override { return "TAAPass"; }
 
     // Configuration
     void setCurrentFrame(VkImageView currentFrame);
@@ -28,16 +28,16 @@ public:
     void setUseVarianceClipping(bool enable) { m_useVarianceClipping = enable; }
 
     // Get output
-    VkImageView getOutputView() const { return m_historyViews[m_currentHistoryIndex]; }
+    [[nodiscard]] VkImageView getOutputView() const { return m_historyViews[m_currentHistoryIndex]; }
 
     // Get jitter for current frame
-    glm::vec2 getJitterOffset(uint32_t frameIndex) const;
+    [[nodiscard]] glm::vec2 getJitterOffset(uint32_t frameIndex) const;
 
 private:
-    bool createHistoryBuffers();
-    bool createRenderPass();
-    bool createPipeline();
-    bool createDescriptors();
+    [[nodiscard]] bool createHistoryBuffers();
+    [[nodiscard]] bool createRenderPass();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createDescriptors();
     void destroyHistoryBuffers();
 
     void swapHistoryBuffers();

@@ -654,10 +654,11 @@ uint32_t ParticleSystem::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFla
     return 0;
 }
 
-VkShaderModule ParticleSystem::loadShaderModule(const std::string& path) {
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
+VkShaderModule ParticleSystem::loadShaderModule(std::string_view path) {
+    const std::string pathStr(path);
+    std::ifstream file(pathStr, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "ParticleSystem: Failed to open shader: " << path << std::endl;
+        std::cerr << "ParticleSystem: Failed to open shader: " << pathStr << std::endl;
         return VK_NULL_HANDLE;
     }
 
@@ -667,10 +668,11 @@ VkShaderModule ParticleSystem::loadShaderModule(const std::string& path) {
     file.read(buffer.data(), fileSize);
     file.close();
 
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = buffer.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(buffer.data());
+    VkShaderModuleCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = buffer.size(),
+        .pCode = reinterpret_cast<const uint32_t*>(buffer.data()),
+    };
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {

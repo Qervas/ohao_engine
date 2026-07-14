@@ -157,7 +157,7 @@ cmake --build build -j8
 cmake --build build --target shaders   # shaders only
 ```
 
-Requires CMake 3.20+, Vulkan SDK 1.3+ with RT extensions, a C++17 compiler. Tested on Linux with GCC/Clang and on Windows with MSVC.
+Requires CMake 3.20+, Vulkan SDK 1.3+ with RT extensions, a **C++20** compiler. Tested on Linux with GCC/Clang and on Windows with MSVC.
 
 ## Run
 

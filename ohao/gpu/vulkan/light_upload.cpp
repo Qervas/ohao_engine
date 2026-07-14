@@ -12,6 +12,7 @@
 #include "scene/component/material_component.hpp"
 #include "scene/asset/model.hpp"
 #include <cstring>
+#include <span>
 #include <glm/gtc/matrix_transform.hpp>
 #include "render/deferred/deferred_renderer.hpp"
 
@@ -43,7 +44,7 @@ void VulkanRenderer::uploadDeferredTextures() {
 
                 std::string texName = actor->getName() + "_albedo_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
-                    td.pixels.data(), td.width, td.height, VK_FORMAT_R8G8B8A8_SRGB,
+                    std::span<const uint8_t>(td.pixels), td.width, td.height, VK_FORMAT_R8G8B8A8_SRGB,
                     BindlessTextureType::Albedo);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
@@ -62,7 +63,7 @@ void VulkanRenderer::uploadDeferredTextures() {
 
                 std::string texName = actor->getName() + "_normal_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
-                    ntd.pixels.data(), ntd.width, ntd.height, VK_FORMAT_R8G8B8A8_UNORM,
+                    std::span<const uint8_t>(ntd.pixels), ntd.width, ntd.height, VK_FORMAT_R8G8B8A8_UNORM,
                     BindlessTextureType::Normal);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
@@ -104,7 +105,7 @@ void VulkanRenderer::uploadDeferredTextures() {
 
                 std::string texName = actor->getName() + "_roughmetal_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
-                    repacked.data(), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
+                    std::span<const uint8_t>(repacked), rmtd.width, rmtd.height, VK_FORMAT_R8G8B8A8_UNORM,
                     BindlessTextureType::Roughness);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);
@@ -123,7 +124,7 @@ void VulkanRenderer::uploadDeferredTextures() {
 
                 std::string texName = actor->getName() + "_emissive_" + std::to_string(mi);
                 auto handle = m_textureManager->loadTextureFromMemory(
-                    etd.pixels.data(), etd.width, etd.height, VK_FORMAT_R8G8B8A8_SRGB,
+                    std::span<const uint8_t>(etd.pixels), etd.width, etd.height, VK_FORMAT_R8G8B8A8_SRGB,
                     BindlessTextureType::Emissive);
                 if (handle.valid()) {
                     m_textureManager->registerName(handle, texName);

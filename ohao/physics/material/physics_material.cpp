@@ -6,7 +6,7 @@ namespace physics {
 
 // === PHYSICS MATERIAL IMPLEMENTATION ===
 
-PhysicsMaterial::PhysicsMaterial(const std::string& name) 
+PhysicsMaterial::PhysicsMaterial(std::string_view name)
     : m_name(name) {
 }
 
@@ -99,14 +99,15 @@ void MaterialLibrary::initializePredefinedMaterials() {
     }
 }
 
-std::shared_ptr<PhysicsMaterial> MaterialLibrary::createMaterial(const std::string& name) {
-    auto material = std::make_shared<PhysicsMaterial>(name);
-    m_materials[name] = material;
+std::shared_ptr<PhysicsMaterial> MaterialLibrary::createMaterial(std::string_view name) {
+    std::string key(name);
+    auto material = std::make_shared<PhysicsMaterial>(key);
+    m_materials[key] = material;
     return material;
 }
 
-std::shared_ptr<PhysicsMaterial> MaterialLibrary::getMaterial(const std::string& name) {
-    auto it = m_materials.find(name);
+std::shared_ptr<PhysicsMaterial> MaterialLibrary::getMaterial(std::string_view name) {
+    auto it = m_materials.find(std::string(name));
     if (it != m_materials.end()) {
         return it->second;
     }
@@ -115,8 +116,8 @@ std::shared_ptr<PhysicsMaterial> MaterialLibrary::getMaterial(const std::string&
     return createMaterial(name);
 }
 
-bool MaterialLibrary::hasMaterial(const std::string& name) const {
-    return m_materials.find(name) != m_materials.end();
+bool MaterialLibrary::hasMaterial(std::string_view name) const {
+    return m_materials.find(std::string(name)) != m_materials.end();
 }
 
 std::vector<std::string> MaterialLibrary::getAllMaterialNames() const {
@@ -131,8 +132,8 @@ std::vector<std::string> MaterialLibrary::getAllMaterialNames() const {
     return names;
 }
 
-void MaterialLibrary::createPredefinedMaterial(const std::string& name, float density, 
-                                              float restitution, float staticFriction, 
+void MaterialLibrary::createPredefinedMaterial(std::string_view name, float density,
+                                              float restitution, float staticFriction,
                                               float dynamicFriction, float roughness) {
     auto material = createMaterial(name);
     material->setDensity(density);

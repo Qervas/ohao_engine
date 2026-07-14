@@ -4,6 +4,7 @@
 add_executable(physics_backend_tests
     physics_backend_tests.cpp
 )
+target_compile_features(physics_backend_tests PRIVATE cxx_std_20)
 
 target_include_directories(physics_backend_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/ohao

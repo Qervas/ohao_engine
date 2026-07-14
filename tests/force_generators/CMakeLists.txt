@@ -4,6 +4,7 @@
 add_executable(force_generator_tests
     force_generator_tests.cpp
 )
+target_compile_features(force_generator_tests PRIVATE cxx_std_20)
 
 target_include_directories(force_generator_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/ohao

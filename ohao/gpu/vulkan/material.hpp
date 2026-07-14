@@ -1,6 +1,10 @@
 #pragma once
+
+#include "core/concepts.hpp"
+
 #include <glm/glm.hpp>
 #include <string>
+#include <string_view>
 
 namespace ohao {
 
@@ -67,35 +71,39 @@ struct Material {
     
     Type type{Type::Custom};
     std::string name{"Default Material"};
-    
+
+    [[nodiscard]] constexpr int typeIndex() const noexcept {
+        return static_cast<int>(to_underlying(type));
+    }
+
     // Utility methods for common material types
-    static Material createMetal(const glm::vec3& color, float roughness = 0.1f);
-    static Material createPlastic(const glm::vec3& color, float roughness = 0.7f);
-    static Material createGlass(const glm::vec3& tint = glm::vec3(1.0f), float roughness = 0.0f);
-    static Material createRubber(const glm::vec3& color, float roughness = 0.9f);
-    static Material createGold();
-    static Material createSilver();
-    static Material createChrome();
+    [[nodiscard]] static Material createMetal(const glm::vec3& color, float roughness = 0.1f);
+    [[nodiscard]] static Material createPlastic(const glm::vec3& color, float roughness = 0.7f);
+    [[nodiscard]] static Material createGlass(const glm::vec3& tint = glm::vec3(1.0f), float roughness = 0.0f);
+    [[nodiscard]] static Material createRubber(const glm::vec3& color, float roughness = 0.9f);
+    [[nodiscard]] static Material createGold();
+    [[nodiscard]] static Material createSilver();
+    [[nodiscard]] static Material createChrome();
     
     // Texture utility methods
-    static Material createTexturedMaterial(const std::string& albedoPath, 
-                                         const std::string& normalPath = "",
-                                         const std::string& roughnessPath = "",
-                                         const std::string& metallicPath = "");
+    [[nodiscard]] static Material createTexturedMaterial(std::string_view albedoPath, 
+                                         std::string_view normalPath = "",
+                                         std::string_view roughnessPath = "",
+                                         std::string_view metallicPath = "");
     
     // Apply preset based on type
     void applyPreset();
     
     // Texture management
-    void setAlbedoTexture(const std::string& path);
-    void setNormalTexture(const std::string& path);
-    void setMetallicTexture(const std::string& path);
-    void setRoughnessTexture(const std::string& path);
-    void setAoTexture(const std::string& path);
-    void setEmissiveTexture(const std::string& path);
+    void setAlbedoTexture(std::string_view path);
+    void setNormalTexture(std::string_view path);
+    void setMetallicTexture(std::string_view path);
+    void setRoughnessTexture(std::string_view path);
+    void setAoTexture(std::string_view path);
+    void setEmissiveTexture(std::string_view path);
     
     // Check if material has any textures
-    bool hasTextures() const;
+    [[nodiscard]] bool hasTextures() const;
 };
 
 } // namespace ohao

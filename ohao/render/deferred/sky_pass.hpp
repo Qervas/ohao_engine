@@ -12,11 +12,11 @@ public:
     SkyPass() = default;
     ~SkyPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "SkyPass"; }
+    [[nodiscard]] const char* getName() const override { return "SkyPass"; }
 
     // Sky parameters
     void setSunDirection(const glm::vec3& dir)  { m_sunDirection = glm::normalize(dir); }
@@ -27,7 +27,7 @@ public:
     void setMoonDirection(const glm::vec3& d)   { m_moonDirection = glm::normalize(d); }
     void setStarSeed(float s)                   { m_starSeed = s; }
     void setEnabled(bool e)                     { m_enabled = e; }
-    bool getEnabled() const                     { return m_enabled; }
+    [[nodiscard]] bool getEnabled() const       { return m_enabled; }
 
     // Camera data for view-direction reconstruction
     void setCameraData(const glm::mat4& invViewProj, const glm::vec3& cameraPos);
@@ -44,11 +44,11 @@ public:
     void setHDROutput(VkImageView view, VkImage image);
 
 private:
-    bool createRenderPass();
-    bool createFramebuffer();
-    bool createDescriptors();
-    bool createPipeline();
-    bool createSampler();
+    [[nodiscard]] bool createRenderPass();
+    [[nodiscard]] bool createFramebuffer();
+    [[nodiscard]] bool createDescriptors();
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createSampler();
     void destroyFramebuffer();
     void updateDescriptors();
 

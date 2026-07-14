@@ -64,19 +64,20 @@ bool VulkanRenderer::updateSceneBuffers() {
         const uint32_t indexOffset = static_cast<uint32_t>(combinedIndices.size());
         const uint32_t indexCount = static_cast<uint32_t>(model->indices.size());
 
-        // Store buffer info
-        MeshBufferInfo bufferInfo{};
-        bufferInfo.vertexOffset = vertexOffset;
-        bufferInfo.vertexCount = static_cast<uint32_t>(model->vertices.size());
-        bufferInfo.indexOffset = indexOffset;
-        bufferInfo.indexCount = indexCount;
-        m_meshBufferMap[actor->getID()] = bufferInfo;
+        // Store buffer info (designated MeshBufferInfo — core GpuPod)
+        m_meshBufferMap[actor->getID()] = MeshBufferInfo{
+            .vertexOffset = vertexOffset,
+            .indexOffset = indexOffset,
+            .indexCount = indexCount,
+            .vertexCount = static_cast<uint32_t>(model->vertices.size()),
+        };
 
-        // Add vertices
-        combinedVertices.insert(combinedVertices.end(), model->vertices.begin(), model->vertices.end());
+        // Add vertices (span-friendly Model API)
+        const auto verts = model->vertexSpan();
+        combinedVertices.insert(combinedVertices.end(), verts.begin(), verts.end());
 
         // Add indices with offset
-        for (uint32_t index : model->indices) {
+        for (uint32_t index : model->indexSpan()) {
             combinedIndices.push_back(index + vertexOffset);
         }
     }

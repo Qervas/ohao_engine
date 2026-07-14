@@ -10,3 +10,8 @@ endif()
 target_include_directories(ohao_core
     PUBLIC ${CMAKE_SOURCE_DIR}/ohao
 )
+
+if(TARGET ohao_core)
+    # Propagate C++20 to all dependents (scene, gpu, examples, tests).
+    target_compile_features(ohao_core PUBLIC cxx_std_20)
+endif()

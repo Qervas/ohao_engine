@@ -5,7 +5,6 @@
 #include "path_tracer.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -34,12 +33,6 @@ constexpr uint32_t kPTFlagAccumulateAOVs = 1u << 3;
 // Phase 5: DLSSRR mode — raygen repurposes normalAOV (binding 7) as the packed
 // (worldN, roughness) guide DLSS Ray Reconstruction consumes.
 constexpr uint32_t kPTFlagDLSSRR = 1u << 4;
-// ReSTIR GI (Phase 1) toggles — driven by env vars for A/B and measurement.
-// Must stay in sync with PT_FLAG_RESTIRGI_* in pt_raygen_realtime.rgen.
-constexpr uint32_t kPTFlagRestirGiOff    = 1u << 5;  // OHAO_RESTIRGI_OFF=1       → no temporal reuse (M=1 anchor)
-constexpr uint32_t kPTFlagRestirGiGiOnly = 1u << 6;  // OHAO_RESTIRGI_GIONLY=1    → write GI-only into diffuseRadiance
-constexpr uint32_t kPTFlagRestirGiLegacy = 1u << 7;  // OHAO_RESTIRGI_LEGACY=1    → original multi-bounce Stage C
-constexpr uint32_t kPTFlagRestirGiNoSpatial = 1u << 8; // OHAO_RESTIRGI_NOSPATIAL=1 → Phase 2 spatial reuse off (Phase-1 behavior)
 }  // namespace
 
 void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
@@ -61,11 +54,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         if (m_dlssInstance != VK_NULL_HANDLE &&
             m_dlssRR->initialize(m_dlssInstance, m_physicalDevice, m_device,
                                  OHAO_DLSS_SNIPPET_DIR, OHAO_DLSS_APPDATA_DIR)) {
-            // In (guide) resolution = m_width/m_height (render res); target
-            // resolution = m_outW/m_outH (output res). For DLAA render==output;
-            // for an upscaling preset render<output and DLSS reconstructs up.
-            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_outW, m_outH,
-                                         dlssQualityFromEnv()) ||
+            if (!m_dlssRR->createFeature(cmd, m_width, m_height, m_width, m_height) ||
                 !m_dlssRR->createTonemapPipeline()) {
                 m_dlssRR->shutdown();
                 m_dlssRR.reset();
@@ -93,14 +82,13 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // DLSS-RR (Phase 5) also REQUIRES sub-pixel camera jitter — same Halton(2,3)
     // pattern NRD uses. The offset is fed to InJitterOffsetX/Y so DLSS can align
     // and integrate the sub-pixel samples across frames.
-    if (m_renderSettings.denoiseMode == DenoiseMode::NRD ||
-        m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) {
+    // Policy: denoiseNeedsPixelJitter (NRD + DLSS-RR) — single source in rt_meta.
+    if (denoiseNeedsPixelJitter(m_renderSettings.denoiseMode)) {
         const uint32_t idx = (m_haltonIndex % 16u) + 1u;
         m_jitterCurrent = glm::vec2(halton(idx, 2) - 0.5f, halton(idx, 3) - 0.5f);
         m_haltonIndex++;
     } else {
-        // Non-NRD paths (None/OIDN/OptiX) keep pixel-center sampling — zero jitter
-        // here preserves bit-exact parity with pre-T4 behavior.
+        // None/OIDN/Atrous keep pixel-center sampling — zero jitter preserves parity.
         m_jitterCurrent = glm::vec2(0.0f);
     }
 
@@ -169,19 +157,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     currShadingHistoryInfo.imageView = m_shadingHistoryViews[m_shadingHistoryWriteIndex];
     currShadingHistoryInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    // ReSTIR GI reservoir ping-pong: bind prev planes (read) to 29-31, curr
-    // planes (write) to 32-34, backed by the [plane][pingpong] image arrays.
-    const uint32_t prevGIReservoirIndex = 1u - m_giReservoirWriteIndex;
-    VkDescriptorImageInfo prevGIReservoirInfo[3]{};
-    VkDescriptorImageInfo currGIReservoirInfo[3]{};
-    for (uint32_t p = 0; p < 3; ++p) {
-        prevGIReservoirInfo[p].imageView   = m_giReservoirViews[p][prevGIReservoirIndex];
-        prevGIReservoirInfo[p].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        currGIReservoirInfo[p].imageView   = m_giReservoirViews[p][m_giReservoirWriteIndex];
-        currGIReservoirInfo[p].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    }
-
-    VkWriteDescriptorSet writes[40] = {};
+    VkWriteDescriptorSet writes[29] = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
@@ -494,38 +470,6 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     writes[writeCount].pImageInfo      = &outSpecInfo;
     writeCount++;
 
-    // Bindings 29-34: ReSTIR GI reservoir (prev read 29-31, curr write 32-34)
-    for (uint32_t p = 0; p < 3; ++p) {
-        writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[writeCount].dstSet          = m_descriptorSet;
-        writes[writeCount].dstBinding      = 29u + p;
-        writes[writeCount].descriptorCount = 1;
-        writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[writeCount].pImageInfo      = &prevGIReservoirInfo[p];
-        writeCount++;
-    }
-    for (uint32_t p = 0; p < 3; ++p) {
-        writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[writeCount].dstSet          = m_descriptorSet;
-        writes[writeCount].dstBinding      = 32u + p;
-        writes[writeCount].descriptorCount = 1;
-        writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[writeCount].pImageInfo      = &currGIReservoirInfo[p];
-        writeCount++;
-    }
-
-    // Binding 35: DLSS-RR specular hit-distance guide (R32F)
-    VkDescriptorImageInfo specHitDistInfo{};
-    specHitDistInfo.imageView   = m_specHitDistView;
-    specHitDistInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    writes[writeCount].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[writeCount].dstSet          = m_descriptorSet;
-    writes[writeCount].dstBinding      = 35;
-    writes[writeCount].descriptorCount = 1;
-    writes[writeCount].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[writeCount].pImageInfo      = &specHitDistInfo;
-    writeCount++;
-
     vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);
 
     // --- Transition accumulation buffer to GENERAL ---
@@ -563,7 +507,7 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
 
     // --- Transition AOV images to GENERAL for storage write ---
     if (m_renderSettings.enableAuxiliaryAOVs) {
-        VkImageMemoryBarrier aovBarriers[13] = {};
+        VkImageMemoryBarrier aovBarriers[12] = {};
 
         aovBarriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         aovBarriers[0].srcAccessMask = 0;
@@ -673,19 +617,9 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         aovBarriers[11].image = m_outSpecRadianceImage;
         aovBarriers[11].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-        // DLSS-RR: specular hit-distance guide (binding 35) — UNDEFINED→GENERAL so
-        // the raygen can imageStore the world-space specular ray length into it.
-        aovBarriers[12].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        aovBarriers[12].srcAccessMask = 0;
-        aovBarriers[12].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        aovBarriers[12].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        aovBarriers[12].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        aovBarriers[12].image = m_specHitDistImage;
-        aovBarriers[12].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
         vkCmdPipelineBarrier(cmd,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 13, aovBarriers);
+            0, 0, nullptr, 0, nullptr, 12, aovBarriers);
     }
 
     // --- Transition surface history images to GENERAL ---
@@ -743,33 +677,6 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
             0, 0, nullptr, 0, nullptr, 2, historyBarriers);
     }
 
-    // --- Transition ReSTIR GI reservoir images to GENERAL (3 prev read + 3 curr write) ---
-    {
-        const uint32_t prevGIIdx = 1u - m_giReservoirWriteIndex;
-        VkImageMemoryBarrier giBarriers[6] = {};
-        for (uint32_t p = 0; p < 3; ++p) {
-            // prev plane (read)
-            giBarriers[p].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            giBarriers[p].srcAccessMask = m_giReservoirInitialized[prevGIIdx] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-            giBarriers[p].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            giBarriers[p].oldLayout     = m_giReservoirInitialized[prevGIIdx] ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-            giBarriers[p].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            giBarriers[p].image         = m_giReservoirImages[p][prevGIIdx];
-            giBarriers[p].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            // curr plane (write)
-            giBarriers[3 + p].sType         = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            giBarriers[3 + p].srcAccessMask = m_giReservoirInitialized[m_giReservoirWriteIndex] ? VK_ACCESS_SHADER_WRITE_BIT : 0;
-            giBarriers[3 + p].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            giBarriers[3 + p].oldLayout     = m_giReservoirInitialized[m_giReservoirWriteIndex] ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-            giBarriers[3 + p].newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            giBarriers[3 + p].image         = m_giReservoirImages[p][m_giReservoirWriteIndex];
-            giBarriers[3 + p].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        }
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
-            0, 0, nullptr, 0, nullptr, 6, giBarriers);
-    }
-
     // --- Bind pipeline and descriptors ---
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, m_rtPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
@@ -785,52 +692,24 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // 256-byte device maxPushConstantsSize, so we cannot append a field — the
     // realtime raygen unpacks samplesPerFrame from the high bits and loops on it;
     // base/offline raygen mask it off (they trace one path per dispatch).
-    const uint32_t spf = std::max(1u, m_renderSettings.samplesPerFrame);
+    const uint32_t spf = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
     const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);
     pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, packedBouncesAndSpf);
     pc.control = glm::uvec4(0u);
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
     if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;
     if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
-    // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings, not the
-    // final sample's 1spp. Raygen handles sample-0 (overwrite) vs N>0 (running mean).
-    if (m_renderSettings.denoiseMode == DenoiseMode::NRD) pc.control.x |= kPTFlagAccumulateAOVs;
-    // DenoiseMode::Atrous (SVGF): feed the denoiser a FRESH per-frame independent
-    // sample instead of the engine's naive accumulated running-mean beauty. SVGF's
-    // own temporal accumulation replaces it — which is what makes the per-pixel
-    // luminance variance (hence the variance-guided spatial filter) meaningful.
-    // raygen historyFrameCount=0 => acc=radiance (1 spp) each frame; the Sobol
-    // sampler still advances via params.z (m_sampleIndex), so frames are
-    // independent noise. Motion vectors are 0 in this mode (raygen gates MV on
-    // historyFrameCount>0) — fine for SVGF's static-camera reprojection; the
-    // moving-camera MV path is exercised by the live interactive viewer.
-    const bool svgfMode = (m_renderSettings.denoiseMode == DenoiseMode::Atrous);
-    // DLSS-RR does its OWN temporal accumulation, so it must be fed a FRESH per-frame
-    // 1-spp HDR frame (not the engine's running-mean). Forcing historyFrameCount=0 in
-    // the raygen makes accum = radiance (1 spp) each frame — the same trick SVGF uses.
-    // Also raise the DLSSRR flag so the raygen writes the packed normal/roughness guide.
+    // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings.
+    // Policy: denoiseNeedsAovAccumulation (rt_meta).
+    if (denoiseNeedsAovAccumulation(m_renderSettings.denoiseMode)) {
+        pc.control.x |= kPTFlagAccumulateAOVs;
+    }
+    // Atrous (SVGF) / DLSS-RR: denoiseWantsFreshSample → historyFrameCount=0 so
+    // raygen writes 1-spp beauty; denoisers own temporal accumulation.
+    const bool freshSample = denoiseWantsFreshSample(m_renderSettings.denoiseMode);
     const bool dlssMode = (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR);
     if (dlssMode) pc.control.x |= kPTFlagDLSSRR;
-    // ReSTIR GI (Phase 1) env toggles — read once, cached. Default = ReSTIR GI ON
-    // (temporal reuse enabled). OHAO_RESTIRGI_OFF disables temporal reuse (M=1
-    // anchor); OHAO_RESTIRGI_GIONLY writes the isolated GI term into diffuseRadiance;
-    // OHAO_RESTIRGI_LEGACY restores the original multi-bounce Stage C.
-    {
-        static const bool kRestirGiOff       = (std::getenv("OHAO_RESTIRGI_OFF")       != nullptr);
-        static const bool kRestirGiGiOnly    = (std::getenv("OHAO_RESTIRGI_GIONLY")    != nullptr);
-        static const bool kRestirGiLegacy    = (std::getenv("OHAO_RESTIRGI_LEGACY")    != nullptr);
-        static const bool kRestirGiNoSpatial = (std::getenv("OHAO_RESTIRGI_NOSPATIAL") != nullptr);
-        if (kRestirGiOff)       pc.control.x |= kPTFlagRestirGiOff;
-        if (kRestirGiGiOnly)    pc.control.x |= kPTFlagRestirGiGiOnly;
-        if (kRestirGiLegacy)    pc.control.x |= kPTFlagRestirGiLegacy;
-        if (kRestirGiNoSpatial) pc.control.x |= kPTFlagRestirGiNoSpatial;
-    }
-    // OHAO_FRESH_1SPP (measurement only): force fresh, independent 1-spp beauty
-    // every frame in ANY denoise mode (no temporal running-mean). Lets an offline
-    // A/B measure the raw glossy-sampler variance + converged mean directly,
-    // without a denoiser's temporal accumulation masking the input variance.
-    static const bool kFresh1Spp = (std::getenv("OHAO_FRESH_1SPP") != nullptr);
-    pc.control.y = (svgfMode || dlssMode || kFresh1Spp) ? 0u : m_historyFrameCount;
+    pc.control.y = freshSample ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,
@@ -937,26 +816,9 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
         ei.diffAlbedoImage  = m_diffAlbedoImage;   ei.diffAlbedoView  = m_diffAlbedoView;   ei.diffAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
         ei.specAlbedoImage  = m_specColorImage;    ei.specAlbedoView  = m_specColorView;    ei.specAlbedoFormat  = VK_FORMAT_R8G8B8A8_UNORM;
         ei.normalRoughImage = m_normalAOV;         ei.normalRoughView = m_normalAOVView;    ei.normalRoughFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
-        // Specular hit-distance guide (world-space ray length). A/B toggle: set
-        // OHAO_NO_SPEC_HITDIST=1 to omit it (leaves DLSS reprojecting reflections as
-        // if attached to the primary surface — the pre-fix flicker) for measurement.
-        {
-            static const bool kNoSpecHitDist = (std::getenv("OHAO_NO_SPEC_HITDIST") != nullptr);
-            if (!kNoSpecHitDist) {
-                ei.specHitDistImage = m_specHitDistImage; ei.specHitDistView = m_specHitDistView; ei.specHitDistFormat = VK_FORMAT_R32_SFLOAT;
-            }
-            static bool s_specHitDistLogged = false;
-            if (!s_specHitDistLogged) {
-                std::cerr << "[DLSS-RR] specular hit-distance guide: "
-                          << (kNoSpecHitDist ? "DISABLED (OHAO_NO_SPEC_HITDIST)" : "ENABLED (binding 35 R32F world-units)")
-                          << std::endl;
-                s_specHitDistLogged = true;
-            }
-        }
         ei.depthImage       = m_depthAOVImage;     ei.depthView       = m_depthAOVView;     ei.depthFormat       = VK_FORMAT_R32_SFLOAT;
         ei.motionImage      = m_motionVectorImage; ei.motionView      = m_motionVectorView; ei.motionFormat      = VK_FORMAT_R16G16_SFLOAT;
-        ei.renderW = m_width; ei.renderH = m_height;   // guide-buffer (input) res
-        ei.outW = m_outW; ei.outH = m_outH;            // COLOR_OUT (target) res — DLSS upscales into it
+        ei.renderW = m_width; ei.renderH = m_height;
         ei.jitterX = m_jitterCurrent.x; ei.jitterY = m_jitterCurrent.y;
         ei.mvScaleX = -1.0f; ei.mvScaleY = -1.0f;   // OHAO writes currPix-prevPix; DLSS wants prevPix-currPix
         ei.worldToView = glm::value_ptr(viewM);
@@ -988,10 +850,8 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 0, 0, nullptr, 0, nullptr, 2, post);
 
-            // 5) Tonemap DLSS HDR COLOR_OUT (OUTPUT res) → RGBA8 beauty (OUTPUT
-            //    res). ACES+gamma, matches the "None" curve. Dispatch spans the
-            //    full output resolution (the shader is resolution-agnostic).
-            m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_outW, m_outH);
+            // 5) Tonemap DLSS HDR COLOR_OUT → RGBA8 beauty (ACES+gamma, matches None).
+            m_dlssRR->tonemap(cmd, m_dlssColorOutView, m_outputView, m_width, m_height);
             dlssRan = true;  // beauty last written by COMPUTE, still GENERAL
         }
     }
@@ -1418,8 +1278,6 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     m_surfaceHistoryWriteIndex = 1u - m_surfaceHistoryWriteIndex;
     m_shadingHistoryInitialized[m_shadingHistoryWriteIndex] = true;
     m_shadingHistoryWriteIndex = 1u - m_shadingHistoryWriteIndex;
-    m_giReservoirInitialized[m_giReservoirWriteIndex] = true;
-    m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex;
 }
 
 } // namespace ohao

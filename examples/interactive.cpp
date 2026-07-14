@@ -27,19 +27,23 @@
 #include "render/camera/camera.hpp"
 #include "render/camera/scene_framer.hpp"
 #include "render/rt/denoise/denoise_types.hpp"
+#include "example_cli.hpp"
 
 #include <iostream>
 #include <string>
 #include <chrono>
 #include <cstring>
-#include <thread>
-#include <atomic>
 #include <algorithm>
 #include <optional>
 #include <vector>
 #include <cmath>
 
 using namespace ohao;
+using ohao::examples::parseRenderFlags;
+using ohao::examples::parseSpp;
+using ohao::examples::argOr;
+using ohao::examples::applyDenoiseOverride;
+using ohao::examples::resolveMode;
 
 struct CameraState {
     float yaw = -90.0f, pitch = 0.0f;
@@ -52,7 +56,7 @@ struct CameraState {
 };
 
 static CameraState g_cam;
-static int g_spp = [](){ const char* e = getenv("OHAO_SPP"); int v = e ? atoi(e) : 1; return v < 1 ? 1 : (v > 64 ? 64 : v); }();
+static int g_spp = 1;
 
 void keyCallback(GLFWwindow* window, int key, int, int action, int) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
@@ -104,19 +108,14 @@ void processInput(GLFWwindow* window, float dt) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string modelPath = argc > 1 ? argv[1] : "";
-    std::string envPath = argc > 2 ? argv[2] : "";
-    uint32_t W = 1280, H = 720;
-    RenderMode rtMode = RenderMode::RTRealtime;
-    std::optional<ohao::DenoiseMode> denoiseOverride;
-    for (int i = 3; i < argc; i++) {
-        std::string arg = argv[i];
-        if (arg == "rt_realtime") rtMode = RenderMode::RTRealtime;
-        else if (arg == "rt_offline") rtMode = RenderMode::RTOffline;
-        else if (arg.rfind("--denoise=", 0) == 0) {
-            denoiseOverride = ohao::parseDenoiseMode(arg.substr(10));
-        }
+    const std::string modelPath{argOr(argc, argv, 1, "")};
+    const std::string envPath{argOr(argc, argv, 2, "")};
+    const uint32_t W = 1280, H = 720;
+    auto cli = parseRenderFlags(argc, argv, 3);
+    if (!cli.useDeferred && cli.rtMode == RenderMode::RTOffline && argc <= 3) {
+        cli.rtMode = RenderMode::RTRealtime;  // interactive default
     }
+    RenderMode rtMode = cli.rtMode;
 
     // Init GLFW with OpenGL (for pixel display)
     if (!glfwInit()) { std::cerr << "GLFW init failed" << std::endl; return 1; }
@@ -148,26 +147,29 @@ int main(int argc, char* argv[]) {
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) { std::cerr << "Renderer init failed" << std::endl; return 1; }
 
-    if (denoiseOverride.has_value()) {
-        renderer.setDenoiseMode(*denoiseOverride);
+    applyDenoiseOverride(renderer, cli);
+    if (cli.denoiseOverride) {
         std::cout << "Denoise mode (CLI override): "
-                  << ohao::denoiseModeName(*denoiseOverride) << std::endl;
+                  << denoiseModeName(*cli.denoiseOverride) << std::endl;
     } else {
         std::cout << "Denoise mode (preset): "
                   << ohao::denoiseModeName(renderer.getDenoiseMode()) << std::endl;
     }
 
-    // "outdoor" (3rd arg): a clean HDRI-lit scene — ground plane + model + sky,
-    // NO enclosure and NO studio lights (the HDRI is the only light). Far simpler
-    // than the bedroom (one dominant sun + sky fill), and the flicker-free showcase.
-    // Default (no "outdoor"): the enclosed bedroom with interior lights, env skipped.
-    bool outdoor = (argc > 3 && std::string(argv[3]) == "outdoor");
-    if (!envPath.empty() && outdoor) {
+    // Env map: skip for indoor bedroom unless outdoor flag is set.
+    if (!envPath.empty() && cli.outdoor) {
         renderer.setEnvironmentMap(envPath);
     }
 
-    // Load model
-    auto model = modelPath.empty() ? nullptr : ModelLoader::load(modelPath);
+    // Load model (Result API)
+    std::shared_ptr<Model> model;
+    if (!modelPath.empty()) {
+        if (auto r = ModelLoader::loadResult(modelPath)) {
+            model = std::move(r.value());
+        } else {
+            std::cerr << "[ModelLoader] " << r.error() << "\n";
+        }
+    }
     FrameResult frame;
     if (model) {
         frame = SceneFramer::computeFraming(model->vertices);
@@ -232,13 +234,6 @@ int main(int argc, char* argv[]) {
         mat->getMaterial().roughness = roughness;
     };
 
-    if (outdoor) {
-        // Outdoor: a single large ground plane, lit purely by the HDRI (sun + sky).
-        // No walls, no ceiling, no enclosure — nothing for stray GI rays to leak
-        // through, and one dominant directional light instead of 4 overlapping ones.
-        float G = S * 6.0f;
-        addQuad("Ground", {-G,-S,-G},{G,-S,-G},{G,-S,G},{-G,-S,G}, {0,1,0}, {0.40f,0.40f,0.42f}, 0.8f);
-    } else {
     // Bedroom walls/floor
     glm::vec3 wallColor(0.55f, 0.50f, 0.45f);   // muted warm gray walls
     glm::vec3 floorColor(0.18f, 0.10f, 0.05f);  // dark walnut wood
@@ -259,7 +254,6 @@ int main(int argc, char* argv[]) {
     addBox("Headboard", {-bedW,-S,-S}, {bedW,-S+bedH*2.5f,-S+0.3f}, {0.20f,0.12f,0.06f}, 0.4f);
     addBox("Pillow", {-bedW*0.4f,-S+bedH,-S+0.4f}, {bedW*0.4f,-S+bedH+1.0f,-S+bedD*0.4f}, {0.92f,0.90f,0.88f}, 0.95f);
     addBox("Nightstand", {S*0.55f,-S,-S}, {S*0.55f+3.0f,-S+bedH*1.5f,-S+3.0f}, {0.22f,0.14f,0.07f}, 0.45f);
-    }  // end indoor bedroom enclosure
 
     // Place model
     if (model) {
@@ -274,37 +268,11 @@ int main(int argc, char* argv[]) {
         mat->getMaterial().roughness = 0.5f;
     }
 
-    // Indoor bedroom lights only — outdoor is lit entirely by the HDRI sun + sky.
-    if (!outdoor)
-        SceneFramer::applyLights(scene.get(), frame);
+    // Bedroom lights
+    SceneFramer::applyLights(scene.get(), frame);
 
     renderer.setScene(scene.get());
     renderer.setRenderMode(rtMode);
-
-    // --- Scripted orbit recording: OHAO_ORBIT=<seconds> drives a fixed-timestep
-    // orbit around the model, dumping numbered frames to OHAO_ORBIT_DIR (default
-    // /tmp/orbit) for offline encoding into a video. Fixed dt → the clip length is
-    // exactly OHAO_ORBIT seconds at OHAO_ORBIT_FPS, independent of render speed.
-    const float orbitSecs = [](){ const char* e = getenv("OHAO_ORBIT"); return e ? (float)atof(e) : 0.0f; }();
-    const int   orbitFps  = [](){ const char* e = getenv("OHAO_ORBIT_FPS"); return e ? atoi(e) : 30; }();
-    const char* orbitDir  = [](){ const char* e = getenv("OHAO_ORBIT_DIR"); return e ? e : "/tmp/orbit"; }();
-    const bool  orbitMode = orbitSecs > 0.0f;
-    const int   orbitTotal  = (int)(orbitSecs * (float)orbitFps);
-    const int   orbitWarmup = orbitFps / 2;   // ~0.5s convergence before recording starts
-    long        orbitFrame  = 0;
-    glm::vec3   orbitCenter = frame.modelPosition;
-    float orbitRadius = 25.0f, orbitHeight = 0.0f, orbitStartAng = 0.0f;
-    if (orbitMode) {
-        glm::vec3 toCam = frame.cameraPosition - orbitCenter;
-        orbitRadius   = std::sqrt(toCam.x * toCam.x + toCam.z * toCam.z);
-        if (orbitRadius < 1.0f) orbitRadius = glm::length(toCam);
-        orbitHeight   = toCam.y;
-        orbitStartAng = std::atan2(toCam.z, toCam.x);
-        g_spp = std::max(g_spp, 4);   // a few spp/frame → cleaner video than 1-spp realtime
-        std::cout << "[orbit] " << orbitSecs << "s @ " << orbitFps << "fps = "
-                  << orbitTotal << " frames -> " << orbitDir
-                  << "  (radius=" << orbitRadius << ", spp=" << g_spp << ")\n";
-    }
 
     // Main loop
     auto lastTime = std::chrono::high_resolution_clock::now();
@@ -317,18 +285,7 @@ int main(int argc, char* argv[]) {
         lastTime = now;
 
         glfwPollEvents();
-        if (orbitMode) {
-            int rec = (int)orbitFrame - orbitWarmup;   // <0 during warmup
-            float ang = orbitStartAng;
-            if (rec >= 0) ang = orbitStartAng + 6.2831853f * (float)rec / (float)orbitTotal;
-            g_cam.position = orbitCenter + glm::vec3(orbitRadius * std::cos(ang), orbitHeight, orbitRadius * std::sin(ang));
-            glm::vec3 look = glm::normalize(orbitCenter - g_cam.position);
-            g_cam.yaw   = glm::degrees(std::atan2(look.z, look.x));
-            g_cam.pitch = glm::degrees(std::asin(std::clamp(look.y, -1.0f, 1.0f)));
-            g_cam.moved = (orbitFrame == 0);   // bootstrap DLSS once, then let it reproject the smooth path
-        } else {
-            processInput(window, dt);
-        }
+        processInput(window, dt);
 
         // Update camera
         auto& camera = renderer.getCamera();
@@ -381,32 +338,8 @@ int main(int argc, char* argv[]) {
         static const int   s_dumpEvery = [](){ const char* e = getenv("OHAO_DUMP_EVERY"); return e ? atoi(e) : 0; }();
         static const char* s_dumpPath  = [](){ const char* p = getenv("OHAO_DUMP_PATH");  return p ? p : "/tmp/ohao_live.png"; }();
         static long        s_dumpN      = 0;
-        static std::atomic<bool> s_dumpBusy{false};
-        // Async: the PNG encode+write (~30-50ms) runs on a DETACHED thread so it
-        // never blocks the render loop. A synchronous write here shows up as a
-        // frozen frame every N frames while panning — invisible when still, a
-        // visible hitch in motion. Copy pixels first (getPixels reuses its buffer);
-        // skip this dump if a prior write is still in flight.
-        if (s_dumpEvery > 0 && pixels && (s_dumpN++ % s_dumpEvery == 0) && !s_dumpBusy.exchange(true)) {
-            auto* buf = new uint8_t[(size_t)W * H * 4];
-            std::memcpy(buf, pixels, (size_t)W * H * 4);
-            std::thread([buf, W, H]() {
-                stbi_write_png(s_dumpPath, W, H, 4, buf, W * 4);
-                delete[] buf;
-                s_dumpBusy.store(false);
-            }).detach();
-        }
-
-        // Scripted orbit: write numbered frames (after warmup), then close.
-        if (orbitMode) {
-            int rec = (int)orbitFrame - orbitWarmup;
-            if (rec >= 0 && pixels) {
-                char opath[512];
-                snprintf(opath, sizeof(opath), "%s/frame_%04d.png", orbitDir, rec);
-                stbi_write_png(opath, W, H, 4, pixels, W * 4);
-            }
-            orbitFrame++;
-            if (rec + 1 >= orbitTotal) glfwSetWindowShouldClose(window, GLFW_TRUE);
+        if (s_dumpEvery > 0 && pixels && (s_dumpN++ % s_dumpEvery == 0)) {
+            stbi_write_png(s_dumpPath, W, H, 4, pixels, W * 4);
         }
 
         glfwSwapBuffers(window);
@@ -421,20 +354,8 @@ int main(int argc, char* argv[]) {
             snprintf(title, sizeof(title), "OHAO Interactive RT | %.1f fps | %d spp/frame | %d total spp",
                      fps, g_spp, totalSpp);
             glfwSetWindowTitle(window, title);
-            // Transient stderr echo so headless perf runs can capture fps + median
-            // frame time without a window manager. Prints once per second.
-            std::fprintf(stderr, "[perf] %.2f fps | %.3f ms/frame\n", fps, 1000.0f / fps);
             frameCount = 0;
             fpsTimer = 0;
-        }
-
-        // Headless auto-exit: OHAO_EXIT_AFTER=<seconds> closes the window so a
-        // scripted perf run terminates and its stderr [perf] lines can be parsed.
-        static const float s_exitAfter = [](){ const char* e = getenv("OHAO_EXIT_AFTER"); return e ? (float)atof(e) : 0.0f; }();
-        static float s_elapsed = 0.0f;
-        s_elapsed += dt;
-        if (s_exitAfter > 0.0f && s_elapsed >= s_exitAfter) {
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
         // Screenshot

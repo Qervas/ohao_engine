@@ -21,9 +21,12 @@ target_include_directories(ohao_renderer PUBLIC
     ${nlohmann_json_SOURCE_DIR}/include
 )
 
+target_compile_features(ohao_renderer PUBLIC cxx_std_20)
+
 target_link_libraries(ohao_renderer PUBLIC
     ohao_gpu_vulkan
     ohao_scene
+    ohao_core
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}

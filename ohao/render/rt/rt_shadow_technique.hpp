@@ -10,6 +10,7 @@
 
 #include "render_technique.hpp"
 #include "rt_acceleration_structure.hpp"
+#include "render/rt/rt_meta.hpp"
 
 namespace ohao {
 
@@ -87,5 +88,8 @@ private:
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     VkDeviceAddress getBufferDeviceAddress(VkBuffer buffer);
 };
+
+// Compile-time check: concrete technique still models the documented concept.
+static_assert(ShadowTechniqueLike<RTShadowTechnique>);
 
 } // namespace ohao

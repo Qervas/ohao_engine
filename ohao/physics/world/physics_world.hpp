@@ -13,6 +13,8 @@
 #include <thread>
 #include <mutex>
 #include <future>
+#include <string_view>
+#include <span>
 
 namespace ohao {
 
@@ -56,6 +58,10 @@ enum class SimulationState {
     STEPPING
 };
 
+[[nodiscard]] constexpr bool isSimulating(SimulationState s) noexcept {
+    return s == SimulationState::RUNNING || s == SimulationState::STEPPING;
+}
+
 // Enhanced physics world with multithreading and optimization
 class PhysicsWorld {
 public:
@@ -74,52 +80,57 @@ public:
     void resume();
     void stop();
     
-    SimulationState getSimulationState() const { return m_state; }
-    void setSimulationState(SimulationState state) { m_state = state; }
+    [[nodiscard]] SimulationState getSimulationState() const noexcept { return m_state; }
+    void setSimulationState(SimulationState state) noexcept { m_state = state; }
+    [[nodiscard]] bool isRunning() const noexcept { return m_state == SimulationState::RUNNING; }
+    [[nodiscard]] bool isPaused() const noexcept { return m_state == SimulationState::PAUSED; }
     
     // Body management
-    std::shared_ptr<dynamics::RigidBody> createRigidBody(PhysicsComponent* component);
+    [[nodiscard]] std::shared_ptr<dynamics::RigidBody> createRigidBody(PhysicsComponent* component);
     void removeRigidBody(std::shared_ptr<dynamics::RigidBody> body);
     void removeRigidBody(dynamics::RigidBody* body);
-    size_t getBodyCount() const { return m_rigidBodies.size(); }
+    [[nodiscard]] size_t getBodyCount() const noexcept { return m_rigidBodies.size(); }
+    [[nodiscard]] bool empty() const noexcept { return m_rigidBodies.empty(); }
 
     // Body access (for profile system)
-    const std::vector<std::shared_ptr<dynamics::RigidBody>>& getRigidBodies() const { return m_rigidBodies; }
+    [[nodiscard]] const std::vector<std::shared_ptr<dynamics::RigidBody>>& getRigidBodies() const noexcept {
+        return m_rigidBodies;
+    }
 
     // Resolve a backend BodyHandle to the owning actor's name ("" if not found)
-    std::string resolveHandleName(backend::BodyHandle handle) const;
+    [[nodiscard]] std::string resolveHandleName(backend::BodyHandle handle) const;
 
     // Test-only: Add raw rigid body without component (for Python tests)
     void addRigidBodyForTesting(std::shared_ptr<dynamics::RigidBody> body);
     
     // Backward compatibility methods
-    size_t getRigidBodyCount() const { return getBodyCount(); }
+    [[nodiscard]] size_t getRigidBodyCount() const noexcept { return getBodyCount(); }
     void stepSimulation(float deltaTime) { step(deltaTime); }
     
     // Initialize overloads for backward compatibility
     template<typename T>
-    bool initialize(const T& /*unused_settings*/) { initialize(); return true; }
+    [[nodiscard]] bool initialize(const T& /*unused_settings*/) { initialize(); return true; }
     
     // === RAYCASTING & QUERIES ===
-    bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+    [[nodiscard]] bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                  backend::RaycastHit& outHit, uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
-    std::vector<backend::RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
+    [[nodiscard]] std::vector<backend::RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
                                                  float maxDistance, uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
-    bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
+    [[nodiscard]] bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
                     float maxDistance, backend::ShapeCastResult& outHit,
                     uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
-    bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
+    [[nodiscard]] bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
                  const glm::quat& rotation, float maxDistance, backend::ShapeCastResult& outHit,
                  uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
-    std::vector<backend::BodyHandle> overlapSphere(const glm::vec3& center, float radius,
+    [[nodiscard]] std::vector<backend::BodyHandle> overlapSphere(const glm::vec3& center, float radius,
                                                     uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
-    std::vector<backend::BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
+    [[nodiscard]] std::vector<backend::BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
                                                  const glm::quat& rotation,
                                                  uint16_t layerMask = backend::CollisionLayer::ALL_MASK) const;
 
     // === CONTACT CALLBACKS ===
     void setContactListener(backend::IContactListener* listener);
-    std::vector<backend::ContactEvent> getContactEvents();
+    [[nodiscard]] std::vector<backend::ContactEvent> getContactEvents();
 
     // === COLLISION LAYERS ===
     void setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide);
@@ -127,16 +138,16 @@ public:
     void setBodyLayer(backend::BodyHandle handle, uint16_t layer);
 
     // === CONSTRAINTS ===
-    backend::ConstraintHandle createConstraint(const backend::ConstraintSettings& settings);
+    [[nodiscard]] backend::ConstraintHandle createConstraint(const backend::ConstraintSettings& settings);
     void destroyConstraint(backend::ConstraintHandle handle);
     void setConstraintEnabled(backend::ConstraintHandle handle, bool enabled);
     void setConstraintMotorState(backend::ConstraintHandle handle, bool enabled, float speed, float maxForce);
     void setConstraintLimits(backend::ConstraintHandle handle, float min, float max);
     void setConstraintBreaking(backend::ConstraintHandle handle, float maxForce, float maxTorque);
-    std::vector<backend::ConstraintHandle> getAndClearBrokenConstraints();
+    [[nodiscard]] std::vector<backend::ConstraintHandle> getAndClearBrokenConstraints();
 
     // === CHARACTER CONTROLLER ===
-    backend::CharacterHandle createCharacter(const backend::CharacterCreationInfo& info);
+    [[nodiscard]] backend::CharacterHandle createCharacter(const backend::CharacterCreationInfo& info);
     void destroyCharacter(backend::CharacterHandle handle);
     backend::CharacterState getCharacterState(backend::CharacterHandle handle) const;
     void setCharacterPosition(backend::CharacterHandle handle, const glm::vec3& pos);
@@ -147,27 +158,31 @@ public:
 
     // Configuration
     void setConfig(const PhysicsWorldConfig& config);
-    const PhysicsWorldConfig& getConfig() const { return m_config; }
+    [[nodiscard]] const PhysicsWorldConfig& getConfig() const noexcept { return m_config; }
     
     void setGravity(const glm::vec3& gravity);
-    glm::vec3 getGravity() const { return m_config.gravity; }
+    [[nodiscard]] glm::vec3 getGravity() const noexcept { return m_config.gravity; }
     
     void setTimeStep(float timeStep);
-    float getTimeStep() const { return m_config.timeStep; }
+    [[nodiscard]] float getTimeStep() const noexcept { return m_config.timeStep; }
     
     // Force system access
-    forces::ForceRegistry& getForceRegistry() { return m_forceRegistry; }
-    const forces::ForceRegistry& getForceRegistry() const { return m_forceRegistry; }
+    [[nodiscard]] forces::ForceRegistry& getForceRegistry() noexcept { return m_forceRegistry; }
+    [[nodiscard]] const forces::ForceRegistry& getForceRegistry() const noexcept {
+        return m_forceRegistry;
+    }
 
     // Profile system access
-    ProfileManager* getProfileManager() { return m_profileManager.get(); }
-    const ProfileManager* getProfileManager() const { return m_profileManager.get(); }
+    [[nodiscard]] ProfileManager* getProfileManager() noexcept { return m_profileManager.get(); }
+    [[nodiscard]] const ProfileManager* getProfileManager() const noexcept {
+        return m_profileManager.get();
+    }
     
     // Convenience methods for force management
-    size_t registerForce(std::unique_ptr<forces::ForceGenerator> generator, 
-                        const std::string& name = "",
+    size_t registerForce(std::unique_ptr<forces::ForceGenerator> generator,
+                        std::string_view name = "",
                         const std::vector<dynamics::RigidBody*>& targetBodies = {});
-    bool unregisterForce(size_t forceId);
+    [[nodiscard]] bool unregisterForce(size_t forceId);
     void clearAllForces();
     
     // Setup common force configurations
@@ -239,7 +254,7 @@ public:
     // === BACKEND (Plugin System) ===
     backend::IPhysicsBackend* getBackend() { return m_backend.get(); }
     const backend::IPhysicsBackend* getBackend() const { return m_backend.get(); }
-    bool hasBackend() const { return m_backend && m_backend->isInitialized(); }
+    [[nodiscard]] bool hasBackend() const { return m_backend && m_backend->isInitialized(); }
     const char* getBackendName() const { return m_backend ? m_backend->getName() : "none"; }
 
     // Register a body with the backend (called after shape is set)
@@ -265,27 +280,29 @@ public:
 
     // Force volumes — spatial AABB/sphere regions that apply a force to bodies inside.
     // Returns a handle (>0) usable with destroyForceVolume / setForceVolumeEnabled.
-    int createForceVolumeBox(const glm::vec3& center, const glm::vec3& halfExtents,
+    [[nodiscard]] int createForceVolumeBox(const glm::vec3& center, const glm::vec3& halfExtents,
                              const glm::vec3& force);
-    int createForceVolumeSphere(const glm::vec3& center, float radius,
+    [[nodiscard]] int createForceVolumeSphere(const glm::vec3& center, float radius,
                                 const glm::vec3& force);
     void destroyForceVolume(int handle);
     void setForceVolumeEnabled(int handle, bool enabled);
 
     // === SPRINGS ===
     // Body-to-body spring (both ends attached to dynamic bodies)
-    int createSpring(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
+    [[nodiscard]] int createSpring(dynamics::RigidBody* bodyA, dynamics::RigidBody* bodyB,
                      float stiffness, float restLength, float damping);
     // Anchored spring (one end fixed in world space)
-    int createAnchorSpring(dynamics::RigidBody* body, const glm::vec3& anchor,
+    [[nodiscard]] int createAnchorSpring(dynamics::RigidBody* body, const glm::vec3& anchor,
                            float stiffness, float restLength, float damping);
     void destroySpring(int handle);
     void setSpringEnabled(int handle, bool enabled);
 
     // === TERRAIN HEIGHTFIELD ===
     // Create a static terrain heightfield body. Replaces any previous terrain body.
-    // heights: row-major normalized [0,1] values. Returns the body handle (INVALID_BODY on failure).
-    backend::BodyHandle addTerrainHeightfield(const float* heights, uint32_t resolution,
+    // heights: row-major normalized [0,1] values (size must be at least resolution*resolution).
+    // Returns the body handle (INVALID_BODY on failure).
+    [[nodiscard]] backend::BodyHandle addTerrainHeightfield(std::span<const float> heights,
+                                              uint32_t resolution,
                                               float worldSize, float heightScale);
     void removeTerrainBody();
 
@@ -379,7 +396,7 @@ public:
     PhysicsWorld* getWorld() { return m_world.get(); }
     const PhysicsWorld* getWorld() const { return m_world.get(); }
     
-    bool isInitialized() const { return m_world != nullptr; }
+    [[nodiscard]] bool isInitialized() const { return m_world != nullptr; }
 
 private:
     PhysicsManager() = default;
@@ -404,8 +421,8 @@ public:
         float avgTime{0.0f};
     };
     
-    static void beginSection(const std::string& name);
-    static void endSection(const std::string& name);
+    static void beginSection(std::string_view name);
+    static void endSection(std::string_view name);
     static void reset();
     
     static const std::vector<ProfileSection>& getSections();
@@ -419,7 +436,7 @@ private:
 // RAII profiler helper
 class ProfileScope {
 public:
-    explicit ProfileScope(const std::string& name) : m_name(name) {
+    explicit ProfileScope(std::string_view name) : m_name(name) {
         PhysicsProfiler::beginSection(m_name);
     }
     

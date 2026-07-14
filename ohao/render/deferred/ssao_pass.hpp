@@ -10,12 +10,12 @@ public:
     SSAOPass() = default;
     ~SSAOPass() override;
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice) override;
     void cleanup() override;
     void execute(VkCommandBuffer cmd, uint32_t frameIndex) override;
     void onResize(uint32_t width, uint32_t height) override;
-    const char* getName() const override { return "SSAOPass"; }
-    bool reloadShader(const std::string& spvPath) override;
+    [[nodiscard]] const char* getName() const override { return "SSAOPass"; }
+    [[nodiscard]] bool reloadShader(std::string_view spvPath) override;
 
     // Configuration
     void setDepthBuffer(VkImageView depth);
@@ -29,15 +29,15 @@ public:
     void setSampleCount(uint32_t count) { m_sampleCount = count; }
 
     // Get output
-    VkImageView getOutputView() const { return m_aoOutputView; }
-    VkImage getOutputImage() const { return m_aoOutput; }
-    VkSampler getSampler() const { return m_sampler; }
+    [[nodiscard]] VkImageView getOutputView() const { return m_aoOutputView; }
+    [[nodiscard]] VkImage getOutputImage() const { return m_aoOutput; }
+    [[nodiscard]] VkSampler getSampler() const { return m_sampler; }
 
 private:
-    bool createOutputImage();
-    bool createNoiseTexture();
-    bool createDescriptors();
-    bool createPipeline();
+    [[nodiscard]] bool createOutputImage();
+    [[nodiscard]] bool createNoiseTexture();
+    [[nodiscard]] bool createDescriptors();
+    [[nodiscard]] bool createPipeline();
     void destroyOutputImage();
 
     // Input buffers

@@ -12,7 +12,7 @@
 
 namespace ohao {
 
-Actor::Actor(const std::string& name)
+Actor::Actor(std::string_view name)
     : SceneObject(name)
     , scene(nullptr)
     , parent(nullptr)
@@ -20,6 +20,19 @@ Actor::Actor(const std::string& name)
 {
     // Add transform component by default
     addComponent<TransformComponent>();
+}
+
+void Actor::addTag(std::string_view tag) {
+    if (tag.empty() || hasTag(tag)) return;
+    tags.emplace_back(tag);
+}
+
+void Actor::removeTag(std::string_view tag) {
+    std::erase_if(tags, [&](const std::string& t) { return t == tag; });
+}
+
+bool Actor::hasTag(std::string_view tag) const {
+    return std::find(tags.begin(), tags.end(), tag) != tags.end();
 }
 
 Actor::~Actor() {
