@@ -268,8 +268,10 @@ void VulkanRenderer::uploadLightBuffer() {
             memcpy(static_cast<uint8_t*>(mapped) + lightDataOffset, gpuLights.data(), gpuLights.size() * sizeof(GPULight));
             vkUnmapMemory(m_device, m_rtLightMemory);
 
-            // Load environment map if set
-            if (!m_envMapPath.empty() && m_rtLightMemory) {
+            // Load environment map if set (once per path — reloading every
+            // updateSceneBuffers was leaking multi-GB HDR images and OOM/segfault).
+            if (!m_envMapPath.empty() && m_rtLightMemory &&
+                m_envMapPath != m_envMapLoadedPath) {
                 int ew, eh, ec;
                 float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);
                 if (hdrPixels) {
@@ -455,6 +457,7 @@ void VulkanRenderer::uploadLightBuffer() {
 
                     std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
                               << " (bindless idx=" << envTexIdx << ")" << std::endl;
+                    m_envMapLoadedPath = m_envMapPath;
                 }
             }
 

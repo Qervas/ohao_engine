@@ -16,31 +16,46 @@ You never have to stare at FIT frames. Showcase files are SHOW quality and grain
 --show-denoise=none   # raw SHOW (if you want noise in docs)
 ```
 
+## Scenes
+
+| `--scene` | Content | Optimizes |
+|-----------|---------|-----------|
+| **`studio` (default)** | DamagedHelmet + ground + studio HDRI + 3-point lights | Ground albedo RGB |
+| `cornell` | Classic box (fast regression) | Left wall albedo RGB |
+
+Studio uses **multi-view** loss (default 2–3 cameras) and a **relight** still (hot key light) after recovery.
+
 ## Run
 
 ```bash
-./build/inverse_fit --selftest --quality high     # default product quality
-./build/inverse_fit --selftest --quality draft    # faster while developing
+# Default: studio helmet, multi-view, OIDN SHOW
+./build/inverse_fit --selftest --scene studio --quality draft
+./build/inverse_fit --selftest --scene studio --quality high
+
+# Legacy box
+./build/inverse_fit --selftest --scene cornell --quality draft
+
 ./build/inverse_fit --selftest --quality ultra    # 1080p @ 2048 spp stills
 ./build/inverse_fit --selftest --quality cinema   # 4K stills
 ```
 
 Outputs under `renders/inverse/`:
 
-- `target_show.png` — ground-truth high-quality render  
+- `target_show.png` / `target_<view>.png` — ground-truth stills  
 - `init_show.png` — wrong initial parameters  
-- `recovered_show.png` — after optimization  
+- `recovered_show.png` / `recovered_<view>.png` — after optimization  
+- `recovered_relight.png` / `truth_relight.png` — same materials, different lighting  
 - `trajectory.json` — loss / θ per iter  
 
 ## Pipeline
 
-1. Build synthetic Cornell-like scene (left wall albedo = optimizable RGB).  
-2. SHOW-render truth → `target_show.png`.  
-3. FIT-render truth → internal target for loss.  
-4. Finite-difference + Adam (or `--gd`) on masked MSE (left wall).  
-5. SHOW-render recovered → `recovered_show.png`.  
+1. Build **studio** (helmet + HDRI) or cornell.  
+2. Multi-view SHOW + FIT targets under truth ground albedo.  
+3. Finite-difference + Adam on **multi-view masked MSE** (ground band).  
+4. SHOW recovered multi-view (OIDN).  
+5. Relight: boost key light, re-render recovered vs truth.  
 
-**FIT never denoises** (determinism + unbiased FD; grain is OK). **SHOW uses OIDN** so you get grain-free stills without polluting the inverse loop.
+**FIT never denoises** (white noise is a feature for inverse/FD). **SHOW uses OIDN** for grain-free stills.
 
 ## Seed
 

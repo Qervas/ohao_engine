@@ -33,20 +33,24 @@ struct ImageRGBA8 {
 };
 
 /// Mean squared error over RGB (ignore alpha). Returns +inf on size mismatch.
-/// If `xMaxFrac` ∈ (0,1], only pixels with x/width < xMaxFrac contribute (e.g. left wall).
+/// Optional axis-aligned crop in normalized coords [0,1]:
+///   x in [0, xMaxFrac), y in [yMinFrac, 1)  (image y grows downward).
 [[nodiscard]] inline double mseRGB(const ImageRGBA8& a, const ImageRGBA8& b,
-                                   double xMaxFrac = 1.0) {
+                                   double xMaxFrac = 1.0, double yMinFrac = 0.0) {
     if (a.width != b.width || a.height != b.height || a.rgba.size() != b.rgba.size()) {
         return std::numeric_limits<double>::infinity();
     }
-    const size_t n = a.pixelCount();
-    if (n == 0) return 0.0;
+    if (a.pixelCount() == 0) return 0.0;
     const uint32_t xLim =
         (xMaxFrac >= 1.0) ? a.width
                           : static_cast<uint32_t>(std::ceil(xMaxFrac * static_cast<double>(a.width)));
+    const uint32_t y0 =
+        (yMinFrac <= 0.0)
+            ? 0u
+            : static_cast<uint32_t>(std::floor(yMinFrac * static_cast<double>(a.height)));
     double sum = 0.0;
     size_t count = 0;
-    for (uint32_t y = 0; y < a.height; ++y) {
+    for (uint32_t y = y0; y < a.height; ++y) {
         for (uint32_t x = 0; x < xLim; ++x) {
             const size_t o = (static_cast<size_t>(y) * a.width + x) * 4;
             const double dr = (static_cast<double>(a.rgba[o + 0]) - b.rgba[o + 0]) / 255.0;

@@ -60,23 +60,23 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).
 4. **Skinned RT BLAS** — animation subsystem removed; gap is moot until reintroduced.
 
-## Inverse rendering (Phase A — dual budget)
+## Inverse rendering (physical, no ML yet)
 
 | Item | State |
 |------|--------|
 | **Goal** | Recover scene params θ so R(θ) ≈ target image |
-| **Wedge** | Left-wall **albedo RGB** via offline PT + finite-diff **Adam** |
-| **CLI** | `./build/inverse_fit --selftest --quality high` |
-| **Lib** | `ohao/inverse/` — loss, params, Adam, quality presets |
-| **SHOW default** | **1920×1080 @ 1024 spp** (clean stills) |
-| **FIT default** | 640×360 @ 128 spp (gradients only) |
-| **Seed** | `VulkanRenderer::setRenderSeed` → PT sample base |
+| **Default scene** | **studio**: DamagedHelmet + ground + HDRI + multi-view |
+| **Optimizes** | Ground albedo RGB (warm clay truth vs cool wrong init) |
+| **Multi-view** | 2–3 cameras; mean FIT loss |
+| **Relight** | After fit: hot key light → `recovered_relight.png` |
+| **CLI** | `./build/inverse_fit --selftest --scene studio --quality draft` |
+| **SHOW** | OIDN grain-free; FIT always raw MC |
 | **Docs** | `docs/inverse.md` |
-| **Not yet** | Autodiff, multi-param, real photos |
+| **Not yet** | ML, autodiff, multi-param materials, real photos |
 
 ```bash
-./build/inverse_fit --selftest --quality high
-# → renders/inverse/{target,init,recovered}_show.png + trajectory.json
+./build/inverse_fit --selftest --scene studio --quality draft
+# → target_*, init_show, recovered_*, *relight*, trajectory.json
 ```
 
 ## Next actions

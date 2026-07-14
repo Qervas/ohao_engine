@@ -139,7 +139,13 @@ public:
     void setRTRenderSettings(const RTRenderSettings& settings);
     void setRTRenderProfile(RTRenderProfile profile);
     [[nodiscard]] const RTRenderSettings& getRTRenderSettings() const { return m_rtSettings; }
-    void setEnvironmentMap(std::string_view path) { m_envMapPath = std::string(path); }
+    void setEnvironmentMap(std::string_view path) {
+        m_envMapPath = std::string(path);
+        // Force reload on next scene upload when path changes.
+        if (m_envMapPath != m_envMapLoadedPath) {
+            m_envMapLoadedPath.clear();
+        }
+    }
     void notifyCameraChanged();
     void resetAccumulation();
     /// Offline/inverse: base sample index after accumulation reset (FD stability).
@@ -439,6 +445,7 @@ private:
     VkBuffer m_envConditionalCDFBuffer{VK_NULL_HANDLE};
     VkDeviceMemory m_envConditionalCDFMemory{VK_NULL_HANDLE};
     std::string m_envMapPath;
+    std::string m_envMapLoadedPath;  // last successfully uploaded env (skip re-load)
     VkImageView m_envMapImageView{VK_NULL_HANDLE};  // for deferred pipeline
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
