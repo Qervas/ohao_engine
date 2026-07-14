@@ -1,14 +1,15 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 #include <functional>
-#include <type_traits>
 #include <typeindex>
 #include <atomic>
 #include <algorithm> // Required for std::find
+#include "core/concepts.hpp"
 #include "scene/scene_object.hpp" // Include SceneObject
 #include "scene/component/component.hpp" // Include Component
 #include "scene/component/transform_component.hpp" // Include TransformComponent directly
@@ -27,12 +28,12 @@ class Actor : public SceneObject {
 public:
     using Ptr = std::shared_ptr<Actor>;
 
-    Actor(const std::string& name = "Actor");
+    explicit Actor(std::string_view name = "Actor");
     ~Actor() override;
 
     // Scene management
     void setScene(Scene* scene);
-    Scene* getScene() const { return scene; }
+    [[nodiscard]] Scene* getScene() const { return scene; }
 
     // Lifecycle methods
     virtual void initialize();
@@ -43,43 +44,49 @@ public:
 
     // Hierarchy management (now manages Actor* instead of SceneNode*)
     void setParent(Actor* parent);
-    Actor* getParent() const { return parent; }
+    [[nodiscard]] Actor* getParent() const { return parent; }
     void addChild(Actor* child);
     void removeChild(Actor* child);
-    const std::vector<Actor*>& getChildren() const { return children; }
+    [[nodiscard]] const std::vector<Actor*>& getChildren() const { return children; }
     void detachFromParent();
 
     // Name properties are inherited from SceneObject
-    const std::string& getName() const { return SceneObject::getName(); }
-    void setName(const std::string& newName) { SceneObject::setName(newName); }
+    [[nodiscard]] const std::string& getName() const { return SceneObject::getName(); }
+    void setName(std::string_view newName) { SceneObject::setName(std::string(newName)); }
 
     // Active state
-    bool isActive() const { return active; }
+    [[nodiscard]] bool isActive() const { return active; }
     void setActive(bool isActive) { active = isActive; }
 
     // Editor visibility (for viewport display, like Blender's eye icon)
-    bool isEditorVisible() const { return editorVisible; }
+    [[nodiscard]] bool isEditorVisible() const { return editorVisible; }
     void setEditorVisible(bool visible) { editorVisible = visible; }
 
     // Transform helpers
-    TransformComponent* getTransform() const;
+    [[nodiscard]] TransformComponent* getTransform() const;
     
     // Transform compatibility with SceneObject
-    glm::mat4 getWorldMatrix() const { 
+    [[nodiscard]] glm::mat4 getWorldMatrix() const { 
         return getTransform() ? getTransform()->getWorldMatrix() : glm::mat4(1.0f);
     }
 
     // Unique ID is inherited from SceneObject
-    ObjectID getID() const { return SceneObject::getID(); }
+    [[nodiscard]] ObjectID getID() const { return SceneObject::getID(); }
 
     // Stable GUID for map serialization
-    const std::string& getGuid() const { return guid; }
-    void setGuid(const std::string& g) { guid = g; }
+    [[nodiscard]] const std::string& getGuid() const { return guid; }
+    void setGuid(std::string_view g) { guid = std::string(g); }
+
+    // Tags (scene queries via Scene::findActorsByTag)
+    void addTag(std::string_view tag);
+    void removeTag(std::string_view tag);
+    [[nodiscard]] bool hasTag(std::string_view tag) const;
+    [[nodiscard]] const std::vector<std::string>& getTags() const noexcept { return tags; }
+    void clearTags() noexcept { tags.clear(); }
 
     // Component management - implemented inline for simplicity
-    template<typename T, typename... Args>
+    template<ComponentType T, typename... Args>
     std::shared_ptr<T> addComponent(Args&&... args) {
-        static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
         std::shared_ptr<T> component = std::make_shared<T>(std::forward<Args>(args)...);
         component->setOwner(this);
         components.push_back(component);
@@ -89,9 +96,8 @@ public:
         return component;
     }
 
-    template<typename T>
-    std::shared_ptr<T> getComponent() const {
-        static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
+    template<ComponentType T>
+    [[nodiscard]] std::shared_ptr<T> getComponent() const {
         auto it = componentsByType.find(std::type_index(typeid(T)));
         if (it != componentsByType.end()) {
             return std::static_pointer_cast<T>(it->second);
@@ -99,42 +105,51 @@ public:
         return nullptr;
     }
 
-    template<typename T>
-    bool hasComponent() const {
-        static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
-        auto it = componentsByType.find(std::type_index(typeid(T)));
-        return it != componentsByType.end();
+    template<ComponentType T>
+    [[nodiscard]] bool hasComponent() const {
+        return componentsByType.contains(std::type_index(typeid(T)));
     }
 
-    template<typename T>
+    template<ComponentType T>
     bool removeComponent() {
-        static_assert(std::is_base_of<Component, T>::value, "Type must be a Component");
         auto it = componentsByType.find(std::type_index(typeid(T)));
-        if (it != componentsByType.end()) {
-            std::shared_ptr<Component> component = it->second;
-            componentsByType.erase(it);
-            auto compIt = std::find_if(components.begin(), components.end(), 
-                [&component](const std::shared_ptr<Component>& comp) { return comp == component; });
-            if (compIt != components.end()) { components.erase(compIt); }
-            component->destroy();
-            component->setOwner(nullptr);
-            onComponentRemoved(component);
-            return true;
-        }
-        return false;
+        if (it == componentsByType.end()) return false;
+
+        std::shared_ptr<Component> component = it->second;
+        componentsByType.erase(it);
+        std::erase_if(components, [&](const std::shared_ptr<Component>& c) {
+            return c == component;
+        });
+        component->destroy();
+        component->setOwner(nullptr);
+        onComponentRemoved(component);
+        return true;
     }
 
     void removeAllComponents();
 
-    const std::vector<std::shared_ptr<Component>>& getAllComponents() const { return components; }
+    [[nodiscard]] const std::vector<std::shared_ptr<Component>>& getAllComponents() const noexcept {
+        return components;
+    }
+
+    [[nodiscard]] std::size_t componentCount() const noexcept { return components.size(); }
+
+    /// Visit every component (non-hot-path).
+    template<typename F>
+        requires std::invocable<F&, Component&>
+    void forEachComponent(F&& fn) {
+        for (auto& c : components) {
+            if (c) fn(*c);
+        }
+    }
 
     void setModel(std::shared_ptr<Model> model);
-    std::shared_ptr<Model> getModel() const;
+    [[nodiscard]] std::shared_ptr<Model> getModel() const;
     void setMaterial(const Material& material);
-    const Material& getMaterial() const;
-    Material& getMaterial();
+    [[nodiscard]] const Material& getMaterial() const;
+    [[nodiscard]] Material& getMaterial();
     
-    const char* getTypeName() const override { return "Actor"; }
+    [[nodiscard]] const char* getTypeName() const override { return "Actor"; }
 
 protected:
     virtual void onComponentAdded(std::shared_ptr<Component> component);
@@ -150,6 +165,7 @@ protected:
     std::vector<std::shared_ptr<Component>> components;
     std::unordered_map<std::type_index, std::shared_ptr<Component>> componentsByType;
     std::string guid;
+    std::vector<std::string> tags;
 };
 
 } // namespace ohao 

@@ -82,14 +82,13 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // DLSS-RR (Phase 5) also REQUIRES sub-pixel camera jitter — same Halton(2,3)
     // pattern NRD uses. The offset is fed to InJitterOffsetX/Y so DLSS can align
     // and integrate the sub-pixel samples across frames.
-    if (m_renderSettings.denoiseMode == DenoiseMode::NRD ||
-        m_renderSettings.denoiseMode == DenoiseMode::DLSSRR) {
+    // Policy: denoiseNeedsPixelJitter (NRD + DLSS-RR) — single source in rt_meta.
+    if (denoiseNeedsPixelJitter(m_renderSettings.denoiseMode)) {
         const uint32_t idx = (m_haltonIndex % 16u) + 1u;
         m_jitterCurrent = glm::vec2(halton(idx, 2) - 0.5f, halton(idx, 3) - 0.5f);
         m_haltonIndex++;
     } else {
-        // Non-NRD paths (None/OIDN/OptiX) keep pixel-center sampling — zero jitter
-        // here preserves bit-exact parity with pre-T4 behavior.
+        // None/OIDN/Atrous keep pixel-center sampling — zero jitter preserves parity.
         m_jitterCurrent = glm::vec2(0.0f);
     }
 
@@ -693,33 +692,24 @@ void PathTracer::render(VkCommandBuffer cmd, RTAccelerationStructure* accel,
     // 256-byte device maxPushConstantsSize, so we cannot append a field — the
     // realtime raygen unpacks samplesPerFrame from the high bits and loops on it;
     // base/offline raygen mask it off (they trace one path per dispatch).
-    const uint32_t spf = std::max(1u, m_renderSettings.samplesPerFrame);
+    const uint32_t spf = clampSamplesPerFrame(m_renderSettings.samplesPerFrame);
     const uint32_t packedBouncesAndSpf = (spf << 16) | (m_maxBounces & 0xFFFFu);
     pc.params = glm::uvec4(m_width, m_height, m_sampleIndex, packedBouncesAndSpf);
     pc.control = glm::uvec4(0u);
     if (m_renderSettings.enableAuxiliaryAOVs) pc.control.x |= kPTFlagEnableAOVs;
     if (m_renderSettings.enableInternalDenoise) pc.control.x |= kPTFlagEnableInternalDenoise;
     if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;
-    // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings, not the
-    // final sample's 1spp. Raygen handles sample-0 (overwrite) vs N>0 (running mean).
-    if (m_renderSettings.denoiseMode == DenoiseMode::NRD) pc.control.x |= kPTFlagAccumulateAOVs;
-    // DenoiseMode::Atrous (SVGF): feed the denoiser a FRESH per-frame independent
-    // sample instead of the engine's naive accumulated running-mean beauty. SVGF's
-    // own temporal accumulation replaces it — which is what makes the per-pixel
-    // luminance variance (hence the variance-guided spatial filter) meaningful.
-    // raygen historyFrameCount=0 => acc=radiance (1 spp) each frame; the Sobol
-    // sampler still advances via params.z (m_sampleIndex), so frames are
-    // independent noise. Motion vectors are 0 in this mode (raygen gates MV on
-    // historyFrameCount>0) — fine for SVGF's static-camera reprojection; the
-    // moving-camera MV path is exercised by the live interactive viewer.
-    const bool svgfMode = (m_renderSettings.denoiseMode == DenoiseMode::Atrous);
-    // DLSS-RR does its OWN temporal accumulation, so it must be fed a FRESH per-frame
-    // 1-spp HDR frame (not the engine's running-mean). Forcing historyFrameCount=0 in
-    // the raygen makes accum = radiance (1 spp) each frame — the same trick SVGF uses.
-    // Also raise the DLSSRR flag so the raygen writes the packed normal/roughness guide.
+    // Sub-plan 4.F T3: NRD wants the mean of N samples on the 5 AOV bindings.
+    // Policy: denoiseNeedsAovAccumulation (rt_meta).
+    if (denoiseNeedsAovAccumulation(m_renderSettings.denoiseMode)) {
+        pc.control.x |= kPTFlagAccumulateAOVs;
+    }
+    // Atrous (SVGF) / DLSS-RR: denoiseWantsFreshSample → historyFrameCount=0 so
+    // raygen writes 1-spp beauty; denoisers own temporal accumulation.
+    const bool freshSample = denoiseWantsFreshSample(m_renderSettings.denoiseMode);
     const bool dlssMode = (m_renderSettings.denoiseMode == DenoiseMode::DLSSRR);
     if (dlssMode) pc.control.x |= kPTFlagDLSSRR;
-    pc.control.y = (svgfMode || dlssMode) ? 0u : m_historyFrameCount;
+    pc.control.y = freshSample ? 0u : m_historyFrameCount;
     pc.control.z = m_viewChangedThisFrame ? 1u : 0u;
     pc.control.w = m_envCDFWidth;
     pc.tuning = glm::vec4(m_renderSettings.fireflyClampLuminance, float(m_envCDFHeight), m_envCDFIntegral,

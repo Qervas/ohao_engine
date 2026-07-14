@@ -6,6 +6,7 @@
 #include <functional>
 #include <mutex>
 #include <atomic>
+#include <compare>
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -24,10 +25,9 @@ enum class AsyncTaskStatus {
 // Async compute task handle
 struct AsyncTaskHandle {
     uint64_t id{0};
-    bool valid() const { return id != 0; }
-
-    bool operator==(const AsyncTaskHandle& other) const { return id == other.id; }
-    bool operator!=(const AsyncTaskHandle& other) const { return id != other.id; }
+    [[nodiscard]] constexpr bool valid() const noexcept { return id != 0; }
+    [[nodiscard]] explicit constexpr operator bool() const noexcept { return valid(); }
+    [[nodiscard]] constexpr auto operator<=>(const AsyncTaskHandle&) const noexcept = default;
 };
 
 // Timeline semaphore for async synchronization
@@ -56,25 +56,25 @@ public:
     ~AsyncComputeQueue();
 
     // Initialization
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
                     uint32_t computeQueueFamily, uint32_t computeQueueIndex);
     void cleanup();
 
     // Queue a compute task
-    AsyncTaskHandle submitTask(
+    [[nodiscard]] AsyncTaskHandle submitTask(
         std::function<void(VkCommandBuffer)> recordCommands,
         std::function<void()> onComplete = nullptr
     );
 
     // Submit with explicit wait semaphores (for cross-queue sync)
-    AsyncTaskHandle submitTaskWithWait(
+    [[nodiscard]] AsyncTaskHandle submitTaskWithWait(
         std::function<void(VkCommandBuffer)> recordCommands,
         const std::vector<std::pair<VkSemaphore, uint64_t>>& waitSemaphores,
         std::function<void()> onComplete = nullptr
     );
 
     // Check if a task is complete
-    bool isTaskComplete(AsyncTaskHandle handle);
+    [[nodiscard]] bool isTaskComplete(AsyncTaskHandle handle);
 
     // Wait for a specific task to complete (blocking)
     void waitForTask(AsyncTaskHandle handle);
@@ -86,8 +86,15 @@ public:
     void processCompletedTasks();
 
     // Get the timeline semaphore for external synchronization
-    VkSemaphore getTimelineSemaphore() const { return m_timelineSemaphore.semaphore; }
-    uint64_t getCurrentSemaphoreValue() const { return m_timelineSemaphore.currentValue; }
+    [[nodiscard]] VkSemaphore getTimelineSemaphore() const noexcept {
+        return m_timelineSemaphore.semaphore;
+    }
+    [[nodiscard]] uint64_t getCurrentSemaphoreValue() const noexcept {
+        return m_timelineSemaphore.currentValue;
+    }
+    [[nodiscard]] bool isInitialized() const noexcept {
+        return m_timelineSemaphore.semaphore != VK_NULL_HANDLE;
+    }
 
     // Get semaphore value for a specific task (for wait operations)
     uint64_t getTaskSignalValue(AsyncTaskHandle handle) const;

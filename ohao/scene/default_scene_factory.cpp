@@ -1,4 +1,5 @@
 #include "default_scene_factory.hpp"
+// Scene factories use string_view Actor APIs via createActor / ComponentFactory.
 #include "core/console_widget.hpp"
 
 namespace ohao {

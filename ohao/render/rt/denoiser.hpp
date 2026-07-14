@@ -1,31 +1,30 @@
 #pragma once
+
 #include <vulkan/vulkan.h>
-#include <vector>
-#include <string>
+#include <cstdint>
 
 namespace ohao {
 
-// A-Trous wavelet denoiser — edge-aware spatial filter
-// Runs as compute shader passes after path tracer output
+/// Legacy A-Trous wavelet denoiser (compute). Prefer DenoiseMode::Atrous (SVGF) for new work.
 class RTDenoiser {
 public:
-    bool init(VkDevice device, VkPhysicalDevice physDevice, uint32_t width, uint32_t height);
+    [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physDevice, uint32_t width, uint32_t height);
     void destroy();
 
-    // Run denoiser: reads from inputImage, writes to outputImage
-    // Uses normalAOV and accumBuffer for edge detection
     void denoise(VkCommandBuffer cmd,
-                 VkImageView inputView,    // noisy tonemapped image
-                 VkImageView outputView,   // denoised result (can be same as input after all iterations)
-                 VkImageView normalView,   // GBuffer normals
-                 VkImageView accumView,    // accumulation buffer (depth proxy)
+                 VkImageView inputView,
+                 VkImageView outputView,
+                 VkImageView normalView,
+                 VkImageView accumView,
                  uint32_t width, uint32_t height,
                  int iterations = 5);
 
+    [[nodiscard]] bool isInitialized() const noexcept { return m_pipeline != VK_NULL_HANDLE; }
+
 private:
-    bool createPipeline();
-    bool createDescriptors();
-    bool createTempImage(uint32_t width, uint32_t height);
+    [[nodiscard]] bool createPipeline();
+    [[nodiscard]] bool createDescriptors();
+    [[nodiscard]] bool createTempImage(uint32_t width, uint32_t height);
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physDevice = VK_NULL_HANDLE;
@@ -36,7 +35,6 @@ private:
     VkDescriptorPool m_descPool = VK_NULL_HANDLE;
     VkDescriptorSet m_descSet = VK_NULL_HANDLE;
 
-    // Temp image for ping-pong
     VkImage m_tempImage = VK_NULL_HANDLE;
     VkDeviceMemory m_tempMemory = VK_NULL_HANDLE;
     VkImageView m_tempView = VK_NULL_HANDLE;

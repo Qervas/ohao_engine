@@ -10,6 +10,8 @@ target_include_directories(ohao_scene
     PUBLIC ${CMAKE_SOURCE_DIR}/ohao
 )
 
+target_compile_features(ohao_scene PUBLIC cxx_std_20)
+
 target_link_libraries(ohao_scene
     PUBLIC
         ohao_core

@@ -1,7 +1,11 @@
 #include "bindless_texture_manager.hpp"
 #include "../../gpu/vulkan/gpu_allocator.hpp"
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <cstring>
+#include <string_view>
+#include <span>
 
 // Include stb_image for texture loading
 #define STB_IMAGE_IMPLEMENTATION
@@ -31,10 +35,11 @@ bool BindlessTextureManager::initialize(VkDevice device, VkPhysicalDevice physic
     }
 
     // Create command pool for texture uploads
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-    poolInfo.queueFamilyIndex = graphicsQueueFamily;
+    VkCommandPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+        .queueFamilyIndex = graphicsQueueFamily,
+    };
 
     if (vkCreateCommandPool(m_device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
         std::cerr << "Failed to create bindless texture command pool" << std::endl;
@@ -109,21 +114,22 @@ void BindlessTextureManager::cleanup() {
 
 bool BindlessTextureManager::createDescriptorResources() {
     // Create sampler
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.mipLodBias = 0.0f;
-    samplerInfo.anisotropyEnable = VK_TRUE;
-    samplerInfo.maxAnisotropy = 16.0f;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
-    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    VkSamplerCreateInfo samplerInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .mipLodBias = 0.0f,
+        .anisotropyEnable = VK_TRUE,
+        .maxAnisotropy = 16.0f,
+        .compareEnable = VK_FALSE,
+        .minLod = 0.0f,
+        .maxLod = VK_LOD_CLAMP_NONE,
+        .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+    };
 
     if (vkCreateSampler(m_device, &samplerInfo, nullptr, &m_defaultSampler) != VK_SUCCESS) {
         std::cerr << "Failed to create bindless texture sampler" << std::endl;
@@ -137,6 +143,7 @@ bool BindlessTextureManager::createDescriptorResources() {
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
         VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
 
+    // pNext feature/flags chain: keep explicit assignment for readability
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
     flagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
     flagsInfo.bindingCount = 1;
@@ -161,16 +168,18 @@ bool BindlessTextureManager::createDescriptorResources() {
     }
 
     // Create descriptor pool
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = m_maxTextures;
+    VkDescriptorPoolSize poolSize{
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = m_maxTextures,
+    };
 
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         std::cerr << "Failed to create bindless descriptor pool" << std::endl;
@@ -226,13 +235,14 @@ bool BindlessTextureManager::createDefaultTextures() {
 }
 
 bool BindlessTextureManager::createSolidColorTexture(uint32_t color, BindlessTextureHandle& outHandle,
-                                                       const std::string& name) {
+                                                       std::string_view name) {
     VkImage image;
     VkDeviceMemory memory;
     VkImageView view;
     uint32_t mipLevels;
 
-    if (!createTextureImage(&color, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false,
+    const auto pixels = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&color), sizeof(color));
+    if (!createTextureImage(pixels, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false,
                              image, memory, view, mipLevels)) {
         return false;
     }
@@ -253,10 +263,10 @@ bool BindlessTextureManager::createSolidColorTexture(uint32_t color, BindlessTex
     tex.height = 1;
     tex.mipLevels = 1;
     tex.format = VK_FORMAT_R8G8B8A8_UNORM;
-    tex.name = name;
+    tex.name = std::string(name);
 
     outHandle.index = slot;
-    m_nameToHandle[name] = outHandle;
+    m_nameToHandle[std::string(name)] = outHandle;
     m_loadedCount++;
 
     return true;
@@ -271,7 +281,9 @@ bool BindlessTextureManager::createDefaultNormalTexture() {
     VkImageView view;
     uint32_t mipLevels;
 
-    if (!createTextureImage(&normalColor, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false,
+    const auto pixels = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&normalColor),
+                                                 sizeof(normalColor));
+    if (!createTextureImage(pixels, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false,
                              image, memory, view, mipLevels)) {
         return false;
     }
@@ -320,11 +332,11 @@ void BindlessTextureManager::freeSlot(uint32_t slot) {
     m_freeSlots.push_back(slot);
 }
 
-BindlessTextureHandle BindlessTextureManager::loadTexture(const std::string& path,
+BindlessTextureHandle BindlessTextureManager::loadTexture(std::string_view path,
                                                             BindlessTextureType type,
                                                             bool generateMips) {
     // Check if already loaded
-    auto it = m_pathToHandle.find(path);
+    auto it = m_pathToHandle.find(std::string(path));
     if (it != m_pathToHandle.end()) {
         return it->second;
     }
@@ -345,7 +357,7 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(const std::string& pat
     VkImageView view;
     uint32_t mipLevels;
 
-    if (!createTextureImage(data.data(), width, height, format, generateMips,
+    if (!createTextureImage(data, width, height, format, generateMips,
                              image, memory, view, mipLevels)) {
         return getDefaultTexture(type);
     }
@@ -369,10 +381,10 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(const std::string& pat
     tex.mipLevels = mipLevels;
     tex.format = format;
     tex.type = type;
-    tex.name = path;
+    tex.name = std::string(path);
 
     BindlessTextureHandle handle{slot};
-    m_pathToHandle[path] = handle;
+    m_pathToHandle[std::string(path)] = handle;
     m_loadedCount++;
     m_totalMemoryUsage += width * height * 4;  // Approximate
 
@@ -381,7 +393,7 @@ BindlessTextureHandle BindlessTextureManager::loadTexture(const std::string& pat
     return handle;
 }
 
-BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(const void* data,
+BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(std::span<const uint8_t> data,
                                                                       uint32_t width, uint32_t height,
                                                                       VkFormat format,
                                                                       BindlessTextureType type,
@@ -425,7 +437,7 @@ BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(const void* 
 }
 
 BindlessTextureHandle BindlessTextureManager::registerExternalTexture(VkImageView view,
-                                                                        const std::string& name,
+                                                                        std::string_view name,
                                                                         BindlessTextureType type) {
     uint32_t slot = allocateSlot();
     if (slot == UINT32_MAX) {
@@ -437,10 +449,10 @@ BindlessTextureHandle BindlessTextureManager::registerExternalTexture(VkImageVie
     tex.image = VK_NULL_HANDLE;  // External, don't destroy
     tex.memory = VK_NULL_HANDLE;
     tex.type = type;
-    tex.name = name;
+    tex.name = std::string(name);
 
     BindlessTextureHandle handle{slot};
-    m_nameToHandle[name] = handle;
+    m_nameToHandle[std::string(name)] = handle;
     m_loadedCount++;
 
     updateDescriptorSet();
@@ -483,27 +495,29 @@ const BindlessTextureInfo* BindlessTextureManager::getTextureInfo(BindlessTextur
     return &m_textures[handle.index];
 }
 
-BindlessTextureHandle BindlessTextureManager::findTexture(const std::string& key) const {
+BindlessTextureHandle BindlessTextureManager::findTexture(std::string_view key) const {
     if (key.empty()) return BindlessTextureHandle{UINT32_MAX};
-    
+
+    const std::string keyStr(key);
+
     // Check name map first (used by deferred texture bridge)
-    auto it = m_nameToHandle.find(key);
+    auto it = m_nameToHandle.find(keyStr);
     if (it != m_nameToHandle.end()) return it->second;
-    
+
     // Check path map (used by normal loading)
-    it = m_pathToHandle.find(key);
+    it = m_pathToHandle.find(keyStr);
     if (it != m_pathToHandle.end()) return it->second;
-    
+
     return BindlessTextureHandle{UINT32_MAX};
 }
 
-BindlessTextureHandle BindlessTextureManager::getTextureByName(const std::string& name) const {
-    auto it = m_nameToHandle.find(name);
+BindlessTextureHandle BindlessTextureManager::getTextureByName(std::string_view name) const {
+    auto it = m_nameToHandle.find(std::string(name));
     return it != m_nameToHandle.end() ? it->second : BindlessTextureHandle{UINT32_MAX};
 }
 
-BindlessTextureHandle BindlessTextureManager::getTextureByPath(const std::string& path) const {
-    auto it = m_pathToHandle.find(path);
+BindlessTextureHandle BindlessTextureManager::getTextureByPath(std::string_view path) const {
+    auto it = m_pathToHandle.find(std::string(path));
     return it != m_pathToHandle.end() ? it->second : BindlessTextureHandle{UINT32_MAX};
 }
 
@@ -557,10 +571,11 @@ void BindlessTextureManager::updateDescriptorSet() {
     }
 }
 
-bool BindlessTextureManager::loadTextureData(const std::string& path, BindlessTextureType type, std::vector<uint8_t>& outData,
+bool BindlessTextureManager::loadTextureData(std::string_view path, BindlessTextureType type, std::vector<uint8_t>& outData,
                                                uint32_t& width, uint32_t& height, VkFormat& format) {
     int w, h, channels;
-    stbi_uc* pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+    const std::string pathStr(path);
+    stbi_uc* pixels = stbi_load(pathStr.c_str(), &w, &h, &channels, STBI_rgb_alpha);
 
     if (!pixels) {
         return false;
@@ -568,7 +583,7 @@ bool BindlessTextureManager::loadTextureData(const std::string& path, BindlessTe
 
     width = static_cast<uint32_t>(w);
     height = static_cast<uint32_t>(h);
-    
+
     // Albedo and Emissive textures are usually sRGB, while others (normal, roughness, etc.) are linear
     if (type == BindlessTextureType::Albedo || type == BindlessTextureType::Emissive) {
         format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -584,7 +599,7 @@ bool BindlessTextureManager::loadTextureData(const std::string& path, BindlessTe
     return true;
 }
 
-bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width, uint32_t height,
+bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, uint32_t width, uint32_t height,
                                                   VkFormat format, bool generateMips,
                                                   VkImage& outImage, VkDeviceMemory& outMemory,
                                                   VkImageView& outView, uint32_t& outMipLevels) {
@@ -592,16 +607,21 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
         static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1 : 1;
 
     VkDeviceSize imageSize = width * height * 4;
+    if (data.size_bytes() < static_cast<size_t>(imageSize)) {
+        std::cerr << "createTextureImage: pixel span smaller than width*height*4" << std::endl;
+        return false;
+    }
 
     // Create staging buffer
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingMemory;
 
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = imageSize;
-    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo bufferInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = imageSize,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
 
     if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &stagingBuffer) != VK_SUCCESS) {
         return false;
@@ -622,10 +642,11 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
         }
     }
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memReqs.size;
-    allocInfo.memoryTypeIndex = memTypeIndex;
+    VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memReqs.size,
+        .memoryTypeIndex = memTypeIndex,
+    };
 
     if (vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingMemory) != VK_SUCCESS) {
         vkDestroyBuffer(m_device, stagingBuffer, nullptr);
@@ -637,23 +658,24 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
     // Copy data to staging buffer
     void* mapped;
     vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &mapped);
-    memcpy(mapped, data, static_cast<size_t>(imageSize));
+    memcpy(mapped, data.data(), static_cast<size_t>(imageSize));
     vkUnmapMemory(m_device, stagingMemory);
 
     // Create image
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = format;
-    imageInfo.extent = {width, height, 1};
-    imageInfo.mipLevels = outMipLevels;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                      VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkImageCreateInfo imageInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {width, height, 1},
+        .mipLevels = outMipLevels,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
 
     if (vkCreateImage(m_device, &imageInfo, nullptr, &outImage) != VK_SUCCESS) {
         vkDestroyBuffer(m_device, stagingBuffer, nullptr);
@@ -674,10 +696,11 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
         }
     }
 
-    VkMemoryAllocateInfo imgAllocInfo{};
-    imgAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    imgAllocInfo.allocationSize = imgMemReqs.size;
-    imgAllocInfo.memoryTypeIndex = imgMemTypeIndex;
+    VkMemoryAllocateInfo imgAllocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = imgMemReqs.size,
+        .memoryTypeIndex = imgMemTypeIndex,
+    };
 
     if (vkAllocateMemory(m_device, &imgAllocInfo, nullptr, &outMemory) != VK_SUCCESS) {
         vkDestroyImage(m_device, outImage, nullptr);
@@ -689,18 +712,20 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
     vkBindImageMemory(m_device, outImage, outMemory, 0);
 
     // Transition and copy
-    VkCommandBufferAllocateInfo cmdAllocInfo{};
-    cmdAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cmdAllocInfo.commandPool = m_commandPool;
-    cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cmdAllocInfo.commandBufferCount = 1;
+    VkCommandBufferAllocateInfo cmdAllocInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = m_commandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
 
     VkCommandBuffer cmd;
     vkAllocateCommandBuffers(m_device, &cmdAllocInfo, &cmd);
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VkCommandBufferBeginInfo beginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
     vkBeginCommandBuffer(cmd, &beginInfo);
 
     // Transition to transfer dst
@@ -752,10 +777,11 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
     vkEndCommandBuffer(cmd);
 
     // Submit
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
+    VkSubmitInfo submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+    };
 
     vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(m_graphicsQueue);
@@ -765,16 +791,19 @@ bool BindlessTextureManager::createTextureImage(const void* data, uint32_t width
     vkFreeMemory(m_device, stagingMemory, nullptr);
 
     // Create image view
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = outImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = outMipLevels;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = outImage,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = outMipLevels,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
 
     if (vkCreateImageView(m_device, &viewInfo, nullptr, &outView) != VK_SUCCESS) {
         vkDestroyImage(m_device, outImage, nullptr);

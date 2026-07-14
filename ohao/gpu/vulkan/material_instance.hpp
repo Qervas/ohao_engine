@@ -1,13 +1,16 @@
 #pragma once
 
+#include "bindless_texture_manager.hpp"
+#include "core/concepts.hpp"
+#include "gpu/layout_meta.hpp"
+
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <memory>
 #include <vector>
-
-#include "bindless_texture_manager.hpp"
 
 namespace ohao {
 
@@ -32,7 +35,7 @@ enum class RenderQueue : uint32_t {
     Overlay = 4000
 };
 
-// Material feature flags
+// Material feature flags (bitmask)
 enum class MaterialFeatures : uint32_t {
     None = 0,
     DoubleSided = 1 << 0,
@@ -50,16 +53,30 @@ enum class MaterialFeatures : uint32_t {
     Sheen = 1 << 12
 };
 
-inline MaterialFeatures operator|(MaterialFeatures a, MaterialFeatures b) {
-    return static_cast<MaterialFeatures>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+[[nodiscard]] constexpr MaterialFeatures operator|(MaterialFeatures a, MaterialFeatures b) noexcept {
+    return static_cast<MaterialFeatures>(to_underlying(a) | to_underlying(b));
 }
 
-inline MaterialFeatures operator&(MaterialFeatures a, MaterialFeatures b) {
-    return static_cast<MaterialFeatures>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+[[nodiscard]] constexpr MaterialFeatures operator&(MaterialFeatures a, MaterialFeatures b) noexcept {
+    return static_cast<MaterialFeatures>(to_underlying(a) & to_underlying(b));
 }
 
-inline bool hasFlag(MaterialFeatures flags, MaterialFeatures flag) {
-    return (static_cast<uint32_t>(flags) & static_cast<uint32_t>(flag)) != 0;
+[[nodiscard]] constexpr MaterialFeatures operator~(MaterialFeatures a) noexcept {
+    return static_cast<MaterialFeatures>(~to_underlying(a));
+}
+
+constexpr MaterialFeatures& operator|=(MaterialFeatures& a, MaterialFeatures b) noexcept {
+    a = a | b;
+    return a;
+}
+
+constexpr MaterialFeatures& operator&=(MaterialFeatures& a, MaterialFeatures b) noexcept {
+    a = a & b;
+    return a;
+}
+
+[[nodiscard]] constexpr bool hasFlag(MaterialFeatures flags, MaterialFeatures flag) noexcept {
+    return (to_underlying(flags) & to_underlying(flag)) != 0;
 }
 
 // Base PBR material parameters (GPU-compatible layout)
@@ -110,6 +127,7 @@ struct PBRMaterialParams {
 };
 
 static_assert(sizeof(PBRMaterialParams) % 16 == 0, "PBRMaterialParams must be 16-byte aligned");
+static_assert(GpuPod<PBRMaterialParams>, "PBRMaterialParams must be GPU-uploadable");
 
 // Material template (base material that can be instanced)
 struct MaterialTemplate {
@@ -130,19 +148,19 @@ public:
     ~MaterialInstance() = default;
 
     // Get GPU-ready parameters
-    const PBRMaterialParams& getParams() const { return m_params; }
-    PBRMaterialParams& getParams() { return m_params; }
+    [[nodiscard]] const PBRMaterialParams& getParams() const { return m_params; }
+    [[nodiscard]] PBRMaterialParams& getParams() { return m_params; }
 
     // Template info
-    const MaterialTemplate* getTemplate() const { return m_template; }
-    const std::string& getName() const { return m_name; }
-    void setName(const std::string& name) { m_name = name; }
+    [[nodiscard]] const MaterialTemplate* getTemplate() const { return m_template; }
+    [[nodiscard]] const std::string& getName() const { return m_name; }
+    void setName(std::string_view name) { m_name = std::string(name); }
 
     // Render state
-    BlendMode getBlendMode() const { return m_blendMode; }
+    [[nodiscard]] BlendMode getBlendMode() const { return m_blendMode; }
     void setBlendMode(BlendMode mode) { m_blendMode = mode; }
 
-    RenderQueue getRenderQueue() const { return m_renderQueue; }
+    [[nodiscard]] RenderQueue getRenderQueue() const { return m_renderQueue; }
     void setRenderQueue(RenderQueue queue) { m_renderQueue = queue; }
 
     // Color properties
@@ -180,11 +198,11 @@ public:
     void setCastShadows(bool enabled);
 
     // Check if dirty (needs GPU update)
-    bool isDirty() const { return m_dirty; }
+    [[nodiscard]] bool isDirty() const { return m_dirty; }
     void clearDirty() { m_dirty = false; }
 
     // GPU buffer offset (set by MaterialManager)
-    uint32_t getBufferOffset() const { return m_bufferOffset; }
+    [[nodiscard]] uint32_t getBufferOffset() const { return m_bufferOffset; }
     void setBufferOffset(uint32_t offset) { m_bufferOffset = offset; }
 
 private:
@@ -208,39 +226,39 @@ public:
     MaterialManager() = default;
     ~MaterialManager();
 
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
                     BindlessTextureManager* textureManager,
                     uint32_t maxMaterials = 1024);
     void cleanup();
 
     // Template management
-    MaterialTemplate* createTemplate(const std::string& name);
-    MaterialTemplate* getTemplate(const std::string& name);
-    const MaterialTemplate* getDefaultTemplate() const { return &m_defaultTemplate; }
+    MaterialTemplate* createTemplate(std::string_view name);
+    [[nodiscard]] MaterialTemplate* getTemplate(std::string_view name);
+    [[nodiscard]] const MaterialTemplate* getDefaultTemplate() const { return &m_defaultTemplate; }
 
     // Instance management
     MaterialInstance* createInstance(const MaterialTemplate* templ = nullptr);
-    MaterialInstance* createInstance(const std::string& templateName);
+    MaterialInstance* createInstance(std::string_view templateName);
     void destroyInstance(MaterialInstance* instance);
 
     // Batch update dirty materials to GPU
     void updateGPU();
 
     // Descriptor set for material buffer
-    VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
-    VkDescriptorSet getDescriptorSet() const { return m_descriptorSet; }
-    VkBuffer getMaterialBuffer() const { return m_materialBuffer; }
+    [[nodiscard]] VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
+    [[nodiscard]] VkDescriptorSet getDescriptorSet() const { return m_descriptorSet; }
+    [[nodiscard]] VkBuffer getMaterialBuffer() const { return m_materialBuffer; }
 
     // Texture manager access
-    BindlessTextureManager* getTextureManager() const { return m_textureManager; }
+    [[nodiscard]] BindlessTextureManager* getTextureManager() const { return m_textureManager; }
 
     // Stats
-    uint32_t getMaterialCount() const { return static_cast<uint32_t>(m_instances.size()); }
-    uint32_t getMaxMaterials() const { return m_maxMaterials; }
+    [[nodiscard]] uint32_t getMaterialCount() const { return static_cast<uint32_t>(m_instances.size()); }
+    [[nodiscard]] uint32_t getMaxMaterials() const { return m_maxMaterials; }
 
 private:
-    bool createMaterialBuffer();
-    bool createDescriptorResources();
+    [[nodiscard]] bool createMaterialBuffer();
+    [[nodiscard]] bool createDescriptorResources();
     void updateDescriptorSet();
 
     VkDevice m_device{VK_NULL_HANDLE};

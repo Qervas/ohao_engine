@@ -7,7 +7,8 @@
 #include "scene/component/material_component.hpp"
 #include "scene/component/light_component.hpp"
 #include "physics/components/physics_component.hpp"
-#include <type_traits>
+#include "core/concepts.hpp"
+#include <string_view>
 #include <tuple>
 
 namespace ohao {
@@ -21,30 +22,24 @@ namespace ohao {
  * This ensures all components are added consistently and safely.
  */
 
-// Helper trait to detect component types
-template<typename T>
-struct is_component : std::is_base_of<Component, T> {};
-
 // Component pack class template
-template<typename... Components>
+template<ComponentType... Components>
 class ComponentPack {
-    static_assert((is_component<Components>::value && ...), "All types must be components");
-    
 public:
     // Apply all components in the pack to an actor
     static void applyTo(Actor::Ptr actor) {
         if (!actor) return;
-        (addComponent<Components>(actor), ...); // Fold expression (C++17)
+        (addComponent<Components>(actor), ...);
     }
     
     // Check if actor has all components in the pack
-    static bool hasAll(Actor::Ptr actor) {
+    [[nodiscard]] static bool hasAll(Actor::Ptr actor) {
         if (!actor) return false;
         return (actor->hasComponent<Components>() && ...);
     }
     
     // Get tuple of all components (for advanced usage)
-    static auto getAll(Actor::Ptr actor) {
+    [[nodiscard]] static auto getAll(Actor::Ptr actor) {
         return std::make_tuple(actor->getComponent<Components>()...);
     }
     
@@ -55,19 +50,19 @@ public:
     }
     
     // Get count of components in this pack
-    static constexpr size_t count() {
+    [[nodiscard]] static constexpr size_t count() {
         return sizeof...(Components);
     }
     
 private:
-    template<typename T>
+    template<ComponentType T>
     static void addComponent(Actor::Ptr actor) {
         if (!actor->hasComponent<T>()) {
             actor->addComponent<T>();
         }
     }
     
-    template<typename T>
+    template<ComponentType T>
     static void removeComponent(Actor::Ptr actor) {
         actor->removeComponent<T>();
     }
@@ -97,26 +92,26 @@ using LightOnlyPack = ComponentPack<LightComponent>;
 class ActorFactory {
 public:
     template<typename PackType>
-    static Actor::Ptr createWithPack(Scene* scene, const std::string& name) {
-        auto actor = scene->createActor(name);
+    [[nodiscard]] static Actor::Ptr createWithPack(Scene* scene, std::string_view name) {
+        auto actor = scene->createActor(std::string(name));
         PackType::applyTo(actor);
         return actor;
     }
     
     // Convenience methods
-    static Actor::Ptr createVisualObject(Scene* scene, const std::string& name) {
+    [[nodiscard]] static Actor::Ptr createVisualObject(Scene* scene, std::string_view name) {
         return createWithPack<VisualObjectPack>(scene, name);
     }
     
-    static Actor::Ptr createPhysicsObject(Scene* scene, const std::string& name) {
+    [[nodiscard]] static Actor::Ptr createPhysicsObject(Scene* scene, std::string_view name) {
         return createWithPack<PhysicsObjectPack>(scene, name);
     }
     
-    static Actor::Ptr createStandardObject(Scene* scene, const std::string& name) {
+    [[nodiscard]] static Actor::Ptr createStandardObject(Scene* scene, std::string_view name) {
         return createWithPack<StandardObjectPack>(scene, name);
     }
     
-    static Actor::Ptr createLightSource(Scene* scene, const std::string& name) {
+    [[nodiscard]] static Actor::Ptr createLightSource(Scene* scene, std::string_view name) {
         return createWithPack<LightSourcePack>(scene, name);
     }
 };

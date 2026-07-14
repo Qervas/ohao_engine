@@ -1,22 +1,27 @@
 #pragma once
 
-// SamplerType — selects the sampling strategy baked into the RT pipeline.
-//
-// Chosen at pipeline creation time via a Vulkan specialization constant.
-// Every SamplerType value must have a matching GLSL branch in
-// shaders/includes/rt/sampler_api.glsl — add both or neither.
+// SamplerType — sampling strategy via Vulkan specialization constant.
+// GLSL mirror: shaders/includes/rt/sampler_api.glsl
+
+#include "core/concepts.hpp"
 
 #include <cstdint>
 
 namespace ohao {
 
 enum class SamplerType : uint32_t {
-    PCG   = 0,   // Legacy pseudo-random; realtime default.
-    Sobol = 1,   // Owen-scrambled Sobol (Cycles-class); offline default.
+    PCG   = 0,   // pseudo-random; realtime default
+    Sobol = 1,   // Owen-scrambled Sobol; offline default
 };
 
-// Vulkan specialization constant ID used by all RT pipelines to bind
-// the chosen SamplerType into the raygen shader.
 inline constexpr uint32_t kSamplerSpecConstantId = 0;
+
+[[nodiscard]] constexpr uint32_t samplerTypeIndex(SamplerType t) noexcept {
+    return to_underlying(t);
+}
+
+[[nodiscard]] constexpr bool isQmcSampler(SamplerType t) noexcept {
+    return t == SamplerType::Sobol;
+}
 
 } // namespace ohao

@@ -34,17 +34,17 @@ public:
     ~JoltPhysicsBackend() override;
 
     // === IPhysicsBackend - Lifecycle ===
-    bool initialize(const PhysicsWorldConfig& config) override;
+    [[nodiscard]] bool initialize(const PhysicsWorldConfig& config) override;
     void shutdown() override;
-    bool isInitialized() const override { return m_initialized; }
+    [[nodiscard]] bool isInitialized() const override { return m_initialized; }
 
     // === Simulation ===
     void step(float deltaTime) override;
 
     // === Body Management ===
-    BodyHandle createBody(const BodyCreationInfo& info) override;
+    [[nodiscard]] BodyHandle createBody(const BodyCreationInfo& info) override;
     void destroyBody(BodyHandle handle) override;
-    bool isValidBody(BodyHandle handle) const override;
+    [[nodiscard]] bool isValidBody(BodyHandle handle) const override;
 
     // === Body Transform ===
     void setPosition(BodyHandle h, const glm::vec3& pos) override;
@@ -75,7 +75,7 @@ public:
 
     // === Sleep ===
     void setAwake(BodyHandle h, bool awake) override;
-    bool isAwake(BodyHandle h) const override;
+    [[nodiscard]] bool isAwake(BodyHandle h) const override;
 
     // === Shape ===
     void setShape(BodyHandle h, const ShapeInfo& shape) override;
@@ -93,30 +93,30 @@ public:
     void setLayerCollision(uint16_t layer1, uint16_t layer2, bool shouldCollide) override;
 
     // === Raycasting & Queries ===
-    bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
+    [[nodiscard]] bool castRay(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                  RaycastHit& outHit, uint16_t layerMask = CollisionLayer::ALL_MASK) const override;
-    std::vector<RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
+    [[nodiscard]] std::vector<RaycastHit> castRayAll(const glm::vec3& origin, const glm::vec3& direction,
                                         float maxDistance, uint16_t layerMask = CollisionLayer::ALL_MASK) const override;
-    bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
+    [[nodiscard]] bool castSphere(const glm::vec3& origin, const glm::vec3& direction, float radius,
                     float maxDistance, ShapeCastResult& outHit,
                     uint16_t layerMask = CollisionLayer::ALL_MASK) const override;
-    bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
+    [[nodiscard]] bool castBox(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& halfExtents,
                  const glm::quat& rotation, float maxDistance, ShapeCastResult& outHit,
                  uint16_t layerMask = CollisionLayer::ALL_MASK) const override;
-    std::vector<BodyHandle> overlapSphere(const glm::vec3& center, float radius,
+    [[nodiscard]] std::vector<BodyHandle> overlapSphere(const glm::vec3& center, float radius,
                                            uint16_t layerMask = CollisionLayer::ALL_MASK) const override;
-    std::vector<BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
+    [[nodiscard]] std::vector<BodyHandle> overlapBox(const glm::vec3& center, const glm::vec3& halfExtents,
                                         const glm::quat& rotation,
                                         uint16_t layerMask = CollisionLayer::ALL_MASK) const override;
 
     // === Contact Callbacks ===
     void setContactListener(IContactListener* listener) override;
-    std::vector<ContactEvent> getContactEvents() override;
+    [[nodiscard]] std::vector<ContactEvent> getContactEvents() override;
 
     // === Constraints ===
-    ConstraintHandle createConstraint(const ConstraintSettings& settings) override;
+    [[nodiscard]] ConstraintHandle createConstraint(const ConstraintSettings& settings) override;
     void destroyConstraint(ConstraintHandle handle) override;
-    bool isValidConstraint(ConstraintHandle handle) const override;
+    [[nodiscard]] bool isValidConstraint(ConstraintHandle handle) const override;
     void setConstraintEnabled(ConstraintHandle handle, bool enabled) override;
     void setConstraintMotorState(ConstraintHandle handle, bool enabled, float speed, float maxForce) override;
     void setConstraintLimits(ConstraintHandle handle, float min, float max) override;
@@ -125,9 +125,9 @@ public:
     std::vector<ConstraintHandle> getAndClearBrokenConstraints() override;
 
     // === Character Controller ===
-    CharacterHandle createCharacter(const CharacterCreationInfo& info) override;
+    [[nodiscard]] CharacterHandle createCharacter(const CharacterCreationInfo& info) override;
     void destroyCharacter(CharacterHandle handle) override;
-    bool isValidCharacter(CharacterHandle handle) const override;
+    [[nodiscard]] bool isValidCharacter(CharacterHandle handle) const override;
     CharacterState getCharacterState(CharacterHandle handle) const override;
     void setCharacterPosition(CharacterHandle handle, const glm::vec3& pos) override;
     void setCharacterRotation(CharacterHandle handle, const glm::quat& rot) override;

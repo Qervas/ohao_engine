@@ -1,8 +1,12 @@
 #pragma once
 
+#include "core/concepts.hpp"
+#include "gpu/vulkan/vk_utils.hpp"
+
 #include <vulkan/vulkan.h>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -53,16 +57,29 @@ struct FrameResources {
 
     // Track if this frame's resources are valid
     bool valid{false};
+
+    [[nodiscard]] explicit operator bool() const noexcept { return valid; }
+
+    template<GpuPod T>
+    [[nodiscard]] std::span<T> cameraMappedAs(std::size_t count = 1) const noexcept {
+        return as_mapped_span<T>(cameraBufferMapped, count);
+    }
+
+    template<GpuPod T>
+    [[nodiscard]] std::span<T> lightMappedAs(std::size_t count = 1) const noexcept {
+        return as_mapped_span<T>(lightBufferMapped, count);
+    }
 };
 
 /**
  * Camera uniform buffer structure (must match shader layout)
  */
 struct FrameCameraUBO {
-    alignas(16) glm::mat4 view;
-    alignas(16) glm::mat4 proj;
-    alignas(16) glm::vec3 viewPos;
+    alignas(16) glm::mat4 view{1.0f};
+    alignas(16) glm::mat4 proj{1.0f};
+    alignas(16) glm::vec3 viewPos{0.0f};
 };
+static_assert(GpuPod<FrameCameraUBO>, "FrameCameraUBO must be GPU POD");
 
 /**
  * Manages a ring buffer of frame resources for multi-frame rendering.

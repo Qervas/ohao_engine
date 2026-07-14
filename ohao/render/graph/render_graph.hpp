@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <functional>
 #include <memory>
@@ -108,8 +109,8 @@ public:
      * @param physicalDevice Physical device for memory queries
      * @param allocator Optional GPU allocator (uses VMA if provided)
      */
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
-                    GpuAllocator* allocator = nullptr);
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+                                  GpuAllocator* allocator = nullptr);
 
     /**
      * Shutdown and cleanup all resources
@@ -123,14 +124,14 @@ public:
      * @param setup Setup function to declare resources
      * @param execute Execute function to record commands
      */
-    void addPass(const std::string& name,
+    void addPass(std::string_view name,
                  std::function<void(PassBuilder&)> setup,
                  std::function<void(VkCommandBuffer)> execute);
 
     /**
      * Add a compute pass to the graph
      */
-    void addComputePass(const std::string& name,
+    void addComputePass(std::string_view name,
                         std::function<void(PassBuilder&)> setup,
                         std::function<void(VkCommandBuffer)> execute);
 
@@ -146,15 +147,15 @@ public:
      * @param currentLayout Current image layout
      * @return Handle to the imported texture
      */
-    TextureHandle importTexture(const std::string& name, VkImage image, VkImageView view,
-                                 VkFormat format, uint32_t width, uint32_t height,
-                                 VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED);
+    [[nodiscard]] TextureHandle importTexture(std::string_view name, VkImage image, VkImageView view,
+                                              VkFormat format, uint32_t width, uint32_t height,
+                                              VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED);
 
     /**
      * Import an external buffer
      */
-    BufferHandle importBuffer(const std::string& name, VkBuffer buffer,
-                               VkDeviceSize size, void* mapped = nullptr);
+    [[nodiscard]] BufferHandle importBuffer(std::string_view name, VkBuffer buffer,
+                                            VkDeviceSize size, void* mapped = nullptr);
 
     /**
      * Set the final output texture (for presentation or readback)
@@ -168,7 +169,7 @@ public:
      * - Allocates resources
      * - Generates barriers
      */
-    bool compile();
+    [[nodiscard]] bool compile();
 
     /**
      * Execute all passes in order
@@ -186,17 +187,17 @@ public:
     /**
      * Get the physical texture for a handle (valid after compile)
      */
-    PhysicalTexture* getPhysicalTexture(TextureHandle handle);
+    [[nodiscard]] PhysicalTexture* getPhysicalTexture(TextureHandle handle);
 
     /**
      * Get the physical buffer for a handle (valid after compile)
      */
-    PhysicalBuffer* getPhysicalBuffer(BufferHandle handle);
+    [[nodiscard]] PhysicalBuffer* getPhysicalBuffer(BufferHandle handle);
 
     /**
      * Check if initialized
      */
-    bool isInitialized() const { return m_device != VK_NULL_HANDLE; }
+    [[nodiscard]] bool isInitialized() const { return m_device != VK_NULL_HANDLE; }
 
 private:
     friend class PassBuilder;
@@ -218,8 +219,8 @@ private:
     void createFramebuffers();
 
     // Resource allocation helpers
-    bool allocateTexture(TextureHandle handle);
-    bool allocateBuffer(BufferHandle handle);
+    [[nodiscard]] bool allocateTexture(TextureHandle handle);
+    [[nodiscard]] bool allocateBuffer(BufferHandle handle);
     void freeTexture(TextureHandle handle);
     void freeBuffer(BufferHandle handle);
 

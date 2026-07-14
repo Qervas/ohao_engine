@@ -387,7 +387,7 @@ void RigidBody::validateState() {
 }
 
 // === FORCE SYSTEM INTEGRATION ===
-void RigidBody::applyForceTracked(const glm::vec3& force, const glm::vec3& relativePos, const std::string& sourceId) {
+void RigidBody::applyForceTracked(const glm::vec3& force, const glm::vec3& relativePos, std::string_view sourceId) {
     // Apply the force using the standard method
     applyForce(force, relativePos);
     
@@ -409,11 +409,11 @@ void RigidBody::applyForceTracked(const glm::vec3& force, const glm::vec3& relat
     
     // Track force source if provided
     if (!sourceId.empty()) {
-        m_activeForces.insert(sourceId);
+        m_activeForces.emplace(sourceId);
     }
 }
 
-void RigidBody::applyTorqueTracked(const glm::vec3& torque, const std::string& sourceId) {
+void RigidBody::applyTorqueTracked(const glm::vec3& torque, std::string_view sourceId) {
     // Apply the torque using the standard method
     applyTorque(torque);
     
@@ -426,7 +426,7 @@ void RigidBody::applyTorqueTracked(const glm::vec3& torque, const std::string& s
     
     // Track force source if provided
     if (!sourceId.empty()) {
-        m_activeForces.insert(sourceId);
+        m_activeForces.emplace(sourceId);
     }
 }
 

@@ -3,12 +3,15 @@
 
 namespace ohao {
 
-VkShaderModule VulkanRenderer::loadShaderModule(const std::string& filepath) {
+VkShaderModule VulkanRenderer::loadShaderModule(std::string_view filepath) {
     // Search multiple paths for shader SPVs
+    const std::string pathStr(filepath);
+    const auto slash = filepath.find_last_of("/\\");
+    const std::string filename = std::string(filepath.substr(slash == std::string_view::npos ? 0 : slash + 1));
     std::vector<std::string> searchPaths = {
-        filepath,
-        "build/shaders/" + filepath.substr(filepath.find_last_of("/\\") + 1),
-        "build/Release/bin/shaders/" + filepath.substr(filepath.find_last_of("/\\") + 1),
+        pathStr,
+        "build/shaders/" + filename,
+        "build/Release/bin/shaders/" + filename,
     };
     std::ifstream file;
     for (const auto& p : searchPaths) {
@@ -16,7 +19,7 @@ VkShaderModule VulkanRenderer::loadShaderModule(const std::string& filepath) {
         if (file.is_open()) break;
     }
     if (!file.is_open()) {
-        std::cerr << "Failed to open shader file: " << filepath << std::endl;
+        std::cerr << "Failed to open shader file: " << pathStr << std::endl;
         return VK_NULL_HANDLE;
     }
 
@@ -27,10 +30,11 @@ VkShaderModule VulkanRenderer::loadShaderModule(const std::string& filepath) {
     file.read(buffer.data(), fileSize);
     file.close();
 
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = buffer.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(buffer.data());
+    VkShaderModuleCreateInfo createInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = buffer.size(),
+        .pCode = reinterpret_cast<const uint32_t*>(buffer.data()),
+    };
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(m_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
@@ -38,7 +42,7 @@ VkShaderModule VulkanRenderer::loadShaderModule(const std::string& filepath) {
         return VK_NULL_HANDLE;
     }
 
-    std::cout << "Loaded shader: " << filepath << std::endl;
+    std::cout << "Loaded shader: " << pathStr << std::endl;
     return shaderModule;
 }
 

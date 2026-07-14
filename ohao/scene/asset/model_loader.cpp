@@ -15,10 +15,13 @@
 
 #include <iostream>
 #include <filesystem>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <functional>
 #include <algorithm>
 #include <cstring>
+#include <cctype>
 
 namespace ohao {
 
@@ -35,12 +38,19 @@ static glm::mat4 toGlm(const aiMatrix4x4& m) {
 static glm::vec3 toGlm(const aiVector3D& v) { return {v.x, v.y, v.z}; }
 static glm::quat toGlm(const aiQuaternion& q) { return glm::quat(q.w, q.x, q.y, q.z); }
 
-std::string ModelLoader::getExtension(const std::string& path) {
+std::string ModelLoader::getExtension(std::string_view path) {
     auto dot = path.find_last_of('.');
-    if (dot == std::string::npos) return "";
-    std::string ext = path.substr(dot + 1);
-    for (auto& c : ext) c = std::tolower(c);
+    if (dot == std::string_view::npos) return {};
+    std::string ext(path.substr(dot + 1));
+    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return ext;
+}
+
+bool ModelLoader::isSupportedExtension(std::string_view ext) {
+    // Accept with or without leading dot
+    if (!ext.empty() && ext.front() == '.') ext.remove_prefix(1);
+    return ext == "obj" || ext == "fbx" || ext == "glb" || ext == "gltf" ||
+           ext == "dae" || ext == "blend" || ext == "3ds" || ext == "ply";
 }
 
 // Mesh repair: merge vertices at the same position and recalculate smooth normals.
@@ -126,7 +136,7 @@ static void repairMeshNormals(std::vector<Vertex>& vertices, const std::vector<u
 
 // === Main Entry Point ===
 
-std::shared_ptr<Model> ModelLoader::load(const std::string& path) {
+std::shared_ptr<Model> ModelLoader::load(std::string_view path) {
     std::string ext = getExtension(path);
 
     std::shared_ptr<Model> model;
@@ -169,9 +179,26 @@ std::shared_ptr<Model> ModelLoader::load(const std::string& path) {
     return model;
 }
 
+Result<std::shared_ptr<Model>> ModelLoader::loadResult(std::string_view path) {
+    if (path.empty()) {
+        return err_string<std::shared_ptr<Model>>("ModelLoader: empty path");
+    }
+    const auto ext = getExtension(path);
+    if (!isSupportedExtension(ext)) {
+        return err_string<std::shared_ptr<Model>>(
+            "ModelLoader: unsupported extension '" + ext + "' for path '" + std::string(path) + "'");
+    }
+    auto model = load(path);
+    if (!model || model->empty()) {
+        return err_string<std::shared_ptr<Model>>(
+            "ModelLoader: failed to load '" + std::string(path) + "'");
+    }
+    return Result<std::shared_ptr<Model>>::ok(std::move(model));
+}
+
 // === OBJ Loader (native) ===
 
-std::shared_ptr<Model> ModelLoader::loadOBJ(const std::string& path) {
+std::shared_ptr<Model> ModelLoader::loadOBJ(std::string_view path) {
     auto model = std::make_shared<Model>();
     if (model->loadFromOBJ(path)) return model;
     return nullptr;
@@ -179,7 +206,7 @@ std::shared_ptr<Model> ModelLoader::loadOBJ(const std::string& path) {
 
 // === FBX Loader (ufbx) ===
 
-std::shared_ptr<Model> ModelLoader::loadFBX(const std::string& path) {
+std::shared_ptr<Model> ModelLoader::loadFBX(std::string_view path) {
     auto model = std::make_shared<Model>();
     if (model->loadFromFBX(path)) return model;
     return nullptr;
@@ -189,13 +216,14 @@ std::shared_ptr<Model> ModelLoader::loadFBX(const std::string& path) {
 
 // Load texture from Assimp material (embedded or file)
 static int loadAssimpTexture(const aiScene* scene, const aiMaterial* mat,
-                              aiTextureType type, const std::string& modelDir,
+                              aiTextureType type, std::string_view modelDir,
                               std::vector<Model::TextureData>& textures) {
     if (mat->GetTextureCount(type) == 0) return -1;
 
     aiString texPath;
     mat->GetTexture(type, 0, &texPath);
     std::string pathStr = texPath.C_Str();
+    const std::string dir{modelDir};
 
     Model::TextureData td;
 
@@ -223,9 +251,9 @@ static int loadAssimpTexture(const aiScene* scene, const aiMaterial* mat,
     // File texture
     std::vector<std::string> candidates = {
         pathStr,
-        modelDir + "/" + pathStr,
-        modelDir + "/" + std::filesystem::path(pathStr).filename().string(),
-        modelDir + "/../textures/" + std::filesystem::path(pathStr).filename().string(),
+        dir + "/" + pathStr,
+        dir + "/" + std::filesystem::path(pathStr).filename().string(),
+        dir + "/../textures/" + std::filesystem::path(pathStr).filename().string(),
     };
     for (const auto& c : candidates) {
         if (!std::filesystem::exists(c)) continue;
@@ -243,8 +271,9 @@ static int loadAssimpTexture(const aiScene* scene, const aiMaterial* mat,
     return -1;
 }
 
-std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
+std::shared_ptr<Model> ModelLoader::loadAssimp(std::string_view path) {
     Assimp::Importer importer;
+    const std::string pathStr{path};
 
     unsigned int flags =
         aiProcess_Triangulate |
@@ -258,15 +287,15 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
         aiProcess_ImproveCacheLocality |
         aiProcess_FixInfacingNormals;
 
-    const aiScene* scene = importer.ReadFile(path, flags);
+    const aiScene* scene = importer.ReadFile(pathStr, flags);
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         std::cerr << "[ModelLoader] Assimp error: " << importer.GetErrorString() << std::endl;
         return nullptr;
     }
 
     auto model = std::make_shared<Model>();
-    model->setSourcePath(path);
-    std::string modelDir = std::filesystem::path(path).parent_path().string();
+    model->setSourcePath(pathStr);
+    std::string modelDir = std::filesystem::path(pathStr).parent_path().string();
 
     std::cout << "[ModelLoader] Assimp: " << scene->mNumMeshes << " meshes, "
               << scene->mNumMaterials << " materials, "
@@ -420,7 +449,7 @@ std::shared_ptr<Model> ModelLoader::loadAssimp(const std::string& path) {
     (void)nextJointIdx;
     (void)inverseBindMatrices;
 
-    std::cout << "[ModelLoader] Loaded: " << path << " ("
+    std::cout << "[ModelLoader] Loaded: " << pathStr << " ("
               << model->vertices.size() << " verts, "
               << model->indices.size() << " indices, "
               << numMats << " materials, "

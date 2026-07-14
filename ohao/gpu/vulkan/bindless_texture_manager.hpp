@@ -1,11 +1,17 @@
 #pragma once
 
+#include "core/concepts.hpp"
+
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <string_view>
+#include <span>
 #include <memory>
 #include <mutex>
+#include <cstdint>
+#include <compare>
 #include <glm/glm.hpp>
 
 namespace ohao {
@@ -16,11 +22,14 @@ class GpuAllocator;
 // Texture handle for bindless access
 struct BindlessTextureHandle {
     uint32_t index{UINT32_MAX};
-    bool valid() const { return index != UINT32_MAX; }
 
-    bool operator==(const BindlessTextureHandle& other) const { return index == other.index; }
-    bool operator!=(const BindlessTextureHandle& other) const { return index != other.index; }
+    [[nodiscard]] constexpr bool valid() const noexcept { return index != UINT32_MAX; }
+    [[nodiscard]] explicit constexpr operator bool() const noexcept { return valid(); }
+
+    [[nodiscard]] constexpr auto operator<=>(const BindlessTextureHandle&) const noexcept = default;
 };
+
+inline constexpr BindlessTextureHandle kInvalidBindlessTexture{};
 
 // Texture type enum
 enum class BindlessTextureType : uint32_t {
@@ -60,83 +69,93 @@ public:
     ~BindlessTextureManager();
 
     // Initialization
-    bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+    [[nodiscard]] bool initialize(VkDevice device, VkPhysicalDevice physicalDevice,
                     GpuAllocator* allocator, uint32_t maxTextures = 4096,
                     uint32_t graphicsQueueFamily = 0, VkQueue graphicsQueue = VK_NULL_HANDLE);
     void cleanup();
 
     // Texture loading
-    BindlessTextureHandle loadTexture(const std::string& path,
+    [[nodiscard]] BindlessTextureHandle loadTexture(std::string_view path,
                                        BindlessTextureType type = BindlessTextureType::Custom,
                                        bool generateMips = true);
 
-    BindlessTextureHandle loadTextureFromMemory(const void* data, uint32_t width, uint32_t height,
+    [[nodiscard]] BindlessTextureHandle loadTextureFromMemory(std::span<const uint8_t> data,
+                                                  uint32_t width, uint32_t height,
                                                   VkFormat format = VK_FORMAT_R8G8B8A8_SRGB,
                                                   BindlessTextureType type = BindlessTextureType::Custom,
                                                   bool generateMips = true);
 
-    BindlessTextureHandle registerExternalTexture(VkImageView view, const std::string& name,
+    [[nodiscard]] BindlessTextureHandle registerExternalTexture(VkImageView view, std::string_view name,
                                                     BindlessTextureType type = BindlessTextureType::Custom);
 
     // Unload texture (marks slot as free)
     void unloadTexture(BindlessTextureHandle handle);
 
     // Query texture info
-    const BindlessTextureInfo* getTextureInfo(BindlessTextureHandle handle) const;
+    [[nodiscard]] const BindlessTextureInfo* getTextureInfo(BindlessTextureHandle handle) const;
     // Unified lookup (checks name first, then path)
-    BindlessTextureHandle findTexture(const std::string& key) const;
+    [[nodiscard]] BindlessTextureHandle findTexture(std::string_view key) const;
 
-    BindlessTextureHandle getTextureByName(const std::string& name) const;
-    BindlessTextureHandle getTextureByPath(const std::string& path) const;
+    [[nodiscard]] BindlessTextureHandle getTextureByName(std::string_view name) const;
+    [[nodiscard]] BindlessTextureHandle getTextureByPath(std::string_view path) const;
 
     // Register a name/path for an existing handle (so getTextureByPath finds it)
-    void registerName(BindlessTextureHandle handle, const std::string& name) {
-        if (handle.valid()) { m_pathToHandle[name] = handle; m_nameToHandle[name] = handle; }
+    void registerName(BindlessTextureHandle handle, std::string_view name) {
+        if (handle.valid()) {
+            std::string key(name);
+            m_pathToHandle[key] = handle;
+            m_nameToHandle[key] = handle;
+        }
     }
 
     // Mark texture as persistent (won't be unloaded during streaming)
     void setTexturePersistent(BindlessTextureHandle handle, bool persistent);
 
     // Quick accessors for a specific texture's view/sampler
-    VkImageView getImageView(BindlessTextureHandle handle) const {
+    [[nodiscard]] VkImageView getImageView(BindlessTextureHandle handle) const {
         const auto* info = getTextureInfo(handle);
         return info ? info->view : VK_NULL_HANDLE;
     }
-    VkSampler getSampler(BindlessTextureHandle /*handle*/) const { return m_defaultSampler; }
-    VkSampler getDefaultSampler() const { return m_defaultSampler; }
+    [[nodiscard]] VkSampler getSampler(BindlessTextureHandle /*handle*/) const { return m_defaultSampler; }
+    [[nodiscard]] VkSampler getDefaultSampler() const { return m_defaultSampler; }
 
     // Descriptor set for shader binding
-    VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
-    VkDescriptorSet getDescriptorSet() const { return m_descriptorSet; }
+    [[nodiscard]] VkDescriptorSetLayout getDescriptorSetLayout() const { return m_descriptorSetLayout; }
+    [[nodiscard]] VkDescriptorSet getDescriptorSet() const { return m_descriptorSet; }
 
     // Update descriptor set (call after loading/unloading textures)
     void updateDescriptorSet();
 
     // Default textures
-    BindlessTextureHandle getDefaultWhiteTexture() const { return m_defaultWhite; }
-    BindlessTextureHandle getDefaultBlackTexture() const { return m_defaultBlack; }
-    BindlessTextureHandle getDefaultNormalTexture() const { return m_defaultNormal; }
-    BindlessTextureHandle getDefaultTexture(BindlessTextureType type) const;
+    [[nodiscard]] BindlessTextureHandle getDefaultWhiteTexture() const { return m_defaultWhite; }
+    [[nodiscard]] BindlessTextureHandle getDefaultBlackTexture() const { return m_defaultBlack; }
+    [[nodiscard]] BindlessTextureHandle getDefaultNormalTexture() const { return m_defaultNormal; }
+    [[nodiscard]] BindlessTextureHandle getDefaultTexture(BindlessTextureType type) const;
 
     // Stats
-    uint32_t getLoadedTextureCount() const { return m_loadedCount; }
-    uint32_t getMaxTextures() const { return m_maxTextures; }
-    size_t getTotalMemoryUsage() const { return m_totalMemoryUsage; }
+    [[nodiscard]] uint32_t getLoadedTextureCount() const noexcept { return m_loadedCount; }
+    [[nodiscard]] uint32_t getMaxTextures() const noexcept { return m_maxTextures; }
+    [[nodiscard]] size_t getTotalMemoryUsage() const noexcept { return m_totalMemoryUsage; }
+    [[nodiscard]] float fillRatio() const noexcept {
+        return m_maxTextures == 0 ? 0.f
+                                  : static_cast<float>(m_loadedCount) / static_cast<float>(m_maxTextures);
+    }
+    [[nodiscard]] bool isInitialized() const noexcept { return m_device != VK_NULL_HANDLE; }
 
 private:
-    bool createDescriptorResources();
-    bool createDefaultTextures();
-    bool createSolidColorTexture(uint32_t color, BindlessTextureHandle& outHandle,
-                                  const std::string& name);
-    bool createDefaultNormalTexture();
+    [[nodiscard]] bool createDescriptorResources();
+    [[nodiscard]] bool createDefaultTextures();
+    [[nodiscard]] bool createSolidColorTexture(uint32_t color, BindlessTextureHandle& outHandle,
+                                  std::string_view name);
+    [[nodiscard]] bool createDefaultNormalTexture();
 
     uint32_t allocateSlot();
     void freeSlot(uint32_t slot);
 
-    bool loadTextureData(const std::string& path, BindlessTextureType type, std::vector<uint8_t>& outData,
+    [[nodiscard]] bool loadTextureData(std::string_view path, BindlessTextureType type, std::vector<uint8_t>& outData,
                           uint32_t& width, uint32_t& height, VkFormat& format);
 
-    bool createTextureImage(const void* data, uint32_t width, uint32_t height,
+    [[nodiscard]] bool createTextureImage(std::span<const uint8_t> data, uint32_t width, uint32_t height,
                              VkFormat format, bool generateMips,
                              VkImage& outImage, VkDeviceMemory& outMemory,
                              VkImageView& outView, uint32_t& outMipLevels);

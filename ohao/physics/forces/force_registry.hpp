@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
+#include <string_view>
 #include <functional>
 
 namespace ohao {
@@ -27,7 +28,7 @@ struct ForceRegistration {
     std::string name;
     bool enabled = true;
     
-    ForceRegistration(std::unique_ptr<ForceGenerator> gen, const std::string& registrationName)
+    ForceRegistration(std::unique_ptr<ForceGenerator> gen, std::string_view registrationName)
         : generator(std::move(gen)), name(registrationName) {}
 };
 
@@ -53,19 +54,19 @@ public:
      * @param targetBodies Bodies this force should affect (empty = affect all)
      * @return Registration ID for later reference
      */
-    size_t registerForce(std::unique_ptr<ForceGenerator> generator, 
-                        const std::string& name = "",
+    size_t registerForce(std::unique_ptr<ForceGenerator> generator,
+                        std::string_view name = "",
                         const std::vector<dynamics::RigidBody*>& targetBodies = {});
     
     /**
      * Unregister a force by ID
      */
-    bool unregisterForce(size_t registrationId);
+    [[nodiscard]] bool unregisterForce(size_t registrationId);
     
     /**
      * Unregister all forces with the given name
      */
-    void unregisterForcesByName(const std::string& name);
+    void unregisterForcesByName(std::string_view name);
     
     /**
      * Clear all force registrations
@@ -87,12 +88,12 @@ public:
     /**
      * Enable/disable a force registration
      */
-    bool setForceEnabled(size_t registrationId, bool enabled);
+    [[nodiscard]] bool setForceEnabled(size_t registrationId, bool enabled);
     
     /**
      * Enable/disable forces by name
      */
-    void setForcesEnabledByName(const std::string& name, bool enabled);
+    void setForcesEnabledByName(std::string_view name, bool enabled);
     
     /**
      * Get number of registered forces
@@ -107,12 +108,12 @@ public:
     /**
      * Add a body to a force's target list
      */
-    bool addBodyToForce(size_t registrationId, dynamics::RigidBody* body);
+    [[nodiscard]] bool addBodyToForce(size_t registrationId, dynamics::RigidBody* body);
     
     /**
      * Remove a body from a force's target list
      */
-    bool removeBodyFromForce(size_t registrationId, dynamics::RigidBody* body);
+    [[nodiscard]] bool removeBodyFromForce(size_t registrationId, dynamics::RigidBody* body);
     
     /**
      * Remove a body from all force registrations (call when body is destroyed)
@@ -128,7 +129,7 @@ public:
     /**
      * Find force registrations by name
      */
-    std::vector<ForceRegistration*> getForceRegistrationsByName(const std::string& name);
+    std::vector<ForceRegistration*> getForceRegistrationsByName(std::string_view name);
     
     /**
      * Get all force registrations

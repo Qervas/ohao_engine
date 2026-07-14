@@ -3,6 +3,8 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
+#include <span>
+#include <concepts>
 
 namespace ohao {
 namespace physics {
@@ -32,32 +34,39 @@ public:
     /**
      * Get the name/type of this force generator
      */
-    virtual std::string getName() const = 0;
+    [[nodiscard]] virtual std::string getName() const = 0;
     
     /**
      * Check if this force generator is enabled
      */
-    virtual bool isEnabled() const { return m_enabled; }
+    [[nodiscard]] virtual bool isEnabled() const noexcept { return m_enabled; }
     
     /**
      * Enable/disable this force generator
      */
-    virtual void setEnabled(bool enabled) { m_enabled = enabled; }
+    virtual void setEnabled(bool enabled) noexcept { m_enabled = enabled; }
     
     /**
      * Get priority for force application order
      * Higher priority forces are applied first
      */
-    virtual int getPriority() const { return m_priority; }
+    [[nodiscard]] virtual int getPriority() const noexcept { return m_priority; }
     
     /**
      * Set priority for force application order
      */
-    virtual void setPriority(int priority) { m_priority = priority; }
+    virtual void setPriority(int priority) noexcept { m_priority = priority; }
 
 protected:
     bool m_enabled = true;
     int m_priority = 0; // Default priority
+};
+
+template<typename T>
+concept ForceGeneratorLike = requires(T& t, dynamics::RigidBody* body, float dt) {
+    { t.applyForce(body, dt) } -> std::same_as<void>;
+    { t.getName() } -> std::convertible_to<std::string>;
+    { t.isEnabled() } -> std::convertible_to<bool>;
 };
 
 /**
@@ -72,8 +81,8 @@ public:
     explicit SingleBodyForceGenerator(dynamics::RigidBody* targetBody = nullptr)
         : m_targetBody(targetBody) {}
     
-    void setTargetBody(dynamics::RigidBody* body) { m_targetBody = body; }
-    dynamics::RigidBody* getTargetBody() const { return m_targetBody; }
+    void setTargetBody(dynamics::RigidBody* body) noexcept { m_targetBody = body; }
+    [[nodiscard]] dynamics::RigidBody* getTargetBody() const noexcept { return m_targetBody; }
 
 protected:
     dynamics::RigidBody* m_targetBody = nullptr;
@@ -97,8 +106,8 @@ public:
         m_bodyB = bodyB;
     }
     
-    dynamics::RigidBody* getBodyA() const { return m_bodyA; }
-    dynamics::RigidBody* getBodyB() const { return m_bodyB; }
+    [[nodiscard]] dynamics::RigidBody* getBodyA() const noexcept { return m_bodyA; }
+    [[nodiscard]] dynamics::RigidBody* getBodyB() const noexcept { return m_bodyB; }
 
 protected:
     dynamics::RigidBody* m_bodyA = nullptr;
@@ -112,15 +121,14 @@ class GlobalForceGenerator : public ForceGenerator {
 public:
     /**
      * Apply force to multiple bodies
-     * @param bodies Array of bodies to potentially affect
-     * @param bodyCount Number of bodies in the array
+     * @param bodies Span of bodies to potentially affect
      * @param deltaTime Time step
      */
-    virtual void applyForceToMultiple(dynamics::RigidBody** bodies, size_t bodyCount, float deltaTime) {
+    virtual void applyForceToMultiple(std::span<dynamics::RigidBody*> bodies, float deltaTime) {
         // Default implementation applies to each body individually
-        for (size_t i = 0; i < bodyCount; ++i) {
-            if (bodies[i] && shouldAffectBody(bodies[i])) {
-                applyForce(bodies[i], deltaTime);
+        for (auto* body : bodies) {
+            if (body && shouldAffectBody(body)) {
+                applyForce(body, deltaTime);
             }
         }
     }

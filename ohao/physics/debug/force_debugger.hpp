@@ -4,6 +4,7 @@
 #include "physics/forces/force_registry.hpp"
 #include <vector>
 #include <string>
+#include <string_view>
 #include <memory>
 #include <unordered_map>
 #include <chrono>
@@ -77,14 +78,14 @@ public:
     void startFrame();
     void endFrame();
     
-    void recordForceApplication(dynamics::RigidBody* body, 
-                              const glm::vec3& force, 
+    void recordForceApplication(dynamics::RigidBody* body,
+                              const glm::vec3& force,
                               const glm::vec3& applicationPoint,
-                              const std::string& sourceId);
+                              std::string_view sourceId);
     
     void recordTorqueApplication(dynamics::RigidBody* body,
                                const glm::vec3& torque,
-                               const std::string& sourceId);
+                               std::string_view sourceId);
     
     void analyzeForceRegistry(const forces::ForceRegistry& registry,
                             const std::vector<dynamics::RigidBody*>& bodies);
@@ -109,15 +110,15 @@ public:
     void resetStats();
     
     // === FORCE TYPE COLORS ===
-    void setForceTypeColor(const std::string& forceType, const glm::vec3& color);
-    glm::vec3 getForceTypeColor(const std::string& forceType) const;
+    void setForceTypeColor(std::string_view forceType, const glm::vec3& color);
+    [[nodiscard]] glm::vec3 getForceTypeColor(std::string_view forceType) const;
     
     // === DEBUGGING UTILITIES ===
     void logForceStatistics() const;
     void logBodyForceBreakdown() const;
     
-    std::string generateForceReport() const;
-    void saveForceReport(const std::string& filename) const;
+    [[nodiscard]] std::string generateForceReport() const;
+    void saveForceReport(std::string_view filename) const;
     
     // === PERFORMANCE PROFILING ===
     void setProfilingEnabled(bool enabled) { m_profilingEnabled = enabled; }
@@ -158,8 +159,8 @@ private:
     
     // Helper methods
     void initializeDefaultColors();
-    glm::vec3 getColorForForceType(const std::string& forceType) const;
-    std::string getBodyName(dynamics::RigidBody* body) const;
+    [[nodiscard]] glm::vec3 getColorForForceType(std::string_view forceType) const;
+    [[nodiscard]] std::string getBodyName(dynamics::RigidBody* body) const;
     void updateFrameStatistics();
     void filterVectorsByMode();
 };

@@ -43,10 +43,10 @@ void ForceDebugger::endFrame() {
     m_frameActive = false;
 }
 
-void ForceDebugger::recordForceApplication(dynamics::RigidBody* body, 
-                                         const glm::vec3& force, 
+void ForceDebugger::recordForceApplication(dynamics::RigidBody* body,
+                                         const glm::vec3& force,
                                          const glm::vec3& applicationPoint,
-                                         const std::string& sourceId) {
+                                         std::string_view sourceId) {
     if (!m_frameActive || !body) return;
     
     float magnitude = glm::length(force);
@@ -57,7 +57,7 @@ void ForceDebugger::recordForceApplication(dynamics::RigidBody* body,
     forceVec.direction = glm::normalize(force);
     forceVec.magnitude = magnitude;
     forceVec.color = getColorForForceType(sourceId);
-    forceVec.sourceId = sourceId;
+    forceVec.sourceId = std::string(sourceId);
     forceVec.bodyName = getBodyName(body);
     
     m_forceVectors.push_back(forceVec);
@@ -75,7 +75,7 @@ void ForceDebugger::recordForceApplication(dynamics::RigidBody* body,
         newStats.netForce = force;
         newStats.totalForceApplied = magnitude;
         newStats.forceApplicationCount = 1;
-        newStats.activeForces.push_back(sourceId);
+        newStats.activeForces.emplace_back(sourceId);
         m_bodyStats.push_back(newStats);
     } else {
         bodyIt->netForce += force;
@@ -83,16 +83,16 @@ void ForceDebugger::recordForceApplication(dynamics::RigidBody* body,
         bodyIt->forceApplicationCount++;
         
         // Add source if not already present
-        if (std::find(bodyIt->activeForces.begin(), bodyIt->activeForces.end(), sourceId) == 
+        if (std::find(bodyIt->activeForces.begin(), bodyIt->activeForces.end(), sourceId) ==
             bodyIt->activeForces.end()) {
-            bodyIt->activeForces.push_back(sourceId);
+            bodyIt->activeForces.emplace_back(sourceId);
         }
     }
 }
 
 void ForceDebugger::recordTorqueApplication(dynamics::RigidBody* body,
                                           const glm::vec3& torque,
-                                          const std::string& sourceId) {
+                                          std::string_view sourceId) {
     if (!m_frameActive || !body || !m_showTorques) return;
     
     float magnitude = glm::length(torque);
@@ -103,7 +103,7 @@ void ForceDebugger::recordTorqueApplication(dynamics::RigidBody* body,
     torqueVec.axis = glm::normalize(torque);
     torqueVec.magnitude = magnitude;
     torqueVec.color = getColorForForceType(sourceId);
-    torqueVec.sourceId = sourceId;
+    torqueVec.sourceId = std::string(sourceId);
     torqueVec.bodyName = getBodyName(body);
     
     m_torqueVectors.push_back(torqueVec);
@@ -161,12 +161,12 @@ void ForceDebugger::resetStats() {
     m_profilingData = ProfilingData{};
 }
 
-void ForceDebugger::setForceTypeColor(const std::string& forceType, const glm::vec3& color) {
-    m_forceTypeColors[forceType] = color;
+void ForceDebugger::setForceTypeColor(std::string_view forceType, const glm::vec3& color) {
+    m_forceTypeColors[std::string(forceType)] = color;
 }
 
-glm::vec3 ForceDebugger::getForceTypeColor(const std::string& forceType) const {
-    auto it = m_forceTypeColors.find(forceType);
+glm::vec3 ForceDebugger::getForceTypeColor(std::string_view forceType) const {
+    auto it = m_forceTypeColors.find(std::string(forceType));
     return (it != m_forceTypeColors.end()) ? it->second : glm::vec3(1.0f, 1.0f, 1.0f);
 }
 
@@ -266,14 +266,15 @@ std::string ForceDebugger::generateForceReport() const {
     return report.str();
 }
 
-void ForceDebugger::saveForceReport(const std::string& filename) const {
-    std::ofstream file(filename);
+void ForceDebugger::saveForceReport(std::string_view filename) const {
+    std::string path(filename);
+    std::ofstream file(path);
     if (file.is_open()) {
         file << generateForceReport();
         file.close();
-        OHAO_LOG_INFO("Force report saved to: " + filename);
+        OHAO_LOG_INFO("Force report saved to: " + path);
     } else {
-        OHAO_LOG_ERROR("Failed to save force report to: " + filename);
+        OHAO_LOG_ERROR("Failed to save force report to: " + path);
     }
 }
 
@@ -291,15 +292,14 @@ void ForceDebugger::initializeDefaultColors() {
     m_forceTypeColors["net_torque"] = glm::vec3(0.8f, 0.8f, 0.8f);       // Light Gray
 }
 
-glm::vec3 ForceDebugger::getColorForForceType(const std::string& forceType) const {
-    auto it = m_forceTypeColors.find(forceType);
+glm::vec3 ForceDebugger::getColorForForceType(std::string_view forceType) const {
+    auto it = m_forceTypeColors.find(std::string(forceType));
     if (it != m_forceTypeColors.end()) {
         return it->second;
     }
     
     // Generate a color based on string hash for unknown types
-    std::hash<std::string> hasher;
-    size_t hash = hasher(forceType);
+    size_t hash = std::hash<std::string_view>{}(forceType);
     float r = ((hash >> 16) & 0xFF) / 255.0f;
     float g = ((hash >> 8) & 0xFF) / 255.0f;
     float b = (hash & 0xFF) / 255.0f;
@@ -344,12 +344,9 @@ void ForceDebugger::filterVectorsByMode() {
     switch (m_vizMode) {
         case VisualizationMode::NET_FORCES_ONLY:
             // Remove individual forces, keep only net forces
-            m_forceVectors.erase(
-                std::remove_if(m_forceVectors.begin(), m_forceVectors.end(),
-                              [](const ForceVector& force) {
-                                  return force.sourceId != "net_force";
-                              }),
-                m_forceVectors.end());
+            std::erase_if(m_forceVectors, [](const ForceVector& force) {
+                return force.sourceId != "net_force";
+            });
             break;
             
         case VisualizationMode::ABOVE_THRESHOLD:

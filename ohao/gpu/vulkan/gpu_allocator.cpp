@@ -41,6 +41,7 @@ bool GpuAllocator::initialize(VkInstance instance, VkPhysicalDevice physicalDevi
 
     m_device = device;
 
+    // VMA create info uses many optional fields; keep explicit assignment for stability
     VmaAllocatorCreateInfo allocatorInfo{};
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
     allocatorInfo.instance = instance;
@@ -90,11 +91,12 @@ GpuBuffer GpuAllocator::createBuffer(
         return result;
     }
 
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = size;
-    bufferInfo.usage = bufferUsage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBufferCreateInfo bufferInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = bufferUsage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = toVmaUsage(memoryUsage);
@@ -117,8 +119,8 @@ GpuBuffer GpuAllocator::createBuffer(
         &result.allocation.info
     );
 
-    if (vkResult != VK_SUCCESS) {
-        std::cerr << "Failed to create VMA buffer: " << vkResult << std::endl;
+    if (vk_failed(vkResult)) {
+        std::cerr << "Failed to create VMA buffer: " << vk_result_name(vkResult) << std::endl;
         return result;
     }
 
@@ -131,6 +133,25 @@ GpuBuffer GpuAllocator::createBuffer(
     }
 
     return result;
+}
+
+GpuBuffer GpuAllocator::createBufferFromBytes(
+    std::span<const std::byte> bytes,
+    VkBufferUsageFlags bufferUsage,
+    AllocationUsage memoryUsage)
+{
+    GpuBuffer buf = createBuffer(
+        static_cast<VkDeviceSize>(bytes.size()),
+        bufferUsage,
+        memoryUsage,
+        /*persistentlyMapped=*/true);
+
+    if (!buf.isValid() || !buf.getMappedData() || bytes.empty()) {
+        return buf;
+    }
+    std::memcpy(buf.getMappedData(), bytes.data(), bytes.size());
+    flushBuffer(buf);
+    return buf;
 }
 
 void GpuAllocator::destroyBuffer(GpuBuffer& buffer) {
@@ -271,7 +292,7 @@ void GpuAllocator::printStats() const {
     std::cout << "===========================" << std::endl;
 }
 
-VmaMemoryUsage GpuAllocator::toVmaUsage(AllocationUsage usage) const {
+VmaMemoryUsage GpuAllocator::toVmaUsage(AllocationUsage usage) const noexcept {
     switch (usage) {
         case AllocationUsage::GpuOnly:
             return VMA_MEMORY_USAGE_GPU_ONLY;

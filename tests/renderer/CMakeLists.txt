@@ -3,6 +3,7 @@
 
 # Standalone renderer test — builds scene, renders to PNG
 add_executable(renderer_test renderer_test.cpp)
+target_compile_features(renderer_test PRIVATE cxx_std_20)
 
 target_include_directories(renderer_test PRIVATE
     ${CMAKE_SOURCE_DIR}/ohao
