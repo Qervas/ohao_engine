@@ -7,7 +7,7 @@
 
 struct RayPayload {
     vec3 color;         // emissive output
-    vec3 attenuation;   // x=roughness (negative=metallic), y=unused, z=unused
+    vec3 attenuation;   // x=roughness, y=metallic (continuous), z=curvature
     vec3 hitPos;
     vec3 hitNormal;
     vec3 hitAlbedo;
@@ -156,7 +156,7 @@ void main() {
     }
     payload.color = emissive;
 
-    // Pack roughness + metallic + curvature for raygen.
-    // .x = roughness (signed for metal flag), .z = per-pixel curvature [0,1].
-    payload.attenuation = vec3(metallic > 0.5 ? -(roughness + 0.001) : roughness, 0.0, curv);
+    // Continuous metal-rough for raygen (scalar full PBR / inverse).
+    // .x = roughness, .y = metallic, .z = per-pixel curvature [0,1].
+    payload.attenuation = vec3(roughness, clamp(metallic, 0.0, 1.0), curv);
 }

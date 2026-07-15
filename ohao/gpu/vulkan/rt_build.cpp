@@ -367,7 +367,8 @@ bool VulkanRenderer::updateRTMaterialParams() {
             ++matIdx;
         }
 
-        // Path-tracer per-instance material (one entry per BLAS instance)
+        // Path-tracer per-instance material (albedo.rgb, packed rough; metal is in mat buffer).
+        // Keep historic packing for any code still reading instance materials.
         float packed = instMetal > 0.5f ? -(instRough + 0.001f) : instRough;
         bool isSphereShape = model->vertices.size() > 100;
         if (isSphereShape) packed += (packed >= 0 ? 10.0f : -10.0f);

@@ -1,6 +1,8 @@
-# Inverse rendering (Phase A)
+# Inverse rendering (Phase A → B1/B2)
 
 Recover scene parameters \(\theta\) so offline path tracing matches a target image.
+
+**Scalar full PBR** (current): \(\theta = [\text{albedo}_{rgb},\, \text{roughness},\, \text{metallic}]\) on one surface (ground / left wall). Not texture maps.
 
 ## Dual budget
 
@@ -18,12 +20,12 @@ You never have to stare at FIT frames. Showcase files are SHOW quality and grain
 
 ## Scenes
 
-| `--scene` | Content | Optimizes |
-|-----------|---------|-----------|
-| **`studio` (default)** | Product shot: Lantern + pedestal + cyclorama + studio HDRI + 3-point lights | Ground albedo RGB |
-| `cornell` | Classic box (fast regression) | Left wall albedo RGB |
+| `--scene` | Content | Optimizes (5D scalar PBR) |
+|-----------|---------|---------------------------|
+| **`studio` (default)** | Product shot: Lantern + pedestal + cyclorama + studio HDRI + 3-point lights | Ground: albedo RGB + roughness + metallic |
+| `cornell` | Classic box (fast regression) | Left wall: albedo RGB + roughness + metallic |
 
-Override hero with `--model assets/showcase_objects/Lantern.glb` (etc.). Studio uses **multi-view** loss (default 3 cameras) and a **relight** still (hot key light) after recovery.
+Override hero with `--model PATH`. Studio uses **multi-view** loss (default 3 cameras) and a **relight** still after recovery.
 
 ## Run
 
@@ -50,10 +52,12 @@ Outputs under `renders/inverse/`:
 ## Pipeline
 
 1. Build **studio** (Lantern product shot + HDRI) or cornell.  
-2. Multi-view SHOW + FIT targets under truth ground albedo.  
-3. Finite-difference + Adam on **multi-view masked MSE** (ground band).  
+2. Multi-view SHOW + FIT targets under truth PBR.  
+3. Finite-difference + Adam on **multi-view masked MSE** (floor / wall band).  
 4. SHOW recovered multi-view (OIDN).  
 5. Relight: boost key light, re-render recovered vs truth.  
+
+Selftest uses **param RMSE** \(= \|\theta-\theta^\star\|_2 / \sqrt{5}\) (tolerance ~0.14 under draft FD noise).
 
 **No ML** in this path — pure physical image match. ML priors are a later phase.
 
@@ -83,6 +87,7 @@ ohao/inverse/
 ## Limits (not yet)
 
 - Autodiff / adjoint path tracer  
-- Multi-parameter materials / lighting fit  
+- Multi-surface PBR / lighting / HDRI fit  
+- **Textured** PBR maps (only uniform scalars)  
 - Real photographs as targets  
 - ML priors (deferred — physical IR first)  
