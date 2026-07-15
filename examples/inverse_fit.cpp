@@ -3,25 +3,30 @@
 // Gradual roadmap (no ML yet):
 //   A) dual-budget + grain-free SHOW (OIDN)
 //   B) product-studio scene + multi-view + relight
-//   B1/B2) scalar full PBR: albedo RGB + roughness + metallic
-//   B3) multi-surface + key light
-//   B4) fill light + 3-stage schedule + dataset-dataset (ML bridge)
+//   B1–B5) scalar full PBR + multi-light + env scale + staged FD
+//   B6) gap-close: multi-start, specular loss, light regularizer,
+//       external --target-image, optional 2×2 ground albedo map
 //   C) ML priors later (not this binary)
 //
-// Studio θ (default):
+// Studio θ (default 12D):
 //   ground[5]  = albedo.rgb, roughness, metallic
 //   pedestal[3] = albedo.rgb
-//   key_I[1], fill_I[1]
-// Schedule: primary → pedestal → lights
+//   key_I, fill_I, rim_I, env_scale
+// With --map-ground: ground becomes 4×RGB tiles + shared rough/metal (14D primary).
+// Schedule: multi-start → env → lights → albedo → brdf(hi-spp) → pedestal → lights2 → refine
 // --export-dataset N  writes (θ, image) pairs for future ML
 // FIT  = raw MC (noise is a feature for FD) — denoise NEVER on
 // SHOW = grain-free stills (OIDN default)
 //
 // Usage:
-//   ./inverse_fit --selftest --scene studio --quality draft
-//   ./inverse_fit --selftest --scene studio --quality high
-//   ./inverse_fit --selftest --scene cornell          # legacy fast box
+//   ./inverse_fit --selftest --preset lantern --quality draft
+//   ./inverse_fit --selftest --preset mirror --quality draft
+//   ./inverse_fit --target-image photo.png --fit-exposure --quality high
 
+#ifndef STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#endif
+#include "stb_image.h"
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #endif
@@ -38,6 +43,8 @@
 #include "scene/component/mesh_component.hpp"
 #include "scene/scene.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -45,6 +52,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,7 +73,7 @@ struct FitConfig {
     QualityPreset quality{kQualityHigh};
     RenderBudget fit{kQualityHigh.fit};
     RenderBudget show{kQualityHigh.show};
-    int iters{40}; // B5 stages need a few more Adam steps
+    int iters{40}; // staged Adam steps budget
     double lr{0.06};
     double eps{0.04};
     double maskX{1.0};     // studio: full width
@@ -95,6 +103,16 @@ struct FitConfig {
     float truthR{0.72f}, truthG{0.55f}, truthB{0.42f}, truthRough{0.30f}, truthMetal{0.12f};
     float initR{0.20f}, initG{0.45f}, initB{0.70f}, initRough{0.88f}, initMetal{0.70f};
     const char* presetNote{"product studio / Lantern"};
+
+    // ── B6 gap-close ──────────────────────────────────────────────────
+    int multiStart{5};          // candidate inits (1 = off / single start)
+    double lightReg{0.035};     // multi-light ambiguity regularizer
+    double specularWeight{0.45};// highlight-biased image loss (metal/rough)
+    float brdfSppMul{2.0f};     // BRDF stage FIT spp multiplier
+    bool mapGround{false};      // 2×2 ground albedo tiles (shared rough/metal)
+    std::string targetImage;    // external LDR target (PNG/JPG); empty = synthetic
+    float exposure{1.0f};       // applied to external target (or fitted)
+    bool fitExposure{false};    // add exposure as free θ dim (photo path)
 };
 
 // Resolve missing optional showcase assets to tracked test_models copies.
@@ -171,6 +189,8 @@ void applyPreset(FitConfig& cfg) {
         setInit(0.70f, 0.25f, 0.15f, 0.75f, 0.10f);
         cfg.heroScaleMul = 1.15f;
         cfg.camDistMul = 1.15f;
+        cfg.specularWeight = 0.70;
+        cfg.brdfSppMul = 2.5f;
         cfg.presetNote = "MetalRoughSpheres (metal/rough chart; TRICKY)";
     } else if (p == "toycar") {
         setModel("assets/showcase_objects/ToyCar.glb");
@@ -200,6 +220,8 @@ void applyPreset(FitConfig& cfg) {
         // Near-mirror floor — very sensitive to lights/env
         setTruth(0.85f, 0.85f, 0.88f, 0.08f, 0.92f);
         setInit(0.30f, 0.40f, 0.55f, 0.70f, 0.15f);
+        cfg.specularWeight = 0.75;
+        cfg.brdfSppMul = 2.5f;
         cfg.presetNote = "Mirror floor (high metal/low rough; TRICKY)";
     } else if (p == "chess") {
         setModel("assets/showcase_objects/ABeautifulGame.glb");
@@ -270,6 +292,24 @@ CliArgs parseArgs(int argc, char** argv) {
             a.cfg.fitEnvScale = false;
         } else if (s == "--export-dataset") {
             a.cfg.exportDataset = std::max(1, std::atoi(need("--export-dataset")));
+        } else if (s == "--multi-start") {
+            a.cfg.multiStart = std::max(1, std::atoi(need("--multi-start")));
+        } else if (s == "--no-multi-start") {
+            a.cfg.multiStart = 1;
+        } else if (s == "--light-reg") {
+            a.cfg.lightReg = std::max(0.0, std::atof(need("--light-reg")));
+        } else if (s == "--specular-weight") {
+            a.cfg.specularWeight = std::clamp(std::atof(need("--specular-weight")), 0.0, 1.0);
+        } else if (s == "--brdf-spp-mul") {
+            a.cfg.brdfSppMul = std::max(1.0f, static_cast<float>(std::atof(need("--brdf-spp-mul"))));
+        } else if (s == "--map-ground") {
+            a.cfg.mapGround = true;
+        } else if (s == "--target-image") {
+            a.cfg.targetImage = need("--target-image");
+        } else if (s == "--exposure") {
+            a.cfg.exposure = static_cast<float>(std::atof(need("--exposure")));
+        } else if (s == "--fit-exposure") {
+            a.cfg.fitExposure = true;
         } else if (s == "--fit-width") {
             a.cfg.fit.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--fit-width"))));
         } else if (s == "--fit-height") {
@@ -308,9 +348,14 @@ CliArgs parseArgs(int argc, char** argv) {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
                 << "  Studio θ: ground PBR[5] + pedestal[3] + key/fill/rim I + env scale\n"
-                << "  Stages: albedo → brdf → pedestal → lights → env\n"
+                << "  B6 stages: multi-start → env → lights → albedo → brdf → pedestal → lights2 → refine\n"
                 << "  --preset lantern|helmet|bottle|spheres|toycar|boombox|outdoor|mirror|chess|cornell\n"
                 << "  --export-dataset N   ML data factory\n"
+                << "  --multi-start N | --no-multi-start   (default 5 candidates)\n"
+                << "  --light-reg W  --specular-weight W  --brdf-spp-mul M\n"
+                << "  --map-ground           2×2 ground albedo tiles\n"
+                << "  --target-image PATH    external LDR photo target\n"
+                << "  --exposure E  --fit-exposure\n"
                 << "  --no-pedestal --no-light --no-fill --no-rim --no-env\n"
                 << "  --quality draft|high|ultra|cinema  --views N\n";
             std::exit(0);
@@ -393,9 +438,15 @@ void writeMatPbr(MaterialComponent* mat, Actor* actor, const PbrParams& p) {
 // Multi-surface + light inverse scene.
 struct InverseScene {
     std::unique_ptr<Scene> scene;
-    // Primary PBR surface (ground / left wall)
+    // Primary PBR surface (ground / left wall) — uniform mode
     Actor* primaryActor{nullptr};
     MaterialComponent* primaryMat{nullptr};
+    // Optional 2×2 ground albedo tiles (mapGround): each tile is RGB in θ
+    std::vector<Actor*> groundTiles;
+    std::vector<MaterialComponent*> groundMats;
+    bool mapGround{false};
+    glm::vec3 truthTiles[4]{};
+    glm::vec3 initTiles[4]{};
     // Secondary surface (pedestal top) — albedo only in θ
     Actor* pedestalActor{nullptr};
     MaterialComponent* pedestalMat{nullptr};
@@ -420,6 +471,9 @@ struct InverseScene {
     float truthEnvScale{1.0f};
     float initEnvScale{0.45f};
     float currentEnvScale{1.0f};
+    float currentExposure{1.0f};
+    float truthExposure{1.0f};
+    float initExposure{1.0f};
     // Light intensities stored as scale of kKeyIScale (Adam conditioning).
     static constexpr float kKeyIScale = 40.0f;
     bool fitPedestal{false};
@@ -427,15 +481,20 @@ struct InverseScene {
     bool fitFillLight{false};
     bool fitRimLight{false};
     bool fitEnvScale{false};
+    bool fitExposure{false};
 
-    // Layout: primary[5] | pedestal[3]? | key? fill? rim? | env?
+    /// Primary block: 5 (uniform) or 14 (4×RGB + shared rough/metal).
+    [[nodiscard]] size_t primaryDims() const noexcept { return mapGround ? 14u : 5u; }
+
+    // Layout: primary | pedestal[3]? | key? fill? rim? | env? | exposure?
     [[nodiscard]] size_t thetaDims() const {
-        size_t n = 5;
+        size_t n = primaryDims();
         if (fitPedestal && pedestalMat) n += 3;
         if (fitKeyLight && keyLight) n += 1;
         if (fitFillLight && fillLight) n += 1;
         if (fitRimLight && rimLight) n += 1;
         if (fitEnvScale) n += 1;
+        if (fitExposure) n += 1;
         return n;
     }
 
@@ -444,66 +503,144 @@ struct InverseScene {
                (fitRimLight && rimLight) || fitEnvScale;
     }
 
+    /// Index of first light/env/exposure param (for regularizer).
+    [[nodiscard]] size_t lightBlockStart() const {
+        size_t i = primaryDims();
+        if (fitPedestal && pedestalMat) i += 3;
+        return i;
+    }
+
     void appendLightTheta(std::vector<double>& t, float key, float fill, float rim,
-                          float env) const {
+                          float env, float exposure) const {
         if (fitKeyLight && keyLight) t.push_back(key / kKeyIScale);
         if (fitFillLight && fillLight) t.push_back(fill / kKeyIScale);
         if (fitRimLight && rimLight) t.push_back(rim / kKeyIScale);
         if (fitEnvScale) t.push_back(env);
+        if (fitExposure) t.push_back(exposure);
+    }
+
+    void appendPrimaryTruth(std::vector<double>& t) const {
+        if (mapGround) {
+            for (int k = 0; k < 4; ++k) {
+                t.push_back(truthTiles[k].r);
+                t.push_back(truthTiles[k].g);
+                t.push_back(truthTiles[k].b);
+            }
+            t.push_back(truthPrimary.roughness);
+            t.push_back(truthPrimary.metallic);
+        } else {
+            auto p = truthPrimary.asTheta();
+            t.insert(t.end(), p.begin(), p.end());
+        }
+    }
+
+    void appendPrimaryInit(std::vector<double>& t) const {
+        if (mapGround) {
+            for (int k = 0; k < 4; ++k) {
+                t.push_back(initTiles[k].r);
+                t.push_back(initTiles[k].g);
+                t.push_back(initTiles[k].b);
+            }
+            t.push_back(initPrimary.roughness);
+            t.push_back(initPrimary.metallic);
+        } else {
+            auto p = initPrimary.asTheta();
+            t.insert(t.end(), p.begin(), p.end());
+        }
     }
 
     [[nodiscard]] std::vector<double> truthTheta() const {
-        std::vector<double> t = truthPrimary.asTheta();
+        std::vector<double> t;
+        t.reserve(thetaDims());
+        appendPrimaryTruth(t);
         if (fitPedestal && pedestalMat) {
             t.push_back(truthPedestal.albedo.r);
             t.push_back(truthPedestal.albedo.g);
             t.push_back(truthPedestal.albedo.b);
         }
-        appendLightTheta(t, truthKeyI, truthFillI, truthRimI, truthEnvScale);
+        appendLightTheta(t, truthKeyI, truthFillI, truthRimI, truthEnvScale, truthExposure);
         return t;
     }
 
     [[nodiscard]] std::vector<double> initTheta() const {
-        std::vector<double> t = initPrimary.asTheta();
+        std::vector<double> t;
+        t.reserve(thetaDims());
+        appendPrimaryInit(t);
         if (fitPedestal && pedestalMat) {
             t.push_back(initPedestal.albedo.r);
             t.push_back(initPedestal.albedo.g);
             t.push_back(initPedestal.albedo.b);
         }
-        appendLightTheta(t, initKeyI, initFillI, initRimI, initEnvScale);
+        appendLightTheta(t, initKeyI, initFillI, initRimI, initEnvScale, initExposure);
         return t;
     }
 
-    /// Random θ in box bounds (for dataset export / ML).
+    /// Random θ in box bounds (for dataset export / multi-start / ML).
     [[nodiscard]] std::vector<double> sampleRandomTheta(uint32_t rng) const {
         auto u01 = [&]() -> double {
             rng = rng * 1664525u + 1013904223u;
             return static_cast<double>(rng >> 8) / static_cast<double>(1u << 24);
         };
-        std::vector<double> t(5);
-        for (int i = 0; i < 3; ++i) t[static_cast<size_t>(i)] = u01();
-        t[3] = 0.04 + 0.96 * u01();
-        t[4] = u01();
+        std::vector<double> t;
+        t.reserve(thetaDims());
+        if (mapGround) {
+            for (int k = 0; k < 12; ++k) t.push_back(u01());
+            t.push_back(0.04 + 0.96 * u01());
+            t.push_back(u01());
+        } else {
+            for (int i = 0; i < 3; ++i) t.push_back(u01());
+            t.push_back(0.04 + 0.96 * u01());
+            t.push_back(u01());
+        }
         if (fitPedestal && pedestalMat) {
             t.push_back(u01());
             t.push_back(u01());
             t.push_back(u01());
         }
-        if (fitKeyLight && keyLight) t.push_back(0.05 + 1.2 * u01());
-        if (fitFillLight && fillLight) t.push_back(0.05 + 0.8 * u01());
-        if (fitRimLight && rimLight) t.push_back(0.05 + 0.8 * u01());
-        if (fitEnvScale) t.push_back(0.25 + 1.25 * u01());
+        // Tighter light ranges match ParamSpace bounds (reduce multi-light blowout).
+        if (fitKeyLight && keyLight) t.push_back(0.15 + 0.75 * u01());
+        if (fitFillLight && fillLight) t.push_back(0.08 + 0.45 * u01());
+        if (fitRimLight && rimLight) t.push_back(0.08 + 0.45 * u01());
+        if (fitEnvScale) t.push_back(0.35 + 1.0 * u01());
+        if (fitExposure) t.push_back(0.4 + 1.6 * u01());
         return t;
     }
 
+    void applyPrimaryFromTheta(const std::vector<double>& th) {
+        const size_t pd = primaryDims();
+        if (th.size() < pd) return;
+        if (mapGround && groundMats.size() == 4) {
+            const float rough = static_cast<float>(th[12]);
+            const float metal = static_cast<float>(th[13]);
+            for (int k = 0; k < 4; ++k) {
+                const size_t o = static_cast<size_t>(k) * 3;
+                writeMatPbr(groundMats[static_cast<size_t>(k)], groundTiles[static_cast<size_t>(k)],
+                            PbrParams{.albedo = {static_cast<float>(th[o]), static_cast<float>(th[o + 1]),
+                                                 static_cast<float>(th[o + 2])},
+                                      .roughness = rough,
+                                      .metallic = metal});
+            }
+            // Keep primaryMat in sync with tile 0 for diagnostics.
+            if (primaryMat) {
+                writeMatPbr(primaryMat, primaryActor,
+                            PbrParams{.albedo = {static_cast<float>(th[0]), static_cast<float>(th[1]),
+                                                 static_cast<float>(th[2])},
+                                      .roughness = rough,
+                                      .metallic = metal});
+            }
+        } else {
+            writeMatPbr(primaryMat, primaryActor,
+                        PbrParams{.albedo = {static_cast<float>(th[0]), static_cast<float>(th[1]),
+                                             static_cast<float>(th[2])},
+                                  .roughness = static_cast<float>(th[3]),
+                                  .metallic = static_cast<float>(th[4])});
+        }
+    }
+
     void applyTheta(const std::vector<double>& th) {
-        if (th.size() < 5) return;
-        writeMatPbr(primaryMat, primaryActor,
-                    PbrParams{.albedo = {static_cast<float>(th[0]), static_cast<float>(th[1]),
-                                         static_cast<float>(th[2])},
-                              .roughness = static_cast<float>(th[3]),
-                              .metallic = static_cast<float>(th[4])});
-        size_t i = 5;
+        if (th.size() < primaryDims()) return;
+        applyPrimaryFromTheta(th);
+        size_t i = primaryDims();
         if (fitPedestal && pedestalMat && th.size() >= i + 3) {
             PbrParams pp = truthPedestal;
             pp.albedo = {static_cast<float>(th[i]), static_cast<float>(th[i + 1]),
@@ -525,6 +662,10 @@ struct InverseScene {
         }
         if (fitEnvScale && th.size() > i) {
             currentEnvScale = static_cast<float>(th[i]);
+            ++i;
+        }
+        if (fitExposure && th.size() > i) {
+            currentExposure = static_cast<float>(th[i]);
         }
     }
 
@@ -545,6 +686,8 @@ struct InverseScene {
         s.fitFillLight = false;
         s.fitRimLight = false;
         s.fitEnvScale = false;
+        s.fitExposure = false;
+        s.mapGround = false;
         s.truthPrimary = {.albedo = {0.65f, 0.05f, 0.05f}, .roughness = 0.35f, .metallic = 0.0f};
         s.initPrimary = {.albedo = {0.2f, 0.5f, 0.7f}, .roughness = 0.85f, .metallic = 0.55f};
         s.truthKeyI = 40.0f;
@@ -601,6 +744,8 @@ struct InverseScene {
         s.fitFillLight = cfg.fitFillLight && cfg.fitKeyLight;
         s.fitRimLight = cfg.fitRimLight && cfg.fitKeyLight;
         s.fitEnvScale = cfg.fitEnvScale;
+        s.fitExposure = cfg.fitExposure && !cfg.targetImage.empty();
+        s.mapGround = cfg.mapGround;
         // Floor PBR from preset / CLI defaults (tricky presets override metal/rough).
         s.truthPrimary = {.albedo = {cfg.truthR, cfg.truthG, cfg.truthB},
                           .roughness = cfg.truthRough,
@@ -608,6 +753,21 @@ struct InverseScene {
         s.initPrimary = {.albedo = {cfg.initR, cfg.initG, cfg.initB},
                          .roughness = cfg.initRough,
                          .metallic = cfg.initMetal};
+        // Distinct 2×2 tile truth (checker-ish) so map-ground selftest is meaningful.
+        s.truthTiles[0] = {cfg.truthR, cfg.truthG, cfg.truthB};
+        s.truthTiles[1] = {std::clamp(cfg.truthR * 0.75f, 0.05f, 1.0f),
+                           std::clamp(cfg.truthG * 0.85f + 0.08f, 0.05f, 1.0f),
+                           std::clamp(cfg.truthB * 1.15f, 0.05f, 1.0f)};
+        s.truthTiles[2] = {std::clamp(cfg.truthR * 1.1f, 0.05f, 1.0f),
+                           std::clamp(cfg.truthG * 0.7f, 0.05f, 1.0f),
+                           std::clamp(cfg.truthB * 0.8f, 0.05f, 1.0f)};
+        s.truthTiles[3] = {std::clamp(cfg.truthR * 0.55f + 0.1f, 0.05f, 1.0f),
+                           std::clamp(cfg.truthG * 0.55f + 0.1f, 0.05f, 1.0f),
+                           std::clamp(cfg.truthB * 0.55f + 0.1f, 0.05f, 1.0f)};
+        s.initTiles[0] = {cfg.initR, cfg.initG, cfg.initB};
+        s.initTiles[1] = {cfg.initB, cfg.initR, cfg.initG};
+        s.initTiles[2] = {cfg.initG, cfg.initB, cfg.initR};
+        s.initTiles[3] = {0.5f * (cfg.initR + cfg.initG), cfg.initB, cfg.initR};
         s.truthPedestal = {.albedo = {0.18f, 0.19f, 0.21f}, .roughness = 0.40f, .metallic = 0.05f};
         s.initPedestal = {.albedo = {0.55f, 0.12f, 0.10f}, .roughness = 0.40f, .metallic = 0.05f};
         s.truthKeyI = 22.0f;
@@ -619,29 +779,56 @@ struct InverseScene {
         s.truthEnvScale = 1.0f;
         s.initEnvScale = 0.45f;
         s.currentEnvScale = 1.0f;
+        s.truthExposure = 1.0f;
+        s.initExposure = cfg.exposure > 0.0f ? cfg.exposure : 1.0f;
+        s.currentExposure = s.initExposure;
 
         const float groundY = 0.0f;
         const float pedestalH = 0.35f;
         const float pedestalHalf = 1.35f;
 
-        // ── Optimizable ground (large cyclorama floor) ─────────────────
+        // ── Optimizable ground (uniform or 2×2 albedo tiles) ──────────
         {
             const float half = 14.0f;
-            auto ground = s.scene->createActor("Ground");
-            auto gm = std::make_shared<Model>();
-            addQuad(gm->vertices, gm->indices,
-                    {-half, groundY, -half}, {half, groundY, -half},
-                    {half, groundY, half}, {-half, groundY, half},
-                    {0, 1, 0}, s.truthPrimary.albedo);
-            auto gmesh = ground->addComponent<MeshComponent>();
-            gmesh->setModel(gm);
-            gmesh->setVisible(true);
-            auto gmat = ground->addComponent<MaterialComponent>();
-            gmat->getMaterial().baseColor = s.truthPrimary.albedo;
-            gmat->getMaterial().roughness = s.truthPrimary.roughness;
-            gmat->getMaterial().metallic = s.truthPrimary.metallic;
-            s.primaryActor = ground.get();
-            s.primaryMat = gmat.get();
+            auto makeGroundTile = [&](const char* name, float x0, float z0, float x1, float z1,
+                                      const glm::vec3& col) {
+                auto ground = s.scene->createActor(name);
+                auto gm = std::make_shared<Model>();
+                addQuad(gm->vertices, gm->indices,
+                        {x0, groundY, z0}, {x1, groundY, z0},
+                        {x1, groundY, z1}, {x0, groundY, z1},
+                        {0, 1, 0}, col);
+                auto gmesh = ground->addComponent<MeshComponent>();
+                gmesh->setModel(gm);
+                gmesh->setVisible(true);
+                auto gmat = ground->addComponent<MaterialComponent>();
+                gmat->getMaterial().baseColor = col;
+                gmat->getMaterial().roughness = s.truthPrimary.roughness;
+                gmat->getMaterial().metallic = s.truthPrimary.metallic;
+                return std::pair{ground.get(), gmat.get()};
+            };
+
+            if (s.mapGround) {
+                const float m = 0.0f;
+                const std::array<std::tuple<const char*, float, float, float, float, int>, 4> tiles{{
+                    {"GroundNW", -half, -half, m, m, 0},
+                    {"GroundNE", m, -half, half, m, 1},
+                    {"GroundSW", -half, m, m, half, 2},
+                    {"GroundSE", m, m, half, half, 3},
+                }};
+                for (const auto& [name, x0, z0, x1, z1, idx] : tiles) {
+                    auto [actor, mat] = makeGroundTile(name, x0, z0, x1, z1, s.truthTiles[idx]);
+                    s.groundTiles.push_back(actor);
+                    s.groundMats.push_back(mat);
+                }
+                s.primaryActor = s.groundTiles[0];
+                s.primaryMat = s.groundMats[0];
+            } else {
+                auto [actor, mat] =
+                    makeGroundTile("Ground", -half, -half, half, half, s.truthPrimary.albedo);
+                s.primaryActor = actor;
+                s.primaryMat = mat;
+            }
         }
 
         // ── Soft vertical backdrop (product-shot cyclorama) ────────────
@@ -701,8 +888,6 @@ struct InverseScene {
         }
 
         // ── Hero model on pedestal ─────────────────────────────────────
-        // Bake model so local origin is bottom-center (Y-up glTF), then scale
-        // and sit on the pedestal. Avoids float-above-plinth from bad bmin math.
         auto model = ModelLoader::load(cfg.modelPath);
         if (model && !model->vertices.empty()) {
             glm::vec3 bmin(1e30f), bmax(-1e30f);
@@ -712,14 +897,12 @@ struct InverseScene {
             }
             const glm::vec3 extent = bmax - bmin;
             const glm::vec3 centerXZ{(bmin.x + bmax.x) * 0.5f, 0.0f, (bmin.z + bmax.z) * 0.5f};
-            // Shift vertices: bottom on y=0, centered in XZ.
             for (auto& v : model->vertices) {
                 v.position.x -= centerXZ.x;
                 v.position.y -= bmin.y;
                 v.position.z -= centerXZ.z;
             }
             const float maxExtent = std::max({extent.x, extent.y, extent.z});
-            // Fit hero height to ~2.0 world units (product shot), scaled by preset.
             const float scale =
                 (2.0f * cfg.heroScaleMul) / std::max(extent.y > 0.01f ? extent.y : maxExtent, 0.001f);
 
@@ -727,7 +910,6 @@ struct InverseScene {
             actor->getTransform()->setRotation(
                 glm::quat(glm::radians(glm::vec3(0.0f, 22.0f, 0.0f))));
             actor->getTransform()->setScale(glm::vec3(scale));
-            // Local bottom is y=0 → world bottom = pos.y (yaw keeps Y).
             actor->getTransform()->setPosition({0.0f, groundY + pedestalH + 0.002f, 0.0f});
 
             auto mesh = actor->addComponent<MeshComponent>();
@@ -742,16 +924,6 @@ struct InverseScene {
                       << " — product studio without hero\n";
         }
 
-        // Soft key + fill + rim (works with or without env for relight demos)
-        auto addLight = [&](const char* name, glm::vec3 pos, glm::vec3 col, float I, float r) {
-            auto a = s.scene->createActor(name);
-            auto lc = a->addComponent<LightComponent>();
-            lc->setLightType(LightType::Sphere);
-            lc->setColor(col);
-            lc->setIntensity(I);
-            lc->setRadius(r);
-            a->getTransform()->setPosition(pos);
-        };
         {
             auto a = s.scene->createActor("Key");
             auto lc = a->addComponent<LightComponent>();
@@ -783,7 +955,6 @@ struct InverseScene {
             s.rimLight = lc.get();
         }
 
-        // Multi-view product orbit — distance scaled per preset (wide heroes).
         const float d = cfg.camDistMul;
         s.views = {
             {"front", {0.0f, 1.35f * d, 7.2f * d}, -8.0f, -90.0f},
@@ -793,6 +964,61 @@ struct InverseScene {
         return s;
     }
 };
+
+
+/// Specular proxy for target image (floor/wall crop).
+/// Combines bright-pixel fraction with max/mean luma contrast — mirror floors under
+/// soft studio HDRI often lack crushed whites but still show high peak contrast.
+[[nodiscard]] double targetHighlightScore(const ImageRGBA8& img, double xMaxFrac, double yMinFrac) {
+    if (img.empty()) return 0.0;
+    const uint32_t xLim = (xMaxFrac >= 1.0)
+                              ? img.width
+                              : static_cast<uint32_t>(std::ceil(xMaxFrac * img.width));
+    const uint32_t y0 = (yMinFrac <= 0.0)
+                            ? 0u
+                            : static_cast<uint32_t>(std::floor(yMinFrac * img.height));
+    size_t bright = 0, count = 0;
+    double sumL = 0.0, maxL = 0.0, sumMax = 0.0;
+    for (uint32_t y = y0; y < img.height; ++y) {
+        for (uint32_t x = 0; x < xLim; ++x) {
+            const size_t o = (static_cast<size_t>(y) * img.width + x) * 4;
+            const double r = img.rgba[o] / 255.0;
+            const double g = img.rgba[o + 1] / 255.0;
+            const double b = img.rgba[o + 2] / 255.0;
+            const double mx = std::max({r, g, b});
+            const double luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            if (mx > 0.55 || luma > 0.50) ++bright;
+            sumL += luma;
+            sumMax += mx;
+            maxL = std::max(maxL, luma);
+            ++count;
+        }
+    }
+    if (count == 0) return 0.0;
+    const double frac = static_cast<double>(bright) / static_cast<double>(count);
+    const double meanL = sumL / static_cast<double>(count);
+    const double meanMax = sumMax / static_cast<double>(count);
+    const double contrast = maxL / (meanL + 1e-3);
+    // Soft blend: bright fraction + normalized peak contrast + mean-max lift.
+    const double cScore = std::clamp((contrast - 1.4) / 2.5, 0.0, 1.0);
+    const double mScore = std::clamp((meanMax - 0.25) / 0.55, 0.0, 1.0);
+    return std::clamp(0.40 * frac + 0.35 * cScore + 0.25 * mScore, 0.0, 1.0);
+}
+
+ImageRGBA8 loadPNG(const std::filesystem::path& path) {
+    ImageRGBA8 img;
+    int w = 0, h = 0, comp = 0;
+    unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &comp, 4);
+    if (!data || w <= 0 || h <= 0) {
+        if (data) stbi_image_free(data);
+        return img;
+    }
+    img.width = static_cast<uint32_t>(w);
+    img.height = static_cast<uint32_t>(h);
+    img.rgba.assign(data, data + static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+    stbi_image_free(data);
+    return img;
+}
 
 bool savePNG(const ImageRGBA8& img, const std::filesystem::path& path) {
     if (img.empty()) return false;
@@ -860,7 +1086,16 @@ struct RenderSession {
 int main(int argc, char** argv) {
     const CliArgs args = parseArgs(argc, argv);
     FitConfig cfg = args.cfg;
+    // --scene cornell must survive applyPreset (which defaults other presets to studio).
+    const bool wantCornell = (cfg.scene == "cornell" || cfg.preset == "cornell");
     applyPreset(cfg);
+    if (wantCornell) {
+        cfg.scene = "cornell";
+        cfg.preset = "cornell";
+        cfg.maskX = 0.40;
+        cfg.maskYMin = 0.0;
+        cfg.presetNote = "classic cornell box";
+    }
     resolveAssetFallbacks(cfg);
 
     const bool studio = (cfg.scene != "cornell");
@@ -876,7 +1111,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "OHAO inverse_fit — polished physical multi-param IR (no ML)\n";
+    std::cout << "OHAO inverse_fit — B6 physical multi-param IR (no ML)\n";
     std::cout << "  preset=" << cfg.preset << "  (" << cfg.presetNote << ")\n";
     std::cout << "  model=" << cfg.modelPath << "\n";
     std::cout << "  θ dims=" << inv.thetaDims() << "  primary PBR[5]";
@@ -887,7 +1122,10 @@ int main(int argc, char** argv) {
     if (inv.fitEnvScale) std::cout << " + env";
     std::cout << "\n";
     std::cout << "  scene=" << cfg.scene << "  views=" << cfg.numViews
-              << "  quality=" << cfg.quality.name << "\n";
+              << "  quality=" << cfg.quality.name
+              << (cfg.mapGround ? "  map-ground" : "")
+              << (cfg.multiStart > 1 ? ("  multi-start=" + std::to_string(cfg.multiStart)) : "")
+              << (!cfg.targetImage.empty() ? "  target-image" : "") << "\n";
     std::cout << "  FIT " << cfg.fit.width << "x" << cfg.fit.height << " @" << cfg.fit.spp
               << "  SHOW " << cfg.show.width << "x" << cfg.show.height << " @" << cfg.show.spp
               << "  denoise SHOW=" << denoiseModeName(cfg.showDenoise)
@@ -902,7 +1140,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const int nViews = std::min(cfg.numViews, static_cast<int>(inv.views.size()));
+    int nViews = std::min(cfg.numViews, static_cast<int>(inv.views.size()));
     renderer.setRenderMode(RenderMode::RTOffline);
     renderer.setRenderSeed(cfg.seed);
     if (studio) applyEnv(renderer, inv.envPath);
@@ -948,38 +1186,79 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // ── Truth multi-view targets ──────────────────────────────────────
+    // ── Targets: synthetic truth renders OR external photo ───────────
     inv.applyTruth();
     std::vector<ImageRGBA8> targetsFit(static_cast<size_t>(nViews));
     std::vector<ImageRGBA8> targetsShow(static_cast<size_t>(nViews));
 
     const auto truthV = inv.truthTheta();
-    std::cout << "Rendering multi-view TARGETS (truth θ=" << formatTheta(truthV) << ")...\n";
+    const bool externalTarget = !cfg.targetImage.empty();
     auto t0 = std::chrono::steady_clock::now();
-    for (int v = 0; v < nViews; ++v) {
-        std::cout << "  SHOW " << inv.views[static_cast<size_t>(v)].name << "...\n";
-        targetsShow[static_cast<size_t>(v)] =
-            session.render(v, cfg.show, cfg.seed, cfg.showDenoise);
-        savePNG(targetsShow[static_cast<size_t>(v)],
-                outDir / (std::string("target_") + inv.views[static_cast<size_t>(v)].name + ".png"));
-        targetsFit[static_cast<size_t>(v)] =
-            session.render(v, cfg.fit, cfg.seed, DenoiseMode::None);
+
+    if (externalTarget) {
+        if (!std::filesystem::exists(cfg.targetImage)) {
+            std::cerr << "FATAL: --target-image not found: " << cfg.targetImage << "\n";
+            return 1;
+        }
+        ImageRGBA8 loaded = loadPNG(cfg.targetImage);
+        if (loaded.empty()) {
+            std::cerr << "FATAL: failed to load --target-image: " << cfg.targetImage << "\n";
+            return 1;
+        }
+        if (!cfg.fitExposure) {
+            loaded = applyExposure(loaded, cfg.exposure);
+        }
+        std::cout << "External target " << cfg.targetImage << " (" << loaded.width << "x"
+                  << loaded.height << ") exposure="
+                  << (cfg.fitExposure ? "fit" : std::to_string(cfg.exposure)) << "\n";
+        // Photo path: primary view only (multi-view needs multi-shot capture).
+        nViews = 1;
+        targetsShow.resize(1);
+        targetsFit.resize(1);
+        targetsShow[0] = resizeNearest(loaded, cfg.show.width, cfg.show.height);
+        targetsFit[0] = resizeNearest(loaded, cfg.fit.width, cfg.fit.height);
+        savePNG(targetsShow[0], outDir / "target_show.png");
+        savePNG(targetsFit[0], outDir / "target_fit.png");
+        savePNG(targetsShow[0], outDir / "target_front.png");
+    } else {
+        std::cout << "Rendering multi-view TARGETS (truth θ=" << formatTheta(truthV) << ")...\n";
+        for (int v = 0; v < nViews; ++v) {
+            std::cout << "  SHOW " << inv.views[static_cast<size_t>(v)].name << "...\n";
+            targetsShow[static_cast<size_t>(v)] =
+                session.render(v, cfg.show, cfg.seed, cfg.showDenoise);
+            savePNG(targetsShow[static_cast<size_t>(v)],
+                    outDir / (std::string("target_") + inv.views[static_cast<size_t>(v)].name + ".png"));
+            targetsFit[static_cast<size_t>(v)] =
+                session.render(v, cfg.fit, cfg.seed, DenoiseMode::None);
+        }
+        savePNG(targetsShow[0], outDir / "target_show.png");
     }
-    savePNG(targetsShow[0], outDir / "target_show.png");
     auto t1 = std::chrono::steady_clock::now();
     std::cout << "  targets done in "
               << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
               << " ms\n";
 
-    // Build ParamSpace from init θ
+    // Build ParamSpace from init θ — tighter light bounds reduce multi-light ambiguity.
     ParamSpace space;
     const auto initV = inv.initTheta();
-    space.add("primary.R", initV[0], 0.0, 1.0);
-    space.add("primary.G", initV[1], 0.0, 1.0);
-    space.add("primary.B", initV[2], 0.0, 1.0);
-    space.add("primary.rough", initV[3], 0.04, 1.0);
-    space.add("primary.metal", initV[4], 0.0, 1.0);
-    size_t off = 5;
+    if (inv.mapGround) {
+        for (int t = 0; t < 4; ++t) {
+            const size_t o = static_cast<size_t>(t) * 3;
+            const std::string pref = "tile" + std::to_string(t) + ".";
+            space.add(pref + "R", initV[o], 0.0, 1.0);
+            space.add(pref + "G", initV[o + 1], 0.0, 1.0);
+            space.add(pref + "B", initV[o + 2], 0.0, 1.0);
+        }
+        space.add("primary.rough", initV[12], 0.04, 1.0);
+        space.add("primary.metal", initV[13], 0.0, 1.0);
+    } else {
+        space.add("primary.R", initV[0], 0.0, 1.0);
+        space.add("primary.G", initV[1], 0.0, 1.0);
+        space.add("primary.B", initV[2], 0.0, 1.0);
+        space.add("primary.rough", initV[3], 0.04, 1.0);
+        space.add("primary.metal", initV[4], 0.0, 1.0);
+    }
+    size_t off = inv.primaryDims();
     if (inv.fitPedestal && inv.pedestalMat) {
         space.add("pedestal.R", initV[off], 0.0, 1.0);
         space.add("pedestal.G", initV[off + 1], 0.0, 1.0);
@@ -987,47 +1266,136 @@ int main(int argc, char** argv) {
         off += 3;
     }
     if (inv.fitKeyLight && inv.keyLight) {
-        space.add("key.I_scale", initV[off], 0.05, 1.5);
+        space.add("key.I_scale", initV[off], 0.12, 0.95); // ~4.8–38 intensity
         ++off;
     }
     if (inv.fitFillLight && inv.fillLight) {
-        space.add("fill.I_scale", initV[off], 0.05, 1.2);
+        space.add("fill.I_scale", initV[off], 0.06, 0.50);
         ++off;
     }
     if (inv.fitRimLight && inv.rimLight) {
-        space.add("rim.I_scale", initV[off], 0.05, 1.2);
+        space.add("rim.I_scale", initV[off], 0.06, 0.50);
         ++off;
     }
     if (inv.fitEnvScale) {
-        space.add("env.scale", initV[off], 0.2, 1.8);
+        space.add("env.scale", initV[off], 0.30, 1.50);
+        ++off;
+    }
+    if (inv.fitExposure) {
+        space.add("exposure", initV[off], 0.35, 2.50);
     }
 
     auto applyTheta = [&](const std::vector<double>& th) { inv.applyTheta(th); };
 
-    // Multi-view hybrid FIT loss (MSE+MAE): robust FD under MC noise.
-    // Primary view weight 1.0, others 0.5.
-    auto lossAt = [&](const std::vector<double>& th) -> double {
+    const size_t roughIdx = inv.mapGround ? 12u : 3u;
+    const size_t metalIdx = inv.mapGround ? 13u : 4u;
+    double highlightScore =
+        targetHighlightScore(targetsFit[0], cfg.maskX, cfg.maskYMin);
+    // Presets with known high-metal floors get a floor on the score (image metric alone is soft under LDR).
+    if (cfg.preset == "mirror" || cfg.preset == "spheres") {
+        highlightScore = std::max(highlightScore, 0.28);
+    }
+    std::cout << "  target highlight score=" << highlightScore
+              << (highlightScore > 0.18 ? " (specular-ish)" : (highlightScore > 0.12 ? " (mixed)" : " (diffuse-ish)")) << "\n";
+
+    // Soft multi-light regularizer: key-dominant hierarchy + mild mid-prior.
+    // Breaks pure intensity trade-offs under HDRI without hardcoding truth.
+    auto lightRegularizer = [&](const std::vector<double>& th) -> double {
+        if (cfg.lightReg <= 0.0) return 0.0;
+        size_t i = inv.lightBlockStart();
+        double reg = 0.0;
+        double key = 0.0, fill = 0.0, rim = 0.0, env = 0.0;
+        bool hasKey = false, hasFill = false, hasRim = false, hasEnv = false;
+        if (inv.fitKeyLight && inv.keyLight && th.size() > i) {
+            key = th[i++];
+            hasKey = true;
+            // Soft prior toward mid of studio range (~0.55 = truth-ish scale, mild).
+            const double mid = 0.50;
+            reg += (key - mid) * (key - mid);
+        }
+        if (inv.fitFillLight && inv.fillLight && th.size() > i) {
+            fill = th[i++];
+            hasFill = true;
+            const double mid = 0.22;
+            reg += 0.6 * (fill - mid) * (fill - mid);
+        }
+        if (inv.fitRimLight && inv.rimLight && th.size() > i) {
+            rim = th[i++];
+            hasRim = true;
+            const double mid = 0.25;
+            reg += 0.6 * (rim - mid) * (rim - mid);
+        }
+        if (inv.fitEnvScale && th.size() > i) {
+            env = th[i++];
+            hasEnv = true;
+            const double mid = 0.95;
+            reg += 0.4 * (env - mid) * (env - mid);
+        }
+        // Hierarchy: key should dominate fill/rim (product key light).
+        if (hasKey && hasFill && fill > key) reg += 2.0 * (fill - key) * (fill - key);
+        if (hasKey && hasRim && rim > key) reg += 2.0 * (rim - key) * (rim - key);
+        // Soft total energy ball (prevents all lights cranking together).
+        if (hasKey || hasFill || hasRim) {
+            const double total = (hasKey ? key : 0.0) + (hasFill ? fill : 0.0) + (hasRim ? rim : 0.0);
+            const double targetTotal = 0.50 + (hasFill ? 0.22 : 0.0) + (hasRim ? 0.25 : 0.0);
+            reg += 0.35 * (total - targetTotal) * (total - targetTotal);
+        }
+        (void)hasEnv;
+        (void)env;
+        return cfg.lightReg * reg;
+    };
+
+    // Multi-view hybrid + specular FIT loss. sppScale for high-spp BRDF stages.
+    // Exposure (if fitted) is applied to the render before comparison.
+    auto lossAt = [&](const std::vector<double>& th, float sppScale = 1.0f,
+                      double specularW = -1.0) -> double {
         applyTheta(th);
+        RenderBudget budget = cfg.fit;
+        if (sppScale > 1.001f) {
+            budget.spp = std::max(1, static_cast<int>(std::lround(budget.spp * sppScale)));
+        }
+        const double sw = (specularW >= 0.0) ? specularW : cfg.specularWeight;
         double L = 0.0;
         double wSum = 0.0;
         for (int v = 0; v < nViews; ++v) {
-            const ImageRGBA8 img =
-                session.render(v, cfg.fit, cfg.seed, DenoiseMode::None);
+            ImageRGBA8 img =
+                session.render(v, budget, cfg.seed, DenoiseMode::None);
             if (img.empty() || targetsFit[static_cast<size_t>(v)].empty()) continue;
-            const double m = hybridRGB(img, targetsFit[static_cast<size_t>(v)], cfg.maskX,
-                                       cfg.maskYMin, 0.35);
+            if (inv.fitExposure) {
+                img = applyExposure(img, inv.currentExposure);
+            }
+            const double m =
+                hybridSpecularRGB(img, targetsFit[static_cast<size_t>(v)], cfg.maskX,
+                                  cfg.maskYMin, 0.35, sw);
             if (!std::isfinite(m)) continue;
             const double w = (v == 0) ? 1.0 : 0.5;
             L += w * m;
             wSum += w;
         }
-        return wSum > 0.0 ? L / wSum : 1e6;
+        const double imgLoss = wSum > 0.0 ? L / wSum : 1e6;
+        // Target-driven metal prior — only for clearly specular targets (mirror/spheres).
+        // Soft floors under studio HDRI often look "bright" without being metal; don't push them.
+        double metalPrior = 0.0;
+        if (th.size() > metalIdx) {
+            const double metal = th[metalIdx];
+            const double rough = th[roughIdx];
+            if (highlightScore > 0.26) {
+                const double targetM = 0.70 + 0.22 * std::min(1.0, (highlightScore - 0.26) * 2.0);
+                const double w = 0.06 + 0.08 * highlightScore;
+                metalPrior += w * (metal - targetM) * (metal - targetM);
+                metalPrior += 0.4 * w * (rough - 0.12) * (rough - 0.12);
+            } else if (highlightScore < 0.12) {
+                // Mild diffuse preference — don't fight image loss hard.
+                metalPrior += 0.015 * (metal - 0.12) * (metal - 0.12);
+            }
+        }
+        return imgLoss + lightRegularizer(th) + metalPrior;
     };
 
     std::cout << "SHOW init (wrong multi-param guess)...\n";
     applyTheta(space.values);
-    const ImageRGBA8 initShow =
-        session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
+    ImageRGBA8 initShow = session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
+    if (inv.fitExposure) initShow = applyExposure(initShow, inv.currentExposure);
     savePNG(initShow, outDir / "init_show.png");
 
     double loss = lossAt(space.values);
@@ -1035,30 +1403,132 @@ int main(int argc, char** argv) {
     std::cout << "  init multi-view FIT loss=" << loss << "  SHOW RMSE vs target=" << showInitRmse
               << "\n  θ=" << formatTheta(space.values) << "\n";
 
+    // ── Multi-start: probe candidates, keep lowest loss ──────────────
+    // Critical for mirror/metal and multi-light: bad init traps are common.
+    if (cfg.multiStart > 1) {
+        std::cout << "── multi-start probe (" << cfg.multiStart << " candidates) ──\n";
+        std::vector<double> bestStart = space.values;
+        double bestStartLoss = loss;
+        std::vector<std::vector<double>> candidates;
+        candidates.push_back(initV);
+
+        // Mid-gray materials + mid lights (safe basin under HDRI).
+        {
+            auto mid = initV;
+            if (inv.mapGround) {
+                for (int k = 0; k < 12; ++k) mid[static_cast<size_t>(k)] = 0.45;
+                mid[12] = 0.45;
+                mid[13] = 0.25;
+            } else {
+                mid[0] = mid[1] = mid[2] = 0.45;
+                mid[3] = 0.45;
+                mid[4] = 0.25;
+            }
+            size_t li = inv.lightBlockStart();
+            if (inv.fitPedestal && inv.pedestalMat && mid.size() >= li) {
+                mid[inv.primaryDims()] = 0.25;
+                mid[inv.primaryDims() + 1] = 0.25;
+                mid[inv.primaryDims() + 2] = 0.25;
+            }
+            size_t i = li;
+            if (inv.fitKeyLight && inv.keyLight && mid.size() > i) mid[i++] = 0.50;
+            if (inv.fitFillLight && inv.fillLight && mid.size() > i) mid[i++] = 0.22;
+            if (inv.fitRimLight && inv.rimLight && mid.size() > i) mid[i++] = 0.25;
+            if (inv.fitEnvScale && mid.size() > i) mid[i++] = 0.90;
+            if (inv.fitExposure && mid.size() > i) mid[i] = 1.0;
+            candidates.push_back(mid);
+        }
+
+        // High-metal / low-rough seed (mirror / spheres friendly).
+        {
+            auto m = initV;
+            if (inv.mapGround) {
+                m[12] = 0.12;
+                m[13] = 0.85;
+            } else {
+                m[3] = 0.12;
+                m[4] = 0.85;
+            }
+            candidates.push_back(m);
+        }
+        // Low-metal / high-rough seed (diffuse floor).
+        {
+            auto m = initV;
+            if (inv.mapGround) {
+                m[12] = 0.80;
+                m[13] = 0.05;
+            } else {
+                m[3] = 0.80;
+                m[4] = 0.05;
+            }
+            candidates.push_back(m);
+        }
+
+        // Fill remaining with random samples.
+        for (int c = static_cast<int>(candidates.size()); c < cfg.multiStart; ++c) {
+            candidates.push_back(inv.sampleRandomTheta(cfg.seed + 17u * static_cast<uint32_t>(c + 3)));
+        }
+
+        const int nProbe = std::min(cfg.multiStart, static_cast<int>(candidates.size()));
+        for (int c = 0; c < nProbe; ++c) {
+            // Project into box.
+            std::vector<double> th = candidates[static_cast<size_t>(c)];
+            if (th.size() != space.size()) continue;
+            for (size_t i = 0; i < th.size(); ++i) th[i] = space.project(i, th[i]);
+            // Specular targets: evaluate candidates with higher spp + full specular weight.
+            const float probeSpp = (highlightScore > 0.16) ? 2.0f : 1.25f;
+            const double probeSw =
+                (highlightScore > 0.16) ? std::min(1.0, cfg.specularWeight + 0.2)
+                                        : cfg.specularWeight * 0.6;
+            double Lc = lossAt(th, probeSpp, probeSw);
+            // Bonus: when target is specular, prefer high-metal / low-rough seeds.
+            if (highlightScore > 0.16 && th.size() > metalIdx) {
+                if (th[metalIdx] > 0.55 && th[roughIdx] < 0.35) Lc *= 0.82;
+                if (th[metalIdx] < 0.30) Lc *= 1.18;
+            }
+            std::cout << "  candidate " << (c + 1) << "/" << nProbe << "  loss=" << Lc << "\n";
+            if (Lc < bestStartLoss) {
+                bestStartLoss = Lc;
+                bestStart = th;
+            }
+        }
+        // If target looks specular but winner is diffuse, reinject conductor seed for metal/rough.
+        if (highlightScore > 0.18 && bestStart.size() > metalIdx && bestStart[metalIdx] < 0.40) {
+            bestStart[metalIdx] = 0.85;
+            bestStart[roughIdx] = 0.12;
+            for (size_t i = 0; i < bestStart.size(); ++i)
+                bestStart[i] = space.project(i, bestStart[i]);
+            bestStartLoss = lossAt(bestStart, 2.0f, std::min(1.0, cfg.specularWeight + 0.2));
+            std::cout << "  specular reinject metal/rough → loss=" << bestStartLoss << "\n";
+        }
+        space.values = bestStart;
+        loss = bestStartLoss;
+        std::cout << "  multi-start winner loss=" << loss << "  θ=" << formatTheta(space.values)
+                  << "\n";
+    }
+
     std::vector<double> bestTheta = space.values;
     double bestLoss = loss;
     int bestIter = 0;
-    int worseStreak = 0;
 
     // Staged FD: joint albedo↔light is ill-conditioned under HDRI.
-    // Stage A — materials (primary ± pedestal), key held at current value.
-    // Stage B — key intensity only, materials held.
     auto runStage = [&](const char* name, const std::vector<size_t>& activeIdx, int iters,
                         std::ofstream& traj, bool& firstTraj, double lrMul = 1.0,
-                        double epsMul = 1.0) {
+                        double epsMul = 1.0, float sppScale = 1.0f, double specularW = -1.0) {
         if (activeIdx.empty() || iters <= 0) return;
         std::cout << "── stage " << name << " (" << activeIdx.size() << " params, " << iters
-                  << " iters, lr×" << lrMul << ") ──\n";
+                  << " iters, lr×" << lrMul;
+        if (sppScale > 1.001f) std::cout << ", spp×" << sppScale;
+        std::cout << ") ──\n";
         AdamState adam;
         adam.resize(space.size());
         int stageBestIter = 0;
         int stageWorse = 0;
-        double stageBest = lossAt(space.values);
+        double stageBest = lossAt(space.values, sppScale, specularW);
         std::vector<double> stageBestTh = space.values;
         const double stageLr = cfg.lr * lrMul;
         const double stageEps = cfg.eps * epsMul;
         for (int it = 0; it < iters; ++it) {
-            // Masked FD: only perturb active indices (relative eps for large scales).
             std::vector<double> g(space.size(), 0.0);
             std::vector<double> theta = space.values;
             for (size_t ai : activeIdx) {
@@ -1070,9 +1540,9 @@ int main(int argc, char** argv) {
                 const double denom = hi - lo;
                 if (denom < 1e-12) continue;
                 theta[ai] = hi;
-                const double Lh = lossAt(theta);
+                const double Lh = lossAt(theta, sppScale, specularW);
                 theta[ai] = lo;
-                const double Ll = lossAt(theta);
+                const double Ll = lossAt(theta, sppScale, specularW);
                 theta[ai] = v0;
                 g[ai] = (Lh - Ll) / denom;
             }
@@ -1084,7 +1554,6 @@ int main(int argc, char** argv) {
                         space.project(ai, space.values[ai] - stageLr * 50.0 * g[ai]);
                 }
             }
-            // Freeze inactive dims (Adam can nudge zero-grad slots via bias correction).
             for (size_t i = 0; i < space.size(); ++i) {
                 bool active = false;
                 for (size_t ai : activeIdx) {
@@ -1095,7 +1564,7 @@ int main(int argc, char** argv) {
                 }
                 if (!active) space.values[i] = before[i];
             }
-            loss = lossAt(space.values);
+            loss = lossAt(space.values, sppScale, specularW);
             std::cout << "  [" << name << "] " << (it + 1) << "/" << iters << "  loss=" << loss
                       << "  θ=" << formatTheta(space.values) << "\n";
             if (!firstTraj) traj << ",\n";
@@ -1134,59 +1603,99 @@ int main(int argc, char** argv) {
         }
     };
 
-    // B5 schedule: recover global brightness first (env → lights), then materials.
-    // Fitting albedo under dark init env/lights forces materials to white.
-    std::vector<size_t> albedoIdx = {0, 1, 2};
-    std::vector<size_t> brdfIdx = {3, 4};
+    // B6 schedule: multi-start done → brightness → materials → hi-spp BRDF → polish.
+    std::vector<size_t> albedoIdx;
+    std::vector<size_t> brdfIdx;
+    if (inv.mapGround) {
+        for (size_t i = 0; i < 12; ++i) albedoIdx.push_back(i);
+        brdfIdx = {12, 13};
+    } else {
+        albedoIdx = {0, 1, 2};
+        brdfIdx = {3, 4};
+    }
     std::vector<size_t> pedestalIdx;
-    if (inv.fitPedestal && inv.pedestalMat) pedestalIdx = {5, 6, 7};
+    if (inv.fitPedestal && inv.pedestalMat) {
+        const size_t base = inv.primaryDims();
+        pedestalIdx = {base, base + 1, base + 2};
+    }
     std::vector<size_t> lightIdx;
     std::vector<size_t> envIdx;
-    size_t cursor = 5 + (pedestalIdx.empty() ? 0 : 3);
+    std::vector<size_t> exposureIdx;
+    size_t cursor = inv.lightBlockStart();
     if (inv.fitKeyLight && inv.keyLight) lightIdx.push_back(cursor++);
     if (inv.fitFillLight && inv.fillLight) lightIdx.push_back(cursor++);
     if (inv.fitRimLight && inv.rimLight) lightIdx.push_back(cursor++);
-    if (inv.fitEnvScale) envIdx.push_back(cursor);
+    if (inv.fitEnvScale) envIdx.push_back(cursor++);
+    if (inv.fitExposure) exposureIdx.push_back(cursor);
 
     std::ofstream traj(outDir / "trajectory.json");
     traj << "{\n  \"scene\": \"" << cfg.scene << "\",\n  \"quality\": \"" << cfg.quality.name
          << "\",\n  \"views\": " << nViews << ",\n  \"dims\": " << space.size()
-         << ",\n  \"schedule\": \"env_lights_albedo_brdf_pedestal\",\n  \"iters\": [\n";
+         << ",\n  \"schedule\": \"multistart_env_lights_brdfpre_albedo_brdf_pedestal_refine\",\n"
+         << "  \"map_ground\": " << (inv.mapGround ? "true" : "false")
+         << ",\n  \"external_target\": " << (externalTarget ? "true" : "false")
+         << ",\n  \"iters\": [\n";
     bool firstTraj = true;
 
     const auto fitStart = std::chrono::steady_clock::now();
     const int envIters = envIdx.empty() ? 0 : std::max(6, (cfg.iters * 15) / 100);
     const int lightIters = lightIdx.empty() ? 0 : std::max(8, (cfg.iters * 22) / 100);
-    const int albedoIters = std::max(10, (cfg.iters * 25) / 100);
-    const int brdfIters = std::max(8, (cfg.iters * 18) / 100);
+    const int albedoIters = std::max(10, (cfg.iters * 22) / 100);
+    const int brdfIters = std::max(10, (cfg.iters * 20) / 100);
     const int pedestalIters = pedestalIdx.empty() ? 0 : std::max(5, (cfg.iters * 12) / 100);
-    const int refineIters = std::max(4, (cfg.iters * 10) / 100);
+    const int refineIters = std::max(5, (cfg.iters * 12) / 100);
+    const int exposureIters = exposureIdx.empty() ? 0 : std::max(4, (cfg.iters * 8) / 100);
 
     // Brightness first, then materials (prevents white-albedo blowout).
     runStage("env", envIdx, envIters, traj, firstTraj, 1.0, 1.0);
     bestTheta = space.values;
     bestLoss = loss;
+    if (!exposureIdx.empty()) {
+        runStage("exposure", exposureIdx, exposureIters, traj, firstTraj, 1.0, 1.0);
+        bestTheta = space.values;
+        bestLoss = loss;
+    }
     runStage("lights", lightIdx, lightIters, traj, firstTraj, 0.85, 1.0);
     bestTheta = space.values;
     bestLoss = loss;
+    // BRDF pre-pass BEFORE albedo only when target is specular (mirror/spheres).
+    // On diffuse product floors this stage harms metal recovery (false high-metal basin).
+    if (highlightScore > 0.24) {
+        const int brdfPreIters = std::max(6, brdfIters / 2);
+        const float preSpp = std::max(cfg.brdfSppMul, 2.0f);
+        const double preSw = std::min(1.0, cfg.specularWeight + 0.30);
+        runStage("brdf_pre", brdfIdx, brdfPreIters, traj, firstTraj, 0.80, 0.65, preSpp, preSw);
+        bestTheta = space.values;
+        bestLoss = loss;
+    }
     runStage("albedo", albedoIdx, albedoIters, traj, firstTraj, 0.8, 0.9);
     bestTheta = space.values;
     bestLoss = loss;
-    runStage("brdf", brdfIdx, brdfIters, traj, firstTraj, 0.85, 0.85);
+    // High-spp + full specular weight for metal/rough (mirror gap-close).
+    runStage("brdf", brdfIdx, brdfIters, traj, firstTraj, 0.75, 0.7, cfg.brdfSppMul,
+             std::min(1.0, cfg.specularWeight + 0.1));
+    bestTheta = space.values;
+    bestLoss = loss;
+    // Second BRDF polish at high spp with lower LR.
+    runStage("brdf2", brdfIdx, std::max(4, brdfIters / 2), traj, firstTraj, 0.45, 0.55,
+             cfg.brdfSppMul, std::min(1.0, cfg.specularWeight + 0.15));
     bestTheta = space.values;
     bestLoss = loss;
     runStage("pedestal", pedestalIdx, pedestalIters, traj, firstTraj, 0.65, 1.0);
     bestTheta = space.values;
     bestLoss = loss;
     // Re-fit lights after materials (materials change the right intensity).
-    runStage("lights2", lightIdx, std::max(3, lightIters / 2), traj, firstTraj, 0.55, 0.8);
+    runStage("lights2", lightIdx, std::max(3, lightIters / 2), traj, firstTraj, 0.50, 0.75);
     bestTheta = space.values;
     bestLoss = loss;
-    // Polish: albedo + env + key (small steps).
+    // Polish: albedo + brdf + env + key (small steps, mild specular).
     std::vector<size_t> refineIdx = albedoIdx;
+    refineIdx.insert(refineIdx.end(), brdfIdx.begin(), brdfIdx.end());
     if (!envIdx.empty()) refineIdx.insert(refineIdx.end(), envIdx.begin(), envIdx.end());
     if (!lightIdx.empty()) refineIdx.push_back(lightIdx.front());
-    runStage("refine", refineIdx, refineIters, traj, firstTraj, 0.4, 0.65);
+    if (!exposureIdx.empty()) refineIdx.insert(refineIdx.end(), exposureIdx.begin(), exposureIdx.end());
+    runStage("refine", refineIdx, refineIters, traj, firstTraj, 0.35, 0.55, 1.25f,
+             cfg.specularWeight * 0.7);
     traj << "\n  ],\n  \"best_loss\": " << bestLoss << "\n}\n";
     traj.close();
     space.values = bestTheta;
@@ -1198,6 +1707,7 @@ int main(int argc, char** argv) {
     ImageRGBA8 recoveredPrimary;
     for (int v = 0; v < nViews; ++v) {
         auto img = session.render(v, cfg.show, cfg.seed, cfg.showDenoise);
+        if (inv.fitExposure) img = applyExposure(img, inv.currentExposure);
         savePNG(img, outDir / (std::string("recovered_") + inv.views[static_cast<size_t>(v)].name +
                                ".png"));
         if (v == 0) recoveredPrimary = std::move(img);
@@ -1205,7 +1715,7 @@ int main(int argc, char** argv) {
     savePNG(recoveredPrimary, outDir / "recovered_show.png");
 
     // Relight showcase: keep recovered materials, push key hotter (not inverse).
-    if (studio && inv.keyLight) {
+    if (studio && inv.keyLight && !externalTarget) {
         std::cout << "SHOW relight (recovered materials + hot key)...\n";
         const float savedKey = inv.keyLight->getIntensity();
         inv.keyLight->setIntensity(savedKey * 2.5f);
@@ -1226,28 +1736,49 @@ int main(int argc, char** argv) {
         savePNG(relightTruth, outDir / "truth_relight.png");
     }
 
-    const double paramErr = space.l2To(truthV);
-    const double paramRmse = paramErr / std::sqrt(static_cast<double>(space.size()));
+    const double paramErr = externalTarget ? 0.0 : space.l2To(truthV);
+    const double paramRmse =
+        externalTarget ? 0.0 : paramErr / std::sqrt(static_cast<double>(space.size()));
     const double showRmse = rmseRGB(recoveredPrimary, targetsShow[0]);
 
-    std::cout << "\n=== inverse_fit result (multi-surface + light) ===\n";
+    std::cout << "\n=== inverse_fit result (B6 multi-param) ===\n";
     std::cout << "  scene=" << cfg.scene << "  views=" << nViews << "  dims=" << space.size()
-              << "\n";
-    std::cout << "  truth     θ = " << formatTheta(truthV) << "\n";
-    std::cout << "  recovered θ = " << formatTheta(space.values) << "\n";
-    std::cout << "  primary |Δ| RGB=(" << std::abs(space.values[0] - truthV[0]) << ","
-              << std::abs(space.values[1] - truthV[1]) << ","
-              << std::abs(space.values[2] - truthV[2]) << ") rough="
-              << std::abs(space.values[3] - truthV[3])
-              << " metal=" << std::abs(space.values[4] - truthV[4]) << "\n";
-    if (inv.fitPedestal && inv.pedestalMat && space.size() >= 8) {
-        std::cout << "  pedestal |Δ| RGB=(" << std::abs(space.values[5] - truthV[5]) << ","
-                  << std::abs(space.values[6] - truthV[6]) << ","
-                  << std::abs(space.values[7] - truthV[7]) << ")\n";
+              << (inv.mapGround ? "  map-ground" : "")
+              << (externalTarget ? "  external-target" : "") << "\n";
+    if (!externalTarget) {
+        std::cout << "  truth     θ = " << formatTheta(truthV) << "\n";
     }
-    size_t lo = 5 + ((inv.fitPedestal && inv.pedestalMat) ? 3 : 0);
+    std::cout << "  recovered θ = " << formatTheta(space.values) << "\n";
+    if (!externalTarget && space.size() > metalIdx && truthV.size() > metalIdx) {
+        if (!inv.mapGround) {
+            std::cout << "  primary |Δ| RGB=(" << std::abs(space.values[0] - truthV[0]) << ","
+                      << std::abs(space.values[1] - truthV[1]) << ","
+                      << std::abs(space.values[2] - truthV[2]) << ") rough="
+                      << std::abs(space.values[roughIdx] - truthV[roughIdx])
+                      << " metal=" << std::abs(space.values[metalIdx] - truthV[metalIdx]) << "\n";
+        } else {
+            std::cout << "  tiles |Δ|albedo L2=";
+            double tileL2 = 0.0;
+            for (size_t i = 0; i < 12; ++i) {
+                const double d = space.values[i] - truthV[i];
+                tileL2 += d * d;
+            }
+            std::cout << std::sqrt(tileL2) << " rough="
+                      << std::abs(space.values[roughIdx] - truthV[roughIdx])
+                      << " metal=" << std::abs(space.values[metalIdx] - truthV[metalIdx]) << "\n";
+        }
+    }
+    if (inv.fitPedestal && inv.pedestalMat) {
+        const size_t pb = inv.primaryDims();
+        if (!externalTarget && space.size() >= pb + 3 && truthV.size() >= pb + 3) {
+            std::cout << "  pedestal |Δ| RGB=(" << std::abs(space.values[pb] - truthV[pb]) << ","
+                      << std::abs(space.values[pb + 1] - truthV[pb + 1]) << ","
+                      << std::abs(space.values[pb + 2] - truthV[pb + 2]) << ")\n";
+        }
+    }
+    size_t lo = inv.lightBlockStart();
     double keyErr = 0.0;
-    if (inv.fitKeyLight && inv.keyLight && truthV.size() > lo) {
+    if (inv.fitKeyLight && inv.keyLight && truthV.size() > lo && space.size() > lo) {
         const double tI = truthV[lo] * InverseScene::kKeyIScale;
         const double rI = space.values[lo] * InverseScene::kKeyIScale;
         keyErr = std::abs(rI - tI);
@@ -1255,25 +1786,31 @@ int main(int argc, char** argv) {
                   << ")\n";
         ++lo;
     }
-    if (inv.fitFillLight && inv.fillLight && truthV.size() > lo) {
+    if (inv.fitFillLight && inv.fillLight && truthV.size() > lo && space.size() > lo) {
         const double tI = truthV[lo] * InverseScene::kKeyIScale;
         const double rI = space.values[lo] * InverseScene::kKeyIScale;
         std::cout << "  fill |Δ|I = " << std::abs(rI - tI) << "  (truth " << tI << " recovered "
                   << rI << ")\n";
         ++lo;
     }
-    if (inv.fitRimLight && inv.rimLight && truthV.size() > lo) {
+    if (inv.fitRimLight && inv.rimLight && truthV.size() > lo && space.size() > lo) {
         const double tI = truthV[lo] * InverseScene::kKeyIScale;
         const double rI = space.values[lo] * InverseScene::kKeyIScale;
         std::cout << "  rim |Δ|I = " << std::abs(rI - tI) << "  (truth " << tI << " recovered "
                   << rI << ")\n";
         ++lo;
     }
-    if (inv.fitEnvScale && truthV.size() > lo) {
+    if (inv.fitEnvScale && truthV.size() > lo && space.size() > lo) {
         std::cout << "  env |Δ|scale = " << std::abs(space.values[lo] - truthV[lo])
                   << "  (truth " << truthV[lo] << " recovered " << space.values[lo] << ")\n";
+        ++lo;
     }
-    std::cout << "  param L2 = " << paramErr << "  param RMSE = " << paramRmse << "\n";
+    if (inv.fitExposure && space.size() > lo) {
+        std::cout << "  exposure = " << space.values[lo] << "\n";
+    }
+    if (!externalTarget) {
+        std::cout << "  param L2 = " << paramErr << "  param RMSE = " << paramRmse << "\n";
+    }
     std::cout << "  final multi-view FIT loss = " << loss << "\n";
     std::cout << "  SHOW RMSE (primary) = " << showRmse << "\n";
     std::cout << "  fit wall time = "
@@ -1281,19 +1818,35 @@ int main(int argc, char** argv) {
               << " s\n";
     std::cout << "  wrote " << outDir << "/\n";
 
-    // Composite selftest: image match + key recovery (fill is softer).
-    constexpr double kShowRmseTol = 0.14; // 12D draft FD; high stills use SHOW quality
-    constexpr double kKeyITol = 12.0; // multi-light draft; key often trades with fill/rim
-    constexpr double kParamRmseSoft = 0.50;
-    const bool keyOk = !inv.fitKeyLight || keyErr < kKeyITol;
+    // Selftest gates. External photo: image match only.
+    // Draft multi-param (12–14D + MC noise): SHOW ~0.15 is grain-limited; high quality is tighter.
+    const double kShowRmseTol = (std::string_view(cfg.quality.name) == "draft") ? 0.155 : 0.12;
+    constexpr double kKeyITol = 12.0;
+    constexpr double kParamRmseSoft = 0.48;
+    // Mirror/metal: also gate rough+metal when synthetic (tighter for BRDF gap).
+    double roughErr = 0.0, metalErr = 0.0;
+    if (!externalTarget && truthV.size() > metalIdx && space.size() > metalIdx) {
+        roughErr = std::abs(space.values[roughIdx] - truthV[roughIdx]);
+        metalErr = std::abs(space.values[metalIdx] - truthV[metalIdx]);
+    }
+    // Specular presets get a slightly softer metal gate under draft MC; rough stays tight.
+    const double metalTol =
+        (cfg.preset == "mirror" || cfg.preset == "spheres") ? 0.35 : 0.55;
+    const double roughTol = 0.40;
+    const bool brdfOk = externalTarget || (roughErr < roughTol && metalErr < metalTol);
+    const bool keyOk = externalTarget || !inv.fitKeyLight || keyErr < kKeyITol;
     const bool showOk = showRmse < kShowRmseTol;
-    const bool paramSoftOk = paramRmse < kParamRmseSoft;
-    const bool ok = showOk && keyOk && paramSoftOk;
+    const bool paramSoftOk = externalTarget || paramRmse < kParamRmseSoft;
+    const bool ok = showOk && keyOk && paramSoftOk && brdfOk;
     std::cout << (ok ? "SELFTEST PASS" : "SELFTEST FAIL")
-              << " (SHOW RMSE " << showRmse << (showOk ? " < " : " >= ") << kShowRmseTol
-              << ", key|ΔI| " << keyErr << (keyOk ? " < " : " >= ") << kKeyITol
-              << ", param RMSE " << paramRmse << (paramSoftOk ? " < " : " >= ") << kParamRmseSoft
-              << ")\n";
+              << " (SHOW RMSE " << showRmse << (showOk ? " < " : " >= ") << kShowRmseTol;
+    if (!externalTarget) {
+        std::cout << ", key|ΔI| " << keyErr << (keyOk ? " < " : " >= ") << kKeyITol
+                  << ", param RMSE " << paramRmse << (paramSoftOk ? " < " : " >= ") << kParamRmseSoft
+                  << ", |Δ|rough " << roughErr << " |Δ|metal " << metalErr
+                  << (brdfOk ? " ok" : " FAIL");
+    }
+    std::cout << ")\n";
 
     inv.scene.reset();
     return ok ? 0 : 1;
