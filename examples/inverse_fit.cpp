@@ -1573,7 +1573,19 @@ int main(int argc, char** argv) {
         space.add("exposure", initV[off], 0.35, 2.50);
     }
 
-    // C1: override init with neural θ prior (tools/inverse_c1/infer.py).
+    auto applyTheta = [&](const std::vector<double>& th) { inv.applyTheta(th); };
+
+    // Always capture the *wrong* multi-param guess first (true BEFORE for compare sheets).
+    std::cout << "SHOW init (wrong multi-param guess)...\n";
+    applyTheta(space.values);
+    ImageRGBA8 wrongInitShow = session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
+    if (inv.fitExposure) wrongInitShow = applyExposure(wrongInitShow, inv.currentExposure);
+    savePNG(wrongInitShow, outDir / "init_show.png"); // BEFORE
+    savePNG(wrongInitShow, outDir / "init_wrong_show.png");
+    const double showWrongRmse = rmseRGB(wrongInitShow, targetsShow[0]);
+    std::cout << "  wrong-init SHOW RMSE vs target=" << showWrongRmse << "\n";
+
+    // C1: override with neural θ prior (tools/inverse_c1/infer.py).
     bool usedNnPrior = false;
     if (!cfg.thetaInitPath.empty()) {
         std::vector<double> nnTh;
@@ -1593,9 +1605,12 @@ int main(int argc, char** argv) {
         if (cfg.nnSkipMultiStart) cfg.multiStart = 1;
         std::cout << "C1 NN prior loaded from " << cfg.thetaInitPath
                   << "  θ=" << formatTheta(space.values) << "\n";
+        applyTheta(space.values);
+        ImageRGBA8 nnShow = session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
+        if (inv.fitExposure) nnShow = applyExposure(nnShow, inv.currentExposure);
+        savePNG(nnShow, outDir / "nn_prior_show.png");
+        std::cout << "  NN-prior SHOW RMSE vs target=" << rmseRGB(nnShow, targetsShow[0]) << "\n";
     }
-
-    auto applyTheta = [&](const std::vector<double>& th) { inv.applyTheta(th); };
 
     const size_t roughIdx = inv.mapGround ? 12u : 3u;
     const size_t metalIdx = inv.mapGround ? 13u : 4u;
@@ -1702,15 +1717,20 @@ int main(int argc, char** argv) {
         return imgLoss + lightRegularizer(th) + metalPrior;
     };
 
-    std::cout << "SHOW init (wrong multi-param guess)...\n";
     applyTheta(space.values);
     ImageRGBA8 initShow = session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
     if (inv.fitExposure) initShow = applyExposure(initShow, inv.currentExposure);
-    savePNG(initShow, outDir / "init_show.png");
+    // Keep init_show.png as the *optimization* start (NN prior if used, else wrong guess).
+    // Wrong guess is always also at init_wrong_show.png for before/after sheets.
+    if (usedNnPrior) {
+        savePNG(initShow, outDir / "init_opt_start_show.png");
+    } else {
+        savePNG(initShow, outDir / "init_show.png");
+    }
 
     double loss = lossAt(space.values);
     const double showInitRmse = rmseRGB(initShow, targetsShow[0]);
-    std::cout << "  init multi-view FIT loss=" << loss << "  SHOW RMSE vs target=" << showInitRmse
+    std::cout << "  fit-start FIT loss=" << loss << "  SHOW RMSE vs target=" << showInitRmse
               << "\n  θ=" << formatTheta(space.values) << "\n";
 
     // ── Multi-start: probe candidates, keep lowest loss ──────────────

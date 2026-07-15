@@ -121,7 +121,9 @@ def build_dir_compare(d: Path, out_dir: Path | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     target_p = find_image(d, ["target_show.png", "target_front.png", "target.png"])
-    init_p = find_image(d, ["init_show.png", "init.png", "init_s.png"])
+    # Prefer true wrong-init for BEFORE; fall back to init_show
+    wrong_p = find_image(d, ["init_wrong_show.png", "init_show.png", "init.png", "init_s.png"])
+    nn_p = find_image(d, ["nn_prior_show.png", "init_opt_start_show.png"])
     rec_p = find_image(d, ["recovered_show.png", "recovered_front.png", "recovered.png"])
 
     if not target_p or not rec_p:
@@ -129,27 +131,30 @@ def build_dir_compare(d: Path, out_dir: Path | None = None) -> dict:
 
     target = load_rgb(target_p)
     rec = resize_match(load_rgb(rec_p), target.shape[:2])
-    if init_p:
-        init = resize_match(load_rgb(init_p), target.shape[:2])
-    else:
-        init = np.zeros_like(target)
+    wrong = resize_match(load_rgb(wrong_p), target.shape[:2]) if wrong_p else None
+    nn_img = resize_match(load_rgb(nn_p), target.shape[:2]) if nn_p else None
 
-    r_init = rmse(init, target) if init_p else float("nan")
+    r_wrong = rmse(wrong, target) if wrong is not None else float("nan")
+    r_nn = rmse(nn_img, target) if nn_img is not None else float("nan")
     r_rec = rmse(rec, target)
     diff = absdiff_vis(rec, target, gain=5.0)
 
     panels = [
         label_panel(target, "TARGET (truth)", str(target_p.name)),
     ]
-    if init_p:
+    if wrong is not None:
         panels.append(
-            label_panel(init, "BEFORE (init / wrong guess)", f"RMSE vs target = {r_init:.4f}")
+            label_panel(wrong, "BEFORE (wrong init)", f"RMSE vs target = {r_wrong:.4f}")
+        )
+    if nn_img is not None:
+        panels.append(
+            label_panel(nn_img, "NN PRIOR (seed)", f"RMSE vs target = {r_nn:.4f}")
         )
     panels.append(
         label_panel(rec, "AFTER (recovered)", f"RMSE vs target = {r_rec:.4f}")
     )
     panels.append(
-        label_panel(diff, "|DIFF| ×5 (red = error)", f"max channel mean |Δ|")
+        label_panel(diff, "|DIFF| ×5 (error heat)", "dark = match, red/yellow = error")
     )
 
     sheet = hstack_pil(panels)
@@ -160,12 +165,14 @@ def build_dir_compare(d: Path, out_dir: Path | None = None) -> dict:
     draw = ImageDraw.Draw(full)
     font = try_font(16)
     improve = ""
-    if init_p and r_init == r_init and r_init > 1e-8:
-        pct = 100.0 * (1.0 - r_rec / r_init)
+    base_r = r_wrong if wrong is not None else r_nn
+    if base_r == base_r and base_r > 1e-8:
+        pct = 100.0 * (1.0 - r_rec / base_r)
         improve = f"  |  RMSE improvement: {pct:+.1f}%"
+    nn_s = f"  nn={r_nn:.4f}" if nn_img is not None else ""
     draw.text(
         (12, sheet.height + 10),
-        f"{d.name}  |  before RMSE={r_init:.4f}  after RMSE={r_rec:.4f}{improve}",
+        f"{d.name}  |  before RMSE={base_r:.4f}{nn_s}  after RMSE={r_rec:.4f}{improve}",
         fill=(200, 210, 230),
         font=font,
     )
@@ -213,7 +220,8 @@ def build_dir_compare(d: Path, out_dir: Path | None = None) -> dict:
 
     meta = {
         "dir": str(d),
-        "rmse_init": r_init,
+        "rmse_before": r_wrong,
+        "rmse_nn_prior": r_nn,
         "rmse_recovered": r_rec,
         "outputs": [str(primary_out), str(simple_out)],
     }
