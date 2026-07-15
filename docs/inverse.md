@@ -136,7 +136,9 @@ python3 tools/inverse_c1/train.py \
 QUALITY=draft EPOCHS=60 ./tools/inverse_c1/run_ladder.sh 96
 ```
 
-Details + measured RGB MAE table: [`tools/inverse_c1/README.md`](../tools/inverse_c1/README.md).
+When NN init is already good (SHOW RMSE &lt; 0.08), FD runs a **soft refine** schedule only — full staged FD was walking off good albedo.
+
+Details + measured tables: [`tools/inverse_c1/README.md`](../tools/inverse_c1/README.md).
 
 ## Limits
 

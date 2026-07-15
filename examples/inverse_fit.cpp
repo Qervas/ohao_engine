@@ -1128,24 +1128,47 @@ ImageRGBA8 loadPNG(const std::filesystem::path& path) {
 }
 
 /// Load C1 θ prior JSON: `{"theta":[...]}` or bare `[...]`.
+/// Prefer the array after `"theta"` so names/metadata arrays are ignored.
 bool loadThetaInit(const std::filesystem::path& path, std::vector<double>& out) {
     std::ifstream in(path);
     if (!in) return false;
     std::stringstream buf;
     buf << in.rdbuf();
     const std::string s = buf.str();
-    const auto lb = s.find('[');
-    const auto rb = s.rfind(']');
-    if (lb == std::string::npos || rb == std::string::npos || rb <= lb) return false;
+    size_t lb = std::string::npos;
+    const auto key = s.find("\"theta\"");
+    if (key != std::string::npos) {
+        lb = s.find('[', key);
+    }
+    if (lb == std::string::npos) {
+        lb = s.find('['); // bare array fallback
+    }
+    if (lb == std::string::npos) return false;
+    // Match the bracket for this array only (not rfind of whole file).
+    int depth = 0;
+    size_t rb = std::string::npos;
+    for (size_t i = lb; i < s.size(); ++i) {
+        if (s[i] == '[') ++depth;
+        else if (s[i] == ']') {
+            --depth;
+            if (depth == 0) {
+                rb = i;
+                break;
+            }
+        }
+    }
+    if (rb == std::string::npos || rb <= lb) return false;
     out.clear();
     std::stringstream arr(s.substr(lb + 1, rb - lb - 1));
     std::string tok;
     while (std::getline(arr, tok, ',')) {
-        // trim
         size_t a = 0, b = tok.size();
         while (a < b && std::isspace(static_cast<unsigned char>(tok[a]))) ++a;
         while (b > a && std::isspace(static_cast<unsigned char>(tok[b - 1]))) --b;
         if (a >= b) continue;
+        // Skip non-numeric tokens (e.g. leftover strings)
+        const char c0 = tok[a];
+        if (!(c0 == '-' || c0 == '+' || c0 == '.' || (c0 >= '0' && c0 <= '9'))) continue;
         try {
             out.push_back(std::stod(tok.substr(a, b - a)));
         } catch (...) {
@@ -1915,11 +1938,19 @@ int main(int argc, char** argv) {
     if (inv.fitEnvScale) envIdx.push_back(cursor++);
     if (inv.fitExposure) exposureIdx.push_back(cursor);
 
+    // C1: if NN prior already matches well, only soft-polish (full FD walks off good color).
+    const bool nnSoftRefine = usedNnPrior && (showInitRmse < 0.08 || loss < 0.08);
+    const char* schedName =
+        nnSoftRefine ? "nn_soft_refine"
+                     : (usedNnPrior ? "nn_seeded_staged"
+                                    : "multistart_env_lights_brdfpre_albedo_brdf_pedestal_refine");
+
     std::ofstream traj(outDir / "trajectory.json");
     traj << "{\n  \"scene\": \"" << cfg.scene << "\",\n  \"quality\": \"" << cfg.quality.name
          << "\",\n  \"views\": " << nViews << ",\n  \"dims\": " << space.size()
-         << ",\n  \"schedule\": \"multistart_env_lights_brdfpre_albedo_brdf_pedestal_refine\",\n"
-         << "  \"map_ground\": " << (inv.mapGround ? "true" : "false")
+         << ",\n  \"schedule\": \"" << schedName << "\",\n"
+         << "  \"nn_prior\": " << (usedNnPrior ? "true" : "false")
+         << ",\n  \"map_ground\": " << (inv.mapGround ? "true" : "false")
          << ",\n  \"external_target\": " << (externalTarget ? "true" : "false")
          << ",\n  \"iters\": [\n";
     bool firstTraj = true;
@@ -1933,56 +1964,57 @@ int main(int argc, char** argv) {
     const int refineIters = std::max(5, (cfg.iters * 12) / 100);
     const int exposureIters = exposureIdx.empty() ? 0 : std::max(4, (cfg.iters * 8) / 100);
 
-    // Brightness first, then materials (prevents white-albedo blowout).
-    runStage("env", envIdx, envIters, traj, firstTraj, 1.0, 1.0);
     bestTheta = space.values;
     bestLoss = loss;
-    if (!exposureIdx.empty()) {
-        runStage("exposure", exposureIdx, exposureIters, traj, firstTraj, 1.0, 1.0);
-        bestTheta = space.values;
-        bestLoss = loss;
+
+    if (nnSoftRefine) {
+        // Keep NN albedo — only gentle light/BRDF/refine. Prevents color blowout.
+        std::cout << "C1 soft refine (init SHOW RMSE=" << showInitRmse << " loss=" << loss
+                  << ") — skipping full staged FD\n";
+        runStage("lights_soft", lightIdx, std::max(3, lightIters / 3), traj, firstTraj, 0.35, 0.7);
+        runStage("brdf_soft", brdfIdx, std::max(4, brdfIters / 3), traj, firstTraj, 0.35, 0.55,
+                 cfg.brdfSppMul, cfg.specularWeight * 0.5);
+        std::vector<size_t> refineIdx = brdfIdx;
+        if (!envIdx.empty()) refineIdx.insert(refineIdx.end(), envIdx.begin(), envIdx.end());
+        if (!lightIdx.empty()) refineIdx.push_back(lightIdx.front());
+        // Tiny albedo nudge only (preserve NN color)
+        refineIdx.insert(refineIdx.end(), albedoIdx.begin(), albedoIdx.end());
+        runStage("refine", refineIdx, std::max(4, refineIters), traj, firstTraj, 0.20, 0.45, 1.25f,
+                 cfg.specularWeight * 0.4);
+    } else {
+        // Brightness first, then materials (prevents white-albedo blowout from dark init).
+        runStage("env", envIdx, envIters, traj, firstTraj, 1.0, 1.0);
+        if (!exposureIdx.empty()) {
+            runStage("exposure", exposureIdx, exposureIters, traj, firstTraj, 1.0, 1.0);
+        }
+        runStage("lights", lightIdx, lightIters, traj, firstTraj, 0.85, 1.0);
+        if (highlightScore > 0.24) {
+            const int brdfPreIters = std::max(6, brdfIters / 2);
+            const float preSpp = std::max(cfg.brdfSppMul, 2.0f);
+            const double preSw = std::min(1.0, cfg.specularWeight + 0.30);
+            runStage("brdf_pre", brdfIdx, brdfPreIters, traj, firstTraj, 0.80, 0.65, preSpp, preSw);
+        }
+        // With NN seed, use softer albedo steps so prior color is not destroyed.
+        const double albedoLr = usedNnPrior ? 0.45 : 0.8;
+        runStage("albedo", albedoIdx, albedoIters, traj, firstTraj, albedoLr, 0.9);
+        runStage("brdf", brdfIdx, brdfIters, traj, firstTraj, 0.75, 0.7, cfg.brdfSppMul,
+                 std::min(1.0, cfg.specularWeight + 0.1));
+        runStage("brdf2", brdfIdx, std::max(4, brdfIters / 2), traj, firstTraj, 0.45, 0.55,
+                 cfg.brdfSppMul, std::min(1.0, cfg.specularWeight + 0.15));
+        runStage("pedestal", pedestalIdx, pedestalIters, traj, firstTraj, 0.65, 1.0);
+        runStage("lights2", lightIdx, std::max(3, lightIters / 2), traj, firstTraj, 0.50, 0.75);
+        std::vector<size_t> refineIdx = albedoIdx;
+        refineIdx.insert(refineIdx.end(), brdfIdx.begin(), brdfIdx.end());
+        if (!envIdx.empty()) refineIdx.insert(refineIdx.end(), envIdx.begin(), envIdx.end());
+        if (!lightIdx.empty()) refineIdx.push_back(lightIdx.front());
+        if (!exposureIdx.empty())
+            refineIdx.insert(refineIdx.end(), exposureIdx.begin(), exposureIdx.end());
+        runStage("refine", refineIdx, refineIters, traj, firstTraj, 0.35, 0.55, 1.25f,
+                 cfg.specularWeight * 0.7);
     }
-    runStage("lights", lightIdx, lightIters, traj, firstTraj, 0.85, 1.0);
-    bestTheta = space.values;
-    bestLoss = loss;
-    // BRDF pre-pass BEFORE albedo only when target is specular (mirror/spheres).
-    // On diffuse product floors this stage harms metal recovery (false high-metal basin).
-    if (highlightScore > 0.24) {
-        const int brdfPreIters = std::max(6, brdfIters / 2);
-        const float preSpp = std::max(cfg.brdfSppMul, 2.0f);
-        const double preSw = std::min(1.0, cfg.specularWeight + 0.30);
-        runStage("brdf_pre", brdfIdx, brdfPreIters, traj, firstTraj, 0.80, 0.65, preSpp, preSw);
-        bestTheta = space.values;
-        bestLoss = loss;
-    }
-    runStage("albedo", albedoIdx, albedoIters, traj, firstTraj, 0.8, 0.9);
-    bestTheta = space.values;
-    bestLoss = loss;
-    // High-spp + full specular weight for metal/rough (mirror gap-close).
-    runStage("brdf", brdfIdx, brdfIters, traj, firstTraj, 0.75, 0.7, cfg.brdfSppMul,
-             std::min(1.0, cfg.specularWeight + 0.1));
-    bestTheta = space.values;
-    bestLoss = loss;
-    // Second BRDF polish at high spp with lower LR.
-    runStage("brdf2", brdfIdx, std::max(4, brdfIters / 2), traj, firstTraj, 0.45, 0.55,
-             cfg.brdfSppMul, std::min(1.0, cfg.specularWeight + 0.15));
-    bestTheta = space.values;
-    bestLoss = loss;
-    runStage("pedestal", pedestalIdx, pedestalIters, traj, firstTraj, 0.65, 1.0);
-    bestTheta = space.values;
-    bestLoss = loss;
-    // Re-fit lights after materials (materials change the right intensity).
-    runStage("lights2", lightIdx, std::max(3, lightIters / 2), traj, firstTraj, 0.50, 0.75);
-    bestTheta = space.values;
-    bestLoss = loss;
-    // Polish: albedo + brdf + env + key (small steps, mild specular).
-    std::vector<size_t> refineIdx = albedoIdx;
-    refineIdx.insert(refineIdx.end(), brdfIdx.begin(), brdfIdx.end());
-    if (!envIdx.empty()) refineIdx.insert(refineIdx.end(), envIdx.begin(), envIdx.end());
-    if (!lightIdx.empty()) refineIdx.push_back(lightIdx.front());
-    if (!exposureIdx.empty()) refineIdx.insert(refineIdx.end(), exposureIdx.begin(), exposureIdx.end());
-    runStage("refine", refineIdx, refineIters, traj, firstTraj, 0.35, 0.55, 1.25f,
-             cfg.specularWeight * 0.7);
+    // Always restore global best across stages (MC noise can make a stage "worse").
+    space.values = bestTheta;
+    loss = bestLoss;
     traj << "\n  ],\n  \"best_loss\": " << bestLoss << "\n}\n";
     traj.close();
     space.values = bestTheta;

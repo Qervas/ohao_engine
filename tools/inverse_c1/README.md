@@ -26,19 +26,27 @@ primary.RGB, rough, metal, pedestal.RGB, key/fill/rim I, env.scale
 
 So one network can be trained on L2 and used for any studio preset fit.
 
-### Measured quality (held-out, N≈240 train / 15% val, draft FIT)
+### Measured quality
+
+**Prior alone (held-out, L2 HQ ~400 samples, larger CNN):**
 
 | Level | RGB MAE | param RMSE | Gate |
 |-------|---------|------------|------|
-| L0 | 0.22 | 0.25 | WEAK (too little diversity) |
+| L0 | 0.22 | 0.25 | WEAK |
 | L1 | 0.21 | 0.24 | WEAK |
-| **L2** | **0.16** | **0.22** | **PASS** |
-| **L2e** | **0.16** | **0.23** | **PASS** |
+| L2 (240) | 0.16 | 0.22 | PASS |
+| **L2 HQ (~400)** | **0.085** | **0.21** | **PASS (strong RGB)** |
 
-Gates: RGB MAE &lt; 0.18 and RMSE &lt; 0.28.  
-**Domain randomization (L2) is the quality win** — more image variety teaches color better than more of the same fixed view.
+Gates: RGB MAE &lt; 0.18 (strong &lt; 0.12) and RMSE &lt; 0.28.
 
-Scale further (N≥200/preset, `QUALITY=high` FIT spp) for stronger RGB (&lt;0.12).
+**Hybrid FD (lantern draft selftest):**
+
+| Method | primary \|Δ\|RGB | SHOW RMSE | metal \|Δ\| |
+|--------|------------------|-----------|------------|
+| Baseline FD (wrong init) | (0.06, **0.45**, 0.17) | 0.067 | 0.40 |
+| **NN prior → soft FD** | **(0.07, 0.06, 0.06)** | **0.021** | 0.30 |
+
+When the prior already matches well (SHOW RMSE &lt; 0.08), `inverse_fit` uses **soft refine only** so full staged FD cannot destroy NN color.
 
 ## Quick start (recommended = L2)
 
