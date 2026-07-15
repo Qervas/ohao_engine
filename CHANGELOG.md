@@ -6,14 +6,13 @@ All notable changes to OHAO Engine are documented here. Newest first.
 
 Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
-### Inverse rendering (Phase A–B2 — physical, no ML)
+### Inverse rendering (Phase A–B3 — physical, no ML)
 
-- **`inverse_fit`**: dual-budget **scalar full PBR** recovery — \(\theta=[\text{albedo}, \text{roughness}, \text{metallic}]\).
-- Default scene is a **product studio** (Lantern/hero on pedestal + cyclorama + HDRI + multi-view + relight); `cornell` kept for fast regression.
-- Default **`--quality high`**: SHOW **1920×1080 @ 1024 spp**; FIT 640×360 @ 128 spp.
-- Presets: `draft` / `high` / `ultra` / `cinema` (4K SHOW). SHOW defaults to **OIDN** (grain-free); FIT stays raw MC.
-- Env map loads once; material θ updates use `updateRTMaterialParams()` (no BLAS thrash).
-- Adam + FD with **best-θ** checkpoint; `setRenderSeed` for stable FD; `docs/inverse.md`.
+- **`inverse_fit`**: dual-budget recovery — **multi-surface scalar PBR + key light intensity**.
+- Studio θ: ground [albedo, rough, metal] + pedestal albedo + key I (staged: materials → light).
+- Default scene is a **product studio** (Lantern + pedestal + cyclorama + HDRI + multi-view + relight).
+- `updateRTMaterialParams()` + `updateRTLightParams()` avoid BLAS/env thrash under FD.
+- Continuous metal in path tracer; Adam + best-θ; `docs/inverse.md`.
 
 ### Refactored to C++20
 
