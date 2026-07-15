@@ -2,6 +2,8 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_GOOGLE_include_directive : require
 
+#include "includes/pbr_unpack.glsl"
+
 // Realtime raygen shader.
 // This keeps the shared hit/miss/material path, but uses motion-tolerant accumulation
 // and stronger in-shader stabilization than the offline/reference path.
@@ -443,13 +445,9 @@ void main() {
             vec4 viewPos = viewMat * vec4(firstHitPos, 1.0);
             firstHitViewZ = -viewPos.z;
 
-            // Roughness: unpack from payload.attenuation.x — encoding matches pt_closesthit.rchit.
-            // Magic-number form: sign bit → metal flag, magnitude → roughness; values >= 10 are
-            // shifted (historic encoding from Feature 1.1 era).
-            float packed = payload.attenuation.x;
-            firstHitRoughness = abs(packed);
-            if (firstHitRoughness >= 10.0) firstHitRoughness -= 10.0;
-            firstHitRoughness = clamp(firstHitRoughness, 0.01, 1.0);
+            float _aovRough, _aovMetal;
+            unpackHitPbr(payload.attenuation, _aovRough, _aovMetal);
+            firstHitRoughness = clamp(_aovRough, 0.01, 1.0);
         }
         if (primarySample) {
             imageStore(depthAOV,     pixel, vec4(firstHitViewZ, 0.0, 0.0, 0.0));
@@ -484,12 +482,9 @@ void main() {
             imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));
         }
 
-        float packedRoughness = payload.attenuation.x;
-        bool  isMetal = (packedRoughness < 0.0);
-        float roughness = abs(packedRoughness);
-        if (roughness >= 10.0) roughness -= 10.0;
-        roughness = max(roughness, 0.01);
-        vec3 F0 = isMetal ? albedo : vec3(0.04);
+        float roughness, metallic;
+        unpackHitPbr(payload.attenuation, roughness, metallic);
+        vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
         // Phase 5 (DLSS-RR): overwrite normalAOV (binding 7) with WORLD-space
         // normal xyz in [-1,1] + perceptual roughness in w — the packed
@@ -505,10 +500,10 @@ void main() {
         firstHitRoughness = roughness;
 
         // Sub-plan 3.C.6: capture demod factors + write demod AOVs
-        firstHitDiffAlbedo = isMetal ? vec3(0.0) : albedo;
+        firstHitDiffAlbedo = albedo * (1.0 - metallic);
         // Metals bake F0 (=albedo) into specular radiance via specThroughput, so compose
         // must NOT re-apply it (that double-darkened metals to near-black in NRD).
-        firstHitSpecColor  = isMetal ? vec3(1.0) : F0;
+        firstHitSpecColor  = mix(F0, vec3(1.0), metallic);
         // Sub-plan 4.F T3: running-average in NRD accumulate mode, overwrite otherwise.
         // Geometric/material AOVs are identical across the N samples (deterministic
         // primary hit), so write them once from the primary sample.
@@ -615,7 +610,7 @@ void main() {
                     float G = (NdotL / (NdotL * (1.0 - k) + k))
                             * (NdotV / (NdotV * (1.0 - k) + k));
                     vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
-                    vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                    vec3 kD = (1.0 - F) * (1.0 - metallic);
                     vec3 diff = kD * albedo / 3.14159;
 
                     // throughput=1 at bounce 0
@@ -677,13 +672,13 @@ void main() {
                     float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
                             * (NdotV / (NdotV * (1.0 - k) + k));
                     vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
-                    vec3 kD = (1.0 - F) * (isMetal ? 0.0 : 1.0);
+                    vec3 kD = (1.0 - F) * (1.0 - metallic);
                     vec3 diff = kD * albedo / OHAO_PI;
 
                     float cosI = abs(dot(normalize(rayDir), N));
                     vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - cosI, 5.0);
                     float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);
-                    if (isMetal) specProbMIS = 1.0;
+                    specProbMIS = mix(specProbMIS, 1.0, metallic);
                     float pdfDiffuseMIS = NdotL_env / OHAO_PI;
 #ifdef OHAO_CRUDE_GLOSSY
                     float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
@@ -750,7 +745,7 @@ void main() {
                 }
             }
             specDir = reflected;
-            specThroughput = isMetal ? albedo : vec3(1.0);
+            specThroughput = mix(vec3(1.0), albedo, metallic);
             if (roughness < 0.05) {
                 specLastBsdfPdf = 1.0;
                 specLastBounceWasDelta = true;
@@ -842,12 +837,9 @@ void main() {
                 specContrib += ec;
             }
 
-            float bPackedRoughness = payload.attenuation.x;
-            bool  bIsMetal = (bPackedRoughness < 0.0);
-            float bRoughness = abs(bPackedRoughness);
-            if (bRoughness >= 10.0) bRoughness -= 10.0;
-            bRoughness = max(bRoughness, 0.01);
-            vec3 bF0 = bIsMetal ? bAlbedo : vec3(0.04);
+            float bRoughness, bMetallic;
+            unpackHitPbr(payload.attenuation, bRoughness, bMetallic);
+            vec3 bF0 = mix(vec3(0.04), bAlbedo, bMetallic);
 
             // === NEE at bounce>=1 (single attribution target: specContrib) ===
             if (lightBuf.lightCount > 0u) {
@@ -939,7 +931,7 @@ void main() {
                         float G = (NdotL / (NdotL * (1.0 - k) + k))
                                 * (NdotV / (NdotV * (1.0 - k) + k));
                         vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
-                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 kD = (1.0 - F) * (1.0 - bMetallic);
                         vec3 diff = kD * bAlbedo / 3.14159;
 
                         vec3 directContribution = specThroughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
@@ -986,14 +978,14 @@ void main() {
                         float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
                                 * (NdotV / (NdotV * (1.0 - k) + k));
                         vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
-                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 kD = (1.0 - F) * (1.0 - bMetallic);
                         vec3 diff = kD * bAlbedo / OHAO_PI;
                         vec3 brdf = diff + spec;
 
                         float cosI = abs(dot(normalize(specRayDir), bN));
                         vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
                         float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - bRoughness * 0.9);
-                        if (bIsMetal) specProbMIS = 1.0;
+                        specProbMIS = mix(specProbMIS, 1.0, bMetallic);
                         float pdfDiffuseMIS = NdotL_env / OHAO_PI;
                         float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
                         float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
@@ -1026,7 +1018,7 @@ void main() {
                 vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
                 float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
                 specProb *= (1.0 - bRoughness * 0.9);
-                if (bIsMetal) specProb = 1.0;
+                specProb = mix(specProb, 1.0, bMetallic);
 
                 float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
                 if (bsdfChoice < specProb || bRoughness < 0.05) {
@@ -1043,7 +1035,7 @@ void main() {
                     }
                     specRayDir = reflected;
                     specRayOrigin = bHitPos + bN * 0.01;
-                    specThroughput *= bIsMetal ? bAlbedo : vec3(1.0);
+                    specThroughput *= mix(vec3(1.0), bAlbedo, bMetallic);
                     specThroughput /= max(specProb, 0.01);
 
                     if (bRoughness < 0.05) {
@@ -1135,12 +1127,9 @@ void main() {
                 diffContrib += ec;
             }
 
-            float bPackedRoughness = payload.attenuation.x;
-            bool  bIsMetal = (bPackedRoughness < 0.0);
-            float bRoughness = abs(bPackedRoughness);
-            if (bRoughness >= 10.0) bRoughness -= 10.0;
-            bRoughness = max(bRoughness, 0.01);
-            vec3 bF0 = bIsMetal ? bAlbedo : vec3(0.04);
+            float bRoughness, bMetallic;
+            unpackHitPbr(payload.attenuation, bRoughness, bMetallic);
+            vec3 bF0 = mix(vec3(0.04), bAlbedo, bMetallic);
 
             // === NEE at bounce>=1 (single attribution target: diffContrib) ===
             if (lightBuf.lightCount > 0u) {
@@ -1232,7 +1221,7 @@ void main() {
                         float G = (NdotL / (NdotL * (1.0 - k) + k))
                                 * (NdotV / (NdotV * (1.0 - k) + k));
                         vec3 spec = D * F * G / (4.0 * NdotV * NdotL + 0.001);
-                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 kD = (1.0 - F) * (1.0 - bMetallic);
                         vec3 diff = kD * bAlbedo / 3.14159;
 
                         vec3 directContribution = diffThroughput * Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);
@@ -1279,14 +1268,14 @@ void main() {
                         float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
                                 * (NdotV / (NdotV * (1.0 - k) + k));
                         vec3 spec = D * F * G / (4.0 * NdotV * NdotL_env + 0.001);
-                        vec3 kD = (1.0 - F) * (bIsMetal ? 0.0 : 1.0);
+                        vec3 kD = (1.0 - F) * (1.0 - bMetallic);
                         vec3 diff = kD * bAlbedo / OHAO_PI;
                         vec3 brdf = diff + spec;
 
                         float cosI = abs(dot(normalize(diffRayDir), bN));
                         vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
                         float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - bRoughness * 0.9);
-                        if (bIsMetal) specProbMIS = 1.0;
+                        specProbMIS = mix(specProbMIS, 1.0, bMetallic);
                         float pdfDiffuseMIS = NdotL_env / OHAO_PI;
                         float pdfSpecMIS = D * NdotH / (4.0 * VdotH + 1e-4);
                         float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
@@ -1319,7 +1308,7 @@ void main() {
                 vec3 fresnel = bF0 + (1.0 - bF0) * pow(1.0 - cosI, 5.0);
                 float specProb = max(fresnel.r, max(fresnel.g, fresnel.b));
                 specProb *= (1.0 - bRoughness * 0.9);
-                if (bIsMetal) specProb = 1.0;
+                specProb = mix(specProb, 1.0, bMetallic);
 
                 float bsdfChoice = getSample1D(dimIdx); dimIdx += 1u;
                 if (bsdfChoice < specProb || bRoughness < 0.05) {
@@ -1336,7 +1325,7 @@ void main() {
                     }
                     diffRayDir = reflected;
                     diffRayOrigin = bHitPos + bN * 0.01;
-                    diffThroughput *= bIsMetal ? bAlbedo : vec3(1.0);
+                    diffThroughput *= bAlbedo * (1.0 - bMetallic);
                     diffThroughput /= max(specProb, 0.01);
 
                     if (bRoughness < 0.05) {
