@@ -65,21 +65,23 @@ struct FitConfig {
     QualityPreset quality{kQualityHigh};
     RenderBudget fit{kQualityHigh.fit};
     RenderBudget show{kQualityHigh.show};
-    int iters{35}; // multi-surface + light needs more Adam steps
-    double lr{0.055};
-    double eps{0.05};
+    int iters{40}; // B5 stages need a few more Adam steps
+    double lr{0.06};
+    double eps{0.04};
     double maskX{1.0};     // studio: full width
-    double maskYMin{0.25}; // floor + pedestal in loss band
+    double maskYMin{0.22}; // floor + pedestal band
     uint32_t seed{1};
     std::string outDir{"renders/inverse"};
     bool useAdam{true};
     DenoiseMode showDenoise{DenoiseMode::OIDN};
     std::string scene{"studio"}; // studio | cornell
     int numViews{3};
-    bool fitPedestal{true};  // multi-surface: pedestal albedo
-    bool fitKeyLight{true};  // key (+ fill) intensities
+    bool fitPedestal{true};
+    bool fitKeyLight{true};
     bool fitFillLight{true};
-    int exportDataset{0}; // >0: write N (θ, FIT image) pairs then exit (ML data factory)
+    bool fitRimLight{true};
+    bool fitEnvScale{true};
+    int exportDataset{0}; // >0: write N (θ, FIT image) pairs then exit
     // Prefer showcase Lantern when present; fall back to tracked test assets.
     std::string modelPath{"assets/showcase_objects/Lantern.glb"};
     std::string envPath{"assets/hdri/brown_photostudio_02_2k.hdr"};
@@ -146,8 +148,13 @@ CliArgs parseArgs(int argc, char** argv) {
         } else if (s == "--no-light") {
             a.cfg.fitKeyLight = false;
             a.cfg.fitFillLight = false;
+            a.cfg.fitRimLight = false;
         } else if (s == "--no-fill") {
             a.cfg.fitFillLight = false;
+        } else if (s == "--no-rim") {
+            a.cfg.fitRimLight = false;
+        } else if (s == "--no-env") {
+            a.cfg.fitEnvScale = false;
         } else if (s == "--export-dataset") {
             a.cfg.exportDataset = std::max(1, std::atoi(need("--export-dataset")));
         } else if (s == "--fit-width") {
@@ -187,12 +194,11 @@ CliArgs parseArgs(int argc, char** argv) {
         } else if (s == "--help" || s == "-h") {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
-                << "  Studio θ: ground PBR[5] + pedestal[3] + key I + fill I\n"
-                << "  Stages: primary → pedestal → lights\n"
-                << "  --export-dataset N   write N (θ,image) pairs for ML (no optim)\n"
-                << "  --no-pedestal --no-light --no-fill\n"
-                << "  --quality draft|high|ultra|cinema  --views N\n"
-                << "  --show-denoise=oidn|none  --out-dir DIR\n";
+                << "  Studio θ: ground PBR[5] + pedestal[3] + key/fill/rim I + env scale\n"
+                << "  Stages: albedo → brdf → pedestal → lights → env\n"
+                << "  --export-dataset N   ML data factory\n"
+                << "  --no-pedestal --no-light --no-fill --no-rim --no-env\n"
+                << "  --quality draft|high|ultra|cinema  --views N\n";
             std::exit(0);
         } else {
             std::cerr << "unknown arg: " << s << "\n";
@@ -281,6 +287,7 @@ struct InverseScene {
     MaterialComponent* pedestalMat{nullptr};
     LightComponent* keyLight{nullptr};
     LightComponent* fillLight{nullptr};
+    LightComponent* rimLight{nullptr};
 
     std::string envPath;
     std::string relightEnvPath;
@@ -294,23 +301,41 @@ struct InverseScene {
     float initKeyI{7.0f};
     float truthFillI{9.0f};
     float initFillI{3.0f};
+    float truthRimI{10.0f};
+    float initRimI{4.0f};
+    float truthEnvScale{1.0f};
+    float initEnvScale{0.45f};
+    float currentEnvScale{1.0f};
     // Light intensities stored as scale of kKeyIScale (Adam conditioning).
     static constexpr float kKeyIScale = 40.0f;
     bool fitPedestal{false};
     bool fitKeyLight{false};
     bool fitFillLight{false};
+    bool fitRimLight{false};
+    bool fitEnvScale{false};
 
-    // Layout: primary[5] | pedestal[3]? | key_scale[1]? | fill_scale[1]?
+    // Layout: primary[5] | pedestal[3]? | key? fill? rim? | env?
     [[nodiscard]] size_t thetaDims() const {
         size_t n = 5;
         if (fitPedestal && pedestalMat) n += 3;
         if (fitKeyLight && keyLight) n += 1;
         if (fitFillLight && fillLight) n += 1;
+        if (fitRimLight && rimLight) n += 1;
+        if (fitEnvScale) n += 1;
         return n;
     }
 
     [[nodiscard]] bool needsLightUpdate() const {
-        return (fitKeyLight && keyLight) || (fitFillLight && fillLight);
+        return (fitKeyLight && keyLight) || (fitFillLight && fillLight) ||
+               (fitRimLight && rimLight) || fitEnvScale;
+    }
+
+    void appendLightTheta(std::vector<double>& t, float key, float fill, float rim,
+                          float env) const {
+        if (fitKeyLight && keyLight) t.push_back(key / kKeyIScale);
+        if (fitFillLight && fillLight) t.push_back(fill / kKeyIScale);
+        if (fitRimLight && rimLight) t.push_back(rim / kKeyIScale);
+        if (fitEnvScale) t.push_back(env);
     }
 
     [[nodiscard]] std::vector<double> truthTheta() const {
@@ -320,8 +345,7 @@ struct InverseScene {
             t.push_back(truthPedestal.albedo.g);
             t.push_back(truthPedestal.albedo.b);
         }
-        if (fitKeyLight && keyLight) t.push_back(truthKeyI / kKeyIScale);
-        if (fitFillLight && fillLight) t.push_back(truthFillI / kKeyIScale);
+        appendLightTheta(t, truthKeyI, truthFillI, truthRimI, truthEnvScale);
         return t;
     }
 
@@ -332,8 +356,7 @@ struct InverseScene {
             t.push_back(initPedestal.albedo.g);
             t.push_back(initPedestal.albedo.b);
         }
-        if (fitKeyLight && keyLight) t.push_back(initKeyI / kKeyIScale);
-        if (fitFillLight && fillLight) t.push_back(initFillI / kKeyIScale);
+        appendLightTheta(t, initKeyI, initFillI, initRimI, initEnvScale);
         return t;
     }
 
@@ -345,8 +368,8 @@ struct InverseScene {
         };
         std::vector<double> t(5);
         for (int i = 0; i < 3; ++i) t[static_cast<size_t>(i)] = u01();
-        t[3] = 0.04 + 0.96 * u01(); // roughness
-        t[4] = u01();               // metallic
+        t[3] = 0.04 + 0.96 * u01();
+        t[4] = u01();
         if (fitPedestal && pedestalMat) {
             t.push_back(u01());
             t.push_back(u01());
@@ -354,6 +377,8 @@ struct InverseScene {
         }
         if (fitKeyLight && keyLight) t.push_back(0.05 + 1.2 * u01());
         if (fitFillLight && fillLight) t.push_back(0.05 + 0.8 * u01());
+        if (fitRimLight && rimLight) t.push_back(0.05 + 0.8 * u01());
+        if (fitEnvScale) t.push_back(0.25 + 1.25 * u01());
         return t;
     }
 
@@ -366,7 +391,7 @@ struct InverseScene {
                               .metallic = static_cast<float>(th[4])});
         size_t i = 5;
         if (fitPedestal && pedestalMat && th.size() >= i + 3) {
-            PbrParams pp = truthPedestal; // keep rough/metal of pedestal fixed
+            PbrParams pp = truthPedestal;
             pp.albedo = {static_cast<float>(th[i]), static_cast<float>(th[i + 1]),
                          static_cast<float>(th[i + 2])};
             writeMatPbr(pedestalMat, pedestalActor, pp);
@@ -378,6 +403,14 @@ struct InverseScene {
         }
         if (fitFillLight && fillLight && th.size() > i) {
             fillLight->setIntensity(static_cast<float>(th[i] * kKeyIScale));
+            ++i;
+        }
+        if (fitRimLight && rimLight && th.size() > i) {
+            rimLight->setIntensity(static_cast<float>(th[i] * kKeyIScale));
+            ++i;
+        }
+        if (fitEnvScale && th.size() > i) {
+            currentEnvScale = static_cast<float>(th[i]);
         }
     }
 
@@ -395,7 +428,9 @@ struct InverseScene {
         s.scene = std::make_unique<Scene>("Inverse Cornell");
         s.fitPedestal = false;
         s.fitKeyLight = cfg.fitKeyLight;
-        s.fitFillLight = false; // cornell has single key
+        s.fitFillLight = false;
+        s.fitRimLight = false;
+        s.fitEnvScale = false;
         s.truthPrimary = {.albedo = {0.65f, 0.05f, 0.05f}, .roughness = 0.35f, .metallic = 0.0f};
         s.initPrimary = {.albedo = {0.2f, 0.5f, 0.7f}, .roughness = 0.85f, .metallic = 0.55f};
         s.truthKeyI = 40.0f;
@@ -450,6 +485,8 @@ struct InverseScene {
         s.fitPedestal = cfg.fitPedestal;
         s.fitKeyLight = cfg.fitKeyLight;
         s.fitFillLight = cfg.fitFillLight && cfg.fitKeyLight;
+        s.fitRimLight = cfg.fitRimLight && cfg.fitKeyLight;
+        s.fitEnvScale = cfg.fitEnvScale;
         // Glossy warm floor: mid roughness + slight metal so all 5 PBR dims matter.
         s.truthPrimary = {.albedo = {0.72f, 0.55f, 0.42f}, .roughness = 0.30f, .metallic = 0.12f};
         s.initPrimary = {.albedo = {0.20f, 0.45f, 0.70f}, .roughness = 0.88f, .metallic = 0.70f};
@@ -459,6 +496,11 @@ struct InverseScene {
         s.initKeyI = 7.0f;
         s.truthFillI = 9.0f;
         s.initFillI = 3.0f;
+        s.truthRimI = 10.0f;
+        s.initRimI = 4.0f;
+        s.truthEnvScale = 1.0f;
+        s.initEnvScale = 0.45f;
+        s.currentEnvScale = 1.0f;
 
         const float groundY = 0.0f;
         const float pedestalH = 0.35f;
@@ -611,7 +653,16 @@ struct InverseScene {
             a->getTransform()->setPosition({-3.5f, 3.0f, 3.5f});
             s.fillLight = lc.get();
         }
-        addLight("Rim", {-0.5f, 3.5f, -4.5f}, {1.0f, 0.95f, 0.9f}, 10.0f, 0.7f);
+        {
+            auto a = s.scene->createActor("Rim");
+            auto lc = a->addComponent<LightComponent>();
+            lc->setLightType(LightType::Sphere);
+            lc->setColor({1.0f, 0.95f, 0.9f});
+            lc->setIntensity(s.truthRimI);
+            lc->setRadius(0.7f);
+            a->getTransform()->setPosition({-0.5f, 3.5f, -4.5f});
+            s.rimLight = lc.get();
+        }
 
         // Multi-view product orbit — pulled back so full hero + pedestal are in frame.
         s.views = {
@@ -658,11 +709,12 @@ struct RenderSession {
         inv.applyCamera(renderer.getCamera(), viewIndex);
         renderer.setDenoiseMode(denoise);
         renderer.setRenderSeed(seed + static_cast<uint32_t>(viewIndex) * 9973u);
+        renderer.setEnvIntensityScale(inv.currentEnvScale);
         if (!bound) {
             renderer.setScene(inv.scene.get());
             bound = true;
         } else {
-            // Material + light edits only — never rebuild BLAS / reload env HDR.
+            // Material + light/env-scale edits only — never rebuild BLAS / reload HDR.
             const bool matsOk = renderer.updateRTMaterialParams();
             const bool lightsOk =
                 inv.needsLightUpdate() ? renderer.updateRTLightParams() : true;
@@ -703,11 +755,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "OHAO inverse_fit — multi-surface + multi-light IR (no ML)\n";
+    std::cout << "OHAO inverse_fit — B5 physical multi-param IR (no ML)\n";
     std::cout << "  θ dims=" << inv.thetaDims() << "  primary PBR[5]";
-    if (inv.fitPedestal && inv.pedestalMat) std::cout << " + pedestal albedo[3]";
-    if (inv.fitKeyLight && inv.keyLight) std::cout << " + key I";
-    if (inv.fitFillLight && inv.fillLight) std::cout << " + fill I";
+    if (inv.fitPedestal && inv.pedestalMat) std::cout << " + pedestal[3]";
+    if (inv.fitKeyLight && inv.keyLight) std::cout << " + key";
+    if (inv.fitFillLight && inv.fillLight) std::cout << " + fill";
+    if (inv.fitRimLight && inv.rimLight) std::cout << " + rim";
+    if (inv.fitEnvScale) std::cout << " + env";
     std::cout << "\n";
     std::cout << "  scene=" << cfg.scene << "  views=" << cfg.numViews
               << "  quality=" << cfg.quality.name << "\n";
@@ -815,27 +869,36 @@ int main(int argc, char** argv) {
     }
     if (inv.fitFillLight && inv.fillLight) {
         space.add("fill.I_scale", initV[off], 0.05, 1.2);
+        ++off;
+    }
+    if (inv.fitRimLight && inv.rimLight) {
+        space.add("rim.I_scale", initV[off], 0.05, 1.2);
+        ++off;
+    }
+    if (inv.fitEnvScale) {
+        space.add("env.scale", initV[off], 0.2, 1.8);
     }
 
     auto applyTheta = [&](const std::vector<double>& th) { inv.applyTheta(th); };
 
-    // FD loss on FIT budget (small res). Multi-view average when sizes match.
+    // Multi-view FIT: primary view weight 1.0, others 0.5 (hardens geometry cues
+    // without letting a weak view dominate FD noise).
     auto lossAt = [&](const std::vector<double>& th) -> double {
         applyTheta(th);
         double L = 0.0;
-        int used = 0;
+        double wSum = 0.0;
         for (int v = 0; v < nViews; ++v) {
             const ImageRGBA8 img =
                 session.render(v, cfg.fit, cfg.seed, DenoiseMode::None);
             if (img.empty() || targetsFit[static_cast<size_t>(v)].empty()) continue;
             const double m =
                 mseRGB(img, targetsFit[static_cast<size_t>(v)], cfg.maskX, cfg.maskYMin);
-            if (std::isfinite(m)) {
-                L += m;
-                ++used;
-            }
+            if (!std::isfinite(m)) continue;
+            const double w = (v == 0) ? 1.0 : 0.5;
+            L += w * m;
+            wSum += w;
         }
-        return used > 0 ? L / static_cast<double>(used) : 1e6;
+        return wSum > 0.0 ? L / wSum : 1e6;
     };
 
     std::cout << "SHOW init (wrong multi-param guess)...\n";
@@ -943,45 +1006,46 @@ int main(int argc, char** argv) {
         }
     };
 
-    // 3-stage schedule: primary PBR → pedestal → lights (key+fill)
-    std::vector<size_t> primaryIdx = {0, 1, 2, 3, 4};
+    // B5 schedule: recover global brightness first (env → lights), then materials.
+    // Fitting albedo under dark init env/lights forces materials to white.
+    std::vector<size_t> albedoIdx = {0, 1, 2};
+    std::vector<size_t> brdfIdx = {3, 4};
     std::vector<size_t> pedestalIdx;
-    if (inv.fitPedestal && inv.pedestalMat) {
-        pedestalIdx = {5, 6, 7};
-    }
+    if (inv.fitPedestal && inv.pedestalMat) pedestalIdx = {5, 6, 7};
     std::vector<size_t> lightIdx;
-    size_t lightBase = 5 + (pedestalIdx.empty() ? 0 : 3);
-    if (inv.fitKeyLight && inv.keyLight) {
-        lightIdx.push_back(lightBase++);
-    }
-    if (inv.fitFillLight && inv.fillLight) {
-        lightIdx.push_back(lightBase);
-    }
+    std::vector<size_t> envIdx;
+    size_t cursor = 5 + (pedestalIdx.empty() ? 0 : 3);
+    if (inv.fitKeyLight && inv.keyLight) lightIdx.push_back(cursor++);
+    if (inv.fitFillLight && inv.fillLight) lightIdx.push_back(cursor++);
+    if (inv.fitRimLight && inv.rimLight) lightIdx.push_back(cursor++);
+    if (inv.fitEnvScale) envIdx.push_back(cursor);
 
     std::ofstream traj(outDir / "trajectory.json");
     traj << "{\n  \"scene\": \"" << cfg.scene << "\",\n  \"quality\": \"" << cfg.quality.name
          << "\",\n  \"views\": " << nViews << ",\n  \"dims\": " << space.size()
-         << ",\n  \"fit_pedestal\": " << (inv.fitPedestal ? "true" : "false")
-         << ",\n  \"fit_key\": " << (inv.fitKeyLight ? "true" : "false")
-         << ",\n  \"fit_fill\": " << (inv.fitFillLight ? "true" : "false")
-         << ",\n  \"schedule\": \"primary_then_pedestal_then_lights\",\n  \"iters\": [\n";
+         << ",\n  \"schedule\": \"env_lights_albedo_brdf_pedestal\",\n  \"iters\": [\n";
     bool firstTraj = true;
 
     const auto fitStart = std::chrono::steady_clock::now();
-    const bool anyLight = !lightIdx.empty();
-    const int primaryIters =
-        anyLight || !pedestalIdx.empty() ? std::max(10, (cfg.iters * 5) / 10) : cfg.iters;
-    const int pedestalIters =
-        pedestalIdx.empty() ? 0 : std::max(4, (cfg.iters * 2) / 10);
-    const int lightIters = anyLight ? std::max(4, (cfg.iters * 3) / 10) : 0;
+    const int envIters = envIdx.empty() ? 0 : std::max(5, (cfg.iters * 15) / 100);
+    const int lightIters = lightIdx.empty() ? 0 : std::max(6, (cfg.iters * 2) / 10);
+    const int albedoIters = std::max(8, (cfg.iters * 25) / 100);
+    const int brdfIters = std::max(6, (cfg.iters * 2) / 10);
+    const int pedestalIters = pedestalIdx.empty() ? 0 : std::max(4, (cfg.iters * 15) / 100);
 
-    runStage("primary", primaryIdx, primaryIters, traj, firstTraj);
-    bestTheta = space.values;
-    bestLoss = loss;
-    runStage("pedestal", pedestalIdx, pedestalIters, traj, firstTraj);
+    runStage("env", envIdx, envIters, traj, firstTraj);
     bestTheta = space.values;
     bestLoss = loss;
     runStage("lights", lightIdx, lightIters, traj, firstTraj);
+    bestTheta = space.values;
+    bestLoss = loss;
+    runStage("albedo", albedoIdx, albedoIters, traj, firstTraj);
+    bestTheta = space.values;
+    bestLoss = loss;
+    runStage("brdf", brdfIdx, brdfIters, traj, firstTraj);
+    bestTheta = space.values;
+    bestLoss = loss;
+    runStage("pedestal", pedestalIdx, pedestalIters, traj, firstTraj);
     traj << "\n  ],\n  \"best_loss\": " << bestLoss << "\n}\n";
     traj.close();
     space.values = bestTheta;
@@ -1040,24 +1104,34 @@ int main(int argc, char** argv) {
                   << std::abs(space.values[6] - truthV[6]) << ","
                   << std::abs(space.values[7] - truthV[7]) << ")\n";
     }
-    const size_t lightOff = 5 + ((inv.fitPedestal && inv.pedestalMat) ? 3 : 0);
+    size_t lo = 5 + ((inv.fitPedestal && inv.pedestalMat) ? 3 : 0);
     double keyErr = 0.0;
-    double fillErr = 0.0;
-    if (inv.fitKeyLight && inv.keyLight && truthV.size() > lightOff) {
-        const double tI = truthV[lightOff] * InverseScene::kKeyIScale;
-        const double rI = space.values[lightOff] * InverseScene::kKeyIScale;
+    if (inv.fitKeyLight && inv.keyLight && truthV.size() > lo) {
+        const double tI = truthV[lo] * InverseScene::kKeyIScale;
+        const double rI = space.values[lo] * InverseScene::kKeyIScale;
         keyErr = std::abs(rI - tI);
         std::cout << "  key |Δ|I = " << keyErr << "  (truth " << tI << " recovered " << rI
                   << ")\n";
+        ++lo;
     }
-    if (inv.fitFillLight && inv.fillLight && truthV.size() > lightOff + 1) {
-        const double tI = truthV[lightOff + 1] * InverseScene::kKeyIScale;
-        const double rI = space.values[lightOff + 1] * InverseScene::kKeyIScale;
-        fillErr = std::abs(rI - tI);
-        std::cout << "  fill |Δ|I = " << fillErr << "  (truth " << tI << " recovered " << rI
-                  << ")\n";
+    if (inv.fitFillLight && inv.fillLight && truthV.size() > lo) {
+        const double tI = truthV[lo] * InverseScene::kKeyIScale;
+        const double rI = space.values[lo] * InverseScene::kKeyIScale;
+        std::cout << "  fill |Δ|I = " << std::abs(rI - tI) << "  (truth " << tI << " recovered "
+                  << rI << ")\n";
+        ++lo;
     }
-    (void)fillErr;
+    if (inv.fitRimLight && inv.rimLight && truthV.size() > lo) {
+        const double tI = truthV[lo] * InverseScene::kKeyIScale;
+        const double rI = space.values[lo] * InverseScene::kKeyIScale;
+        std::cout << "  rim |Δ|I = " << std::abs(rI - tI) << "  (truth " << tI << " recovered "
+                  << rI << ")\n";
+        ++lo;
+    }
+    if (inv.fitEnvScale && truthV.size() > lo) {
+        std::cout << "  env |Δ|scale = " << std::abs(space.values[lo] - truthV[lo])
+                  << "  (truth " << truthV[lo] << " recovered " << space.values[lo] << ")\n";
+    }
     std::cout << "  param L2 = " << paramErr << "  param RMSE = " << paramRmse << "\n";
     std::cout << "  final multi-view FIT loss = " << loss << "\n";
     std::cout << "  SHOW RMSE (primary) = " << showRmse << "\n";
@@ -1067,7 +1141,7 @@ int main(int argc, char** argv) {
     std::cout << "  wrote " << outDir << "/\n";
 
     // Composite selftest: image match + key recovery (fill is softer).
-    constexpr double kShowRmseTol = 0.12;
+    constexpr double kShowRmseTol = 0.14; // 12D draft FD; high stills use SHOW quality
     constexpr double kKeyITol = 8.0;
     constexpr double kParamRmseSoft = 0.50;
     const bool keyOk = !inv.fitKeyLight || keyErr < kKeyITol;

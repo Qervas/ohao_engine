@@ -1,7 +1,7 @@
-# Inverse rendering (Phase A → B4)
+# Inverse rendering (Phase A → B5)
 
 Recover scene parameters \(\theta\) so offline path tracing matches a target image.
-**Physical only** — no ML in the fit loop (yet). The renderer is also a **data factory** for future ML.
+**Physical only** — no ML in the fit loop. `--export-dataset` prepares data for future ML.
 
 ## Current θ (studio default)
 
@@ -9,99 +9,65 @@ Recover scene parameters \(\theta\) so offline path tracing matches a target ima
 |-------|------|---------|
 | Primary (ground) | 5 | albedo RGB + roughness + metallic |
 | Pedestal | 3 | albedo RGB |
-| Key light | 1 | intensity (normalized) |
-| Fill light | 1 | intensity (normalized) |
-| **Total** | **10** | staged FD |
+| Key / fill / rim | 3 | light intensities (normalized) |
+| Env | 1 | HDRI intensity scale |
+| **Total** | **12** | staged FD |
 
 **Cornell**: wall PBR[5] + key I[1].
 
-### Optimization schedule
+### Optimization schedule (B5)
 
-1. **primary** — ground/wall PBR  
-2. **pedestal** — second-surface albedo  
-3. **lights** — key + fill intensities  
+1. **env** — HDRI scale (global brightness first)  
+2. **lights** — key + fill + rim  
+3. **albedo** — primary RGB  
+4. **brdf** — roughness + metallic  
+5. **pedestal** — second-surface albedo  
 
-Joint material↔light FD is ill-conditioned under HDRI (albedo trades with brightness). Staging fixes that.
+Brightness (env/lights) before materials prevents albedo blowing to white under a dark init HDRI.
+
+Multi-view FIT: view 0 weight 1.0, other views 0.5.
 
 ## Dual budget
 
-| Mode | Role | Default (`--quality high`) | Denoise |
-|------|------|----------------------------|---------|
-| **FIT** | FD gradients / loss | 640×360 @ 128 spp | **Always none** (raw MC) |
-| **SHOW** | Human stills | **1920×1080 @ 1024 spp** | **OIDN** (grain-free) |
+| Mode | Role | Default (`high`) | Denoise |
+|------|------|------------------|---------|
+| **FIT** | FD / loss | 640×360 @ 128 spp | always none |
+| **SHOW** | Stills | 1920×1080 @ 1024 spp | OIDN |
 
 ## Run
 
 ```bash
-# Selftest (optimize + stills)
 ./build/inverse_fit --selftest --scene studio --quality draft
 ./build/inverse_fit --selftest --scene studio --quality high
 
-# Ablate blocks
-./build/inverse_fit --selftest --no-pedestal
+# Ablations
+./build/inverse_fit --selftest --no-pedestal --no-rim --no-env
 ./build/inverse_fit --selftest --no-light
-./build/inverse_fit --selftest --no-fill
 
-# ML data factory: N random (θ, FIT image) pairs
+# ML data factory
 ./build/inverse_fit --export-dataset 64 --quality draft --out-dir renders/inverse
-# → renders/inverse/dataset/00000.png … + meta.jsonl
 ```
-
-Outputs: `target_*`, `init_show`, `recovered_*`, `*relight*`, `trajectory.json`.
 
 ## How far to ML?
 
-| Phase | Status | What it unlocks |
-|-------|--------|-----------------|
-| **A** Dual budget + OIDN SHOW | ✅ | Clean demos, usable FD |
-| **B1–B2** Scalar full PBR | ✅ | Uniform metal/rough, not just color |
-| **B3** Multi-surface + key | ✅ | Product-scene inverse |
-| **B4** Multi-light + dataset export | ✅ (this) | Fill light; synthetic pairs for training |
-| **B5** More coverage (rim, env scale, multi-view FIT harden) | next | Stronger physical baseline |
-| **C1** Neural residual / prior on θ | **ML starts here** | Faster / more stable init; photo ambiguity |
-| **C2** Photo targets + domain gap | later | Real images, not self-rendered |
-| **C3** Map / SVBRDF / NeRF-style fields | research | Textures, geometry-from-images |
+| Phase | Status |
+|-------|--------|
+| A dual budget + OIDN SHOW | ✅ |
+| B1–B2 scalar full PBR | ✅ |
+| B3 multi-surface + key | ✅ |
+| B4 multi-light + dataset export | ✅ |
+| **B5 rim + env + harden FIT** | ✅ **you are here** |
+| C1 neural residual on θ | **next for ML** |
+| C2 photo targets | later |
+| C3 texture / SVBRDF fields | research |
 
-**Practical answer:** we can start **using ML any time after B4** — specifically once you have:
+**ML can start now** (synthetic pairs via `--export-dataset`).  
+**Recommended C1:** image → Δθ prior, refine with 5–15 physical FD iters (hybrid).
 
-1. A stable physical loop that can **label** data (we do: `--export-dataset`)  
-2. A decision on **what the network predicts** (θ residual? env? rough/metal prior?)  
-3. Training outside this binary (PyTorch/etc.), then a C++ load path or export
+## Limits
 
-**Recommended ML first slice (C1):**  
-Train a small MLP/CNN: `image features → Δθ` (or init θ), then **refine with the existing physical FD** for 5–15 iters. Hybrid = reliable + fast.
-
-**Not ready for ML yet if you mean:** end-to-end replace path tracing, or fit full textures from one photo without a prior — that needs C2–C3 and more data.
-
-Distance estimate:
-
-- **~1 more physical milestone (B5)** before ML is *worth* it for quality  
-- **ML can start in parallel now** using `--export-dataset`  
-- **Full photo-to-PBR product** is several milestones after C1  
-
-## Library
-
-```
-ohao/inverse/
-  image_loss.hpp    # masked MSE
-  param_space.hpp   # θ + FD gradient
-  optimizer.hpp     # Adam
-  quality.hpp       # draft/high/ultra/cinema
-  inverse_module.hpp
-```
-
-## Implementation notes
-
-- Env map loads **once**; light rebuild re-stamps `envMapTexIdx`.  
-- Materials: `updateRTMaterialParams()` (no BLAS thrash).  
-- Lights: `updateRTLightParams()`.  
-- Continuous metallic in path tracer (not binary 0.5 threshold).  
-- Best-θ per stage.
-
-## Limits (not yet)
-
-- Autodiff / adjoint path tracer  
-- **Textured** PBR maps  
-- Real photographs as targets  
-- HDRI / camera as free θ  
-- ML priors (C1 — data factory ready)  
+- Autodiff / adjoint PT  
+- Textured PBR maps  
+- Real photographs  
+- Camera as free θ  
+- ML priors (data factory ready)  
