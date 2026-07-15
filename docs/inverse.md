@@ -104,34 +104,39 @@ Multi-view FIT: view 0 weight 1.0, other views 0.5.
 | C2 real-photo domain gap | later (path ready via `--target-image`) |
 | C3 full-res texture / SVBRDF | research (`--map-ground` is the 2×2 pragmatic step) |
 
-## C1 hybrid (dataset → network → FD)
+## C1 hybrid (unified θ + generalization ladder)
 
 Physical FD alone often matches the **image** while **color θ is wrong** (albedo ↔ light ambiguity).  
-C1 trains a small CNN on synthetic pairs, then uses it as init:
+C1 trains a CNN on **synthetic pairs with a single 12D studio θ layout**, then seeds FD.
+
+### Not scene-locked — ladder of diversity
+
+| Level | Diversity | Typical use |
+|-------|-----------|-------------|
+| L0 | θ only, one preset | smoke |
+| L1 | multi-preset (same θ dims) | multi-hero |
+| **L2** | + random cam/lights/hero | **default general prior** |
+| L2e | + exposure jitter | photo-ish lite |
+
+All levels share the **same θ vector** → one network, not one model per scene.
 
 ```bash
-# 1) Data factory
-./tools/inverse_c1/export_dataset.sh 128 renders/inverse_c1_data
-
-# 2) Train
+# Recommended: L2 export + train
+QUALITY=draft LEVELS="L2" ./tools/inverse_c1/export_ladder.sh 128 renders/inverse_c1_ladder
 python3 tools/inverse_c1/train.py \
-  --data renders/inverse_c1_data/dataset \
-  --out tools/inverse_c1/checkpoints --epochs 40
+  --data renders/inverse_c1_ladder/L2/dataset \
+  --out tools/inverse_c1/checkpoints/L2 --epochs 80
 
-# 3) Hybrid selftest (NN prior → staged FD)
+# Hybrid selftest
 ./build/inverse_fit --selftest --preset lantern --quality draft \
-  --nn-model tools/inverse_c1/checkpoints/best.pt \
+  --nn-model tools/inverse_c1/checkpoints/L2/best.pt \
   --out-dir renders/inverse_c1_hybrid
+
+# Full ladder (export+train+eval)
+QUALITY=draft EPOCHS=60 ./tools/inverse_c1/run_ladder.sh 96
 ```
 
-Manual prior file:
-
-```bash
-python3 tools/inverse_c1/infer.py --model .../best.pt --image target.png --out theta.json
-./build/inverse_fit --selftest --theta-init theta.json --no-multi-start
-```
-
-Details: [`tools/inverse_c1/README.md`](../tools/inverse_c1/README.md).
+Details + measured RGB MAE table: [`tools/inverse_c1/README.md`](../tools/inverse_c1/README.md).
 
 ## Limits
 

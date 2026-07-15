@@ -120,6 +120,10 @@ struct FitConfig {
     std::string nnModelPath;    // if set, run infer.py on FIT target → theta init
     std::string nnPython{"python3"};
     bool nnSkipMultiStart{true};// when θ-init present, skip multi-start (prior is the start)
+    // C1 export generalization (L1–L4 ladder)
+    bool domainRand{false};           // L2: randomize cam/lights/hero per sample
+    bool exportExposureJitter{false}; // L4-lite: random exposure gain on export PNGs
+    int exportViewMode{0};            // 0=primary, 1=random named view, 2=all views
 };
 
 // Resolve missing optional showcase assets to tracked test_models copies.
@@ -325,6 +329,22 @@ CliArgs parseArgs(int argc, char** argv) {
             a.cfg.nnPython = need("--nn-python");
         } else if (s == "--nn-keep-multi-start") {
             a.cfg.nnSkipMultiStart = false;
+        } else if (s == "--domain-rand") {
+            a.cfg.domainRand = true;
+        } else if (s == "--export-exposure-jitter") {
+            a.cfg.exportExposureJitter = true;
+        } else if (s == "--export-views") {
+            const std::string v = need("--export-views");
+            if (v == "0" || v == "primary") {
+                a.cfg.exportViewMode = 0;
+            } else if (v == "random") {
+                a.cfg.exportViewMode = 1;
+            } else if (v == "all") {
+                a.cfg.exportViewMode = 2;
+            } else {
+                std::cerr << "--export-views expects primary|random|all\n";
+                std::exit(2);
+            }
         } else if (s == "--fit-width") {
             a.cfg.fit.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--fit-width"))));
         } else if (s == "--fit-height") {
@@ -376,6 +396,9 @@ CliArgs parseArgs(int argc, char** argv) {
                 << "  --nn-python BIN        python for --nn-model (default python3)\n"
                 << "  --nn-keep-multi-start   still probe multi-start after NN prior\n"
                 << "  --export-dataset N     ML data factory (θ, FIT image) pairs\n"
+                << "  --domain-rand          L2: randomize cam/lights/hero per export sample\n"
+                << "  --export-exposure-jitter  L4-lite exposure gain on export PNGs\n"
+                << "  --export-views primary|random|all\n"
                 << "  --no-pedestal --no-light --no-fill --no-rim --no-env\n"
                 << "  --quality draft|high|ultra|cinema  --views N\n";
             std::exit(0);
@@ -473,6 +496,14 @@ struct InverseScene {
     LightComponent* keyLight{nullptr};
     LightComponent* fillLight{nullptr};
     LightComponent* rimLight{nullptr};
+    Actor* keyLightActor{nullptr};
+    Actor* fillLightActor{nullptr};
+    Actor* rimLightActor{nullptr};
+    Actor* heroActor{nullptr};
+    glm::vec3 baseKeyPos{4.0f, 5.0f, 4.5f};
+    glm::vec3 baseFillPos{-3.5f, 3.0f, 3.5f};
+    glm::vec3 baseRimPos{-0.5f, 3.5f, -4.5f};
+    std::vector<CameraView> baseViews;
 
     std::string envPath;
     std::string relightEnvPath;
@@ -931,6 +962,7 @@ struct InverseScene {
                 glm::quat(glm::radians(glm::vec3(0.0f, 22.0f, 0.0f))));
             actor->getTransform()->setScale(glm::vec3(scale));
             actor->getTransform()->setPosition({0.0f, groundY + pedestalH + 0.002f, 0.0f});
+            s.heroActor = actor.get();
 
             auto mesh = actor->addComponent<MeshComponent>();
             mesh->setModel(model);
@@ -951,8 +983,9 @@ struct InverseScene {
             lc->setColor({1.0f, 0.97f, 0.92f});
             lc->setIntensity(s.truthKeyI);
             lc->setRadius(1.0f);
-            a->getTransform()->setPosition({4.0f, 5.0f, 4.5f});
+            a->getTransform()->setPosition(s.baseKeyPos);
             s.keyLight = lc.get();
+            s.keyLightActor = a.get();
         }
         {
             auto a = s.scene->createActor("Fill");
@@ -961,8 +994,9 @@ struct InverseScene {
             lc->setColor({0.75f, 0.85f, 1.0f});
             lc->setIntensity(s.truthFillI);
             lc->setRadius(1.4f);
-            a->getTransform()->setPosition({-3.5f, 3.0f, 3.5f});
+            a->getTransform()->setPosition(s.baseFillPos);
             s.fillLight = lc.get();
+            s.fillLightActor = a.get();
         }
         {
             auto a = s.scene->createActor("Rim");
@@ -971,8 +1005,9 @@ struct InverseScene {
             lc->setColor({1.0f, 0.95f, 0.9f});
             lc->setIntensity(s.truthRimI);
             lc->setRadius(0.7f);
-            a->getTransform()->setPosition({-0.5f, 3.5f, -4.5f});
+            a->getTransform()->setPosition(s.baseRimPos);
             s.rimLight = lc.get();
+            s.rimLightActor = a.get();
         }
 
         const float d = cfg.camDistMul;
@@ -981,7 +1016,59 @@ struct InverseScene {
             {"three_quarter", {5.0f * d, 1.55f * d, 5.6f * d}, -10.0f, -48.0f},
             {"opposite", {-4.8f * d, 1.35f * d, 5.4f * d}, -8.0f, -128.0f},
         };
+        s.baseViews = s.views;
         return s;
+    }
+
+    /// L2 domain randomization for export (θ dims unchanged).
+    int applyDomainRandomization(uint32_t& rng) {
+        auto u01 = [&]() -> float {
+            rng = rng * 1664525u + 1013904223u;
+            return static_cast<float>(rng >> 8) / static_cast<float>(1u << 24);
+        };
+        auto n11 = [&]() -> float { return u01() * 2.0f - 1.0f; };
+
+        auto jitterPos = [&](Actor* a, const glm::vec3& base, float amp) {
+            if (!a) return;
+            a->getTransform()->setPosition(
+                base + glm::vec3(n11() * amp, n11() * amp * 0.45f, n11() * amp));
+        };
+        jitterPos(keyLightActor, baseKeyPos, 1.25f);
+        jitterPos(fillLightActor, baseFillPos, 1.05f);
+        jitterPos(rimLightActor, baseRimPos, 1.05f);
+
+        if (heroActor) {
+            const float yaw = 8.0f + u01() * 55.0f;
+            heroActor->getTransform()->setRotation(
+                glm::quat(glm::radians(glm::vec3(0.0f, yaw, 0.0f))));
+        }
+
+        if (baseViews.empty()) baseViews = views;
+        const float distScale = 1.0f + n11() * 0.14f;
+        const float yaw = -90.0f + n11() * 58.0f;
+        const float pitch = -9.0f + n11() * 7.0f;
+        const float elev = 1.25f + n11() * 0.4f;
+        const float dist = 6.9f * distScale;
+        const float yawRad = glm::radians(yaw + 90.0f);
+        CameraView orbit{"orbit",
+                         {std::cos(yawRad) * dist, elev, std::sin(yawRad) * dist},
+                         pitch,
+                         yaw};
+        views.clear();
+        views.push_back(orbit);
+        for (const auto& b : baseViews) views.push_back(b);
+        return 0;
+    }
+
+    void resetDomainDefaults() {
+        if (keyLightActor) keyLightActor->getTransform()->setPosition(baseKeyPos);
+        if (fillLightActor) fillLightActor->getTransform()->setPosition(baseFillPos);
+        if (rimLightActor) rimLightActor->getTransform()->setPosition(baseRimPos);
+        if (heroActor) {
+            heroActor->getTransform()->setRotation(
+                glm::quat(glm::radians(glm::vec3(0.0f, 22.0f, 0.0f))));
+        }
+        if (!baseViews.empty()) views = baseViews;
     }
 };
 
@@ -1231,11 +1318,15 @@ int main(int argc, char** argv) {
             std::ofstream cfgOut(dataDir / "config.json");
             cfgOut << "{\n"
                    << "  \"format\": \"ohao_inverse_c1\",\n"
-                   << "  \"version\": 1,\n"
+                   << "  \"version\": 2,\n"
                    << "  \"dims\": " << inv.thetaDims() << ",\n"
                    << "  \"preset\": \"" << cfg.preset << "\",\n"
                    << "  \"scene\": \"" << cfg.scene << "\",\n"
                    << "  \"map_ground\": " << (inv.mapGround ? "true" : "false") << ",\n"
+                   << "  \"domain_rand\": " << (cfg.domainRand ? "true" : "false") << ",\n"
+                   << "  \"exposure_jitter\": " << (cfg.exportExposureJitter ? "true" : "false")
+                   << ",\n"
+                   << "  \"export_view_mode\": " << cfg.exportViewMode << ",\n"
                    << "  \"fit\": {\"width\": " << cfg.fit.width << ", \"height\": " << cfg.fit.height
                    << ", \"spp\": " << cfg.fit.spp << "},\n"
                    << "  \"names\": [";
@@ -1250,32 +1341,78 @@ int main(int argc, char** argv) {
         meta << "{\"type\":\"header\",\"dims\":" << inv.thetaDims()
              << ",\"fit\":[" << cfg.fit.width << "," << cfg.fit.height << "," << cfg.fit.spp
              << "],\"scene\":\"" << cfg.scene << "\",\"preset\":\"" << cfg.preset
-             << "\",\"map_ground\":" << (inv.mapGround ? "true" : "false") << "}\n";
+             << "\",\"map_ground\":" << (inv.mapGround ? "true" : "false")
+             << ",\"domain_rand\":" << (cfg.domainRand ? "true" : "false")
+             << ",\"version\":2}\n";
         std::cout << "Exporting " << cfg.exportDataset << " (θ, image) pairs to " << dataDir
-                  << " (C1 data factory)...\n";
+                  << " (C1 factory"
+                  << (cfg.domainRand ? ", domain-rand" : "")
+                  << (cfg.exportExposureJitter ? ", exp-jitter" : "") << ")...\n";
+
+        int written = 0;
         for (int i = 0; i < cfg.exportDataset; ++i) {
-            const uint32_t rng = cfg.seed + static_cast<uint32_t>(i) * 2654435761u;
+            uint32_t rng = cfg.seed + static_cast<uint32_t>(i) * 2654435761u;
             const auto th = inv.sampleRandomTheta(rng);
             inv.applyTheta(th);
-            const ImageRGBA8 img =
-                session.render(0, cfg.fit, cfg.seed + static_cast<uint32_t>(i), DenoiseMode::None);
-            char name[32];
-            std::snprintf(name, sizeof(name), "%05d.png", i);
-            const auto path = dataDir / name;
-            savePNG(img, path);
-            meta << "{\"i\":" << i << ",\"file\":\"" << name << "\",\"theta\":[";
-            for (size_t k = 0; k < th.size(); ++k) {
-                if (k) meta << ",";
-                meta << th[k];
+
+            int viewIdx = 0;
+            std::string viewName = "front";
+            if (cfg.domainRand && studio) {
+                viewIdx = inv.applyDomainRandomization(rng);
+                viewName = inv.views.empty() ? "orbit" : inv.views[0].name;
+                session.bound = false; // transforms changed — full rebind
+            } else if (cfg.exportViewMode == 1 && !inv.views.empty()) {
+                viewIdx = static_cast<int>(rng % static_cast<uint32_t>(inv.views.size()));
+                viewName = inv.views[static_cast<size_t>(viewIdx)].name;
             }
-            meta << "]}\n";
+
+            auto emitSample = [&](int vIdx, const std::string& vName, int sampleId) {
+                ImageRGBA8 img =
+                    session.render(vIdx, cfg.fit, cfg.seed + static_cast<uint32_t>(sampleId),
+                                   DenoiseMode::None);
+                float expGain = 1.0f;
+                if (cfg.exportExposureJitter) {
+                    // Mild LDR exposure domain gap (C2/L4-lite)
+                    uint32_t er = cfg.seed + static_cast<uint32_t>(sampleId) * 97u + 13u;
+                    er = er * 1664525u + 1013904223u;
+                    const float u = static_cast<float>(er >> 8) / static_cast<float>(1u << 24);
+                    expGain = 0.75f + u * 0.55f; // [0.75, 1.30]
+                    img = applyExposure(img, expGain);
+                }
+                char name[40];
+                std::snprintf(name, sizeof(name), "%05d.png", sampleId);
+                savePNG(img, dataDir / name);
+                meta << "{\"i\":" << sampleId << ",\"file\":\"" << name << "\",\"preset\":\""
+                     << cfg.preset << "\",\"scene\":\"" << cfg.scene << "\",\"view\":\"" << vName
+                     << "\",\"domain_rand\":" << (cfg.domainRand ? "true" : "false")
+                     << ",\"exposure\":" << expGain << ",\"theta\":[";
+                for (size_t k = 0; k < th.size(); ++k) {
+                    if (k) meta << ",";
+                    meta << th[k];
+                }
+                meta << "]}\n";
+            };
+
+            if (cfg.exportViewMode == 2 && !inv.views.empty() && !cfg.domainRand) {
+                for (int v = 0; v < static_cast<int>(inv.views.size()); ++v) {
+                    emitSample(v, inv.views[static_cast<size_t>(v)].name, written);
+                    ++written;
+                }
+            } else {
+                emitSample(viewIdx, viewName, written);
+                ++written;
+            }
+
+            if (cfg.domainRand && studio) inv.resetDomainDefaults();
+
             if ((i + 1) % 10 == 0 || i + 1 == cfg.exportDataset) {
-                std::cout << "  " << (i + 1) << "/" << cfg.exportDataset << "\n";
+                std::cout << "  " << (i + 1) << "/" << cfg.exportDataset << " (files=" << written
+                          << ")\n";
             }
         }
         meta.close();
-        std::cout << "Dataset export done → " << dataDir
-                  << "\n  Train: python3 tools/inverse_c1/train.py --data " << dataDir << "\n";
+        std::cout << "Dataset export done → " << dataDir << " (" << written << " images)\n"
+                  << "  Train: python3 tools/inverse_c1/train.py --data " << dataDir << "\n";
         inv.scene.reset();
         return 0;
     }

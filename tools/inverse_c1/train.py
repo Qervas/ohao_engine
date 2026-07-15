@@ -56,10 +56,10 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-frac", type=float, default=0.15)
-    ap.add_argument("--width", type=int, default=96)
-    ap.add_argument("--height", type=int, default=54)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--width", type=int, default=128, help="net input width (quality: 128)")
+    ap.add_argument("--height", type=int, default=72, help="net input height (quality: 72)")
     args = ap.parse_args()
 
     data_dir = args.data
