@@ -37,16 +37,36 @@ Multi-view FIT: view 0 weight 1.0, other views 0.5.
 ## Run
 
 ```bash
-./build/inverse_fit --selftest --scene studio --quality draft
-./build/inverse_fit --selftest --scene studio --quality high
+./build/inverse_fit --selftest --preset lantern --quality draft
+./build/inverse_fit --selftest --preset helmet --quality draft
+./build/inverse_fit --selftest --preset spheres --quality draft   # tricky metal chart
+./build/inverse_fit --selftest --preset bottle --quality draft    # glass-ish
+./build/inverse_fit --selftest --preset outdoor --quality draft   # outdoor HDRI
+./build/inverse_fit --selftest --preset mirror --quality draft    # mirror floor
 
 # Ablations
 ./build/inverse_fit --selftest --no-pedestal --no-rim --no-env
-./build/inverse_fit --selftest --no-light
 
 # ML data factory
 ./build/inverse_fit --export-dataset 64 --quality draft --out-dir renders/inverse
 ```
+
+### Presets
+
+| `--preset` | Hero | Notes |
+|------------|------|--------|
+| `lantern` | Lantern | Baseline product studio |
+| `helmet` | DamagedHelmet | Textured metal hero |
+| `bottle` | WaterBottle | Glass/plastic — **tricky** |
+| `spheres` | MetalRoughSpheres | Metal/rough chart — **tricky** |
+| `toycar` | ToyCar | Dense mesh — **tricky** |
+| `boombox` | BoomBox | Mixed materials |
+| `outdoor` | Lantern + outdoor HDRI | Strong directional — **tricky** |
+| `mirror` | Lantern + mirror floor | High metal floor — **tricky** |
+| `chess` | ABeautifulGame | Large set — **tricky** |
+| `cornell` | Cornell box | Fast regression |
+
+Polish: hybrid MSE+MAE loss, relative FD eps, per-stage LR, final **refine** pass (albedo+env+key).
 
 ## How far to ML?
 

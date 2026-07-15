@@ -6,12 +6,13 @@ All notable changes to OHAO Engine are documented here. Newest first.
 
 Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
-### Inverse rendering (Phase A–B5 — physical, no ML)
+### Inverse rendering (Phase A–B5 polish — physical, no ML)
 
-- **`inverse_fit`**: multi-surface PBR + **key/fill/rim** lights + **HDRI env scale**.
-- Staged FD: **albedo → brdf → pedestal → lights → env** (better primary recovery).
-- Multi-view FIT with primary-weighted loss; env intensity via light-buffer header (no HDR reload).
-- **`--export-dataset N`**: `(θ, image)` pairs for future ML; roadmap in `docs/inverse.md`.
+- **`inverse_fit`**: multi-surface PBR + key/fill/rim + HDRI env scale.
+- **Polish**: hybrid MSE+MAE loss, relative FD ε, per-stage LR, refine pass (albedo+env+key).
+- **Schedule**: env → lights → albedo → brdf → pedestal → refine.
+- **`--preset`**: lantern, helmet, bottle, spheres, toycar, boombox, outdoor, mirror, chess, cornell.
+- **`--export-dataset N`**: ML data factory; roadmap in `docs/inverse.md`.
 
 ### Refactored to C++20
 

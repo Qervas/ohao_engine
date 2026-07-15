@@ -64,6 +64,46 @@ struct ImageRGBA8 {
     return sum / static_cast<double>(count * 3);
 }
 
+/// Mean absolute error over RGB in [0,1] (same crop as mseRGB).
+[[nodiscard]] inline double maeRGB(const ImageRGBA8& a, const ImageRGBA8& b,
+                                   double xMaxFrac = 1.0, double yMinFrac = 0.0) {
+    if (a.width != b.width || a.height != b.height || a.rgba.size() != b.rgba.size()) {
+        return std::numeric_limits<double>::infinity();
+    }
+    if (a.pixelCount() == 0) return 0.0;
+    const uint32_t xLim =
+        (xMaxFrac >= 1.0) ? a.width
+                          : static_cast<uint32_t>(std::ceil(xMaxFrac * static_cast<double>(a.width)));
+    const uint32_t y0 =
+        (yMinFrac <= 0.0)
+            ? 0u
+            : static_cast<uint32_t>(std::floor(yMinFrac * static_cast<double>(a.height)));
+    double sum = 0.0;
+    size_t count = 0;
+    for (uint32_t y = y0; y < a.height; ++y) {
+        for (uint32_t x = 0; x < xLim; ++x) {
+            const size_t o = (static_cast<size_t>(y) * a.width + x) * 4;
+            sum += std::abs(static_cast<double>(a.rgba[o + 0]) - b.rgba[o + 0]) / 255.0;
+            sum += std::abs(static_cast<double>(a.rgba[o + 1]) - b.rgba[o + 1]) / 255.0;
+            sum += std::abs(static_cast<double>(a.rgba[o + 2]) - b.rgba[o + 2]) / 255.0;
+            ++count;
+        }
+    }
+    if (count == 0) return 0.0;
+    return sum / static_cast<double>(count * 3);
+}
+
+/// Hybrid loss: MSE + w * MAE (more robust FD under MC noise).
+[[nodiscard]] inline double hybridRGB(const ImageRGBA8& a, const ImageRGBA8& b,
+                                      double xMaxFrac = 1.0, double yMinFrac = 0.0,
+                                      double maeWeight = 0.35) {
+    const double mse = mseRGB(a, b, xMaxFrac, yMinFrac);
+    const double mae = maeRGB(a, b, xMaxFrac, yMinFrac);
+    if (!std::isfinite(mse)) return mse;
+    if (!std::isfinite(mae)) return mse;
+    return mse + maeWeight * mae;
+}
+
 /// Relative L2 on RGB in [0,1].
 [[nodiscard]] inline double rmseRGB(const ImageRGBA8& a, const ImageRGBA8& b) {
     return std::sqrt(mseRGB(a, b));
