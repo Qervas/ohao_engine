@@ -1,5 +1,5 @@
 {
-  "checkpoint": "tools/inverse_c1/checkpoints/best.pt",
+  "checkpoint": "tools/inverse_c1/checkpoints/L2/best.pt",
   "dims": 12,
   "names": [
     "primary.R",
@@ -16,11 +16,11 @@
     "env.scale"
   ],
   "image_size": [
-    96,
-    54
+    128,
+    72
   ],
-  "val_loss": 0.180630162358284,
-  "epoch": 55,
+  "val_loss": 0.15776191817389595,
+  "epoch": 60,
   "preset": "lantern",
   "format": "ohao_inverse_c1"
 }

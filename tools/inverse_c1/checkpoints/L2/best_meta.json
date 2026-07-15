@@ -19,8 +19,8 @@
     128,
     72
   ],
-  "val_loss": 0.15776191817389595,
-  "epoch": 60,
+  "val_loss": 0.14072456856568655,
+  "epoch": 42,
   "preset": "lantern",
   "format": "ohao_inverse_c1"
 }
