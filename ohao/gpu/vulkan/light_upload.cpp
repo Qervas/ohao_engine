@@ -142,6 +142,14 @@ void VulkanRenderer::uploadDeferredTextures() {
 
 }
 
+bool VulkanRenderer::updateRTLightParams() {
+    if (!m_scene || !m_device) return false;
+    // Reuse full light-buffer path: it skips env HDR reload when path is cached
+    // and re-stamps envMapTexIdx into the new light header.
+    uploadLightBuffer();
+    return m_rtLightBuffer != VK_NULL_HANDLE;
+}
+
 void VulkanRenderer::uploadLightBuffer() {
     // Build light buffer from scene LightComponents
     {
@@ -225,9 +233,14 @@ void VulkanRenderer::uploadLightBuffer() {
                     gl.extra = glm::vec4(0);
                     gl.extra2 = glm::vec4(0);
                     gpuLights.push_back(gl);
-                    std::cout << "[RT] Emissive mesh light: " << actor->getName()
-                              << " color=(" << emColor.r << "," << emColor.g << "," << emColor.b
-                              << ") intensity=" << intensity << std::endl;
+                    // Avoid spamming inverse_fit (called every FD eval).
+                    static bool s_loggedEmissive = false;
+                    if (!s_loggedEmissive) {
+                        std::cout << "[RT] Emissive mesh light: " << actor->getName()
+                                  << " color=(" << emColor.r << "," << emColor.g << ","
+                                  << emColor.b << ") intensity=" << intensity << std::endl;
+                        s_loggedEmissive = true;
+                    }
                 }
                 break;  // one light per actor
             }
@@ -517,7 +530,11 @@ void VulkanRenderer::uploadLightBuffer() {
                 renderer.setLightBuffer(m_rtLightBuffer, count);
             });
 
-            std::cout << "[RT] Light buffer: " << count << " lights" << std::endl;
+            static uint32_t s_lastLoggedCount = ~0u;
+            if (count != s_lastLoggedCount) {
+                std::cout << "[RT] Light buffer: " << count << " lights" << std::endl;
+                s_lastLoggedCount = count;
+            }
         }
     }
 

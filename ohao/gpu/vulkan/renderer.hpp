@@ -269,6 +269,10 @@ public:
     /// Returns false if RT materials are not yet uploaded (call updateSceneBuffers first).
     [[nodiscard]] bool updateRTMaterialParams();
 
+    /// Inverse / live edit: rebuild light SSBO from scene lights without
+    /// reloading env HDR or touching BLAS (env tex idx is re-stamped).
+    [[nodiscard]] bool updateRTLightParams();
+
     // Check if scene has renderable meshes
     [[nodiscard]] bool hasSceneMeshes() const { return m_hasSceneMeshes; }
 
