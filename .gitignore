@@ -87,3 +87,7 @@ CLAUDE.md
 external/DLSS/
 tools/dlss_probe/dlss_probe
 tools/dlss_probe/ngx_appdata/
+
+# C1 inverse ML local data / checkpoints (regenerate via export+train)
+renders/inverse_c1*/
+tools/inverse_c1/checkpoints/*.pt

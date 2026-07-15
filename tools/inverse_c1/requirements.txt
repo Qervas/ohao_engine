@@ -1,0 +1,4 @@
+# C1 inverse θ-prior trainer (CPU or CUDA)
+torch>=2.0
+numpy>=1.24
+Pillow>=10.0
