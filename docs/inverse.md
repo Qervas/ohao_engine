@@ -1,78 +1,83 @@
-# Inverse rendering (Phase A → B3)
+# Inverse rendering (Phase A → B4)
 
 Recover scene parameters \(\theta\) so offline path tracing matches a target image.
+**Physical only** — no ML in the fit loop (yet). The renderer is also a **data factory** for future ML.
 
-**Studio θ (default)**:
-- ground scalar PBR: albedo RGB + roughness + metallic  
-- pedestal albedo RGB (second surface)  
-- key light intensity  
+## Current θ (studio default)
 
-**Cornell θ**: left-wall PBR + key intensity.
+| Block | Dims | Content |
+|-------|------|---------|
+| Primary (ground) | 5 | albedo RGB + roughness + metallic |
+| Pedestal | 3 | albedo RGB |
+| Key light | 1 | intensity (normalized) |
+| Fill light | 1 | intensity (normalized) |
+| **Total** | **10** | staged FD |
 
-**Schedule**: staged FD — **materials first**, then **key light** (joint albedo↔light is ill-conditioned under HDRI).
+**Cornell**: wall PBR[5] + key I[1].
+
+### Optimization schedule
+
+1. **primary** — ground/wall PBR  
+2. **pedestal** — second-surface albedo  
+3. **lights** — key + fill intensities  
+
+Joint material↔light FD is ill-conditioned under HDRI (albedo trades with brightness). Staging fixes that.
 
 ## Dual budget
 
 | Mode | Role | Default (`--quality high`) | Denoise |
 |------|------|----------------------------|---------|
-| **FIT** | FD gradients / loss only | 640×360 @ 128 spp | **Always none** (raw MC — white noise is a feature for inverse) |
-| **SHOW** | Human-facing stills | **1920×1080 @ 1024 spp** | **OIDN by default** (grain-free) |
-
-You never have to stare at FIT frames. Showcase files are SHOW quality and grain-free.
-
-```bash
---show-denoise=oidn   # default: clean stills
---show-denoise=none   # raw SHOW (if you want noise in docs)
-```
-
-## Scenes
-
-| `--scene` | Content | Optimizes |
-|-----------|---------|-----------|
-| **`studio` (default)** | Product shot: Lantern + pedestal + cyclorama + HDRI + lights | Ground PBR[5] + pedestal albedo[3] + key I[1] |
-| `cornell` | Classic box | Left wall PBR[5] + key I[1] |
-
-Flags: `--no-pedestal`, `--no-light`. Override hero with `--model PATH`. Multi-view SHOW; FIT uses dual-res draft budget.
+| **FIT** | FD gradients / loss | 640×360 @ 128 spp | **Always none** (raw MC) |
+| **SHOW** | Human stills | **1920×1080 @ 1024 spp** | **OIDN** (grain-free) |
 
 ## Run
 
 ```bash
-# Default: studio helmet, multi-view, OIDN SHOW
+# Selftest (optimize + stills)
 ./build/inverse_fit --selftest --scene studio --quality draft
 ./build/inverse_fit --selftest --scene studio --quality high
 
-# Legacy box
-./build/inverse_fit --selftest --scene cornell --quality draft
+# Ablate blocks
+./build/inverse_fit --selftest --no-pedestal
+./build/inverse_fit --selftest --no-light
+./build/inverse_fit --selftest --no-fill
 
-./build/inverse_fit --selftest --quality ultra    # 1080p @ 2048 spp stills
-./build/inverse_fit --selftest --quality cinema   # 4K stills
+# ML data factory: N random (θ, FIT image) pairs
+./build/inverse_fit --export-dataset 64 --quality draft --out-dir renders/inverse
+# → renders/inverse/dataset/00000.png … + meta.jsonl
 ```
 
-Outputs under `renders/inverse/`:
+Outputs: `target_*`, `init_show`, `recovered_*`, `*relight*`, `trajectory.json`.
 
-- `target_show.png` / `target_<view>.png` — ground-truth stills  
-- `init_show.png` — wrong initial parameters  
-- `recovered_show.png` / `recovered_<view>.png` — after optimization  
-- `recovered_relight.png` / `truth_relight.png` — same materials, different lighting  
-- `trajectory.json` — loss / θ per iter  
+## How far to ML?
 
-## Pipeline
+| Phase | Status | What it unlocks |
+|-------|--------|-----------------|
+| **A** Dual budget + OIDN SHOW | ✅ | Clean demos, usable FD |
+| **B1–B2** Scalar full PBR | ✅ | Uniform metal/rough, not just color |
+| **B3** Multi-surface + key | ✅ | Product-scene inverse |
+| **B4** Multi-light + dataset export | ✅ (this) | Fill light; synthetic pairs for training |
+| **B5** More coverage (rim, env scale, multi-view FIT harden) | next | Stronger physical baseline |
+| **C1** Neural residual / prior on θ | **ML starts here** | Faster / more stable init; photo ambiguity |
+| **C2** Photo targets + domain gap | later | Real images, not self-rendered |
+| **C3** Map / SVBRDF / NeRF-style fields | research | Textures, geometry-from-images |
 
-1. Build **studio** (Lantern product shot + HDRI) or cornell.  
-2. Multi-view SHOW + FIT targets under truth PBR.  
-3. Finite-difference + Adam on **multi-view masked MSE** (floor / wall band).  
-4. SHOW recovered multi-view (OIDN).  
-5. Relight: boost key light, re-render recovered vs truth.  
+**Practical answer:** we can start **using ML any time after B4** — specifically once you have:
 
-Selftest (composite): SHOW RMSE + key intensity error + soft param RMSE.
+1. A stable physical loop that can **label** data (we do: `--export-dataset`)  
+2. A decision on **what the network predicts** (θ residual? env? rough/metal prior?)  
+3. Training outside this binary (PyTorch/etc.), then a C++ load path or export
 
-**No ML** in this path — pure physical image match. ML priors are a later phase.
+**Recommended ML first slice (C1):**  
+Train a small MLP/CNN: `image features → Δθ` (or init θ), then **refine with the existing physical FD** for 5–15 iters. Hybrid = reliable + fast.
 
-**FIT never denoises** (white noise is a feature for inverse/FD). **SHOW uses OIDN** for grain-free stills.
+**Not ready for ML yet if you mean:** end-to-end replace path tracing, or fit full textures from one photo without a prior — that needs C2–C3 and more data.
 
-## Seed
+Distance estimate:
 
-`--seed N` sets the path tracer sample base after each accumulation reset so FD probes are stable.
+- **~1 more physical milestone (B5)** before ML is *worth* it for quality  
+- **ML can start in parallel now** using `--export-dataset`  
+- **Full photo-to-PBR product** is several milestones after C1  
 
 ## Library
 
@@ -87,14 +92,16 @@ ohao/inverse/
 
 ## Implementation notes
 
-- Env map loads **once**; later light-buffer rebuilds re-stamp `envMapTexIdx` (skip-reload).  
-- Material θ updates use `updateRTMaterialParams()` (no BLAS rebuild) so multi-iter FD does not OOM.  
-- Optimizer keeps **best-θ** by FIT loss (Adam can overshoot after the min).  
+- Env map loads **once**; light rebuild re-stamps `envMapTexIdx`.  
+- Materials: `updateRTMaterialParams()` (no BLAS thrash).  
+- Lights: `updateRTLightParams()`.  
+- Continuous metallic in path tracer (not binary 0.5 threshold).  
+- Best-θ per stage.
 
 ## Limits (not yet)
 
 - Autodiff / adjoint path tracer  
-- Multi-surface PBR / lighting / HDRI fit  
-- **Textured** PBR maps (only uniform scalars)  
+- **Textured** PBR maps  
 - Real photographs as targets  
-- ML priors (deferred — physical IR first)  
+- HDRI / camera as free θ  
+- ML priors (C1 — data factory ready)  

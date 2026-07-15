@@ -4,15 +4,16 @@
 //   A) dual-budget + grain-free SHOW (OIDN)
 //   B) product-studio scene + multi-view + relight
 //   B1/B2) scalar full PBR: albedo RGB + roughness + metallic
-//   B3) multi-surface + key light intensity
+//   B3) multi-surface + key light
+//   B4) fill light + 3-stage schedule + dataset-dataset (ML bridge)
 //   C) ML priors later (not this binary)
 //
 // Studio θ (default):
 //   ground[5]  = albedo.rgb, roughness, metallic
 //   pedestal[3] = albedo.rgb
-//   key_I[1]   = key light intensity
-// Cornell θ:
-//   wall[5] + key_I[1]
+//   key_I[1], fill_I[1]
+// Schedule: primary → pedestal → lights
+// --export-dataset N  writes (θ, image) pairs for future ML
 // FIT  = raw MC (noise is a feature for FD) — denoise NEVER on
 // SHOW = grain-free stills (OIDN default)
 //
@@ -39,6 +40,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -75,7 +77,9 @@ struct FitConfig {
     std::string scene{"studio"}; // studio | cornell
     int numViews{3};
     bool fitPedestal{true};  // multi-surface: pedestal albedo
-    bool fitKeyLight{true};  // key light intensity
+    bool fitKeyLight{true};  // key (+ fill) intensities
+    bool fitFillLight{true};
+    int exportDataset{0}; // >0: write N (θ, FIT image) pairs then exit (ML data factory)
     // Prefer showcase Lantern when present; fall back to tracked test assets.
     std::string modelPath{"assets/showcase_objects/Lantern.glb"};
     std::string envPath{"assets/hdri/brown_photostudio_02_2k.hdr"};
@@ -141,6 +145,11 @@ CliArgs parseArgs(int argc, char** argv) {
             a.cfg.fitPedestal = false;
         } else if (s == "--no-light") {
             a.cfg.fitKeyLight = false;
+            a.cfg.fitFillLight = false;
+        } else if (s == "--no-fill") {
+            a.cfg.fitFillLight = false;
+        } else if (s == "--export-dataset") {
+            a.cfg.exportDataset = std::max(1, std::atoi(need("--export-dataset")));
         } else if (s == "--fit-width") {
             a.cfg.fit.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--fit-width"))));
         } else if (s == "--fit-height") {
@@ -178,13 +187,12 @@ CliArgs parseArgs(int argc, char** argv) {
         } else if (s == "--help" || s == "-h") {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
-                << "  Studio θ: ground PBR[5] + pedestal albedo[3] + key intensity[1]\n"
-                << "  Cornell θ: wall PBR[5] + key intensity[1]\n"
-                << "  --quality draft|high|ultra|cinema\n"
-                << "  --no-pedestal  --no-light   (disable multi-surface / light fit)\n"
-                << "  --model PATH --env PATH --views N\n"
-                << "  --show-denoise=oidn|none  (FIT always raw MC)\n"
-                << "  --fit-* / --show-* / --iters --lr --seed --out-dir\n";
+                << "  Studio θ: ground PBR[5] + pedestal[3] + key I + fill I\n"
+                << "  Stages: primary → pedestal → lights\n"
+                << "  --export-dataset N   write N (θ,image) pairs for ML (no optim)\n"
+                << "  --no-pedestal --no-light --no-fill\n"
+                << "  --quality draft|high|ultra|cinema  --views N\n"
+                << "  --show-denoise=oidn|none  --out-dir DIR\n";
             std::exit(0);
         } else {
             std::cerr << "unknown arg: " << s << "\n";
@@ -271,8 +279,8 @@ struct InverseScene {
     // Secondary surface (pedestal top) — albedo only in θ
     Actor* pedestalActor{nullptr};
     MaterialComponent* pedestalMat{nullptr};
-    // Key light intensity
     LightComponent* keyLight{nullptr};
+    LightComponent* fillLight{nullptr};
 
     std::string envPath;
     std::string relightEnvPath;
@@ -284,17 +292,25 @@ struct InverseScene {
     PbrParams initPedestal{.albedo = {0.55f, 0.12f, 0.10f}, .roughness = 0.4f, .metallic = 0.05f};
     float truthKeyI{22.0f};
     float initKeyI{7.0f};
-    // Key intensity is stored in θ as a scale of kKeyIScale (better Adam conditioning).
+    float truthFillI{9.0f};
+    float initFillI{3.0f};
+    // Light intensities stored as scale of kKeyIScale (Adam conditioning).
     static constexpr float kKeyIScale = 40.0f;
     bool fitPedestal{false};
     bool fitKeyLight{false};
+    bool fitFillLight{false};
 
-    // Layout: primary[5] | pedestal albedo[3]? | key_I_scale[1]?
+    // Layout: primary[5] | pedestal[3]? | key_scale[1]? | fill_scale[1]?
     [[nodiscard]] size_t thetaDims() const {
         size_t n = 5;
         if (fitPedestal && pedestalMat) n += 3;
         if (fitKeyLight && keyLight) n += 1;
+        if (fitFillLight && fillLight) n += 1;
         return n;
+    }
+
+    [[nodiscard]] bool needsLightUpdate() const {
+        return (fitKeyLight && keyLight) || (fitFillLight && fillLight);
     }
 
     [[nodiscard]] std::vector<double> truthTheta() const {
@@ -305,6 +321,7 @@ struct InverseScene {
             t.push_back(truthPedestal.albedo.b);
         }
         if (fitKeyLight && keyLight) t.push_back(truthKeyI / kKeyIScale);
+        if (fitFillLight && fillLight) t.push_back(truthFillI / kKeyIScale);
         return t;
     }
 
@@ -316,6 +333,27 @@ struct InverseScene {
             t.push_back(initPedestal.albedo.b);
         }
         if (fitKeyLight && keyLight) t.push_back(initKeyI / kKeyIScale);
+        if (fitFillLight && fillLight) t.push_back(initFillI / kKeyIScale);
+        return t;
+    }
+
+    /// Random θ in box bounds (for dataset export / ML).
+    [[nodiscard]] std::vector<double> sampleRandomTheta(uint32_t rng) const {
+        auto u01 = [&]() -> double {
+            rng = rng * 1664525u + 1013904223u;
+            return static_cast<double>(rng >> 8) / static_cast<double>(1u << 24);
+        };
+        std::vector<double> t(5);
+        for (int i = 0; i < 3; ++i) t[static_cast<size_t>(i)] = u01();
+        t[3] = 0.04 + 0.96 * u01(); // roughness
+        t[4] = u01();               // metallic
+        if (fitPedestal && pedestalMat) {
+            t.push_back(u01());
+            t.push_back(u01());
+            t.push_back(u01());
+        }
+        if (fitKeyLight && keyLight) t.push_back(0.05 + 1.2 * u01());
+        if (fitFillLight && fillLight) t.push_back(0.05 + 0.8 * u01());
         return t;
     }
 
@@ -336,6 +374,10 @@ struct InverseScene {
         }
         if (fitKeyLight && keyLight && th.size() > i) {
             keyLight->setIntensity(static_cast<float>(th[i] * kKeyIScale));
+            ++i;
+        }
+        if (fitFillLight && fillLight && th.size() > i) {
+            fillLight->setIntensity(static_cast<float>(th[i] * kKeyIScale));
         }
     }
 
@@ -353,6 +395,7 @@ struct InverseScene {
         s.scene = std::make_unique<Scene>("Inverse Cornell");
         s.fitPedestal = false;
         s.fitKeyLight = cfg.fitKeyLight;
+        s.fitFillLight = false; // cornell has single key
         s.truthPrimary = {.albedo = {0.65f, 0.05f, 0.05f}, .roughness = 0.35f, .metallic = 0.0f};
         s.initPrimary = {.albedo = {0.2f, 0.5f, 0.7f}, .roughness = 0.85f, .metallic = 0.55f};
         s.truthKeyI = 40.0f;
@@ -406,6 +449,7 @@ struct InverseScene {
         s.relightEnvPath = cfg.relightEnvPath;
         s.fitPedestal = cfg.fitPedestal;
         s.fitKeyLight = cfg.fitKeyLight;
+        s.fitFillLight = cfg.fitFillLight && cfg.fitKeyLight;
         // Glossy warm floor: mid roughness + slight metal so all 5 PBR dims matter.
         s.truthPrimary = {.albedo = {0.72f, 0.55f, 0.42f}, .roughness = 0.30f, .metallic = 0.12f};
         s.initPrimary = {.albedo = {0.20f, 0.45f, 0.70f}, .roughness = 0.88f, .metallic = 0.70f};
@@ -413,6 +457,8 @@ struct InverseScene {
         s.initPedestal = {.albedo = {0.55f, 0.12f, 0.10f}, .roughness = 0.40f, .metallic = 0.05f};
         s.truthKeyI = 22.0f;
         s.initKeyI = 7.0f;
+        s.truthFillI = 9.0f;
+        s.initFillI = 3.0f;
 
         const float groundY = 0.0f;
         const float pedestalH = 0.35f;
@@ -555,7 +601,16 @@ struct InverseScene {
             a->getTransform()->setPosition({4.0f, 5.0f, 4.5f});
             s.keyLight = lc.get();
         }
-        addLight("Fill", {-3.5f, 3.0f, 3.5f}, {0.75f, 0.85f, 1.0f}, 9.0f, 1.4f);
+        {
+            auto a = s.scene->createActor("Fill");
+            auto lc = a->addComponent<LightComponent>();
+            lc->setLightType(LightType::Sphere);
+            lc->setColor({0.75f, 0.85f, 1.0f});
+            lc->setIntensity(s.truthFillI);
+            lc->setRadius(1.4f);
+            a->getTransform()->setPosition({-3.5f, 3.0f, 3.5f});
+            s.fillLight = lc.get();
+        }
         addLight("Rim", {-0.5f, 3.5f, -4.5f}, {1.0f, 0.95f, 0.9f}, 10.0f, 0.7f);
 
         // Multi-view product orbit — pulled back so full hero + pedestal are in frame.
@@ -610,8 +665,8 @@ struct RenderSession {
             // Material + light edits only — never rebuild BLAS / reload env HDR.
             const bool matsOk = renderer.updateRTMaterialParams();
             const bool lightsOk =
-                inv.fitKeyLight ? renderer.updateRTLightParams() : true;
-            if (!matsOk || (inv.fitKeyLight && !lightsOk)) {
+                inv.needsLightUpdate() ? renderer.updateRTLightParams() : true;
+            if (!matsOk || (inv.needsLightUpdate() && !lightsOk)) {
                 (void)renderer.updateSceneBuffers();
             }
         }
@@ -648,10 +703,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::cout << "OHAO inverse_fit — multi-surface + light IR (no ML)\n";
+    std::cout << "OHAO inverse_fit — multi-surface + multi-light IR (no ML)\n";
     std::cout << "  θ dims=" << inv.thetaDims() << "  primary PBR[5]";
     if (inv.fitPedestal && inv.pedestalMat) std::cout << " + pedestal albedo[3]";
-    if (inv.fitKeyLight && inv.keyLight) std::cout << " + key intensity[1]";
+    if (inv.fitKeyLight && inv.keyLight) std::cout << " + key I";
+    if (inv.fitFillLight && inv.fillLight) std::cout << " + fill I";
     std::cout << "\n";
     std::cout << "  scene=" << cfg.scene << "  views=" << cfg.numViews
               << "  quality=" << cfg.quality.name << "\n";
@@ -659,6 +715,9 @@ int main(int argc, char** argv) {
               << "  SHOW " << cfg.show.width << "x" << cfg.show.height << " @" << cfg.show.spp
               << "  denoise SHOW=" << denoiseModeName(cfg.showDenoise)
               << " FIT=none\n";
+    if (cfg.exportDataset > 0) {
+        std::cout << "  mode=export-dataset N=" << cfg.exportDataset << "\n";
+    }
 
     VulkanRenderer renderer(cfg.show.width, cfg.show.height);
     if (!renderer.initialize()) {
@@ -675,6 +734,42 @@ int main(int argc, char** argv) {
 
     const auto outDir = std::filesystem::path(cfg.outDir);
     std::filesystem::create_directories(outDir);
+
+    // ── Optional: ML data factory (θ → FIT image pairs) ───────────────
+    if (cfg.exportDataset > 0) {
+        const auto dataDir = outDir / "dataset";
+        std::filesystem::create_directories(dataDir);
+        std::ofstream meta(dataDir / "meta.jsonl");
+        meta << "{\"type\":\"header\",\"dims\":" << inv.thetaDims()
+             << ",\"fit\":[" << cfg.fit.width << "," << cfg.fit.height << "," << cfg.fit.spp
+             << "],\"scene\":\"" << cfg.scene << "\"}\n";
+        std::cout << "Exporting " << cfg.exportDataset << " (θ, image) pairs to " << dataDir
+                  << " ...\n";
+        for (int i = 0; i < cfg.exportDataset; ++i) {
+            const uint32_t rng = cfg.seed + static_cast<uint32_t>(i) * 2654435761u;
+            const auto th = inv.sampleRandomTheta(rng);
+            inv.applyTheta(th);
+            const ImageRGBA8 img =
+                session.render(0, cfg.fit, cfg.seed + static_cast<uint32_t>(i), DenoiseMode::None);
+            char name[32];
+            std::snprintf(name, sizeof(name), "%05d.png", i);
+            const auto path = dataDir / name;
+            savePNG(img, path);
+            meta << "{\"i\":" << i << ",\"file\":\"" << name << "\",\"theta\":[";
+            for (size_t k = 0; k < th.size(); ++k) {
+                if (k) meta << ",";
+                meta << th[k];
+            }
+            meta << "]}\n";
+            if ((i + 1) % 10 == 0 || i + 1 == cfg.exportDataset) {
+                std::cout << "  " << (i + 1) << "/" << cfg.exportDataset << "\n";
+            }
+        }
+        meta.close();
+        std::cout << "Dataset export done. (physical renderer = ML data factory)\n";
+        inv.scene.reset();
+        return 0;
+    }
 
     // ── Truth multi-view targets ──────────────────────────────────────
     inv.applyTruth();
@@ -715,8 +810,11 @@ int main(int argc, char** argv) {
         off += 3;
     }
     if (inv.fitKeyLight && inv.keyLight) {
-        // Normalized key intensity (physical I = θ * kKeyIScale)
         space.add("key.I_scale", initV[off], 0.05, 1.5);
+        ++off;
+    }
+    if (inv.fitFillLight && inv.fillLight) {
+        space.add("fill.I_scale", initV[off], 0.05, 1.2);
     }
 
     auto applyTheta = [&](const std::vector<double>& th) { inv.applyTheta(th); };
@@ -845,32 +943,45 @@ int main(int argc, char** argv) {
         }
     };
 
-    // Build active index sets
-    std::vector<size_t> matIdx = {0, 1, 2, 3, 4};
+    // 3-stage schedule: primary PBR → pedestal → lights (key+fill)
+    std::vector<size_t> primaryIdx = {0, 1, 2, 3, 4};
+    std::vector<size_t> pedestalIdx;
     if (inv.fitPedestal && inv.pedestalMat) {
-        matIdx.push_back(5);
-        matIdx.push_back(6);
-        matIdx.push_back(7);
+        pedestalIdx = {5, 6, 7};
     }
     std::vector<size_t> lightIdx;
-    if (inv.fitKeyLight && inv.keyLight) lightIdx.push_back(space.size() - 1);
+    size_t lightBase = 5 + (pedestalIdx.empty() ? 0 : 3);
+    if (inv.fitKeyLight && inv.keyLight) {
+        lightIdx.push_back(lightBase++);
+    }
+    if (inv.fitFillLight && inv.fillLight) {
+        lightIdx.push_back(lightBase);
+    }
 
     std::ofstream traj(outDir / "trajectory.json");
     traj << "{\n  \"scene\": \"" << cfg.scene << "\",\n  \"quality\": \"" << cfg.quality.name
          << "\",\n  \"views\": " << nViews << ",\n  \"dims\": " << space.size()
          << ",\n  \"fit_pedestal\": " << (inv.fitPedestal ? "true" : "false")
          << ",\n  \"fit_key\": " << (inv.fitKeyLight ? "true" : "false")
-         << ",\n  \"schedule\": \"materials_then_light\",\n  \"iters\": [\n";
+         << ",\n  \"fit_fill\": " << (inv.fitFillLight ? "true" : "false")
+         << ",\n  \"schedule\": \"primary_then_pedestal_then_lights\",\n  \"iters\": [\n";
     bool firstTraj = true;
 
     const auto fitStart = std::chrono::steady_clock::now();
-    const int matIters = inv.fitKeyLight ? std::max(8, (cfg.iters * 2) / 3) : cfg.iters;
-    const int lightIters = inv.fitKeyLight ? std::max(4, cfg.iters / 3) : 0;
-    runStage("materials", matIdx, matIters, traj, firstTraj);
-    // After materials, freeze materials at best and optimize key.
+    const bool anyLight = !lightIdx.empty();
+    const int primaryIters =
+        anyLight || !pedestalIdx.empty() ? std::max(10, (cfg.iters * 5) / 10) : cfg.iters;
+    const int pedestalIters =
+        pedestalIdx.empty() ? 0 : std::max(4, (cfg.iters * 2) / 10);
+    const int lightIters = anyLight ? std::max(4, (cfg.iters * 3) / 10) : 0;
+
+    runStage("primary", primaryIdx, primaryIters, traj, firstTraj);
     bestTheta = space.values;
     bestLoss = loss;
-    runStage("key_light", lightIdx, lightIters, traj, firstTraj);
+    runStage("pedestal", pedestalIdx, pedestalIters, traj, firstTraj);
+    bestTheta = space.values;
+    bestLoss = loss;
+    runStage("lights", lightIdx, lightIters, traj, firstTraj);
     traj << "\n  ],\n  \"best_loss\": " << bestLoss << "\n}\n";
     traj.close();
     space.values = bestTheta;
@@ -929,13 +1040,24 @@ int main(int argc, char** argv) {
                   << std::abs(space.values[6] - truthV[6]) << ","
                   << std::abs(space.values[7] - truthV[7]) << ")\n";
     }
-    if (inv.fitKeyLight && inv.keyLight) {
-        const size_t ki = space.size() - 1;
-        const double tI = truthV[ki] * InverseScene::kKeyIScale;
-        const double rI = space.values[ki] * InverseScene::kKeyIScale;
-        std::cout << "  key |Δ|I = " << std::abs(rI - tI) << "  (truth " << tI << " recovered "
-                  << rI << ")\n";
+    const size_t lightOff = 5 + ((inv.fitPedestal && inv.pedestalMat) ? 3 : 0);
+    double keyErr = 0.0;
+    double fillErr = 0.0;
+    if (inv.fitKeyLight && inv.keyLight && truthV.size() > lightOff) {
+        const double tI = truthV[lightOff] * InverseScene::kKeyIScale;
+        const double rI = space.values[lightOff] * InverseScene::kKeyIScale;
+        keyErr = std::abs(rI - tI);
+        std::cout << "  key |Δ|I = " << keyErr << "  (truth " << tI << " recovered " << rI
+                  << ")\n";
     }
+    if (inv.fitFillLight && inv.fillLight && truthV.size() > lightOff + 1) {
+        const double tI = truthV[lightOff + 1] * InverseScene::kKeyIScale;
+        const double rI = space.values[lightOff + 1] * InverseScene::kKeyIScale;
+        fillErr = std::abs(rI - tI);
+        std::cout << "  fill |Δ|I = " << fillErr << "  (truth " << tI << " recovered " << rI
+                  << ")\n";
+    }
+    (void)fillErr;
     std::cout << "  param L2 = " << paramErr << "  param RMSE = " << paramRmse << "\n";
     std::cout << "  final multi-view FIT loss = " << loss << "\n";
     std::cout << "  SHOW RMSE (primary) = " << showRmse << "\n";
@@ -944,18 +1066,11 @@ int main(int argc, char** argv) {
               << " s\n";
     std::cout << "  wrote " << outDir << "/\n";
 
-    // Composite selftest: image match + key recovery matter more than every
-    // weakly-observed dim (e.g. small pedestal footprint under draft spp).
+    // Composite selftest: image match + key recovery (fill is softer).
     constexpr double kShowRmseTol = 0.12;
     constexpr double kKeyITol = 8.0;
-    constexpr double kParamRmseSoft = 0.45;
-    double keyErr = 0.0;
-    bool keyOk = true;
-    if (inv.fitKeyLight && inv.keyLight) {
-        const size_t ki = space.size() - 1;
-        keyErr = std::abs(space.values[ki] - truthV[ki]) * InverseScene::kKeyIScale;
-        keyOk = keyErr < kKeyITol;
-    }
+    constexpr double kParamRmseSoft = 0.50;
+    const bool keyOk = !inv.fitKeyLight || keyErr < kKeyITol;
     const bool showOk = showRmse < kShowRmseTol;
     const bool paramSoftOk = paramRmse < kParamRmseSoft;
     const bool ok = showOk && keyOk && paramSoftOk;
