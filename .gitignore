@@ -91,3 +91,6 @@ tools/dlss_probe/ngx_appdata/
 # C1 inverse ML local data / checkpoints (regenerate via export+train)
 renders/inverse_c1*/
 tools/inverse_c1/checkpoints/*.pt
+tools/inverse_c1/checkpoints/**/*.pt
+tools/inverse_c1/checkpoints/**/*.log
+tools/inverse_c1/checkpoints/**/history.json
