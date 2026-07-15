@@ -112,9 +112,20 @@ class InverseThetaDataset(Dataset):
         if self.augment:
             if np.random.rand() < 0.5:
                 arr = np.flip(arr, axis=1).copy()
-            # Mild brightness jitter (simulates exposure mismatch)
-            gain = float(np.random.uniform(0.9, 1.1))
+            # Mild brightness / color temperature jitter (L4-lite domain gap)
+            gain = float(np.random.uniform(0.88, 1.12))
             arr = np.clip(arr * gain, 0.0, 1.0)
+            if np.random.rand() < 0.4:
+                # soft white-balance shift
+                wb = np.array(
+                    [
+                        np.random.uniform(0.95, 1.05),
+                        np.random.uniform(0.97, 1.03),
+                        np.random.uniform(0.95, 1.05),
+                    ],
+                    dtype=np.float32,
+                )
+                arr = np.clip(arr * wb, 0.0, 1.0)
         # CHW
         x = torch.from_numpy(arr).permute(2, 0, 1).contiguous()
         th = np.asarray(row["theta"], dtype=np.float32)

@@ -10,7 +10,9 @@ Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + defer
 
 - **`inverse_fit`**: multi-surface PBR + key/fill/rim + HDRI env scale.
 - **B6 gap-close**: multi-start init, specular-weighted loss, high-spp BRDF stages, light regularizer, tighter light bounds, BRDF-pre for specular targets.
-- **C1 neural θ prior**: `tools/inverse_c1/` train/infer; `--export-dataset` writes `config.json` + pairs; `--nn-model` / `--theta-init` seed FD refine.
+- **C1 neural θ prior**: `tools/inverse_c1/` train/infer/eval; unified 12D studio θ across levels.
+- **Generalization ladder**: L0→L1 multi-preset → L2 domain-rand (cam/lights/hero) → L2e exposure jitter; `--domain-rand`, `--export-views`, `--export-exposure-jitter`.
+- **`--nn-model` / `--theta-init`**: seed FD refine from learned prior.
 - **`--target-image`**: external LDR photo path (+ `--exposure` / `--fit-exposure`).
 - **`--map-ground`**: 2×2 ground albedo tiles (shared rough/metal) — pragmatic texture step.
 - **Schedule**: multi-start → env → lights → brdf_pre → albedo → brdf → pedestal → lights2 → refine.

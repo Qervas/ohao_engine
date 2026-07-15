@@ -1,0 +1,26 @@
+{
+  "checkpoint": "tools/inverse_c1/checkpoints/L2/best.pt",
+  "dims": 12,
+  "names": [
+    "primary.R",
+    "primary.G",
+    "primary.B",
+    "primary.rough",
+    "primary.metal",
+    "pedestal.R",
+    "pedestal.G",
+    "pedestal.B",
+    "key.I_scale",
+    "fill.I_scale",
+    "rim.I_scale",
+    "env.scale"
+  ],
+  "image_size": [
+    128,
+    72
+  ],
+  "val_loss": 0.15776191817389595,
+  "epoch": 60,
+  "preset": "lantern",
+  "format": "ohao_inverse_c1"
+}
