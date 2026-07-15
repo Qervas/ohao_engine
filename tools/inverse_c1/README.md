@@ -107,6 +107,28 @@ python3 tools/inverse_c1/infer.py \
 ./build/inverse_fit --selftest --nn-model tools/inverse_c1/checkpoints/L2/best.pt
 ```
 
+## Before / after comparison images
+
+After every `inverse_fit` run (if Python is available), sheets are written into the out-dir:
+
+| File | Content |
+|------|---------|
+| `compare_before_after.png` | Target \| Init \| Recovered \| \|Diff\|×5 |
+| `compare_target_recovered.png` | Target \| Recovered |
+| `compare_multiview.png` | Per-view target / recovered / diff |
+
+Manual rebuild:
+
+```bash
+python3 tools/inverse_c1/make_compare.py renders/inverse_c1_compare/lantern_nn
+python3 tools/inverse_c1/make_compare.py   # also builds baseline vs NN sheet if present
+```
+
+Headline sheet from last hybrid compare:
+
+`renders/inverse_c1_compare/COMPARE_baseline_vs_nn.png`  
+(target | bad init | baseline FD | NN hybrid)
+
 ## What is *not* generalized yet
 
 | Missing | Notes |

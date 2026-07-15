@@ -2137,6 +2137,26 @@ int main(int argc, char** argv) {
               << " s\n";
     std::cout << "  wrote " << outDir << "/\n";
 
+    // Before/after comparison sheet (target | init | recovered | diff).
+    {
+        std::filesystem::path cmpScript = "tools/inverse_c1/make_compare.py";
+        if (!std::filesystem::exists(cmpScript)) {
+            cmpScript = std::filesystem::path("..") / cmpScript;
+        }
+        if (std::filesystem::exists(cmpScript)) {
+            std::ostringstream cmd;
+            cmd << cfg.nnPython << " " << cmpScript.string() << " "
+                << std::filesystem::absolute(outDir).string();
+            const int crc = std::system(cmd.str().c_str());
+            if (crc == 0) {
+                std::cout << "  compare sheets → " << outDir
+                          << "/compare_before_after.png  (+ target_recovered, multiview)\n";
+            } else {
+                std::cout << "  (compare sheet skipped, rc=" << crc << ")\n";
+            }
+        }
+    }
+
     // Selftest gates. External photo: image match only.
     // Draft multi-param (12–14D + MC noise): SHOW ~0.15 is grain-limited; high quality is tighter.
     const double kShowRmseTol = (std::string_view(cfg.quality.name) == "draft") ? 0.155 : 0.12;
