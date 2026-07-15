@@ -26,7 +26,8 @@ layout(set = 0, binding = 12) uniform sampler2D textures[];
 layout(set = 0, binding = 11) readonly buffer LightBuffer {
     uint lightCount;
     uint envMapTexIdx;    // bindless index of HDR env map (0xFFFFFFFF = none)
-    uint _pad[2];
+    float envIntensity;   // HDRI scale (default 1.0; inverse/relight)
+    uint _pad;
     // GPULight lights[] follows at offset 16
 } lightBuf;
 
@@ -61,7 +62,8 @@ void main() {
     if (lightBuf.envMapTexIdx != 0xFFFFFFFFu) {
         vec3 dir = normalize(gl_WorldRayDirectionEXT);
         vec2 uv = dirToEquirect(dir);
-        payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb;
+        float envS = (lightBuf.envIntensity > 0.0) ? lightBuf.envIntensity : 1.0;
+        payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb * envS;
     } else {
         // No env map — return BLACK. A fake "sky ambient" here is physically wrong
         // for closed/indoor scenes: GI rays that escape through wall seams pick it

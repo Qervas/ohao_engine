@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <algorithm>
 #include <vector>
 #include <memory>
 #include <cstdint>
@@ -147,6 +148,12 @@ public:
             m_envMapTexIdx = 0xFFFFFFFFu;
         }
     }
+    /// Scale HDRI contribution (inverse / relight). Default 1.0. Written into
+    /// light-buffer header (offset 8) on every light upload — no env re-load.
+    void setEnvIntensityScale(float s) noexcept {
+        m_envIntensityScale = std::max(0.0f, s);
+    }
+    [[nodiscard]] float getEnvIntensityScale() const noexcept { return m_envIntensityScale; }
     void notifyCameraChanged();
     void resetAccumulation();
     /// Offline/inverse: base sample index after accumulation reset (FD stability).
@@ -462,6 +469,7 @@ private:
     uint32_t m_envMapWidth{0};
     uint32_t m_envMapHeight{0};
     float m_envMapIntegral{0.0f};
+    float m_envIntensityScale{1.0f}; // light header offset 8
     VkImage m_rtTextureArray{VK_NULL_HANDLE};
     VkDeviceMemory m_rtTextureArrayMemory{VK_NULL_HANDLE};
     VkImageView m_rtTextureArrayView{VK_NULL_HANDLE};

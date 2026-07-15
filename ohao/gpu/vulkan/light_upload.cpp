@@ -278,6 +278,8 @@ void VulkanRenderer::uploadLightBuffer() {
             m_rtLightCount = count;
             memcpy(mapped, &count, sizeof(uint32_t));
             // envMapTexIdx at offset 4 — set by env map loader, default 0xFFFFFFFF (none)
+            // envIntensity scale at offset 8 (float) — inverse/relight without reloading HDR
+            memcpy(static_cast<uint8_t*>(mapped) + 8, &m_envIntensityScale, sizeof(float));
             memcpy(static_cast<uint8_t*>(mapped) + lightDataOffset, gpuLights.data(), gpuLights.size() * sizeof(GPULight));
             vkUnmapMemory(m_device, m_rtLightMemory);
 
@@ -292,6 +294,7 @@ void VulkanRenderer::uploadLightBuffer() {
                 void* lm = nullptr;
                 vkMapMemory(m_device, m_rtLightMemory, 0, 16, 0, &lm);
                 memcpy(static_cast<uint8_t*>(lm) + 4, &m_envMapTexIdx, sizeof(uint32_t));
+                memcpy(static_cast<uint8_t*>(lm) + 8, &m_envIntensityScale, sizeof(float));
                 vkUnmapMemory(m_device, m_rtLightMemory);
                 forEachRTRenderer([&](IRTRendererProfile& renderer) {
                     if (m_envMarginalCDFBuffer && m_envConditionalCDFBuffer) {
@@ -474,10 +477,11 @@ void VulkanRenderer::uploadLightBuffer() {
                         renderer.setBindlessTextures(views, samplers);
                     });
 
-                    // Write env map index to light buffer header (offset 4)
+                    // Write env map index (offset 4) + intensity scale (offset 8)
                     void* lm;
                     vkMapMemory(m_device, m_rtLightMemory, 0, 16, 0, &lm);
                     memcpy(static_cast<uint8_t*>(lm) + 4, &envTexIdx, sizeof(uint32_t));
+                    memcpy(static_cast<uint8_t*>(lm) + 8, &m_envIntensityScale, sizeof(float));
                     vkUnmapMemory(m_device, m_rtLightMemory);
 
                     // Sub-plan 4.F T1: expose env view+sampler to path tracers
