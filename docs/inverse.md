@@ -99,13 +99,39 @@ Multi-view FIT: view 0 weight 1.0, other views 0.5.
 | B3 multi-surface + key | ✅ |
 | B4 multi-light + dataset export | ✅ |
 | B5 rim + env + harden FIT | ✅ |
-| **B6 gap-close (multi-start, specular, photo, map)** | ✅ **you are here** |
-| C1 neural residual on θ | **next for ML** |
+| B6 gap-close (multi-start, specular, photo, map) | ✅ |
+| **C1 neural θ prior + FD refine** | ✅ **you are here** |
 | C2 real-photo domain gap | later (path ready via `--target-image`) |
 | C3 full-res texture / SVBRDF | research (`--map-ground` is the 2×2 pragmatic step) |
 
-**ML can start now** (synthetic pairs via `--export-dataset`).  
-**Recommended C1:** image → Δθ prior, refine with 5–15 physical FD iters (hybrid).
+## C1 hybrid (dataset → network → FD)
+
+Physical FD alone often matches the **image** while **color θ is wrong** (albedo ↔ light ambiguity).  
+C1 trains a small CNN on synthetic pairs, then uses it as init:
+
+```bash
+# 1) Data factory
+./tools/inverse_c1/export_dataset.sh 128 renders/inverse_c1_data
+
+# 2) Train
+python3 tools/inverse_c1/train.py \
+  --data renders/inverse_c1_data/dataset \
+  --out tools/inverse_c1/checkpoints --epochs 40
+
+# 3) Hybrid selftest (NN prior → staged FD)
+./build/inverse_fit --selftest --preset lantern --quality draft \
+  --nn-model tools/inverse_c1/checkpoints/best.pt \
+  --out-dir renders/inverse_c1_hybrid
+```
+
+Manual prior file:
+
+```bash
+python3 tools/inverse_c1/infer.py --model .../best.pt --image target.png --out theta.json
+./build/inverse_fit --selftest --theta-init theta.json --no-multi-start
+```
+
+Details: [`tools/inverse_c1/README.md`](../tools/inverse_c1/README.md).
 
 ## Limits
 

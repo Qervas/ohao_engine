@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -53,6 +54,7 @@
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -113,6 +115,11 @@ struct FitConfig {
     std::string targetImage;    // external LDR target (PNG/JPG); empty = synthetic
     float exposure{1.0f};       // applied to external target (or fitted)
     bool fitExposure{false};    // add exposure as free θ dim (photo path)
+    // C1: neural θ prior (JSON from tools/inverse_c1/infer.py)
+    std::string thetaInitPath;  // if set, override init θ with predicted prior
+    std::string nnModelPath;    // if set, run infer.py on FIT target → theta init
+    std::string nnPython{"python3"};
+    bool nnSkipMultiStart{true};// when θ-init present, skip multi-start (prior is the start)
 };
 
 // Resolve missing optional showcase assets to tracked test_models copies.
@@ -310,6 +317,14 @@ CliArgs parseArgs(int argc, char** argv) {
             a.cfg.exposure = static_cast<float>(std::atof(need("--exposure")));
         } else if (s == "--fit-exposure") {
             a.cfg.fitExposure = true;
+        } else if (s == "--theta-init") {
+            a.cfg.thetaInitPath = need("--theta-init");
+        } else if (s == "--nn-model") {
+            a.cfg.nnModelPath = need("--nn-model");
+        } else if (s == "--nn-python") {
+            a.cfg.nnPython = need("--nn-python");
+        } else if (s == "--nn-keep-multi-start") {
+            a.cfg.nnSkipMultiStart = false;
         } else if (s == "--fit-width") {
             a.cfg.fit.width = static_cast<uint32_t>(std::max(16, std::atoi(need("--fit-width"))));
         } else if (s == "--fit-height") {
@@ -356,6 +371,11 @@ CliArgs parseArgs(int argc, char** argv) {
                 << "  --map-ground           2×2 ground albedo tiles\n"
                 << "  --target-image PATH    external LDR photo target\n"
                 << "  --exposure E  --fit-exposure\n"
+                << "  --theta-init PATH.json C1 NN prior (from tools/inverse_c1/infer.py)\n"
+                << "  --nn-model PATH.pt     auto-run C1 infer on FIT target → θ prior\n"
+                << "  --nn-python BIN        python for --nn-model (default python3)\n"
+                << "  --nn-keep-multi-start   still probe multi-start after NN prior\n"
+                << "  --export-dataset N     ML data factory (θ, FIT image) pairs\n"
                 << "  --no-pedestal --no-light --no-fill --no-rim --no-env\n"
                 << "  --quality draft|high|ultra|cinema  --views N\n";
             std::exit(0);
@@ -1020,6 +1040,34 @@ ImageRGBA8 loadPNG(const std::filesystem::path& path) {
     return img;
 }
 
+/// Load C1 θ prior JSON: `{"theta":[...]}` or bare `[...]`.
+bool loadThetaInit(const std::filesystem::path& path, std::vector<double>& out) {
+    std::ifstream in(path);
+    if (!in) return false;
+    std::stringstream buf;
+    buf << in.rdbuf();
+    const std::string s = buf.str();
+    const auto lb = s.find('[');
+    const auto rb = s.rfind(']');
+    if (lb == std::string::npos || rb == std::string::npos || rb <= lb) return false;
+    out.clear();
+    std::stringstream arr(s.substr(lb + 1, rb - lb - 1));
+    std::string tok;
+    while (std::getline(arr, tok, ',')) {
+        // trim
+        size_t a = 0, b = tok.size();
+        while (a < b && std::isspace(static_cast<unsigned char>(tok[a]))) ++a;
+        while (b > a && std::isspace(static_cast<unsigned char>(tok[b - 1]))) --b;
+        if (a >= b) continue;
+        try {
+            out.push_back(std::stod(tok.substr(a, b - a)));
+        } catch (...) {
+            return false;
+        }
+    }
+    return !out.empty();
+}
+
 bool savePNG(const ImageRGBA8& img, const std::filesystem::path& path) {
     if (img.empty()) return false;
     std::filesystem::create_directories(path.parent_path());
@@ -1150,16 +1198,61 @@ int main(int argc, char** argv) {
     const auto outDir = std::filesystem::path(cfg.outDir);
     std::filesystem::create_directories(outDir);
 
-    // ── Optional: ML data factory (θ → FIT image pairs) ───────────────
+    // ── Optional: ML data factory (θ → FIT image pairs) for C1 ────────
     if (cfg.exportDataset > 0) {
         const auto dataDir = outDir / "dataset";
         std::filesystem::create_directories(dataDir);
+
+        // Param names match ParamSpace layout (for trainer column weighting).
+        std::vector<std::string> dimNames;
+        if (inv.mapGround) {
+            for (int t = 0; t < 4; ++t) {
+                dimNames.push_back("tile" + std::to_string(t) + ".R");
+                dimNames.push_back("tile" + std::to_string(t) + ".G");
+                dimNames.push_back("tile" + std::to_string(t) + ".B");
+            }
+            dimNames.push_back("primary.rough");
+            dimNames.push_back("primary.metal");
+        } else {
+            dimNames = {"primary.R", "primary.G", "primary.B", "primary.rough", "primary.metal"};
+        }
+        if (inv.fitPedestal && inv.pedestalMat) {
+            dimNames.push_back("pedestal.R");
+            dimNames.push_back("pedestal.G");
+            dimNames.push_back("pedestal.B");
+        }
+        if (inv.fitKeyLight && inv.keyLight) dimNames.push_back("key.I_scale");
+        if (inv.fitFillLight && inv.fillLight) dimNames.push_back("fill.I_scale");
+        if (inv.fitRimLight && inv.rimLight) dimNames.push_back("rim.I_scale");
+        if (inv.fitEnvScale) dimNames.push_back("env.scale");
+        if (inv.fitExposure) dimNames.push_back("exposure");
+
+        {
+            std::ofstream cfgOut(dataDir / "config.json");
+            cfgOut << "{\n"
+                   << "  \"format\": \"ohao_inverse_c1\",\n"
+                   << "  \"version\": 1,\n"
+                   << "  \"dims\": " << inv.thetaDims() << ",\n"
+                   << "  \"preset\": \"" << cfg.preset << "\",\n"
+                   << "  \"scene\": \"" << cfg.scene << "\",\n"
+                   << "  \"map_ground\": " << (inv.mapGround ? "true" : "false") << ",\n"
+                   << "  \"fit\": {\"width\": " << cfg.fit.width << ", \"height\": " << cfg.fit.height
+                   << ", \"spp\": " << cfg.fit.spp << "},\n"
+                   << "  \"names\": [";
+            for (size_t i = 0; i < dimNames.size(); ++i) {
+                if (i) cfgOut << ", ";
+                cfgOut << "\"" << dimNames[i] << "\"";
+            }
+            cfgOut << "]\n}\n";
+        }
+
         std::ofstream meta(dataDir / "meta.jsonl");
         meta << "{\"type\":\"header\",\"dims\":" << inv.thetaDims()
              << ",\"fit\":[" << cfg.fit.width << "," << cfg.fit.height << "," << cfg.fit.spp
-             << "],\"scene\":\"" << cfg.scene << "\"}\n";
+             << "],\"scene\":\"" << cfg.scene << "\",\"preset\":\"" << cfg.preset
+             << "\",\"map_ground\":" << (inv.mapGround ? "true" : "false") << "}\n";
         std::cout << "Exporting " << cfg.exportDataset << " (θ, image) pairs to " << dataDir
-                  << " ...\n";
+                  << " (C1 data factory)...\n";
         for (int i = 0; i < cfg.exportDataset; ++i) {
             const uint32_t rng = cfg.seed + static_cast<uint32_t>(i) * 2654435761u;
             const auto th = inv.sampleRandomTheta(rng);
@@ -1181,7 +1274,8 @@ int main(int argc, char** argv) {
             }
         }
         meta.close();
-        std::cout << "Dataset export done. (physical renderer = ML data factory)\n";
+        std::cout << "Dataset export done → " << dataDir
+                  << "\n  Train: python3 tools/inverse_c1/train.py --data " << dataDir << "\n";
         inv.scene.reset();
         return 0;
     }
@@ -1238,6 +1332,40 @@ int main(int argc, char** argv) {
               << std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()
               << " ms\n";
 
+    // C1: optional auto-infer θ prior from FIT target via Python trainer.
+    if (!cfg.nnModelPath.empty() && cfg.thetaInitPath.empty()) {
+        if (!std::filesystem::exists(cfg.nnModelPath)) {
+            std::cerr << "FATAL: --nn-model not found: " << cfg.nnModelPath << "\n";
+            return 1;
+        }
+        const auto fitTargetPath = outDir / "target_fit.png";
+        if (targetsFit[0].empty() || !savePNG(targetsFit[0], fitTargetPath)) {
+            // Fall back to SHOW if FIT empty
+            if (!savePNG(targetsShow[0], fitTargetPath)) {
+                std::cerr << "FATAL: could not write FIT target for NN infer\n";
+                return 1;
+            }
+        }
+        const auto thetaPath = outDir / "theta_prior.json";
+        // Prefer repo-relative infer script
+        std::filesystem::path inferScript = "tools/inverse_c1/infer.py";
+        if (!std::filesystem::exists(inferScript)) {
+            inferScript = std::filesystem::path("..") / inferScript;
+        }
+        std::ostringstream cmd;
+        cmd << cfg.nnPython << " " << inferScript.string() << " --model "
+            << std::filesystem::absolute(cfg.nnModelPath).string() << " --image "
+            << std::filesystem::absolute(fitTargetPath).string() << " --out "
+            << std::filesystem::absolute(thetaPath).string();
+        std::cout << "C1 NN infer: " << cmd.str() << "\n";
+        const int rc = std::system(cmd.str().c_str());
+        if (rc != 0 || !std::filesystem::exists(thetaPath)) {
+            std::cerr << "FATAL: NN infer failed (rc=" << rc << ")\n";
+            return 1;
+        }
+        cfg.thetaInitPath = thetaPath.string();
+    }
+
     // Build ParamSpace from init θ — tighter light bounds reduce multi-light ambiguity.
     ParamSpace space;
     const auto initV = inv.initTheta();
@@ -1283,6 +1411,28 @@ int main(int argc, char** argv) {
     }
     if (inv.fitExposure) {
         space.add("exposure", initV[off], 0.35, 2.50);
+    }
+
+    // C1: override init with neural θ prior (tools/inverse_c1/infer.py).
+    bool usedNnPrior = false;
+    if (!cfg.thetaInitPath.empty()) {
+        std::vector<double> nnTh;
+        if (!loadThetaInit(cfg.thetaInitPath, nnTh)) {
+            std::cerr << "FATAL: failed to parse --theta-init " << cfg.thetaInitPath << "\n";
+            return 1;
+        }
+        if (nnTh.size() != space.size()) {
+            std::cerr << "FATAL: --theta-init dims " << nnTh.size() << " != space " << space.size()
+                      << "\n";
+            return 1;
+        }
+        for (size_t i = 0; i < space.size(); ++i) {
+            space.values[i] = space.project(i, nnTh[i]);
+        }
+        usedNnPrior = true;
+        if (cfg.nnSkipMultiStart) cfg.multiStart = 1;
+        std::cout << "C1 NN prior loaded from " << cfg.thetaInitPath
+                  << "  θ=" << formatTheta(space.values) << "\n";
     }
 
     auto applyTheta = [&](const std::vector<double>& th) { inv.applyTheta(th); };
