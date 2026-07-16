@@ -56,31 +56,53 @@ echo "═══ 3) FD refine from NN prior ═══"
   --theta-init "$NN/theta_prior.json" --no-multi-start --out-dir "$NN" 2>&1 | tee "$NN/run.log" \
   | grep -E 'C1 NN|truth|recovered θ|primary \|Δ|SHOW RMSE|SELFTEST|param RMSE' || true
 
-echo "═══ Compare ═══"
-python3 - "$BASE/run.log" "$NN/run.log" <<'PY'
-import re, sys
+echo "═══ Compare sheets ═══"
+python3 "$ROOT/tools/inverse_c1/make_compare.py" "$BASE" "$NN" 2>/dev/null || true
+
+echo "═══ Compare metrics ═══"
+python3 - "$BASE/run.log" "$NN/run.log" "$OUT/${PRESET}_summary.json" "$PRESET" <<'PY'
+import re, sys, json
 def parse(path):
     t = open(path, errors="ignore").read()
-    def g(pat, default=None):
-        m = re.search(pat, t)
-        return m.group(1) if m else default
-    rgb = re.search(r'primary \|Δ\| RGB=\(([^)]+)\)', t)
-    rough = re.search(r'rough=([0-9.eE+-]+)', t)
-    metal = re.search(r'metal=([0-9.eE+-]+)', t)
+    # Prefer the diagnostics line (primary |Δ| RGB=(..) rough=.. metal=..)
+    prim = re.search(
+        r'primary \|Δ\| RGB=\(([^)]+)\)\s*rough=([0-9.eE+-]+)\s*metal=([0-9.eE+-]+)',
+        t,
+    )
     show = re.search(r'SHOW RMSE \(primary\) = ([0-9.eE+-]+)', t)
     prmse = re.search(r'param RMSE = ([0-9.eE+-]+)', t)
     st = 'PASS' if 'SELFTEST PASS' in t else ('FAIL' if 'SELFTEST FAIL' in t else '?')
+    def f(m, g=1):
+        return float(m.group(g)) if m else None
+    rgb_t = None
+    rgb_mean = None
+    rough = metal = None
+    if prim:
+        rgb_t = [float(x) for x in prim.group(1).split(',')]
+        rgb_mean = sum(rgb_t) / max(1, len(rgb_t))
+        rough = float(prim.group(2))
+        metal = float(prim.group(3))
     return {
-        'rgb': rgb.group(1) if rgb else '?',
-        'rough': rough.group(1) if rough else '?',
-        'metal': metal.group(1) if metal else '?',
-        'show': show.group(1) if show else '?',
-        'prmse': prmse.group(1) if prmse else '?',
+        'rgb_delta': rgb_t,
+        'rgb_mean_abs': rgb_mean,
+        'rough_abs': rough,
+        'metal_abs': metal,
+        'show_rmse': f(show),
+        'param_rmse': f(prmse),
         'selftest': st,
     }
 b, n = parse(sys.argv[1]), parse(sys.argv[2])
-print(f"{'metric':12s} {'baseline FD':22s} {'NN→FD':22s}")
-for k in ('rgb','rough','metal','show','prmse','selftest'):
-    print(f"{k:12s} {b[k]:22s} {n[k]:22s}")
+summary = {'preset': sys.argv[4], 'baseline': b, 'nn_hybrid': n}
+with open(sys.argv[3], 'w') as f:
+    json.dump(summary, f, indent=2)
+print(f"{'metric':14s} {'baseline FD':22s} {'NN→FD':22s}")
+def fmt(v):
+    if v is None: return '?'
+    if isinstance(v, float): return f'{v:.4f}'
+    if isinstance(v, list): return ','.join(f'{x:.3f}' for x in v)
+    return str(v)
+for k in ('rgb_delta','rgb_mean_abs','rough_abs','metal_abs','show_rmse','param_rmse','selftest'):
+    print(f"{k:14s} {fmt(b.get(k)):22s} {fmt(n.get(k)):22s}")
+print(f"wrote {sys.argv[3]}")
 PY
 echo "Outputs: $BASE  vs  $NN"
