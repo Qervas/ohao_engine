@@ -41,16 +41,22 @@ Loss: color ×5, metal ×4.5, rough ×3
 
 Also: `*_baseline/compare_before_after.png` for FD-only.
 
+## Sprint B add-ons
+
+- Specular **metal reinject** (0.88) when NN underestimates metal on mirror/spheres
+- Soft-color + **hard BRDF** schedule for specular presets
+- One-command `./tools/inverse_c1/pipeline.sh`
+- HTML gallery: `renders/inverse_c1_gallery/index.html`
+
+Mirror after hard-BRDF + reinject: **SELFTEST PASS**, metal \|Δ\| ~0.31, rough \|Δ\| ~0.023, SHOW 0.041.
+
 ## Reproduce
 
 ```bash
-# Train metal prior
-QUALITY=draft ./tools/inverse_c1/export_metal_heavy.sh   # or chunked export
-python3 tools/inverse_c1/train.py --data renders/inverse_c1_metal/dataset \
-  --out tools/inverse_c1/checkpoints/L2_metal --epochs 100
+./tools/inverse_c1/pipeline.sh --skip-train
+# or full retrain:
+./tools/inverse_c1/pipeline.sh --export
 
-# Hybrid + sheets
-./tools/inverse_c1/hybrid_compare.sh --preset lantern --model tools/inverse_c1/checkpoints/L2_metal/best.pt
-./tools/inverse_c1/hybrid_compare.sh --preset mirror  --model tools/inverse_c1/checkpoints/L2_metal/best.pt
-./tools/inverse_c1/hybrid_compare.sh --preset outdoor --model tools/inverse_c1/checkpoints/L2_metal/best.pt
+# Open compare gallery
+xdg-open renders/inverse_c1_gallery/index.html
 ```

@@ -1605,6 +1605,22 @@ int main(int argc, char** argv) {
         if (cfg.nnSkipMultiStart) cfg.multiStart = 1;
         std::cout << "C1 NN prior loaded from " << cfg.thetaInitPath
                   << "  θ=" << formatTheta(space.values) << "\n";
+
+        // Specular floors: NN often underestimates metal. Reinject conductor seed for BRDF
+        // dims only (keep predicted albedo) when metal looks diffuse but target is specular.
+        {
+            double hs = targetHighlightScore(targetsFit[0], cfg.maskX, cfg.maskYMin);
+            if (cfg.preset == "mirror" || cfg.preset == "spheres") hs = std::max(hs, 0.28);
+            const size_t mi = inv.mapGround ? 13u : 4u;
+            const size_t ri = inv.mapGround ? 12u : 3u;
+            if (hs > 0.22 && space.size() > mi && space.values[mi] < 0.55) {
+                std::cout << "  specular reinject: metal " << space.values[mi] << " → 0.88, rough "
+                          << space.values[ri] << " → 0.10\n";
+                space.values[mi] = space.project(mi, 0.88);
+                space.values[ri] = space.project(ri, 0.10);
+            }
+        }
+
         applyTheta(space.values);
         ImageRGBA8 nnShow = session.render(0, cfg.show, cfg.seed, cfg.showDenoise);
         if (inv.fitExposure) nnShow = applyExposure(nnShow, inv.currentExposure);

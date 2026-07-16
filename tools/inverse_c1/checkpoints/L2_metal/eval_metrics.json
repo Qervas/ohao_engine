@@ -1,0 +1,29 @@
+{
+  "samples": 60,
+  "dims": 12,
+  "param_rmse": 0.2150001526864074,
+  "rgb_mae": 0.09744420978758069,
+  "rough_mae": 0.26145101388295494,
+  "metal_mae": 0.17254897753397624,
+  "per_dim_mae": {
+    "primary.R": 0.07943411668141682,
+    "primary.G": 0.1150067408879598,
+    "primary.B": 0.09789177179336547,
+    "primary.rough": 0.26145101388295494,
+    "primary.metal": 0.17254897753397624,
+    "pedestal.R": 0.28392351468404137,
+    "pedestal.G": 0.2494527498881022,
+    "pedestal.B": 0.2563115199406942,
+    "key.I_scale": 0.1898820161819458,
+    "fill.I_scale": 0.12284740209579467,
+    "rim.I_scale": 0.11151845455169677,
+    "env.scale": 0.0992366393407186
+  },
+  "model": "tools/inverse_c1/checkpoints/L2_metal/best.pt",
+  "data": "renders/inverse_c1_metal/dataset",
+  "level": "L2_metal",
+  "gates": {
+    "rgb_ok": true,
+    "rmse_ok": true
+  }
+}
