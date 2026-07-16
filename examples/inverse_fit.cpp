@@ -1958,12 +1958,18 @@ int main(int argc, char** argv) {
     if (inv.fitEnvScale) envIdx.push_back(cursor++);
     if (inv.fitExposure) exposureIdx.push_back(cursor);
 
-    // C1: if NN prior already matches well, only soft-polish (full FD walks off good color).
-    const bool nnSoftRefine = usedNnPrior && (showInitRmse < 0.08 || loss < 0.08);
+    // C1: if NN prior already matches well, soft-polish (full FD walks off good color).
+    // Specular targets still need BRDF stages — soft-all freezes wrong metal.
+    const bool nnImageGood = usedNnPrior && (showInitRmse < 0.12 || loss < 0.10);
+    const bool nnSpecular = usedNnPrior && (highlightScore > 0.22 || cfg.preset == "mirror" ||
+                                            cfg.preset == "spheres");
+    const bool nnSoftRefine = nnImageGood && !nnSpecular;
+    const bool nnSoftColorHardBrdf = nnImageGood && nnSpecular;
     const char* schedName =
-        nnSoftRefine ? "nn_soft_refine"
-                     : (usedNnPrior ? "nn_seeded_staged"
-                                    : "multistart_env_lights_brdfpre_albedo_brdf_pedestal_refine");
+        nnSoftRefine              ? "nn_soft_refine"
+        : nnSoftColorHardBrdf     ? "nn_soft_color_hard_brdf"
+        : usedNnPrior             ? "nn_seeded_staged"
+                                  : "multistart_env_lights_brdfpre_albedo_brdf_pedestal_refine";
 
     std::ofstream traj(outDir / "trajectory.json");
     traj << "{\n  \"scene\": \"" << cfg.scene << "\",\n  \"quality\": \"" << cfg.quality.name
@@ -1988,7 +1994,7 @@ int main(int argc, char** argv) {
     bestLoss = loss;
 
     if (nnSoftRefine) {
-        // Keep NN albedo — only gentle light/BRDF/refine. Prevents color blowout.
+        // Diffuse / product: keep NN albedo — gentle light/BRDF/refine.
         std::cout << "C1 soft refine (init SHOW RMSE=" << showInitRmse << " loss=" << loss
                   << ") — skipping full staged FD\n";
         runStage("lights_soft", lightIdx, std::max(3, lightIters / 3), traj, firstTraj, 0.35, 0.7);
@@ -1997,10 +2003,29 @@ int main(int argc, char** argv) {
         std::vector<size_t> refineIdx = brdfIdx;
         if (!envIdx.empty()) refineIdx.insert(refineIdx.end(), envIdx.begin(), envIdx.end());
         if (!lightIdx.empty()) refineIdx.push_back(lightIdx.front());
-        // Tiny albedo nudge only (preserve NN color)
         refineIdx.insert(refineIdx.end(), albedoIdx.begin(), albedoIdx.end());
         runStage("refine", refineIdx, std::max(4, refineIters), traj, firstTraj, 0.20, 0.45, 1.25f,
                  cfg.specularWeight * 0.4);
+    } else if (nnSoftColorHardBrdf) {
+        // Mirror/spheres: protect color, hammer metal/rough with hi-spp specular loss.
+        std::cout << "C1 soft-color + hard BRDF (SHOW RMSE=" << showInitRmse
+                  << " highlight=" << highlightScore << ")\n";
+        runStage("lights_soft", lightIdx, std::max(3, lightIters / 3), traj, firstTraj, 0.40, 0.7);
+        runStage("brdf_pre", brdfIdx, std::max(8, brdfIters), traj, firstTraj, 0.85, 0.55,
+                 std::max(cfg.brdfSppMul, 2.5f), std::min(1.0, cfg.specularWeight + 0.35));
+        runStage("brdf", brdfIdx, std::max(8, brdfIters), traj, firstTraj, 0.70, 0.5,
+                 std::max(cfg.brdfSppMul, 2.5f), std::min(1.0, cfg.specularWeight + 0.4));
+        runStage("brdf2", brdfIdx, std::max(6, brdfIters / 2), traj, firstTraj, 0.45, 0.45,
+                 std::max(cfg.brdfSppMul, 2.5f), 1.0);
+        // Tiny albedo polish last (do not run big albedo stage)
+        runStage("albedo_soft", albedoIdx, std::max(3, albedoIters / 3), traj, firstTraj, 0.25, 0.7);
+        runStage("lights2", lightIdx, std::max(3, lightIters / 3), traj, firstTraj, 0.40, 0.7);
+        std::vector<size_t> refineIdx = brdfIdx;
+        refineIdx.insert(refineIdx.end(), albedoIdx.begin(), albedoIdx.end());
+        if (!envIdx.empty()) refineIdx.insert(refineIdx.end(), envIdx.begin(), envIdx.end());
+        if (!lightIdx.empty()) refineIdx.push_back(lightIdx.front());
+        runStage("refine", refineIdx, std::max(5, refineIters), traj, firstTraj, 0.25, 0.5, 1.5f,
+                 0.85);
     } else {
         // Brightness first, then materials (prevents white-albedo blowout from dark init).
         runStage("env", envIdx, envIters, traj, firstTraj, 1.0, 1.0);

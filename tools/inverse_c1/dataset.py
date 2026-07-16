@@ -56,7 +56,7 @@ def load_records(data_dir: Path) -> list[dict[str, Any]]:
 
 
 def loss_weights(names: list[str]) -> np.ndarray:
-    """Up-weight albedo / color dims so the net prioritizes correct color."""
+    """Up-weight color + BRDF dims (metal/rough were under-fit in hybrid)."""
     w = np.ones(len(names), dtype=np.float32)
     for i, n in enumerate(names):
         nl = n.lower()
@@ -70,9 +70,9 @@ def loss_weights(names: list[str]) -> np.ndarray:
         if is_rgb and "rough" not in nl and "metal" not in nl:
             w[i] = 4.0  # primary + pedestal color
         elif "rough" in nl:
-            w[i] = 1.5
+            w[i] = 3.0  # BRDF quality sprint
         elif "metal" in nl:
-            w[i] = 2.0
+            w[i] = 4.5  # metal was soft (~0.3 Δ) — push harder
         elif "env" in nl or "key" in nl:
             w[i] = 1.2
     # Extra boost on first three dims (primary albedo) when present
