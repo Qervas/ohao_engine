@@ -48,37 +48,22 @@ Gates: RGB MAE &lt; 0.18 (strong &lt; 0.12) and RMSE &lt; 0.28.
 
 When the prior already matches well (SHOW RMSE &lt; 0.08), `inverse_fit` uses **soft refine only** so full staged FD cannot destroy NN color.
 
-## Quick start (recommended = L2)
+## Quick start (recommended)
 
 ```bash
-# Build exporter
-cmake --build build --target inverse_fit -j
+# One command — hybrid gallery + HTML index (reuse trained weights)
+./tools/inverse_c1/pipeline.sh --skip-train
+xdg-open renders/inverse_c1_gallery/index.html
 
-# Export full ladder (or just L2)
-QUALITY=draft LEVELS="L2" ./tools/inverse_c1/export_ladder.sh 128 renders/inverse_c1_ladder
-
-# Train
-python3 tools/inverse_c1/train.py \
-  --data renders/inverse_c1_ladder/L2/dataset \
-  --out tools/inverse_c1/checkpoints/L2 \
-  --epochs 80 --width 128 --height 72
-
-# Eval (held-out)
-python3 tools/inverse_c1/eval.py \
-  --model tools/inverse_c1/checkpoints/L2/best.pt \
-  --data renders/inverse_c1_ladder/L2/dataset
-
-# Hybrid FD refine
-./build/inverse_fit --selftest --preset lantern --quality draft \
-  --nn-model tools/inverse_c1/checkpoints/L2/best.pt \
-  --out-dir renders/inverse_c1_hybrid
+# Full: export metal-heavy data → train → gallery
+./tools/inverse_c1/pipeline.sh --export
 ```
 
-One-shot ladder:
+Gallery shows baseline FD vs NN hybrid for lantern / mirror / outdoor with
+`compare_before_after.png` sheets.
 
-```bash
-QUALITY=draft EPOCHS=60 ./tools/inverse_c1/run_ladder.sh 96 renders/inverse_c1_ladder
-```
+Manual pieces still available: `export_ladder.sh`, `train.py`, `hybrid_compare.sh`,
+`make_compare.py`, `make_gallery.py`.
 
 ## Manual export flags
 
