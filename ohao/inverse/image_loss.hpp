@@ -176,6 +176,53 @@ inline void cropLimits(uint32_t w, uint32_t h, double xMaxFrac, double yMinFrac,
     return std::sqrt(mseRGB(a, b));
 }
 
+/// PSNR (dB) with peak = 1.0 on RGB in [0,1] using mseRGB. Higher is better.
+[[nodiscard]] inline double psnrRGB(const ImageRGBA8& a, const ImageRGBA8& b) {
+    const double mse = mseRGB(a, b);
+    if (!std::isfinite(mse)) return 0.0;
+    if (mse <= 1e-12) return 99.0;
+    return -10.0 * std::log10(mse);
+}
+
+/// Mean SSIM over RGB channels (simplified, Gaussian-free window = full image stats).
+/// Suitable for lab reporting; not identical to multi-scale SSIM.
+[[nodiscard]] inline double ssimRGB(const ImageRGBA8& a, const ImageRGBA8& b) {
+    if (a.width != b.width || a.height != b.height || a.rgba.size() != b.rgba.size() ||
+        a.empty()) {
+        return 0.0;
+    }
+    const size_t n = a.pixelCount();
+    if (n == 0) return 0.0;
+    // Per-channel global SSIM (stable for reporting).
+    double ssimSum = 0.0;
+    constexpr double C1 = 0.01 * 0.01;
+    constexpr double C2 = 0.03 * 0.03;
+    for (int c = 0; c < 3; ++c) {
+        double meanA = 0.0, meanB = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            meanA += a.rgba[i * 4 + static_cast<size_t>(c)] / 255.0;
+            meanB += b.rgba[i * 4 + static_cast<size_t>(c)] / 255.0;
+        }
+        meanA /= static_cast<double>(n);
+        meanB /= static_cast<double>(n);
+        double varA = 0.0, varB = 0.0, cov = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            const double va = a.rgba[i * 4 + static_cast<size_t>(c)] / 255.0 - meanA;
+            const double vb = b.rgba[i * 4 + static_cast<size_t>(c)] / 255.0 - meanB;
+            varA += va * va;
+            varB += vb * vb;
+            cov += va * vb;
+        }
+        varA /= static_cast<double>(n);
+        varB /= static_cast<double>(n);
+        cov /= static_cast<double>(n);
+        const double num = (2.0 * meanA * meanB + C1) * (2.0 * cov + C2);
+        const double den = (meanA * meanA + meanB * meanB + C1) * (varA + varB + C2);
+        ssimSum += (den > 0.0) ? (num / den) : 0.0;
+    }
+    return ssimSum / 3.0;
+}
+
 /// Max absolute channel error in [0,255] (for recovery diagnostics).
 [[nodiscard]] inline double maxAbsRGB(const ImageRGBA8& a, const ImageRGBA8& b) {
     if (a.width != b.width || a.height != b.height || a.rgba.size() != b.rgba.size()) {

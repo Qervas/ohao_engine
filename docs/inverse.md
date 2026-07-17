@@ -140,6 +140,45 @@ When NN init is already good (SHOW RMSE &lt; 0.08), FD runs a **soft refine** sc
 
 Details + measured tables: [`tools/inverse_c1/README.md`](../tools/inverse_c1/README.md).
 
+## Lab track (multi-view / maps / PSNR)
+
+Toward lab-grade inverse rendering (train-only multi-view, spatial maps, holdout + relight **PSNR/SSIM**):
+
+- Architecture + measured bar: [`docs/inverse_lab.md`](inverse_lab.md)
+- Tooling: `tools/inverse_lab/`
+- CLI: `--export-capture` / `--lab-bundle` / `--map-res N`
+
+**LABTEST** (synthetic lantern, capture-gated): holdout PSNR ≥ 28 dB, relight ≥ 26 dB, holdout gain ≥ 8 dB — all vs **exported** capture PNGs (`metric_gt=capture_export_images`).
+
+```bash
+./build/inverse_fit --export-capture --preset lantern --quality draft --views 3 \
+  --show-width 1280 --show-height 720 --show-spp 256 --fit-spp 64 --map-res 2 \
+  --out-dir renders/inverse_lab/lantern_frontier
+./build/inverse_fit --lab-bundle renders/inverse_lab/lantern_frontier/capture \
+  --preset lantern --quality draft \
+  --show-width 1280 --show-height 720 --show-spp 256 --fit-spp 64 \
+  --iters 36 --multi-start 5 --visual-polish \
+  --out-dir renders/inverse_lab/lantern_frontier_fit
+```
+
+## Code layout
+
+`examples/inverse_fit.cpp` is a **thin CLI** (~30 LOC). Pipeline lives under `ohao/inverse/`:
+
+| Module | Role |
+|--------|------|
+| `fit_config.hpp` | `FitConfig`, presets, CLI (`parseArgs`) |
+| `scene_builder.hpp` | `InverseScene` (studio / Cornell), θ apply, domain-rand |
+| `io.hpp` | PNG load/save, θ JSON prior, highlight score |
+| `render_session.hpp` | cached FIT/SHOW renders (mat/light-only updates) |
+| `export_dataset.hpp` | C1 ML data factory (`runExportDataset`) |
+| `staged_fit.hpp` | `StagedFitter`: loss, multi-start, Adam stages, schedule |
+| `visual_polish.hpp` | high-spp pure-image polish + SHOW guard |
+| `fit_engine.hpp` | orchestration: setup → fit → report (`runInverseFit`) |
+| `image_loss.hpp` / `param_space.hpp` / `optimizer.hpp` / `quality.hpp` | core math + dual budgets |
+
+Umbrella: `#include "inverse/inverse_module.hpp"`. Entry: `runInverseFit(cfg)`.
+
 ## Limits
 
 - Autodiff / adjoint PT  

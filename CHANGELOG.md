@@ -8,6 +8,9 @@ Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + defer
 
 ### Inverse rendering (Phase A–C1 hybrid)
 
+- **Modular split**: `examples/inverse_fit.cpp` is a thin CLI; pipeline in `ohao/inverse/` — `fit_config`, `scene_builder`, `io`, `render_session`, `export_dataset`, `staged_fit`, `visual_polish`, `fit_engine` (+ loss/optimizer/quality).
+- **Metal pass**: preset-first conductor/dielectric mode (hero glints no longer flip product floors to metal); stronger priors + post-schedule `metal_lock` stage; spheres chart targets mid-metal (0.55) not chrome; NN specular **hold** when SHOW already excellent.
+- **Inverse Lab (L1–L2 frontier protocol)**: multi-view capture (`--export-capture`), train-only fit (`--lab-bundle`), spatial ground maps (`--map-res`), train/holdout/relight **PSNR+SSIM** + `lab_metrics.json`, **LABTEST** bar (holdout ≥28 dB, relight ≥26 dB, ≥8 dB gain).
 - **`inverse_fit`**: multi-surface PBR + key/fill/rim + HDRI env scale.
 - **B6 gap-close**: multi-start init, specular-weighted loss, high-spp BRDF stages, light regularizer, tighter light bounds, BRDF-pre for specular targets.
 - **C1 neural θ prior**: `tools/inverse_c1/` train/infer/eval; unified 12D studio θ across levels.

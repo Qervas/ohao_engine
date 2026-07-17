@@ -56,11 +56,20 @@ def main() -> int:
     presets = []
     for p in ("lantern", "mirror", "outdoor", "spheres", "helmet"):
         base = root / f"{p}_baseline"
-        nn = root / f"{p}_nn"
+        # Prefer metal-pass hybrid dirs, then classic _nn
+        nn = root / f"{p}_metal"
+        if not nn.is_dir():
+            nn = root / f"{p}_nn"
         if not nn.is_dir() and not base.is_dir():
             continue
         b = parse_run_log(base / "run.log") if base.is_dir() else {}
-        n = parse_run_log(nn / "run.log") if nn.is_dir() else {}
+        # Metal-pass runs often only leave trajectory + compares; scrape compare dir via summary
+        n = {}
+        for log_name in ("run.log", "fit.log"):
+            if (nn / log_name).is_file():
+                n = parse_run_log(nn / log_name)
+                break
+        # Fall back: parse recovered metrics from sibling tmp logs is not available; keep empty
         # prefer summary json if present
         sj = root / f"{p}_summary.json"
         if sj.is_file():

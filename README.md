@@ -21,7 +21,44 @@ A solo **Vulkan 1.3** hybrid renderer in **C++20**: KHR path tracing for ground 
 
 Built to learn how a modern hybrid renderer is wired end to end. ~52K lines of **C++20** and ~14K lines of GLSL across 121 shaders, with two pipelines that share scene, materials, and acceleration structures. No engine SDK, no editor host. Path tracer is for ground truth. Deferred is for interactive iteration. The hybrid mode runs RT shadows and 1-bounce RT GI on top of the deferred G-buffer.
 
-**Recent focus:** refactored the engine surface to **C++20** (concepts, `span`/`string_view`, `Result`, RT denoise-policy traits, subsystem module headers) while keeping the hybrid RT + deferred stack and golden-image regression net.
+**Recent focus:** multi-pipeline **inverse rendering lab** (path-tracer oracle + Diff-IR Deferred sibling) on one Vulkan host — capture-gated holdout/relight bars, modular C++20.
+
+## Inverse lab — recover materials from pixels
+
+Wrong init → recovered → capture GT on the **lantern** studio plate. Fit is train-only; gates use **capture-exported** holdout / relight images (not live-oracle theater).
+
+<p align="center">
+  <img src="docs/images/inverse_pt_frontier.png" width="900" alt="OHAO inverse lab — wrong init, recovered, capture target on lantern frontier plate" />
+</p>
+
+| Gate | Target | Measured |
+|------|--------|----------|
+| Holdout PSNR | ≥ 28 dB | **32.5 dB** |
+| Relight PSNR | ≥ 26 dB | **34.4 dB** |
+| Gain vs wrong init | ≥ 8 dB | **+20.5 dB** |
+| RMSE before → after | — | **0.299 → 0.0195 (−93.5%)** |
+
+**Diff-IR** sits beside the path tracer (not a replacement): tile albedo → **Deferred studio mesh** via `applyTheta`, dense map PNG export + atlas UVs. Wrong-init coordinate FD; map MSE vs the actual wrong start.
+
+<p align="center">
+  <img src="docs/images/inverse_diff_fit.png" width="820" alt="Diff-IR Deferred fit — wrong initTiles vs recovered" />
+</p>
+
+```bash
+# One-shot plate (Diff DIFFTEST + PT LABTEST)
+./scripts/run_inverse_showcase.sh
+
+# Diff only
+./build/inverse_fit --backend diff --preset lantern --quality draft \
+  --out-dir renders/diff_selftest
+
+# PT capture-gated frontier (needs capture bundle once)
+./build/inverse_fit --backend pt \
+  --lab-bundle renders/inverse_lab/lantern_frontier/capture \
+  --quality draft --out-dir renders/inverse_lab/lantern_frontier_fit
+```
+
+Docs: [`docs/inverse_lab.md`](docs/inverse_lab.md) · [`docs/render_pipelines.md`](docs/render_pipelines.md) · deck: [`docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx`](docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx)
 
 ## Headline numbers
 
