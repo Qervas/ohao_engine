@@ -67,8 +67,8 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 | **Goal** | Recover scene params θ / maps so R(θ) ≈ target |
 | **Backends** | `--backend pt` · `--backend diff` (Deferred map SoT) · `--backend hybrid` (Diff fit → PT lab eval) |
 | **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
-| **Diff-IR** | Full studio mesh Deferred; tile θ → dense map → **bindless GBuffer albedo SoT**; wrong-init coord FD; DIFFTEST ✅ |
-| **Beauty contract** | Diff: dense map sampled by Deferred (`<actor>_albedo_0`); map PNG export + atlas UVs. PT: physical θ + maps. |
+| **Diff-IR** | Full studio mesh Deferred; tile θ path (DIFFTEST) + **H1 dense free-map** (`--dense-map`, MAPTEST) ✅ |
+| **Beauty contract** | Diff: dense map sampled by Deferred (`<actor>_albedo_0`); free-grid θ painted to ≥64² map. PT: physical θ + maps. |
 | **Docs / media** | `docs/inverse_lab.md`, **`docs/inverse_lab_roadmap.md`** (long-run plan), `docs/render_pipelines.md`, `docs/media/inverse/` |
 | **Showcase** | `scripts/run_inverse_showcase.sh` · deck `docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx` |
 
@@ -84,10 +84,10 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** start **H1 / M1a** — free dense albedo 64² under Deferred (Adam, wrong-init, MAPTEST).
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1/M1a landed** — free dense albedo (`--dense-map`, 64² beauty, 8×8 free grid, MAPTEST).
 
-1. M1a dense albedo optim (primary).  
-2. M1c fast map upload (persistent VkImage / staging).  
+1. M1b denser free grid / 128² publish plate.  
+2. M1c faster map upload (persistent VkImage / staging overwrite).  
 3. Expand golden corpus (env helmet, deferred cornell).  
 4. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).  
 5. Keep this file honest after each meaningful change.

@@ -67,6 +67,10 @@ struct FitConfig {
     float brdfSppMul{2.0f};     // BRDF stage FIT spp multiplier
     bool mapGround{false};      // ground albedo tiles (shared rough/metal); see mapRes
     int mapRes{2};              // tile grid N×N when mapGround (2=classic 2×2, 4=lab maps)
+    // H1 dense albedo (free map θ under Deferred; beauty samples map)
+    bool denseMap{false};       // optim free dense ground albedo (not only 2×2 tiles)
+    int denseMapRes{64};        // beauty map resolution (width=height)
+    int denseGrid{8};           // free control grid G×G painted into denseMapRes
     std::string targetImage;    // external LDR target (PNG/JPG); empty = synthetic
     float exposure{1.0f};       // applied to external target (or fitted)
     bool fitExposure{false};    // add exposure as free θ dim (photo path)
@@ -374,6 +378,18 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 a.cfg.mapGround = true;
                 a.cfg.mapRes = 2;
             }
+        } else if (s == "--dense-map") {
+            a.cfg.denseMap = true;
+            a.cfg.mapGround = true;
+            if (a.cfg.mapRes < 2) a.cfg.mapRes = 2;
+        } else if (s == "--dense-map-res") {
+            a.cfg.denseMapRes = std::clamp(std::atoi(need("--dense-map-res")), 32, 256);
+            a.cfg.denseMap = true;
+            a.cfg.mapGround = true;
+        } else if (s == "--dense-grid") {
+            a.cfg.denseGrid = std::clamp(std::atoi(need("--dense-grid")), 4, 16);
+            a.cfg.denseMap = true;
+            a.cfg.mapGround = true;
         } else if (s == "--help" || s == "-h") {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
@@ -385,6 +401,9 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 << "  --lab-bundle PATH    fit from lab capture/ directory\n"
                 << "  --backend pt|diff|hybrid  pt=path tracer; diff=Deferred map SoT;\n"
                 << "                            hybrid=Diff fit + PT capture-gated eval\n"
+                << "  --dense-map               free dense ground albedo (H1/M1a MAPTEST)\n"
+                << "  --dense-map-res N         beauty map size NxN (default 64)\n"
+                << "  --dense-grid G            free control grid GxG (default 8)\n"
                 << "  --multi-start N | --no-multi-start   (default 5 candidates)\n"
                 << "  --light-reg W  --specular-weight W  --brdf-spp-mul M\n"
                 << "  --map-ground           N×N ground albedo tiles (default N=2)\n"

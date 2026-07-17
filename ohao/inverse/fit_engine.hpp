@@ -5,6 +5,7 @@
 
 #include "inverse/backend/image_formation.hpp"
 #include "inverse/backend/pt_formation.hpp"
+#include "inverse/dense_map_fit.hpp"
 #include "inverse/hybrid_eval.hpp"
 #include "inverse/diff_fit.hpp"
 #include "inverse/export_capture.hpp"
@@ -104,7 +105,8 @@ namespace ohao::inverse {
     if (!cfg.labBundle.empty()) std::cout << "  mode=lab-bundle " << cfg.labBundle << "\n";
 
     if (cfg.backend == InverseBackend::Diff) {
-        // Diff-IR albedo inverse (Deferred map SoT selftest).
+        // Dense free-map optim (H1/M1a) or classic tile Diff selftest.
+        if (cfg.denseMap) return runDenseMapFitCli(std::move(cfg));
         return runDiffFit(std::move(cfg));
     }
     if (cfg.backend == InverseBackend::Hybrid) {

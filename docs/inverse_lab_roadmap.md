@@ -81,7 +81,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | Horizon | Timebox (indicative) | Outcome |
 |---------|----------------------|---------|
 | **H0 — Foundation** | Done | L0–L5 protocol + Diff SoT + hybrid LABTEST |
-| **H1 — Dense materials** | ~4–8 weeks | Free dense albedo (+ ORM); map-first demos |
+| **H1 — Dense materials** | In progress | **M1a ✅** free dense albedo 64²; M1b/M1c next; ORM in H2 |
 | **H2 — Gallery & robustness** | ~4–6 weeks | Multi-preset, multi-resolution, stress gates |
 | **H3 — Real capture** | ~6–10 weeks | Photo multi-view plate, honest failure modes |
 | **H4 — Differentiability** | ~6–12 weeks | True ∂L/∂map (Deferred first); FD-checked |
@@ -335,7 +335,7 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | ID | Name | Horizon | Depends | Exit artifact |
 |----|------|---------|---------|---------------|
 | **M0** | Foundation plate | H0 | — | ✅ hybrid LABTEST + README face |
-| **M1a** | Dense albedo 64² | H1 | M0 | MAPTEST + map triple stills |
+| **M1a** | Dense albedo 64² | H1 | M0 | ✅ MAPTEST + map triple stills (`--dense-map`) |
 | **M1b** | Dense albedo 128² | H1 | M1a | Publish resolution; speed note |
 | **M1c** | Fast map upload | H1 | M1a | No unload thrash; stable long optim |
 | **M2a** | Roughness map | H2 | M1b | Relight gate held |
@@ -431,13 +431,12 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 
 ---
 
-## 11. Immediate next actions (start of H1)
+## 11. Immediate next actions
 
-1. **M1a design lock:** map res 64², free albedo only, Adam, wrong-init gray, lantern.  
-2. **Param + optim module** under `ohao/render/diff/` (map state, Adam, loss).  
-3. **MAPTEST** JSON + stills; wire `--backend diff --dense-map` (or default once stable).  
-4. **Upload path** persistent image (steal lessons from bindless thrash fix).  
-5. Update README with dense map triple when MAPTEST green.
+1. **M1a ✅** — `--dense-map` free-grid→64² Deferred SoT; MAPTEST (map MSE drop + ≥2 dB PSNR).  
+2. **M1b** — denser free grid and/or 128² publish plate.  
+3. **M1c** — persistent map upload (staging overwrite; less thrash).  
+4. README dense map triple stills when ready for public face polish.
 
 ---
 

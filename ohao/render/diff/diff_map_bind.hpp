@@ -21,8 +21,10 @@ namespace ohao::diff {
 inline constexpr const char* kGroundAlbedoSoTLogical = "diff_ground_albedo_sot";
 
 /// Upload dense map and wire every ground tile to sample it in Deferred GBuffer.
+/// When replacePrevious=false, skips wait-idle unload (fast FD loop; short-lived leak OK).
 [[nodiscard]] inline bool bindGroundAlbedoMap(VulkanRenderer& renderer, inverse::InverseScene& inv,
-                                              const DiffAlbedoMap& map) {
+                                              const DiffAlbedoMap& map,
+                                              bool replacePrevious = true) {
     auto* tm = renderer.getTextureManager();
     if (!tm || map.empty() || inv.groundMats.empty() || inv.groundTiles.empty()) return false;
 
@@ -38,9 +40,12 @@ inline constexpr const char* kGroundAlbedoSoTLogical = "diff_ground_albedo_sot";
     }
 
     // Safe replace: wait-idle unload of previous SoT image, then upload.
-    if (auto old = tm->findTexture(kGroundAlbedoSoTLogical);
-        old.valid() && old != tm->getDefaultWhiteTexture() && old != tm->getDefaultBlackTexture()) {
-        tm->unloadTexture(old);
+    if (replacePrevious) {
+        if (auto old = tm->findTexture(kGroundAlbedoSoTLogical);
+            old.valid() && old != tm->getDefaultWhiteTexture() &&
+            old != tm->getDefaultBlackTexture()) {
+            tm->unloadTexture(old);
+        }
     }
 
     auto handle = tm->loadTextureFromMemory(
