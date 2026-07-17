@@ -44,12 +44,21 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
     return savePNG(m, path);
 }
 
-[[nodiscard]] inline int runDiffFit(FitConfig cfg) {
+struct DiffFitResult {
+    bool pass{false};
+    std::vector<double> recoveredTiles; // N²×3 RGB
+    int mapRes{2};
+    double initLoss{0}, finalLoss{0}, initPsnr{0}, trainPsnr{0};
+};
+
+[[nodiscard]] inline DiffFitResult runDiffFitDetailed(FitConfig cfg) {
+    DiffFitResult result{};
     std::cout << std::unitbuf;
     applyPreset(cfg);
     resolveAssetFallbacks(cfg);
     cfg.mapGround = true;
     if (cfg.mapRes < 2) cfg.mapRes = 2;
+    result.mapRes = cfg.mapRes;
 
     const std::uint32_t W = 320;
     const std::uint32_t H = 180;
@@ -60,13 +69,13 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
     InverseScene inv = InverseScene::buildStudio(cfg);
     if (!inv.mapGround || inv.truthTiles.empty()) {
         std::cerr << "FATAL: Diff fit requires map-ground studio\n";
-        return 1;
+        return result;
     }
 
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) {
         std::cerr << "FATAL: Diff VulkanRenderer init failed\n";
-        return 1;
+        return result;
     }
     renderer.setRenderMode(RenderMode::Deferred);
     if (std::filesystem::exists(inv.envPath)) applyEnv(renderer, inv.envPath);
@@ -120,7 +129,7 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
     if (abMse < 1e-4) {
         std::cerr << "FATAL: tile θ does not affect Deferred beauty\n";
         inv.scene.reset();
-        return 1;
+        return result;
     }
 
     // Wrong init only: initTiles (studio wrong guess) or flat gray — never near-truth warm.
@@ -265,8 +274,28 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
     std::cout << (ok ? "DIFFTEST PASS" : "DIFFTEST FAIL")
               << " (wrong-init optim; loss " << initLoss << " → " << finalLoss << "; PSNR "
               << initPsnr << " → " << psnr << "; map_mse_vs_wrong " << mapMseVsWrong << ")\n";
+
+    result.pass = ok;
+    result.recoveredTiles = best;
+    result.initLoss = initLoss;
+    result.finalLoss = finalLoss;
+    result.initPsnr = initPsnr;
+    result.trainPsnr = psnr;
+    {
+        std::ofstream tj(outDir / "recovered_tiles.json");
+        tj << "{\n  \"map_res\": " << N << ",\n  \"rgb\": [";
+        for (size_t i = 0; i < best.size(); ++i) {
+            if (i) tj << ", ";
+            tj << best[i];
+        }
+        tj << "]\n}\n";
+    }
     inv.scene.reset();
-    return ok ? 0 : 1;
+    return result;
+}
+
+[[nodiscard]] inline int runDiffFit(FitConfig cfg) {
+    return runDiffFitDetailed(std::move(cfg)).pass ? 0 : 1;
 }
 
 } // namespace ohao::inverse

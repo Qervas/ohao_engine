@@ -15,6 +15,8 @@ namespace ohao::inverse {
 enum class InverseBackend : std::uint8_t {
     PathTrace = 0,
     Diff = 1,
+    /// Diff fit (Deferred map SoT) + PT capture-gated holdout/relight eval.
+    Hybrid = 2,
 };
 
 [[nodiscard]] inline const char* inverseBackendName(InverseBackend b) noexcept {
@@ -23,12 +25,15 @@ enum class InverseBackend : std::uint8_t {
         return "pt";
     case InverseBackend::Diff:
         return "diff";
+    case InverseBackend::Hybrid:
+        return "hybrid";
     }
     return "pt";
 }
 
 [[nodiscard]] inline InverseBackend parseInverseBackend(std::string_view s) noexcept {
     if (s == "diff" || s == "diff-ir" || s == "differentiable") return InverseBackend::Diff;
+    if (s == "hybrid" || s == "diff-pt" || s == "diff+pt") return InverseBackend::Hybrid;
     return InverseBackend::PathTrace;
 }
 

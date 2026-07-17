@@ -5,6 +5,7 @@
 
 #include "inverse/backend/image_formation.hpp"
 #include "inverse/backend/pt_formation.hpp"
+#include "inverse/hybrid_eval.hpp"
 #include "inverse/diff_fit.hpp"
 #include "inverse/export_capture.hpp"
 #include "inverse/export_dataset.hpp"
@@ -103,8 +104,12 @@ namespace ohao::inverse {
     if (!cfg.labBundle.empty()) std::cout << "  mode=lab-bundle " << cfg.labBundle << "\n";
 
     if (cfg.backend == InverseBackend::Diff) {
-        // Diff-IR albedo inverse (Diff-domain selftest). Capture-gated PT plate uses --backend pt.
+        // Diff-IR albedo inverse (Deferred map SoT selftest).
         return runDiffFit(std::move(cfg));
+    }
+    if (cfg.backend == InverseBackend::Hybrid) {
+        // Diff fit → PT capture-gated holdout/relight (requires --lab-bundle).
+        return runHybridDiffPt(std::move(cfg));
     }
 
     VulkanRenderer renderer(cfg.show.width, cfg.show.height);
