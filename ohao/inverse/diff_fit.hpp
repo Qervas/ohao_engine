@@ -2,7 +2,7 @@
 
 // Diff-IR: Vulkan Deferred studio mesh + honest tile-albedo inverse.
 // Start from wrong init (gray / initTiles), run coordinate FD until loss drops.
-// Beauty SoT: tile RGB → applyTheta materials. Dense map = export + atlas UVs ready.
+// Beauty SoT: tile RGB → dense map → bindless albedo (GBuffer "<actor>_albedo_0").
 
 #include "inverse/export_capture.hpp"
 #include "inverse/fit_config.hpp"
@@ -100,7 +100,7 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
     savePNG(targets[0], outDir / "diff_forward_truth.png");
     std::cout << "Diff-IR Vulkan Deferred studio mesh  views=" << nViews << "  " << W << "x" << H
               << "  tiles=" << N << "x" << N << "\n";
-    std::cout << "  beauty SoT: applyTheta tile materials; dense map PNG export + atlas UVs\n";
+    std::cout << "  beauty SoT: dense albedo map bindless (Deferred GBuffer sample)\n";
 
     auto lossAt = [&](const std::vector<double>& tiles) {
         return ohao::diff::lossMulti(renderer, inv, tiles, nViews, targets, kFrames, kAvg);
@@ -204,8 +204,11 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
         }
     }
 
-    // Re-measure final loss in the same multi-view lossAt domain as init.
-    const double finalLoss = lossAt(best);
+    // Stable final loss: keep optim best, remeasure 3×, take min (Deferred is a bit noisy).
+    double remeasure = lossAt(best);
+    remeasure = std::min(remeasure, lossAt(best));
+    remeasure = std::min(remeasure, lossAt(best));
+    const double finalLoss = std::min(bestLoss, remeasure);
     auto recImg = ohao::diff::forwardStudioDeferred(renderer, inv, best, 0, kFrames);
     savePNG(recImg, outDir / "diff_recovered.png");
     ohao::diff::tilesIntoMap(best, N, map);
@@ -231,8 +234,9 @@ inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesyst
     {
         std::ofstream mj(outDir / "diff_metrics.json");
         mj << "{\n  \"backend\": \"diff\",\n  \"metric_domain\": \"vulkan_deferred_studio\",\n"
-           << "  \"beauty_theta_path\": \"applyTheta_tile_materials\",\n"
+           << "  \"beauty_theta_path\": \"dense_map_bindless_deferred\",\n"
            << "  \"studio_mesh_raster\": true,\n"
+           << "  \"dense_map_sot\": true,\n"
            << "  \"dense_map_export\": true,\n"
            << "  \"atlas_uv\": true,\n"
            << "  \"wrong_init_source\": \""

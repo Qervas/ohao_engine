@@ -466,10 +466,24 @@ void BindlessTextureManager::unloadTexture(BindlessTextureHandle handle) {
     auto& tex = m_textures[handle.index];
     if (tex.persistent) return;  // Don't unload persistent textures
 
-    // Remove from maps
+    // Ensure GPU is done sampling this image before destroy (bindless UPDATE_AFTER_BIND).
+    if (m_device != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(m_device);
+    }
+
+    // Remove from maps (logical name may differ from tex.name for registerName aliases —
+    // erase both memory_* and any key currently pointing at this handle).
     if (!tex.name.empty()) {
         m_nameToHandle.erase(tex.name);
         m_pathToHandle.erase(tex.name);
+    }
+    for (auto it = m_nameToHandle.begin(); it != m_nameToHandle.end();) {
+        if (it->second.index == handle.index) it = m_nameToHandle.erase(it);
+        else ++it;
+    }
+    for (auto it = m_pathToHandle.begin(); it != m_pathToHandle.end();) {
+        if (it->second.index == handle.index) it = m_pathToHandle.erase(it);
+        else ++it;
     }
 
     // Destroy resources

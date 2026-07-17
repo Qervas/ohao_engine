@@ -38,7 +38,7 @@ Wrong init → recovered → capture GT on the **lantern** studio plate. Fit is 
 | Gain vs wrong init | ≥ 8 dB | **+20.5 dB** |
 | RMSE before → after | — | **0.299 → 0.0195 (−93.5%)** |
 
-**Diff-IR** sits beside the path tracer (not a replacement): tile albedo → **Deferred studio mesh** via `applyTheta`, dense map PNG export + atlas UVs. Wrong-init coordinate FD; map MSE vs the actual wrong start.
+**Diff-IR** sits beside the path tracer (not a replacement): tile albedo → dense map → **bindless texture sampled by Deferred** on the full studio mesh. Wrong-init coordinate FD; map MSE vs the actual wrong start.
 
 <p align="center">
   <img src="docs/images/inverse_diff_fit.png" width="820" alt="Diff-IR Deferred fit — wrong initTiles vs recovered" />

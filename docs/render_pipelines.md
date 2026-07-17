@@ -19,7 +19,7 @@ Forward Deferred  Diff-IR      PathTrace
 |------|------|
 | **Deferred** | Realtime / offline raster, GBuffer |
 | **PathTrace (RTOffline)** | Physical stills, inverse FD, lab relight oracle |
-| **Diff-IR** | Vulkan Deferred studio-mesh raster; tile θ via `applyTheta` (`--backend diff`); dense map PNG export + ground atlas UVs |
+| **Diff-IR** | Vulkan Deferred studio-mesh raster; tile θ → dense map → bindless GBuffer albedo SoT (`--backend diff`); map PNG export |
 
 ## Art of the code (LOC law)
 
