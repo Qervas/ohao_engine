@@ -336,8 +336,8 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 |----|------|---------|---------|---------------|
 | **M0** | Foundation plate | H0 | — | ✅ hybrid LABTEST + README face |
 | **M1a** | Dense albedo 64² | H1 | M0 | ✅ MAPTEST + map triple stills (`--dense-map`) |
-| **M1b** | Dense albedo 128² | H1 | M1a | Publish resolution; speed note |
-| **M1c** | Fast map upload | H1 | M1a | No unload thrash; stable long optim |
+| **M1b** | Dense albedo 128² | H1 | M1a | ✅ MAPTEST at `--dense-map-res 128` |
+| **M1c** | Fast map upload | H1 | M1a | ✅ `updateTextureFromMemory` in-place SoT |
 | **M2a** | Roughness map | H2 | M1b | Relight gate held |
 | **M2b** | Metallic + priors | H2 | M2a | ORM strip in showcase |
 | **M3a** | 3-preset gallery | H2 | M1b | Gallery wall + script |
@@ -433,10 +433,9 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 
 ## 11. Immediate next actions
 
-1. **M1a ✅** — `--dense-map` free-grid→64² Deferred SoT; MAPTEST (map MSE drop + ≥2 dB PSNR).  
-2. **M1b** — denser free grid and/or 128² publish plate.  
-3. **M1c** — persistent map upload (staging overwrite; less thrash).  
-4. README dense map triple stills when ready for public face polish.
+1. **M1a–c ✅** — dense map 64/128², free grid, in-place upload, MAPTEST.  
+2. **H2 / M2a** — roughness (ORM) map channel under Deferred + relight gate.  
+3. README dense map triple stills for public face polish.
 
 ---
 

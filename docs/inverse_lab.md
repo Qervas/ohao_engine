@@ -59,10 +59,13 @@ Spatial materials: `--map-res N` → N×N ground albedo tiles + shared rough/met
 python3 tools/inverse_lab/test_metrics_and_maps.py renders/inverse_lab/lantern_frontier_fit
 python3 tools/inverse_lab/eval_bundle.py renders/inverse_lab/lantern_frontier_fit
 
-# H1/M1a free dense ground albedo (Deferred map SoT, MAPTEST)
+# H1 free dense ground albedo (Deferred map SoT, MAPTEST) — 64² or 128²
 ./build/inverse_fit --backend diff --dense-map --dense-map-res 64 --dense-grid 8 \
   --preset lantern --quality draft --out-dir renders/diff_dense
+./build/inverse_fit --backend diff --dense-map --dense-map-res 128 --dense-grid 8 \
+  --preset lantern --quality draft --out-dir renders/diff_dense_128
 python3 tools/inverse_lab/test_dense_map.py renders/diff_dense
+python3 tools/inverse_lab/test_dense_map.py renders/diff_dense_128
 ```
 
 ## Ladder
