@@ -84,9 +84,9 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-1. Raise hybrid transfer quality (Diff tiles → PT holdout/relight closer to PT-only plate).
-2. Denser UV maps / ORM channels on top of bindless albedo SoT.
-3. Faster map update (avoid full unload/recreate each FD step).
+1. Denser UV maps / ORM channels on top of bindless albedo SoT.
+2. Faster map update (avoid full unload/recreate each FD step).
+3. Optional: hybrid PT refine schedule polish (speed vs full LABTEST margin).
 4. Expand golden corpus (env helmet, deferred cornell).
 5. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
 6. Keep this file honest after each meaningful change.
