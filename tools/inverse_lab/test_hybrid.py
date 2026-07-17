@@ -39,13 +39,19 @@ def main(out: Path) -> int:
         f"diff_train_psnr={float(h.get('diff_train_psnr', 0)):.2f} "
         f"transfer_pass={h.get('transfer_pass')} full_lab={h.get('full_labtest_pass')}"
     )
-    ok = (
+    transfer_ok = (
         holdout >= xfer_h
         and gain >= xfer_g
         and relight >= xfer_r
         and h.get("transfer_pass") is True
         and h.get("difftest_pass") is True
     )
+    # Full oracle bar (same as PT LABTEST) — expected after PT light+soft-tile refine.
+    full_ok = holdout >= 28.0 and gain >= 8.0 and relight >= 26.0
+    if h.get("full_labtest_pass") is True:
+        full_ok = True
+    print(f"transfer_ok={transfer_ok} full_lab_ok={full_ok} light_refine={h.get('pt_light_refine')}")
+    ok = transfer_ok  # hybrid exit contract; full_lab is bonus when light refine lands
     print(("PASS" if ok else "FAIL") + " tools/inverse_lab/test_hybrid.py")
     return 0 if ok else 1
 
