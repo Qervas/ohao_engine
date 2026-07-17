@@ -1,6 +1,7 @@
 # Inverse Lab — frontier multi-view / novel-view / relight protocol
 
-**Status:** L1–L2 **pass** on synthetic lantern studio capture (capture-gated PSNR/SSIM bar).
+**Status:** L1–L2 **pass** on synthetic lantern studio capture (capture-gated PSNR/SSIM bar).  
+**Long-run plan:** [`docs/inverse_lab_roadmap.md`](inverse_lab_roadmap.md) — horizons H0–H5, elongated phases, milestones M0–M6.
 
 ## Problem definition
 
@@ -69,7 +70,7 @@ python3 tools/inverse_lab/eval_bundle.py renders/inverse_lab/lantern_frontier_fi
 | L3 denser UV maps / hero maps | partial — ground atlas UVs + dense map SoT; denser θ next |
 | L4 Diff-IR (`--backend diff`, Deferred dense-map SoT) | ✅ bindless albedo SoT (DIFFTEST) |
 | L5 Hybrid Diff-fit → PT light/tile refine → eval (`--backend hybrid`) | ✅ DIFFTEST + transfer; full LABTEST achievable |
-| L5 neural materials + public benchmarks | planned |
+| L6+ dense maps / ORM / photo / autodiff | → **roadmap** H1–H5 (not started as free dense θ) |
 
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
 
@@ -81,3 +82,5 @@ python3 tools/inverse_lab/eval_bundle.py renders/inverse_lab/lantern_frontier_fi
 ## Non-goals (this track)
 
 Public dataset SOTA, free geometry/camera, unmatched single-photo inverse.
+
+See roadmap §0 / §6 for elongated non-goals and optional ambition tracks.

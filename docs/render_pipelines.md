@@ -65,4 +65,5 @@ Lab protocol (capture-gated PSNR/SSIM) is backend-agnostic: see `docs/inverse_la
 
 - `docs/inverse.md` — inverse product overview  
 - `docs/inverse_lab.md` — multi-view / holdout / relight bar  
+- `docs/inverse_lab_roadmap.md` — long-run phases H0–H5 / milestones M0–M6  
 - Renovation Phase 0 — determinism contract for offline stills  

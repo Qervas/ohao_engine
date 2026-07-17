@@ -58,7 +58,7 @@ Wrong init → recovered → capture GT on the **lantern** studio plate. Fit is 
   --quality draft --out-dir renders/inverse_lab/lantern_frontier_fit
 ```
 
-Docs: [`docs/inverse_lab.md`](docs/inverse_lab.md) · [`docs/render_pipelines.md`](docs/render_pipelines.md) · deck: [`docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx`](docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx)
+Docs: [`docs/inverse_lab.md`](docs/inverse_lab.md) · [`docs/inverse_lab_roadmap.md`](docs/inverse_lab_roadmap.md) (long-run plan) · [`docs/render_pipelines.md`](docs/render_pipelines.md) · deck: [`docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx`](docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx)
 
 ## Headline numbers
 
