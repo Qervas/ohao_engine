@@ -84,10 +84,9 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1/M1a landed** — free dense albedo (`--dense-map`, 64² beauty, 8×8 free grid, MAPTEST).
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a+M1b+M1c** — free dense albedo 64/128², in-place map upload, MAPTEST.
 
-1. M1b denser free grid / 128² publish plate.  
-2. M1c faster map upload (persistent VkImage / staging overwrite).  
-3. Expand golden corpus (env helmet, deferred cornell).  
-4. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).  
-5. Keep this file honest after each meaningful change.
+1. H2 M2a roughness map / ORM channel.  
+2. Expand golden corpus (env helmet, deferred cornell).  
+3. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).  
+4. Keep this file honest after each meaningful change.

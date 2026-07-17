@@ -85,6 +85,12 @@ public:
                                                   BindlessTextureType type = BindlessTextureType::Custom,
                                                   bool generateMips = true);
 
+    /// Overwrite an existing texture's texels in place (same WxH). No new slot / no unload.
+    /// Used by Diff dense-map FD loop for fast beauty SoT updates.
+    [[nodiscard]] bool updateTextureFromMemory(BindlessTextureHandle handle,
+                                               std::span<const uint8_t> data,
+                                               uint32_t width, uint32_t height);
+
     [[nodiscard]] BindlessTextureHandle registerExternalTexture(VkImageView view, std::string_view name,
                                                     BindlessTextureType type = BindlessTextureType::Custom);
 

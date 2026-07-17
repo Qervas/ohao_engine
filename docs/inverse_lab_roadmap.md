@@ -81,7 +81,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | Horizon | Timebox (indicative) | Outcome |
 |---------|----------------------|---------|
 | **H0 — Foundation** | Done | L0–L5 protocol + Diff SoT + hybrid LABTEST |
-| **H1 — Dense materials** | In progress | **M1a ✅** free dense albedo 64²; M1b/M1c next; ORM in H2 |
+| **H1 — Dense materials** | M1a–c landed | Free dense albedo 64/128² + in-place upload; ORM → H2 |
 | **H2 — Gallery & robustness** | ~4–6 weeks | Multi-preset, multi-resolution, stress gates |
 | **H3 — Real capture** | ~6–10 weeks | Photo multi-view plate, honest failure modes |
 | **H4 — Differentiability** | ~6–12 weeks | True ∂L/∂map (Deferred first); FD-checked |

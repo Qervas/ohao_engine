@@ -69,8 +69,8 @@ struct FitConfig {
     int mapRes{2};              // tile grid N×N when mapGround (2=classic 2×2, 4=lab maps)
     // H1 dense albedo (free map θ under Deferred; beauty samples map)
     bool denseMap{false};       // optim free dense ground albedo (not only 2×2 tiles)
-    int denseMapRes{64};        // beauty map resolution (width=height)
-    int denseGrid{8};           // free control grid G×G painted into denseMapRes
+    int denseMapRes{64};        // beauty map resolution (width=height); 128 for M1b plate
+    int denseGrid{8};           // free control grid G×G painted into denseMapRes (try 12 for denser θ)
     std::string targetImage;    // external LDR target (PNG/JPG); empty = synthetic
     float exposure{1.0f};       // applied to external target (or fitted)
     bool fitExposure{false};    // add exposure as free θ dim (photo path)

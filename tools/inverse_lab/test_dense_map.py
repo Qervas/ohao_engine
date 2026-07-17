@@ -40,6 +40,10 @@ def main(out: Path) -> int:
     if int(m.get("dense_map_res", 0)) < 32:
         print("FAIL dense_map_res too small")
         return 1
+    # M1c: prefer in-place upload when field present
+    upload = m.get("map_upload")
+    if upload is not None and "in_place" not in str(upload):
+        print(f"WARN map_upload={upload} (expected in_place path for M1c)")
 
     init_psnr = float(m["init_psnr"])
     train_psnr = float(m["train_psnr"])

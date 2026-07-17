@@ -330,6 +330,7 @@ struct DenseMapFitResult {
            << "  \"dense_map_sot\": true,\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"
            << "  \"dense_grid\": " << G << ",\n"
+           << "  \"map_upload\": \"in_place_updateTextureFromMemory\",\n"
            << "  \"wrong_init_source\": \"cool_solid\",\n"
            << "  \"init_loss\": " << initLoss << ",\n"
            << "  \"final_loss\": " << finalLoss << ",\n"

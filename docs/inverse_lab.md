@@ -75,7 +75,7 @@ python3 tools/inverse_lab/test_dense_map.py renders/diff_dense
 | L3 denser UV maps / hero maps | partial — ground atlas UVs + dense map SoT; denser θ next |
 | L4 Diff-IR (`--backend diff`, Deferred dense-map SoT) | ✅ bindless albedo SoT (DIFFTEST) |
 | L5 Hybrid Diff-fit → PT light/tile refine → eval (`--backend hybrid`) | ✅ DIFFTEST + transfer; full LABTEST achievable |
-| L6 / H1 M1a free dense albedo (`--dense-map`) | ✅ MAPTEST (64² map, 8×8 free grid, wrong-init cool) |
+| L6 / H1 free dense albedo (`--dense-map`) | ✅ MAPTEST 64² + 128²; in-place map upload (M1a–c) |
 | L6+ ORM / photo / autodiff | → **roadmap** H2–H5 |
 
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.

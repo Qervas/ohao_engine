@@ -2,6 +2,7 @@
 
 // Bind dense albedo map into Deferred ground materials (beauty SoT).
 // GBuffer model path: findMaterialTextureIndex → "<actor>_albedo_0".
+// Fast path: updateTextureFromMemory when SoT slot already exists (M1c).
 
 #include "render/diff/diff_map.hpp"
 
@@ -21,10 +22,10 @@ namespace ohao::diff {
 inline constexpr const char* kGroundAlbedoSoTLogical = "diff_ground_albedo_sot";
 
 /// Upload dense map and wire every ground tile to sample it in Deferred GBuffer.
-/// When replacePrevious=false, skips wait-idle unload (fast FD loop; short-lived leak OK).
+/// Prefer in-place texel update when the SoT texture already exists at the same size.
 [[nodiscard]] inline bool bindGroundAlbedoMap(VulkanRenderer& renderer, inverse::InverseScene& inv,
                                               const DiffAlbedoMap& map,
-                                              bool replacePrevious = true) {
+                                              bool /*replacePrevious*/ = true) {
     auto* tm = renderer.getTextureManager();
     if (!tm || map.empty() || inv.groundMats.empty() || inv.groundTiles.empty()) return false;
 
@@ -39,23 +40,32 @@ inline constexpr const char* kGroundAlbedoSoTLogical = "diff_ground_albedo_sot";
         rgba[i * 4 + 3] = 255;
     }
 
-    // Safe replace: wait-idle unload of previous SoT image, then upload.
-    if (replacePrevious) {
-        if (auto old = tm->findTexture(kGroundAlbedoSoTLogical);
-            old.valid() && old != tm->getDefaultWhiteTexture() &&
-            old != tm->getDefaultBlackTexture()) {
-            tm->unloadTexture(old);
-        }
-    }
+    BindlessTextureHandle handle = tm->findTexture(kGroundAlbedoSoTLogical);
+    const bool sizeOk = handle.valid() && [&]() {
+        const auto* info = tm->getTextureInfo(handle);
+        return info && info->width == map.desc.width && info->height == map.desc.height;
+    }();
 
-    auto handle = tm->loadTextureFromMemory(
-        std::span<const std::uint8_t>(rgba), map.desc.width, map.desc.height,
-        VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Albedo, /*generateMips=*/false);
-    if (!handle.valid() || handle == tm->getDefaultWhiteTexture() ||
-        handle == tm->getDefaultBlackTexture()) {
-        return false;
+    if (sizeOk) {
+        if (!tm->updateTextureFromMemory(handle, std::span<const std::uint8_t>(rgba),
+                                         map.desc.width, map.desc.height)) {
+            return false;
+        }
+    } else {
+        if (handle.valid() && handle != tm->getDefaultWhiteTexture() &&
+            handle != tm->getDefaultBlackTexture()) {
+            tm->unloadTexture(handle);
+        }
+        handle = tm->loadTextureFromMemory(
+            std::span<const std::uint8_t>(rgba), map.desc.width, map.desc.height,
+            VK_FORMAT_R8G8B8A8_UNORM, BindlessTextureType::Albedo, /*generateMips=*/false);
+        if (!handle.valid() || handle == tm->getDefaultWhiteTexture() ||
+            handle == tm->getDefaultBlackTexture()) {
+            return false;
+        }
+        tm->registerName(handle, kGroundAlbedoSoTLogical);
+        tm->setTexturePersistent(handle, true);
     }
-    tm->registerName(handle, kGroundAlbedoSoTLogical);
 
     const glm::vec3 white(1.f);
     for (size_t k = 0; k < inv.groundTiles.size(); ++k) {

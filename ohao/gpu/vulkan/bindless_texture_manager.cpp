@@ -436,6 +436,111 @@ BindlessTextureHandle BindlessTextureManager::loadTextureFromMemory(std::span<co
     return handle;
 }
 
+bool BindlessTextureManager::updateTextureFromMemory(BindlessTextureHandle handle,
+                                                     std::span<const uint8_t> data,
+                                                     uint32_t width, uint32_t height) {
+    if (!handle.valid() || handle.index >= m_textures.size()) return false;
+    auto& tex = m_textures[handle.index];
+    if (tex.image == VK_NULL_HANDLE || tex.width != width || tex.height != height) return false;
+
+    const VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4u;
+    if (data.size_bytes() < static_cast<size_t>(imageSize)) return false;
+
+    VkBuffer stagingBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    VkBufferCreateInfo bufferInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = imageSize,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    if (vkCreateBuffer(m_device, &bufferInfo, nullptr, &stagingBuffer) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(m_device, stagingBuffer, &memReqs);
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memProps);
+    uint32_t memTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((memReqs.memoryTypeBits & (1u << i)) &&
+            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+            memTypeIndex = i;
+            break;
+        }
+    }
+    if (memTypeIndex == UINT32_MAX) {
+        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+        return false;
+    }
+    VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memReqs.size,
+        .memoryTypeIndex = memTypeIndex,
+    };
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &stagingMemory) != VK_SUCCESS) {
+        vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+        return false;
+    }
+    vkBindBufferMemory(m_device, stagingBuffer, stagingMemory, 0);
+    void* mapped = nullptr;
+    vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &mapped);
+    memcpy(mapped, data.data(), static_cast<size_t>(imageSize));
+    vkUnmapMemory(m_device, stagingMemory);
+
+    VkCommandBufferAllocateInfo cmdAllocInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = m_commandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(m_device, &cmdAllocInfo, &cmd);
+    VkCommandBufferBeginInfo beginInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = tex.image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(cmd, stagingBuffer, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                           &region);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submitInfo{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+    };
+    vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_graphicsQueue);
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+    vkDestroyBuffer(m_device, stagingBuffer, nullptr);
+    vkFreeMemory(m_device, stagingMemory, nullptr);
+    return true;
+}
+
 BindlessTextureHandle BindlessTextureManager::registerExternalTexture(VkImageView view,
                                                                         std::string_view name,
                                                                         BindlessTextureType type) {
