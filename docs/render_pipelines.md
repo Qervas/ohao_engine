@@ -37,7 +37,8 @@ Diff lives under `ohao/render/diff/` as many small C++20 units. Inverse backends
 | `--backend` | Formation | Grads |
 |-------------|-----------|-------|
 | `pt` (default) | Path tracer via `RenderSession` | Finite differences |
-| `diff` | Diff-IR (`ohao/render/diff/*`) | Analytic ∂L/∂albedo map (+ FD check) |
+| `diff` | Diff-IR (`ohao/render/diff/*`) | Tile θ → dense map → Deferred bindless SoT + FD |
+| `hybrid` | Diff fit → PT eval | Same as diff for fit; capture-gated holdout/relight under PT |
 
 ### Showcase commands
 
@@ -46,7 +47,13 @@ Diff lives under `ohao/render/diff/` as many small C++20 units. Inverse backends
 ./build/inverse_fit --backend diff --preset lantern --quality draft \
   --show-width 320 --show-height 180 --iters 40 --out-dir renders/diff_demo
 
-# Capture-gated PT lab plate (LABTEST, hybrid oracle)
+# Hybrid: Diff fit → PT capture-gated holdout/relight (DIFFTEST + LABTEST)
+./build/inverse_fit --backend hybrid --preset lantern --quality draft \
+  --lab-bundle renders/inverse_lab/lantern_frontier/capture \
+  --show-width 640 --show-height 360 --show-spp 128 \
+  --out-dir renders/inverse_lab/lantern_hybrid
+
+# Capture-gated PT lab plate (LABTEST)
 ./build/inverse_fit --backend pt --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --preset lantern --quality draft --show-width 640 --show-height 360 --show-spp 128 \
   --iters 28 --multi-start 5 --visual-polish --out-dir renders/inverse_lab/lantern_frontier_fit

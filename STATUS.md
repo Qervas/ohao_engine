@@ -65,7 +65,7 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 | Item | State |
 |------|--------|
 | **Goal** | Recover scene params θ / maps so R(θ) ≈ target |
-| **Backends** | `--backend pt` (FD + path tracer) · `--backend diff` (Deferred + dense albedo) |
+| **Backends** | `--backend pt` · `--backend diff` (Deferred map SoT) · `--backend hybrid` (Diff fit → PT lab eval) |
 | **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
 | **Diff-IR** | Full studio mesh Deferred; tile θ → dense map → **bindless GBuffer albedo SoT**; wrong-init coord FD; DIFFTEST ✅ |
 | **Beauty contract** | Diff: dense map sampled by Deferred (`<actor>_albedo_0`); map PNG export + atlas UVs. PT: physical θ + maps. |
@@ -75,13 +75,16 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 ```bash
 ./scripts/run_inverse_showcase.sh
 ./build/inverse_fit --backend diff --preset lantern --quality draft --out-dir renders/diff_selftest
+./build/inverse_fit --backend hybrid --preset lantern --quality draft \
+  --lab-bundle renders/inverse_lab/lantern_frontier/capture \
+  --out-dir renders/inverse_lab/lantern_hybrid
 ./build/inverse_fit --backend pt --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --quality draft --out-dir renders/inverse_lab/lantern_frontier_fit
 ```
 
 ## Next actions
 
-1. Diff-fit + PT-eval hybrid lab gate (same capture bar, Diff domain fit).
+1. Raise hybrid transfer quality (Diff tiles → PT holdout/relight closer to PT-only plate).
 2. Denser UV maps / ORM channels on top of bindless albedo SoT.
 3. Faster map update (avoid full unload/recreate each FD step).
 4. Expand golden corpus (env helmet, deferred cornell).
