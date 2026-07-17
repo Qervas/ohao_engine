@@ -60,28 +60,30 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).
 4. **Skinned RT BLAS** — animation subsystem removed; gap is moot until reintroduced.
 
-## Inverse rendering (physical, no ML yet)
+## Inverse rendering (physical + Diff-IR)
 
 | Item | State |
 |------|--------|
-| **Goal** | Recover scene params θ so R(θ) ≈ target image |
-| **Default scene** | **studio**: DamagedHelmet + ground + HDRI + multi-view |
-| **Optimizes** | Ground albedo RGB (warm clay truth vs cool wrong init) |
-| **Multi-view** | 2–3 cameras; mean FIT loss |
-| **Relight** | After fit: hot key light → `recovered_relight.png` |
-| **CLI** | `./build/inverse_fit --selftest --scene studio --quality draft` |
-| **SHOW** | OIDN grain-free; FIT always raw MC |
-| **Docs** | `docs/inverse.md` |
-| **Not yet** | ML, autodiff, multi-param materials, real photos |
+| **Goal** | Recover scene params θ / maps so R(θ) ≈ target |
+| **Backends** | `--backend pt` (FD + path tracer) · `--backend diff` (Deferred + dense albedo) |
+| **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
+| **Diff-IR** | Full studio mesh Deferred; tile θ → applyTheta beauty; dense map PNG export + **atlas UVs**; wrong-init coord FD; DIFFTEST ✅ |
+| **Beauty contract** | Diff: tile materials drive Deferred beauty; dense map export + UV atlas for bindless SoT next. PT: physical θ + maps. |
+| **Docs / media** | `docs/inverse_lab.md`, `docs/render_pipelines.md`, `docs/media/inverse/`, README hero |
+| **Showcase** | `scripts/run_inverse_showcase.sh` · deck `docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx` |
 
 ```bash
-./build/inverse_fit --selftest --scene studio --quality draft
-# → target_*, init_show, recovered_*, *relight*, trajectory.json
+./scripts/run_inverse_showcase.sh
+./build/inverse_fit --backend diff --preset lantern --quality draft --out-dir renders/diff_selftest
+./build/inverse_fit --backend pt --lab-bundle renders/inverse_lab/lantern_frontier/capture \
+  --quality draft --out-dir renders/inverse_lab/lantern_frontier_fit
 ```
 
 ## Next actions
 
-1. Inverse Phase 2: roughness more params (roughness) + multi-view / lighting fit; optional Adam.
-2. Expand golden corpus (env helmet, deferred cornell).
-3. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
-4. Keep this file honest after each meaningful change.
+1. Finish bindless dense-map beauty SoT (GBuffer sample path — atlas UVs already on ground).
+2. Diff-fit + PT-eval hybrid lab gate (same capture bar, Diff domain fit).
+3. Denser UV maps / ORM channels once bindless SoT is verified.
+4. Expand golden corpus (env helmet, deferred cornell).
+5. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
+6. Keep this file honest after each meaningful change.
