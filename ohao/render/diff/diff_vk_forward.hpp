@@ -1,9 +1,7 @@
 #pragma once
 
 // Diff-IR Vulkan forward: Deferred raster of full studio mesh.
-// Beauty SoT (current): tile RGB → applyTheta materials (proven Deferred path).
-// Dense map: always painted for export + atlas UVs on ground; bindless bind is
-// available via bindGroundAlbedoMap but not required for DIFFTEST gates.
+// Beauty SoT: tile RGB → dense map → bindless albedo sampled by GBuffer.
 
 #include "render/diff/diff_map.hpp"
 #include "render/diff/diff_map_bind.hpp"
@@ -22,7 +20,6 @@
 
 namespace ohao::diff {
 
-/// Paint tile RGB into dense map (export + future bindless SoT source).
 inline void tilesIntoMap(const std::vector<double>& tileRgb, int N, DiffAlbedoMap& map) {
     if (N < 1) return;
     if (map.empty()) map.allocate(32, 32);
@@ -41,12 +38,11 @@ inline void tilesIntoMap(const std::vector<double>& tileRgb, int N, DiffAlbedoMa
     }
 }
 
-/// Apply tile colors via applyTheta (beauty SoT today: material base + vertex color).
 inline void applyTilesToScene(ohao::inverse::InverseScene& inv, const std::vector<double>& tileRgb,
                               int mapGrid) {
     if (!inv.mapGround || inv.groundMats.empty()) return;
     const int N = mapGrid > 0 ? mapGrid : inv.mapRes;
-    auto th = inv.truthTheta(); // keep lights / rough / metal
+    auto th = inv.truthTheta();
     for (int i = 0; i < N * N; ++i) {
         const size_t o = static_cast<size_t>(i) * 3u;
         if (o + 2 >= tileRgb.size()) break;
@@ -55,24 +51,20 @@ inline void applyTilesToScene(ohao::inverse::InverseScene& inv, const std::vecto
         th[o + 2] = tileRgb[o + 2];
     }
     inv.applyTheta(th);
-    // Ensure GBuffer uses material colors, not a stale bindless override.
-    for (auto* mat : inv.groundMats) {
-        if (!mat) continue;
-        mat->getMaterial().useAlbedoTexture = false;
-        mat->getMaterial().albedoTexture.clear();
-    }
 }
 
-/// Deferred beauty of full studio mesh driven by tile θ materials.
-/// Dense map is painted for export (and atlas UVs are on the mesh for map sampling).
 [[nodiscard]] inline ohao::inverse::ImageRGBA8 forwardStudioDeferred(
     ohao::VulkanRenderer& renderer, ohao::inverse::InverseScene& inv,
     const std::vector<double>& tileRgb, int viewIndex, int frames = 16) {
     static DiffAlbedoMap s_map;
     if (s_map.empty()) s_map.allocate(32, 32);
+
     tilesIntoMap(tileRgb, inv.mapRes, s_map);
     applyTilesToScene(inv, tileRgb, inv.mapRes);
+    // Wire bindless map (white verts + materialColors + "<actor>_albedo_0").
+    (void)bindGroundAlbedoMap(renderer, inv, s_map);
     (void)renderer.updateSceneBuffers();
+
     inv.applyCamera(renderer.getCamera(), viewIndex);
     renderer.setRenderMode(ohao::RenderMode::Deferred);
     if (auto* def = renderer.getDeferredRenderer()) {

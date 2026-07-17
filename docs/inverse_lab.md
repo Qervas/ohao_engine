@@ -66,11 +66,11 @@ python3 tools/inverse_lab/eval_bundle.py renders/inverse_lab/lantern_frontier_fi
 | L0 scalar multi-param IR | ✅ |
 | L1 multi-view capture + holdout/relight | ✅ |
 | L2 PSNR/SSIM bar + train-only loss | ✅ |
-| L3 denser UV maps / hero maps | partial — ground atlas UVs + dense map export; denser θ / bindless sample next |
-| L4 Diff-IR (`--backend diff`, Deferred studio mesh inverse) | ✅ tile beauty + map export (DIFFTEST) |
+| L3 denser UV maps / hero maps | partial — ground atlas UVs + dense map SoT; denser θ next |
+| L4 Diff-IR (`--backend diff`, Deferred dense-map SoT) | ✅ bindless albedo SoT (DIFFTEST) |
 | L5 neural materials + public benchmarks | planned |
 
-**L4 note:** Diff-IR optimizes tile albedo through Deferred (`applyTheta`), exports dense map PNGs, and lays atlas UVs for bindless map sampling. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
+**L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
 
 ## Tests
 

@@ -57,7 +57,8 @@ def main() -> int:
     m = json.loads(metrics.read_text())
     assert m.get("backend") == "diff"
     assert m.get("studio_mesh_raster") is True
-    assert m.get("beauty_theta_path") == "applyTheta_tile_materials"
+    assert m.get("beauty_theta_path") == "dense_map_bindless_deferred"
+    assert m.get("dense_map_sot") is True
     assert m.get("dense_map_export") is True
     assert m.get("atlas_uv") is True
     assert m.get("wrong_init_source") in ("initTiles", "gray")

@@ -67,8 +67,8 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 | **Goal** | Recover scene params θ / maps so R(θ) ≈ target |
 | **Backends** | `--backend pt` (FD + path tracer) · `--backend diff` (Deferred + dense albedo) |
 | **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
-| **Diff-IR** | Full studio mesh Deferred; tile θ → applyTheta beauty; dense map PNG export + **atlas UVs**; wrong-init coord FD; DIFFTEST ✅ |
-| **Beauty contract** | Diff: tile materials drive Deferred beauty; dense map export + UV atlas for bindless SoT next. PT: physical θ + maps. |
+| **Diff-IR** | Full studio mesh Deferred; tile θ → dense map → **bindless GBuffer albedo SoT**; wrong-init coord FD; DIFFTEST ✅ |
+| **Beauty contract** | Diff: dense map sampled by Deferred (`<actor>_albedo_0`); map PNG export + atlas UVs. PT: physical θ + maps. |
 | **Docs / media** | `docs/inverse_lab.md`, `docs/render_pipelines.md`, `docs/media/inverse/`, README hero |
 | **Showcase** | `scripts/run_inverse_showcase.sh` · deck `docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx` |
 
@@ -81,9 +81,9 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-1. Finish bindless dense-map beauty SoT (GBuffer sample path — atlas UVs already on ground).
-2. Diff-fit + PT-eval hybrid lab gate (same capture bar, Diff domain fit).
-3. Denser UV maps / ORM channels once bindless SoT is verified.
+1. Diff-fit + PT-eval hybrid lab gate (same capture bar, Diff domain fit).
+2. Denser UV maps / ORM channels on top of bindless albedo SoT.
+3. Faster map update (avoid full unload/recreate each FD step).
 4. Expand golden corpus (env helmet, deferred cornell).
 5. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).
 6. Keep this file honest after each meaningful change.
