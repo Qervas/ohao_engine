@@ -67,16 +67,20 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 | **Goal** | Recover scene params θ / maps so R(θ) ≈ target |
 | **Backends** | `--backend pt` · `--backend diff` (Deferred map SoT) · `--backend hybrid` (Diff fit → PT lab eval) |
 | **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
-| **Diff-IR** | Full studio mesh Deferred; tile θ (DIFFTEST) + **H1 dense albedo** + **H2 dense ORM.g** (`--dense-map` / `--dense-orm`, MAPTEST) ✅ |
-| **Beauty contract** | Diff: dense albedo + optional ORM sampled by Deferred (`_albedo_0` / `_roughmetal_0`); free-grid θ painted to ≥64². PT: physical θ + maps. |
+| **Diff-IR** | Full studio mesh Deferred; tile θ (DIFFTEST) + **H1 dense albedo** + **H2 ORM.g + ORM.b** (`--dense-map` / `--dense-orm` / `--dense-metal`, MAPTEST) ✅ |
+| **Beauty contract** | Diff: dense albedo + ORM sampled by Deferred (`_albedo_0` / `_roughmetal_0`); free-grid θ painted to ≥64². PT: physical θ + maps. |
+| **HD plates** | `--hd 720\|1080\|full720\|full1080` — FIT optim + SHOW stills (720p / 1080p daily plate sizes) |
 | **Docs / media** | `docs/inverse_lab.md`, **`docs/inverse_lab_roadmap.md`** (long-run plan), `docs/render_pipelines.md`, `docs/media/inverse/` |
 | **Showcase** | `scripts/run_inverse_showcase.sh` · deck `docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx` |
 
 ```bash
 ./scripts/run_inverse_showcase.sh
 ./build/inverse_fit --backend diff --preset lantern --quality draft --out-dir renders/diff_selftest
+# Daily-realistic HD stills (FIT half-res optim + SHOW 720p/1080p plate)
 ./build/inverse_fit --backend diff --dense-orm --dense-map-res 64 --dense-grid 4 \
-  --preset lantern --out-dir renders/diff_dense_orm
+  --hd 720 --preset lantern --out-dir renders/diff_dense_orm_hd720
+./build/inverse_fit --backend diff --dense-metal --dense-map-res 64 --dense-grid 2 \
+  --hd 720 --preset lantern --out-dir renders/diff_dense_metal_hd720
 ./build/inverse_fit --backend hybrid --preset lantern --quality draft \
   --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --out-dir renders/inverse_lab/lantern_hybrid
@@ -86,9 +90,8 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a–c ✅** + **H2 M2a ✅** (dense roughness/ORM + synthetic relight gate).
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a–c ✅** + **H2 M2a ✅** + **H2 M2b ✅** (dense metallic/ORM.b + synthetic relight) + HD 720/1080 plates.
 
-1. H2 M2b metallic channel / priors.  
-2. M3 gallery (multi-preset stress).  
-3. Expand golden corpus (env helmet, deferred cornell).  
-4. Keep this file honest after each meaningful change.
+1. M3 gallery (multi-preset stress).  
+2. Expand golden corpus (env helmet, deferred cornell).  
+3. Keep this file honest after each meaningful change.

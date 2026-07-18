@@ -4,7 +4,7 @@
 // Fixed GT albedo; free G×G rough grid painted to dense map → bindless ORM.
 // Wrong-init high-rough solid; coord FD + Adam; MAPTEST + synthetic relight gate.
 
-#include "inverse/export_capture.hpp"
+#include "inverse/dense_common.hpp"
 #include "inverse/fit_config.hpp"
 #include "inverse/image_loss.hpp"
 #include "inverse/io.hpp"
@@ -34,49 +34,12 @@ namespace ohao::inverse {
 
 namespace dense_orm_detail {
 
-inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map, const std::filesystem::path& path) {
-    ImageRGBA8 m;
-    m.width = map.desc.width;
-    m.height = map.desc.height;
-    m.rgba.resize(map.pixelCount() * 4u);
-    for (size_t i = 0; i < map.pixelCount(); ++i) {
-        m.rgba[i * 4 + 0] =
-            static_cast<uint8_t>(std::clamp(map.rgb[i * 3 + 0], 0.f, 1.f) * 255.f + 0.5f);
-        m.rgba[i * 4 + 1] =
-            static_cast<uint8_t>(std::clamp(map.rgb[i * 3 + 1], 0.f, 1.f) * 255.f + 0.5f);
-        m.rgba[i * 4 + 2] =
-            static_cast<uint8_t>(std::clamp(map.rgb[i * 3 + 2], 0.f, 1.f) * 255.f + 0.5f);
-        m.rgba[i * 4 + 3] = 255;
-    }
-    return savePNG(m, path);
-}
+using dense_common::saveMapPng;
+using dense_common::psnrFromMse;
+using dense_common::fillCheckerScalar;
 
-/// Checker roughness GT: low/high tiles for clear map + beauty signal.
-inline void fillCheckerRough(ohao::diff::DiffAlbedoMap& map, int tiles, float lo, float hi) {
-    if (map.empty() || tiles < 1) return;
-    for (std::uint32_t y = 0; y < map.desc.height; ++y) {
-        for (std::uint32_t x = 0; x < map.desc.width; ++x) {
-            const int tx = static_cast<int>(x * tiles / map.desc.width);
-            const int ty = static_cast<int>(y * tiles / map.desc.height);
-            const float r = ((tx + ty) & 1) ? hi : lo;
-            const size_t o = (static_cast<size_t>(y) * map.desc.width + x) * 3u;
-            map.rgb[o + 0] = r;
-            map.rgb[o + 1] = r;
-            map.rgb[o + 2] = r;
-        }
-    }
-}
-
-struct OrmPair {
-    ohao::diff::DiffAlbedoMap albedo;
-    ohao::diff::DiffAlbedoMap orm;
-};
-
-inline void buildOrmPair(const ohao::diff::DiffAlbedoMap& albedo,
-                         const ohao::diff::DiffAlbedoMap& rough, OrmPair& out) {
-    out.albedo = albedo;
-    ohao::diff::packOrmMap(rough, /*metalScalar=*/1.f, out.orm);
-}
+// Absolute metal in ORM.b (base metallic = 1 in bind); high for rough signal.
+inline constexpr float kOrmGroundMetal = 0.72f;
 
 /// Forward beauty with fixed albedo + free roughness ORM under Deferred.
 [[nodiscard]] inline ImageRGBA8 forwardOrm(VulkanRenderer& renderer, InverseScene& inv,
@@ -86,12 +49,11 @@ inline void buildOrmPair(const ohao::diff::DiffAlbedoMap& albedo,
     static bool s_primed = false;
     if (forceSceneRebuild) s_primed = false;
     ohao::diff::DiffAlbedoMap orm;
-    ohao::diff::packOrmMap(rough, 1.f, orm);
+    ohao::diff::packOrmMap(rough, kOrmGroundMetal, orm);
     if (!s_primed) {
         inv.applyTruth();
-        // High metal so roughness strongly modulates specular under studio lights.
-        inv.truthPrimary.metallic = 0.72f;
-        if (inv.primaryMat) inv.primaryMat->getMaterial().metallic = 0.72f;
+        inv.truthPrimary.metallic = kOrmGroundMetal;
+        if (inv.primaryMat) inv.primaryMat->getMaterial().metallic = kOrmGroundMetal;
         (void)ohao::diff::bindGroundAlbedoOrmMaps(renderer, inv, albedo, orm);
         (void)renderer.updateSceneBuffers();
         s_primed = true;
@@ -135,10 +97,6 @@ inline constexpr double kOrmCropYMin = 0.42;
     return sum / static_cast<double>(nViews);
 }
 
-[[nodiscard]] inline double psnrFromMse(double mse) {
-    return (mse > 1e-12) ? (-10.0 * std::log10(mse)) : 99.0;
-}
-
 } // namespace dense_orm_detail
 
 struct DenseOrmFitResult {
@@ -163,9 +121,10 @@ struct DenseOrmFitResult {
     cfg.denseGrid = std::clamp(cfg.denseGrid, 4, 16);
     cfg.denseMapRes = std::clamp(cfg.denseMapRes, 32, 256);
 
-    const std::uint32_t W = 256;
-    const std::uint32_t H = 144;
-    const int kFrames = 6;
+    const auto vp = dense_common::resolveViewport(cfg);
+    const std::uint32_t W = vp.fitW, H = vp.fitH, showW = vp.showW, showH = vp.showH;
+    const bool wantShowStills = vp.wantShowStills();
+    const int kFrames = vp.frames;
     const int nViews = 2;
     const int G = cfg.denseGrid;
     const int mapPx = cfg.denseMapRes;
@@ -186,8 +145,8 @@ struct DenseOrmFitResult {
     if (std::filesystem::exists(inv.envPath)) applyEnv(renderer, inv.envPath);
 
     inv.applyTruth();
-    // Specular headroom for roughness signal under Deferred lights.
-    inv.truthPrimary.metallic = 0.72f;
+    // Specular headroom for roughness signal under Deferred lights (ORM.b absolute).
+    inv.truthPrimary.metallic = kOrmGroundMetal;
     renderer.setScene(inv.scene.get());
     (void)renderer.updateSceneBuffers();
 
@@ -203,7 +162,7 @@ struct DenseOrmFitResult {
     const int checkerTiles = std::max(2, G / 2);
     ohao::diff::DiffAlbedoMap gtRough;
     gtRough.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
-    fillCheckerRough(gtRough, checkerTiles, /*lo=*/0.08f, /*hi=*/0.95f);
+    fillCheckerScalar(gtRough, checkerTiles, /*lo=*/0.08f, /*hi=*/0.95f);
 
     std::vector<ImageRGBA8> targets;
     for (int v = 0; v < nViews; ++v) {
@@ -215,16 +174,18 @@ struct DenseOrmFitResult {
     saveMapPng(gtRough, outDir / "materials" / "ground_rough_gt.png");
     {
         ohao::diff::DiffAlbedoMap gtOrm;
-        ohao::diff::packOrmMap(gtRough, 1.f, gtOrm);
+        ohao::diff::packOrmMap(gtRough, kOrmGroundMetal, gtOrm);
         saveMapPng(gtOrm, outDir / "materials" / "ground_orm_gt.png");
         saveMapPng(fixedAlb, outDir / "materials" / "ground_albedo_fixed.png");
     }
 
-    std::cout << "Dense-ORM Diff-IR  views=" << nViews << "  " << W << "x" << H
-              << "  map=" << mapPx << "x" << mapPx << "  free_rough_grid=" << G << "x" << G
-              << "  (θ dims=" << nGrid << ")  checker=" << checkerTiles << "\n";
+    std::cout << "Dense-ORM Diff-IR  views=" << nViews << "  FIT " << W << "x" << H
+              << "  SHOW " << showW << "x" << showH << "  map=" << mapPx << "x" << mapPx
+              << "  free_rough_grid=" << G << "x" << G << "  (θ dims=" << nGrid
+              << ")  checker=" << checkerTiles << "\n";
     std::cout << "  beauty SoT: fixed albedo + free ORM.g bindless (Deferred GBuffer)\n";
-    std::cout << "  loss: floor crop y>=" << kOrmCropYMin << " + specular bias; metal=0.72\n";
+    std::cout << "  loss: floor crop y>=" << kOrmCropYMin << " + specular bias; metal="
+              << kOrmGroundMetal << "\n";
     std::cout << "  wrong_init: high_rough solid (not GT checker)\n";
 
     auto lossAtGrid = [&](const std::vector<double>& grid) {
@@ -272,7 +233,7 @@ struct DenseOrmFitResult {
     saveMapPng(work, outDir / "materials" / "ground_rough_init.png");
     {
         ohao::diff::DiffAlbedoMap initOrm;
-        ohao::diff::packOrmMap(work, 1.f, initOrm);
+        ohao::diff::packOrmMap(work, kOrmGroundMetal, initOrm);
         saveMapPng(initOrm, outDir / "materials" / "ground_orm_init.png");
     }
     std::cout << "  wrong-init loss=" << initLoss << " floor_PSNR=" << initPsnr
@@ -380,7 +341,7 @@ struct DenseOrmFitResult {
     saveMapPng(work, outDir / "materials" / "ground_rough_recovered.png");
     {
         ohao::diff::DiffAlbedoMap recOrm;
-        ohao::diff::packOrmMap(work, 1.f, recOrm);
+        ohao::diff::packOrmMap(work, kOrmGroundMetal, recOrm);
         saveMapPng(recOrm, outDir / "materials" / "ground_orm_recovered.png");
     }
 
@@ -416,6 +377,43 @@ struct DenseOrmFitResult {
         }
     }
 
+    // HD plate stills: re-render truth/init/recovered/relight at SHOW resolution.
+    if (wantShowStills) {
+        std::cout << "  [dense-orm] SHOW plate stills " << showW << "x" << showH << "\n";
+        inv.scene.reset();
+        InverseScene invShow = InverseScene::buildStudio(cfg);
+        invShow.applyTruth();
+        invShow.truthPrimary.metallic = kOrmGroundMetal;
+        VulkanRenderer showR(showW, showH);
+        if (showR.initialize()) {
+            showR.setRenderMode(RenderMode::Deferred);
+            if (std::filesystem::exists(invShow.envPath)) applyEnv(showR, invShow.envPath);
+            showR.setScene(invShow.scene.get());
+            (void)showR.updateSceneBuffers();
+            const int showFrames = std::max(kFrames, 6);
+            auto showSave = [&](const ohao::diff::DiffAlbedoMap& rough, const char* name,
+                                bool force = false) {
+                auto img = forwardOrm(showR, invShow, fixedAlb, rough, 0, showFrames, force);
+                savePNG(img, outDir / name);
+                return img;
+            };
+            ohao::diff::DiffAlbedoMap initRough;
+            initRough.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
+            ohao::diff::gridIntoRoughMap(th, G, initRough);
+            showSave(gtRough, "orm_forward_truth_show.png", true);
+            showSave(initRough, "orm_init_show.png");
+            showSave(work, "orm_recovered_show.png");
+            if (invShow.keyLight) {
+                const float saved = invShow.keyLight->getIntensity();
+                invShow.keyLight->setIntensity(saved * 2.5f);
+                showSave(gtRough, "orm_relight_truth_show.png", true);
+                showSave(work, "orm_relight_recovered_show.png");
+                invShow.keyLight->setIntensity(saved);
+            }
+            invShow.scene.reset();
+        }
+    }
+
     std::cout << "  final loss=" << finalLoss << "  train PSNR=" << finalPsnr
               << "  (wrong-init PSNR was " << initPsnr << ")\n";
     std::cout << "  rough_mse_init=" << result.roughMseInit
@@ -432,13 +430,15 @@ struct DenseOrmFitResult {
            << "  \"metric_domain\": \"vulkan_deferred_studio\",\n"
            << "  \"beauty_theta_path\": \"dense_orm_bindless_deferred\",\n"
            << "  \"dense_orm_sot\": true,\n"
+           << "  \"fit_wh\": [" << W << ", " << H << "],\n"
+           << "  \"show_wh\": [" << showW << ", " << showH << "],\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"
            << "  \"dense_grid\": " << G << ",\n"
            << "  \"map_upload\": \"in_place_updateTextureFromMemory\",\n"
            << "  \"wrong_init_source\": \"high_rough_solid\",\n"
            << "  \"gt_rough_pattern\": \"checker_" << checkerTiles << "\",\n"
            << "  \"loss_crop_y_min\": " << kOrmCropYMin << ",\n"
-           << "  \"ground_metal\": 0.72,\n"
+           << "  \"ground_metal\": " << kOrmGroundMetal << ",\n"
            << "  \"albedo_free\": false,\n"
            << "  \"init_loss\": " << initLoss << ",\n"
            << "  \"final_loss\": " << finalLoss << ",\n"

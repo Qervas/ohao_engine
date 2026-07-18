@@ -71,6 +71,19 @@ python3 tools/inverse_lab/test_dense_map.py renders/diff_dense_128
 ./build/inverse_fit --backend diff --dense-orm --dense-map-res 64 --dense-grid 4 \
   --preset lantern --out-dir renders/diff_dense_orm
 python3 tools/inverse_lab/test_dense_orm.py renders/diff_dense_orm
+
+# H2 free dense ground metallic / ORM.b (fixed albedo+rough; default G=2)
+./build/inverse_fit --backend diff --dense-metal --dense-map-res 64 --dense-grid 2 \
+  --preset lantern --out-dir renders/diff_dense_metal
+python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
+
+# Daily-realistic HD plate: FIT optim + SHOW 720p/1080p stills (*_show.png)
+./build/inverse_fit --backend diff --dense-orm --hd 720 --preset lantern \
+  --out-dir renders/diff_dense_orm_hd720
+./build/inverse_fit --backend diff --dense-metal --hd 720 --preset lantern \
+  --out-dir renders/diff_dense_metal_hd720
+./build/inverse_fit --backend diff --dense-orm --hd 1080 --preset lantern \
+  --out-dir renders/diff_dense_orm_hd1080
 ```
 
 ## Ladder
@@ -85,7 +98,9 @@ python3 tools/inverse_lab/test_dense_orm.py renders/diff_dense_orm
 | L5 Hybrid Diff-fit → PT light/tile refine → eval (`--backend hybrid`) | ✅ DIFFTEST + transfer; full LABTEST achievable |
 | L6 / H1 free dense albedo (`--dense-map`) | ✅ MAPTEST 64² + 128²; in-place map upload (M1a–c) |
 | L6 / H2 free dense roughness (`--dense-orm`) | ✅ MAPTEST + floor-crop + synthetic key-light relight (M2a) |
-| L6+ metallic / photo / autodiff | → **roadmap** M2b, H3–H5 |
+| L6 / H2 free dense metallic (`--dense-metal`) | ✅ MAPTEST + relight; G=2 checker-aligned free θ (M2b) |
+| L6 / HD plates (`--hd 720\|1080`) | ✅ FIT optim + SHOW 720p/1080p stills |
+| L6+ photo / autodiff | → **roadmap** H3–H5 |
 
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
 
@@ -95,6 +110,7 @@ python3 tools/inverse_lab/test_dense_orm.py renders/diff_dense_orm
 - `tools/inverse_lab/test_map_apply_diff.py` — export path writes differing init/GT maps  
 - `tools/inverse_lab/test_dense_map.py` — H1 dense albedo MAPTEST  
 - `tools/inverse_lab/test_dense_orm.py` — H2 dense ORM/rough MAPTEST + relight  
+- `tools/inverse_lab/test_dense_metal.py` — H2 dense metallic MAPTEST + relight  
 
 ## Non-goals (this track)
 

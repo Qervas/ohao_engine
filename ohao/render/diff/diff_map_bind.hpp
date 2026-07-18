@@ -65,7 +65,9 @@ inline constexpr const char* kGroundOrmSoTLogical = "diff_ground_orm_sot";
     return true;
 }
 
-/// ORM packing: R=AO(1), G=roughness, B=metallic(1 so scalar metal multiplies cleanly).
+/// ORM packing: R=AO(1), G=roughness, B=metallic.
+/// Base material roughness/metal should be 1 so texture channels are absolute
+/// (GBuffer: roughness *= orm.g, metallic *= orm.b).
 inline void packOrmMap(const DiffAlbedoMap& roughMap, float metalScalar, DiffAlbedoMap& ormOut) {
     if (roughMap.empty()) return;
     if (ormOut.empty() || ormOut.desc.width != roughMap.desc.width ||
@@ -79,8 +81,28 @@ inline void packOrmMap(const DiffAlbedoMap& roughMap, float metalScalar, DiffAlb
                                      0.04f, 1.f);
         ormOut.rgb[i * 3 + 0] = 1.f; // AO
         ormOut.rgb[i * 3 + 1] = rgh;
-        ormOut.rgb[i * 3 + 2] = 1.f; // metal multiplier identity
-        (void)m;
+        ormOut.rgb[i * 3 + 2] = m; // absolute metal when base metallic = 1
+    }
+}
+
+/// Pack free roughness + free metallic maps into ORM (absolute channels).
+inline void packOrmRoughMetal(const DiffAlbedoMap& roughMap, const DiffAlbedoMap& metalMap,
+                              DiffAlbedoMap& ormOut) {
+    if (roughMap.empty() || metalMap.empty() || roughMap.pixelCount() != metalMap.pixelCount())
+        return;
+    if (ormOut.empty() || ormOut.desc.width != roughMap.desc.width ||
+        ormOut.desc.height != roughMap.desc.height)
+        ormOut.allocate(roughMap.desc.width, roughMap.desc.height);
+    for (size_t i = 0; i < roughMap.pixelCount(); ++i) {
+        const float rgh = std::clamp(roughMap.rgb[i * 3 + 1] > 1e-6f ? roughMap.rgb[i * 3 + 1]
+                                                                     : roughMap.rgb[i * 3 + 0],
+                                     0.04f, 1.f);
+        const float met = std::clamp(metalMap.rgb[i * 3 + 2] > 1e-6f ? metalMap.rgb[i * 3 + 2]
+                                                                     : metalMap.rgb[i * 3 + 0],
+                                     0.f, 1.f);
+        ormOut.rgb[i * 3 + 0] = 1.f;
+        ormOut.rgb[i * 3 + 1] = rgh;
+        ormOut.rgb[i * 3 + 2] = met;
     }
 }
 
@@ -168,18 +190,17 @@ inline void fillRoughMap(DiffAlbedoMap& map, float rough) {
             mat->getMaterial().useRoughnessTexture = true;
             mat->getMaterial().roughnessTexture = ormName;
             mat->getMaterial().baseColor = white;
-            mat->getMaterial().roughness = 1.f; // absolute via texture G
-            mat->getMaterial().metallic = inv.truthPrimary.metallic;
+            mat->getMaterial().roughness = 1.f; // absolute via ORM.g
+            mat->getMaterial().metallic = 1.f;  // absolute via ORM.b
         }
         if (auto mesh = actor->getComponent<MeshComponent>()) {
             if (auto model = mesh->getModel()) {
-                // w=1 → roughness = 1 * orm.g; metal scalar * orm.b(1)
+                // base 1 → roughness = orm.g, metal = orm.b (absolute maps)
                 const glm::vec4 matCol(1.f, 1.f, 1.f, 1.f);
                 if (model->materialColors.empty()) model->materialColors.push_back(matCol);
                 else model->materialColors[0] = matCol;
-                if (model->materialMetallic.empty())
-                    model->materialMetallic.push_back(inv.truthPrimary.metallic);
-                else model->materialMetallic[0] = inv.truthPrimary.metallic;
+                if (model->materialMetallic.empty()) model->materialMetallic.push_back(1.f);
+                else model->materialMetallic[0] = 1.f;
                 for (auto& v : model->vertices) v.color = white;
             }
         }

@@ -73,6 +73,8 @@ struct FitConfig {
     int denseGrid{8};           // free control grid G×G painted into denseMapRes (try 12 for denser θ)
     // H2 dense roughness / ORM.g (fixed albedo; free rough grid; prefer denseGrid=4 for M2a)
     bool denseOrm{false};       // optim free dense ground roughness under Deferred
+    // H2 M2b dense metallic / ORM.b (fixed albedo+rough; free metal grid)
+    bool denseMetal{false};     // optim free dense ground metallic under Deferred
     std::string targetImage;    // external LDR target (PNG/JPG); empty = synthetic
     float exposure{1.0f};       // applied to external target (or fitted)
     bool fitExposure{false};    // add exposure as free θ dim (photo path)
@@ -390,15 +392,45 @@ inline CliArgs parseArgs(int argc, char** argv) {
             if (a.cfg.mapRes < 2) a.cfg.mapRes = 2;
             // M2a default: 4×4 free rough grid (matches coarse checker; G=8 is slower / noisier).
             if (a.cfg.denseGrid == 8) a.cfg.denseGrid = 4;
+        } else if (s == "--dense-metal") {
+            a.cfg.denseMetal = true;
+            a.cfg.mapGround = true;
+            if (a.cfg.mapRes < 2) a.cfg.mapRes = 2;
+            // M2b default: 2×2 free metal grid (matches checker GT; G=4 overfits mid-metal).
+            if (a.cfg.denseGrid == 8 || a.cfg.denseGrid == 4) a.cfg.denseGrid = 2;
         } else if (s == "--dense-map-res") {
             a.cfg.denseMapRes = std::clamp(std::atoi(need("--dense-map-res")), 32, 256);
-            // Shared map size for dense albedo or dense ORM paths.
-            if (!a.cfg.denseOrm) a.cfg.denseMap = true;
+            // Shared map size for dense albedo / ORM / metal paths.
+            if (!a.cfg.denseOrm && !a.cfg.denseMetal) a.cfg.denseMap = true;
             a.cfg.mapGround = true;
         } else if (s == "--dense-grid") {
-            a.cfg.denseGrid = std::clamp(std::atoi(need("--dense-grid")), 4, 16);
-            if (!a.cfg.denseOrm) a.cfg.denseMap = true;
+            a.cfg.denseGrid = std::clamp(std::atoi(need("--dense-grid")), 2, 16);
+            if (!a.cfg.denseOrm && !a.cfg.denseMetal) a.cfg.denseMap = true;
             a.cfg.mapGround = true;
+        } else if (s == "--hd") {
+            // Daily-realistic plate sizes. Optim at FIT; stills at SHOW.
+            //   720  → FIT 640×360  SHOW 1280×720  (fast optim + HD plate)
+            //   1080 → FIT 960×540  SHOW 1920×1080
+            //   full720 / full1080 → optim at full SHOW resolution (expensive FD)
+            const std::string v = need("--hd");
+            auto setWH = [&](uint32_t fw, uint32_t fh, uint32_t sw, uint32_t sh) {
+                a.cfg.fit.width = fw;
+                a.cfg.fit.height = fh;
+                a.cfg.show.width = sw;
+                a.cfg.show.height = sh;
+            };
+            if (v == "720") {
+                setWH(640, 360, 1280, 720);
+            } else if (v == "1080") {
+                setWH(960, 540, 1920, 1080);
+            } else if (v == "full720" || v == "720full") {
+                setWH(1280, 720, 1280, 720);
+            } else if (v == "full1080" || v == "1080full") {
+                setWH(1920, 1080, 1920, 1080);
+            } else {
+                std::cerr << "--hd expects 720|1080|full720|full1080\n";
+                std::exit(2);
+            }
         } else if (s == "--help" || s == "-h") {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
@@ -412,8 +444,11 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 << "                            hybrid=Diff fit + PT capture-gated eval\n"
                 << "  --dense-map               free dense ground albedo (H1/M1a MAPTEST)\n"
                 << "  --dense-orm               free dense ground roughness/ORM (H2/M2a)\n"
+                << "  --dense-metal             free dense ground metallic/ORM.b (H2/M2b)\n"
                 << "  --dense-map-res N         beauty map size NxN (default 64)\n"
                 << "  --dense-grid G            free control grid GxG (default 8)\n"
+                << "  --hd 720|1080|full720|full1080  daily plate sizes (FIT optim + SHOW stills)\n"
+                << "  --fit-width/--fit-height  optim resolution  --show-width/--show-height plate\n"
                 << "  --multi-start N | --no-multi-start   (default 5 candidates)\n"
                 << "  --light-reg W  --specular-weight W  --brdf-spp-mul M\n"
                 << "  --map-ground           N×N ground albedo tiles (default N=2)\n"

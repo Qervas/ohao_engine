@@ -6,6 +6,7 @@
 #include "inverse/backend/image_formation.hpp"
 #include "inverse/backend/pt_formation.hpp"
 #include "inverse/dense_map_fit.hpp"
+#include "inverse/dense_metal_fit.hpp"
 #include "inverse/dense_orm_fit.hpp"
 #include "inverse/hybrid_eval.hpp"
 #include "inverse/diff_fit.hpp"
@@ -106,7 +107,8 @@ namespace ohao::inverse {
     if (!cfg.labBundle.empty()) std::cout << "  mode=lab-bundle " << cfg.labBundle << "\n";
 
     if (cfg.backend == InverseBackend::Diff) {
-        // Dense free-map optim (H1 albedo / H2 ORM) or classic tile Diff selftest.
+        // Dense free-map optim (H1 albedo / H2 ORM.g / H2 ORM.b) or classic tile Diff.
+        if (cfg.denseMetal) return runDenseMetalFitCli(std::move(cfg));
         if (cfg.denseOrm) return runDenseOrmFitCli(std::move(cfg));
         if (cfg.denseMap) return runDenseMapFitCli(std::move(cfg));
         return runDiffFit(std::move(cfg));

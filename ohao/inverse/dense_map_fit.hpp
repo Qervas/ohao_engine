@@ -109,9 +109,10 @@ struct DenseMapFitResult {
     cfg.denseGrid = std::clamp(cfg.denseGrid, 4, 16);
     cfg.denseMapRes = std::clamp(cfg.denseMapRes, 32, 256);
 
-    const std::uint32_t W = 256;
-    const std::uint32_t H = 144;
-    const int kFrames = 6;
+    // Honor --fit-* / --hd (legacy dense lab used 256×144).
+    const std::uint32_t W = std::max(256u, cfg.fit.width);
+    const std::uint32_t H = std::max(144u, cfg.fit.height);
+    const int kFrames = (W * H >= 1280u * 720u) ? 4 : (W * H >= 640u * 360u) ? 5 : 6;
     const int nViews = 2;
     const int G = cfg.denseGrid;
     const int mapPx = cfg.denseMapRes;

@@ -49,6 +49,26 @@ inline void gridIntoRoughMap(const std::vector<double>& gridRough, int G, DiffAl
     }
 }
 
+/// Same as gridIntoRoughMap but metal clamped to [0,1] (no 0.04 floor).
+inline void gridIntoMetalMap(const std::vector<double>& gridMetal, int G, DiffAlbedoMap& map) {
+    if (G < 1 || map.empty()) return;
+    for (std::uint32_t y = 0; y < map.desc.height; ++y) {
+        for (std::uint32_t x = 0; x < map.desc.width; ++x) {
+            const int gx = std::min(G - 1, static_cast<int>(x * G / map.desc.width));
+            const int gy = std::min(G - 1, static_cast<int>(y * G / map.desc.height));
+            const size_t gi = static_cast<size_t>(gy * G + gx);
+            const size_t o = (static_cast<size_t>(y) * map.desc.width + x) * 3u;
+            if (gi < gridMetal.size()) {
+                const float m =
+                    static_cast<float>(std::clamp(gridMetal[gi], 0.0, 1.0));
+                map.rgb[o + 0] = m;
+                map.rgb[o + 1] = m;
+                map.rgb[o + 2] = m;
+            }
+        }
+    }
+}
+
 /// Mean squared error between two maps (same size). Returns 0 if incompatible.
 [[nodiscard]] inline double mapMse(const DiffAlbedoMap& a, const DiffAlbedoMap& b) {
     if (a.empty() || b.empty() || a.rgb.size() != b.rgb.size()) return 0.0;
@@ -71,6 +91,11 @@ inline void gridIntoRoughMap(const std::vector<double>& gridRough, int G, DiffAl
     return s / static_cast<double>(a.pixelCount());
 }
 
+/// Metallic map MSE (same layout as roughMapMse).
+[[nodiscard]] inline double metalMapMse(const DiffAlbedoMap& a, const DiffAlbedoMap& b) {
+    return roughMapMse(a, b);
+}
+
 inline void clampGrid(std::vector<double>& grid, double lo = 0.02, double hi = 1.0) {
     for (double& c : grid) c = std::clamp(c, lo, hi);
 }
@@ -78,5 +103,7 @@ inline void clampGrid(std::vector<double>& grid, double lo = 0.02, double hi = 1
 inline void clampRoughGrid(std::vector<double>& grid) {
     clampGrid(grid, 0.04, 1.0);
 }
+
+inline void clampMetalGrid(std::vector<double>& grid) { clampGrid(grid, 0.0, 1.0); }
 
 } // namespace ohao::diff
