@@ -67,14 +67,16 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 | **Goal** | Recover scene params θ / maps so R(θ) ≈ target |
 | **Backends** | `--backend pt` · `--backend diff` (Deferred map SoT) · `--backend hybrid` (Diff fit → PT lab eval) |
 | **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
-| **Diff-IR** | Full studio mesh Deferred; tile θ path (DIFFTEST) + **H1 dense free-map** (`--dense-map`, MAPTEST) ✅ |
-| **Beauty contract** | Diff: dense map sampled by Deferred (`<actor>_albedo_0`); free-grid θ painted to ≥64² map. PT: physical θ + maps. |
+| **Diff-IR** | Full studio mesh Deferred; tile θ (DIFFTEST) + **H1 dense albedo** + **H2 dense ORM.g** (`--dense-map` / `--dense-orm`, MAPTEST) ✅ |
+| **Beauty contract** | Diff: dense albedo + optional ORM sampled by Deferred (`_albedo_0` / `_roughmetal_0`); free-grid θ painted to ≥64². PT: physical θ + maps. |
 | **Docs / media** | `docs/inverse_lab.md`, **`docs/inverse_lab_roadmap.md`** (long-run plan), `docs/render_pipelines.md`, `docs/media/inverse/` |
 | **Showcase** | `scripts/run_inverse_showcase.sh` · deck `docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx` |
 
 ```bash
 ./scripts/run_inverse_showcase.sh
 ./build/inverse_fit --backend diff --preset lantern --quality draft --out-dir renders/diff_selftest
+./build/inverse_fit --backend diff --dense-orm --dense-map-res 64 --dense-grid 4 \
+  --preset lantern --out-dir renders/diff_dense_orm
 ./build/inverse_fit --backend hybrid --preset lantern --quality draft \
   --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --out-dir renders/inverse_lab/lantern_hybrid
@@ -84,9 +86,9 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a+M1b+M1c** — free dense albedo 64/128², in-place map upload, MAPTEST.
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a–c ✅** + **H2 M2a ✅** (dense roughness/ORM + synthetic relight gate).
 
-1. H2 M2a roughness map / ORM channel.  
-2. Expand golden corpus (env helmet, deferred cornell).  
-3. Wire `IblProcessor` → deferred for proper metals/IBL (if deferred stays).  
+1. H2 M2b metallic channel / priors.  
+2. M3 gallery (multi-preset stress).  
+3. Expand golden corpus (env helmet, deferred cornell).  
 4. Keep this file honest after each meaningful change.

@@ -66,6 +66,11 @@ python3 tools/inverse_lab/eval_bundle.py renders/inverse_lab/lantern_frontier_fi
   --preset lantern --quality draft --out-dir renders/diff_dense_128
 python3 tools/inverse_lab/test_dense_map.py renders/diff_dense
 python3 tools/inverse_lab/test_dense_map.py renders/diff_dense_128
+
+# H2 free dense ground roughness / ORM.g (fixed albedo, MAPTEST + synthetic relight)
+./build/inverse_fit --backend diff --dense-orm --dense-map-res 64 --dense-grid 4 \
+  --preset lantern --out-dir renders/diff_dense_orm
+python3 tools/inverse_lab/test_dense_orm.py renders/diff_dense_orm
 ```
 
 ## Ladder
@@ -79,7 +84,8 @@ python3 tools/inverse_lab/test_dense_map.py renders/diff_dense_128
 | L4 Diff-IR (`--backend diff`, Deferred dense-map SoT) | ✅ bindless albedo SoT (DIFFTEST) |
 | L5 Hybrid Diff-fit → PT light/tile refine → eval (`--backend hybrid`) | ✅ DIFFTEST + transfer; full LABTEST achievable |
 | L6 / H1 free dense albedo (`--dense-map`) | ✅ MAPTEST 64² + 128²; in-place map upload (M1a–c) |
-| L6+ ORM / photo / autodiff | → **roadmap** H2–H5 |
+| L6 / H2 free dense roughness (`--dense-orm`) | ✅ MAPTEST + floor-crop + synthetic key-light relight (M2a) |
+| L6+ metallic / photo / autodiff | → **roadmap** M2b, H3–H5 |
 
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
 
@@ -87,6 +93,8 @@ python3 tools/inverse_lab/test_dense_map.py renders/diff_dense_128
 
 - `tools/inverse_lab/test_metrics_and_maps.py` — gates on real `lab_metrics.json` + map MSE  
 - `tools/inverse_lab/test_map_apply_diff.py` — export path writes differing init/GT maps  
+- `tools/inverse_lab/test_dense_map.py` — H1 dense albedo MAPTEST  
+- `tools/inverse_lab/test_dense_orm.py` — H2 dense ORM/rough MAPTEST + relight  
 
 ## Non-goals (this track)
 
