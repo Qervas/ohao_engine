@@ -81,6 +81,9 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
   --hd 720 --preset lantern --out-dir renders/diff_dense_orm_hd720
 ./build/inverse_fit --backend diff --dense-metal --dense-map-res 64 --dense-grid 2 \
   --hd 720 --preset lantern --out-dir renders/diff_dense_metal_hd720
+# Multi-preset gallery wall (M3a): lantern + helmet + spheres
+./scripts/run_inverse_gallery.sh --fast
+OUT_ROOT=renders/inverse_gallery_hd720 HD=720 ./scripts/run_inverse_gallery.sh
 ./build/inverse_fit --backend hybrid --preset lantern --quality draft \
   --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --out-dir renders/inverse_lab/lantern_hybrid
@@ -90,8 +93,8 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a–c ✅** + **H2 M2a ✅** + **H2 M2b ✅** (dense metallic/ORM.b + synthetic relight) + HD 720/1080 plates.
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a–c ✅** + **H2 M2a–b ✅** + **M3a ✅** (3-preset gallery wall) + HD 720/1080 plates.
 
-1. M3 gallery (multi-preset stress).  
+1. M3b ablation table (views / res / init stress).  
 2. Expand golden corpus (env helmet, deferred cornell).  
 3. Keep this file honest after each meaningful change.

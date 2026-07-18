@@ -82,7 +82,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 |---------|----------------------|---------|
 | **H0 — Foundation** | Done | L0–L5 protocol + Diff SoT + hybrid LABTEST |
 | **H1 — Dense materials** | M1a–c landed | Free dense albedo 64/128² + in-place upload |
-| **H2 — Multi-channel + gallery** | M2a–b landed; M3 open | Roughness + metallic ORM ✅; HD plates; multi-preset next |
+| **H2 — Multi-channel + gallery** | M2a–b + M3a landed; M3b open | ORM.g/b ✅; HD plates; 3-preset gallery wall ✅ |
 | **H3 — Real capture** | ~6–10 weeks | Photo multi-view plate, honest failure modes |
 | **H4 — Differentiability** | ~6–12 weeks | True ∂L/∂map (Deferred first); FD-checked |
 | **H5 — Ambition options** | Later / optional | Neural priors, public benches, geometry joint |
@@ -340,7 +340,7 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | **M1c** | Fast map upload | H1 | M1a | ✅ `updateTextureFromMemory` in-place SoT |
 | **M2a** | Roughness map | H2 | M1b | ✅ MAPTEST + synthetic relight (`--dense-orm`) |
 | **M2b** | Metallic + priors | H2 | M2a | ✅ MAPTEST + relight (`--dense-metal`); HD 720/1080 plates |
-| **M3a** | 3-preset gallery | H2 | M1b | Gallery wall + script |
+| **M3a** | 3-preset gallery | H2 | M1b | ✅ lantern/helmet/spheres MAPTEST + `gallery_wall.html` |
 | **M3b** | Ablation table | H2 | M3a | views / res / init stress |
 | **M4a** | Photo capture recipe | H3 | M1b | Dataset folder + cameras |
 | **M4b** | Photo inverse plate | H3 | M4a, M2a | Photo vs re-render hero |
@@ -436,7 +436,8 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 1. **M1a–c ✅** — dense map 64/128², free grid, in-place upload, MAPTEST.  
 2. **M2a ✅** — free dense roughness (ORM.g) under Deferred; floor-crop specular loss; synthetic key-light relight gate.  
 3. **M2b ✅** — free dense metallic (ORM.b); extreme-flip FD; `--hd 720|1080` daily plate sizes.  
-4. **M3a** — multi-preset gallery wall.
+4. **M3a ✅** — multi-preset gallery wall (`scripts/run_inverse_gallery.sh`; lantern/helmet/spheres).  
+5. **M3b** — ablation table (views / res / init stress).
 
 ---
 

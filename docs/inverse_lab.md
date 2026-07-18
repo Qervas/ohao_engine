@@ -100,6 +100,7 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 | L6 / H2 free dense roughness (`--dense-orm`) | ✅ MAPTEST + floor-crop + synthetic key-light relight (M2a) |
 | L6 / H2 free dense metallic (`--dense-metal`) | ✅ MAPTEST + relight; G=2 checker-aligned free θ (M2b) |
 | L6 / HD plates (`--hd 720\|1080`) | ✅ FIT optim + SHOW 720p/1080p stills |
+| L6 / H2 multi-preset gallery (M3a) | ✅ lantern + helmet + spheres; `scripts/run_inverse_gallery.sh` |
 | L6+ photo / autodiff | → **roadmap** H3–H5 |
 
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
@@ -111,6 +112,16 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 - `tools/inverse_lab/test_dense_map.py` — H1 dense albedo MAPTEST  
 - `tools/inverse_lab/test_dense_orm.py` — H2 dense ORM/rough MAPTEST + relight  
 - `tools/inverse_lab/test_dense_metal.py` — H2 dense metallic MAPTEST + relight  
+- `tools/inverse_lab/test_gallery.py` — M3a ≥3 presets MAPTEST + gallery wall  
+- `scripts/run_inverse_gallery.sh` — multi-preset matrix + HTML wall  
+
+```bash
+# Fast CI-ish gallery (256×144)
+./scripts/run_inverse_gallery.sh --fast
+# Daily 720p gallery wall
+OUT_ROOT=renders/inverse_gallery_hd720 HD=720 ./scripts/run_inverse_gallery.sh
+# open renders/inverse_gallery_hd720/gallery_wall.html
+```
 
 ## Non-goals (this track)
 
