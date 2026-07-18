@@ -69,9 +69,10 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 | **Lab plate (PT)** | Capture-gated holdout **32.5** / relight **34.4** / gain **+20.5** dB ✅ (`metric_gt=capture_export_images`) |
 | **Diff-IR** | Full studio mesh Deferred; tile θ (DIFFTEST) + **H1 dense albedo** + **H2 ORM.g + ORM.b** (`--dense-map` / `--dense-orm` / `--dense-metal`, MAPTEST) ✅ |
 | **Beauty contract** | Diff: dense albedo + ORM sampled by Deferred (`_albedo_0` / `_roughmetal_0`); free-grid θ painted to ≥64². PT: physical θ + maps. |
-| **HD plates** | `--hd 720\|1080\|full720\|full1080` — FIT optim + SHOW stills (720p / 1080p daily plate sizes) |
+| **HD plates** | `--hd 720\|1080\|full720\|full1080` — FIT optim + SHOW stills (720p / 1080p) |
+| **Quality plate (publish bar)** | `--quality-plate` — **1080p SHOW @20f**, map≥128, multi-view, hard presets; dB only count here for product face |
 | **Docs / media** | `docs/inverse_lab.md`, **`docs/inverse_lab_roadmap.md`** (long-run plan), `docs/render_pipelines.md`, `docs/media/inverse/` |
-| **Showcase** | `scripts/run_inverse_showcase.sh` · deck `docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx` |
+| **Showcase** | `scripts/run_inverse_showcase.sh` · `run_inverse_gallery.sh` · `run_inverse_quality_plate.sh` · deck in `docs/media/inverse/` |
 
 ```bash
 ./scripts/run_inverse_showcase.sh
@@ -84,6 +85,10 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 # Multi-preset gallery wall (M3a): lantern + helmet + spheres
 ./scripts/run_inverse_gallery.sh --fast
 OUT_ROOT=renders/inverse_gallery_hd720 HD=720 ./scripts/run_inverse_gallery.sh
+# Publish face (persuasion bar): hard presets @ 1080p clean stills — use this for claims
+./scripts/run_inverse_quality_plate.sh
+# Ablation table (M3b)
+PRESET=spheres ./scripts/run_inverse_ablation.sh
 ./build/inverse_fit --backend hybrid --preset lantern --quality draft \
   --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --out-dir renders/inverse_lab/lantern_hybrid
@@ -93,8 +98,8 @@ OUT_ROOT=renders/inverse_gallery_hd720 HD=720 ./scripts/run_inverse_gallery.sh
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1 M1a–c ✅** + **H2 M2a–b ✅** + **M3a ✅** (3-preset gallery wall) + HD 720/1080 plates.
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H2 ✅** + **M3a gallery ✅** + **M3b ablation ✅** + **quality plate bar ✅** (1080p hard scenes).
 
-1. M3b ablation table (views / res / init stress).  
+1. H3 photo multi-view plate (honest sim-to-real).  
 2. Expand golden corpus (env helmet, deferred cornell).  
-3. Keep this file honest after each meaningful change.
+3. Keep this file honest after each meaningful change — **no dB claims without quality plate stills**.

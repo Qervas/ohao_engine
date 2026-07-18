@@ -37,6 +37,7 @@ namespace dense_orm_detail {
 using dense_common::saveMapPng;
 using dense_common::psnrFromMse;
 using dense_common::fillCheckerScalar;
+using dense_common::fillProductScalar;
 
 // Absolute metal in ORM.b (base metallic = 1 in bind); high for rough signal.
 inline constexpr float kOrmGroundMetal = 0.72f;
@@ -125,16 +126,19 @@ struct DenseOrmFitResult {
     const std::uint32_t W = vp.fitW, H = vp.fitH, showW = vp.showW, showH = vp.showH;
     const bool wantShowStills = vp.wantShowStills();
     const int kFrames = vp.frames;
-    const int nViews = 2;
+    const int showFrames = vp.showFrames;
+    int nViews = (cfg.denseViews > 0) ? std::clamp(cfg.denseViews, 1, 4) : 2;
     const int G = cfg.denseGrid;
     const int mapPx = cfg.denseMapRes;
     const int nGrid = G * G; // single-channel rough θ
+    const bool qualityPlate = cfg.denseQualityPlate;
 
     InverseScene inv = InverseScene::buildStudio(cfg);
     if (!inv.mapGround || inv.groundTiles.empty()) {
         std::cerr << "FATAL: dense ORM fit requires map-ground studio\n";
         return result;
     }
+    nViews = std::min(nViews, std::max(1, static_cast<int>(inv.views.size())));
 
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) {
@@ -158,11 +162,21 @@ struct DenseOrmFitResult {
     fixedAlb.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
     fixedAlb.fill(0.48f, 0.48f, 0.50f);
 
-    // GT roughness: G-aligned checker (each free cell can match one tile when G divides tiles).
+    // GT roughness: checker (lab) or soft product bands (quality plate — less toy, still free-grid recoverable).
     const int checkerTiles = std::max(2, G / 2);
+    const int productBands = std::max(2, G);
     ohao::diff::DiffAlbedoMap gtRough;
     gtRough.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
-    fillCheckerScalar(gtRough, checkerTiles, /*lo=*/0.08f, /*hi=*/0.95f);
+    // Quality: denser G-aligned checker (product-looking tiles, still free-grid recoverable).
+    // Soft product_bands exist in dense_common for future continuous θ.
+    if (qualityPlate) {
+        fillCheckerScalar(gtRough, G, /*lo=*/0.10f, /*hi=*/0.92f);
+    } else {
+        fillCheckerScalar(gtRough, checkerTiles, /*lo=*/0.08f, /*hi=*/0.95f);
+    }
+    const std::string gtPattern =
+        qualityPlate ? (std::string("checker_dense_") + std::to_string(G))
+                     : (std::string("checker_") + std::to_string(checkerTiles));
 
     std::vector<ImageRGBA8> targets;
     for (int v = 0; v < nViews; ++v) {
@@ -182,11 +196,11 @@ struct DenseOrmFitResult {
     std::cout << "Dense-ORM Diff-IR  views=" << nViews << "  FIT " << W << "x" << H
               << "  SHOW " << showW << "x" << showH << "  map=" << mapPx << "x" << mapPx
               << "  free_rough_grid=" << G << "x" << G << "  (θ dims=" << nGrid
-              << ")  checker=" << checkerTiles << "\n";
-    std::cout << "  beauty SoT: fixed albedo + free ORM.g bindless (Deferred GBuffer)\n";
-    std::cout << "  loss: floor crop y>=" << kOrmCropYMin << " + specular bias; metal="
-              << kOrmGroundMetal << "\n";
-    std::cout << "  wrong_init: high_rough solid (not GT checker)\n";
+              << ")  gt=" << gtPattern << (qualityPlate ? "  QUALITY_PLATE" : "") << "\n";
+    std::cout << "  frames fit=" << kFrames << " show=" << showFrames
+              << "  beauty SoT: fixed albedo + free ORM.g (Deferred)\n";
+    std::cout << "  loss: floor crop y>=" << kOrmCropYMin << " + specular; metal="
+              << kOrmGroundMetal << "  wrong_init=high_rough_solid\n";
 
     auto lossAtGrid = [&](const std::vector<double>& grid) {
         ohao::diff::DiffAlbedoMap m;
@@ -377,9 +391,11 @@ struct DenseOrmFitResult {
         }
     }
 
-    // HD plate stills: re-render truth/init/recovered/relight at SHOW resolution.
+    // HD / quality plate stills: re-render truth/init/recovered/relight at SHOW resolution.
     if (wantShowStills) {
-        std::cout << "  [dense-orm] SHOW plate stills " << showW << "x" << showH << "\n";
+        std::cout << "  [dense-orm] SHOW plate stills " << showW << "x" << showH
+                  << " @" << showFrames << " frames"
+                  << (qualityPlate ? " (quality-plate bar)" : "") << "\n";
         inv.scene.reset();
         InverseScene invShow = InverseScene::buildStudio(cfg);
         invShow.applyTruth();
@@ -390,7 +406,6 @@ struct DenseOrmFitResult {
             if (std::filesystem::exists(invShow.envPath)) applyEnv(showR, invShow.envPath);
             showR.setScene(invShow.scene.get());
             (void)showR.updateSceneBuffers();
-            const int showFrames = std::max(kFrames, 6);
             auto showSave = [&](const ohao::diff::DiffAlbedoMap& rough, const char* name,
                                 bool force = false) {
                 auto img = forwardOrm(showR, invShow, fixedAlb, rough, 0, showFrames, force);
@@ -430,13 +445,18 @@ struct DenseOrmFitResult {
            << "  \"metric_domain\": \"vulkan_deferred_studio\",\n"
            << "  \"beauty_theta_path\": \"dense_orm_bindless_deferred\",\n"
            << "  \"dense_orm_sot\": true,\n"
+           << "  \"quality_plate\": " << (qualityPlate ? "true" : "false") << ",\n"
+           << "  \"preset\": \"" << cfg.preset << "\",\n"
            << "  \"fit_wh\": [" << W << ", " << H << "],\n"
            << "  \"show_wh\": [" << showW << ", " << showH << "],\n"
+           << "  \"fit_frames\": " << kFrames << ",\n"
+           << "  \"show_frames\": " << showFrames << ",\n"
+           << "  \"n_views\": " << nViews << ",\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"
            << "  \"dense_grid\": " << G << ",\n"
            << "  \"map_upload\": \"in_place_updateTextureFromMemory\",\n"
            << "  \"wrong_init_source\": \"high_rough_solid\",\n"
-           << "  \"gt_rough_pattern\": \"checker_" << checkerTiles << "\",\n"
+           << "  \"gt_rough_pattern\": \"" << gtPattern << "\",\n"
            << "  \"loss_crop_y_min\": " << kOrmCropYMin << ",\n"
            << "  \"ground_metal\": " << kOrmGroundMetal << ",\n"
            << "  \"albedo_free\": false,\n"

@@ -123,7 +123,9 @@ struct DenseMetalFitResult {
     const std::uint32_t W = vp.fitW, H = vp.fitH, showW = vp.showW, showH = vp.showH;
     const bool wantShowStills = vp.wantShowStills();
     const int kFrames = vp.frames;
-    const int nViews = 2;
+    const int showFrames = vp.showFrames;
+    int nViews = (cfg.denseViews > 0) ? std::clamp(cfg.denseViews, 1, 4) : 2;
+    const bool qualityPlate = cfg.denseQualityPlate;
     const int G = cfg.denseGrid;
     const int mapPx = cfg.denseMapRes;
     const int nGrid = G * G;
@@ -133,6 +135,7 @@ struct DenseMetalFitResult {
         std::cerr << "FATAL: dense metal fit requires map-ground studio\n";
         return result;
     }
+    nViews = std::min(nViews, std::max(1, static_cast<int>(inv.views.size())));
 
     VulkanRenderer renderer(W, H);
     if (!renderer.initialize()) {
@@ -409,7 +412,6 @@ struct DenseMetalFitResult {
             if (std::filesystem::exists(invShow.envPath)) applyEnv(showR, invShow.envPath);
             showR.setScene(invShow.scene.get());
             (void)showR.updateSceneBuffers();
-            const int showFrames = std::max(kFrames, 6);
             auto showSave = [&](const ohao::diff::DiffAlbedoMap& metal, const char* name,
                                 bool force = false) {
                 auto img =
@@ -449,6 +451,8 @@ struct DenseMetalFitResult {
            << "  \"metric_domain\": \"vulkan_deferred_studio\",\n"
            << "  \"beauty_theta_path\": \"dense_metal_bindless_deferred\",\n"
            << "  \"dense_metal_sot\": true,\n"
+           << "  \"quality_plate\": " << (qualityPlate ? "true" : "false") << ",\n"
+           << "  \"preset\": \"" << cfg.preset << "\",\n"
            << "  \"fit_wh\": [" << W << ", " << H << "],\n"
            << "  \"show_wh\": [" << showW << ", " << showH << "],\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"

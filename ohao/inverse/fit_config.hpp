@@ -75,6 +75,11 @@ struct FitConfig {
     bool denseOrm{false};       // optim free dense ground roughness under Deferred
     // H2 M2b dense metallic / ORM.b (fixed albedo+rough; free metal grid)
     bool denseMetal{false};     // optim free dense ground metallic under Deferred
+    // Publish-quality dense plate (persuasion bar: dB only counts with clean stills)
+    bool denseQualityPlate{false}; // 1080p SHOW, denser maps, more frames, product GT pattern
+    int denseFitFrames{0};         // 0 = auto from viewport / quality-plate
+    int denseShowFrames{0};        // 0 = auto; plate stills accumulation
+    int denseViews{0};             // 0 = path default (2); quality-plate uses 3
     std::string targetImage;    // external LDR target (PNG/JPG); empty = synthetic
     float exposure{1.0f};       // applied to external target (or fitted)
     bool fitExposure{false};    // add exposure as free θ dim (photo path)
@@ -431,6 +436,29 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 std::cerr << "--hd expects 720|1080|full720|full1080\n";
                 std::exit(2);
             }
+        } else if (s == "--quality-plate") {
+            // Publish bar: clean 1080p stills + denser maps + multi-view + hard scenes.
+            // dB claims without this flag are lab diagnostics, not the product face.
+            a.cfg.denseQualityPlate = true;
+            a.cfg.quality = kQualityHigh;
+            a.cfg.fit = a.cfg.quality.fit;   // 640×360 default; overridden below
+            a.cfg.show = a.cfg.quality.show; // 1920×1080
+            a.cfg.fit.width = 960;
+            a.cfg.fit.height = 540;
+            a.cfg.show.width = 1920;
+            a.cfg.show.height = 1080;
+            if (a.cfg.denseMapRes < 128) a.cfg.denseMapRes = 128;
+            if (a.cfg.denseViews <= 0) a.cfg.denseViews = 3;
+            if (a.cfg.denseFitFrames <= 0) a.cfg.denseFitFrames = 8;
+            if (a.cfg.denseShowFrames <= 0) a.cfg.denseShowFrames = 20;
+            a.cfg.mapGround = true;
+            if (a.cfg.mapRes < 2) a.cfg.mapRes = 2;
+        } else if (s == "--dense-show-frames") {
+            a.cfg.denseShowFrames = std::max(4, std::atoi(need("--dense-show-frames")));
+        } else if (s == "--dense-fit-frames") {
+            a.cfg.denseFitFrames = std::max(4, std::atoi(need("--dense-fit-frames")));
+        } else if (s == "--dense-views") {
+            a.cfg.denseViews = std::clamp(std::atoi(need("--dense-views")), 1, 4);
         } else if (s == "--help" || s == "-h") {
             std::cout
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
@@ -448,6 +476,10 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 << "  --dense-map-res N         beauty map size NxN (default 64)\n"
                 << "  --dense-grid G            free control grid GxG (default 8)\n"
                 << "  --hd 720|1080|full720|full1080  daily plate sizes (FIT optim + SHOW stills)\n"
+                << "  --quality-plate          publish bar: 1080p SHOW, map≥128, multi-view, clean frames\n"
+                << "  --dense-show-frames N    plate still accumulation (default auto / 20 quality)\n"
+                << "  --dense-fit-frames N     optim accumulation\n"
+                << "  --dense-views N          train views for dense paths (default 2 / 3 quality)\n"
                 << "  --fit-width/--fit-height  optim resolution  --show-width/--show-height plate\n"
                 << "  --multi-start N | --no-multi-start   (default 5 candidates)\n"
                 << "  --light-reg W  --specular-weight W  --brdf-spp-mul M\n"

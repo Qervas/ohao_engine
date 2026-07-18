@@ -101,7 +101,19 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 | L6 / H2 free dense metallic (`--dense-metal`) | ✅ MAPTEST + relight; G=2 checker-aligned free θ (M2b) |
 | L6 / HD plates (`--hd 720\|1080`) | ✅ FIT optim + SHOW 720p/1080p stills |
 | L6 / H2 multi-preset gallery (M3a) | ✅ lantern + helmet + spheres; `scripts/run_inverse_gallery.sh` |
+| L6 / quality plate (publish bar) | ✅ `--quality-plate`: 1080p@20f, map128, hard presets (spheres/outdoor/helmet) |
+| L6 / M3b ablation | ✅ views / map-res / hd / lab_fast table on spheres |
 | L6+ photo / autodiff | → **roadmap** H3–H5 |
+
+### Quality bar (how we speak in public)
+
+| Path | Resolution | Role |
+|------|------------|------|
+| lab_fast 256×144 | CI / iteration | Diagnostics only — **do not quote dB as product proof** |
+| `--hd 720` | SHOW 1280×720 | Daily dev plate |
+| **`--quality-plate`** | **SHOW 1920×1080 @20 frames**, map≥128, multi-view, hard presets | **Publish face** — stills must look clean; dB + map MSE together |
+
+Hard presets for persuasion: **spheres** (metal chart), **outdoor** (HDRI), **helmet** (textured hero). Lantern alone is not enough.
 
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
 
@@ -113,14 +125,20 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 - `tools/inverse_lab/test_dense_orm.py` — H2 dense ORM/rough MAPTEST + relight  
 - `tools/inverse_lab/test_dense_metal.py` — H2 dense metallic MAPTEST + relight  
 - `tools/inverse_lab/test_gallery.py` — M3a ≥3 presets MAPTEST + gallery wall  
+- `tools/inverse_lab/test_quality_plate.py` — publish bar (≥2 hard presets, 1080p, map≥128)  
+- `tools/inverse_lab/test_ablation.py` — M3b ablation table baseline green  
 - `scripts/run_inverse_gallery.sh` — multi-preset matrix + HTML wall  
+- `scripts/run_inverse_quality_plate.sh` — hard-scene 1080p plate  
+- `scripts/run_inverse_ablation.sh` — views/map/hd/lab_fast matrix  
 
 ```bash
-# Fast CI-ish gallery (256×144)
+# Fast CI-ish gallery (256×144) — not the product face
 ./scripts/run_inverse_gallery.sh --fast
 # Daily 720p gallery wall
 OUT_ROOT=renders/inverse_gallery_hd720 HD=720 ./scripts/run_inverse_gallery.sh
-# open renders/inverse_gallery_hd720/gallery_wall.html
+# Publish face (quote these stills + metrics)
+./scripts/run_inverse_quality_plate.sh
+# open renders/inverse_quality_plate/gallery_wall.html
 ```
 
 ## Non-goals (this track)
