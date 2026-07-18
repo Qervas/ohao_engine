@@ -298,10 +298,8 @@ namespace ohao::inverse {
 
     const auto fitStart = std::chrono::steady_clock::now();
     fit.runSchedule(seedLikeNn, showAfterMs, traj, firstTraj);
-    if (labMode) {
-        cfg.visualPolish = true;
-        if (cfg.polishIters <= 0) cfg.polishIters = 8;
-    }
+    // Lab polish is optional: --no-visual-polish must win (720p polish is multi-hour).
+    if (labMode && cfg.visualPolish && cfg.polishIters <= 0) cfg.polishIters = 8;
     runVisualPolish(fit, externalTarget || labMode, tb.targetsShow, traj, firstTraj);
     space.values = fit.bestTheta;
     fit.loss = fit.bestLoss;

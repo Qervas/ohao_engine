@@ -103,7 +103,8 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 | L6 / H2 multi-preset gallery (M3a) | ✅ lantern + helmet + spheres; `scripts/run_inverse_gallery.sh` |
 | L6 / quality plate (publish bar) | ✅ `--quality-plate`: 1080p@20f, map128, hard presets (spheres/outdoor/helmet) |
 | L6 / M3b ablation | ✅ views / map-res / hd / lab_fast table on spheres |
-| L6+ photo / autodiff | → **roadmap** H3–H5 |
+| L7 / H3 photo plate (M4a–b) | ✅ recipe + photo_proxy + PHOTOTEST (`docs/inverse_photo_lab.md`) |
+| L7+ real phone/COLMAP / autodiff | → **roadmap** H3 real_photo + H4 |
 
 ### Quality bar (how we speak in public)
 
@@ -130,6 +131,9 @@ Hard presets for persuasion: **spheres** (metal chart), **outdoor** (HDRI), **he
 - `scripts/run_inverse_gallery.sh` — multi-preset matrix + HTML wall  
 - `scripts/run_inverse_quality_plate.sh` — hard-scene 1080p plate  
 - `scripts/run_inverse_ablation.sh` — views/map/hd/lab_fast matrix  
+- `scripts/run_inverse_photo_plate.sh` — H3 multi-view photo_proxy + PHOTOTEST  
+- `tools/inverse_lab/test_photo_plate.py` — honest photo gain gate  
+- `docs/inverse_photo_lab.md` — capture recipe (real + proxy)  
 
 ```bash
 # Fast CI-ish gallery (256×144) — not the product face
