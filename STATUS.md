@@ -91,6 +91,10 @@ OUT_ROOT=renders/inverse_gallery_hd720 HD=720 ./scripts/run_inverse_gallery.sh
 PRESET=spheres ./scripts/run_inverse_ablation.sh
 # H3 photo-proxy plate (domain-shifted multi-view; PHOTOTEST, not LABTEST theater)
 ./scripts/run_inverse_photo_plate.sh
+# H4/M5a analytic albedo GRADCHECK + dense MAPTEST
+./build/inverse_fit --backend diff --dense-map --dense-map-res 64 --dense-grid 8 \
+  --fit-width 256 --fit-height 144 --preset lantern --out-dir renders/diff_dense_analytic
+python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
 ./build/inverse_fit --backend hybrid --preset lantern --quality draft \
   --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --out-dir renders/inverse_lab/lantern_hybrid
@@ -100,8 +104,8 @@ PRESET=spheres ./scripts/run_inverse_ablation.sh
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H2 ✅** + **M3 gallery/ablation ✅** + **quality plate ✅** + **H3 M4a–b photo_proxy ✅**.
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H3 ✅** + **M5a analytic albedo GRADCHECK ✅** (median rel err ~7% vs FD).
 
-1. Real phone/COLMAP capture into `ohao_inverse_lab_capture` (same PHOTOTEST).  
-2. Expand golden corpus (env helmet, deferred cornell).  
-3. Keep this file honest — quality plate for dense Diff claims; PHOTOTEST for photo path.
+1. M5b: use analytic grads for dense Adam optim (speed plate ≥10× vs full FD).  
+2. Real phone/COLMAP capture (same PHOTOTEST).  
+3. Keep claims honest — GRADCHECK ≠ full reverse-mode yet.

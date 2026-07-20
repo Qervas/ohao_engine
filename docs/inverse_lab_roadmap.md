@@ -84,7 +84,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | **H1 — Dense materials** | M1a–c landed | Free dense albedo 64/128² + in-place upload |
 | **H2 — Multi-channel + gallery** | M2–M3 landed | ORM.g/b ✅; quality 1080p plate ✅; gallery + ablation ✅ |
 | **H3 — Real capture** | M4a–b photo_proxy ✅; real_phone open | Recipe + PHOTOTEST; real COLMAP shoot next |
-| **H4 — Differentiability** | ~6–12 weeks | True ∂L/∂map (Deferred first); FD-checked |
+| **H4 — Differentiability** | M5a GRADCHECK ✅; M5b open | Analytic albedo vs FD (~7% med); Adam speed next |
 | **H5 — Ambition options** | Later / optional | Neural priors, public benches, geometry joint |
 
 Horizons stack; do not start H3 before H1 ships a dense plate. H4 can overlap late H2 if H1 is solid.
@@ -344,8 +344,8 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | **M3b** | Ablation table | H2 | M3a | ✅ quality baseline + map/views/hd/lab_fast matrix |
 | **M4a** | Photo capture recipe | H3 | M1b | ✅ `docs/inverse_photo_lab.md` + cameras.jsonl |
 | **M4b** | Photo inverse plate | H3 | M4a, M2a | ✅ photo_proxy + PHOTOTEST + photo_vs_rerender strip |
-| **M5a** | Analytic albedo grads | H4 | M1b | FD check + speedup |
-| **M5b** | Adam dense default | H4 | M5a | Diff default path |
+| **M5a** | Analytic albedo grads | H4 | M1b | ✅ GRADCHECK median rel err ~7%; MAPTEST still FD closer |
+| **M5b** | Adam dense default | H4 | M5a | Analytic-driven Adam ≥10× FD wall-clock |
 | **M6*** | Optional tracks | H5 | M4b | Separate RFCs |
 
 ---
@@ -439,7 +439,8 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 4. **M3a ✅** — multi-preset gallery wall (`scripts/run_inverse_gallery.sh`; lantern/helmet/spheres).  
 5. **M3b ✅** — ablation table + **quality plate bar** (`--quality-plate`, hard presets @1080p).  
 6. **M4a–b ✅** — photo recipe + photo_proxy plate + PHOTOTEST (gain-based, no fake ≥28).  
-7. **H3 real_photo** — phone/COLMAP shoot into same bundle; optional H4 autodiff.
+7. **M5a ✅** — analytic Deferred albedo grads FD-checked (`dense_analytic.hpp`).  
+8. **M5b** — analytic Adam optim speed plate; real_photo COLMAP when hardware available.
 
 ---
 

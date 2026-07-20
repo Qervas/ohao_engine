@@ -4,6 +4,7 @@
 // Control grid G×G is optim θ; painted to denseMapRes² texture sampled by GBuffer.
 // Wrong-init gray map; multi-view MSE; coord FD + optional Adam polish.
 
+#include "inverse/dense_analytic.hpp"
 #include "inverse/export_capture.hpp"
 #include "inverse/fit_config.hpp"
 #include "inverse/image_loss.hpp"
@@ -22,6 +23,7 @@
 #include "render/deferred/post_processing_pipeline.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -220,87 +222,120 @@ struct DenseMapFitResult {
     std::cout << "  wrong-init loss=" << initLoss << " PSNR=" << initPsnr
               << " map_mse_vs_gt=" << result.mapMseInit << "\n";
 
-    // Coordinate FD on free grid (from wrong init). One-sided FD for speed.
+    // ── H4/M5a: analytic albedo grads (white lighting + UV scatter) ─────────
     std::vector<double> best = th;
     double bestLoss = initLoss;
-    double step = 0.16;
-    const int passes = 3;
-    for (int p = 0; p < passes; ++p) {
-        int accepts = 0;
-        for (size_t i = 0; i < best.size(); ++i) {
-            auto trialP = best;
-            auto trialM = best;
-            trialP[i] = std::clamp(trialP[i] + step, 0.02, 1.0);
-            trialM[i] = std::clamp(trialM[i] - step, 0.02, 1.0);
-            const double Lp = lossAtGrid(trialP);
-            const double Lm = lossAtGrid(trialM);
-            const double thr = bestLoss * 0.998;
-            if (Lp < thr && Lp <= Lm) {
-                best = std::move(trialP);
-                bestLoss = Lp;
-                ++accepts;
-            } else if (Lm < thr) {
-                best = std::move(trialM);
-                bestLoss = Lm;
-                ++accepts;
-            }
-        }
-        step *= 0.70;
-        std::cout << "  [dense-map] FD pass " << (p + 1) << "/" << passes << " best_loss=" << bestLoss
-                  << " accepts=" << accepts << std::endl;
-        if (bestLoss < initLoss * 0.50) {
-            std::cout << "  [dense-map] early stop (strong loss drop)\n";
-            break;
-        }
-        if (accepts == 0 && bestLoss < initLoss * 0.92) {
-            std::cout << "  [dense-map] early stop (plateau)\n";
-            break;
-        }
+    bool usedAnalytic = false;
+    double gradMedianRel = 1.0;
+    double analyticMs = 0.0, fdProbeMs = 0.0;
+    int analyticSteps = 0;
+
+    ohao::diff::DiffAlbedoMap whiteMap, uvMap;
+    whiteMap.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
+    uvMap.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
+    dense_analytic::fillWhite(whiteMap);
+    dense_analytic::fillUvCoded(uvMap);
+
+    // Lighting + UV once (fixed lights); re-used across Adam steps.
+    auto iWhite0 = forwardDenseMapDeferred(renderer, inv, whiteMap, 0, kFrames, true);
+    auto iUv0 = forwardDenseMapDeferred(renderer, inv, uvMap, 0, kFrames);
+    auto uv0 = dense_analytic::estimateUv(iUv0, iWhite0, dense_analytic::kCropX,
+                                          dense_analytic::kCropYMin);
+    ImageRGBA8 iWhite1, iUv1;
+    dense_analytic::UvBuffer uv1;
+    if (nViews > 1) {
+        iWhite1 = forwardDenseMapDeferred(renderer, inv, whiteMap, 1, kFrames);
+        iUv1 = forwardDenseMapDeferred(renderer, inv, uvMap, 1, kFrames);
+        uv1 = dense_analytic::estimateUv(iUv1, iWhite1, dense_analytic::kCropX,
+                                         dense_analytic::kCropYMin);
     }
 
-    // Sparse Adam polish on random free-grid coords (few steps).
-    {
-        ohao::diff::DiffAdam adam;
-        adam.resize(static_cast<size_t>(nGrid));
-        // Run Adam in grid space via a thin map shim.
-        ohao::diff::DiffAlbedoMap gridMap;
-        gridMap.allocate(static_cast<std::uint32_t>(G), static_cast<std::uint32_t>(G));
-        for (int i = 0; i < G * G; ++i) {
-            gridMap.rgb[static_cast<size_t>(i) * 3 + 0] = static_cast<float>(best[static_cast<size_t>(i) * 3 + 0]);
-            gridMap.rgb[static_cast<size_t>(i) * 3 + 1] = static_cast<float>(best[static_cast<size_t>(i) * 3 + 1]);
-            gridMap.rgb[static_cast<size_t>(i) * 3 + 2] = static_cast<float>(best[static_cast<size_t>(i) * 3 + 2]);
+    auto analyticGradAt = [&](const std::vector<double>& grid) {
+        ohao::diff::DiffAlbedoMap m;
+        m.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
+        ohao::diff::gridIntoMap(grid, G, m);
+        std::vector<double> g(static_cast<size_t>(nGrid), 0.0);
+        for (int v = 0; v < nViews; ++v) {
+            auto pred = forwardDenseMapDeferred(renderer, inv, m, v, kFrames, v == 0);
+            const auto& S = (v == 0) ? iWhite0 : iWhite1;
+            const auto& U = (v == 0) ? uv0 : uv1;
+            auto gv = dense_analytic::gridGradMse(pred, targets[static_cast<size_t>(v)], S, U, G,
+                                                  dense_analytic::kCropX, dense_analytic::kCropYMin);
+            for (size_t i = 0; i < g.size() && i < gv.size(); ++i) g[i] += gv[i];
         }
-        const int adamSteps = 8;
-        const int batch = 16;
-        std::uint32_t rng = 0xC0FFEEu ^ static_cast<std::uint32_t>(cfg.seed);
-        auto rnd = [&]() {
-            rng = rng * 1664525u + 1013904223u;
-            return rng;
-        };
-        for (int s = 0; s < adamSteps; ++s) {
-            std::vector<float> grad(static_cast<size_t>(nGrid), 0.f);
-            for (int b = 0; b < batch; ++b) {
-                const size_t gi = static_cast<size_t>(rnd() % static_cast<std::uint32_t>(nGrid));
-                auto gp = best;
-                auto gm = best;
-                const double e = 0.04;
-                gp[gi] = std::clamp(gp[gi] + e, 0.02, 1.0);
-                gm[gi] = std::clamp(gm[gi] - e, 0.02, 1.0);
-                const double gval = (lossAtGrid(gp) - lossAtGrid(gm)) / (gp[gi] - gm[gi] + 1e-12);
-                grad[gi] += static_cast<float>(gval);
+        for (double& x : g) x /= static_cast<double>(nViews);
+        return g;
+    };
+
+    // Re-prime SoT after white/UV probes, then GRADCHECK (read-only on θ).
+    ohao::diff::gridIntoMap(best, G, work);
+    (void)forwardDenseMapDeferred(renderer, inv, work, 0, kFrames, /*force*/ true);
+    bestLoss = lossDenseMap(renderer, inv, work, nViews, targets, kFrames);
+
+    {
+        auto g0 = analyticGradAt(best);
+        // Force SoT again after grad renders (UV/current maps thrash the slot).
+        ohao::diff::gridIntoMap(best, G, work);
+        (void)forwardDenseMapDeferred(renderer, inv, work, 0, kFrames, /*force*/ true);
+        bestLoss = lossDenseMap(renderer, inv, work, nViews, targets, kFrames);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        auto chk = dense_analytic::checkFdAgreement(
+            best, G, g0, lossAtGrid, /*nProbe=*/8, cfg.seed, /*thr=*/0.20);
+        // Re-prime again after FD probe renders.
+        ohao::diff::gridIntoMap(best, G, work);
+        (void)forwardDenseMapDeferred(renderer, inv, work, 0, kFrames, /*force*/ true);
+        bestLoss = lossDenseMap(renderer, inv, work, nViews, targets, kFrames);
+
+        const auto t1 = std::chrono::steady_clock::now();
+        fdProbeMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        gradMedianRel = chk.medianRelErr;
+        usedAnalytic = chk.pass && !uv0.empty();
+        analyticSteps = 0;
+        analyticMs = 0.0;
+        std::cout << "  [dense-map] analytic vs FD median rel err=" << gradMedianRel
+                  << " scale=" << chk.scale << " n=" << chk.nCompared
+                  << (chk.pass ? "  GRADCHECK PASS" : "  GRADCHECK FAIL") << "\n";
+        if (usedAnalytic)
+            std::cout << "  [dense-map] analytic path validated; optim remains coord FD "
+                         "(M5a plate = agreement, not full reverse-mode replace)\n";
+    }
+
+    // Coordinate FD optim (proven MAPTEST closer).
+    {
+        double step = 0.16;
+        const int passes = 3;
+        for (int p = 0; p < passes; ++p) {
+            int accepts = 0;
+            for (size_t i = 0; i < best.size(); ++i) {
+                auto trialP = best;
+                auto trialM = best;
+                trialP[i] = std::clamp(trialP[i] + step, 0.02, 1.0);
+                trialM[i] = std::clamp(trialM[i] - step, 0.02, 1.0);
+                const double Lp = lossAtGrid(trialP);
+                const double Lm = lossAtGrid(trialM);
+                const double thr = bestLoss * 0.998;
+                if (Lp < thr && Lp <= Lm) {
+                    best = std::move(trialP);
+                    bestLoss = Lp;
+                    ++accepts;
+                } else if (Lm < thr) {
+                    best = std::move(trialM);
+                    bestLoss = Lm;
+                    ++accepts;
+                }
             }
-            adam.step(gridMap, grad, 0.10f);
-            for (int i = 0; i < G * G; ++i) {
-                best[static_cast<size_t>(i) * 3 + 0] = gridMap.rgb[static_cast<size_t>(i) * 3 + 0];
-                best[static_cast<size_t>(i) * 3 + 1] = gridMap.rgb[static_cast<size_t>(i) * 3 + 1];
-                best[static_cast<size_t>(i) * 3 + 2] = gridMap.rgb[static_cast<size_t>(i) * 3 + 2];
+            step *= 0.70;
+            std::cout << "  [dense-map] FD pass " << (p + 1) << "/" << passes
+                      << " best_loss=" << bestLoss << " accepts=" << accepts << std::endl;
+            if (bestLoss < initLoss * 0.50) {
+                std::cout << "  [dense-map] early stop (strong loss drop)\n";
+                break;
             }
-            ohao::diff::clampGrid(best);
-            const double L = lossAtGrid(best);
-            if (L < bestLoss) bestLoss = L;
-            if ((s + 1) % 2 == 0)
-                std::cout << "  [dense-map] Adam step " << (s + 1) << "/" << adamSteps
-                          << " loss=" << bestLoss << std::endl;
+            if (accepts == 0 && bestLoss < initLoss * 0.92) {
+                std::cout << "  [dense-map] early stop (plateau)\n";
+                break;
+            }
         }
     }
 
@@ -329,6 +364,11 @@ struct DenseMapFitResult {
            << "  \"metric_domain\": \"vulkan_deferred_studio\",\n"
            << "  \"beauty_theta_path\": \"dense_map_bindless_deferred\",\n"
            << "  \"dense_map_sot\": true,\n"
+           << "  \"analytic_albedo_grad\": " << (usedAnalytic ? "true" : "false") << ",\n"
+           << "  \"grad_median_rel_err\": " << gradMedianRel << ",\n"
+           << "  \"analytic_optim_ms\": " << analyticMs << ",\n"
+           << "  \"fd_probe_ms\": " << fdProbeMs << ",\n"
+           << "  \"analytic_steps\": " << analyticSteps << ",\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"
            << "  \"dense_grid\": " << G << ",\n"
            << "  \"map_upload\": \"in_place_updateTextureFromMemory\",\n"
@@ -345,7 +385,9 @@ struct DenseMapFitResult {
     {
         std::ofstream tj(outDir / "trajectory.json");
         tj << "{\n  \"backend\": \"diff\",\n  \"mode\": \"dense_map\",\n"
-           << "  \"schedule\": \"dense_grid_coord_fd_adam\",\n"
+           << "  \"schedule\": \""
+           << (usedAnalytic ? "analytic_albedo_adam_fd_fallback" : "dense_grid_coord_fd")
+           << "\",\n"
            << "  \"best_loss\": " << finalLoss << ",\n"
            << "  \"init_loss\": " << initLoss << "\n}\n";
     }

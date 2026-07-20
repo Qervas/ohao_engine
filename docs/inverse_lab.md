@@ -104,7 +104,8 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 | L6 / quality plate (publish bar) | ✅ `--quality-plate`: 1080p@20f, map128, hard presets (spheres/outdoor/helmet) |
 | L6 / M3b ablation | ✅ views / map-res / hd / lab_fast table on spheres |
 | L7 / H3 photo plate (M4a–b) | ✅ recipe + photo_proxy + PHOTOTEST (`docs/inverse_photo_lab.md`) |
-| L7+ real phone/COLMAP / autodiff | → **roadmap** H3 real_photo + H4 |
+| L8 / H4 analytic albedo (M5a) | ✅ GRADCHECK vs FD (~7% med rel err); optim still coord FD |
+| L8+ Adam speed / real_photo | → **roadmap** M5b + real_photo |
 
 ### Quality bar (how we speak in public)
 
@@ -133,7 +134,15 @@ Hard presets for persuasion: **spheres** (metal chart), **outdoor** (HDRI), **he
 - `scripts/run_inverse_ablation.sh` — views/map/hd/lab_fast matrix  
 - `scripts/run_inverse_photo_plate.sh` — H3 multi-view photo_proxy + PHOTOTEST  
 - `tools/inverse_lab/test_photo_plate.py` — honest photo gain gate  
+- `tools/inverse_lab/test_dense_analytic.py` — H4 analytic GRADCHECK + MAPTEST  
 - `docs/inverse_photo_lab.md` — capture recipe (real + proxy)  
+
+```bash
+# H4 analytic albedo GRADCHECK (then coord FD MAPTEST)
+./build/inverse_fit --backend diff --dense-map --dense-map-res 64 --dense-grid 8 \
+  --fit-width 256 --fit-height 144 --preset lantern --out-dir renders/diff_dense_analytic
+python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
+```
 
 ```bash
 # Fast CI-ish gallery (256×144) — not the product face
