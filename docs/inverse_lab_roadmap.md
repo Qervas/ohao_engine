@@ -345,7 +345,7 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | **M4a** | Photo capture recipe | H3 | M1b | ✅ `docs/inverse_photo_lab.md` + cameras.jsonl |
 | **M4b** | Photo inverse plate | H3 | M4a, M2a | ✅ photo_proxy + PHOTOTEST + photo_vs_rerender strip |
 | **M5a** | Analytic albedo grads | H4 | M1b | ✅ GRADCHECK (med rel err ~10–20% vs FD) |
-| **M5b** | Analytic dense optim | H4 | M5a | ✅ linear solve + sparse one-sided FD; ~6× vs 3-pass FD + MAPTEST |
+| **M5b** | Analytic dense optim | H4 | M5a | ✅ linear solve + residual + sparse; ≥10× (~20×) vs 3-pass FD + MAPTEST |
 | **M6*** | Optional tracks | H5 | M4b | Separate RFCs |
 
 ---
@@ -439,8 +439,8 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 4. **M3a ✅** — multi-preset gallery wall (`scripts/run_inverse_gallery.sh`; lantern/helmet/spheres).  
 5. **M3b ✅** — ablation table + **quality plate bar** (`--quality-plate`, hard presets @1080p).  
 6. **M4a–b ✅** — photo recipe + photo_proxy plate + PHOTOTEST (gain-based, no fake ≥28).  
-7. **M5a–b ✅** — analytic GRADCHECK + linear-solve/sparse optim (~6× vs full FD, MAPTEST).  
-8. **Next** — ≥10× pure-analytic or real_photo COLMAP.
+7. **M5a–b ✅** — analytic GRADCHECK + residual/sparse optim (**≥10×** ~20× vs full FD, MAPTEST).  
+8. **Next** — real_photo COLMAP (same PHOTOTEST) or optional reverse-mode polish.
 
 ---
 

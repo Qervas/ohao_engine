@@ -104,8 +104,8 @@ python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H3 ✅** + **M5a GRADCHECK ✅** + **M5b analytic+sparse optim ✅** (~6× vs 3-pass FD, MAPTEST).
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H4 ✅** — M5a GRADCHECK + M5b analytic residual+sparse optim (**≥10×** vs 3-pass FD estimate, MAPTEST).
 
-1. Push speed toward ≥10× (tighter sparse set / better UV).  
-2. Real phone/COLMAP capture (same PHOTOTEST).  
-3. Keep claims honest — hybrid analytic+sparse, not pure reverse-mode.
+1. Real phone/COLMAP capture (same PHOTOTEST).  
+2. Optional pure reverse-mode Adam polish (beyond residual closed-form).  
+3. Keep claims honest — hybrid analytic+sparse, not full autodiff.

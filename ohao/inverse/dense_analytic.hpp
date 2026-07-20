@@ -240,4 +240,52 @@ inline void adamStep(std::vector<double>& grid, const std::vector<double>& grad,
     return out;
 }
 
+/// Residual update under I≈A⊙S: ΔA ≈ mean((T−P)/S) per free cell (additive polish).
+[[nodiscard]] inline std::vector<double> gridFromResidual(const ImageRGBA8& pred,
+                                                          const ImageRGBA8& tgt,
+                                                          const ImageRGBA8& lighting,
+                                                          const UvBuffer& uv, int G,
+                                                          const std::vector<double>& prior,
+                                                          double step = 0.85, double cropX = 1.0,
+                                                          double cropYMin = 0.0) {
+    std::vector<double> sum(static_cast<size_t>(G) * G * 3u, 0.0);
+    std::vector<double> cnt(static_cast<size_t>(G) * G, 0.0);
+    std::vector<double> out = prior;
+    if (out.size() != sum.size()) out.assign(sum.size(), 0.45);
+    if (pred.empty() || tgt.empty() || lighting.empty() || uv.empty() || G < 1) return out;
+    if (pred.width != tgt.width || pred.height != tgt.height) return out;
+    std::uint32_t xLim = 0, y0 = 0;
+    detail::cropLimits(pred.width, pred.height, cropX, cropYMin, xLim, y0);
+    for (std::uint32_t y = y0; y < pred.height; ++y) {
+        for (std::uint32_t x = 0; x < xLim; ++x) {
+            const size_t uo = (static_cast<size_t>(y) * uv.w + x) * 2u;
+            if (uo + 1 >= uv.uv.size()) continue;
+            const float uu = uv.uv[uo + 0];
+            const float vv = uv.uv[uo + 1];
+            if (uu < 0.f || vv < 0.f) continue;
+            const int gx = std::min(G - 1, static_cast<int>(uu * static_cast<float>(G)));
+            const int gy = std::min(G - 1, static_cast<int>(vv * static_cast<float>(G)));
+            const size_t gi = static_cast<size_t>(gy * G + gx);
+            const size_t o = (static_cast<size_t>(y) * pred.width + x) * 4u;
+            for (int c = 0; c < 3; ++c) {
+                const double s = std::max(1e-3, lighting.rgba[o + c] / 255.0);
+                const double t = tgt.rgba[o + c] / 255.0;
+                const double p = pred.rgba[o + c] / 255.0;
+                sum[gi * 3u + static_cast<size_t>(c)] += (t - p) / s;
+            }
+            cnt[gi] += 1.0;
+        }
+    }
+    const double a = std::clamp(step, 0.0, 1.5);
+    for (int i = 0; i < G * G; ++i) {
+        if (cnt[static_cast<size_t>(i)] < 1.0) continue;
+        const double inv = 1.0 / cnt[static_cast<size_t>(i)];
+        for (int c = 0; c < 3; ++c) {
+            const size_t k = static_cast<size_t>(i) * 3u + static_cast<size_t>(c);
+            out[k] = std::clamp(out[k] + a * sum[k] * inv, 0.02, 1.0);
+        }
+    }
+    return out;
+}
+
 } // namespace ohao::inverse::dense_analytic

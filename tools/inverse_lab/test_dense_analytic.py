@@ -58,17 +58,14 @@ def main(out: Path) -> int:
         print("FAIL MAPTEST quality")
         return 1
 
-    # M5b: analytic+sparse path (not full 3-pass FD) + ≥3× speedup
+    # M5b: analytic residual+sparse path (not full 3-pass FD) + ≥10× vs est full FD
     if not optim:
         print("FAIL optim_analytic false (full FD fallback)")
         return 1
-    if speedup < 3.0:
-        print(f"FAIL speedup {speedup:.1f}× < 3× vs 3-pass FD estimate")
+    if speedup < 10.0:
+        print(f"FAIL speedup {speedup:.1f}× < 10× vs 3-pass FD estimate")
         return 1
-    if speedup >= 10.0:
-        print(f"SPEED 10×+ achieved ({speedup:.1f}×)")
-    else:
-        print(f"NOTE speedup {speedup:.1f}× (target 10×; ≥3× with MAPTEST accepted for M5b hybrid)")
+    print(f"SPEED 10×+ achieved ({speedup:.1f}×)")
 
     print("PASS tools/inverse_lab/test_dense_analytic.py")
     return 0

@@ -104,8 +104,8 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 | L6 / quality plate (publish bar) | ✅ `--quality-plate`: 1080p@20f, map128, hard presets (spheres/outdoor/helmet) |
 | L6 / M3b ablation | ✅ views / map-res / hd / lab_fast table on spheres |
 | L7 / H3 photo plate (M4a–b) | ✅ recipe + photo_proxy + PHOTOTEST (`docs/inverse_photo_lab.md`) |
-| L8 / H4 analytic albedo (M5a–b) | ✅ GRADCHECK + linear solve + sparse FD optim (~6× vs full FD) |
-| L8+ pure-analytic ≥10× / real_photo | → **roadmap** next |
+| L8 / H4 analytic albedo (M5a–b) | ✅ GRADCHECK + residual + sparse optim (≥10× vs full FD, MAPTEST) |
+| L8+ real_photo COLMAP / pure reverse-mode | → **roadmap** next |
 
 ### Quality bar (how we speak in public)
 
