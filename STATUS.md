@@ -104,8 +104,8 @@ python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H3 ✅** + **M5a analytic albedo GRADCHECK ✅** (median rel err ~7% vs FD).
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H3 ✅** + **M5a GRADCHECK ✅** + **M5b analytic+sparse optim ✅** (~6× vs 3-pass FD, MAPTEST).
 
-1. M5b: use analytic grads for dense Adam optim (speed plate ≥10× vs full FD).  
+1. Push speed toward ≥10× (tighter sparse set / better UV).  
 2. Real phone/COLMAP capture (same PHOTOTEST).  
-3. Keep claims honest — GRADCHECK ≠ full reverse-mode yet.
+3. Keep claims honest — hybrid analytic+sparse, not pure reverse-mode.

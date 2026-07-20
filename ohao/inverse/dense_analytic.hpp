@@ -20,8 +20,10 @@
 
 namespace ohao::inverse::dense_analytic {
 
+// Full-frame for GRADCHECK vs lossDenseMap; floor band for linear solve (less hero pollution).
 inline constexpr double kCropX = 1.0;
-inline constexpr double kCropYMin = 0.22; // ground + pedestal band (studio)
+inline constexpr double kCropYMin = 0.0;
+inline constexpr double kSolveCropYMin = 0.40;
 
 inline void fillWhite(ohao::diff::DiffAlbedoMap& m) {
     if (!m.empty()) m.fill(1.f, 1.f, 1.f);
@@ -77,17 +79,17 @@ struct UvBuffer {
     return out;
 }
 
-/// Analytic grid gradient for MSE: ∂/∂A (||A⊙S − T||²) ≈ 2(I−T)⊙S scattered to G×G.
-/// `gridRgb` is G*G*3 free params. Returns same layout gradient.
+/// Analytic grid gradient for mean MSE: L = mean_p ||I−T||², I≈A⊙S.
+/// Scatter ∂L/∂A ≈ (2/N)(I−T)⊙S into free G×G cells (no per-cell average).
 [[nodiscard]] inline std::vector<double> gridGradMse(const ImageRGBA8& pred, const ImageRGBA8& tgt,
                                                      const ImageRGBA8& lighting, const UvBuffer& uv,
                                                      int G, double cropX, double cropYMin) {
     std::vector<double> g(static_cast<size_t>(G) * G * 3u, 0.0);
-    std::vector<double> w(static_cast<size_t>(G) * G, 0.0);
     if (pred.empty() || tgt.empty() || lighting.empty() || uv.empty() || G < 1) return g;
     if (pred.width != tgt.width || pred.height != tgt.height) return g;
     std::uint32_t xLim = 0, y0 = 0;
     detail::cropLimits(pred.width, pred.height, cropX, cropYMin, xLim, y0);
+    double nPix = 0.0;
     for (std::uint32_t y = y0; y < pred.height; ++y) {
         for (std::uint32_t x = 0; x < xLim; ++x) {
             const size_t uo = (static_cast<size_t>(y) * uv.w + x) * 2u;
@@ -103,19 +105,14 @@ struct UvBuffer {
                 const double ip = pred.rgba[o + c] / 255.0;
                 const double it = tgt.rgba[o + c] / 255.0;
                 const double s = lighting.rgba[o + c] / 255.0;
-                // dL/dA = 2 (I-T) * dI/dA, dI/dA ≈ S (linear albedo)
                 g[gi * 3u + static_cast<size_t>(c)] += 2.0 * (ip - it) * s;
             }
-            w[gi] += 1.0;
+            nPix += 1.0;
         }
     }
-    for (int i = 0; i < G * G; ++i) {
-        if (w[static_cast<size_t>(i)] > 1.0) {
-            const double inv = 1.0 / w[static_cast<size_t>(i)];
-            g[static_cast<size_t>(i) * 3 + 0] *= inv;
-            g[static_cast<size_t>(i) * 3 + 1] *= inv;
-            g[static_cast<size_t>(i) * 3 + 2] *= inv;
-        }
+    if (nPix > 0.0) {
+        const double inv = 1.0 / nPix;
+        for (double& x : g) x *= inv;
     }
     return g;
 }
@@ -169,12 +166,78 @@ template <typename LossFn>
     return r;
 }
 
-/// One Adam-like step on free grid using analytic gradient (positive grad → increase loss).
-inline void adamLikeStep(std::vector<double>& grid, const std::vector<double>& grad, double lr) {
-    for (size_t i = 0; i < grid.size() && i < grad.size(); ++i) {
-        // Descent: subtract gradient
-        grid[i] = std::clamp(grid[i] - lr * grad[i], 0.02, 1.0);
+/// True Adam step (descent) on free grid.
+struct AdamState {
+    std::vector<double> m, v;
+    int t{0};
+    void resize(size_t n) {
+        m.assign(n, 0.0);
+        v.assign(n, 0.0);
+        t = 0;
     }
+};
+
+inline void adamStep(std::vector<double>& grid, const std::vector<double>& grad, AdamState& st,
+                     double lr, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8) {
+    if (st.m.size() != grid.size()) st.resize(grid.size());
+    ++st.t;
+    const double bc1 = 1.0 - std::pow(b1, st.t);
+    const double bc2 = 1.0 - std::pow(b2, st.t);
+    for (size_t i = 0; i < grid.size() && i < grad.size(); ++i) {
+        st.m[i] = b1 * st.m[i] + (1.0 - b1) * grad[i];
+        st.v[i] = b2 * st.v[i] + (1.0 - b2) * grad[i] * grad[i];
+        const double mhat = st.m[i] / (bc1 + 1e-12);
+        const double vhat = st.v[i] / (bc2 + 1e-12);
+        grid[i] = std::clamp(grid[i] - lr * mhat / (std::sqrt(vhat) + eps), 0.02, 1.0);
+    }
+}
+
+/// Closed-form under linear model I≈A⊙S: A = clamp(T/S) scattered into free G×G grid.
+/// Blend with `prior` (e.g. current θ) using `blend` in [0,1] (1 = pure solve).
+[[nodiscard]] inline std::vector<double> gridFromLinearSolve(const ImageRGBA8& tgt,
+                                                             const ImageRGBA8& lighting,
+                                                             const UvBuffer& uv, int G,
+                                                             const std::vector<double>& prior,
+                                                             double blend = 0.85, double cropX = 1.0,
+                                                             double cropYMin = 0.0) {
+    std::vector<double> sum(static_cast<size_t>(G) * G * 3u, 0.0);
+    std::vector<double> cnt(static_cast<size_t>(G) * G, 0.0);
+    std::vector<double> out = prior;
+    if (out.size() != sum.size()) out.assign(sum.size(), 0.45);
+    if (tgt.empty() || lighting.empty() || uv.empty() || G < 1) return out;
+    if (tgt.width != lighting.width || tgt.height != lighting.height) return out;
+    std::uint32_t xLim = 0, y0 = 0;
+    detail::cropLimits(tgt.width, tgt.height, cropX, cropYMin, xLim, y0);
+    for (std::uint32_t y = y0; y < tgt.height; ++y) {
+        for (std::uint32_t x = 0; x < xLim; ++x) {
+            const size_t uo = (static_cast<size_t>(y) * uv.w + x) * 2u;
+            if (uo + 1 >= uv.uv.size()) continue;
+            const float uu = uv.uv[uo + 0];
+            const float vv = uv.uv[uo + 1];
+            if (uu < 0.f || vv < 0.f) continue;
+            const int gx = std::min(G - 1, static_cast<int>(uu * static_cast<float>(G)));
+            const int gy = std::min(G - 1, static_cast<int>(vv * static_cast<float>(G)));
+            const size_t gi = static_cast<size_t>(gy * G + gx);
+            const size_t o = (static_cast<size_t>(y) * tgt.width + x) * 4u;
+            for (int c = 0; c < 3; ++c) {
+                const double s = std::max(1e-3, lighting.rgba[o + c] / 255.0);
+                const double t = tgt.rgba[o + c] / 255.0;
+                sum[gi * 3u + static_cast<size_t>(c)] += std::clamp(t / s, 0.02, 1.0);
+            }
+            cnt[gi] += 1.0;
+        }
+    }
+    const double b = std::clamp(blend, 0.0, 1.0);
+    for (int i = 0; i < G * G; ++i) {
+        if (cnt[static_cast<size_t>(i)] < 1.0) continue;
+        const double inv = 1.0 / cnt[static_cast<size_t>(i)];
+        for (int c = 0; c < 3; ++c) {
+            const size_t k = static_cast<size_t>(i) * 3u + static_cast<size_t>(c);
+            const double sol = sum[k] * inv;
+            out[k] = std::clamp((1.0 - b) * prior[k] + b * sol, 0.02, 1.0);
+        }
+    }
+    return out;
 }
 
 } // namespace ohao::inverse::dense_analytic

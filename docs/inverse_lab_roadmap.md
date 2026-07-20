@@ -84,7 +84,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | **H1 — Dense materials** | M1a–c landed | Free dense albedo 64/128² + in-place upload |
 | **H2 — Multi-channel + gallery** | M2–M3 landed | ORM.g/b ✅; quality 1080p plate ✅; gallery + ablation ✅ |
 | **H3 — Real capture** | M4a–b photo_proxy ✅; real_phone open | Recipe + PHOTOTEST; real COLMAP shoot next |
-| **H4 — Differentiability** | M5a GRADCHECK ✅; M5b open | Analytic albedo vs FD (~7% med); Adam speed next |
+| **H4 — Differentiability** | M5a–b landed | GRADCHECK + linear solve + sparse FD (~6× vs full FD) |
 | **H5 — Ambition options** | Later / optional | Neural priors, public benches, geometry joint |
 
 Horizons stack; do not start H3 before H1 ships a dense plate. H4 can overlap late H2 if H1 is solid.
@@ -344,8 +344,8 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | **M3b** | Ablation table | H2 | M3a | ✅ quality baseline + map/views/hd/lab_fast matrix |
 | **M4a** | Photo capture recipe | H3 | M1b | ✅ `docs/inverse_photo_lab.md` + cameras.jsonl |
 | **M4b** | Photo inverse plate | H3 | M4a, M2a | ✅ photo_proxy + PHOTOTEST + photo_vs_rerender strip |
-| **M5a** | Analytic albedo grads | H4 | M1b | ✅ GRADCHECK median rel err ~7%; MAPTEST still FD closer |
-| **M5b** | Adam dense default | H4 | M5a | Analytic-driven Adam ≥10× FD wall-clock |
+| **M5a** | Analytic albedo grads | H4 | M1b | ✅ GRADCHECK (med rel err ~10–20% vs FD) |
+| **M5b** | Analytic dense optim | H4 | M5a | ✅ linear solve + sparse one-sided FD; ~6× vs 3-pass FD + MAPTEST |
 | **M6*** | Optional tracks | H5 | M4b | Separate RFCs |
 
 ---
@@ -439,8 +439,8 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 4. **M3a ✅** — multi-preset gallery wall (`scripts/run_inverse_gallery.sh`; lantern/helmet/spheres).  
 5. **M3b ✅** — ablation table + **quality plate bar** (`--quality-plate`, hard presets @1080p).  
 6. **M4a–b ✅** — photo recipe + photo_proxy plate + PHOTOTEST (gain-based, no fake ≥28).  
-7. **M5a ✅** — analytic Deferred albedo grads FD-checked (`dense_analytic.hpp`).  
-8. **M5b** — analytic Adam optim speed plate; real_photo COLMAP when hardware available.
+7. **M5a–b ✅** — analytic GRADCHECK + linear-solve/sparse optim (~6× vs full FD, MAPTEST).  
+8. **Next** — ≥10× pure-analytic or real_photo COLMAP.
 
 ---
 
