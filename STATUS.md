@@ -106,6 +106,6 @@ python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
 
 **Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H4 ✅** + **museum cinematic preset** (`--preset museum`, NIUA statue/pedestal, marble floor). Publish face still uses quality-plate tables in `docs/media/inverse/RESULTS.md`.
 
-1. Green museum MAPTEST + 1080p quality stills for README.  
+1. Optional museum 1080p SHOW (heavy NIUA mesh; slow FD).  
 2. Real phone/COLMAP / public IR bench (track B).  
 3. Keep claims honest — studio protocol ≠ Objects-with-Lighting.

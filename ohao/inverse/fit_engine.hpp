@@ -82,6 +82,22 @@ namespace ohao::inverse {
         }
     }
 
+    // Dense Diff paths build their own studio — skip prebuild (double BLAS / GPU thrash).
+    if (cfg.backend == InverseBackend::Diff &&
+        (cfg.denseMap || cfg.denseOrm || cfg.denseMetal)) {
+        std::cout << "OHAO inverse_fit — multi-param IR\n";
+        std::cout << "  preset=" << cfg.preset << "  (" << cfg.presetNote << ")\n";
+        std::cout << "  model=" << cfg.modelPath << "\n";
+        std::cout << "  backend=" << inverseBackendName(cfg.backend) << "  dense-map path\n";
+        std::cout << "  scene=" << cfg.scene << "  quality=" << cfg.quality.name << "\n";
+        std::cout << "  FIT " << cfg.fit.width << "x" << cfg.fit.height << " @" << cfg.fit.spp
+                  << "  SHOW " << cfg.show.width << "x" << cfg.show.height << " @" << cfg.show.spp
+                  << "\n";
+        if (cfg.denseMetal) return runDenseMetalFitCli(std::move(cfg));
+        if (cfg.denseOrm) return runDenseOrmFitCli(std::move(cfg));
+        return runDenseMapFitCli(std::move(cfg));
+    }
+
     InverseScene inv =
         studio ? InverseScene::buildStudio(cfg) : InverseScene::buildCornell(cfg);
     if (!inv.primaryMat) {
@@ -107,10 +123,7 @@ namespace ohao::inverse {
     if (!cfg.labBundle.empty()) std::cout << "  mode=lab-bundle " << cfg.labBundle << "\n";
 
     if (cfg.backend == InverseBackend::Diff) {
-        // Dense free-map optim (H1 albedo / H2 ORM.g / H2 ORM.b) or classic tile Diff.
-        if (cfg.denseMetal) return runDenseMetalFitCli(std::move(cfg));
-        if (cfg.denseOrm) return runDenseOrmFitCli(std::move(cfg));
-        if (cfg.denseMap) return runDenseMapFitCli(std::move(cfg));
+        // Classic tile Diff (dense handled above).
         return runDiffFit(std::move(cfg));
     }
     if (cfg.backend == InverseBackend::Hybrid) {

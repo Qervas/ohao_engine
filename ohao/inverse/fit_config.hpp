@@ -232,7 +232,8 @@ inline void applyPreset(FitConfig& cfg) {
     } else if (p == "museum" || p == "cinematic" || p == "museum_statue") {
         // NIUA museum pack: statue hero + marble floor protocol (ground free θ).
         setModel("assets/museum_studio/statue.glb");
-        setEnv("assets/hdri/brown_photostudio_02_2k.hdr");
+        // Prefer tracked env_studio — large Poly Haven 2k HDR can OOM/segfault on some drivers.
+        setEnv("assets/test_models/env_studio.hdr");
         // Light marble base (buildStudio expands to B&W tiles when museumStudio).
         setTruth(0.82f, 0.80f, 0.78f, 0.38f, 0.04f);
         setInit(0.22f, 0.42f, 0.72f, 0.90f, 0.08f); // cool high-rough wrong floor
@@ -241,29 +242,31 @@ inline void applyPreset(FitConfig& cfg) {
         cfg.camDistMul = 1.05f;
         cfg.museumStudio = true;
         cfg.fitPedestal = false; // fixed stone pedestal look
-        cfg.pedestalModelPath = "assets/museum_studio/pedestal.glb";
+        // Procedural pedestal for dense/PT lab: NIUA pedestal.glb is ~174k verts and
+        // doubles BLAS cost with statue (~200k); keep glb on disk for future SHOW-only dress.
+        cfg.pedestalModelPath.clear();
         cfg.presetNote = "Museum statue · marble floor (NIUA) · cinematic";
     } else if (p == "museum_amphora") {
         setModel("assets/museum_studio/amphora.glb");
-        setEnv("assets/hdri/brown_photostudio_02_2k.hdr");
+        setEnv("assets/test_models/env_studio.hdr");
         setTruth(0.82f, 0.80f, 0.78f, 0.38f, 0.04f);
         setInit(0.22f, 0.42f, 0.72f, 0.90f, 0.08f);
         cfg.heroScaleMul = 0.85f;
         cfg.camDistMul = 1.0f;
         cfg.museumStudio = true;
         cfg.fitPedestal = false;
-        cfg.pedestalModelPath = "assets/museum_studio/pedestal.glb";
+        cfg.pedestalModelPath.clear();
         cfg.presetNote = "Museum amphora · marble floor (NIUA)";
     } else if (p == "museum_bust") {
         setModel("assets/museum_studio/bust.glb");
-        setEnv("assets/hdri/brown_photostudio_02_2k.hdr");
+        setEnv("assets/test_models/env_studio.hdr");
         setTruth(0.82f, 0.80f, 0.78f, 0.38f, 0.04f);
         setInit(0.22f, 0.42f, 0.72f, 0.90f, 0.08f);
         cfg.heroScaleMul = 0.95f;
         cfg.camDistMul = 0.9f;
         cfg.museumStudio = true;
         cfg.fitPedestal = false;
-        cfg.pedestalModelPath = "assets/museum_studio/pedestal.glb";
+        cfg.pedestalModelPath.clear();
         cfg.presetNote = "Museum bust · marble floor (NIUA)";
     } else {
         std::cerr << "unknown --preset '" << p << "', using lantern\n";

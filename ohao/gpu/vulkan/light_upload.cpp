@@ -323,18 +323,28 @@ void VulkanRenderer::uploadLightBuffer() {
                     imgInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
                     imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-                    VkImage envImage;
-                    vkCreateImage(m_device, &imgInfo, nullptr, &envImage);
-                    VkMemoryRequirements emr;
-                    vkGetBufferMemoryRequirements(m_device, m_rtLightBuffer, &emr);  // reuse for sizing
+                    VkImage envImage = VK_NULL_HANDLE;
+                    if (vkCreateImage(m_device, &imgInfo, nullptr, &envImage) != VK_SUCCESS ||
+                        envImage == VK_NULL_HANDLE) {
+                        std::cerr << "[RT] env map: vkCreateImage failed for " << m_envMapPath
+                                  << "\n";
+                        stbi_image_free(hdrPixels);
+                    } else {
+                    VkMemoryRequirements emr{};
                     vkGetImageMemoryRequirements(m_device, envImage, &emr);
                     VkMemoryAllocateInfo eai{};
                     eai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
                     eai.allocationSize = emr.size;
                     eai.memoryTypeIndex = findMemoryType(m_physicalDevice, emr.memoryTypeBits,
                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-                    VkDeviceMemory envMem;
-                    vkAllocateMemory(m_device, &eai, nullptr, &envMem);
+                    VkDeviceMemory envMem = VK_NULL_HANDLE;
+                    if (vkAllocateMemory(m_device, &eai, nullptr, &envMem) != VK_SUCCESS ||
+                        envMem == VK_NULL_HANDLE) {
+                        std::cerr << "[RT] env map: OOM allocating " << emr.size
+                                  << " bytes for " << m_envMapPath << "\n";
+                        vkDestroyImage(m_device, envImage, nullptr);
+                        stbi_image_free(hdrPixels);
+                    } else {
                     vkBindImageMemory(m_device, envImage, envMem, 0);
 
                     // Upload via staging buffer
@@ -498,7 +508,9 @@ void VulkanRenderer::uploadLightBuffer() {
                     std::cout << "[RT] Environment map loaded: " << ew << "x" << eh
                               << " (bindless idx=" << envTexIdx << ")" << std::endl;
                     m_envMapLoadedPath = m_envMapPath;
-                }
+                    } // envMem allocate ok
+                    } // envImage create ok
+                } // hdrPixels
             }
 
             // Ensure CDF bindings are valid even without an env map

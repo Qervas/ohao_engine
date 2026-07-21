@@ -304,6 +304,46 @@ def build_photo() -> Path:
     return out
 
 
+def build_museum() -> Path:
+    """NIUA museum cinematic dense-albedo plate (protocol face)."""
+    d = ROOT / "renders" / "diff_museum_smoke"
+    if not (d / "dense_recovered.png").is_file():
+        print("skip museum strip (no renders/diff_museum_smoke)")
+        return OUT / "readme_museum.jpg"
+    mpath = d / "dense_map_metrics.json"
+    sub = "MAPTEST museum"
+    if mpath.is_file():
+        import json as _json
+
+        m = _json.loads(mpath.read_text())
+        dps = float(m.get("psnr_improve_db") or 0)
+        sub = f"MAPTEST +{dps:.1f} dB · marble floor free map"
+    panels = []
+    for path, lab, s in (
+        (d / "dense_init.png", "Wrong init", "cool solid floor"),
+        (d / "dense_recovered.png", "Recovered", sub),
+        (d / "dense_forward_truth.png", "Target", "B&W marble GT"),
+        (d / "materials" / "ground_albedo_init.png", "Map init", "cool"),
+        (d / "materials" / "ground_albedo_recovered.png", "Map recovered", "free 8×8"),
+        (d / "materials" / "ground_albedo_gt.png", "Map GT", "marble tiles"),
+    ):
+        if not path.is_file():
+            continue
+        im = load_rgb(path)
+        if path.parent.name == "materials":
+            im = im.resize((280, 280), Image.Resampling.NEAREST)
+        else:
+            im = fit_height(im, 300)
+        panels.append(labeled_panel(im, lab, s))
+    board = vstack(
+        [hstack(panels[:3]), hstack(panels[3:])] if len(panels) > 3 else [hstack(panels)],
+        title="Museum cinematic protocol — NIUA statue · free dense ground albedo (not public IR bench)",
+    )
+    out = OUT / "readme_museum.jpg"
+    save(board, out, max_w=1600)
+    return out
+
+
 def build_analytic() -> Path:
     d = ROOT / "renders" / "diff_dense_analytic"
     panels = []
@@ -547,6 +587,7 @@ def write_results() -> Path:
         "readme_dense_metal.jpg",
         "readme_photo_proxy.jpg",
         "readme_analytic.jpg",
+        "readme_museum.jpg",
     ):
         md.append(f"- `docs/media/inverse/{name}`\n")
 
@@ -582,6 +623,7 @@ def main() -> int:
     build_metal()
     build_photo()
     build_analytic()
+    build_museum()
     write_results()
     print("PASS tools/inverse_lab/make_readme_figures.py")
     return 0

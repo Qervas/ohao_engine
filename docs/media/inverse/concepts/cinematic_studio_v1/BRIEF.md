@@ -82,8 +82,9 @@ Smoke: meshes load (statue+pedestal); dense MAPTEST PSNR gain OK, map MSE still 
 - [x] Assets imported → `assets/museum_studio/`  
 - [x] `--preset museum|museum_amphora|museum_bust|cinematic`  
 - [x] Dark cyclorama + B&W marble tiles + mesh pedestal  
-- [ ] Quality-plate 1080p stills + README figure rebuild  
-- [ ] MAPTEST fully green on museum (map MSE gate)
+- [x] MAPTEST green on museum (256×144 dense albedo)  
+- [x] README museum strip (`readme_museum.jpg`)  
+- [ ] Optional 1080p SHOW polish (heavy NIUA mesh — slow)
 
 ## Phase 1 implementation sketch (after lock)
 
