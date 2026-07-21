@@ -465,7 +465,8 @@ struct DenseMapFitResult {
             step *= 0.70;
             std::cout << "  [dense-map] FD pass " << (p + 1) << "/3 best_loss=" << bestLoss
                       << " accepts=" << accepts << std::endl;
-            if (bestLoss < initLoss * 0.50) break;
+            // Need ≥2 passes for map MSE (beauty can drop 50% while free grid still lagging).
+            if (p >= 1 && bestLoss < initLoss * 0.40) break;
             if (accepts == 0 && bestLoss < initLoss * 0.92) break;
         }
         const auto tf1 = std::chrono::steady_clock::now();

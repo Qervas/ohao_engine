@@ -439,28 +439,59 @@ struct InverseScene {
             s.truthTiles.resize(static_cast<size_t>(nT));
             s.initTiles.resize(static_cast<size_t>(nT));
             for (int k = 0; k < nT; ++k) {
-                const float u = static_cast<float>(k % s.mapRes) / static_cast<float>(std::max(1, s.mapRes - 1));
-                const float v = static_cast<float>(k / s.mapRes) / static_cast<float>(std::max(1, s.mapRes - 1));
-                // Checker + hue drift for spatial structure
-                const float checker = ((k % s.mapRes) + (k / s.mapRes)) % 2 == 0 ? 1.0f : 0.72f;
-                s.truthTiles[static_cast<size_t>(k)] = {
-                    std::clamp(cfg.truthR * checker * (0.85f + 0.25f * u), 0.05f, 1.0f),
-                    std::clamp(cfg.truthG * checker * (0.85f + 0.25f * v), 0.05f, 1.0f),
-                    std::clamp(cfg.truthB * checker * (0.90f + 0.15f * (1.0f - u)), 0.05f, 1.0f)};
-                // Init: wrong uniform-ish with per-tile shuffle
-                s.initTiles[static_cast<size_t>(k)] = {
-                    std::clamp(cfg.initR * (0.7f + 0.3f * v), 0.05f, 1.0f),
-                    std::clamp(cfg.initG * (0.7f + 0.3f * u), 0.05f, 1.0f),
-                    std::clamp(cfg.initB * (0.6f + 0.4f * (1.0f - v)), 0.05f, 1.0f)};
+                const float u = static_cast<float>(k % s.mapRes) /
+                                static_cast<float>(std::max(1, s.mapRes - 1));
+                const float v = static_cast<float>(k / s.mapRes) /
+                                static_cast<float>(std::max(1, s.mapRes - 1));
+                if (cfg.museumStudio) {
+                    // Black/white marble tiles (museum gallery) — strong spatial SoT.
+                    const bool light = ((k % s.mapRes) + (k / s.mapRes)) % 2 == 0;
+                    const float veining = 0.92f + 0.08f * u * (1.0f - v);
+                    if (light) {
+                        s.truthTiles[static_cast<size_t>(k)] = {
+                            std::clamp(0.84f * veining, 0.05f, 1.0f),
+                            std::clamp(0.82f * veining, 0.05f, 1.0f),
+                            std::clamp(0.78f * veining, 0.05f, 1.0f)};
+                    } else {
+                        s.truthTiles[static_cast<size_t>(k)] = {
+                            std::clamp(0.07f + 0.04f * v, 0.03f, 0.20f),
+                            std::clamp(0.07f + 0.03f * u, 0.03f, 0.20f),
+                            std::clamp(0.08f + 0.03f * (1.0f - u), 0.03f, 0.20f)};
+                    }
+                    // Wrong init: cool solid wash (no marble).
+                    s.initTiles[static_cast<size_t>(k)] = {
+                        std::clamp(cfg.initR * (0.85f + 0.15f * v), 0.05f, 1.0f),
+                        std::clamp(cfg.initG * (0.85f + 0.15f * u), 0.05f, 1.0f),
+                        std::clamp(cfg.initB * (0.80f + 0.20f * (1.0f - v)), 0.05f, 1.0f)};
+                } else {
+                    // Checker + hue drift for spatial structure
+                    const float checker =
+                        ((k % s.mapRes) + (k / s.mapRes)) % 2 == 0 ? 1.0f : 0.72f;
+                    s.truthTiles[static_cast<size_t>(k)] = {
+                        std::clamp(cfg.truthR * checker * (0.85f + 0.25f * u), 0.05f, 1.0f),
+                        std::clamp(cfg.truthG * checker * (0.85f + 0.25f * v), 0.05f, 1.0f),
+                        std::clamp(cfg.truthB * checker * (0.90f + 0.15f * (1.0f - u)), 0.05f, 1.0f)};
+                    s.initTiles[static_cast<size_t>(k)] = {
+                        std::clamp(cfg.initR * (0.7f + 0.3f * v), 0.05f, 1.0f),
+                        std::clamp(cfg.initG * (0.7f + 0.3f * u), 0.05f, 1.0f),
+                        std::clamp(cfg.initB * (0.6f + 0.4f * (1.0f - v)), 0.05f, 1.0f)};
+                }
             }
         }
-        s.truthPedestal = {.albedo = {0.18f, 0.19f, 0.21f}, .roughness = 0.40f, .metallic = 0.05f};
+        s.truthPedestal = cfg.museumStudio
+                              ? PbrParams{.albedo = {0.22f, 0.22f, 0.24f},
+                                          .roughness = 0.48f,
+                                          .metallic = 0.03f}
+                              : PbrParams{.albedo = {0.18f, 0.19f, 0.21f},
+                                          .roughness = 0.40f,
+                                          .metallic = 0.05f};
         s.initPedestal = {.albedo = {0.55f, 0.12f, 0.10f}, .roughness = 0.40f, .metallic = 0.05f};
-        s.truthKeyI = 22.0f;
+        // Cinematic museum: warmer key, cooler rim; slightly softer intensities.
+        s.truthKeyI = cfg.museumStudio ? 20.0f : 22.0f;
         s.initKeyI = 7.0f;
-        s.truthFillI = 9.0f;
+        s.truthFillI = cfg.museumStudio ? 7.5f : 9.0f;
         s.initFillI = 3.0f;
-        s.truthRimI = 10.0f;
+        s.truthRimI = cfg.museumStudio ? 12.0f : 10.0f;
         s.initRimI = 4.0f;
         s.truthEnvScale = 1.0f;
         s.initEnvScale = 0.45f;
@@ -534,9 +565,11 @@ struct InverseScene {
         // ── Soft vertical backdrop (product-shot cyclorama) ────────────
         {
             const float halfW = 14.0f;
-            const float h = 8.0f;
+            const float h = cfg.museumStudio ? 9.0f : 8.0f;
             const float z = -6.5f;
-            const glm::vec3 backdropCol(0.82f, 0.84f, 0.88f);
+            const glm::vec3 backdropCol =
+                cfg.museumStudio ? glm::vec3(0.045f, 0.048f, 0.055f)
+                                 : glm::vec3(0.82f, 0.84f, 0.88f);
             auto wall = s.scene->createActor("Backdrop");
             auto wm = std::make_shared<Model>();
             addQuad(wm->vertices, wm->indices,
@@ -548,12 +581,54 @@ struct InverseScene {
             mesh->setVisible(true);
             auto mat = wall->addComponent<MaterialComponent>();
             mat->getMaterial().baseColor = backdropCol;
-            mat->getMaterial().roughness = 0.85f;
+            mat->getMaterial().roughness = cfg.museumStudio ? 0.92f : 0.85f;
             mat->getMaterial().metallic = 0.0f;
         }
 
-        // ── Pedestal (top albedo is multi-surface θ; sides fixed slate) ─
-        {
+        // ── Pedestal: optional glTF (museum) or procedural box faces ───
+        float pedestalTopY = groundY + pedestalH;
+        bool pedestalFromMesh = false;
+        if (!cfg.pedestalModelPath.empty()) {
+            auto pedModel = ModelLoader::load(cfg.pedestalModelPath);
+            if (pedModel && !pedModel->vertices.empty()) {
+                glm::vec3 bmin(1e30f), bmax(-1e30f);
+                for (const auto& v : pedModel->vertices) {
+                    bmin = glm::min(bmin, v.position);
+                    bmax = glm::max(bmax, v.position);
+                }
+                const glm::vec3 extent = bmax - bmin;
+                const glm::vec3 centerXZ{(bmin.x + bmax.x) * 0.5f, 0.0f, (bmin.z + bmax.z) * 0.5f};
+                for (auto& v : pedModel->vertices) {
+                    v.position.x -= centerXZ.x;
+                    v.position.y -= bmin.y;
+                    v.position.z -= centerXZ.z;
+                }
+                // Target pedestal height ~pedestalH, footprint within half*2.
+                const float scaleH = pedestalH / std::max(extent.y, 0.05f);
+                const float scaleXZ =
+                    (2.0f * pedestalHalf * 0.92f) / std::max(std::max(extent.x, extent.z), 0.05f);
+                const float scale = std::min(scaleH, scaleXZ);
+                pedestalTopY = groundY + extent.y * scale;
+
+                auto actor = s.scene->createActor("PedestalMesh");
+                actor->getTransform()->setScale(glm::vec3(scale));
+                actor->getTransform()->setPosition({0.0f, groundY + 0.001f, 0.0f});
+                auto mesh = actor->addComponent<MeshComponent>();
+                mesh->setModel(pedModel);
+                mesh->setVisible(true);
+                auto mat = actor->addComponent<MaterialComponent>();
+                mat->getMaterial().baseColor = s.truthPedestal.albedo;
+                mat->getMaterial().roughness = s.truthPedestal.roughness;
+                mat->getMaterial().metallic = s.truthPedestal.metallic;
+                // Not in free θ (museum: fixed stone); keep pointers null.
+                s.pedestalActor = nullptr;
+                s.pedestalMat = nullptr;
+                pedestalFromMesh = true;
+                std::cout << "  loaded pedestal mesh: " << cfg.pedestalModelPath
+                          << " scale=" << scale << " topY=" << pedestalTopY << "\n";
+            }
+        }
+        if (!pedestalFromMesh) {
             const float y0 = groundY + 0.002f;
             const float y1 = groundY + pedestalH;
             const float h = pedestalHalf;
@@ -585,6 +660,7 @@ struct InverseScene {
                      {-1, 0, 0}, false);
             makeFace("PedestalRight", {h, y0, h}, {h, y0, -h}, {h, y1, -h}, {h, y1, h},
                      {1, 0, 0}, false);
+            pedestalTopY = y1;
         }
 
         // ── Hero model on pedestal ─────────────────────────────────────
@@ -610,7 +686,7 @@ struct InverseScene {
             actor->getTransform()->setRotation(
                 glm::quat(glm::radians(glm::vec3(0.0f, 22.0f, 0.0f))));
             actor->getTransform()->setScale(glm::vec3(scale));
-            actor->getTransform()->setPosition({0.0f, groundY + pedestalH + 0.002f, 0.0f});
+            actor->getTransform()->setPosition({0.0f, pedestalTopY + 0.002f, 0.0f});
             s.heroActor = actor.get();
 
             auto mesh = actor->addComponent<MeshComponent>();
@@ -629,9 +705,11 @@ struct InverseScene {
             auto a = s.scene->createActor("Key");
             auto lc = a->addComponent<LightComponent>();
             lc->setLightType(LightType::Sphere);
-            lc->setColor({1.0f, 0.97f, 0.92f});
+            // Museum: warmer key
+            lc->setColor(cfg.museumStudio ? glm::vec3(1.0f, 0.93f, 0.82f)
+                                          : glm::vec3(1.0f, 0.97f, 0.92f));
             lc->setIntensity(s.truthKeyI);
-            lc->setRadius(1.0f);
+            lc->setRadius(cfg.museumStudio ? 1.15f : 1.0f);
             a->getTransform()->setPosition(s.baseKeyPos);
             s.keyLight = lc.get();
             s.keyLightActor = a.get();
@@ -640,7 +718,8 @@ struct InverseScene {
             auto a = s.scene->createActor("Fill");
             auto lc = a->addComponent<LightComponent>();
             lc->setLightType(LightType::Sphere);
-            lc->setColor({0.75f, 0.85f, 1.0f});
+            lc->setColor(cfg.museumStudio ? glm::vec3(0.65f, 0.78f, 1.0f)
+                                          : glm::vec3(0.75f, 0.85f, 1.0f));
             lc->setIntensity(s.truthFillI);
             lc->setRadius(1.4f);
             a->getTransform()->setPosition(s.baseFillPos);
@@ -651,7 +730,9 @@ struct InverseScene {
             auto a = s.scene->createActor("Rim");
             auto lc = a->addComponent<LightComponent>();
             lc->setLightType(LightType::Sphere);
-            lc->setColor({1.0f, 0.95f, 0.9f});
+            // Museum: cooler rim
+            lc->setColor(cfg.museumStudio ? glm::vec3(0.72f, 0.85f, 1.0f)
+                                          : glm::vec3(1.0f, 0.95f, 0.9f));
             lc->setIntensity(s.truthRimI);
             lc->setRadius(0.7f);
             a->getTransform()->setPosition(s.baseRimPos);
@@ -660,11 +741,20 @@ struct InverseScene {
         }
 
         const float d = cfg.camDistMul;
-        s.views = {
-            {"front", {0.0f, 1.35f * d, 7.2f * d}, -8.0f, -90.0f},
-            {"three_quarter", {5.0f * d, 1.55f * d, 5.6f * d}, -10.0f, -48.0f},
-            {"opposite", {-4.8f * d, 1.35f * d, 5.4f * d}, -8.0f, -128.0f},
-        };
+        if (cfg.museumStudio) {
+            // Lower product angle so marble floor fills ≥40% of frame (inverse SoT).
+            s.views = {
+                {"front", {0.0f, 1.15f * d, 6.8f * d}, -12.0f, -90.0f},
+                {"three_quarter", {4.6f * d, 1.25f * d, 5.3f * d}, -14.0f, -48.0f},
+                {"opposite", {-4.4f * d, 1.15f * d, 5.1f * d}, -12.0f, -128.0f},
+            };
+        } else {
+            s.views = {
+                {"front", {0.0f, 1.35f * d, 7.2f * d}, -8.0f, -90.0f},
+                {"three_quarter", {5.0f * d, 1.55f * d, 5.6f * d}, -10.0f, -48.0f},
+                {"opposite", {-4.8f * d, 1.35f * d, 5.4f * d}, -8.0f, -128.0f},
+            };
+        }
         s.baseViews = s.views;
         return s;
     }

@@ -55,6 +55,10 @@ struct FitConfig {
     float camDistMul{1.0f};
     bool modelFromCli{false};
     bool envFromCli{false};
+    /// Dark cyclorama + black/white marble floor tiles (museum cinematic shell).
+    bool museumStudio{false};
+    /// Optional glTF pedestal (empty = procedural box).
+    std::string pedestalModelPath;
     // Ground truth/init (set by applyPreset / defaults in buildStudio)
     float truthR{0.72f}, truthG{0.55f}, truthB{0.42f}, truthRough{0.30f}, truthMetal{0.12f};
     float initR{0.20f}, initG{0.45f}, initB{0.70f}, initRough{0.88f}, initMetal{0.70f};
@@ -115,13 +119,18 @@ inline void resolveAssetFallbacks(FitConfig& cfg) {
             }
         }
     };
-    pick(cfg.modelPath, {"assets/showcase_objects/Lantern.glb",
+    pick(cfg.modelPath, {"assets/museum_studio/statue.glb",
+                         "assets/showcase_objects/Lantern.glb",
                          "assets/test_models/DamagedHelmet.glb"});
     pick(cfg.envPath, {"assets/hdri/brown_photostudio_02_2k.hdr",
                        "assets/test_models/env_studio.hdr"});
     pick(cfg.relightEnvPath, {"assets/hdri/kloofendal_43d_clear_puresky_2k.hdr",
                               "assets/test_models/env_outdoor.hdr",
                               "assets/test_models/env_studio.hdr"});
+    if (!cfg.pedestalModelPath.empty()) {
+        pick(cfg.pedestalModelPath, {"assets/museum_studio/pedestal.glb"});
+        if (!std::filesystem::exists(cfg.pedestalModelPath)) cfg.pedestalModelPath.clear();
+    }
 }
 
 /// Object / lighting packs — including tricky heroes (metal chart, glass bottle, car).
@@ -220,6 +229,42 @@ inline void applyPreset(FitConfig& cfg) {
         cfg.heroScaleMul = 1.2f;
         cfg.camDistMul = 1.2f;
         cfg.presetNote = "ABeautifulGame chess set (large scene; TRICKY)";
+    } else if (p == "museum" || p == "cinematic" || p == "museum_statue") {
+        // NIUA museum pack: statue hero + marble floor protocol (ground free θ).
+        setModel("assets/museum_studio/statue.glb");
+        setEnv("assets/hdri/brown_photostudio_02_2k.hdr");
+        // Light marble base (buildStudio expands to B&W tiles when museumStudio).
+        setTruth(0.82f, 0.80f, 0.78f, 0.38f, 0.04f);
+        setInit(0.22f, 0.42f, 0.72f, 0.90f, 0.08f); // cool high-rough wrong floor
+        // NIUA statue is tall; keep product framing with visible marble floor.
+        cfg.heroScaleMul = 0.72f;
+        cfg.camDistMul = 1.05f;
+        cfg.museumStudio = true;
+        cfg.fitPedestal = false; // fixed stone pedestal look
+        cfg.pedestalModelPath = "assets/museum_studio/pedestal.glb";
+        cfg.presetNote = "Museum statue · marble floor (NIUA) · cinematic";
+    } else if (p == "museum_amphora") {
+        setModel("assets/museum_studio/amphora.glb");
+        setEnv("assets/hdri/brown_photostudio_02_2k.hdr");
+        setTruth(0.82f, 0.80f, 0.78f, 0.38f, 0.04f);
+        setInit(0.22f, 0.42f, 0.72f, 0.90f, 0.08f);
+        cfg.heroScaleMul = 0.85f;
+        cfg.camDistMul = 1.0f;
+        cfg.museumStudio = true;
+        cfg.fitPedestal = false;
+        cfg.pedestalModelPath = "assets/museum_studio/pedestal.glb";
+        cfg.presetNote = "Museum amphora · marble floor (NIUA)";
+    } else if (p == "museum_bust") {
+        setModel("assets/museum_studio/bust.glb");
+        setEnv("assets/hdri/brown_photostudio_02_2k.hdr");
+        setTruth(0.82f, 0.80f, 0.78f, 0.38f, 0.04f);
+        setInit(0.22f, 0.42f, 0.72f, 0.90f, 0.08f);
+        cfg.heroScaleMul = 0.95f;
+        cfg.camDistMul = 0.9f;
+        cfg.museumStudio = true;
+        cfg.fitPedestal = false;
+        cfg.pedestalModelPath = "assets/museum_studio/pedestal.glb";
+        cfg.presetNote = "Museum bust · marble floor (NIUA)";
     } else {
         std::cerr << "unknown --preset '" << p << "', using lantern\n";
         cfg.preset = "lantern";
@@ -464,7 +509,8 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 << "Usage: inverse_fit [--selftest] [--scene studio|cornell]\n"
                 << "  Studio θ: ground PBR[5] + pedestal[3] + key/fill/rim I + env scale\n"
                 << "  B6 stages: multi-start → env → lights → albedo → brdf → pedestal → lights2 → refine\n"
-                << "  --preset lantern|helmet|bottle|spheres|toycar|boombox|outdoor|mirror|chess|cornell\n"
+                << "  --preset lantern|helmet|bottle|spheres|toycar|boombox|outdoor|mirror|chess\n"
+                << "           |museum|museum_statue|museum_amphora|museum_bust|cinematic|cornell\n"
                 << "  --export-dataset N   ML data factory\n"
                 << "  --export-capture     lab multi-view capture bundle (train/holdout/relight)\n"
                 << "  --lab-bundle PATH    fit from lab capture/ directory\n"

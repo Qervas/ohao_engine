@@ -104,8 +104,8 @@ python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H4 ✅** — M5a GRADCHECK + M5b analytic residual+sparse optim (**≥10×** vs 3-pass FD estimate, MAPTEST). Publish face: quality-plate stills + research tables in `docs/media/inverse/RESULTS.md` / README.
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H4 ✅** + **museum cinematic preset** (`--preset museum`, NIUA statue/pedestal, marble floor). Publish face still uses quality-plate tables in `docs/media/inverse/RESULTS.md`.
 
-1. Real phone/COLMAP capture (same PHOTOTEST).  
-2. Optional pure reverse-mode Adam polish (beyond residual closed-form).  
-3. Keep claims honest — hybrid analytic+sparse, not full autodiff.
+1. Green museum MAPTEST + 1080p quality stills for README.  
+2. Real phone/COLMAP / public IR bench (track B).  
+3. Keep claims honest — studio protocol ≠ Objects-with-Lighting.
