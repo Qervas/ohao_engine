@@ -104,7 +104,7 @@ python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
 
 ## Next actions
 
-**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H4 ✅** — M5a GRADCHECK + M5b analytic residual+sparse optim (**≥10×** vs 3-pass FD estimate, MAPTEST).
+**Inverse lab (see `docs/inverse_lab_roadmap.md`):** **H1–H4 ✅** — M5a GRADCHECK + M5b analytic residual+sparse optim (**≥10×** vs 3-pass FD estimate, MAPTEST). Publish face: quality-plate stills + research tables in `docs/media/inverse/RESULTS.md` / README.
 
 1. Real phone/COLMAP capture (same PHOTOTEST).  
 2. Optional pure reverse-mode Adam polish (beyond residual closed-form).  

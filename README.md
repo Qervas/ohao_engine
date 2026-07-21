@@ -25,40 +25,111 @@ Built to learn how a modern hybrid renderer is wired end to end. ~52K lines of *
 
 ## Inverse lab — recover materials from pixels
 
-Wrong init → recovered → capture GT on the **lantern** studio plate. Fit is train-only; gates use **capture-exported** holdout / relight images (not live-oracle theater).
+Multi-pipeline inverse rendering on one Vulkan host: **path-tracer oracle** (capture-gated LABTEST) + **Diff-IR Deferred** sibling (free dense maps as beauty SoT). Fit is train-only; published dB always name the **metric domain**. Full tables + machine-readable pack: [`docs/media/inverse/RESULTS.md`](docs/media/inverse/RESULTS.md).
+
+### Publish face — Diff-IR quality plate (1080p SHOW)
+
+Hard presets only (spheres · helmet · outdoor). Free dense **roughness** (ORM.g), map ≥128², multi-view, wrong-init → recovered → GT. **Not** the 256×144 lab_fast toy.
 
 <p align="center">
-  <img src="docs/images/inverse_pt_frontier.png" width="900" alt="OHAO inverse lab — wrong init, recovered, capture target on lantern frontier plate" />
+  <img src="docs/media/inverse/readme_quality_matrix.jpg" width="920" alt="Diff-IR quality plate — spheres, helmet, outdoor: wrong init, recovered, GT at 1080p" />
+</p>
+
+| Preset | Init → train PSNR | ΔPSNR | Rough map MSE | Relight Δ | Domain |
+|--------|-------------------|-------|---------------|-----------|--------|
+| spheres | 38.3 → 58.1 | **+19.8 dB** | 0.362 → 0.179 | +19.9 dB | Deferred dense ORM · 1920×1080 |
+| helmet | 35.8 → 57.6 | **+21.8 dB** | 0.362 → 0.081 | +21.8 dB | same |
+| outdoor | 32.4 → 56.9 | **+24.5 dB** | 0.362 → 0.194 | +24.5 dB | same |
+
+<p align="center">
+  <img src="docs/media/inverse/readme_quality_relight.jpg" width="920" alt="Spheres novel-light relight + recovered roughness maps" />
+</p>
+
+<sub>Novel-HDRI relight on spheres (+19.9 dB vs wrong init) and free-grid roughness maps (init → recovered → GT).</sub>
+
+### PT capture-gated LABTEST (oracle plate)
+
+Wrong init → recovered → **capture export** GT (not live-oracle theater). Holdout / relight gates on exported PNGs.
+
+<p align="center">
+  <img src="docs/media/inverse/readme_pt_frontier.jpg" width="920" alt="PT inverse lab lantern frontier — wrong init, recovered, capture GT, relight" />
 </p>
 
 | Gate | Target | Measured |
 |------|--------|----------|
-| Holdout PSNR | ≥ 28 dB | **32.5 dB** |
-| Relight PSNR | ≥ 26 dB | **34.4 dB** |
-| Gain vs wrong init | ≥ 8 dB | **+20.5 dB** |
-| RMSE before → after | — | **0.299 → 0.0195 (−93.5%)** |
+| Holdout PSNR / SSIM | ≥ 28 dB | **32.5 dB** / 0.983 |
+| Relight PSNR / SSIM | ≥ 26 dB | **34.4 dB** / 0.989 |
+| Holdout gain vs wrong init | ≥ 8 dB | **+20.5 dB** |
+| Train RMSE before → after | — | **0.299 → 0.0195 (−93.5%)** |
+| Metric domain | — | `capture_export_images` |
 
-**Diff-IR** sits beside the path tracer (not a replacement): tile albedo → dense map → **bindless texture sampled by Deferred** on the full studio mesh. Wrong-init coordinate FD; map MSE vs the actual wrong start.
+### Diff-IR dense maps (albedo · metal) + analytic speed
+
+Beauty θ is a **bindless Deferred-sampled map** (albedo / ORM). Wrong-init is cool solid / low-metal / high-rough — never free-gift GT warm start. Map MSE is first-class beside PSNR.
 
 <p align="center">
-  <img src="docs/images/inverse_diff_fit.png" width="820" alt="Diff-IR Deferred fit — wrong initTiles vs recovered" />
+  <img src="docs/media/inverse/readme_dense_albedo.jpg" width="820" alt="Dense albedo MAPTEST — beauty and map triple" />
+</p>
+<p align="center">
+  <img src="docs/media/inverse/readme_dense_metal.jpg" width="820" alt="Dense metallic MAPTEST — beauty, relight, metal maps" />
 </p>
 
+| Task | ΔPSNR (train) | Map MSE | Relight Δ | Notes |
+|------|---------------|---------|-----------|--------|
+| Dense albedo 64² free-grid | +7.3 dB | 0.104 → 0.084 | — | MAPTEST; cool wrong-init |
+| Dense albedo 128² | +7.2 dB | 0.104 → 0.080 | — | same protocol |
+| Dense metallic ORM.b | **+26.8 dB** | 0.405 → **0.006** | +26.9 dB | extreme flip + relight |
+| Dense roughness ORM.g (lab) | +21.0 dB | 0.378 → 0.169 | +22.1 dB | floor-crop specular loss |
+
+**H4 analytic albedo** (linear solve + residual + sparse polish; GRADCHECK vs FD — **not** a reverse-mode autodiff claim):
+
+| Metric | Value |
+|--------|-------|
+| GRADCHECK median rel err vs coord FD | 0.198 (gate &lt; 0.20) |
+| Analytic optim wall-clock | 2.2 s |
+| Est. full 3-pass coord FD | 42.8 s |
+| **Speedup** | **19.7×** |
+| MAPTEST after analytic path | +2.8 dB · map MSE drop |
+
+<p align="center">
+  <img src="docs/media/inverse/readme_analytic.jpg" width="820" alt="Analytic albedo optim recovery strip" />
+</p>
+
+### Photo proxy (domain shift) — PHOTOTEST
+
+Domain-shifted multi-view capture. Gates are **gain vs wrong-init**, not synthetic ≥28 absolute theater under photo noise.
+
+<p align="center">
+  <img src="docs/media/inverse/readme_photo_proxy.jpg" width="820" alt="Photo proxy PHOTOTEST strip" />
+</p>
+
+| Metric | Value | Domain |
+|--------|-------|--------|
+| Holdout gain vs wrong init | **+14.9 dB** | `photo_proxy_images` |
+| Holdout / relight PSNR | 28.7 / 27.4 dB | capture-exported |
+| PHOTOTEST | PASS (gain ≥ 3 dB) | no fake LABTEST bar |
+
+### Reproduce
+
 ```bash
-# One-shot plate (Diff DIFFTEST + PT LABTEST)
-./scripts/run_inverse_showcase.sh
+# Publish-face quality plate (1080p hard presets)
+./scripts/run_inverse_quality_plate.sh
 
-# Diff only
-./build/inverse_fit --backend diff --preset lantern --quality draft \
-  --out-dir renders/diff_selftest
-
-# PT capture-gated frontier (needs capture bundle once)
+# PT capture-gated frontier
 ./build/inverse_fit --backend pt \
   --lab-bundle renders/inverse_lab/lantern_frontier/capture \
   --quality draft --out-dir renders/inverse_lab/lantern_frontier_fit
+
+# Dense albedo + analytic ≥10× path
+./build/inverse_fit --backend diff --dense-map --dense-map-res 64 --dense-grid 8 \
+  --fit-width 256 --fit-height 144 --preset lantern --out-dir renders/diff_dense_analytic
+python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
+
+# Rebuild README figures + RESULTS pack from existing renders/
+python3 tools/inverse_lab/make_readme_figures.py
 ```
 
-Docs: [`docs/inverse_lab.md`](docs/inverse_lab.md) · [`docs/inverse_lab_roadmap.md`](docs/inverse_lab_roadmap.md) (long-run plan) · [`docs/render_pipelines.md`](docs/render_pipelines.md) · deck: [`docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx`](docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx)
+Docs: [`docs/inverse_lab.md`](docs/inverse_lab.md) · [`docs/inverse_lab_roadmap.md`](docs/inverse_lab_roadmap.md) · [`docs/media/inverse/RESULTS.md`](docs/media/inverse/RESULTS.md) · [`docs/inverse_photo_lab.md`](docs/inverse_photo_lab.md) · deck: [`docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx`](docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx)
 
 ## Headline numbers
 

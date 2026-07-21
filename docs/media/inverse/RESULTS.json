@@ -1,0 +1,118 @@
+{
+  "title": "OHAO Inverse Lab \u2014 research results pack",
+  "protocol_notes": [
+    "PT LABTEST uses capture-exported holdout/relight PNGs (not live-oracle theater).",
+    "Diff dense MAPTEST uses wrong-init cool/high-rough/low-metal vs GT maps; beauty via bindless Deferred.",
+    "Quality plate: FIT 960\u00d7540, SHOW 1920\u00d71080 @20f, map\u2265128, multi-view, hard presets.",
+    "lab_fast 256\u00d7144 is diagnostic only \u2014 do not quote as product proof.",
+    "Analytic speedup is vs estimated full 3-pass coordinate FD (same loss eval cost model)."
+  ],
+  "tables": {
+    "pt_capture_gated_labtest": {
+      "metric_domain": "capture_export_images",
+      "scene": "lantern frontier",
+      "holdout_psnr_db": 32.4575,
+      "holdout_ssim": 0.983036,
+      "relight_psnr_db": 34.355,
+      "relight_ssim": 0.98939,
+      "wrong_init_holdout_psnr_db": 11.9415,
+      "holdout_gain_db": 20.516,
+      "train_rmse_before": 0.298605,
+      "train_rmse_after": 0.0194881,
+      "gates": {
+        "holdout_ge_28": true,
+        "relight_ge_26": true,
+        "gain_ge_8": true
+      }
+    },
+    "photo_proxy_phototest": {
+      "metric_domain": "photo_proxy_images",
+      "holdout_psnr_db": 28.7372,
+      "wrong_init_holdout_psnr_db": 13.8431,
+      "holdout_gain_db": 14.894,
+      "relight_psnr_db": 27.4365,
+      "pass": true,
+      "note": "Gain-based PHOTOTEST; synthetic LABTEST bar not applied under domain shift."
+    },
+    "diff_dense_quality_plate_orm": {
+      "metric_domain": "vulkan_deferred_studio",
+      "resolution_show": "1920\u00d71080",
+      "map_res": 128,
+      "presets": {
+        "spheres": {
+          "init_psnr": 38.3244,
+          "train_psnr": 58.0929,
+          "psnr_improve_db": 19.7685,
+          "rough_mse_init": 0.3617,
+          "rough_mse_recovered": 0.179256,
+          "relight_improve_db": 19.9061,
+          "quality_plate": true
+        },
+        "outdoor": {
+          "init_psnr": 32.3903,
+          "train_psnr": 56.9332,
+          "psnr_improve_db": 24.5428,
+          "rough_mse_init": 0.3617,
+          "rough_mse_recovered": 0.193612,
+          "relight_improve_db": 24.4758,
+          "quality_plate": true
+        },
+        "helmet": {
+          "init_psnr": 35.7862,
+          "train_psnr": 57.5732,
+          "psnr_improve_db": 21.787,
+          "rough_mse_init": 0.3617,
+          "rough_mse_recovered": 0.0811357,
+          "relight_improve_db": 21.807,
+          "quality_plate": true
+        }
+      }
+    },
+    "diff_dense_albedo_maptest": {
+      "metric_domain": "vulkan_deferred_studio",
+      "map64": {
+        "init_psnr": 17.6372,
+        "train_psnr": 24.9784,
+        "psnr_improve_db": 7.34123,
+        "map_mse_init": 0.104391,
+        "map_mse_recovered": 0.0837006
+      },
+      "map128": {
+        "init_psnr": 17.6345,
+        "train_psnr": 24.8735,
+        "psnr_improve_db": 7.239,
+        "map_mse_init": 0.104391,
+        "map_mse_recovered": 0.08018
+      }
+    },
+    "diff_dense_metal_maptest": {
+      "metric_domain": "vulkan_deferred_studio",
+      "init_psnr": 16.5808,
+      "train_psnr": 43.3862,
+      "psnr_improve_db": 26.8054,
+      "metal_mse_init": 0.405,
+      "metal_mse_recovered": 0.00564348,
+      "relight_improve_db": 26.8996
+    },
+    "diff_dense_orm_lab": {
+      "metric_domain": "vulkan_deferred_studio",
+      "psnr_improve_db": 21.0177,
+      "rough_mse_init": 0.37845,
+      "rough_mse_recovered": 0.169352,
+      "relight_improve_db": 22.1366
+    },
+    "analytic_m5": {
+      "metric_domain": "vulkan_deferred_studio",
+      "grad_median_rel_err": 0.197844,
+      "analytic_albedo_grad": true,
+      "optim_analytic": true,
+      "analytic_optim_ms": 2166.14,
+      "fd_est_3pass_ms": 42768.7,
+      "speedup_vs_fd": 19.7442,
+      "psnr_improve_db": 2.80884,
+      "map_mse_init": 0.104391,
+      "map_mse_recovered": 0.0820367,
+      "note": "Agreement with FD is GRADCHECK (not reverse-mode autodiff claim)."
+    }
+  }
+}
