@@ -61,5 +61,6 @@ Measured on this machine from gated lab runs. **Metric domains are labeled**; do
 - `docs/media/inverse/readme_dense_metal.jpg`
 - `docs/media/inverse/readme_photo_proxy.jpg`
 - `docs/media/inverse/readme_analytic.jpg`
+- `docs/media/inverse/readme_museum.jpg`
 
 Machine-readable: [`RESULTS.json`](RESULTS.json)

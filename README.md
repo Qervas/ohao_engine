@@ -63,26 +63,27 @@ Wrong init → recovered → **capture export** GT (not live-oracle theater). Ho
 | Train RMSE before → after | — | **0.299 → 0.0195 (−93.5%)** |
 | Metric domain | — | `capture_export_images` |
 
-### Museum cinematic protocol (NIUA hero)
+### Museum publish face — NIUA amphora · 1080p SHOW
 
-Dark product-museum shell with a NIUA-generated **statue** hero and free dense **marble floor** maps. Studio protocol only — not Objects-with-Lighting / OpenIllumination.
+Dark museum product shell with a **clear amphora** hero (not lantern / sphere chart). Free dense **marble floor** maps: wrong-init cool solid → recovered checker → GT. Optim at draft FIT; **publish stills at 1920×1080**. Domain `ohao_museum_studio_protocol` — not a public IR bench claim.
 
 <p align="center">
-  <img src="docs/media/inverse/readme_museum.jpg" width="820" alt="Museum cinematic dense albedo — wrong init, recovered, GT" />
+  <img src="docs/media/inverse/readme_museum.jpg" width="920" alt="Museum amphora dense albedo — wrong init, recovered, GT at 1080p" />
 </p>
 
-| Gate | Measured (256×144 dense albedo) |
-|------|----------------------------------|
-| MAPTEST ΔPSNR | **+7.9 dB** |
-| Map MSE | 0.156 → 0.125 |
-| GRADCHECK med rel err | 0.064 |
+| Gate | Measured |
+|------|----------|
+| SHOW stills | **1920×1080** wrong / recovered / GT |
+| MAPTEST ΔPSNR | **+21.5 dB** (16.9 → 38.3) |
+| Map MSE | 0.232 → **0.0019** |
+| Hero | NIUA `amphora.glb` · free θ = ground albedo only |
 | Domain | `ohao_museum_studio_protocol` |
 
 ```bash
-./build/inverse_fit --backend diff --preset museum --dense-map \
-  --dense-map-res 64 --dense-grid 8 --quality draft \
-  --fit-width 256 --fit-height 144 --out-dir renders/diff_museum_smoke
-python3 tools/inverse_lab/test_dense_map.py renders/diff_museum_smoke
+./build/inverse_fit --backend diff --preset museum --dense-map --dense-map-res 128 \
+  --quality draft --out-dir renders/diff_museum_plate --no-visual-polish
+python3 tools/inverse_lab/test_dense_map.py renders/diff_museum_plate
+python3 tools/inverse_lab/make_readme_figures.py
 ```
 
 ### Diff-IR dense maps (albedo · metal) + analytic speed

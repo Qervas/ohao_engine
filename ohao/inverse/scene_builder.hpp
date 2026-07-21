@@ -444,25 +444,19 @@ struct InverseScene {
                 const float v = static_cast<float>(k / s.mapRes) /
                                 static_cast<float>(std::max(1, s.mapRes - 1));
                 if (cfg.museumStudio) {
-                    // Black/white marble tiles (museum gallery) — strong spatial SoT.
+                    // High-contrast black/white marble (reads clearly under studio lights).
                     const bool light = ((k % s.mapRes) + (k / s.mapRes)) % 2 == 0;
-                    const float veining = 0.92f + 0.08f * u * (1.0f - v);
                     if (light) {
                         s.truthTiles[static_cast<size_t>(k)] = {
-                            std::clamp(0.84f * veining, 0.05f, 1.0f),
-                            std::clamp(0.82f * veining, 0.05f, 1.0f),
-                            std::clamp(0.78f * veining, 0.05f, 1.0f)};
+                            0.92f + 0.04f * u, 0.90f + 0.04f * v, 0.86f + 0.04f * (1.0f - u)};
                     } else {
                         s.truthTiles[static_cast<size_t>(k)] = {
-                            std::clamp(0.07f + 0.04f * v, 0.03f, 0.20f),
-                            std::clamp(0.07f + 0.03f * u, 0.03f, 0.20f),
-                            std::clamp(0.08f + 0.03f * (1.0f - u), 0.03f, 0.20f)};
+                            0.04f + 0.02f * v, 0.04f + 0.02f * u, 0.05f + 0.02f * (1.0f - u)};
                     }
-                    // Wrong init: cool solid wash (no marble).
+                    // Wrong init: solid cool blue wash (obviously wrong floor).
                     s.initTiles[static_cast<size_t>(k)] = {
-                        std::clamp(cfg.initR * (0.85f + 0.15f * v), 0.05f, 1.0f),
-                        std::clamp(cfg.initG * (0.85f + 0.15f * u), 0.05f, 1.0f),
-                        std::clamp(cfg.initB * (0.80f + 0.20f * (1.0f - v)), 0.05f, 1.0f)};
+                        std::clamp(cfg.initR, 0.05f, 1.0f), std::clamp(cfg.initG, 0.05f, 1.0f),
+                        std::clamp(cfg.initB, 0.05f, 1.0f)};
                 } else {
                     // Checker + hue drift for spatial structure
                     const float checker =
@@ -742,11 +736,11 @@ struct InverseScene {
 
         const float d = cfg.camDistMul;
         if (cfg.museumStudio) {
-            // Lower product angle so marble floor fills ≥40% of frame (inverse SoT).
+            // Product framing: full hero in view + marble floor still in lower half.
             s.views = {
-                {"front", {0.0f, 1.15f * d, 6.8f * d}, -12.0f, -90.0f},
-                {"three_quarter", {4.6f * d, 1.25f * d, 5.3f * d}, -14.0f, -48.0f},
-                {"opposite", {-4.4f * d, 1.15f * d, 5.1f * d}, -12.0f, -128.0f},
+                {"front", {0.0f, 1.65f * d, 8.2f * d}, -6.0f, -90.0f},
+                {"three_quarter", {5.4f * d, 1.75f * d, 6.4f * d}, -8.0f, -48.0f},
+                {"opposite", {-5.2f * d, 1.65f * d, 6.2f * d}, -6.0f, -128.0f},
             };
         } else {
             s.views = {

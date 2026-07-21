@@ -5,6 +5,7 @@
 // Wrong-init gray map; multi-view MSE; coord FD + optional Adam polish.
 
 #include "inverse/dense_analytic.hpp"
+#include "inverse/dense_common.hpp"
 #include "inverse/export_capture.hpp"
 #include "inverse/fit_config.hpp"
 #include "inverse/image_loss.hpp"
@@ -108,16 +109,29 @@ struct DenseMapFitResult {
     resolveAssetFallbacks(cfg);
     cfg.mapGround = true;
     if (cfg.mapRes < 2) cfg.mapRes = 2;
+    // Museum: 2×2 high-contrast marble tiles + matching free grid (obvious recovery).
+    if (cfg.museumStudio) {
+        cfg.mapRes = 2;
+        if (cfg.denseGrid != 2) cfg.denseGrid = 2;
+        if (cfg.denseMapRes < 128) cfg.denseMapRes = 128;
+    }
     if (cfg.denseMapRes < 32) cfg.denseMapRes = 64;
-    if (cfg.denseGrid < 4) cfg.denseGrid = 8;
-    cfg.denseGrid = std::clamp(cfg.denseGrid, 4, 16);
+    if (cfg.denseGrid < 2) cfg.denseGrid = 8;
+    cfg.denseGrid = std::clamp(cfg.denseGrid, 2, 16);
     cfg.denseMapRes = std::clamp(cfg.denseMapRes, 32, 256);
 
-    // Honor --fit-* / --hd (legacy dense lab used 256×144).
-    const std::uint32_t W = std::max(256u, cfg.fit.width);
-    const std::uint32_t H = std::max(144u, cfg.fit.height);
-    const int kFrames = (W * H >= 1280u * 720u) ? 4 : (W * H >= 640u * 360u) ? 5 : 6;
-    const int nViews = 2;
+    const auto vp = dense_common::resolveViewport(cfg);
+    const std::uint32_t W = vp.fitW, H = vp.fitH, showW = vp.showW, showH = vp.showH;
+    const int kFrames = vp.frames;
+    const int showFrames = vp.showFrames;
+    const bool wantShowStills = vp.wantShowStills() || cfg.museumStudio;
+    const bool qualityPlate = vp.qualityPlate;
+    // Museum publish face: always 1080p SHOW stills (FIT may stay draft-sized for speed).
+    const std::uint32_t plateW =
+        cfg.museumStudio ? std::max(showW, 1920u) : showW;
+    const std::uint32_t plateH =
+        cfg.museumStudio ? std::max(showH, 1080u) : showH;
+    const int nViews = (cfg.denseViews > 0) ? cfg.denseViews : (qualityPlate ? 3 : 2);
     const int G = cfg.denseGrid;
     const int mapPx = cfg.denseMapRes;
     const int nGrid = G * G * 3;
@@ -143,6 +157,12 @@ struct DenseMapFitResult {
     const auto outDir = std::filesystem::path(cfg.outDir);
     std::filesystem::create_directories(outDir / "materials");
 
+    std::cout << "Dense-map Diff-IR  views=" << nViews << "  FIT " << W << "x" << H
+              << "  SHOW " << plateW << "x" << plateH << "  map=" << mapPx << "x" << mapPx
+              << "  free_grid=" << G << "x" << G << "  (θ dims=" << nGrid << ")"
+              << (cfg.museumStudio ? "  MUSEUM" : "")
+              << (qualityPlate ? "  QUALITY_PLATE" : "") << "\n";
+
     // GT map: truth studio tiles painted into dense texture.
     std::vector<double> truthTiles;
     const int N = inv.mapRes;
@@ -165,9 +185,6 @@ struct DenseMapFitResult {
     savePNG(targets[0], outDir / "dense_forward_truth.png");
     saveDiffMapPng(gtMap, outDir / "materials" / "ground_albedo_gt.png");
 
-    std::cout << "Dense-map Diff-IR  views=" << nViews << "  " << W << "x" << H
-              << "  map=" << mapPx << "x" << mapPx << "  free_grid=" << G << "x" << G
-              << "  (θ dims=" << nGrid << ")\n";
     std::cout << "  beauty SoT: free dense albedo map bindless (Deferred GBuffer sample)\n";
     std::cout << "  wrong_init: cool solid (not GT)\n";
 
@@ -358,7 +375,8 @@ struct DenseMapFitResult {
             analyticSteps = 1;
 
             // Residual closed-form iters: ΔA ≈ (T−P)/S (2 views, no FD).
-            for (int it = 0; it < 3; ++it) {
+            double rStep = 0.90;
+            for (int it = 0; it < 5; ++it) {
                 std::vector<double> acc = best;
                 int nR = 0;
                 for (int v = 0; v < nViews; ++v) {
@@ -370,7 +388,7 @@ struct DenseMapFitResult {
                         forwardDenseMapDeferred(renderer, inv, work, v, kFastFrames, false);
                     acc = dense_analytic::gridFromResidual(
                         pred, targets[static_cast<size_t>(v)], S, U, G, acc,
-                        /*step=*/0.70, dense_analytic::kCropX, dense_analytic::kSolveCropYMin);
+                        /*step=*/rStep, dense_analytic::kCropX, dense_analytic::kSolveCropYMin);
                     ++nR;
                 }
                 if (nR == 0) break;
@@ -381,6 +399,7 @@ struct DenseMapFitResult {
                     best = std::move(acc);
                     bestLoss = L;
                     ++analyticSteps;
+                    rStep *= 0.75;
                 } else {
                     softApply(best);
                     break;
@@ -399,12 +418,12 @@ struct DenseMapFitResult {
                 for (size_t i = 0; i < g.size(); ++i) rank.push_back({std::abs(g[i]), i});
                 std::sort(rank.begin(), rank.end(),
                           [](const auto& a, const auto& b) { return a.first > b.first; });
-                const int kTop = std::min(24, static_cast<int>(rank.size()));
+                const int kTop = std::min(std::max(24, nGrid / 3), static_cast<int>(rank.size()));
                 std::cout << "  [dense-map] one-sided sparse FD top-" << kTop << " (fast loss)\n";
                 const auto tf0 = std::chrono::steady_clock::now();
-                double step = 0.20;
+                double step = 0.22;
                 int accepts = 0;
-                for (int pass = 0; pass < 2; ++pass) {
+                for (int pass = 0; pass < 3; ++pass) {
                     for (int t = 0; t < kTop; ++t) {
                         const size_t i = rank[static_cast<size_t>(t)].second;
                         auto trial = best;
@@ -417,7 +436,7 @@ struct DenseMapFitResult {
                             ++accepts;
                         }
                     }
-                    step *= 0.60;
+                    step *= 0.55;
                 }
                 const auto tf1 = std::chrono::steady_clock::now();
                 fdActualMs = std::chrono::duration<double, std::milli>(tf1 - tf0).count();
@@ -448,13 +467,15 @@ struct DenseMapFitResult {
     }
 
     // Full FD only if analytic+sparse failed quality gate.
+    // Museum G=2 → only 12 free dims; run all 3 passes for clean marble recovery.
     if (!optimAnalytic) {
         std::cout << "  [dense-map] full coord FD from current θ (not cold init)\n";
         reprime(best, /*force*/ true);
         bestLoss = lossAtGrid(best);
         const auto tf0 = std::chrono::steady_clock::now();
-        double step = 0.18;
-        for (int p = 0; p < 3; ++p) {
+        double step = cfg.museumStudio ? 0.28 : 0.18;
+        const int nPass = cfg.museumStudio ? 4 : 3;
+        for (int p = 0; p < nPass; ++p) {
             int accepts = 0;
             for (size_t i = 0; i < best.size(); ++i) {
                 auto trialP = best;
@@ -474,11 +495,10 @@ struct DenseMapFitResult {
                     ++accepts;
                 }
             }
-            step *= 0.70;
-            std::cout << "  [dense-map] FD pass " << (p + 1) << "/3 best_loss=" << bestLoss
-                      << " accepts=" << accepts << std::endl;
-            // Need ≥2 passes for map MSE (beauty can drop 50% while free grid still lagging).
-            if (p >= 1 && bestLoss < initLoss * 0.40) break;
+            step *= 0.65;
+            std::cout << "  [dense-map] FD pass " << (p + 1) << "/" << nPass
+                      << " best_loss=" << bestLoss << " accepts=" << accepts << std::endl;
+            if (!cfg.museumStudio && p >= 1 && bestLoss < initLoss * 0.40) break;
             if (accepts == 0 && bestLoss < initLoss * 0.92) break;
         }
         const auto tf1 = std::chrono::steady_clock::now();
@@ -500,6 +520,39 @@ struct DenseMapFitResult {
     savePNG(recImg, outDir / "dense_recovered.png");
     saveDiffMapPng(work, outDir / "materials" / "ground_albedo_recovered.png");
 
+    // Init map for SHOW plate (wrong-init cool solid grid).
+    ohao::diff::DiffAlbedoMap initMap;
+    initMap.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
+    ohao::diff::gridIntoMap(cool, G, initMap);
+
+    // High-res SHOW stills (publish face): re-render after optim — not lab_fast crops.
+    if (wantShowStills || plateW > W || plateH > H) {
+        std::cout << "  [dense-map] SHOW plate stills " << plateW << "x" << plateH << " @"
+                  << showFrames << " frames"
+                  << (cfg.museumStudio ? " (museum publish)" : "") << "\n";
+        inv.scene.reset();
+        InverseScene invShow = InverseScene::buildStudio(cfg);
+        invShow.applyTruth();
+        VulkanRenderer showR(plateW, plateH);
+        if (showR.initialize()) {
+            showR.setRenderMode(RenderMode::Deferred);
+            showR.setScene(invShow.scene.get());
+            (void)showR.updateSceneBuffers();
+            if (std::filesystem::exists(invShow.envPath)) applyEnv(showR, invShow.envPath);
+            auto showSave = [&](const ohao::diff::DiffAlbedoMap& m, const char* name,
+                                bool force = false) {
+                auto img = forwardDenseMapDeferred(showR, invShow, m, 0, showFrames, force);
+                savePNG(img, outDir / name);
+            };
+            showSave(gtMap, "dense_forward_truth_show.png", true);
+            showSave(initMap, "dense_init_show.png");
+            showSave(work, "dense_recovered_show.png");
+            invShow.scene.reset();
+        } else {
+            std::cerr << "  WARN: SHOW renderer init failed — no high-res stills\n";
+        }
+    }
+
     std::cout << "  final loss=" << finalLoss << "  train PSNR=" << finalPsnr
               << "  (wrong-init PSNR was " << initPsnr << ")\n";
     std::cout << "  map_mse_init=" << result.mapMseInit << "  map_mse_recovered=" << result.mapMseRec
@@ -510,9 +563,14 @@ struct DenseMapFitResult {
         mj << "{\n"
            << "  \"backend\": \"diff\",\n"
            << "  \"mode\": \"dense_map\",\n"
-           << "  \"metric_domain\": \"vulkan_deferred_studio\",\n"
+           << "  \"metric_domain\": \""
+           << (cfg.museumStudio ? "ohao_museum_studio_protocol" : "vulkan_deferred_studio")
+           << "\",\n"
            << "  \"beauty_theta_path\": \"dense_map_bindless_deferred\",\n"
            << "  \"dense_map_sot\": true,\n"
+           << "  \"quality_plate\": " << (qualityPlate ? "true" : "false") << ",\n"
+           << "  \"museum_studio\": " << (cfg.museumStudio ? "true" : "false") << ",\n"
+           << "  \"preset\": \"" << cfg.preset << "\",\n"
            << "  \"analytic_albedo_grad\": " << (usedAnalytic ? "true" : "false") << ",\n"
            << "  \"optim_analytic\": " << (optimAnalytic ? "true" : "false") << ",\n"
            << "  \"grad_median_rel_err\": " << gradMedianRel << ",\n"
@@ -522,6 +580,11 @@ struct DenseMapFitResult {
            << "  \"fd_actual_ms\": " << fdActualMs << ",\n"
            << "  \"speedup_vs_fd\": " << speedup << ",\n"
            << "  \"analytic_steps\": " << analyticSteps << ",\n"
+           << "  \"fit_wh\": [" << W << ", " << H << "],\n"
+           << "  \"show_wh\": [" << plateW << ", " << plateH << "],\n"
+           << "  \"fit_frames\": " << kFrames << ",\n"
+           << "  \"show_frames\": " << showFrames << ",\n"
+           << "  \"n_views\": " << nViews << ",\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"
            << "  \"dense_grid\": " << G << ",\n"
            << "  \"map_upload\": \"in_place_updateTextureFromMemory\",\n"

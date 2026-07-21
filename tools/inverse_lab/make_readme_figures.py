@@ -305,42 +305,53 @@ def build_photo() -> Path:
 
 
 def build_museum() -> Path:
-    """NIUA museum cinematic dense-albedo plate (protocol face)."""
-    d = ROOT / "renders" / "diff_museum_smoke"
-    if not (d / "dense_recovered.png").is_file():
-        print("skip museum strip (no renders/diff_museum_smoke)")
+    """NIUA museum amphora plate — prefer 1080p SHOW stills when present."""
+    d = ROOT / "renders" / "diff_museum_plate"
+    if not (d / "dense_recovered_show.png").is_file() and not (d / "dense_recovered.png").is_file():
+        d = ROOT / "renders" / "diff_museum_smoke"
+    if not (d / "dense_recovered.png").is_file() and not (d / "dense_recovered_show.png").is_file():
+        print("skip museum strip (no museum plate renders)")
         return OUT / "readme_museum.jpg"
     mpath = d / "dense_map_metrics.json"
-    sub = "MAPTEST museum"
+    sub = "MAPTEST museum amphora"
+    show_label = "1080p SHOW"
     if mpath.is_file():
         import json as _json
 
         m = _json.loads(mpath.read_text())
         dps = float(m.get("psnr_improve_db") or 0)
-        sub = f"MAPTEST +{dps:.1f} dB · marble floor free map"
+        sw = m.get("show_wh") or []
+        if isinstance(sw, list) and len(sw) >= 2:
+            show_label = f"{sw[0]}×{sw[1]} SHOW"
+        sub = f"MAPTEST +{dps:.1f} dB · marble free map · {show_label}"
+    def pick(stem: str) -> Path:
+        show = d / f"{stem}_show.png"
+        if show.is_file():
+            return show
+        return d / f"{stem}.png"
     panels = []
     for path, lab, s in (
-        (d / "dense_init.png", "Wrong init", "cool solid floor"),
-        (d / "dense_recovered.png", "Recovered", sub),
-        (d / "dense_forward_truth.png", "Target", "B&W marble GT"),
-        (d / "materials" / "ground_albedo_init.png", "Map init", "cool"),
-        (d / "materials" / "ground_albedo_recovered.png", "Map recovered", "free 8×8"),
-        (d / "materials" / "ground_albedo_gt.png", "Map GT", "marble tiles"),
+        (pick("dense_init"), "Wrong init", "cool solid floor"),
+        (pick("dense_recovered"), "Recovered", sub),
+        (pick("dense_forward_truth"), "Target / GT", "B&W marble tiles"),
+        (d / "materials" / "ground_albedo_init.png", "Map init", "cool solid"),
+        (d / "materials" / "ground_albedo_recovered.png", "Map recovered", "free 2×2"),
+        (d / "materials" / "ground_albedo_gt.png", "Map GT", "marble 2×2"),
     ):
         if not path.is_file():
             continue
         im = load_rgb(path)
         if path.parent.name == "materials":
-            im = im.resize((280, 280), Image.Resampling.NEAREST)
+            im = im.resize((300, 300), Image.Resampling.NEAREST)
         else:
-            im = fit_height(im, 300)
+            im = fit_height(im, 360)
         panels.append(labeled_panel(im, lab, s))
     board = vstack(
         [hstack(panels[:3]), hstack(panels[3:])] if len(panels) > 3 else [hstack(panels)],
-        title="Museum cinematic protocol — NIUA statue · free dense ground albedo (not public IR bench)",
+        title="Museum publish face — NIUA amphora · free dense ground albedo · 1080p SHOW (not public IR bench)",
     )
     out = OUT / "readme_museum.jpg"
-    save(board, out, max_w=1600)
+    save(board, out, max_w=1920)
     return out
 
 
