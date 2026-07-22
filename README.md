@@ -27,6 +27,8 @@ Built to learn how a modern hybrid renderer is wired end to end. ~52K lines of *
 
 Multi-pipeline inverse rendering on one Vulkan host: **path-tracer oracle** (capture-gated LABTEST) + **Diff-IR Deferred** sibling (free dense maps as beauty SoT). Fit is train-only; published dB always name the **metric domain**. Full tables + machine-readable pack: [`docs/media/inverse/RESULTS.md`](docs/media/inverse/RESULTS.md).
 
+> **What these numbers are — and aren't.** The dB below are **synthetic self-consistency**: the targets are the engine's *own renders* of a known material θ (LABTEST, `metric_gt=capture_export_images`), so a good fit is expected and does **not** by itself prove inverse rendering on real data. Gradients are **finite-difference**, not autodiff — the "Diff-IR" backend carries one analytic albedo gradient (linear `I≈A⊙S`, lighting detached) and finite-differences everything else. Recovering materials from **real photographs the engine never rendered** ([roadmap H3](docs/inverse_lab_roadmap.md)) is the honest acid test — it is **in progress**, and that is where a real claim will come from.
+
 ### Publish face — Diff-IR quality plate (1080p SHOW)
 
 Hard presets only (spheres · helmet · outdoor). Free dense **roughness** (ORM.g), map ≥128², multi-view, wrong-init → recovered → GT. **Not** the 256×144 lab_fast toy.

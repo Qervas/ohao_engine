@@ -62,6 +62,11 @@ Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimenta
 
 ## Inverse rendering (physical + Diff-IR)
 
+> **⚠️ Reality check (2026-07 audit — read before trusting any dB below).**
+> - **This is not "differentiable rendering."** Gradients are **coordinate finite-difference** (perturb a texel → re-render → measure the loss delta) for roughness, metallic, lights, env, and the whole PT path. The *only* analytic gradient is ∂L/∂albedo under the linearized `I ≈ A⊙S` model, with lighting held as a **detached, pre-rendered buffer** (`ohao/inverse/dense_analytic.hpp`) — it never differentiates through shadows, Fresnel, specular, visibility, or GI. It is honestly FD-checked and honestly **not** autodiff. "Differentiable rendering" is a Phase-5 *aspiration*, not the current state.
+> - **The headline LABTEST numbers measure synthetic self-consistency, not inverse rendering.** `holdout 32.5 / +20.5 dB` come from fitting the engine's **own renders of a known θ** (`metric_gt=capture_export_images` = the same forward model at higher spp). In a perfectly-matched synthetic world, high dB is near-trivial and proves nothing about reality.
+> - **The honest bar is real photographs.** PHOTOTEST (a domain-shifted *proxy*, +14.9 dB) is closer but still synthetic; **fitting genuine photos the engine never rendered (roadmap H3) is still OPEN** and is the real acid test. Do not present LABTEST dB as "inverse rendering works on the world."
+
 | Item | State |
 |------|--------|
 | **Goal** | Recover scene params θ / maps so R(θ) ≈ target |

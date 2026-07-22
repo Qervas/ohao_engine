@@ -84,10 +84,12 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | **H1 — Dense materials** | M1a–c landed | Free dense albedo 64/128² + in-place upload |
 | **H2 — Multi-channel + gallery** | M2–M3 landed | ORM.g/b ✅; quality 1080p plate ✅; gallery + ablation ✅ |
 | **H3 — Real capture** | M4a–b photo_proxy ✅; real_phone open | Recipe + PHOTOTEST; real COLMAP shoot next |
-| **H4 — Differentiability** | M5a–b landed | GRADCHECK + linear solve + sparse FD (~6× vs full FD) |
+| **H4 — Analytic albedo + FD speedup** | M5a–b landed — ⚠️ *not* differentiable rendering | Analytic ∂L/∂albedo for the linear `I≈A⊙S` case (lighting detached) + FD-check + sparse-FD ~6× vs full FD. Roughness/metallic/lights/PT remain **finite-difference**. |
 | **H5 — Ambition options** | Later / optional | Neural priors, public benches, geometry joint |
 
 Horizons stack; do not start H3 before H1 ships a dense plate. H4 can overlap late H2 if H1 is solid.
+
+> **Honesty (2026-07 audit).** Everything above H3 is validated on **synthetic self-consistency** — the fit target is the engine's own render of a known θ, so high dB is expected and is *not* evidence of inverse rendering on the world. The subsystem is a **finite-difference optimizer** with one analytic albedo gradient; it is not "differentiable rendering" (that's Phase 5). The only milestone that can produce a real, defensible claim is **H3 real photos** — treat it as the gate, not a nice-to-have. See `STATUS.md` → Inverse rendering reality check.
 
 ---
 
