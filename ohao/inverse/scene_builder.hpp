@@ -481,13 +481,14 @@ struct InverseScene {
                                           .metallic = 0.05f};
         s.initPedestal = {.albedo = {0.55f, 0.12f, 0.10f}, .roughness = 0.40f, .metallic = 0.05f};
         // Cinematic museum: warmer key, cooler rim; slightly softer intensities.
-        s.truthKeyI = cfg.museumStudio ? 20.0f : 22.0f;
+        // Museum: brighter key/fill + env so hero reads against a light gallery wall.
+        s.truthKeyI = cfg.museumStudio ? 28.0f : 22.0f;
         s.initKeyI = 7.0f;
-        s.truthFillI = cfg.museumStudio ? 7.5f : 9.0f;
+        s.truthFillI = cfg.museumStudio ? 16.0f : 9.0f;
         s.initFillI = 3.0f;
-        s.truthRimI = cfg.museumStudio ? 12.0f : 10.0f;
+        s.truthRimI = cfg.museumStudio ? 14.0f : 10.0f;
         s.initRimI = 4.0f;
-        s.truthEnvScale = 1.0f;
+        s.truthEnvScale = cfg.museumStudio ? 1.45f : 1.0f;
         s.initEnvScale = 0.45f;
         s.currentEnvScale = 1.0f;
         s.truthExposure = 1.0f;
@@ -561,8 +562,9 @@ struct InverseScene {
             const float halfW = 14.0f;
             const float h = cfg.museumStudio ? 9.0f : 8.0f;
             const float z = -6.5f;
+            // Soft warm gallery gray (readable) — was near-black and crushed the hero.
             const glm::vec3 backdropCol =
-                cfg.museumStudio ? glm::vec3(0.045f, 0.048f, 0.055f)
+                cfg.museumStudio ? glm::vec3(0.62f, 0.60f, 0.56f)
                                  : glm::vec3(0.82f, 0.84f, 0.88f);
             auto wall = s.scene->createActor("Backdrop");
             auto wm = std::make_shared<Model>();
@@ -575,7 +577,7 @@ struct InverseScene {
             mesh->setVisible(true);
             auto mat = wall->addComponent<MaterialComponent>();
             mat->getMaterial().baseColor = backdropCol;
-            mat->getMaterial().roughness = cfg.museumStudio ? 0.92f : 0.85f;
+            mat->getMaterial().roughness = cfg.museumStudio ? 0.88f : 0.85f;
             mat->getMaterial().metallic = 0.0f;
         }
 
@@ -700,10 +702,10 @@ struct InverseScene {
             auto lc = a->addComponent<LightComponent>();
             lc->setLightType(LightType::Sphere);
             // Museum: warmer key
-            lc->setColor(cfg.museumStudio ? glm::vec3(1.0f, 0.93f, 0.82f)
+            lc->setColor(cfg.museumStudio ? glm::vec3(1.0f, 0.96f, 0.90f)
                                           : glm::vec3(1.0f, 0.97f, 0.92f));
             lc->setIntensity(s.truthKeyI);
-            lc->setRadius(cfg.museumStudio ? 1.15f : 1.0f);
+            lc->setRadius(cfg.museumStudio ? 1.35f : 1.0f);
             a->getTransform()->setPosition(s.baseKeyPos);
             s.keyLight = lc.get();
             s.keyLightActor = a.get();
@@ -712,10 +714,10 @@ struct InverseScene {
             auto a = s.scene->createActor("Fill");
             auto lc = a->addComponent<LightComponent>();
             lc->setLightType(LightType::Sphere);
-            lc->setColor(cfg.museumStudio ? glm::vec3(0.65f, 0.78f, 1.0f)
+            lc->setColor(cfg.museumStudio ? glm::vec3(0.85f, 0.90f, 1.0f)
                                           : glm::vec3(0.75f, 0.85f, 1.0f));
             lc->setIntensity(s.truthFillI);
-            lc->setRadius(1.4f);
+            lc->setRadius(cfg.museumStudio ? 1.8f : 1.4f);
             a->getTransform()->setPosition(s.baseFillPos);
             s.fillLight = lc.get();
             s.fillLightActor = a.get();
