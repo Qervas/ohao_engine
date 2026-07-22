@@ -117,6 +117,10 @@ struct FitConfig {
     // setViewMatrix(that camera's own view matrix), then report the max per-pixel
     // diff. Proves the full-pose path is pixel-identical to the Euler path.
     bool poseGate{false};
+    // H3/M0b: render N overlapping orbit views of the hero for real SfM (COLMAP).
+    // >0 replaces the scene's synthetic cameras with an N-view orbit and exports
+    // the capture bundle (implies --export-capture). Not clamped like --views.
+    int orbitCapture{0};
 };
 
 // Resolve missing optional showcase assets to tracked test_models copies.
@@ -438,6 +442,14 @@ inline CliArgs parseArgs(int argc, char** argv) {
             }
         } else if (s == "--pose-gate") {
             a.cfg.poseGate = true;
+        } else if (s == "--orbit-capture") {
+            a.cfg.orbitCapture = std::max(2, std::atoi(need("--orbit-capture")));
+            a.cfg.exportCapture = true;      // orbit capture writes a lab bundle
+            a.cfg.numViews = a.cfg.orbitCapture; // export all N (bypasses --views 1..8 clamp)
+            if (!a.cfg.mapGround) {          // match --export-capture map default
+                a.cfg.mapGround = true;
+                a.cfg.mapRes = 2;
+            }
         } else if (s == "--lab-bundle") {
             a.cfg.labBundle = need("--lab-bundle");
         } else if (s == "--backend") {
@@ -530,6 +542,7 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 << "  --lab-bundle PATH    fit from lab capture/ directory\n"
                 << "  --pose-gate          H3: render each view via Euler AND via full view\n"
                 << "                       matrix; report max per-pixel diff (setViewMatrix check)\n"
+                << "  --orbit-capture N    H3/M0b: N overlapping orbit views for real SfM (COLMAP)\n"
                 << "  --backend pt|diff|hybrid  pt=path tracer; diff=Deferred map SoT;\n"
                 << "                            hybrid=Diff fit + PT capture-gated eval\n"
                 << "  --dense-map               free dense ground albedo (H1/M1a MAPTEST)\n"

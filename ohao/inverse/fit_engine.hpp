@@ -195,6 +195,11 @@ namespace ohao::inverse {
         std::cerr << "FATAL: optimizable primary material missing\n";
         return 1;
     }
+    // H3/M0b: swap in an N-view orbit for real SfM capture (implies export).
+    // Target the hero's vertical center: pedestal top (0.35) + hero half-height
+    // (heroScaleMul, since buildStudio scales full height to 2·heroScaleMul).
+    if (cfg.orbitCapture > 0 && studio)
+        inv.buildOrbitViews(cfg.orbitCapture, 40.0f, 18.0f, 0.35f + cfg.heroScaleMul);
 
     std::cout << "OHAO inverse_fit — multi-param IR\n";
     std::cout << "  preset=" << cfg.preset << "  (" << cfg.presetNote << ")\n";

@@ -365,6 +365,64 @@ struct InverseScene {
         }
     }
 
+    // H3/M0b: replace the ~3 synthetic cameras with an N-view orbit around the
+    // hero for real Structure-from-Motion (COLMAP). Each view is a full 6-DOF
+    // pose (glm::lookAt at the hero) so export_capture writes an exact "view"
+    // matrix + focal. Reuses the tuned front camera to derive the look target and
+    // radius, then sweeps azimuth 0..360° at a fixed modest elevation. Adjacent
+    // views overlap heavily (360/N deg apart), which SfM needs to match features.
+    void buildOrbitViews(int n, float fovDeg = 40.0f, float elevationDeg = 18.0f,
+                         float targetYOverride = -1.0f) {
+        if (n < 2) n = 2;
+        // Orbit target = hero vertical center (so the hero stays framed, not
+        // top-clipped). targetYOverride comes from the caller (pedestal top +
+        // hero half-height); fall back to the front-view ground intersection.
+        glm::vec3 target(0.0f, targetYOverride >= 0.0f ? targetYOverride : 0.0f, 0.0f);
+        float radius = 7.3f;
+        if (!views.empty()) {
+            const CameraView& f = views.front();
+            const glm::vec3 eye = f.position;
+            if (targetYOverride < 0.0f) {
+                glm::vec3 dir;
+                dir.x = std::cos(glm::radians(f.yawDeg)) * std::cos(glm::radians(f.pitchDeg));
+                dir.y = std::sin(glm::radians(f.pitchDeg));
+                dir.z = std::sin(glm::radians(f.yawDeg)) * std::cos(glm::radians(f.pitchDeg));
+                dir = glm::normalize(dir);
+                const float denom =
+                    (std::fabs(dir.z) > 1e-4f) ? dir.z : (dir.z >= 0.f ? 1e-4f : -1e-4f);
+                float t = -eye.z / denom;
+                if (t < 0.5f) t = glm::length(eye);
+                target = eye + dir * t;
+                target.x = 0.0f;
+            }
+            // Tighten vs the tuned wide framing so the textured hero (the main SfM
+            // feature source) fills the frame — dark synthetic renders need it.
+            radius = glm::length(eye - target) * 0.62f;
+        }
+        const float el = glm::radians(elevationDeg);
+        const float cosEl = std::cos(el), sinEl = std::sin(el);
+        if (baseViews.empty()) baseViews = views;
+        views.clear();
+        views.reserve(static_cast<size_t>(n));
+        constexpr float kTwoPi = 6.28318530717958647692f;
+        for (int k = 0; k < n; ++k) {
+            const float az = kTwoPi * static_cast<float>(k) / static_cast<float>(n);
+            const glm::vec3 eye = target + glm::vec3(radius * cosEl * std::cos(az),
+                                                     radius * sinEl,
+                                                     radius * cosEl * std::sin(az));
+            CameraView cv{};
+            cv.name = "orbit"; // string literal → static storage (const char* safe)
+            cv.position = eye;
+            cv.hasPose = true;
+            cv.view = glm::lookAt(eye, target, glm::vec3(0.0f, 1.0f, 0.0f));
+            cv.fovDeg = fovDeg;
+            views.push_back(cv);
+        }
+        std::cout << "  orbit capture: " << n << " views  radius=" << radius
+                  << "  elevation=" << elevationDeg << "deg  target=(" << target.x << ","
+                  << target.y << "," << target.z << ")\n";
+    }
+
     static InverseScene buildCornell(const FitConfig& cfg) {
         InverseScene s;
         s.scene = std::make_unique<Scene>("Inverse Cornell");
