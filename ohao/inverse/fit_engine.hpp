@@ -38,9 +38,100 @@
 
 namespace ohao::inverse {
 
+// H3 correctness gate. For each view, render once via the Euler camera path
+// (setPosition + setRotation, as inv.views carries by default) and once via the
+// full-pose path (setViewMatrix with that same camera's own view matrix), then
+// report the max per-pixel difference. Uses RTOffline (PT), which derives the
+// camera solely from the view matrix, so a correct setViewMatrix convention
+// yields byte-identical images.
+[[nodiscard]] inline int runPoseGate(FitConfig cfg) {
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+
+    const bool wantCornell = (cfg.scene == "cornell" || cfg.preset == "cornell");
+    applyPreset(cfg);
+    if (wantCornell) {
+        cfg.scene = "cornell";
+        cfg.preset = "cornell";
+    }
+    resolveAssetFallbacks(cfg);
+    const bool studio = (cfg.scene != "cornell");
+
+    InverseScene inv =
+        studio ? InverseScene::buildStudio(cfg) : InverseScene::buildCornell(cfg);
+    if (!inv.primaryMat) {
+        std::cerr << "FATAL: pose-gate scene build failed\n";
+        return 2;
+    }
+
+    VulkanRenderer renderer(cfg.fit.width, cfg.fit.height);
+    if (!renderer.initialize()) {
+        std::cerr << "FATAL: pose-gate renderer init failed\n";
+        return 2;
+    }
+    renderer.setRenderMode(RenderMode::RTOffline);
+    renderer.setRenderSeed(cfg.seed);
+    if (studio && std::filesystem::exists(inv.envPath)) applyEnv(renderer, inv.envPath);
+
+    RenderSession session{renderer, inv, false};
+    inv.applyTruth();
+
+    const auto outDir = std::filesystem::path(cfg.outDir);
+    std::filesystem::create_directories(outDir);
+
+    const int nViews = std::min(cfg.numViews, static_cast<int>(inv.views.size()));
+    std::cout << "H3 POSE-GATE  preset=" << cfg.preset << "  views=" << nViews << "  "
+              << cfg.fit.width << "x" << cfg.fit.height << " @" << cfg.fit.spp
+              << " spp (RTOffline)\n";
+
+    int worst = 0;
+    double worstMeanAbs = 0.0;
+    for (int v = 0; v < nViews; ++v) {
+        // Path A — Euler (inv.views[v].hasPose == false → setPosition/setRotation).
+        ImageRGBA8 a = session.render(v, cfg.fit, cfg.seed, DenoiseMode::None);
+        const glm::mat4 M = renderer.getCamera().getViewMatrix();
+        const float fov = renderer.getCamera().getFov();
+
+        // Path B — full pose (setViewMatrix with the exact matrix Path A used).
+        const CameraView saved = inv.views[static_cast<size_t>(v)];
+        CameraView pose = saved;
+        pose.hasPose = true;
+        pose.view = M;
+        pose.fovDeg = fov;
+        inv.views[static_cast<size_t>(v)] = pose;
+        ImageRGBA8 b = session.render(v, cfg.fit, cfg.seed, DenoiseMode::None);
+        inv.views[static_cast<size_t>(v)] = saved;
+
+        int vmax = 0;
+        double sum = 0.0;
+        const size_t n = std::min(a.rgba.size(), b.rgba.size());
+        for (size_t i = 0; i < n; ++i) {
+            const int d = std::abs(static_cast<int>(a.rgba[i]) - static_cast<int>(b.rgba[i]));
+            vmax = std::max(vmax, d);
+            sum += d;
+        }
+        const double meanAbs = n ? sum / static_cast<double>(n) : 0.0;
+        worst = std::max(worst, vmax);
+        worstMeanAbs = std::max(worstMeanAbs, meanAbs);
+        std::cout << "  view " << v << " (" << (saved.name ? saved.name : "?") << ")  max|Δ|="
+                  << vmax << "  mean|Δ|=" << meanAbs << "\n";
+        savePNG(a, outDir / ("posegate_euler_" + std::to_string(v) + ".png"));
+        savePNG(b, outDir / ("posegate_pose_" + std::to_string(v) + ".png"));
+    }
+
+    const bool pass = worst <= 1; // ≤1 8-bit LSB tolerance for GPU float noise
+    std::cout << (pass ? "POSE-GATE PASS" : "POSE-GATE FAIL")
+              << "  max_per_pixel_diff=" << worst << " (8-bit LSB)  worst_mean|Δ|=" << worstMeanAbs
+              << "\n";
+    inv.scene.reset();
+    return pass ? 0 : 1;
+}
+
 [[nodiscard]] inline int runInverseFit(FitConfig cfg) {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
+
+    if (cfg.poseGate) return runPoseGate(std::move(cfg));
 
     const bool wantCornell = (cfg.scene == "cornell" || cfg.preset == "cornell");
     applyPreset(cfg);

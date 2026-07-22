@@ -13,7 +13,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -166,6 +168,9 @@ inline int runExportCapture(const FitConfig& cfg, InverseScene& inv, RenderSessi
 
     // Cameras + train/holdout images (SHOW budget, denoise for clean lab GT).
     std::ofstream camLog(capRoot / "cameras.jsonl");
+    // Full float precision so the emitted "view" matrix round-trips bit-exact
+    // through the loader (the H3 pixel-match gate depends on this).
+    camLog << std::setprecision(std::numeric_limits<float>::max_digits10);
     for (int v = 0; v < nUse; ++v) {
         const auto& cv = inv.views[static_cast<size_t>(v)];
         const bool holdout = (v >= nTrain);
@@ -179,11 +184,25 @@ inline int runExportCapture(const FitConfig& cfg, InverseScene& inv, RenderSessi
         ImageRGBA8 img = session.render(v, cfg.show, cfg.seed, DenoiseMode::None);
         savePNG(img, imgDir / name);
 
+        // H3: emit the exact world→view matrix + focal used to render this view.
+        // Sourced from the Camera that just rendered (applyCamera ran inside
+        // session.render), so a full-pose loader reproduces these pixels exactly.
+        const Camera& gcam = session.renderer.getCamera();
+        const glm::mat4 view = gcam.getViewMatrix();
+        const float fovDeg = gcam.getFov();
+
         camLog << "{\"index\":" << v << ",\"name\":\"" << cv.name << "\",\"file\":\"" << name
                << "\",\"split\":\"" << (holdout ? "holdout" : "train") << "\",\"position\":["
                << cv.position.x << "," << cv.position.y << "," << cv.position.z
                << "],\"pitch_deg\":" << cv.pitchDeg << ",\"yaw_deg\":" << cv.yawDeg
-               << ",\"fov_deg\":40.0}\n";
+               << ",\"fov_deg\":" << fovDeg << ",\"view\":[";
+        // Row-major serialization: element (row r, col c) → glm view[c][r].
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c) {
+                if (r || c) camLog << ",";
+                camLog << view[c][r];
+            }
+        camLog << "]}\n";
     }
     camLog.close();
 

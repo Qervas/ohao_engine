@@ -8,6 +8,7 @@
 #include "inverse/dense_common.hpp"
 #include "inverse/export_capture.hpp"
 #include "inverse/fit_config.hpp"
+#include "inverse/fit_targets.hpp"
 #include "inverse/image_loss.hpp"
 #include "inverse/io.hpp"
 #include "inverse/render_session.hpp"
@@ -140,6 +141,20 @@ struct DenseMapFitResult {
     if (!inv.mapGround || inv.truthTiles.empty()) {
         std::cerr << "FATAL: dense map fit requires map-ground studio\n";
         return result;
+    }
+
+    // H3: if a lab bundle is supplied, render/fit through its real 6-DOF poses
+    // (COLMAP path) instead of the synthetic pitch/yaw cameras. This is what
+    // validates the full-pose plumbing for the dense-albedo (M0a) case.
+    if (!cfg.labBundle.empty()) {
+        std::filesystem::path labCap;
+        std::string err;
+        if (resolveLabCapturePath(cfg, labCap, err)) {
+            const int nj = injectLabPoses(inv, labCap / "cameras.jsonl");
+            std::cout << "  [dense-map] lab bundle poses injected=" << nj << " (full 6-DOF path)\n";
+        } else {
+            std::cerr << "  [dense-map] WARN: " << err << " (using synthetic cameras)\n";
+        }
     }
 
     VulkanRenderer renderer(W, H);
@@ -532,6 +547,12 @@ struct DenseMapFitResult {
                   << (cfg.museumStudio ? " (museum publish)" : "") << "\n";
         inv.scene.reset();
         InverseScene invShow = InverseScene::buildStudio(cfg);
+        if (!cfg.labBundle.empty()) {
+            std::filesystem::path labCap;
+            std::string err;
+            if (resolveLabCapturePath(cfg, labCap, err))
+                (void)injectLabPoses(invShow, labCap / "cameras.jsonl");
+        }
         invShow.applyTruth();
         VulkanRenderer showR(plateW, plateH);
         if (showR.initialize()) {

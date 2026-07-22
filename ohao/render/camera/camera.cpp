@@ -7,6 +7,8 @@
 #include <glm/ext/vector_float3.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/mat3x3.hpp>
+#include <glm/matrix.hpp>
 #include <algorithm>
 #include <glm/trigonometric.hpp>
 #include <sys/types.h>
@@ -23,28 +25,51 @@ Camera::Camera(float fov, float aspect, float nearPlane, float farPlane)
 
 void
 Camera::updateVectors(){
-    // Calculate all vectors first
-    glm::vec3 newFront;
-    newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-    newFront.y = sin(glm::radians(pitch));
-    newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-    newFront = glm::normalize(newFront);
+    // Under a 6-DOF pose override the view matrix + basis vectors are owned by
+    // setViewMatrix(); only intrinsics (projection) are refreshed here so that
+    // setFov / setAspectRatio / setPerspectiveProjection keep working.
+    if (!poseOverride) {
+        // Calculate all vectors first
+        glm::vec3 newFront;
+        newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        newFront.y = sin(glm::radians(pitch));
+        newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        newFront = glm::normalize(newFront);
 
-    glm::vec3 newRight = glm::normalize(glm::cross(newFront, worldUp));
-    glm::vec3 newUp = glm::normalize(glm::cross(newRight, newFront));
+        glm::vec3 newRight = glm::normalize(glm::cross(newFront, worldUp));
+        glm::vec3 newUp = glm::normalize(glm::cross(newRight, newFront));
 
-    // Update all vectors and matrices atomically
-    front = newFront;
-    right = newRight;
-    up = newUp;
+        // Update all vectors and matrices atomically
+        front = newFront;
+        right = newRight;
+        up = newUp;
 
-    viewMatrix = glm::lookAt(position, position + front, up);
+        viewMatrix = glm::lookAt(position, position + front, up);
+    }
 
     if(projectionType == ProjectionType::Perspective) {
         projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);
     } else {
         projectionMatrix = glm::ortho(orthoLeft, orthoRight, orthoBottom, orthoTop, nearPlane, farPlane);
     }
+}
+
+void
+Camera::setViewMatrix(const glm::mat4& v){
+    // Adopt an external world→view matrix in the exact convention getViewMatrix()
+    // emits (right-handed glm::lookAt: rows of the upper-left 3×3 are the camera
+    // right / up / -forward axes; the 4th column is R·(-eye)).
+    poseOverride = true;
+    viewMatrix = v;
+
+    const glm::mat3 R{v}; // upper-left rotation; R[col][row]
+    right = glm::normalize(glm::vec3(R[0][0], R[1][0], R[2][0]));      // row 0
+    up    = glm::normalize(glm::vec3(R[0][1], R[1][1], R[2][1]));      // row 1
+    front = -glm::normalize(glm::vec3(R[0][2], R[1][2], R[2][2]));     // row 2 = -forward
+    // Camera world position: solve R·C + t = 0 ⇒ C = -Rᵀ·t (R orthonormal).
+    position = -glm::transpose(R) * glm::vec3(v[3]);
+
+    updateVectors(); // poseOverride guards the view; refreshes projection only
 }
 
 glm::mat4
@@ -64,12 +89,14 @@ Camera::getViewProjectionMatrix() const{
 
 void
 Camera::setPosition(const glm::vec3& newPosition){
+    poseOverride = false; // explicit Euler/position re-pose wins over any override
     position = newPosition;
     updateVectors();
 }
 
 void
 Camera::setRotation(float newPitch, float newYaw){
+    poseOverride = false; // explicit Euler/position re-pose wins over any override
     pitch = glm::clamp(newPitch, -89.0f, 89.0f);
     yaw = newYaw;
     updateVectors();
@@ -77,12 +104,14 @@ Camera::setRotation(float newPitch, float newYaw){
 
 void
 Camera::move(const glm::vec3& offset){
+    poseOverride = false;
     position += offset;
     updateVectors();
 }
 
 void
 Camera::rotate(float deltaPitch, float deltaYaw){
+    poseOverride = false;
     pitch += deltaPitch;
     yaw += deltaYaw;
 
@@ -105,6 +134,7 @@ Camera::focusOnPoint(const glm::vec3& targetPoint, float distance){
     float newYaw = glm::degrees(atan2(direction.z, direction.x));
 
     // Update camera
+    poseOverride = false;
     position = newPosition;
     pitch = glm::clamp(newPitch, -89.0f, 89.0f);
     yaw = newYaw;

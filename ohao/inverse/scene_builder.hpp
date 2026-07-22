@@ -352,9 +352,17 @@ struct InverseScene {
 
     void applyCamera(Camera& cam, int viewIndex) const {
         const CameraView& v = views[static_cast<size_t>(viewIndex) % views.size()];
-        cam.setPosition(v.position);
-        cam.setRotation(v.pitchDeg, v.yawDeg);
-        cam.setFov(40.0f);
+        if (v.hasPose) {
+            // Real 6-DOF pose (COLMAP / lab bundle): drive the camera from the
+            // full world→view matrix + per-view focal. setViewMatrix wins until
+            // an Euler re-pose, so this is stable across eval frames.
+            cam.setViewMatrix(v.view);
+            cam.setFov(v.fovDeg);
+        } else {
+            cam.setPosition(v.position);
+            cam.setRotation(v.pitchDeg, v.yawDeg);
+            cam.setFov(40.0f);
+        }
     }
 
     static InverseScene buildCornell(const FitConfig& cfg) {

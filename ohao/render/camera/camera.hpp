@@ -26,6 +26,16 @@ public:
     [[nodiscard]] glm::mat4 getProjectionMatrix() const;
     [[nodiscard]] glm::mat4 getViewProjectionMatrix() const;
 
+    // Full 6-DOF pose override. Stores `v` as the world→view matrix returned by
+    // getViewMatrix() (same right-handed glm::lookAt convention this class emits)
+    // and derives position/basis vectors from it so consumers that read them
+    // directly (deferred viewPos, etc.) stay consistent. The override wins until
+    // an explicit setPosition/setRotation/move/rotate/focusOnPoint re-poses from
+    // Euler angles. Intrinsics (fov/aspect/near/far) still apply via setFov /
+    // setPerspectiveProjection and are refreshed here.
+    void setViewMatrix(const glm::mat4& v);
+    [[nodiscard]] bool hasPoseOverride() const noexcept { return poseOverride; }
+
     void setPosition(const glm::vec3& position);
     void setRotation(float pitch, float yaw);
     void move(const glm::vec3& offset);
@@ -73,6 +83,10 @@ private:
 
     float pitch{0.0f};
     float yaw{-90.0f};
+
+    // When true, viewMatrix is an externally supplied 6-DOF pose and
+    // updateVectors() must not recompute it from pitch/yaw/position.
+    bool poseOverride{false};
 
     ProjectionType projectionType{ProjectionType::Perspective};
     float fov{45.0f};

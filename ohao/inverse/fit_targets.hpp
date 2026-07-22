@@ -10,6 +10,7 @@
 
 #include "render/rt/denoise/denoise_types.hpp"
 
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -18,7 +19,125 @@
 #include <string>
 #include <vector>
 
+#include <glm/glm.hpp>
+
 namespace ohao::inverse {
+
+// ── H3: full 6-DOF camera pose parsing from a lab cameras.jsonl ────────────────
+// Extract a scalar (string or number) value for `key` from a JSON line.
+[[nodiscard]] inline std::string labJsonScalar(const std::string& s, const char* key) {
+    const auto k = s.find(key);
+    if (k == std::string::npos) return {};
+    const auto colon = s.find(':', k);
+    if (colon == std::string::npos) return {};
+    size_t i = colon + 1;
+    while (i < s.size() && s[i] == ' ') ++i;
+    if (i < s.size() && s[i] == '\"') {
+        const auto q1 = s.find('\"', i + 1);
+        if (q1 == std::string::npos) return {};
+        return s.substr(i + 1, q1 - i - 1);
+    }
+    size_t j = i;
+    while (j < s.size() && s[j] != ',' && s[j] != '}') ++j;
+    return s.substr(i, j - i);
+}
+
+// Parse up to `maxN` floats from the JSON array that immediately follows `key`.
+// Returns the count parsed (0 if key/array absent). Skips the `position` array
+// etc. because it anchors on the exact key requested.
+[[nodiscard]] inline int labJsonFloatArray(const std::string& s, const char* key, float* out,
+                                           int maxN) {
+    const auto k = s.find(key);
+    if (k == std::string::npos) return 0;
+    const auto lb = s.find('[', k);
+    if (lb == std::string::npos) return 0;
+    const auto rb = s.find(']', lb);
+    if (rb == std::string::npos) return 0;
+    int n = 0;
+    size_t i = lb + 1;
+    while (i < rb && n < maxN) {
+        while (i < rb && (s[i] == ' ' || s[i] == ',' || s[i] == '\t')) ++i;
+        if (i >= rb) break;
+        size_t j = i;
+        while (j < rb && s[j] != ',') ++j;
+        out[n++] = static_cast<float>(std::atof(s.substr(i, j - i).c_str()));
+        i = j;
+    }
+    return n;
+}
+
+// Parse cameras.jsonl into per-index CameraViews. Lines carrying a 16-float
+// "view" matrix become full 6-DOF poses (hasPose=true); other lines keep the
+// legacy position/pitch/yaw fields. Returns true iff ≥1 line had a "view".
+[[nodiscard]] inline bool parseLabCameraPoses(const std::filesystem::path& camerasJsonl,
+                                              std::vector<CameraView>& poses) {
+    std::ifstream in(camerasJsonl);
+    if (!in) return false;
+    bool anyPose = false;
+    std::vector<std::pair<int, CameraView>> tmp;
+    int maxIdx = -1;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        CameraView cv{};
+        cv.name = "pose"; // string literal: static storage, safe for const char*
+        const int idx = std::atoi(labJsonScalar(line, "\"index\"").c_str());
+        // Legacy euler fields (fallback / reference).
+        float pos[3] = {0, 0, 0};
+        if (labJsonFloatArray(line, "\"position\"", pos, 3) == 3)
+            cv.position = glm::vec3(pos[0], pos[1], pos[2]);
+        const std::string pitch = labJsonScalar(line, "\"pitch_deg\"");
+        const std::string yaw = labJsonScalar(line, "\"yaw_deg\"");
+        if (!pitch.empty()) cv.pitchDeg = static_cast<float>(std::atof(pitch.c_str()));
+        if (!yaw.empty()) cv.yawDeg = static_cast<float>(std::atof(yaw.c_str()));
+        const std::string fov = labJsonScalar(line, "\"fov_deg\"");
+        cv.fovDeg = fov.empty() ? 40.0f : static_cast<float>(std::atof(fov.c_str()));
+        // Full 6-DOF view matrix (row-major → glm column-major).
+        float m[16];
+        if (labJsonFloatArray(line, "\"view\"", m, 16) == 16) {
+            glm::mat4 M(1.0f);
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c) M[c][r] = m[r * 4 + c];
+            cv.view = M;
+            cv.hasPose = true;
+            anyPose = true;
+        }
+        maxIdx = std::max(maxIdx, idx);
+        tmp.emplace_back(idx, cv);
+    }
+    poses.assign(static_cast<size_t>(std::max(0, maxIdx + 1)), CameraView{});
+    for (auto& [i, cv] : tmp)
+        if (i >= 0 && i < static_cast<int>(poses.size())) poses[static_cast<size_t>(i)] = cv;
+    return anyPose;
+}
+
+// Inject full-pose cameras from a bundle into the scene's `views`, overriding by
+// index. Views without a parsed pose keep the synthetic scene camera at that
+// index (back-compat). Returns the number of poses injected.
+inline int injectLabPoses(InverseScene& inv, const std::filesystem::path& camerasJsonl) {
+    std::vector<CameraView> poses;
+    if (!parseLabCameraPoses(camerasJsonl, poses)) return 0; // legacy bundle: keep synthetic
+    const size_t n = std::max(poses.size(), inv.views.size());
+    std::vector<CameraView> merged;
+    merged.reserve(n);
+    int injected = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const bool hasParsed = (i < poses.size() && poses[i].hasPose);
+        const bool hasSynth = (i < inv.views.size());
+        if (hasParsed) {
+            CameraView cv = poses[i];
+            if (hasSynth && inv.views[i].name) cv.name = inv.views[i].name; // keep readable name
+            merged.push_back(cv);
+            ++injected;
+        } else if (hasSynth) {
+            merged.push_back(inv.views[i]); // back-compat: synthetic pitch/yaw camera
+        } else if (i < poses.size()) {
+            merged.push_back(poses[i]); // parsed euler-only line beyond synthetic set
+        }
+    }
+    if (!merged.empty()) inv.views = std::move(merged);
+    return injected;
+}
 
 struct FitTargetBundle {
     int nViews{1};
@@ -48,7 +167,7 @@ struct FitTargetBundle {
 }
 
 /// Load train/holdout/relight from ohao_inverse_lab_capture; half-res FIT budget.
-[[nodiscard]] inline int loadLabTargets(FitConfig& cfg, FitTargetBundle& tb,
+[[nodiscard]] inline int loadLabTargets(FitConfig& cfg, InverseScene& inv, FitTargetBundle& tb,
                                         const std::filesystem::path& outDir) {
     std::string err;
     if (!resolveLabCapturePath(cfg, tb.labCap, err)) {
@@ -57,6 +176,13 @@ struct FitTargetBundle {
     }
     tb.labMode = true;
     cfg.showDenoise = DenoiseMode::None;
+
+    // H3: adopt the bundle's real 6-DOF camera poses (COLMAP path). Lines without
+    // a "view" matrix fall back to the synthetic scene cameras (back-compat).
+    const int injected = injectLabPoses(inv, tb.labCap / "cameras.jsonl");
+    if (injected > 0)
+        std::cout << "Lab bundle: injected " << injected
+                  << " full 6-DOF camera pose(s) from cameras.jsonl\n";
 
     std::ifstream camIn(tb.labCap / "cameras.jsonl");
     if (!camIn) {
@@ -223,7 +349,7 @@ struct FitTargetBundle {
     tb.nViews = std::min(maxViews, static_cast<int>(inv.views.size()));
     tb.externalTarget = !cfg.targetImage.empty() && cfg.labBundle.empty();
 
-    if (!cfg.labBundle.empty()) return loadLabTargets(cfg, tb, outDir);
+    if (!cfg.labBundle.empty()) return loadLabTargets(cfg, inv, tb, outDir);
     if (tb.externalTarget) return loadExternalTarget(cfg, tb, outDir);
     return loadSyntheticTargets(cfg, inv, session, tb, truthV, outDir);
 }

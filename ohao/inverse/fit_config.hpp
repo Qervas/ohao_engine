@@ -23,6 +23,13 @@ struct CameraView {
     glm::vec3 position;
     float pitchDeg;
     float yawDeg;
+    // Full 6-DOF path (real COLMAP capture). When hasPose is true, applyCamera
+    // uses `view` (a world→view matrix in glm::lookAt convention) + `fovDeg`
+    // directly and ignores position/pitch/yaw. Defaults keep the synthetic
+    // pitch/yaw path fully back-compatible for aggregate-initialized views.
+    bool hasPose{false};
+    glm::mat4 view{1.0f};
+    float fovDeg{40.0f};
 };
 
 struct FitConfig {
@@ -106,6 +113,10 @@ struct FitConfig {
     std::string labBundle;            // path to capture/ dir (or parent containing capture/)
     // Image formation backend (pt = path tracer FD; diff = Diff-IR when wired)
     InverseBackend backend{InverseBackend::PathTrace};
+    // H3 correctness gate: render each view via setRotation/setPosition AND via
+    // setViewMatrix(that camera's own view matrix), then report the max per-pixel
+    // diff. Proves the full-pose path is pixel-identical to the Euler path.
+    bool poseGate{false};
 };
 
 // Resolve missing optional showcase assets to tracked test_models copies.
@@ -425,6 +436,8 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 a.cfg.mapGround = true;
                 a.cfg.mapRes = 2;
             }
+        } else if (s == "--pose-gate") {
+            a.cfg.poseGate = true;
         } else if (s == "--lab-bundle") {
             a.cfg.labBundle = need("--lab-bundle");
         } else if (s == "--backend") {
@@ -515,6 +528,8 @@ inline CliArgs parseArgs(int argc, char** argv) {
                 << "  --export-dataset N   ML data factory\n"
                 << "  --export-capture     lab multi-view capture bundle (train/holdout/relight)\n"
                 << "  --lab-bundle PATH    fit from lab capture/ directory\n"
+                << "  --pose-gate          H3: render each view via Euler AND via full view\n"
+                << "                       matrix; report max per-pixel diff (setViewMatrix check)\n"
                 << "  --backend pt|diff|hybrid  pt=path tracer; diff=Deferred map SoT;\n"
                 << "                            hybrid=Diff fit + PT capture-gated eval\n"
                 << "  --dense-map               free dense ground albedo (H1/M1a MAPTEST)\n"
