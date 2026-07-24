@@ -33,37 +33,72 @@
         <p>F0, ORM convention, roughness floors.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#math">Math</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-lie-artists-can-paint">The lie artists can paint</a></li><li><a href="#f0-the-0-04-that-is-not-arbitrary">F0: the 0.04 that is not arbitrary</a></li><li><a href="#fresnel-at-grazing-angles-the-schlick-term">Fresnel at grazing angles: the Schlick term</a></li><li><a href="#past-textbook-cook-torrance">Past textbook Cook-Torrance</a></li><li><a href="#the-direct-vs-ibl-k-remap">The direct-vs-IBL k remap</a></li><li><a href="#where-the-packed-roughness-comes-from">Where the packed roughness comes from</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-lie-artists-can-paint">The lie artists can paint</h2></div>
 <div class="prose reveal">
-<p>Metallic-roughness PBR: baseColor, metallic, roughness map to diffuse lobe + specular F0. ORM packing follows glTF (occlusion/roughness/metal).</p>
+<p>The physically-correct microfacet BRDF wants a spectral, complex index of refraction at every surface point. No artist authors that. OHAO collapses it to three scalars an artist can paint into textures — base color, metallic, roughness — and reconstructs the physics at shade time. This page is about what that reconstruction gets right and the three places it deliberately cheats.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="f0-the-0-04-that-is-not-arbitrary">F0: the 0.04 that is not arbitrary</h2></div>
 <div class="prose reveal">
-<p>pbr_unpack.glsl expands packed rows/textures into shading parameters.</p>
-<p>Dielectric F0 ≈ 0.04; metals use baseColor as F0 with zero diffuse.</p>
-<p>Roughness floor kills zero-width specular fireflies in path tracing.</p>
+<p>F0 is the Fresnel reflectance at normal incidence: the fraction of light a flat surface bounces straight back when you look at it head-on. For a dielectric it is fixed by the index of refraction n through F0 = ((n - 1)/(n + 1))^2. Common dielectrics sit near n = 1.5, so:</p>
+<div class="math-block">$$
+F_0^{\text{dielectric}} = \left(\frac{1.5 - 1}{1.5 + 1}\right)^2 \approx 0.04
+$$</div>
+<p>OHAO hard-codes that constant as the dielectric base reflectivity.</p>
+<div class="citation-chip"><code class="citation-code">surface.F0 = vec3(0.04); // Dielectric F0</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/material_types.glsl#L129" target="_blank" rel="noopener">shaders/includes/material/material_types.glsl:129</a></div>
+<p>Metals have no meaningful single-scalar IOR in this model and absorb all transmitted light within nanometers, so they get zero diffuse and reuse base color as F0. One branch-free `mix` spans the whole range:</p>
+<div class="citation-chip"><code class="citation-code">return mix(dielectricF0, surface.albedo, surface.metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/material_types.glsl#L138" target="_blank" rel="noopener">shaders/includes/material/material_types.glsl:138</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The intermediate values of that lerp (metallic = 0.5) are not physical — no real material is half-conductor. But the slider is continuous and monotonic, which is all an artist needs, and pure 0/1 endpoints are exactly right.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="fresnel-at-grazing-angles-the-schlick-term">Fresnel at grazing angles: the Schlick term</h2></div>
 <div class="prose reveal">
-<p>One material language for deferred and PT means artist assets look consistent across modes.</p>
+<p>Head-on reflectance is only F0; at grazing angles every surface approaches a perfect mirror. OHAO uses the roughness-aware Schlick approximation:</p>
+<div class="math-block">$$
+F(\theta) = F_0 + \big(\max(1-\text{rough},\,F_0) - F_0\big)\,(1 - \cos\theta)^5
+$$</div>
+<div class="citation-chip"><code class="citation-code">return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/ibl.glsl#L12" target="_blank" rel="noopener">shaders/includes/lighting/ibl.glsl:12</a></div>
+<p>The textbook Schlick term tops out at 1.0. The `max(1 - roughness, F0)` cap is the cheat: on a rough surface the grazing highlight should not blow out to a mirror, so the ceiling is pulled down as roughness rises. This matches the integrated reflectance a pre-baked BRDF LUT would give, without the texture fetch.</p>
 </div>
-<div class="section-rule"><h2 id="math">Math</h2></div>
+<div class="section-rule"><h2 id="past-textbook-cook-torrance">Past textbook Cook-Torrance</h2></div>
 <div class="prose reveal">
-<p>F_{0,\mathrm{dielectric}} \approx 0.04</p>
-<p>F_0 = \mathrm{lerp}(0.04,\, c_{\mathrm{base}},\, m)</p>
+<p>Most engines evaluate specular as single-scatter D·G·F and stop. OHAO adds two refinements. First, the geometry term is the height-correlated Smith form, which accounts for masking and shadowing being correlated on the same microsurface rather than independent:</p>
+<div class="citation-chip"><code class="citation-code">float geometrySmithCorrelated(float NdotV, float NdotL, float roughness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L66" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:66</a></div>
+<p>Second — and this is the part a reviewer will notice is missing from most hobby renderers — single-scatter GGX loses energy at high roughness because it models exactly one bounce off the microsurface. Rough metal comes out visibly too dark. OHAO adds the lost energy back with a Kulla-Conty / Turquin compensation term:</p>
+<div class="math-block">$$
+E_{ms} = (1 - E(\mu_o))\,(1 - E(\mu_i)), \qquad f_{ms} = \frac{F_{avg}\,E_{ms}}{1 - F_{avg}(1 - E(\mu_o))}
+$$</div>
+<p>where E is the directional albedo of single-scatter GGX, evaluated from a polynomial fit instead of a lookup table.</p>
+<div class="citation-chip"><code class="citation-code">float Ems = (1.0 - E_o) * (1.0 - E_i);        // energy lost by single scatter</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L159" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:159</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 Favg = surface.F0 + (1.0 - surface.F0) / 21.0;  // average Fresnel</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L160" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:160</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/ggx_multiscatter_energy.svg" alt="Single-scatter GGX droops with roughness; the compensation term returns total energy to ~1. Shape from the GGX_E() fit in brdf_ggx.glsl — conceptual, not a captured render." loading="lazy" /><figcaption>Single-scatter GGX droops with roughness; the compensation term returns total energy to ~1. Shape from the GGX_E() fit in brdf_ggx.glsl — conceptual, not a captured render.</figcaption></figure>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Energy compensation is not cosmetic. Without it, rough metals read darker than their albedo implies, so an artist compensates by over-brightening the base color, and the asset then looks wrong under a different light. Matching Cycles&#x27; multi-scatter GGX keeps look-dev portable between the offline and realtime paths.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-direct-vs-ibl-k-remap">The direct-vs-IBL k remap</h2></div>
 <div class="prose reveal">
-<p>Metallic-roughness: baseColor, metallic, roughness → diffuse + specular F0.</p>
-<p>Dielectric F0 ≈ 0.04; metals use baseColor as F0 with zero diffuse.</p>
-<p>ORM packing: occlusion/roughness/metal in one texture (glTF convention).</p>
-<p>Roughness floor prevents zero-width specular fireflies in PT.</p>
+<p>The Smith-Schlick geometry approximation needs a roughness remap, and it is a different constant for punctual lights than for image-based lighting — a subtlety that silently darkens IBL if you use the wrong one:</p>
+<div class="citation-chip"><code class="citation-code">float k = (r * r) / 8.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L50" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:50</a></div>
+<p>This `(rough + 1)^2 / 8` form is the direct-lighting remap (Karis 2013). The IBL path uses `rough^2 / 2`; they are not interchangeable.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-packed-roughness-comes-from">Where the packed roughness comes from</h2></div>
+<div class="prose reveal">
+<p>At the closest-hit shader the material arrives packed into a payload vector, and the unpack carries a backward-compatibility story worth knowing before you touch it. The current encoding is continuous roughness in `.x`, metallic in `.y`:</p>
+<div class="citation-chip"><code class="citation-code">if (att.x &lt; 0.0 &amp;&amp; att.y &lt; 1e-4) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/pbr_unpack.glsl#L9" target="_blank" rel="noopener">shaders/includes/pbr_unpack.glsl:9</a></div>
+<p>A legacy signed encoding (negative `.x` meant &quot;binary metal&quot;) is still accepted when `.y` is ~0, so old shader-binding-table payloads authored mid-session do not silently break. Removing that branch is safe only once every producer writes the new form.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Metals must have zero diffuse and F0 = base color; dielectrics F0 = 0.04. Violating this double-counts or loses energy.</li>
+<li>Roughness is clamped away from 0 (`max(roughness, 0.01)` in the unpack) so the specular lobe never becomes a zero-width delta that fireflies in the path tracer.</li>
+<li>The direct and IBL geometry remaps are not interchangeable; using the IBL k for punctual lights darkens direct specular.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
+        <div class="row"><code>shaders/includes/material/material_types.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/lighting/ibl.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/brdf/brdf_ggx.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
       </div>

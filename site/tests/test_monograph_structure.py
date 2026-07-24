@@ -16,6 +16,61 @@ SITE = Path(__file__).resolve().parents[1]
 ROOT = SITE.parent
 M = SITE / "m"
 
+sys.path.insert(0, str(SITE / "tools"))
+from monograph import blocks as _blocks  # noqa: E402
+from monograph import cite as _cite      # noqa: E402
+
+CONTENT = SITE / "content" / "units"
+
+
+class GateTest(unittest.TestCase):
+    def _md_files(self):
+        return sorted(CONTENT.rglob("*.md"))
+
+    def test_no_sources_of_truth_filler(self):
+        hits = [str(p.relative_to(SITE)) for p in M.rglob("*.html")
+                if "Sources of truth:" in p.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual(hits, [], f"filler present: {hits}")
+
+    def test_no_api_dump(self):
+        needle = "API / symbols the unit exposes or binds"
+        hits = [str(p.relative_to(SITE)) for p in M.rglob("*.html")
+                if needle in p.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual(hits, [], f"api dump present: {hits}")
+
+    def test_all_citations_resolve(self):
+        errors = []
+        for md in self._md_files():
+            _fm, body = _blocks.split_frontmatter(md.read_text(encoding="utf-8"))
+            for m in re.finditer(r'\{\{cite\s+(\S+)\s+"(.+?)"\}\}', body):
+                try:
+                    _cite.resolve_citation(m.group(1), m.group(2))
+                except _cite.CitationError as e:
+                    errors.append(f"{md.relative_to(CONTENT)}: {e}")
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_no_empty_section_rules(self):
+        # Every <h2 id=...> must be followed by non-empty content before the next h2/footer.
+        bad = []
+        for p in M.rglob("*.html"):
+            html = p.read_text(encoding="utf-8", errors="replace")
+            for m in re.finditer(r'<h2 id="([^"]+)">.*?</h2></div>\s*(.*?)(?=<div class="section-rule"|<div class="aside|</article>)',
+                                 html, re.S):
+                if not re.sub(r"<[^>]+>|\s", "", m.group(2)):
+                    bad.append(f"{p.relative_to(SITE)}#{m.group(1)}")
+        self.assertEqual(bad, [], f"empty sections: {bad}")
+
+    def test_v2_math_blocks_are_explained(self):
+        bad = []
+        for md in self._md_files():
+            fm, _ = _blocks.split_frontmatter(md.read_text(encoding="utf-8"))
+            if fm.get("standard") != "v2":
+                continue
+            for slug, has_prose in _blocks.iter_math_sections(md.read_text(encoding="utf-8")):
+                if not has_prose:
+                    bad.append(f"{md.relative_to(CONTENT)}#{slug}")
+        self.assertEqual(bad, [], f"unexplained math in v2 pages: {bad}")
+
 
 class MonographStructureTest(unittest.TestCase):
     def test_binding_svg_plate_exists(self) -> None:
