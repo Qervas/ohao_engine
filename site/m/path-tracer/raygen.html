@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · Raygen integrator — OHAO Monograph</title>
+  <meta name="description" content="Stages A/B/C, NEE, dual-lobe, AOV writes." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/raygen" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · Raygen integrator</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>Raygen integrator</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Stages A/B/C, NEE, dual-lobe, AOV writes.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#math">Math</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="prose reveal">
+<p>Raygen integrator family: pt_raygen.rgen (brute-force reference), realtime/offline variants with NEE, dual-lobe BRDF, MIS, AOV packing for denoisers.</p>
+</div>
+<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="prose reveal">
+<p>Primary ray from camera UBO; closest-hit payload carries throughput.</p>
+<p>NEE: sample light (sphere solid angle), shadow ray with Tmax = lightDist (not radius).</p>
+<p>BRDF sample next direction; Russian roulette / max bounce.</p>
+<p>Write beauty + AOVs; NRD path packs YCoCg + norm hit-dist via nrd_frontend.glsl.</p>
+<ul>
+<li>Camera primary ray</li>
+<li>Closest-hit payload</li>
+<li>NEE + shadow ray</li>
+<li>BRDF sample bounce</li>
+<li>RR / max depth</li>
+<li>Accum + AOV writes</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="prose reveal">
+<p>One integrator family; profile swaps spp/sampler without forking the host API. Hub NEE walk anchors L305+ line pedagogy.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Shadow Tmax uses distance to light sample, not sphere radius</li>
+<li>NRD inputs are YCoCg+hitDist, not linear RGB</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="math">Math</h2></div>
+<div class="prose reveal">
+<p>L_o = L_e + \int_{\mathcal{H}} f_r L_i |n\cdot w_i|\,dw_i</p>
+<p>\hat{L}_{\mathrm{NEE}} = \frac{f_r L_e |n\cdot w_i|}{p_{\mathrm{light}}} V</p>
+</div>
+<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="prose reveal">
+<p>pt_raygen.rgen is the brute-force reference: camera ray → bounce → light hit, no NEE.</p>
+<p>Realtime/offline variants add NEE (next-event estimation), dual-lobe BRDF sampling, and MIS.</p>
+<p>NEE sphere sample: sample light disk by solid angle, shadow ray with d=lightDist (not radius) for Tmin/Tmax.</p>
+<p>AOV writes: albedo, normal, depth, roughness, diffuse/specular radiance, motion vectors for denoisers.</p>
+<p>NRD path packs radiance as YCoCg + normalized hit-distance before REBLUR (see nrd_frontend.glsl).</p>
+<p>Hub monograph has the line-anchored NEE walk (L305+) with GLSL and why-notes.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="as.html"><div class="label">← Prev</div><div class="title">Acceleration structures</div></a><a class="next" href="hit-miss.html"><div class="label">Next →</div><div class="title">Hit &amp; miss shaders</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

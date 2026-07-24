@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shaders — OHAO Monograph</title>
+  <meta name="description" content="Shaders hub" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="shaders/index" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> · Shaders</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">▸</div>
+        <div>
+          <p class="chapter-kicker">Module hub</p>
+          <h1>Shaders</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Module</div>
+        <p>Design units under <strong>shaders</strong> — what it is, how it is implemented, why the design exists.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page. Full tree: <a href="../sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="layout.html">
+          <div class="num">layout</div>
+          <h3>Shader tree layout</h3>
+          <p>core / rt / postprocess / compute / includes / shadow / particles.</p>
+        </a>
+        <a class="tree-card" href="includes-common.html">
+          <div class="num">includes-common</div>
+          <h3>Common includes</h3>
+          <p>math, color, encoding, reconstruction, constants, types.</p>
+        </a>
+        <a class="tree-card" href="includes-lighting.html">
+          <div class="num">includes-lighting</div>
+          <h3>Lighting includes</h3>
+          <p>IBL, attenuation, light types, phase, blinn_phong.</p>
+        </a>
+        <a class="tree-card" href="includes-shadow.html">
+          <div class="num">includes-shadow</div>
+          <h3>Shadow includes</h3>
+          <p>CSM sampling, PCF, shadow types.</p>
+        </a>
+        <a class="tree-card" href="includes-fx.html">
+          <div class="num">includes-fx</div>
+          <h3>Atmosphere &amp; water includes</h3>
+          <p>Gerstner waves, cloud density fields.</p>
+        </a>
+        <a class="tree-card" href="postprocess-chain.html">
+          <div class="num">postprocess-chain</div>
+          <h3>Postprocess shader chain</h3>
+          <p>Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</p>
+        </a>
+        <a class="tree-card" href="rt-includes.html">
+          <div class="num">rt-includes</div>
+          <h3>RT shader includes</h3>
+          <p>pbr_unpack, rt_masks, NRD frontend used by raygen.</p>
+        </a>
+        <a class="tree-card" href="compute.html">
+          <div class="num">compute</div>
+          <h3>Compute shaders</h3>
+          <p>BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.</p>
+        </a>
+        <a class="tree-card" href="core-gbuffer-lighting.html">
+          <div class="num">core-gbuffer-lighting</div>
+          <h3>Core GBuffer &amp; lighting shaders</h3>
+          <p>gbuffer.vert/frag, deferred_lighting.frag MRT contract.</p>
+        </a>
+        <a class="tree-card" href="forward.html">
+          <div class="num">forward</div>
+          <h3>Forward shaders</h3>
+          <p>Legacy forward.vert/frag path.</p>
+        </a>
+        <a class="tree-card" href="particles-sh.html">
+          <div class="num">particles-sh</div>
+          <h3>Particle shaders</h3>
+          <p>Emit, update, render.</p>
+        </a>
+        <a class="tree-card" href="overlay-gizmo.html">
+          <div class="num">overlay-gizmo</div>
+          <h3>Overlay gizmo shaders</h3>
+          <p>Editor/debug gizmo vert+frag.</p>
+        </a>
+        <a class="tree-card" href="rt-shaders.html">
+          <div class="num">rt-shaders</div>
+          <h3>RT program family</h3>
+          <p>pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic.</p>
+        </a>
+        <a class="tree-card" href="disabled.html">
+          <div class="num">disabled</div>
+          <h3>Disabled shader archive</h3>
+          <p>shaders/_disabled holds retired experiments — not in active build.</p>
+        </a>
+      </div>
+
+
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

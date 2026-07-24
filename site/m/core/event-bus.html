@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01b · Core · EventBus — OHAO Monograph</title>
+  <meta name="description" content="Thread-safe pub/sub with typed subscribe helpers." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="core/event-bus" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · EventBus</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">core</p>
+          <h1>EventBus</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Thread-safe pub/sub with typed subscribe helpers.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="prose reveal">
+<p>Thread-safe publish/subscribe bus for decoupling systems (physics contacts, UI, tools) without hard module links.</p>
+</div>
+<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="prose reveal">
+<p>subscribe(eventType, handler) → SubscriptionId; unsubscribe by id.</p>
+<p>subscribeTyped&lt;T&gt; wraps any_cast and skips bad casts.</p>
+<p>ScopedSubscription is move-only RAII unsubscribe.</p>
+<p>EventBus::instance() is a process-wide convenience; inject a bus in tests.</p>
+<ul>
+<li>subscribe(eventType, handler) → SubscriptionId</li>
+<li>subscribeTyped&lt;T&gt; skips bad any_casts</li>
+<li>publish / publishTyped</li>
+<li>ScopedSubscription RAII unsubscribe</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="prose reveal">
+<p>Physics and audio should not #include each other; events carry typed payloads across boundaries.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>string_view keys at API; owned strings in map</li>
+<li>ScopedSubscription moves only</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="prose reveal">
+<p>event_bus.hpp: defines `class EventBus`.</p>
+<p>event_bus.hpp: defines `struct Subscription`.</p>
+<p>event_bus.hpp: defines `class ScopedSubscription`.</p>
+<p>Thread-safe publish/subscribe bus.</p>
+<p>Art notes: - Event type keys are string_view at the API; owned std::string in the map.</p>
+<ul>
+<li>ScopedSubscription is move-only RAII unsubscribe.</li>
+<li>publishTyped/subscribeTyped reduce std::any boilerplate for known T.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/core/event_bus.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/event_bus.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="types-concepts.html"><div class="label">← Prev</div><div class="title">Types &amp; concepts</div></a><a class="next" href="command-result.html"><div class="label">Next →</div><div class="title">Command history &amp; Result</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>12 · Build & run — OHAO Monograph</title>
+  <meta name="description" content="Full build graph, options, examples, goldens, Pages." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="build" data-root="..">
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 12 · Build & run</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">12</div>
+        <div>
+          <p class="chapter-kicker">Systems · full depth</p>
+          <h1>Build &amp; run</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>From empty build dir to verified pixels and a published monograph: CMake options, targets, shader compile, examples, goldens, Pages workflow.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#cfg">Configure &amp; build</a></li>
+          <li><a href="#opt">CMake options</a></li>
+          <li><a href="#graph">Target / lib graph</a></li>
+          <li><a href="#sh">Shaders</a></li>
+          <li><a href="#ex">Examples</a></li>
+          <li><a href="#test">Tests &amp; goldens</a></li>
+          <li><a href="#pages">GitHub Pages</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="cfg">Configure &amp; build</h2></div>
+      <div class="listing reveal"><div class="listing-bar"><span>shell</span></div>
+<pre>cmake -B build -S . -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+cmake --build build -j$(nproc)
+cmake --build build --target shaders
+# optional
+ctest --test-dir build --output-on-failure</pre></div>
+      <div class="prose reveal"><p>Requires: CMake ≥3.20, C++20 compiler, Vulkan SDK, GPU driver with RT for path tracing. FetchContent pulls gtest, stb, and other deps on first configure.</p></div>
+
+      <div class="section-rule"><h2 id="opt">CMake options</h2></div>
+      <table class="data-table compact reveal">
+        <thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td><code>OHAO_NRD</code></td><td>ON</td><td>NRD integration; OFF → empty stubs</td></tr>
+          <tr><td><code>OHAO_DLSS</code></td><td>if NGX lib present</td><td>DLSS-RR; OFF → no NGX link</td></tr>
+          <tr><td><code>BUILD_*_TESTS</code></td><td>various</td><td>engine/physics/audio/renderer tests</td></tr>
+          <tr><td><code>BUILD_PYTHON_BINDINGS</code></td><td>OFF</td><td>optional physics python</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-rule"><h2 id="graph">Target / lib graph</h2></div>
+      <div class="prose reveal">
+        <p>Mental model: <code>ohao_core</code> ← scene / physics / audio; GPU + renderer libs link Vulkan + RT/deferred; examples link the stack into <code>cornell_box</code>, <code>model_viewer</code>, <code>env_demo</code>, <code>interactive</code>, <code>turntable</code>, … Artifacts land in <code>build/</code> (Debug often <code>*d</code> suffixes).</p>
+      </div>
+
+      <div class="section-rule"><h2 id="sh">Shaders</h2></div>
+      <div class="prose reveal">
+        <p><code>shaders/</code> CMake + <code>compile_shaders.sh</code> produce SPIR-V under <code>build/shaders</code> / <code>bin/shaders</code>. PathTracer searches several relative paths for SPVs at runtime. Sampler type is a raygen specialization constant at pipeline create.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="ex">Examples (the exercises)</h2></div>
+      <table class="data-table compact reveal">
+        <thead><tr><th>Binary</th><th>What it proves</th></tr></thead>
+        <tbody>
+          <tr><td><code>cornell_box</code></td><td>PT still / deferred hybrid smoke; goldens</td></tr>
+          <tr><td><code>model_viewer</code></td><td>GLB/FBX + spp + mode; default 1080p</td></tr>
+          <tr><td><code>env_demo</code></td><td>HDRI + OIDN path</td></tr>
+          <tr><td><code>interactive</code></td><td>GLFW live; <code>--denoise=nrd</code></td></tr>
+          <tr><td><code>turntable</code></td><td>Frame sequences</td></tr>
+        </tbody>
+      </table>
+      <div class="listing reveal"><div class="listing-bar"><span>examples</span></div>
+<pre>./build/cornell_box out.png 1024
+./build/cornell_box out.png 1 deferred
+./build/model_viewer model.glb out.png 256
+./build/env_demo model.glb env.hdr out.png 256
+./build/interactive model.glb env.hdr --denoise=nrd</pre></div>
+
+      <div class="section-rule"><h2 id="test">Tests &amp; goldens</h2></div>
+      <div class="prose reveal">
+        <p>Unit/integration: engine, physics, audio, renderer. Goldens: <code>tests/golden/</code> cornell + metal_rough_spheres; pre-push hook when enabled. STATUS.md is the evidence matrix — update with pixels, not hope.</p>
+      </div>
+      <div class="section-rule"><h2 id="pages">GitHub Pages</h2></div>
+      <div class="prose reveal">
+        <p>Workflow <code>.github/workflows/pages.yml</code> stages <code>site/</code>, resolves media symlinks, <strong>excludes inverse research media</strong>, fails if inverse product strings appear in HTML, deploys with Actions. Enable: Settings → Pages → GitHub Actions. Local: <code>cd site && python3 -m http.server 8765</code>. Details: <code>site/DEPLOY.md</code>.</p>
+      </div>
+      <div class="section-rule"><h2>Monograph self-check</h2></div>
+      <div class="listing reveal"><div class="listing-bar"><span>shell</span></div>
+<pre>python3 site/tests/test_monograph_structure.py</pre></div>
+
+      <nav class="pager">
+        <a href="physics.html"><div class="label">← Previous</div><div class="title">11 · Physics</div></a>
+        <a class="next" href="status.html"><div class="label">Next →</div><div class="title">13 · Status</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

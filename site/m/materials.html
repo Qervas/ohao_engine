@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>04 · Materials & PBR — OHAO Monograph</title>
+  <meta name="description" content="Full material pipeline CPU→GPU, GGX, lights, dual consumers." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="materials" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 04 · Materials & PBR</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">04</div>
+        <div>
+          <p class="chapter-kicker">Foundations · full depth</p>
+          <h1>Materials &amp; PBR</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>Follow one material from a GLB field all the way into GBuffer lighting and path-tracer NEE — pack layout, BRDF math as coded, light structs, and the failure modes when the two pipelines disagree.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#pipe">End-to-end material pipeline</a></li>
+          <li><a href="#cpu">CPU representation</a></li>
+          <li><a href="#tex">Texture upload &amp; bindless indices</a></li>
+          <li><a href="#pack">MaterialGpuPack (SSBO)</a></li>
+          <li><a href="#pc">Deferred push-constant path</a></li>
+          <li><a href="#ggx">GGX / Cook-Torrance as shipped</a></li>
+          <li><a href="#lights">Light structs &amp; budgets</a></li>
+          <li><a href="#fail">Failure modes</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="pipe">End-to-end material pipeline</h2></div>
+      <figure class="plate reveal">
+        <div class="plate-frame svg-frame" data-no-glossary>
+          <svg data-no-glossary="1" viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg">
+            <text x="30" y="28" fill="#c9a27a" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="2">WORKFLOW · MATERIAL</text>
+            <rect x="20" y="50" width="100" height="70" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="70" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">GLB/FBX</text>
+            <rect x="150" y="50" width="110" height="70" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="205" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Component</text>
+            <rect x="290" y="50" width="110" height="70" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="345" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Bindless</text>
+            <rect x="430" y="50" width="110" height="70" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="485" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Pack SSBO</text>
+            <rect x="570" y="40" width="150" height="45" rx="4" fill="#11141a" stroke="#c9a27a"/><text x="645" y="68" text-anchor="middle" fill="#c9a27a" font-size="12" font-family="DM Sans, system-ui, sans-serif">GBuffer PC</text>
+            <rect x="570" y="95" width="150" height="45" rx="4" fill="#11141a" stroke="#6eb8d4"/><text x="645" y="123" text-anchor="middle" fill="#6eb8d4" font-size="12" font-family="DM Sans, system-ui, sans-serif">closesthit</text>
+            <rect x="750" y="50" width="170" height="70" rx="4" fill="#0a0b0e" stroke="#c9a27a"/><text x="835" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">BRDF shade</text>
+            <text x="480" y="180" text-anchor="middle" fill="#6e685c" font-size="11" font-family="DM Sans, system-ui, sans-serif" letter-spacing="2">FIG. MAT-1  ·  ONE LANGUAGE, TWO CONSUMERS</text>
+          </svg>
+        </div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. MAT-1</span>
+          <p>Loaders never touch Vulkan. Upload + pack is GPU chapter territory; this chapter owns the language both sides speak.</p>
+        </figcaption>
+      </figure>
+      <div class="algo reveal">
+        <div class="algo-bar">Field → shaded pixel</div>
+        <ol>
+          <li>Loader reads baseColor / metallic / roughness / texture URIs (glTF metallic-roughness or Assimp)</li>
+          <li><code>MaterialComponent</code> holds runtime scalars + logical texture names</li>
+          <li>On scene upload: images → <code>BindlessTextureManager</code> → integer indices</li>
+          <li><strong>RT path:</strong> pack 3×vec4 into matColors SSBO; per-triangle matID; closesthit samples</li>
+          <li><strong>Deferred path:</strong> per-draw push constants carry scalars + tex indices; gbuffer.frag samples</li>
+          <li>Lighting or NEE multiplies by BRDF (GGX + Lambert)</li>
+        </ol>
+      </div>
+
+      <div class="section-rule"><h2 id="cpu">CPU representation</h2></div>
+      <div class="prose reveal">
+        <p>Typical fields after load (names vary slightly by loader):</p>
+        <ul>
+          <li><strong>baseColor / albedo</strong> — linear RGB (or sRGB textures sampled then used as albedo)</li>
+          <li><strong>metallic, roughness</strong> — scalars in \([0,1]\); maps multiply later</li>
+          <li><strong>normal map, ORM (occlusion-roughness-metallic), emissive</strong> — optional</li>
+          <li><strong>alpha / cutout</strong> — any-hit path for cards; some OBJ materials filtered entirely</li>
+        </ul>
+      </div>
+      <div class="jargon reveal"><div class="j-term">Jargon · metallic-roughness</div>
+        <p>glTF’s default PBR model: metalness blends dielectric F₀≈0.04 into base color; roughness spreads the specular lobe. OHAO does not use a separate specular-glossiness path as the beauty SoT (though tinygltf can read the extension).</p>
+      </div>
+
+      <div class="section-rule"><h2 id="tex">Texture upload &amp; bindless</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">BindlessTextureManager</div>
+        <ol>
+          <li>Create/update VkImage + view + sampler for each unique texture</li>
+          <li>Write into descriptor array <code>sampler2D textures[]</code> (PT binding 12; GBuffer similar)</li>
+          <li>Store index on material; <code>0xFFFFFFFF</code> means “no texture”</li>
+          <li>Shaders: <code>nonuniformEXT(idx)</code> when indexing dynamically</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why bindless</div>
+        <p>Multi-material GLBs would thrash descriptor sets per draw. One array + indices scales to thousands of textures with one layout.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="pack">MaterialGpuPack — 48 bytes / material</h2></div>
+      <div class="listing reveal"><div class="listing-bar"><span>layout_meta.hpp · rt_build · closesthit</span></div>
+<pre>// matColors[matID * 3 + …]
++0  vec4(baseColor.rgb, asfloat(diffuseTexIdx))
++1  vec4(roughness, metallic, normalTexIdx, emissiveTexIdx)
++2  vec4(roughMetalTexIdx, unused, unused, unused)
+// kNoTexture = 0xFFFFFFFFu
+// static_assert pack == 48 bytes</pre></div>
+      <div class="prose reveal">
+        <p>Texture indices are bit-cast through floats so a single vec4 stream stays std430-friendly. <code>OHAO_ASSERT_GPU_LAYOUT</code> / concepts catch C++ vs GLSL drift at compile time.</p>
+      </div>
+      <div class="decision reveal">
+        <div class="decision-head"><span class="decision-tag">Invariant</span><h4>matID / instance order</h4></div>
+        <div class="decision-body">
+          <p>TLAS instances and material rows are built together in <code>rt_build.cpp</code>. Reordering one list without the other swaps materials across the scene silently.</p>
+        </div>
+      </div>
+
+      <div class="section-rule"><h2 id="pc">Deferred push-constant path</h2></div>
+      <div class="prose reveal">
+        <p>GBuffer draws do not use the full matColors SSBO for every parameter. Per draw (~224–240 B PC under NVIDIA’s 256 B limit):</p>
+        <ul>
+          <li>model, viewProj, prevMVP (velocity)</li>
+          <li>materialParams: metallic, roughness, roughMetalTexIdx, albedoTexIdx</li>
+          <li>albedoColor.rgb + normalTexIdx in .a</li>
+          <li>emissive tex index + strength</li>
+        </ul>
+        <p><code>gbuffer.frag</code> then: sample albedo; optional normal map; if ORM index &lt; 4096 multiply ao/rough/metal (R/G/B); <code>rough = max(rough, 0.04)</code>; write MRT packing (Ch.&nbsp;05).</p>
+      </div>
+
+      <div class="section-rule"><h2 id="ggx">GGX / Cook-Torrance as shipped</h2></div>
+      <div class="prose reveal">
+        <p>File: <code>shaders/includes/brdf/brdf_ggx.glsl</code>. Specular:</p>
+      </div>
+      <div class="math-block reveal">\[
+        D_{\mathrm{GGX}}(h)=\frac{\alpha^{2}}{\pi\bigl((n\!\cdot\!h)^{2}(\alpha^{2}-1)+1\bigr)^{2}},\quad \alpha=\mathrm{roughness}^{2}
+      \]</div>
+      <div class="math-block reveal">\[
+        F_0=\mathrm{lerp}(0.04,c,m),\quad
+        F=F_0+(1-F_0)(1-v\!\cdot\!h)^{5}
+      \]</div>
+      <div class="prose reveal">
+        <p>Geometry: height-correlated Smith (Frostbite-style). Diffuse: Lambert \(c/\pi\) energy-scaled by \((1-m)(1-F)\). Path-tracer NEE evaluates a compatible GGX path in raygen (including optional anisotropy helper). Roughness floor exists so mirrors do not NaN and NRD sign-bits survive.</p>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why GGX</div>
+        <p>Industry default for real-time + offline PBR assets. Matches glTF expectations so DamagedHelmet-class models look “right” without custom artist tuning.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="lights">Light structs &amp; budgets</h2></div>
+      <table class="data-table compact reveal">
+        <thead><tr><th></th><th>Path tracer</th><th>Deferred</th></tr></thead>
+        <tbody>
+          <tr><td>Struct</td><td><code>GPULight</code> 80 B (5×vec4)</td><td><code>LightData</code> 128 B (+ light-space matrix)</td></tr>
+          <tr><td>Count</td><td>up to 64 SSBO</td><td>up to 8 UBO</td></tr>
+          <tr><td>Types</td><td>sphere, dir, spot, area</td><td>dir / point / spot (+ CSM)</td></tr>
+          <tr><td>Env</td><td>miss + CDF IS + MIS</td><td>equirect IBL LOD</td></tr>
+        </tbody>
+      </table>
+      <div class="prose reveal">
+        <p>Same scene lights are repacked differently. Realtime budget is intentional — many-light PT uses NEE sampling; deferred loops a small UBO.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="fail">Failure modes</h2></div>
+      <div class="aside warn reveal"><div class="aside-label">When materials “look wrong”</div>
+        <p><strong>Deferred metal black:</strong> missing IBL / LUT (Ch.&nbsp;05) — not necessarily pack failure.<br/>
+        <strong>Wrong material on mesh:</strong> TLAS/mat order desync.<br/>
+        <strong>Pink/black textures:</strong> bindless index OOB or 0xFFFFFFFF mishandled.<br/>
+        <strong>PT vs deferred mismatch:</strong> different roughness multiply or missing ORM on one path.</p>
+      </div>
+      <div class="file-map reveal">
+        <div class="row"><code>layout_meta.hpp</code><span class="desc">Pack + byte sizes</span></div>
+        <div class="row"><code>brdf/brdf_ggx.glsl</code><span class="desc">D/F/G eval</span></div>
+        <div class="row"><code>gbuffer.frag</code><span class="desc">Deferred sample + MRT</span></div>
+        <div class="row"><code>pt_closesthit.rchit</code><span class="desc">RT sample → payload</span></div>
+        <div class="row"><code>gpu_light.hpp / light_upload.cpp</code><span class="desc">Lights</span></div>
+        <div class="row"><code>bindless_texture_manager.*</code><span class="desc">Indices</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="materials/pbr-model.html">
+          <div class="num">pbr-model</div>
+          <h3>PBR metallic-roughness</h3>
+          <p>F0, ORM convention, roughness floors.</p>
+        </a>
+        <a class="tree-card" href="materials/ggx.html">
+          <div class="num">ggx</div>
+          <h3>GGX implementation</h3>
+          <p>D/F/G terms, Smith correlated, energy helpers.</p>
+        </a>
+        <a class="tree-card" href="materials/pack.html">
+          <div class="num">pack</div>
+          <h3>GPU material pack</h3>
+          <p>3×vec4 matColors, texture bit-cast indices.</p>
+        </a>
+        <a class="tree-card" href="materials/advanced.html">
+          <div class="num">advanced</div>
+          <h3>Advanced material includes</h3>
+          <p>advanced_brdf, material_sampling, material_types.</p>
+        </a>
+        <a class="tree-card" href="materials/lights.html">
+          <div class="num">lights</div>
+          <h3>Lights dual packing</h3>
+          <p>GPULight SSBO (64) vs deferred LightData UBO (8).</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="gpu.html"><div class="label">← Previous</div><div class="title">03 · GPU</div></a>
+        <a class="next" href="deferred.html"><div class="label">Next →</div><div class="title">05 · Deferred</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>11 · Physics — OHAO Monograph</title>
+  <meta name="description" content="Full physics: backend factory, world step, layers, forces, render sync." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="physics" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 11 · Physics</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">11</div>
+        <div>
+          <p class="chapter-kicker">Systems · full depth</p>
+          <h1>Physics</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>Simulation as a pluggable service: factory → backend → world step → component write-back → optional TLAS dirty. Rendering never steps Jolt itself.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#factory">Backend factory</a></li>
+          <li><a href="#iface">IPhysicsBackend surface</a></li>
+          <li><a href="#world">World config &amp; state machine</a></li>
+          <li><a href="#step">Step workflow</a></li>
+          <li><a href="#body">Bodies, shapes, layers</a></li>
+          <li><a href="#force">Forces &amp; constraints</a></li>
+          <li><a href="#char">Character &amp; queries</a></li>
+          <li><a href="#sync">Sync to scene / GPU</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="factory">Backend factory</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">createPhysicsBackend(preferred)</div>
+        <ol>
+          <li>If Jolt compiled and preferred is jolt/auto/empty → try <code>JoltPhysicsBackend</code></li>
+          <li>On exception → log and fall through</li>
+          <li>Else / always available: <code>NullPhysicsBackend</code> (no-op, no crash)</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why null backend</div>
+        <p>Headless CI or machines without physics still run the renderer. “Microservice” isolation: physics failure must not take down the engine.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="iface">IPhysicsBackend surface</h2></div>
+      <div class="prose reveal">
+        <p>Abstract API covers: rigid body lifecycle, transforms, velocities, forces, sleep, shapes, CCD, 16-layer collision matrix, raycast/overlap/shape cast, contact callbacks (thread-safe queue), constraints (fixed/point/hinge/slider/cone/distance/six-DoF), heightfields, character controller. Handles are <code>uint32_t</code> with INVALID sentinels.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="world">World config &amp; state machine</h2></div>
+      <div class="prose reveal">
+        <p><code>PhysicsWorldConfig</code>: gravity (default −9.81 y), timeStep 1/60, maxSubSteps, multithreading, sleeping, CCD, debug flags, maxBodies/constraints. Scene constructor builds a world and initializes with settings.</p>
+        <p>States: STOPPED · RUNNING · PAUSED · STEPPING. Hosts call play/pause/step/stop (and GDScript facades mirror this).</p>
+      </div>
+
+      <div class="section-rule"><h2 id="step">Step workflow</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">PhysicsWorld::step(dt)</div>
+        <ol>
+          <li>If not running/stepping, return</li>
+          <li>Accumulate time; for each substep:</li>
+          <li>Force registry: gravity, springs, drag, volumes, fields…</li>
+          <li>Backend integrate contacts / constraints</li>
+          <li>Drain contact begin/persist/end events to listeners</li>
+          <li>Write transforms back to RigidBody / PhysicsComponent / actors</li>
+          <li>Optional profiler / debug draw data</li>
+        </ol>
+      </div>
+
+      <div class="section-rule"><h2 id="body">Bodies, shapes, layers</h2></div>
+      <div class="prose reveal">
+        <p>Types: dynamic, static, kinematic. Shapes: box, sphere, capsule, cylinder, triangle mesh, heightfield. Layers 0–15 (DEFAULT, STATIC, CHARACTER, TRIGGER, PROJECTILE, …) with pair enable/disable. CCD for fast movers. Mass, friction, restitution, damping, gravity scale.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="force">Forces &amp; constraints</h2></div>
+      <div class="prose reveal">
+        <p>Force generators register on bodies each step (not one-shot impulses only). Constraints build mechanisms: doors (hinge), ragdolls, vehicles. Motors, limits, breakable joints for gameplay.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="char">Character &amp; queries</h2></div>
+      <div class="prose reveal">
+        <p>Capsule character controller with ground state classification. Queries: raycast closest/all, sphere/box overlap, shape casts — layer masks filter results. Grab/throw helpers sit above springs/constraints in higher-level APIs.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="sync">Sync to scene / GPU</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">After physics, before render</div>
+        <ol>
+          <li>Actor world matrices updated from bodies</li>
+          <li>Deferred draws use new model matrices automatically if upload path reads components each frame</li>
+          <li>RT: TLAS instances need update/rebuild if transforms moved — trunk favors static BLAS; dynamic policy is host responsibility</li>
+        </ol>
+      </div>
+      <div class="file-map reveal">
+        <div class="row"><code>backend_factory.cpp</code><span class="desc">Jolt or null</span></div>
+        <div class="row"><code>physics_backend.hpp</code><span class="desc">Full contract</span></div>
+        <div class="row"><code>jolt/jolt_backend.*</code><span class="desc">Production impl</span></div>
+        <div class="row"><code>world/physics_world.*</code><span class="desc">Step · state</span></div>
+        <div class="row"><code>forces/*</code><span class="desc">Generators</span></div>
+        <div class="row"><code>components/physics_component.*</code><span class="desc">Actor bind</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="physics/backend.html">
+          <div class="num">backend</div>
+          <h3>Backend plugin</h3>
+          <p>IPhysicsBackend, factory, null fallback, Jolt.</p>
+        </a>
+        <a class="tree-card" href="physics/world.html">
+          <div class="num">world</div>
+          <h3>PhysicsWorld</h3>
+          <p>Config, state machine, step, body registry.</p>
+        </a>
+        <a class="tree-card" href="physics/bodies.html">
+          <div class="num">bodies</div>
+          <h3>Bodies &amp; shapes</h3>
+          <p>RigidBody, all shape types, factory, PhysicsComponent.</p>
+        </a>
+        <a class="tree-card" href="physics/forces.html">
+          <div class="num">forces</div>
+          <h3>Force generators</h3>
+          <p>Registry, gravity, spring, drag, volumes, fields, presets.</p>
+        </a>
+        <a class="tree-card" href="physics/materials-phys.html">
+          <div class="num">materials-phys</div>
+          <h3>Physics materials</h3>
+          <p>Friction/restitution style materials.</p>
+        </a>
+        <a class="tree-card" href="physics/math-constants.html">
+          <div class="num">math-constants</div>
+          <h3>Physics math &amp; constants</h3>
+          <p>Shared scalars, clamp helpers, math utils.</p>
+        </a>
+        <a class="tree-card" href="physics/debug.html">
+          <div class="num">debug</div>
+          <h3>Force debugger</h3>
+          <p>Debug visualization hooks.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="audio.html"><div class="label">← Previous</div><div class="title">10 · Audio</div></a>
+        <a class="next" href="build.html"><div class="label">Next →</div><div class="title">12 · Build</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

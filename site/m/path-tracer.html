@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer — OHAO Monograph</title>
+  <meta name="description" content="Path tracer monograph with NEE sphere walk, plates, bindings." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="path-tracer" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+    <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 06 · Path tracer</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">06</div>
+        <div>
+          <p class="chapter-kicker">Pipelines · implementation</p>
+          <h1>Path tracer</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>Document the path tracer <em>as coded</em> in <code>pt_raygen.rgen</code>. The deep section below is a line-anchored walk of the analytic <strong>NEE sphere-light branch</strong> — every jargon term, formula, and step answers <em>why</em>.</p>
+      </div>
+
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#host-life">Host lifecycle</a></li>
+          <li><a href="#plates">Plates (real + binding)</a></li>
+          <li><a href="#role">Role</a></li>
+          <li><a href="#stages">Stages A/B/C</a></li>
+          <li><a href="#nee-walk">NEE sphere branch walk</a></li>
+          <li><a href="#bind">Descriptor plate</a></li>
+          <li><a href="#files">Source map</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="host-life">Host lifecycle (before a single ray)</h2></div>
+      <div class="prose reveal">
+        <p class="lead">The path tracer is not constructed in <code>VulkanRenderer::initialize</code>. It appears on demand so 4K dual profiles do not OOM.</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">From mode switch to first pixel</div>
+        <ol>
+          <li>Device + TLAS host already exist (Ch.&nbsp;03)</li>
+          <li>Scene uploaded: VB/IB, matColors, lights, bindless, <code>buildBLASTLAS</code></li>
+          <li><code>setRenderMode(RTOffline|RTRealtime)</code> → <code>ensureRTRenderer(mode)</code></li>
+          <li>Construct PathTracer; <code>init</code> device/instance/queue; allocate beauty + AOV images for width×height</li>
+          <li>Create RT pipeline from SPIR-V (raygen/miss/chit/ahit); build SBT</li>
+          <li>Create descriptor set (bindings 0–35); bind TLAS, buffers, images, CDFs</li>
+          <li>Apply profile settings (bounces, sampler, denoise mode, firefly clamp)</li>
+          <li>Per frame / spp: push constants (invView/invProj, sample index, flags) → <code>traceRays</code></li>
+          <li>Optional denoise (Ch.&nbsp;09); copy to staging / present</li>
+          <li>Camera move → <code>resetAccumulation</code> / notify view changed</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal">
+        <div class="why-label">Why lazy profiles</div>
+        <p>Each PathTracer holds full-resolution HDR + many AOVs. Offline + realtime at once at 4K exhausted 8&nbsp;GiB (Fox.glb hang). Lazy create + 1080p default fixed it.</p>
+      </div>
+      <figure class="plate reveal">
+        <div class="plate-frame svg-frame" data-no-glossary>
+          <svg data-no-glossary="1" viewBox="0 0 920 280" xmlns="http://www.w3.org/2000/svg">
+            <text x="40" y="30" fill="#c9a27a" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="2">WORKFLOW · PATH TRACER HOST</text>
+            <rect x="30" y="60" width="120" height="50" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="90" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Scene up</text>
+            <rect x="180" y="60" width="120" height="50" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="240" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">TLAS</text>
+            <rect x="330" y="60" width="140" height="50" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="400" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">ensureRT</text>
+            <rect x="500" y="60" width="140" height="50" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="570" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Pipeline+SBT</text>
+            <rect x="670" y="60" width="120" height="50" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="730" y="90" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Descriptors</text>
+            <rect x="250" y="150" width="160" height="50" rx="4" fill="#11141a" stroke="#6eb8d4"/><text x="330" y="180" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">traceRays</text>
+            <rect x="440" y="150" width="160" height="50" rx="4" fill="#11141a" stroke="#c9a27a"/><text x="520" y="180" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Denoise</text>
+            <rect x="630" y="150" width="160" height="50" rx="4" fill="#11141a" stroke="#c9a27a"/><text x="710" y="180" text-anchor="middle" fill="#ebe4d6" font-size="13" font-family="Fraunces, Georgia, serif">Readback</text>
+            <text x="460" y="250" text-anchor="middle" fill="#6e685c" font-size="11" font-family="DM Sans, system-ui, sans-serif" letter-spacing="2">FIG. PT-HOST  ·  LAZY CREATE THEN TRACE</text>
+          </svg>
+        </div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. PT-HOST</span>
+          <p>Integrator math (NEE walk below) only runs after this host path succeeds.</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="plates">Visual plates</h2></div>
+      <figure class="plate reveal">
+        <div class="plate-frame">
+          <img src="../assets/plates/cornell_beauty_16spp.png" alt="Cornell box path-traced beauty, real engine export 16 spp + OIDN" />
+        </div>
+        <figcaption class="plate-cap">
+          <span class="plate-id">Plate PT-R1</span>
+          <p><span class="real-badge">Real engine output</span>
+          <strong>Cornell box beauty.</strong> Exported from <code>./build/cornell_box</code> @ 16 spp + OIDN — not AI art.</p>
+        </figcaption>
+      </figure>
+
+      <figure class="plate reveal">
+        <div class="plate-frame">
+          <img src="../assets/concept/nee_sphere_conceptual.jpg" alt="Conceptual diagram of NEE connecting hit to sphere light" />
+        </div>
+        <figcaption class="plate-cap">
+          <span class="plate-id">Plate PT-C1</span>
+          <p><span class="concept-badge">Conceptual illustration — not engine output</span>
+          <strong>NEE idea sketch.</strong> Grok Imagine diagram for intuition only; shading below is from real GLSL.</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="role">Role</h2></div>
+      <div class="prose reveal">
+        <p class="lead">
+          <code>PathTracer</code> is the physical image-formation path for
+          <code>RTOffline</code> / <code>RTRealtime</code>. It estimates the rendering
+          equation by shooting rays, connecting to lights, and accumulating samples.
+        </p>
+      </div>
+      <div class="jargon reveal">
+        <div class="j-term">Jargon · rendering equation</div>
+        <p>The balance of light leaving a surface point: emission plus the integral of incoming light weighted by the BRDF and the cosine to the normal. Path tracing estimates that integral with random samples instead of solving it analytically.</p>
+      </div>
+      <div class="math-block reveal">\[
+        L_o(x,\omega_o)=L_e(x,\omega_o)+\int_{\mathcal{H}} f_r(x,\omega_o,\omega_i)\,L_i(x,\omega_i)\,(\mathbf{n}\!\cdot\!\omega_i)\,d\omega_i
+      \]</div>
+      <div class="why-callout reveal">
+        <div class="why-label">Why this equation</div>
+        <p>It is the definition of “correct” lighting for opaque surfaces. Offline profiles chase it with more bounces and better samplers; realtime profiles approximate it under a time budget.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="stages">Integrator stages</h2></div>
+      <div class="stage-stack reveal">
+        <div class="stage ray"><div class="stage-id">Stage A</div><h4>Primary + first hit + direct NEE</h4>
+          <p>Camera ray, material unpack, AOV write, then analytic light connection (this chapter’s deep walk).</p></div>
+        <div class="stage"><div class="stage-id">Stage B</div><h4>Specular indirect chain</h4>
+          <p>GGX-oriented bounces; NEE/env attribute to <code>specContrib</code>.</p></div>
+        <div class="stage ray"><div class="stage-id">Stage C</div><h4>Diffuse indirect chain</h4>
+          <p>Cosine hemisphere; contributions to <code>diffContrib</code>.</p></div>
+      </div>
+      <div class="why-callout reveal">
+        <div class="why-label">Why dual-lobe split</div>
+        <p>Denoisers (NRD/DLSS) need separate diffuse and specular statistics and hit distances. One mixed path makes demodulation ambiguous.</p>
+      </div>
+
+      <!-- ===================== NEE WALK ===================== -->
+      <div class="section-rule"><h2 id="nee-walk">Deep walk · NEE sphere branch</h2></div>
+      <div class="prose reveal">
+        <p class="lead">
+          Source: <code>shaders/rt/pt_raygen.rgen</code> lines <strong>304–435</strong>
+          (304 = comment; analytic direct NEE body 305–435). We walk the <strong>sphere light</strong>
+          branch only (<code>lightType &lt; 0.5</code> at L327), the general solid-angle case.
+        </p>
+      </div>
+
+      <div class="jargon reveal">
+        <div class="j-term">Jargon · NEE (Next Event Estimation)</div>
+        <p>Instead of hoping a random bounce hits a light, we <em>explicitly sample a point on a light</em> and cast a shadow ray to test visibility. That direct connection is the “next event.” Without NEE, small bright lights are almost never hit by pure BSDF sampling → noisy or black direct lighting.</p>
+      </div>
+      <div class="jargon reveal">
+        <div class="j-term">Jargon · PDF (probability density function)</div>
+        <p>How likely a continuous random choice was. Monte Carlo divides the contribution by the PDF so rare samples are not under-counted and common samples are not over-counted. Units matter: solid-angle vs area measures must match.</p>
+      </div>
+      <div class="jargon reveal">
+        <div class="j-term">Jargon · throughput</div>
+        <p>The running product of “how much light survives” along a path (BRDF × cosine / PDF factors). At bounce 0 after the primary hit, throughput is still 1 before we multiply the direct term.</p>
+      </div>
+      <div class="jargon reveal">
+        <div class="j-term">Jargon · MIS (multiple importance sampling)</div>
+        <p>When two strategies can sample the same light path (e.g. “sample the light” vs “sample the BRDF”), MIS blends them with weights from their PDFs so neither strategy alone blows variance. Sphere NEE at bounce 0 here uses explicit light pick + count factor; env sampling nearby uses power/balance heuristics (Ch.&nbsp;07).</p>
+      </div>
+
+      <!-- Step 1 pick light -->
+      <div class="nee-step reveal">
+        <div class="nee-step-head"><span class="sn">L305–310</span><h4>Step 1 · Pick a light uniformly</h4></div>
+        <div class="nee-step-body">
+          <p>Line <strong>304</strong> is only the section comment. The branch starts at <strong>305</strong>: if any lights exist, pick one index with a 1D sample (306), advance the sampler dim (307), clamp (308), load <code>GPULight</code> (310).</p>
+          <div class="dual-pane">
+            <div class="pane">
+              <div class="pane-bar">GLSL · pt_raygen.rgen (exact lines)</div>
+              <pre><span class="ln">304</span><span class="cm">// ==== Analytic direct NEE at bounce 0 ====</span>
+<span class="ln">305</span><span class="kw">if</span> (lightBuf.lightCount &gt; 0u) {
+<span class="ln">306</span>  uint selectedLightIdx = uint(getSample1D(dimIdx) * float(lightBuf.lightCount));
+<span class="ln">307</span>  dimIdx += 1u;
+<span class="ln">308</span>  selectedLightIdx = min(selectedLightIdx, lightBuf.lightCount - 1u);
+<span class="ln">310</span>  GPULight light = lightBuf.lights[selectedLightIdx];</pre>
+            </div>
+            <div class="pane">
+              <div class="pane-bar">Formula</div>
+              <div class="math-block">\[
+                i \sim \mathrm{Uniform}\{0,\ldots,N_L-1\}
+              \]</div>
+            </div>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why uniform over lights</div>
+            <p>Simple and unbiased given a later ×N<sub>L</sub> factor. Smarter light picking (power-proportional) is a future variance win; uniform is correct and easy to validate.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 decode -->
+      <div class="nee-step reveal">
+        <div class="nee-step-head"><span class="sn">L312–322</span><h4>Step 2 · Decode light + emission density</h4></div>
+        <div class="nee-step-body">
+          <p>Read type, center, color, intensity, radius. Sphere surface area \(A=4\pi r^{2}\). Convert artist “color×intensity” into radiance density \(L_e\) by dividing by area so bigger spheres are not infinitely brighter per steradian.</p>
+          <div class="dual-pane">
+            <div class="pane">
+              <div class="pane-bar">GLSL</div>
+              <pre><span class="ln">312</span>float lightType = light.positionAndType.w;
+<span class="ln">313</span>vec3 lightCenter = light.positionAndType.xyz;
+<span class="ln">314</span>vec3 lightColor = light.colorAndIntensity.rgb;
+<span class="ln">315</span>float lightIntensity = light.colorAndIntensity.w;
+<span class="ln">316</span>float lightRadius = light.dirAndParam.w;
+<span class="ln">320</span>float r = max(lightRadius, <span class="num">0.01</span>);
+<span class="ln">321</span>float area = <span class="num">4.0</span> * <span class="num">3.14159</span> * r * r;
+<span class="ln">322</span>vec3 Le = lightColor * lightIntensity / max(area, <span class="num">0.01</span>);</pre>
+            </div>
+            <div class="pane">
+              <div class="pane-bar">Formula</div>
+              <div class="math-block">\[
+                A=4\pi r^{2},\quad
+                L_e=\frac{c\cdot I}{A}
+              \]</div>
+            </div>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why divide by area</div>
+            <p>We will later multiply by the geometry term that includes area. Keeping \(L_e\) as “radiance-like density” matches the sphere surface sampling measure. The 0.01 floors avoid division by zero for degenerate radii.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3 sample sphere -->
+      <div class="nee-step reveal">
+        <div class="nee-step-head"><span class="sn">L327–343</span><h4>Step 3 · Sphere branch: sample surface point</h4></div>
+        <div class="nee-step-body">
+          <p>Only when <code>lightType &lt; 0.5</code> (sphere). Uniform sample on the unit sphere, scale by radius, form light point and outward normal (radial). Direction \(L\) from hit to that point; weight uses foreshortening on the light and inverse-square.</p>
+          <div class="dual-pane">
+            <div class="pane">
+              <div class="pane-bar">GLSL · sphere branch</div>
+              <pre><span class="ln">327</span><span class="kw">if</span> (lightType &lt; <span class="num">0.5</span>) {
+<span class="ln">328</span>  vec2 u12 = getSample2D(dimIdx); dimIdx += 2u;
+<span class="ln">330</span>  float cosTheta = <span class="num">1.0</span> - <span class="num">2.0</span> * u1;
+<span class="ln">331</span>  float sinTheta = sqrt(max(<span class="num">0.0</span>,
+<span class="ln">331</span>      <span class="num">1.0</span> - cosTheta*cosTheta));
+<span class="ln">332</span>  float phi = <span class="num">6.2831853</span> * u2;
+<span class="ln">334</span>  vec3 offset = vec3(sinTheta*cos(phi),
+<span class="ln">334</span>      sinTheta*sin(phi), cosTheta) * r;
+<span class="ln">335</span>  vec3 lightPoint = lightCenter + offset;
+<span class="ln">336</span>  vec3 lightNormal = normalize(offset);
+<span class="ln">337</span>  vec3 toLight = lightPoint - hitPos;
+<span class="ln">338</span>  float lightDist = length(toLight);
+<span class="ln">339</span>  L = toLight / lightDist;
+<span class="ln">340</span>  float lightCos = max(dot(-L, lightNormal), <span class="num">0.0</span>);
+<span class="ln">341</span>  float lightArea = <span class="num">4.0</span>*<span class="num">3.14159</span>*r*r;
+<span class="ln">342</span>  weight = lightCos * lightArea / (lightDist * lightDist); <span class="cm">// ÷ d²</span>
+<span class="ln">343</span>  shadowDist = lightDist - <span class="num">0.02</span>;
+<span class="ln">344</span>}</pre>
+            </div>
+            <div class="pane">
+              <div class="pane-bar">Formula · area → solid angle factor</div>
+              <div class="math-block">\[
+                d=\|y-x\|=\texttt{lightDist},\quad
+                \omega=\frac{y-x}{d},\quad
+                w=\frac{|\mathbf{n}_L\!\cdot\!(-\omega)|\,A}{d^{2}}
+              \]</div>
+              <p class="math-note" style="margin:0.6rem 0 0;text-align:left;max-width:none">Sphere <em>radius</em> is \(r\) (used only in \(A=4\pi r^{2}\)). Distance to the sample is \(d=\texttt{lightDist}\). GLSL divides by <code>lightDist * lightDist</code> — never by \(r^{2}\).</p>
+            </div>
+          </div>
+          <div class="jargon">
+            <div class="j-term">Jargon · solid angle / geometry term</div>
+            <p>How big a surface patch looks from the shading point. The factor \(A\,|\cos|/d^{2}\) with distance \(d=\|y-x\|\) (not the sphere radius \(r\)) converts a uniform area sample into solid-angle measure. If the back of the sphere faces you, \(\cos\le0\) and weight is zero — no contribution from that hemisphere of the light surface.</p>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why sample the whole sphere (not the visible disk only)</div>
+            <p>Implementation simplicity and a single code path. The \(\max(\mathbf{n}_L\cdot(-\omega),0)\) kills back-facing samples. Visible-disk sampling would lower variance but needs more geometry math; this branch prioritizes correctness and readability.</p>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why shadowDist = dist − 0.02</div>
+            <p>Trace slightly short of the light surface so the ray does not self-hit the light geometry as an “occluder.” Epsilon tradeoff: too large → light leaks/gaps; too small → acne.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4 shadow -->
+      <div class="nee-step reveal">
+        <div class="nee-step-head"><span class="sn">L385–392</span><h4>Step 4 · Shadow ray (visibility)</h4></div>
+        <div class="nee-step-body">
+          <p>Only if surface faces the light (<code>NdotL &gt; 0</code>) and weight is positive. Trace with terminate-on-first-hit and skip closest-hit for speed. Miss convention: <code>payload.hitDist &lt; 0</code> means visible.</p>
+          <div class="dual-pane">
+            <div class="pane">
+              <div class="pane-bar">GLSL</div>
+              <pre><span class="ln">385</span>float NdotL = max(dot(N, L), <span class="num">0.0</span>);
+<span class="ln">387</span><span class="kw">if</span> (NdotL &gt; <span class="num">0.0</span> &amp;&amp; weight &gt; <span class="num">0.0</span>) {
+<span class="ln">388</span>  payload.hitDist = <span class="num">999.0</span>;
+<span class="ln">389</span>  traceRayEXT(topLevelAS,
+<span class="ln">390</span>    TerminateOnFirstHit | Opaque
+<span class="ln">390</span>    | SkipClosestHit,
+<span class="ln">392</span>    hitPos + N*<span class="num">0.01</span>, <span class="num">0.001</span>, L, shadowDist, 0);</pre>
+            </div>
+            <div class="pane">
+              <div class="pane-bar">Formula</div>
+              <div class="math-block">\[
+                V=\begin{cases}1 & \text{miss}\\0 & \text{any hit}\end{cases}
+              \]</div>
+            </div>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why these ray flags</div>
+            <p><strong>TerminateOnFirstHit</strong> stops at the first occluder — we only need yes/no visibility. <strong>SkipClosestHit</strong> skips material shading on the occluder — pure intersection test. Origin bias \(N\cdot 0.01\) reduces self-shadow acne on the shading surface.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5 shade -->
+      <div class="nee-step reveal">
+        <div class="nee-step-head"><span class="sn">L394–432</span><h4>Step 5 · BRDF × light × weight × N_L</h4></div>
+        <div class="nee-step-body">
+          <p>On miss (visible), evaluate microfacet GGX specular + Lambert diffuse, multiply by \(L_e\), \(N\cdot L\), geometry weight, and light count. Split into demod diffuse/specular for NRD. Optional firefly clamp in realtime.</p>
+          <div class="dual-pane">
+            <div class="pane">
+              <div class="pane-bar">GLSL (abridged)</div>
+              <pre><span class="ln">409</span>vec3 spec = D*F*G / (<span class="num">4</span>*NdotV*NdotL + eps);
+<span class="ln">411</span>vec3 diff = kD * albedo / PI;
+<span class="ln">414</span>vec3 direct =
+<span class="ln">414</span>  Le * (diff+spec) * NdotL * weight
+<span class="ln">414</span>  * float(lightBuf.lightCount);
+<span class="ln">419</span>radiance += direct;
+<span class="ln">422</span>vec3 neeCommon = Le * NdotL * weight
+<span class="ln">422</span>  * float(lightBuf.lightCount);
+<span class="ln">423</span>diffContrib += neeCommon * diff;
+<span class="ln">424</span>specContrib += neeCommon * spec;</pre>
+            </div>
+            <div class="pane">
+              <div class="pane-bar">Formula</div>
+              <div class="math-block">\[
+                L_{\mathrm{NEE}}=L_e\,f_r\,(n\!\cdot\!\ell)\,w\cdot N_L\cdot V
+              \]</div>
+            </div>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why multiply by light count \(N_L\)</div>
+            <p>We picked one light with probability \(1/N_L\). Unbiased estimators divide by the PDF of the discrete choice — equivalent to multiplying by \(N_L\). Forget this factor and the scene is \(N_L\times\) too dark.</p>
+          </div>
+          <div class="why-callout">
+            <div class="why-label">Why split diff/spec here</div>
+            <p>Same NEE sample feeds two AOV buckets so REBLUR/DLSS can denoise lobes separately. Beauty still sums both.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="aside note reveal">
+        <div class="aside-label">Other branches (same function)</div>
+        <p>Directional (<code>type &lt; 1.5</code>): fixed direction, weight=1, long shadow. Spot: sphere-like sample × cone falloff². Area: bilinear on edge1×edge2. Same shadow + BRDF tail.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="bind">Full-page binding plate</h2></div>
+      <figure class="plate fullpage reveal">
+        <div class="plate-frame">
+          <img src="../assets/plates/pt_bindings.svg" alt="Full path tracer descriptor binding map" />
+        </div>
+        <figcaption class="plate-cap">
+          <span class="plate-id">Fig. BIND-1</span>
+          <p><strong>Descriptor set 0.</strong> Shipped bindings <strong>0–35</strong> from <code>path_tracer_descriptors.cpp</code> (ReSTIR 29–34, DLSS-RR hit-dist 35).</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="files">Source map</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc">NEE L304–435 · stages A/B/C</span></div>
+        <div class="row"><code>path_tracer_descriptors.cpp</code><span class="desc">Binding layout</span></div>
+        <div class="row"><code>gpu_light.hpp</code><span class="desc">80-byte light struct</span></div>
+        <div class="row"><code>rt_settings.hpp / rt_meta.hpp</code><span class="desc">Profiles · traits</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="path-tracer/host.html">
+          <div class="num">host</div>
+          <h3>Host lifecycle</h3>
+          <p>ensureRTRenderer, images, pipeline, SBT, descriptors.</p>
+        </a>
+        <a class="tree-card" href="path-tracer/profiles.html">
+          <div class="num">profiles</div>
+          <h3>Profiles &amp; meta</h3>
+          <p>RTRenderSettings, Realtime vs Offline traits.</p>
+        </a>
+        <a class="tree-card" href="path-tracer/as.html">
+          <div class="num">as</div>
+          <h3>Acceleration structures</h3>
+          <p>BLAS/TLAS API, rebuild vs update.</p>
+        </a>
+        <a class="tree-card" href="path-tracer/raygen.html">
+          <div class="num">raygen</div>
+          <h3>Raygen integrator</h3>
+          <p>Stages A/B/C, NEE, dual-lobe, AOV writes.</p>
+        </a>
+        <a class="tree-card" href="path-tracer/hit-miss.html">
+          <div class="num">hit-miss</div>
+          <h3>Hit &amp; miss shaders</h3>
+          <p>closesthit materials, anyhit alpha, miss env.</p>
+        </a>
+        <a class="tree-card" href="path-tracer/bindings.html">
+          <div class="num">bindings</div>
+          <h3>Descriptor map 0–35</h3>
+          <p>Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</p>
+        </a>
+        <a class="tree-card" href="path-tracer/restir.html">
+          <div class="num">restir</div>
+          <h3>ReSTIR GI reservoirs</h3>
+          <p>Ping-pong reservoir planes on bindings 29–34.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="deferred.html"><div class="label">← Previous</div><div class="title">05 · Deferred</div></a>
+        <a class="next" href="sampling.html"><div class="label">Next →</div><div class="title">07 · Sampling & MIS</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

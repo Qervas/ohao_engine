@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>09 · Denoising — OHAO Monograph</title>
+  <meta name="description" content="Full denoise pipelines OIDN/NRD/DLSS, packing, compose." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="denoise" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 09 · Denoising</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">09</div>
+        <div>
+          <p class="chapter-kicker">Pipelines · full depth</p>
+          <h1>Denoising</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>Denoise is a staged backend after the integrator. This chapter maps offline vs realtime pipelines, resource traits, packing contracts, and compose — enough to debug magenta without guesswork.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#where">Where denoise sits</a></li>
+          <li><a href="#traits">Mode selection &amp; traits</a></li>
+          <li><a href="#oidn">OIDN full path</a></li>
+          <li><a href="#nrd">NRD full path</a></li>
+          <li><a href="#pack">Packing math</a></li>
+          <li><a href="#dlss">DLSS-RR path</a></li>
+          <li><a href="#debug">Debug checklist</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="where">Where denoise sits</h2></div>
+      <figure class="plate reveal">
+        <div class="plate-frame svg-frame" data-no-glossary>
+          <svg data-no-glossary="1" viewBox="0 0 920 160" xmlns="http://www.w3.org/2000/svg">
+            <rect x="20" y="40" width="150" height="60" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="95" y="75" text-anchor="middle" fill="#ebe4d6" font-size="14" font-family="Fraunces, Georgia, serif">traceRays</text>
+            <rect x="200" y="40" width="150" height="60" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="275" y="75" text-anchor="middle" fill="#ebe4d6" font-size="14" font-family="Fraunces, Georgia, serif">AOV pack</text>
+            <rect x="380" y="40" width="150" height="60" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="455" y="75" text-anchor="middle" fill="#ebe4d6" font-size="14" font-family="Fraunces, Georgia, serif">Denoise</text>
+            <rect x="560" y="40" width="150" height="60" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="635" y="75" text-anchor="middle" fill="#ebe4d6" font-size="14" font-family="Fraunces, Georgia, serif">Compose</text>
+            <rect x="740" y="40" width="150" height="60" rx="4" fill="#0a0b0e" stroke="#c9a27a"/><text x="815" y="75" text-anchor="middle" fill="#ebe4d6" font-size="14" font-family="Fraunces, Georgia, serif">Present</text>
+            <text x="460" y="140" text-anchor="middle" fill="#6e685c" font-size="11" font-family="DM Sans, system-ui, sans-serif" letter-spacing="2">FIG. DN-1  ·  AFTER INTEGRATOR</text>
+          </svg>
+        </div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. DN-1</span>
+          <p>Packing errors show up as “denoise bugs” but are often raygen contract bugs.</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="traits">Mode selection &amp; traits</h2></div>
+      <table class="data-table compact reveal">
+        <thead><tr><th>Mode</th><th>Typical use</th><th>Trait needs</th></tr></thead>
+        <tbody>
+          <tr><td>OIDN</td><td>Offline stills</td><td>CPU readback; albedo+normal guides</td></tr>
+          <tr><td>NRD</td><td>Realtime PT</td><td>motion, diff/spec split, Halton jitter</td></tr>
+          <tr><td>DLSS-RR</td><td>Realtime + NGX</td><td>motion, extended guides, hit-dist (binding 35)</td></tr>
+          <tr><td>Atrous</td><td>Internal spatial</td><td>optional motion</td></tr>
+          <tr><td>None</td><td>Debug noise</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <div class="prose reveal">
+        <p><code>RTProfileTraits</code>: offline allows external denoise (OIDN default); realtime enables internal denoise flags / firefly clamp. CLI <code>--denoise=</code> overrides. Changing mode may require image/pipeline features already allocated at PT init.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="oidn">OIDN full path</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">Offline still</div>
+        <ol>
+          <li>Accumulate N spp into HDR beauty (binding 1) + albedo/normal AOVs</li>
+          <li>Readback to CPU (or GPU OIDN path depending on build)</li>
+          <li>OIDN filter with guides</li>
+          <li>Write denoised beauty; tonemap / PNG</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why OIDN offline</div>
+        <p>Best quality/stability for stills and turntables. Too heavy as a default interactive path — that is NRD/DLSS territory.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="nrd">NRD full path</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">Realtime frame</div>
+        <ol>
+          <li>Raygen writes demod diffuse/specular radiance + hit-dist (packed), normal-rough, motion, ViewZ, demod albedo/F0</li>
+          <li>Optional <code>PT_FLAG_ACCUMULATE_AOVS</code> running mean for multi-spp</li>
+          <li>NRD REBLUR (or related) compute dispatches consume packed inputs</li>
+          <li>Write denoised diff/spec (bindings 27–28 on set 0)</li>
+          <li><code>nrd_compose</code>: unpack YCoCg → linear, recombine, env miss fill as configured</li>
+          <li>Cinematic / tonemap modules → presentable beauty</li>
+        </ol>
+      </div>
+
+      <div class="section-rule"><h2 id="pack">Packing math (the contract)</h2></div>
+      <div class="math-block reveal">\[
+        Y=\tfrac14R+\tfrac12G+\tfrac14B,\;
+        C_o=\tfrac12R-\tfrac12B,\;
+        C_g=-\tfrac14R+\tfrac12G-\tfrac14B
+      \]</div>
+      <div class="math-block reveal">\[
+        \widehat d=\mathrm{saturate}\!\left(\frac{d}{(A+|z|B)\,\mathrm{mix}(C,1,\alpha^{2})}\right)
+      \]</div>
+      <div class="prose reveal">
+        <p><code>nrdPackRadianceHitDist</code> → <code>vec4(YCoCg, normHitDist)</code>. Normals via rotated-oct + roughness carrying \(n_z\) sign. Compose must call unpack. <strong>Magenta helmet:</strong> linear RGB written where YCoCg expected.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="dlss">DLSS-RR path</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">When OHAO_DLSS + NGX ok</div>
+        <ol>
+          <li>Device must have advertised NVX/push-descriptor exts at createLogicalDevice</li>
+          <li>PT flag DLSSRR may repack normalAOV as (N, roughness)</li>
+          <li>Binding 35: specular hit-distance guide</li>
+          <li>NGX eval; on failure fall back to raw / other denoise</li>
+        </ol>
+      </div>
+
+      <div class="section-rule"><h2 id="debug">Debug checklist</h2></div>
+      <div class="aside warn reveal"><div class="aside-label">Before blaming the denoise library</div>
+        <p>1) Inspect pre-denoise AOVs (neutral?). 2) Confirm mode traits (motion present?). 3) Confirm pack/unpack pair. 4) Confirm resolution matches. 5) Only then upgrade NRD/OIDN versions.</p>
+      </div>
+      <div class="file-map reveal">
+        <div class="row"><code>oidn_denoise.*</code><span class="desc">OIDN</span></div>
+        <div class="row"><code>nrd_denoise.* / nrd_compose.* / nrd_cinematic.*</code><span class="desc">Realtime chain</span></div>
+        <div class="row"><code>nrd_frontend.glsl</code><span class="desc">Pack/unpack</span></div>
+        <div class="row"><code>dlss_rr.*</code><span class="desc">NGX</span></div>
+        <div class="row"><code>rt_meta.hpp / denoise_types.*</code><span class="desc">Traits · modes</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="denoise/types.html">
+          <div class="num">types</div>
+          <h3>Denoise modes &amp; traits</h3>
+          <p>DenoiseMode enum + DenoiseModeTraits resource needs.</p>
+        </a>
+        <a class="tree-card" href="denoise/oidn.html">
+          <div class="num">oidn</div>
+          <h3>OIDN</h3>
+          <p>Offline guided denoise path.</p>
+        </a>
+        <a class="tree-card" href="denoise/nrd.html">
+          <div class="num">nrd</div>
+          <h3>NRD REBLUR + compose</h3>
+          <p>Pack YCoCg, dispatch, unpack compose, cinematic post.</p>
+        </a>
+        <a class="tree-card" href="denoise/dlss.html">
+          <div class="num">dlss</div>
+          <h3>DLSS Ray Reconstruction</h3>
+          <p>NGX dlssd init, guides, binding 35 hit-dist.</p>
+        </a>
+        <a class="tree-card" href="denoise/atrous.html">
+          <div class="num">atrous</div>
+          <h3>À-trous / SVGF-style</h3>
+          <p>Internal spatial/temporal denoise compute.</p>
+        </a>
+        <a class="tree-card" href="denoise/cinematic.html">
+          <div class="num">cinematic</div>
+          <h3>Cinematic RT post</h3>
+          <p>Bloom extract/blur, DoF, composite after NRD.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="hybrid.html"><div class="label">← Previous</div><div class="title">08 · Hybrid</div></a>
+        <a class="next" href="audio.html"><div class="label">Next →</div><div class="title">10 · Audio</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>
