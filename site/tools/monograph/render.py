@@ -55,13 +55,14 @@ def _sources_footer(paths: list[str]) -> str:
     )
 
 
-def _on_this_page(headings: list[tuple[str, str]]) -> str:
+def _on_this_page(headings: list[tuple[str, str]], has_sources: bool) -> str:
     if not headings:
         return ""
     items = "".join(f'<li><a href="#{slug}">{esc(title)}</a></li>' for slug, title in headings)
+    sources_item = '<li><a href="#sources">Sources</a></li>' if has_sources else ""
     return (
         '      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>\n'
-        f'        <ol>{items}<li><a href="#sources">Sources</a></li></ol>\n'
+        f'        <ol>{items}{sources_item}</ol>\n'
         "      </nav>"
     )
 
@@ -96,7 +97,7 @@ def render_leaf(module: str, child: dict, hub: str | None) -> str:
         <div class="label">Design unit</div>
         <p>{esc(child["summary"])}</p>
       </div>
-{_on_this_page(headings)}
+{_on_this_page(headings, bool(footer_paths))}
 
 {body_html}
 {_sources_footer(footer_paths)}

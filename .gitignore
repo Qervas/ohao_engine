@@ -94,3 +94,20 @@ tools/inverse_c1/checkpoints/*.pt
 tools/inverse_c1/checkpoints/**/*.pt
 tools/inverse_c1/checkpoints/**/*.log
 tools/inverse_c1/checkpoints/**/history.json
+
+# --- monograph: heavy binaries & generated caches (not tracked) ---
+/assets/hdri/
+/assets/complex_scenes/
+/assets/normal_humans/
+/assets/photoreal_humans/
+/assets/showcase_objects/
+/bin/
+/demo/
+/out.png
+/helmet.png
+/smoke_test.png
+/tests/golden/*.actual.png
+site/media
+site/images
+__pycache__/
+*.pyc
