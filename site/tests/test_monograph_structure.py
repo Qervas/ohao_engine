@@ -54,7 +54,7 @@ class GateTest(unittest.TestCase):
         bad = []
         for p in M.rglob("*.html"):
             html = p.read_text(encoding="utf-8", errors="replace")
-            for m in re.finditer(r'<h2 id="([^"]+)">.*?</h2></div>\s*(.*?)(?=<div class="section-rule"|<div class="aside|</article>)',
+            for m in re.finditer(r'<h2 id="([^"]+)">.*?</h2></div>\s*(.*?)(?=<div class="section-rule"|</article>)',
                                  html, re.S):
                 if not re.sub(r"<[^>]+>|\s", "", m.group(2)):
                     bad.append(f"{p.relative_to(SITE)}#{m.group(1)}")
