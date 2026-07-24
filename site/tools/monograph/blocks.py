@@ -20,7 +20,7 @@ from __future__ import annotations
 import html
 import re
 
-from .cite import CitationError, citation_chip_html
+from .cite import citation_chip_html
 
 _HEADING = re.compile(r"^##\s+(.+?)\s*$")
 _CITE = re.compile(r'^\{\{cite\s+(\S+)\s+"(.+)"\}\}\s*$')
@@ -68,6 +68,7 @@ def _parse_blocks(body: str) -> list[dict]:
     i = 0
     prose: list[str] = []
     bullets: list[str] = []
+    slug_counts: dict[str, int] = {}
 
     def flush_prose():
         nonlocal prose
@@ -89,7 +90,12 @@ def _parse_blocks(body: str) -> list[dict]:
         if m:
             flush_prose(); flush_bullets()
             title = m.group(1)
-            blocks.append({"kind": "heading", "text": title, "slug": _slug(title)})
+            slug = _slug(title)
+            slug_counts[slug] = slug_counts.get(slug, 0) + 1
+            count = slug_counts[slug]
+            if count > 1:
+                slug = f"{slug}-{count}"
+            blocks.append({"kind": "heading", "text": title, "slug": slug})
             i += 1
             continue
 
@@ -103,8 +109,9 @@ def _parse_blocks(body: str) -> list[dict]:
                 i += 1
                 while i < len(lines) and "$$" not in lines[i]:
                     buf.append(lines[i]); i += 1
-                if i < len(lines):
-                    buf.append(lines[i].split("$$")[0])
+                if i >= len(lines):
+                    raise ValueError("blocks: unterminated $$ math block")
+                buf.append(lines[i].split("$$")[0])
                 tex = "\n".join(buf).strip()
             blocks.append({"kind": "math", "tex": tex})
             i += 1
@@ -131,6 +138,8 @@ def _parse_blocks(body: str) -> list[dict]:
             i += 1
             while i < len(lines) and lines[i].strip() != ":::":
                 buf.append(lines[i]); i += 1
+            if i >= len(lines):
+                raise ValueError(f"blocks: unterminated {s} callout")
             blocks.append({"kind": kind, "text": " ".join(x.strip() for x in buf).strip()})
             i += 1
             continue
@@ -143,6 +152,8 @@ def _parse_blocks(body: str) -> list[dict]:
             i += 1
             while i < len(lines) and not _FENCE.match(lines[i]):
                 buf.append(lines[i]); i += 1
+            if i >= len(lines):
+                raise ValueError("blocks: unterminated ``` code fence")
             blocks.append({"kind": "code", "lang": lang, "text": "\n".join(buf)})
             i += 1
             continue
@@ -189,14 +200,16 @@ def _group_sections(blocks: list[dict]) -> list[dict]:
 
 
 def _is_legacy_sourcemap(section: dict) -> bool:
-    txt = " ".join(
-        b.get("text", "") for b in section["blocks"] if b["kind"] in ("prose", "bullets")
-    )
-    joined = " ".join(
-        " ".join(b["items"]) if b["kind"] == "bullets" else b.get("text", "")
+    """True iff some prose block in the section is exactly "Source map:".
+
+    This is the auto-generated legacy source-map list marker; a section is
+    only dropped when it contains that exact standalone prose line, never on
+    a mere substring match elsewhere in the prose.
+    """
+    return any(
+        b["kind"] == "prose" and b.get("text", "").strip() == "Source map:"
         for b in section["blocks"]
     )
-    return "Source map:" in txt or joined.strip().startswith("Source map:")
 
 
 def _render_block(b: dict, cited: list[str]) -> str:

@@ -83,6 +83,69 @@ class RenderBodyTest(unittest.TestCase):
         self.assertNotIn("Empty", html)
         self.assertIn("Full", html)
 
+    def test_section_merely_mentioning_source_map_still_renders(self):
+        html, headings, _ = blocks.render_body(
+            "---\nid: x\n---\n\n## Real Section\n\n"
+            "This mentions the Source map: idea in passing.\n"
+        )
+        self.assertIn('id="real-section"', html)
+        self.assertIn("<h2", html)
+        self.assertIn(("real-section", "Real Section"), headings)
+
+    def test_legacy_source_map_section_is_dropped(self):
+        html, headings, _ = blocks.render_body(
+            "---\nid: x\n---\n\n## Notes\n\nSource map:\n"
+            "- `some/path.py`\n- `other/path.py`\n"
+        )
+        self.assertNotIn("Notes", html)
+        self.assertNotIn("notes", [slug for slug, _ in headings])
+        self.assertEqual(headings, [])
+
+    def test_unterminated_math_block_raises(self):
+        with self.assertRaises(ValueError):
+            blocks.render_body(
+                "---\nid: x\n---\n\n## S\n\nprose\n\n$$\nF_0 = 0.04\n"
+            )
+
+    def test_unterminated_why_callout_raises(self):
+        with self.assertRaises(ValueError):
+            blocks.render_body(
+                "---\nid: x\n---\n\n## S\n\n:::why\nbecause reasons\n"
+            )
+
+    def test_unterminated_code_fence_raises(self):
+        with self.assertRaises(ValueError):
+            blocks.render_body(
+                "---\nid: x\n---\n\n## S\n\n```glsl\nfloat x = 1.0;\n"
+            )
+
+    def test_duplicate_heading_slugs_are_deduped(self):
+        html, headings, _ = blocks.render_body(
+            "---\nid: x\n---\n\n## Overview\n\nfirst prose\n"
+            "\n## Overview\n\nsecond prose\n"
+        )
+        self.assertEqual(
+            headings,
+            [("overview", "Overview"), ("overview-2", "Overview")],
+        )
+        self.assertIn('id="overview"', html)
+        self.assertIn('id="overview-2"', html)
+
+    def test_fenced_code_block_renders(self):
+        html, _, _ = blocks.render_body(
+            "---\nid: x\n---\n\n## S\n\nprose\n\n```glsl\nfloat x = 1.0;\n```\n"
+        )
+        self.assertIn('<pre class="code-block', html)
+        self.assertIn("<code>", html)
+        self.assertIn("float x = 1.0;", html)
+
+    def test_multiline_math_block_renders(self):
+        html, _, _ = blocks.render_body(
+            "---\nid: x\n---\n\n## S\n\nprose\n\n$$\nF_0 = 0.04\n$$\n"
+        )
+        self.assertIn("math-block", html)
+        self.assertIn("F_0 = 0.04", html)
+
 
 class MathGateTest(unittest.TestCase):
     def test_math_section_with_prose_is_ok(self):
