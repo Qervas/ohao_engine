@@ -52,10 +52,18 @@ def main(root: Path) -> int:
 
     hard_pass = []
     for d, m in runs:
+        # Required keys: a missing key must FAIL, never silently skip a check.
+        # show_frames used to be absent from dense_metal metrics, which turned the
+        # show_frames>=12 gate below into a guaranteed no-op for every metal run.
+        missing = [k for k in ("show_wh", "dense_map_res", "show_frames") if m.get(k) is None]
+        if missing:
+            print(f"FAIL {d.name}: metrics missing required key(s): {', '.join(missing)}")
+            return 1
+
         qp = m.get("quality_plate") is True
-        show = m.get("show_wh") or [0, 0]
-        map_res = int(m.get("dense_map_res", 0))
-        frames = int(m.get("show_frames", 0) or 0)
+        show = m.get("show_wh")
+        map_res = int(m["dense_map_res"])
+        frames = int(m["show_frames"])
         preset = str(m.get("preset", d.name.split("_")[0])).lower()
         ok = is_pass(m)
         print(
@@ -71,7 +79,7 @@ def main(root: Path) -> int:
         if map_res < 128:
             print(f"FAIL {d.name}: dense_map_res must be ≥128")
             return 1
-        if frames and frames < 12:
+        if frames < 12:
             print(f"FAIL {d.name}: show_frames too low for clean plate ({frames})")
             return 1
         # Prefer HD show stills present

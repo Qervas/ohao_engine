@@ -453,6 +453,12 @@ struct DenseMetalFitResult {
            << "  \"preset\": \"" << cfg.preset << "\",\n"
            << "  \"fit_wh\": [" << W << ", " << H << "],\n"
            << "  \"show_wh\": [" << showW << ", " << showH << "],\n"
+           // Present in dense_orm/dense_map metrics since 3557cfb; missing here, which
+           // made test_quality_plate.py's show_frames>=12 check a silent no-op for every
+           // dense_metal run (it defaulted the key to 0 and skipped).
+           << "  \"fit_frames\": " << kFrames << ",\n"
+           << "  \"show_frames\": " << showFrames << ",\n"
+           << "  \"n_views\": " << nViews << ",\n"
            << "  \"dense_map_res\": " << mapPx << ",\n"
            << "  \"dense_grid\": " << G << ",\n"
            << "  \"map_upload\": \"in_place_updateTextureFromMemory\",\n"
