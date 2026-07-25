@@ -223,9 +223,10 @@ struct StagedFitter {
         double wSum = 0.0;
         for (int v = 0; v < nViews; ++v) {
             if (static_cast<size_t>(v) >= targets.size()) continue;
-            // Lab trains against capture stills (exported without denoise).
-            const DenoiseMode dm =
-                (!cfg.labBundle.empty()) ? DenoiseMode::None : DenoiseMode::None;
+            // Fit-loop renders are never denoised (lab or synthetic): the loss
+            // must see the raw estimator, and lab targets are capture stills
+            // exported without denoise.
+            const DenoiseMode dm = DenoiseMode::None;
             ImageRGBA8 img = session.render(v, budget, cfg.seed, dm);
             if (img.empty() || targets[static_cast<size_t>(v)].empty()) continue;
             if (inv.fitExposure) {

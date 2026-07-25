@@ -263,6 +263,18 @@ namespace ohao::inverse {
         inv.scene.reset();
         return rc;
     }
+    // tb.nViews is the raw train-row count and throws away the safe bound
+    // computed above. Fail loud rather than re-clamp: if the bundle has more
+    // train rows than the scene has cameras, the extra photos would be fitted
+    // against an arbitrary camera and folded into the reported metric.
+    if (static_cast<size_t>(tb.nViews) > inv.views.size()) {
+        std::cerr << "FATAL: target bundle has " << tb.nViews << " train view(s) but the scene "
+                  << "has only " << inv.views.size()
+                  << " camera view(s). Refusing to fit photos against cameras that do not "
+                     "exist.\n";
+        inv.scene.reset();
+        return 1;
+    }
     nViews = tb.nViews;
     const bool labMode = tb.labMode;
     const bool externalTarget = tb.externalTarget;
@@ -352,8 +364,12 @@ namespace ohao::inverse {
         std::cout << "C1 NN prior loaded from " << cfg.thetaInitPath
                   << "  θ=" << formatTheta(space.values) << "\n";
         if (cfg.preset == "mirror" || cfg.preset == "spheres") {
-            const size_t mi = inv.mapGround ? 13u : 4u;
-            const size_t ri = inv.mapGround ? 12u : 3u;
+            // Derived, not hardcoded: the old literals 13/12 were only correct
+            // for mapRes==2 (tileCount 4 → rough=12, metal=13). Under --map-res 4
+            // (tileCount 16 → rough=48, metal=49) they silently overwrote tile-4's
+            // R/G albedo channels instead of the metal/rough prior.
+            const size_t mi = fit.metalIdx;
+            const size_t ri = fit.roughIdx;
             const double tm = (cfg.preset == "mirror") ? 0.90 : 0.55;
             const double tr = (cfg.preset == "mirror") ? 0.08 : 0.18;
             if (space.size() > mi && space.values[mi] < tm - 0.20) {

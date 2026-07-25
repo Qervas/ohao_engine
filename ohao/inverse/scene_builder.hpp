@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -351,7 +352,20 @@ struct InverseScene {
     void applyTruth() { applyTheta(truthTheta()); }
 
     void applyCamera(Camera& cam, int viewIndex) const {
-        const CameraView& v = views[static_cast<size_t>(viewIndex) % views.size()];
+        // Fail loud: the old `% views.size()` silently substituted a *different,
+        // valid-looking* camera for an out-of-range view. On the real-photo (H3)
+        // path a partial COLMAP registration produces exactly that situation, so
+        // an aliased camera would be trained against a photo and reported as a
+        // confident PSNR. Clamping would be equally wrong.
+        if (viewIndex < 0 || static_cast<size_t>(viewIndex) >= views.size()) {
+            std::cerr << "FATAL: view index " << viewIndex << " out of range (have "
+                      << views.size() << " camera view(s)). Refusing to alias onto another "
+                         "camera — the scene's view set does not cover this frame.\n";
+            throw std::out_of_range("ohao::inverse::InverseScene::applyCamera: view index " +
+                                    std::to_string(viewIndex) + " >= " +
+                                    std::to_string(views.size()));
+        }
+        const CameraView& v = views[static_cast<size_t>(viewIndex)];
         if (v.hasPose) {
             // Real 6-DOF pose (COLMAP / lab bundle): drive the camera from the
             // full world→view matrix + per-view focal. setViewMatrix wins until

@@ -69,19 +69,32 @@ namespace ohao::inverse {
 // Parse cameras.jsonl into per-index CameraViews. Lines carrying a 16-float
 // "view" matrix become full 6-DOF poses (hasPose=true); other lines keep the
 // legacy position/pitch/yaw fields. Returns true iff ≥1 line had a "view".
+// `err` is set (and the return value is meaningless) when a row is malformed:
+// callers MUST check it and abort. Silently degrading a malformed row to the
+// euler path would point the fit at the wrong camera.
 [[nodiscard]] inline bool parseLabCameraPoses(const std::filesystem::path& camerasJsonl,
-                                              std::vector<CameraView>& poses) {
+                                              std::vector<CameraView>& poses, std::string& err) {
     std::ifstream in(camerasJsonl);
     if (!in) return false;
     bool anyPose = false;
     std::vector<std::pair<int, CameraView>> tmp;
     int maxIdx = -1;
     std::string line;
+    int lineNo = 0;
     while (std::getline(in, line)) {
-        if (line.empty()) continue;
+        ++lineNo;
+        if (line.find('{') == std::string::npos) continue; // blank / CR-only line
         CameraView cv{};
         cv.name = "pose"; // string literal: static storage, safe for const char*
-        const int idx = std::atoi(labJsonScalar(line, "\"index\"").c_str());
+        // "index" must be present: std::atoi("") == 0 would collapse every row
+        // that omits it onto view 0.
+        const std::string idxStr = labJsonScalar(line, "\"index\"");
+        if (idxStr.empty()) {
+            err = "FATAL: " + camerasJsonl.string() + " line " + std::to_string(lineNo) +
+                  " has no \"index\" field (would silently alias onto view 0)";
+            return false;
+        }
+        const int idx = std::atoi(idxStr.c_str());
         // Legacy euler fields (fallback / reference).
         float pos[3] = {0, 0, 0};
         if (labJsonFloatArray(line, "\"position\"", pos, 3) == 3)
@@ -92,9 +105,20 @@ namespace ohao::inverse {
         if (!yaw.empty()) cv.yawDeg = static_cast<float>(std::atof(yaw.c_str()));
         const std::string fov = labJsonScalar(line, "\"fov_deg\"");
         cv.fovDeg = fov.empty() ? 40.0f : static_cast<float>(std::atof(fov.c_str()));
-        // Full 6-DOF view matrix (row-major → glm column-major).
+        // Full 6-DOF view matrix (row-major → glm column-major). If the key is
+        // present it MUST parse as exactly 16 floats — falling through to the
+        // euler path on a truncated/malformed array would fit against a camera
+        // that has nothing to do with the photo.
         float m[16];
-        if (labJsonFloatArray(line, "\"view\"", m, 16) == 16) {
+        const bool hasViewKey = line.find("\"view\"") != std::string::npos;
+        const int nView = labJsonFloatArray(line, "\"view\"", m, 16);
+        if (hasViewKey && nView != 16) {
+            err = "FATAL: " + camerasJsonl.string() + " line " + std::to_string(lineNo) +
+                  " (index=" + std::to_string(idx) + ") has a \"view\" field that parsed as " +
+                  std::to_string(nView) + " floats, expected 16";
+            return false;
+        }
+        if (nView == 16) {
             glm::mat4 M(1.0f);
             for (int r = 0; r < 4; ++r)
                 for (int c = 0; c < 4; ++c) M[c][r] = m[r * 4 + c];
@@ -114,9 +138,14 @@ namespace ohao::inverse {
 // Inject full-pose cameras from a bundle into the scene's `views`, overriding by
 // index. Views without a parsed pose keep the synthetic scene camera at that
 // index (back-compat). Returns the number of poses injected.
-inline int injectLabPoses(InverseScene& inv, const std::filesystem::path& camerasJsonl) {
+// Returns -1 (and fills `err`) on a malformed cameras.jsonl — callers must abort.
+inline int injectLabPoses(InverseScene& inv, const std::filesystem::path& camerasJsonl,
+                          std::string& err) {
     std::vector<CameraView> poses;
-    if (!parseLabCameraPoses(camerasJsonl, poses)) return 0; // legacy bundle: keep synthetic
+    if (!parseLabCameraPoses(camerasJsonl, poses, err)) {
+        if (!err.empty()) return -1;
+        return 0; // legacy bundle: keep synthetic
+    }
     const size_t n = std::max(poses.size(), inv.views.size());
     std::vector<CameraView> merged;
     merged.reserve(n);
@@ -179,7 +208,12 @@ struct FitTargetBundle {
 
     // H3: adopt the bundle's real 6-DOF camera poses (COLMAP path). Lines without
     // a "view" matrix fall back to the synthetic scene cameras (back-compat).
-    const int injected = injectLabPoses(inv, tb.labCap / "cameras.jsonl");
+    std::string poseErr;
+    const int injected = injectLabPoses(inv, tb.labCap / "cameras.jsonl", poseErr);
+    if (injected < 0) {
+        std::cerr << poseErr << "\n";
+        return 1;
+    }
     if (injected > 0)
         std::cout << "Lab bundle: injected " << injected
                   << " full 6-DOF camera pose(s) from cameras.jsonl\n";
@@ -213,9 +247,16 @@ struct FitTargetBundle {
         return s.substr(i, j - i);
     };
     while (std::getline(camIn, line)) {
-        if (line.empty()) continue;
+        if (line.find('{') == std::string::npos) continue; // blank / CR-only line
         CamLine c;
-        c.index = std::atoi(jsonStr(line, "\"index\"").c_str());
+        const std::string idxStr = jsonStr(line, "\"index\"");
+        if (idxStr.empty()) {
+            std::cerr << "FATAL: " << (tb.labCap / "cameras.jsonl")
+                      << " has a row with no \"index\" field (would collapse onto view 0): "
+                      << line << "\n";
+            return 1;
+        }
+        c.index = std::atoi(idxStr.c_str());
         c.file = jsonStr(line, "\"file\"");
         c.split = jsonStr(line, "\"split\"");
         cams.push_back(std::move(c));
@@ -229,6 +270,20 @@ struct FitTargetBundle {
     }
     if (train.empty()) {
         std::cerr << "FATAL: lab bundle has no train views\n";
+        return 1;
+    }
+    // Partial COLMAP registration is a NORMAL outcome (photo_ingest.py emits rows
+    // without an "R_view" when an image fails to register). If ANY row carried a
+    // real pose, then EVERY row must: otherwise the unregistered photos would be
+    // fitted against a leftover synthetic studio camera — or a default-constructed
+    // CameraView at the world origin — and reported as a confident PSNR.
+    if (injected > 0 && injected < static_cast<int>(cams.size())) {
+        std::cerr << "FATAL: lab bundle carries real 6-DOF poses but only " << injected
+                  << " of " << cams.size() << " camera row(s) have one ("
+                  << train.size() << " train + " << hold.size()
+                  << " holdout). Partial registration would fit the unregistered photos "
+                     "against arbitrary cameras. Re-run COLMAP or drop the unregistered "
+                     "rows from cameras.jsonl.\n";
         return 1;
     }
     tb.nViews = static_cast<int>(train.size());

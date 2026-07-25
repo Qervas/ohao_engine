@@ -150,7 +150,12 @@ struct DenseMapFitResult {
         std::filesystem::path labCap;
         std::string err;
         if (resolveLabCapturePath(cfg, labCap, err)) {
-            const int nj = injectLabPoses(inv, labCap / "cameras.jsonl");
+            std::string poseErr;
+            const int nj = injectLabPoses(inv, labCap / "cameras.jsonl", poseErr);
+            if (nj < 0) {
+                std::cerr << poseErr << "\n";
+                return result;
+            }
             std::cout << "  [dense-map] lab bundle poses injected=" << nj << " (full 6-DOF path)\n";
         } else {
             std::cerr << "  [dense-map] WARN: " << err << " (using synthetic cameras)\n";
@@ -550,8 +555,13 @@ struct DenseMapFitResult {
         if (!cfg.labBundle.empty()) {
             std::filesystem::path labCap;
             std::string err;
-            if (resolveLabCapturePath(cfg, labCap, err))
-                (void)injectLabPoses(invShow, labCap / "cameras.jsonl");
+            if (resolveLabCapturePath(cfg, labCap, err)) {
+                std::string poseErr;
+                if (injectLabPoses(invShow, labCap / "cameras.jsonl", poseErr) < 0) {
+                    std::cerr << poseErr << "\n";
+                    return result;
+                }
+            }
         }
         invShow.applyTruth();
         VulkanRenderer showR(plateW, plateH);
