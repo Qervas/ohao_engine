@@ -83,7 +83,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | **H0 — Foundation** | Done | L0–L5 protocol + Diff SoT + hybrid LABTEST |
 | **H1 — Dense materials** | M1a–c landed | Free dense albedo 64/128² + in-place upload |
 | **H2 — Multi-channel + gallery** | M2–M3 landed | ORM.g/b ✅; quality 1080p plate ✅; gallery + ablation ✅ |
-| **H3 — Real capture** | M4a–b photo_proxy ✅; real_phone open | Recipe + PHOTOTEST; real COLMAP shoot next |
+| **H3 — Real capture** | M4a–b photo_proxy ✅; M1 ingestion pipeline ✅ (no shoot yet) | Recipe + PHOTOTEST; ChArUco→metric-pose ingest (`tools/inverse_lab/photo_ingest.py`, `docs/h3_capture_guide.md`) validated on a synthetic rehearsal only — **real photos still not shot** |
 | **H4 — Analytic albedo + FD speedup** | M5a–b landed — ⚠️ *not* differentiable rendering | Analytic ∂L/∂albedo for the linear `I≈A⊙S` case (lighting detached) + FD-check + sparse-FD ~6× vs full FD. Roughness/metallic/lights/PT remain **finite-difference**. |
 | **H5 — Ambition options** | Later / optional | Neural priors, public benches, geometry joint |
 
@@ -346,6 +346,7 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | **M3b** | Ablation table | H2 | M3a | ✅ quality baseline + map/views/hd/lab_fast matrix |
 | **M4a** | Photo capture recipe | H3 | M1b | ✅ `docs/inverse_photo_lab.md` + cameras.jsonl |
 | **M4b** | Photo inverse plate | H3 | M4a, M2a | ✅ photo_proxy + PHOTOTEST + photo_vs_rerender strip |
+| **M4c** | ChArUco photo ingest | H3 | M4a | ✅ tool + synthetic rehearsal gate (center RMSE 1.17 mm, rot ≤0.26°); ⏳ awaiting a real shoot |
 | **M5a** | Analytic albedo grads | H4 | M1b | ✅ GRADCHECK (med rel err ~10–20% vs FD) |
 | **M5b** | Analytic dense optim | H4 | M5a | ✅ linear solve + residual + sparse; ≥10× (~20×) vs 3-pass FD + MAPTEST |
 | **M6*** | Optional tracks | H5 | M4b | Separate RFCs |

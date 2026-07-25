@@ -117,7 +117,16 @@ def brighten_images(src_dir: Path, dst_dir: Path, target_p99: float = 210.0,
 # ── pycolmap SfM ─────────────────────────────────────────────────────────────
 
 def run_sfm(image_dir: Path, work: Path, camera_params: str,
-            use_gpu: bool = False) -> pycolmap.Reconstruction:
+            use_gpu: bool = False, tuning: str = "synthetic") -> pycolmap.Reconstruction:
+    """SIFT -> exhaustive match -> incremental mapping with FIXED intrinsics.
+
+    `tuning` selects the feature/matching regime:
+      "synthetic" (default, M0b) — dark low-contrast renders: darkness adaptivity,
+        many features, permissive Lowe ratio, no cross-check.
+      "photo" (H3/M1 real capture) — real photographs have plenty of texture and
+        contrast, so keep COLMAP's stricter, better-conditioned defaults; only the
+        feature budget is raised. Loosening the ratio here just adds outliers.
+    """
     work.mkdir(parents=True, exist_ok=True)
     db = work / "database.db"
     if db.exists():
@@ -132,12 +141,13 @@ def run_sfm(image_dir: Path, work: Path, camera_params: str,
     # weakly-lit hero. SINGLE camera model matches our one synthetic camera.
     ext = pycolmap.FeatureExtractionOptions()
     ext.use_gpu = use_gpu
-    ext.sift.darkness_adaptivity = True
     ext.sift.max_num_features = 16384
-    ext.sift.peak_threshold = 0.003    # low-contrast synthetic renders
-    ext.sift.edge_threshold = 15.0
-    ext.sift.first_octave = -1
     ext.sift.estimate_affine_shape = False
+    if tuning == "synthetic":
+        ext.sift.darkness_adaptivity = True
+        ext.sift.peak_threshold = 0.003    # low-contrast synthetic renders
+        ext.sift.edge_threshold = 15.0
+        ext.sift.first_octave = -1
 
     # Known-calibrated pinhole camera: we rendered these with a fixed intrinsic,
     # so give COLMAP the true focal + principal point and keep them CONSTANT
@@ -166,9 +176,10 @@ def run_sfm(image_dir: Path, work: Path, camera_params: str,
     match_opts = pycolmap.FeatureMatchingOptions()
     match_opts.use_gpu = use_gpu
     match_opts.guided_matching = True  # use 2-view geometry to densify matches
-    match_opts.sift.max_ratio = 0.95
-    match_opts.sift.max_distance = 0.9
-    match_opts.sift.cross_check = False
+    if tuning == "synthetic":
+        match_opts.sift.max_ratio = 0.95
+        match_opts.sift.max_distance = 0.9
+        match_opts.sift.cross_check = False
     pycolmap.match_exhaustive(
         database_path=db,
         matching_options=match_opts,

@@ -20,6 +20,14 @@
 
 ## 2. Capture recipe (real photos — M4a)
 
+> **M4c update.** The real-photo path is now automated end to end:
+> **[`docs/h3_capture_guide.md`](h3_capture_guide.md)** + `tools/inverse_lab/photo_ingest.py`
+> turn a folder of phone photos of an object on a printed ChArUco board into this
+> bundle format with **metric** poses (board plane = world y=0). Validated on a
+> synthetic ChArUco rehearsal (camera-center RMSE 1.17 mm, rotation ≤ 0.26°);
+> **no real shoot has been ingested yet**. The manual recipe below still describes
+> what to shoot.
+
 ### Minimum viable product shoot
 
 | Item | Spec |
