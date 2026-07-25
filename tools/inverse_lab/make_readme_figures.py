@@ -409,6 +409,10 @@ def write_results() -> Path:
             "Diff dense MAPTEST uses wrong-init cool/high-rough/low-metal vs GT maps; beauty via bindless Deferred.",
             "Quality plate: FIT 960×540, SHOW 1920×1080 @20f, map≥128, multi-view, hard presets.",
             "lab_fast 256×144 is diagnostic only — do not quote as product proof.",
+            "Dense 'relight' = the SAME key light scaled 2.5x. Not novel illumination: no env swap, "
+            "no light moved or added, and the dense paths do not fit lights at all.",
+            "This pack copies whatever metrics JSON is sitting in renders/ — re-run the fits before "
+            "regenerating, or you will republish stale numbers (this happened once; see RESULTS.md T3).",
             "Analytic speedup is vs estimated full 3-pass coordinate FD (same loss eval cost model).",
         ],
         "tables": {
@@ -445,7 +449,10 @@ def write_results() -> Path:
                         "psnr_improve_db": v.get("psnr_improve_db"),
                         "rough_mse_init": v.get("rough_mse_init"),
                         "rough_mse_recovered": v.get("rough_mse_recovered"),
+                        # Withdrawn for any plate run before the 2026-07-25 relight fix — those
+                        # runs measured the training light twice. Re-run the plate to restore it.
                         "relight_improve_db": v.get("relight_improve_db"),
+                        "relight_kind": "same_key_light_x2.5",
                         "quality_plate": v.get("quality_plate"),
                     }
                     for k, v in qplates.items()
@@ -477,13 +484,19 @@ def write_results() -> Path:
                 "metal_mse_init": metal.get("metal_mse_init"),
                 "metal_mse_recovered": metal.get("metal_mse_recovered"),
                 "relight_improve_db": metal.get("relight_improve_db"),
+                "relight_kind": "same_key_light_x2.5",
+                "fit_wh": metal.get("fit_wh"),
             },
             "diff_dense_orm_lab": {
                 "metric_domain": "vulkan_deferred_studio",
+                "init_psnr": orm.get("init_psnr"),
+                "train_psnr": orm.get("train_psnr"),
                 "psnr_improve_db": orm.get("psnr_improve_db"),
                 "rough_mse_init": orm.get("rough_mse_init"),
                 "rough_mse_recovered": orm.get("rough_mse_recovered"),
                 "relight_improve_db": orm.get("relight_improve_db"),
+                "relight_kind": "same_key_light_x2.5",
+                "fit_wh": orm.get("fit_wh"),
             },
             "analytic_m5": {
                 "metric_domain": "vulkan_deferred_studio",

@@ -1,11 +1,13 @@
 {
-  "title": "OHAO Inverse Lab \u2014 research results pack",
+  "title": "OHAO Inverse Lab — research results pack",
   "protocol_notes": [
     "PT LABTEST uses capture-exported holdout/relight PNGs (not live-oracle theater).",
     "Diff dense MAPTEST uses wrong-init cool/high-rough/low-metal vs GT maps; beauty via bindless Deferred.",
-    "Quality plate: FIT 960\u00d7540, SHOW 1920\u00d71080 @20f, map\u2265128, multi-view, hard presets.",
-    "lab_fast 256\u00d7144 is diagnostic only \u2014 do not quote as product proof.",
-    "Analytic speedup is vs estimated full 3-pass coordinate FD (same loss eval cost model)."
+    "Quality plate: FIT 960×540, SHOW 1920×1080 @20f, map≥128, multi-view, hard presets.",
+    "lab_fast 256×144 is diagnostic only — do not quote as product proof.",
+    "Analytic speedup is vs estimated full 3-pass coordinate FD (same loss eval cost model).",
+    "Dense 'relight' = the SAME key light scaled 2.5x. Not novel illumination: no env swap, no light moved or added, and the dense paths do not fit lights at all.",
+    "2026-07-25 correction: dense relight previously re-measured the TRAINING light (applyTruth reverted the boost); and the T3 train/map numbers were copied from stale renders/ metrics predating commit 3557cfb. T3 below is a fresh run on current HEAD."
   ],
   "tables": {
     "pt_capture_gated_labtest": {
@@ -36,7 +38,7 @@
     },
     "diff_dense_quality_plate_orm": {
       "metric_domain": "vulkan_deferred_studio",
-      "resolution_show": "1920\u00d71080",
+      "resolution_show": "1920×1080",
       "map_res": 128,
       "presets": {
         "spheres": {
@@ -45,8 +47,10 @@
           "psnr_improve_db": 19.7685,
           "rough_mse_init": 0.3617,
           "rough_mse_recovered": 0.179256,
-          "relight_improve_db": 19.9061,
-          "quality_plate": true
+          "relight_improve_db": null,
+          "quality_plate": true,
+          "relight_kind": "same_key_light_x2.5",
+          "relight_withdrawn": "run predates 2026-07-25 relight fix; was a duplicate training-light measurement"
         },
         "outdoor": {
           "init_psnr": 32.3903,
@@ -54,8 +58,10 @@
           "psnr_improve_db": 24.5428,
           "rough_mse_init": 0.3617,
           "rough_mse_recovered": 0.193612,
-          "relight_improve_db": 24.4758,
-          "quality_plate": true
+          "relight_improve_db": null,
+          "quality_plate": true,
+          "relight_kind": "same_key_light_x2.5",
+          "relight_withdrawn": "run predates 2026-07-25 relight fix; was a duplicate training-light measurement"
         },
         "helmet": {
           "init_psnr": 35.7862,
@@ -63,8 +69,10 @@
           "psnr_improve_db": 21.787,
           "rough_mse_init": 0.3617,
           "rough_mse_recovered": 0.0811357,
-          "relight_improve_db": 21.807,
-          "quality_plate": true
+          "relight_improve_db": null,
+          "quality_plate": true,
+          "relight_kind": "same_key_light_x2.5",
+          "relight_withdrawn": "run predates 2026-07-25 relight fix; was a duplicate training-light measurement"
         }
       }
     },
@@ -87,19 +95,31 @@
     },
     "diff_dense_metal_maptest": {
       "metric_domain": "vulkan_deferred_studio",
-      "init_psnr": 16.5808,
-      "train_psnr": 43.3862,
-      "psnr_improve_db": 26.8054,
+      "init_psnr": 19.7957,
+      "train_psnr": 47.8613,
+      "psnr_improve_db": 28.0656,
       "metal_mse_init": 0.405,
-      "metal_mse_recovered": 0.00564348,
-      "relight_improve_db": 26.8996
+      "metal_mse_recovered": 0.0015681,
+      "relight_improve_db": 28.0492,
+      "relight_kind": "same_key_light_x2.5",
+      "fit_wh": [
+        640,
+        360
+      ]
     },
     "diff_dense_orm_lab": {
       "metric_domain": "vulkan_deferred_studio",
-      "psnr_improve_db": 21.0177,
+      "init_psnr": 38.1323,
+      "train_psnr": 43.662,
+      "psnr_improve_db": 5.52968,
       "rough_mse_init": 0.37845,
-      "rough_mse_recovered": 0.169352,
-      "relight_improve_db": 22.1366
+      "rough_mse_recovered": 0.250166,
+      "relight_improve_db": 3.40799,
+      "relight_kind": "same_key_light_x2.5",
+      "fit_wh": [
+        640,
+        360
+      ]
     },
     "analytic_m5": {
       "metric_domain": "vulkan_deferred_studio",

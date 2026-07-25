@@ -359,20 +359,19 @@ struct DenseOrmFitResult {
         saveMapPng(recOrm, outDir / "materials" / "ground_orm_recovered.png");
     }
 
-    // Synthetic Deferred relight: boost key light (same maps, new lighting).
+    // Synthetic Deferred relight: SAME key light at kRelightKeyScale× training
+    // intensity (not novel illumination — no env swap, no light move). The scope
+    // scales the θ source-of-truth so the forced forward's applyTruth() cannot
+    // revert it, and verify() aborts if it somehow did.
     auto measureRelightPsnr = [&](const ohao::diff::DiffAlbedoMap& rough) {
-        float saved = 1.f;
-        if (inv.keyLight) {
-            saved = inv.keyLight->getIntensity();
-            inv.keyLight->setIntensity(saved * 2.5f);
-        }
+        dense_common::RelightScope relight(inv);
         auto tgt = forwardOrm(renderer, inv, fixedAlb, gtRough, 0, kFrames, true);
         auto img = forwardOrm(renderer, inv, fixedAlb, rough, 0, kFrames);
-        if (inv.keyLight) inv.keyLight->setIntensity(saved);
+        relight.verify("dense-orm");
         return psnrFromMse(beautyMse(img, tgt));
     };
 
-    // Init / recovered under relight (each call restores key).
+    // Init / recovered under relight (each scope restores the key light).
     {
         ohao::diff::DiffAlbedoMap initRough;
         initRough.allocate(static_cast<std::uint32_t>(mapPx), static_cast<std::uint32_t>(mapPx));
@@ -380,14 +379,13 @@ struct DenseOrmFitResult {
         result.relightInitPsnr = measureRelightPsnr(initRough);
         result.relightRecPsnr = measureRelightPsnr(work);
         // Capture stills under relight with recovered.
-        if (inv.keyLight) {
-            const float saved = inv.keyLight->getIntensity();
-            inv.keyLight->setIntensity(saved * 2.5f);
+        {
+            dense_common::RelightScope relight(inv);
             auto relT = forwardOrm(renderer, inv, fixedAlb, gtRough, 0, kFrames, true);
             auto relR = forwardOrm(renderer, inv, fixedAlb, work, 0, kFrames);
+            relight.verify("dense-orm stills");
             savePNG(relT, outDir / "orm_relight_truth.png");
             savePNG(relR, outDir / "orm_relight_recovered.png");
-            inv.keyLight->setIntensity(saved);
         }
     }
 
@@ -418,12 +416,11 @@ struct DenseOrmFitResult {
             showSave(gtRough, "orm_forward_truth_show.png", true);
             showSave(initRough, "orm_init_show.png");
             showSave(work, "orm_recovered_show.png");
-            if (invShow.keyLight) {
-                const float saved = invShow.keyLight->getIntensity();
-                invShow.keyLight->setIntensity(saved * 2.5f);
+            {
+                dense_common::RelightScope relight(invShow);
                 showSave(gtRough, "orm_relight_truth_show.png", true);
                 showSave(work, "orm_relight_recovered_show.png");
-                invShow.keyLight->setIntensity(saved);
+                relight.verify("dense-orm show");
             }
             invShow.scene.reset();
         }

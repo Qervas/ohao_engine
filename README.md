@@ -99,12 +99,24 @@ Beauty θ is a **bindless Deferred-sampled map** (albedo / ORM). Wrong-init is c
   <img src="docs/media/inverse/readme_dense_metal.jpg" width="820" alt="Dense metallic MAPTEST — beauty, relight, metal maps" />
 </p>
 
-| Task | ΔPSNR (train) | Map MSE | Relight Δ | Notes |
+| Task | ΔPSNR (train) | Map MSE | Key×2.5 Δ | Notes |
 |------|---------------|---------|-----------|--------|
 | Dense albedo 64² free-grid | +7.3 dB | 0.104 → 0.084 | — | MAPTEST; cool wrong-init |
 | Dense albedo 128² | +7.2 dB | 0.104 → 0.080 | — | same protocol |
-| Dense metallic ORM.b | **+26.8 dB** | 0.405 → **0.006** | +26.9 dB | extreme flip + relight |
-| Dense roughness ORM.g (lab) | +21.0 dB | 0.378 → 0.169 | +22.1 dB | floor-crop specular loss |
+| Dense metallic ORM.b | **+28.1 dB** | 0.405 → **0.0016** | +28.0 dB | extreme flip; FIT 640×360 |
+| Dense roughness ORM.g (lab) | +5.5 dB | 0.378 → 0.250 | +3.4 dB | floor-crop specular loss; FIT 640×360 |
+
+> **Corrected 2026-07-25.** The "Relight Δ" column previously read +26.9 / +22.1 dB. Those numbers were
+> not a relight at all: the dense fits boosted the key light and then called a forward with
+> `force=true`, whose first statement (`inv.applyTruth()`) drove the key intensity straight back to the
+> training value — so both "relit" renders were the *training* render. The relight PNGs were
+> byte-identical to the training PNGs (verified: mean-abs-diff exactly 0.000000). The column is now a
+> genuine **2.5× scale of the same key light** — it is *not* novel illumination (no environment swap,
+> no light moved, no light added), and the dense paths do not fit lights at all. For capture-exported
+> novel-lighting relight see the PT LABTEST row above. The train/map numbers also moved because the
+> previously published values came from stale `renders/` metrics files predating commit `3557cfb`,
+> which changed both dense fits; every number in this table row is now from the exact command in
+> [`docs/inverse_lab.md`](docs/inverse_lab.md) on current `HEAD`.
 
 **H4 analytic albedo** (linear solve + residual + sparse polish; GRADCHECK vs FD — **not** a reverse-mode autodiff claim):
 

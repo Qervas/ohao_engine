@@ -67,7 +67,7 @@ python3 tools/inverse_lab/eval_bundle.py renders/inverse_lab/lantern_frontier_fi
 python3 tools/inverse_lab/test_dense_map.py renders/diff_dense
 python3 tools/inverse_lab/test_dense_map.py renders/diff_dense_128
 
-# H2 free dense ground roughness / ORM.g (fixed albedo, MAPTEST + synthetic relight)
+# H2 free dense ground roughness / ORM.g (fixed albedo, MAPTEST + key×2.5 check)
 ./build/inverse_fit --backend diff --dense-orm --dense-map-res 64 --dense-grid 4 \
   --preset lantern --out-dir renders/diff_dense_orm
 python3 tools/inverse_lab/test_dense_orm.py renders/diff_dense_orm
@@ -97,8 +97,8 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 | L4 Diff-IR (`--backend diff`, Deferred dense-map SoT) | ✅ bindless albedo SoT (DIFFTEST) |
 | L5 Hybrid Diff-fit → PT light/tile refine → eval (`--backend hybrid`) | ✅ DIFFTEST + transfer; full LABTEST achievable |
 | L6 / H1 free dense albedo (`--dense-map`) | ✅ MAPTEST 64² + 128²; in-place map upload (M1a–c) |
-| L6 / H2 free dense roughness (`--dense-orm`) | ✅ MAPTEST + floor-crop + synthetic key-light relight (M2a) |
-| L6 / H2 free dense metallic (`--dense-metal`) | ✅ MAPTEST + relight; G=2 checker-aligned free θ (M2b) |
+| L6 / H2 free dense roughness (`--dense-orm`) | ✅ MAPTEST + floor-crop + key×2.5 check (M2a) — **not** a novel-illumination relight |
+| L6 / H2 free dense metallic (`--dense-metal`) | ✅ MAPTEST + key×2.5 check; G=2 checker-aligned free θ (M2b) |
 | L6 / HD plates (`--hd 720\|1080`) | ✅ FIT optim + SHOW 720p/1080p stills |
 | L6 / H2 multi-preset gallery (M3a) | ✅ lantern + helmet + spheres; `scripts/run_inverse_gallery.sh` |
 | L6 / quality plate (publish bar) | ✅ `--quality-plate`: 1080p@20f, map128, hard presets (spheres/outdoor/helmet) |
@@ -118,6 +118,29 @@ python3 tools/inverse_lab/test_dense_metal.py renders/diff_dense_metal
 
 Hard presets for persuasion: **spheres** (metal chart), **outdoor** (HDRI), **helmet** (textured hero). Lantern alone is not enough.
 
+### What the dense "relight" number is — and is not
+
+The `--dense-orm` / `--dense-metal` gates report `relight_init_psnr` / `relight_recovered_psnr`. Read
+them narrowly:
+
+- It is **the same key light scaled 2.5×**, nothing else. No environment swap, no light moved, no
+  light added or removed, no change of light colour or type.
+- The dense paths **do not fit lights at all** — θ is the material map only. So this is a check that
+  the recovered map still beats the wrong-init map when the exposure of the scene changes; it is
+  *not* evidence of disentangled lighting.
+- It is a **weak** perturbation on the `lantern` preset: the loss-cropped floor band already sits near
+  the ACES tonemap ceiling, so 2.5× lifts the relit truth frame by only ~0.4 % mean pixel value.
+- It must **not** be quoted alongside, or read like, the PT LABTEST relight, which is scored against
+  **capture-exported** PNGs under a genuinely different lighting session
+  (`metric_gt=capture_export_images`).
+
+Implementation note (2026-07-25): the relight is applied by scaling `InverseScene::truthKeyI` inside
+`dense_common::RelightScope`, not by calling `keyLight->setIntensity()` directly. A direct
+`setIntensity` is silently reverted by the next `inv.applyTruth()` inside a forced forward — which is
+exactly the bug that made every published dense relight number a duplicate *training-light*
+measurement until it was found. `RelightScope::verify()` now aborts the run rather than let that
+recur.
+
 **L4 note:** Diff-IR paints tile θ into a dense albedo map, binds it as Deferred-sampled bindless albedo (atlas UVs + `<actor>_albedo_0`), optimizes with coordinate FD from wrong init. Capture-gated holdout/relight bar (≥28/≥26/≥8) uses **`--backend pt`** (or hybrid Diff-fit + PT eval) because PT matches the capture export domain.
 
 ## Tests
@@ -125,8 +148,8 @@ Hard presets for persuasion: **spheres** (metal chart), **outdoor** (HDRI), **he
 - `tools/inverse_lab/test_metrics_and_maps.py` — gates on real `lab_metrics.json` + map MSE  
 - `tools/inverse_lab/test_map_apply_diff.py` — export path writes differing init/GT maps  
 - `tools/inverse_lab/test_dense_map.py` — H1 dense albedo MAPTEST  
-- `tools/inverse_lab/test_dense_orm.py` — H2 dense ORM/rough MAPTEST + relight  
-- `tools/inverse_lab/test_dense_metal.py` — H2 dense metallic MAPTEST + relight  
+- `tools/inverse_lab/test_dense_orm.py` — H2 dense ORM/rough MAPTEST + key×2.5 check  
+- `tools/inverse_lab/test_dense_metal.py` — H2 dense metallic MAPTEST + key×2.5 check  
 - `tools/inverse_lab/test_gallery.py` — M3a ≥3 presets MAPTEST + gallery wall  
 - `tools/inverse_lab/test_quality_plate.py` — publish bar (≥2 hard presets, 1080p, map≥128)  
 - `tools/inverse_lab/test_ablation.py` — M3b ablation table baseline green  

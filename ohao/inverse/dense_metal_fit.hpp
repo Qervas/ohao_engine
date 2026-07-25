@@ -371,15 +371,15 @@ struct DenseMetalFitResult {
         saveMapPng(recOrm, outDir / "materials" / "ground_orm_recovered.png");
     }
 
+    // Synthetic Deferred relight: SAME key light at kRelightKeyScale× training
+    // intensity (not novel illumination — no env swap, no light move). The scope
+    // scales the θ source-of-truth so the forced forward's applyTruth() cannot
+    // revert it, and verify() aborts if it somehow did.
     auto measureRelightPsnr = [&](const ohao::diff::DiffAlbedoMap& metal) {
-        float saved = 1.f;
-        if (inv.keyLight) {
-            saved = inv.keyLight->getIntensity();
-            inv.keyLight->setIntensity(saved * 2.5f);
-        }
+        dense_common::RelightScope relight(inv);
         auto tgt = forwardMetal(renderer, inv, fixedAlb, fixedRough, gtMetal, 0, kFrames, true);
         auto img = forwardMetal(renderer, inv, fixedAlb, fixedRough, metal, 0, kFrames);
-        if (inv.keyLight) inv.keyLight->setIntensity(saved);
+        relight.verify("dense-metal");
         return psnrFromMse(beautyMse(img, tgt));
     };
 
@@ -389,14 +389,13 @@ struct DenseMetalFitResult {
         ohao::diff::gridIntoMetalMap(th, G, initMetal);
         result.relightInitPsnr = measureRelightPsnr(initMetal);
         result.relightRecPsnr = measureRelightPsnr(work);
-        if (inv.keyLight) {
-            const float saved = inv.keyLight->getIntensity();
-            inv.keyLight->setIntensity(saved * 2.5f);
+        {
+            dense_common::RelightScope relight(inv);
             auto relT = forwardMetal(renderer, inv, fixedAlb, fixedRough, gtMetal, 0, kFrames, true);
             auto relR = forwardMetal(renderer, inv, fixedAlb, fixedRough, work, 0, kFrames);
+            relight.verify("dense-metal stills");
             savePNG(relT, outDir / "metal_relight_truth.png");
             savePNG(relR, outDir / "metal_relight_recovered.png");
-            inv.keyLight->setIntensity(saved);
         }
     }
 
@@ -424,12 +423,11 @@ struct DenseMetalFitResult {
             showSave(gtMetal, "metal_forward_truth_show.png", true);
             showSave(initMetal, "metal_init_show.png");
             showSave(work, "metal_recovered_show.png");
-            if (invShow.keyLight) {
-                const float saved = invShow.keyLight->getIntensity();
-                invShow.keyLight->setIntensity(saved * 2.5f);
+            {
+                dense_common::RelightScope relight(invShow);
                 showSave(gtMetal, "metal_relight_truth_show.png", true);
                 showSave(work, "metal_relight_recovered_show.png");
-                invShow.keyLight->setIntensity(saved);
+                relight.verify("dense-metal show");
             }
             invShow.scene.reset();
         }

@@ -340,8 +340,8 @@ Trunk remains: **dense physical maps + hybrid oracle + capture discipline**.
 | **M1a** | Dense albedo 64² | H1 | M0 | ✅ MAPTEST + map triple stills (`--dense-map`) |
 | **M1b** | Dense albedo 128² | H1 | M1a | ✅ MAPTEST at `--dense-map-res 128` |
 | **M1c** | Fast map upload | H1 | M1a | ✅ `updateTextureFromMemory` in-place SoT |
-| **M2a** | Roughness map | H2 | M1b | ✅ MAPTEST + synthetic relight (`--dense-orm`) |
-| **M2b** | Metallic + priors | H2 | M2a | ✅ MAPTEST + relight (`--dense-metal`); HD 720/1080 plates |
+| **M2a** | Roughness map | H2 | M1b | ✅ MAPTEST + key×2.5 exposure check (`--dense-orm`) — no lights fitted, not a novel-illumination relight |
+| **M2b** | Metallic + priors | H2 | M2a | ✅ MAPTEST + key×2.5 check (`--dense-metal`); HD 720/1080 plates |
 | **M3a** | 3-preset gallery | H2 | M1b | ✅ lantern/helmet/spheres MAPTEST + `gallery_wall.html` |
 | **M3b** | Ablation table | H2 | M3a | ✅ quality baseline + map/views/hd/lab_fast matrix |
 | **M4a** | Photo capture recipe | H3 | M1b | ✅ `docs/inverse_photo_lab.md` + cameras.jsonl |
@@ -437,7 +437,7 @@ Adjust with hardware time (PT refine is the wall-clock hog). Prefer **shipping M
 ## 11. Immediate next actions
 
 1. **M1a–c ✅** — dense map 64/128², free grid, in-place upload, MAPTEST.  
-2. **M2a ✅** — free dense roughness (ORM.g) under Deferred; floor-crop specular loss; synthetic key-light relight gate.  
+2. **M2a ✅** — free dense roughness (ORM.g) under Deferred; floor-crop specular loss; key×2.5 exposure gate (the same key light scaled — **not** novel illumination; no lights are fitted on this path).  
 3. **M2b ✅** — free dense metallic (ORM.b); extreme-flip FD; `--hd 720|1080` daily plate sizes.  
 4. **M3a ✅** — multi-preset gallery wall (`scripts/run_inverse_gallery.sh`; lantern/helmet/spheres).  
 5. **M3b ✅** — ablation table + **quality plate bar** (`--quality-plate`, hard presets @1080p).  

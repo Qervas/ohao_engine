@@ -5,15 +5,73 @@
 #include "inverse/fit_config.hpp"
 #include "inverse/image_loss.hpp"
 #include "inverse/io.hpp"
+#include "inverse/scene_builder.hpp"
 
 #include "render/diff/diff_map.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
 
 namespace ohao::inverse::dense_common {
+
+/// Synthetic relight for the dense paths: the SAME key light scaled by this factor.
+/// Not novel illumination — no env swap, no light move, no new light. See
+/// docs/inverse_lab.md ("Synthetic key-light relight").
+inline constexpr float kRelightKeyScale = 2.5f;
+
+/// RAII scope that actually holds the key light at kRelightKeyScale × training
+/// intensity across the forward renders inside it.
+///
+/// Why this is not just `keyLight->setIntensity(x * 2.5f)`: the dense forward
+/// helpers call `inv.applyTruth()` on every primed/forced render, and
+/// applyTheta() re-drives `keyLight->setIntensity(truthKeyI)` from the θ
+/// source-of-truth (scene_builder.hpp:330-331 / :193). A live setIntensity is
+/// therefore silently reverted by the very next forced forward, which is how the
+/// published "relight" numbers ended up being a second *training-light* render.
+/// So we scale the source of truth as well; the live set covers the
+/// `fitKeyLight == false` case, where applyTheta never touches the light at all.
+class RelightScope {
+public:
+    explicit RelightScope(InverseScene& inv, float scale = kRelightKeyScale)
+        : inv_(inv), savedTruth_(inv.truthKeyI), scale_(scale) {
+        inv_.truthKeyI = savedTruth_ * scale_;
+        if (inv_.keyLight) {
+            savedLive_ = inv_.keyLight->getIntensity();
+            inv_.keyLight->setIntensity(savedLive_ * scale_);
+        }
+    }
+    RelightScope(const RelightScope&) = delete;
+    RelightScope& operator=(const RelightScope&) = delete;
+
+    /// Call AFTER the relit forwards. Makes the "the boost got reverted" failure
+    /// mode unrepresentable instead of silently publishing a duplicate metric.
+    void verify(const char* what) const {
+        if (!inv_.keyLight) return;
+        const float want = savedLive_ * scale_;
+        const float got = inv_.keyLight->getIntensity();
+        if (std::abs(got - want) > 0.02f * std::max(1.0f, want)) {
+            std::cerr << "FATAL: " << what << " relight did not hold — key intensity " << got
+                      << " but expected " << want << " (" << scale_ << "x of " << savedLive_
+                      << "). The relight metric would be a duplicate training-light render.\n";
+            std::abort();
+        }
+    }
+
+    ~RelightScope() {
+        inv_.truthKeyI = savedTruth_;
+        if (inv_.keyLight) inv_.keyLight->setIntensity(savedLive_);
+    }
+
+private:
+    InverseScene& inv_;
+    float savedTruth_{0.f};
+    float savedLive_{1.f};
+    float scale_{kRelightKeyScale};
+};
 
 inline bool saveMapPng(const ohao::diff::DiffAlbedoMap& map,
                        const std::filesystem::path& path) {
