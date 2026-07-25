@@ -4,7 +4,7 @@
 // Beauty SoT: tile RGB → dense map → bindless albedo sampled by GBuffer.
 
 #include "render/diff/diff_map.hpp"
-#include "render/diff/diff_map_bind.hpp"
+#include "inverse/diff_map_bind.hpp"
 
 #include "gpu/vulkan/renderer.hpp"
 #include "inverse/image_loss.hpp"

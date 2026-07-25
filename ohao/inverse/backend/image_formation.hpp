@@ -1,7 +1,9 @@
 #pragma once
 
 // Offline image formation for inverse fit — backend-agnostic contract.
-// PT wraps RenderSession; Diff will wrap DiffSession. No god objects.
+// PT wraps RenderSession. No god objects.
+// NOTE: the Diff backend does NOT go through this interface — it runs the Vulkan
+// Deferred studio forward directly (ohao/inverse/diff_vk_forward.hpp).
 
 #include "inverse/image_loss.hpp"
 #include "inverse/quality.hpp"
@@ -50,7 +52,8 @@ public:
     virtual ~IInverseImageFormation() = default;
 
     [[nodiscard]] virtual InverseBackend backend() const noexcept = 0;
-    [[nodiscard]] virtual bool supportsAnalyticGrads() const noexcept { return false; }
+    // NOTE: no supportsAnalyticGrads() hook. No backend in this repo has analytic
+    // or adjoint gradients — every optimizer here uses finite differences.
 
     /// Forward: apply current scene θ already set by InverseScene, render one view.
     [[nodiscard]] virtual ImageRGBA8 forward(const InverseRenderRequest& req) = 0;

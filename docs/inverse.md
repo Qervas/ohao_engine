@@ -177,7 +177,8 @@ Toward lab-grade inverse rendering (train-only multi-view, spatial maps, holdout
 | `fit_engine.hpp` | orchestration: setup → fit → report (`runInverseFit`) |
 | `image_loss.hpp` / `param_space.hpp` / `optimizer.hpp` / `quality.hpp` | core math + dual budgets |
 
-Umbrella: `#include "inverse/inverse_module.hpp"`. Entry: `runInverseFit(cfg)`.
+Entry: `#include "inverse/fit_engine.hpp"` → `runInverseFit(cfg)`. (The former
+`inverse_module.hpp` umbrella header was removed — nothing included it.)
 
 ## Limits
 

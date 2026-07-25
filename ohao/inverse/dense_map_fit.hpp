@@ -15,10 +15,10 @@
 #include "inverse/scene_builder.hpp"
 
 #include "render/diff/diff_map.hpp"
-#include "render/diff/diff_map_bind.hpp"
+#include "inverse/diff_map_bind.hpp"
 #include "render/diff/diff_map_paint.hpp"
 #include "render/diff/diff_optimizer.hpp"
-#include "render/diff/diff_vk_forward.hpp"
+#include "inverse/diff_vk_forward.hpp"
 
 #include "gpu/vulkan/renderer.hpp"
 #include "render/deferred/deferred_renderer.hpp"

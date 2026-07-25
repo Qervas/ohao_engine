@@ -71,7 +71,7 @@ We do **not** claim: public-dataset SOTA, free geometry, free camera, single unc
 | Role | Backend | Future |
 |------|---------|--------|
 | **Oracle / gold bar** | Path tracer | Stays; denser spp when publishing |
-| **Dense fit workhorse** | Diff Deferred | Dense maps, analytic grads, Adam |
+| **Dense fit workhorse** | Diff Deferred | Dense maps, Adam on **finite-difference** grads (analytic/adjoint grads are NOT implemented) |
 | **Transfer plate** | Hybrid | Diff materials + short PT light/BRDF refine |
 
 ---

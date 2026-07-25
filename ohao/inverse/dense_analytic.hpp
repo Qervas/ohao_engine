@@ -166,32 +166,6 @@ template <typename LossFn>
     return r;
 }
 
-/// True Adam step (descent) on free grid.
-struct AdamState {
-    std::vector<double> m, v;
-    int t{0};
-    void resize(size_t n) {
-        m.assign(n, 0.0);
-        v.assign(n, 0.0);
-        t = 0;
-    }
-};
-
-inline void adamStep(std::vector<double>& grid, const std::vector<double>& grad, AdamState& st,
-                     double lr, double b1 = 0.9, double b2 = 0.999, double eps = 1e-8) {
-    if (st.m.size() != grid.size()) st.resize(grid.size());
-    ++st.t;
-    const double bc1 = 1.0 - std::pow(b1, st.t);
-    const double bc2 = 1.0 - std::pow(b2, st.t);
-    for (size_t i = 0; i < grid.size() && i < grad.size(); ++i) {
-        st.m[i] = b1 * st.m[i] + (1.0 - b1) * grad[i];
-        st.v[i] = b2 * st.v[i] + (1.0 - b2) * grad[i] * grad[i];
-        const double mhat = st.m[i] / (bc1 + 1e-12);
-        const double vhat = st.v[i] / (bc2 + 1e-12);
-        grid[i] = std::clamp(grid[i] - lr * mhat / (std::sqrt(vhat) + eps), 0.02, 1.0);
-    }
-}
-
 /// Closed-form under linear model I≈A⊙S: A = clamp(T/S) scattered into free G×G grid.
 /// Blend with `prior` (e.g. current θ) using `blend` in [0,1] (1 = pure solve).
 [[nodiscard]] inline std::vector<double> gridFromLinearSolve(const ImageRGBA8& tgt,
