@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01 · Architecture — OHAO Monograph</title>
+  <meta name="description" content="End-to-end path, invariants, layer cake." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="architecture" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 01 · Architecture</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">01</div>
+        <div>
+          <p class="chapter-kicker">Foundations · deep dive</p>
+          <h1>Architecture</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>The wide-angle map: how a request becomes pixels, which modules own which phase, and the non-negotiable invariants. Deep module chapters hang off this spine.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#request">End-to-end request path</a></li>
+          <li><a href="#modes">Mode matrix</a></li>
+          <li><a href="#invariants">Invariants</a></li>
+          <li><a href="#layers">Layer cake</a></li>
+          <li><a href="#read">How to read the book</a></li>
+        </ol>
+      </nav>
+
+      <figure class="plate reveal">
+        <div class="plate-frame">
+          <img src="../assets/concept/dual_pipeline_conceptual.jpg" alt="Conceptual dual pipeline" />
+        </div>
+        <figcaption class="plate-cap">
+          <span class="plate-id">Plate ARCH-C1</span>
+          <p><span class="concept-badge">Conceptual illustration — not engine output</span> Teaching sketch of two formations on one spine.</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="request">End-to-end request path</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">Typical example binary</div>
+        <ol>
+          <li>Parse CLI (model path, spp, mode, denoise)</li>
+          <li>Construct <code>Scene</code>; load assets into actors/components</li>
+          <li><code>VulkanRenderer(w,h).initialize()</code> — full GPU cold start (Ch.&nbsp;03)</li>
+          <li><code>setScene(scene)</code> — upload meshes, materials, lights, BLAS/TLAS</li>
+          <li>Place camera; optional env map</li>
+          <li><code>setRenderMode(Deferred | RTOffline | …)</code> — RT modes call <code>ensureRTRenderer</code> lazily</li>
+          <li>Loop or single shot: <code>render()</code></li>
+          <li>Read <code>getPixels()</code> / write PNG / present GLFW</li>
+          <li>Optional: denoise offline still via OIDN path inside PT</li>
+        </ol>
+      </div>
+      <div class="prose reveal">
+        <p>Nothing in that list requires an editor. The engine is a library with a fat GPU core.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="modes">Mode matrix</h2></div>
+      <table class="data-table compact reveal">
+        <thead><tr><th>Mode</th><th>Who draws</th><th>AS?</th><th>Readback</th></tr></thead>
+        <tbody>
+          <tr><td>Forward</td><td>Legacy raster</td><td>no</td><td>staging</td></tr>
+          <tr><td>Deferred</td><td>DeferredRenderer graph</td><td>optional hybrid</td><td>staging</td></tr>
+          <tr><td>RTRealtime</td><td>PathTracer (PCG, few bounces)</td><td>required</td><td>staging + denoise opts</td></tr>
+          <tr><td>RTOffline</td><td>PathTracer (Sobol, OIDN path)</td><td>required</td><td>HDR accum → beauty</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-rule"><h2 id="invariants">Invariants (break these → silent wrong pixels)</h2></div>
+      <div class="contract reveal">
+        <div class="contract-bar"><span>Must hold across modules</span><span>always</span></div>
+        <div class="contract-body">
+          <ul>
+            <li>One scene language for deferred and PT (materials, lights, transforms)</li>
+            <li>TLAS instance order locked to material table order</li>
+            <li>Bindless indices valid or 0xFFFFFFFF “no texture”</li>
+            <li>NRD packing uses YCoCg + norm hit-dist when NRD is on</li>
+            <li>Frame ring: never read staging without waiting on that slot’s fence</li>
+            <li>PathTracer profiles lazy — do not dual-allocate at 4K</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-rule"><h2 id="layers">Layer cake</h2></div>
+      <table class="data-table reveal">
+        <thead><tr><th>Layer</th><th>Owns</th><th>Deep chapter</th></tr></thead>
+        <tbody>
+          <tr><td>Scene</td><td>Actors, components, loaders, physics world handle</td><td>02</td></tr>
+          <tr><td>GPU host</td><td>Device, upload, AS, ring, dispatch</td><td>03</td></tr>
+          <tr><td>Materials language</td><td>PBR + pack</td><td>04</td></tr>
+          <tr><td>Deferred formation</td><td>GBuffer → light → post</td><td>05</td></tr>
+          <tr><td>PT formation</td><td>Integrator + AOVs</td><td>06–07</td></tr>
+          <tr><td>Hybrid inject</td><td>RT shadow/GI into deferred</td><td>08</td></tr>
+          <tr><td>Denoise</td><td>OIDN/NRD/DLSS contracts</td><td>09</td></tr>
+          <tr><td>Audio / Physics</td><td>Sim &amp; sound facades</td><td>10–11</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-rule"><h2 id="read">How to go deeper</h2></div>
+      <div class="prose reveal">
+        <ol>
+          <li>Want “what happens when I press run?” → Ch.&nbsp;03 GPU init + this request path</li>
+          <li>Want “why is my metal black?” → Ch.&nbsp;04 + 05 IBL limits</li>
+          <li>Want “why is noise structured like that?” → Ch.&nbsp;06–07 NEE/MIS</li>
+          <li>Want “why magenta after denoise?” → Ch.&nbsp;09</li>
+        </ol>
+        <p>Hover dotted terms (GGX, TLAS, …) or open the <a href="glossary.html">Glossary</a>.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="architecture/request-path.html">
+          <div class="num">request-path</div>
+          <h3>Request path</h3>
+          <p>CLI/example → Scene → VulkanRenderer::initialize → setScene → render → pixels.</p>
+        </a>
+        <a class="tree-card" href="architecture/invariants.html">
+          <div class="num">invariants</div>
+          <h3>Cross-module invariants</h3>
+          <p>Contracts that break pixels silently if violated.</p>
+        </a>
+        <a class="tree-card" href="architecture/module-map.html">
+          <div class="num">module-map</div>
+          <h3>Module ownership map</h3>
+          <p>Which directory owns which concern; forbidden dependencies.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="../index.html"><div class="label">← Previous</div><div class="title">00 · Cover</div></a>
+        <a class="next" href="scene.html"><div class="label">Next →</div><div class="title">02 · Scene</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

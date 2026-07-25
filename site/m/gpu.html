@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>03 · GPU / Vulkan — OHAO Monograph</title>
+  <meta name="description" content="Vulkan init workflow, upload, frame ring, deferred dispatch." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="gpu" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 03 · GPU / Vulkan</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">03</div>
+        <div>
+          <p class="chapter-kicker">Foundations · deep dive</p>
+          <h1>GPU / Vulkan</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>This is the <strong>GPU host spine</strong>: how Vulkan comes up, what resources exist before any frame, how a scene becomes buffers + TLAS, and how one frame is recorded and read back. After this chapter you should be able to walk <code>VulkanRenderer::initialize</code> and <code>renderDeferred</code> without guessing.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#role">Role of VulkanRenderer</a></li>
+          <li><a href="#init">Cold-start init pipeline</a></li>
+          <li><a href="#device">Instance · device · features</a></li>
+          <li><a href="#resources">Resources after init</a></li>
+          <li><a href="#scene-up">Scene → GPU upload</a></li>
+          <li><a href="#frame">One deferred frame</a></li>
+          <li><a href="#rt">RT attach &amp; lazy PathTracer</a></li>
+          <li><a href="#files">Source map by concern</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="role">Role</h2></div>
+      <div class="prose reveal">
+        <p class="lead"><code>VulkanRenderer</code> is an <strong>offscreen-capable host</strong>. It owns the device, queues, frame ring, deferred child, RT acceleration structure, and optional PathTracers. Examples and embeds call <code>initialize → setScene → render → getPixels</code> (or present via GLFW in interactive).</p>
+        <p>It is deliberately split across TUs so “init plumbing” does not sit in the same file as path-trace dispatch.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="init">Cold-start init pipeline</h2></div>
+      <div class="prose reveal">
+        <p>Exact order in <code>VulkanRenderer::initialize()</code> (<code>renderer.cpp</code>). Failures return false early; deferred/RT failures can be non-fatal so forward still works.</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">VulkanRenderer::initialize · ordered steps</div>
+        <ol>
+          <li><span class="em">createInstance</span> — Vulkan 1.3 app info; optional validation if <code>OHAO_VALIDATION=1</code>; DLSS may add <code>GET_PHYSICAL_DEVICE_PROPERTIES_2</code></li>
+          <li><span class="em">pickPhysicalDevice</span> — enumerate GPUs; prefer <strong>discrete</strong> with a graphics queue</li>
+          <li><span class="em">createLogicalDevice</span> — queue + RT/AS/descriptor-indexing features chain + device extensions</li>
+          <li><span class="em">createCommandPool</span> — for graphics family</li>
+          <li><span class="em">createRenderPass</span> + <span class="em">createOffscreenFramebuffer</span> — legacy/offscreen color path</li>
+          <li><span class="em">Shadow</span> render pass + resources (before descriptors)</li>
+          <li><span class="em">Descriptor set layout</span> (forward path)</li>
+          <li><span class="em">BindlessTextureManager</span> — up to 4096 textures; before pipeline so layouts include bindless set</li>
+          <li><span class="em">createPipeline</span> + shadow pipeline</li>
+          <li>UBOs: camera + lights; descriptor pool/sets; vertex buffer scaffolding; fences/semaphores</li>
+          <li><span class="em">initializeFrameResources</span> — ring of N frames (cmd buf, staging, fence)</li>
+          <li><span class="em">DeferredRenderer::initialize</span> — GBuffer/CSM/lighting/post (texture manager injected first)</li>
+          <li><span class="em">RTAccelerationStructure::init</span> — TLAS host; PathTracers stay <strong>lazy</strong></li>
+        </ol>
+      </div>
+      <div class="why-callout reveal">
+        <div class="why-label">Why this order</div>
+        <p>Device before anything GPU. Bindless before pipelines that reference its layout. Shadows before lighting descriptors that sample the map. Deferred after textures. RT AS after queue/pool exist. PathTracer images are huge — creating both profiles at 4K OOMs, so they wait for <code>ensureRTRenderer(mode)</code>.</p>
+      </div>
+
+      <figure class="plate reveal">
+        <div class="plate-frame svg-frame" data-no-glossary>
+          <svg data-no-glossary="1" viewBox="0 0 960 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vulkan init flow">
+            <text x="40" y="36" fill="#c9a27a" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="2">WORKFLOW · VULKAN COLD START</text>
+            <defs>
+              <marker id="arr_gpu" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#6e685c"/></marker>
+            </defs>
+            <!-- row 1 -->
+            <rect x="40" y="60" width="130" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="105" y="93" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Instance</text>
+            <line x1="170" y1="88" x2="200" y2="88" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="200" y="60" width="130" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="265" y="93" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Pick GPU</text>
+            <line x1="330" y1="88" x2="360" y2="88" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="360" y="60" width="130" height="56" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="425" y="85" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Device</text><text x="425" y="102" text-anchor="middle" fill="#a39c8e" font-size="11" font-family="DM Sans, system-ui, sans-serif">RT features</text>
+            <line x1="490" y1="88" x2="520" y2="88" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="520" y="60" width="130" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="585" y="93" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Cmd pool</text>
+            <line x1="650" y1="88" x2="680" y2="88" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="680" y="60" width="140" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="750" y="93" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Offscreen FB</text>
+            <!-- row 2 -->
+            <path d="M750 116 V150 H105 V180" fill="none" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="40" y="180" width="150" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="115" y="213" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Shadow RTs</text>
+            <line x1="190" y1="208" x2="220" y2="208" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="220" y="180" width="150" height="56" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="295" y="205" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Bindless</text><text x="295" y="222" text-anchor="middle" fill="#a39c8e" font-size="11" font-family="DM Sans, system-ui, sans-serif">4096 slots</text>
+            <line x1="370" y1="208" x2="400" y2="208" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="400" y="180" width="150" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="475" y="213" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Pipelines</text>
+            <line x1="550" y1="208" x2="580" y2="208" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="580" y="180" width="150" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="655" y="213" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">UBO / sets</text>
+            <line x1="730" y1="208" x2="760" y2="208" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="760" y="180" width="150" height="56" rx="4" fill="#171b24" stroke="#c9a27a"/><text x="835" y="213" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="14">Frame ring</text>
+            <!-- row 3 -->
+            <path d="M835 236 V270 H265 V300" fill="none" stroke="#6e685c" marker-end="url(#arr_gpu)"/>
+            <rect x="200" y="300" width="200" height="70" rx="4" fill="#11141a" stroke="#c9a27a" stroke-width="1.75"/><text x="300" y="330" text-anchor="middle" fill="#c9a27a" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="1">DEFERRED</text><text x="300" y="352" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="15">GBuffer…post</text>
+            <rect x="460" y="300" width="200" height="70" rx="4" fill="#11141a" stroke="#6eb8d4" stroke-width="1.75"/><text x="560" y="330" text-anchor="middle" fill="#6eb8d4" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="1">RT AS</text><text x="560" y="352" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="15">TLAS host</text>
+            <rect x="720" y="300" width="200" height="70" rx="4" fill="#0a0b0e" stroke="#2a3140" stroke-dasharray="5 4"/><text x="820" y="330" text-anchor="middle" fill="#6e685c" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="1">PATH TRACER</text><text x="820" y="352" text-anchor="middle" fill="#a39c8e" font-family="Fraunces, Georgia, serif" font-size="14">lazy later</text>
+            <text x="480" y="430" text-anchor="middle" fill="#6e685c" font-family="DM Sans, system-ui, sans-serif" font-size="11" letter-spacing="2">FIG. GPU-1  ·  INIT DEPENDENCY ORDER</text>
+            <text x="480" y="460" text-anchor="middle" fill="#a39c8e" font-family="DM Sans, system-ui, sans-serif" font-size="12">Solid boxes created in initialize(); dashed = ensureRTRenderer on first RT mode</text>
+          </svg>
+        </div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. GPU-1</span>
+          <p><strong>Init DAG.</strong> PathTracer images are intentionally not allocated until a render mode needs them.</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="device">Instance · device · features</h2></div>
+      <div class="prose reveal">
+        <h3>Instance</h3>
+        <p><code>VK_API_VERSION_1_3</code>. Validation only if env set — keeps release paths clean. DLSS path may request instance extension for device properties2.</p>
+        <h3>Physical device</h3>
+        <p>Loop all devices; keep a graphics-capable queue family; <strong>always prefer discrete</strong> over integrated when both appear (comment in code: NVIDIA over Intel iGPU).</p>
+        <h3>Logical device extensions (RT path)</h3>
+      </div>
+      <table class="data-table compact reveal">
+        <thead><tr><th>Extension</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><code>KHR_acceleration_structure</code></td><td>BLAS/TLAS</td></tr>
+          <tr><td><code>KHR_ray_tracing_pipeline</code></td><td>raygen/hit/miss pipelines</td></tr>
+          <tr><td><code>KHR_deferred_host_operations</code></td><td>required by AS builds</td></tr>
+          <tr><td><code>KHR_buffer_device_address</code></td><td>AS device addresses</td></tr>
+          <tr><td><code>EXT_descriptor_indexing</code></td><td>bindless arrays</td></tr>
+          <tr><td><code>KHR_spirv_1_4</code> + float controls</td><td>RT shader model</td></tr>
+          <tr><td>external memory/semaphore</td><td>CUDA/OIDN-style interop readiness</td></tr>
+          <tr><td>NVX binary import / image view handle / push descriptor</td><td>DLSS-RR when GPU supports</td></tr>
+        </tbody>
+      </table>
+      <div class="prose reveal">
+        <p>Feature chain (pNext): RayTracingPipeline → AccelerationStructure → Vulkan1.3 → Vulkan1.2 (bufferDeviceAddress, descriptorIndexing, runtime arrays, update-after-bind, nonuniform indexing…).</p>
+      </div>
+      <div class="jargon reveal"><div class="j-term">Jargon · pNext feature chain</div>
+        <p>Vulkan enables optional features by linking structs. Order matters for the driver; OHAO builds one chain so RT + bindless + 1.2/1.3 bits light up together.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="resources">What exists after a successful init</h2></div>
+      <dl class="defgrid reveal">
+        <dt>Device / queue</dt><dd>Single graphics queue family (present is host-side for GLFW examples)</dd>
+        <dt>Offscreen targets</dt><dd>Color (+ depth as needed) for legacy path; deferred owns its GBuffer later</dd>
+        <dt>Bindless manager</dt><dd>Descriptor set with variable count; materials store indices</dd>
+        <dt>Frame ring</dt><dd>Typically 3: command buffer, fence, staging mapped for CPU readback</dd>
+        <dt>DeferredRenderer</dt><dd>Full pass graph object, resized to width×height</dd>
+        <dt>RTAccelerationStructure</dt><dd>Ready to receive BLAS/TLAS; empty until scene upload</dd>
+        <dt>PathTracer</dt><dd><em>Not</em> constructed yet (lazy)</dd>
+      </dl>
+
+      <div class="section-rule"><h2 id="scene-up">Scene → GPU upload workflow</h2></div>
+      <div class="prose reveal">
+        <p class="lead">When <code>setScene</code> runs (or scene dirties), the renderer walks actors and materializes GPU truth. RT path is concentrated in <code>rt_build.cpp</code>.</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">Upload spine (conceptual)</div>
+        <ol>
+          <li>Collect mesh components → pack / upload vertex + index buffers; build <code>m_meshBufferMap</code></li>
+          <li>Upload textures into BindlessTextureManager; record indices on materials</li>
+          <li>Pack matColors SSBO (3×vec4) + matID per triangle; keep order stable</li>
+          <li>Upload lights → deferred UBO and/or PT <code>GPULight</code> SSBO</li>
+          <li>Optional HDRI → image + env CDF buffers</li>
+          <li><span class="em">buildBLASTLAS</span>: one BLAS per mesh actor; TLAS instances in <strong>same order</strong> as material rows</li>
+          <li>If PathTracer already exists, re-bind buffers/descriptors (materials, textures, lights, env)</li>
+        </ol>
+      </div>
+      <div class="decision reveal">
+        <div class="decision-head"><span class="decision-tag">Invariant</span><h4>TLAS instance order = material row order</h4></div>
+        <div class="decision-body">
+          <p>Closesthit / custom indices assume this. Two independent loops that sort differently will silently swap materials across the whole scene.</p>
+        </div>
+      </div>
+
+      <div class="section-rule"><h2 id="frame">One deferred frame (host side)</h2></div>
+      <div class="prose reveal">
+        <p><code>renderDeferred()</code> in <code>render_dispatch.cpp</code>:</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">renderDeferred</div>
+        <ol>
+          <li>Select ring slot <code>m_currentFrame</code>; <span class="em">wait</span> on its fence (GPU finished with that slot)</li>
+          <li>Copy <em>this</em> slot’s staging buffer → <code>m_pixelBuffer</code> (RGBA8 readback of a prior submit)</li>
+          <li>Reset command buffer; push camera matrices into DeferredRenderer</li>
+          <li>Wire TLAS for hybrid if available; env map view; geometry buffers; update light UBO (sky/sun blend fallback)</li>
+          <li>Begin cmd; <code>DeferredRenderer::render(cmd, frameIndex)</code> — full pass graph</li>
+          <li>Copy deferred final color → staging; end cmd; <span class="em">queue submit</span> with fence</li>
+          <li>Advance frame index modulo ring size</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal">
+        <div class="why-label">Why wait-then-read staging</div>
+        <p>CPU readback of a buffer the GPU still writes is a race. The ring keeps N frames of staging; you always read the slot you just waited on — data from a completed submit, not the one in flight.</p>
+      </div>
+      <div class="jargon reveal"><div class="j-term">Jargon · ring / frames in flight</div>
+        <p>Multiple command buffers so CPU can record frame N while GPU executes N−1. OHAO’s offscreen path also uses the ring for safe pixel download.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="rt">RT attach &amp; lazy PathTracer</h2></div>
+      <div class="prose reveal">
+        <p><code>ensureRTRenderer(mode)</code> creates either realtime or offline PathTracer profile, allocates AOV images, builds RT pipeline/SBT, then re-uploads scene bindings if a scene is already set. <code>setRenderMode</code> switches dispatch between deferred / RT paths without recreating the device.</p>
+        <p>PT render path: bind descriptors → trace rays → optional denoise → copy beauty to staging (see Ch.&nbsp;06).</p>
+      </div>
+
+      <div class="section-rule"><h2 id="files">Source map by concern</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>renderer.cpp</code><span class="desc">initialize / shutdown / setScene / mode</span></div>
+        <div class="row"><code>device_setup.cpp</code><span class="desc">instance, device, pool, sync, frame resources</span></div>
+        <div class="row"><code>buffer_setup.cpp</code><span class="desc">VB/IB/UBO scaffolding</span></div>
+        <div class="row"><code>scene_upload.cpp</code><span class="desc">mesh draws, buffer maps</span></div>
+        <div class="row"><code>rt_build.cpp</code><span class="desc">RT buffers + buildBLASTLAS</span></div>
+        <div class="row"><code>light_upload.cpp</code><span class="desc">lights + env</span></div>
+        <div class="row"><code>render_dispatch.cpp</code><span class="desc">renderDeferred / RT / readback</span></div>
+        <div class="row"><code>bindless_texture_manager.*</code><span class="desc">indexed textures</span></div>
+        <div class="row"><code>frame/frame_resources.*</code><span class="desc">ring slots</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="gpu/renderer-facade.html">
+          <div class="num">renderer-facade</div>
+          <h3>VulkanRenderer facade</h3>
+          <p>Public API: modes, setScene, ensureRT, denoise, pixels, present.</p>
+        </a>
+        <a class="tree-card" href="gpu/init.html">
+          <div class="num">init</div>
+          <h3>Device init</h3>
+          <p>createInstance → pickPhysicalDevice → createLogicalDevice feature chain.</p>
+        </a>
+        <a class="tree-card" href="gpu/bindless.html">
+          <div class="num">bindless</div>
+          <h3>Bindless textures</h3>
+          <p>BindlessTextureManager: variable count array, update-after-bind.</p>
+        </a>
+        <a class="tree-card" href="gpu/buffers-alloc.html">
+          <div class="num">buffers-alloc</div>
+          <h3>Buffers &amp; allocator</h3>
+          <p>VMA-style allocation, staging, UBOs, GPU allocator helpers.</p>
+        </a>
+        <a class="tree-card" href="gpu/scene-upload.html">
+          <div class="num">scene-upload</div>
+          <h3>Scene upload</h3>
+          <p>Meshes → VB/IB map; materials; lights; env.</p>
+        </a>
+        <a class="tree-card" href="gpu/rt-build.html">
+          <div class="num">rt-build</div>
+          <h3>RT build (BLAS/TLAS)</h3>
+          <p>buildBLASTLAS order, instance transforms, material lockstep.</p>
+        </a>
+        <a class="tree-card" href="gpu/dispatch.html">
+          <div class="num">dispatch</div>
+          <h3>Render dispatch</h3>
+          <p>renderDeferred vs RT path, staging readback ring.</p>
+        </a>
+        <a class="tree-card" href="gpu/layout-meta.html">
+          <div class="num">layout-meta</div>
+          <h3>Layout contracts</h3>
+          <p>OHAO_ASSERT_GPU_LAYOUT, MaterialGpuPack, push-constant sizes.</p>
+        </a>
+        <a class="tree-card" href="gpu/pipeline-fb.html">
+          <div class="num">pipeline-fb</div>
+          <h3>Legacy pipeline &amp; framebuffer</h3>
+          <p>Forward pipeline creation, offscreen FB, shadow resources.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="scene.html"><div class="label">← Previous</div><div class="title">02 · Scene</div></a>
+        <a class="next" href="materials.html"><div class="label">Next →</div><div class="title">04 · Materials</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

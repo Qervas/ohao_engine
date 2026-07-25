@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01b · Core — OHAO Monograph</title>
+  <meta name="description" content="01b · Core hub" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="core/index" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> · 01b · Core</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">▸</div>
+        <div>
+          <p class="chapter-kicker">Module hub</p>
+          <h1>01b · Core</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Module</div>
+        <p>Design units under <strong>core</strong> — what it is, how it is implemented, why the design exists.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page. Full tree: <a href="../sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="types-concepts.html">
+          <div class="num">types-concepts</div>
+          <h3>Types &amp; concepts</h3>
+          <p>GpuPod, common_types, C++20 concepts used across modules.</p>
+        </a>
+        <a class="tree-card" href="event-bus.html">
+          <div class="num">event-bus</div>
+          <h3>EventBus</h3>
+          <p>Thread-safe pub/sub with typed subscribe helpers.</p>
+        </a>
+        <a class="tree-card" href="command-result.html">
+          <div class="num">command-result</div>
+          <h3>Command history &amp; Result</h3>
+          <p>Undo/redo command pattern and fallible Result type.</p>
+        </a>
+        <a class="tree-card" href="console-widget.html">
+          <div class="num">console-widget</div>
+          <h3>Console widget</h3>
+          <p>In-engine console / log surface for debug tooling.</p>
+        </a>
+      </div>
+
+
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Render graph — OHAO Monograph</title>
+  <meta name="description" content="Render graph hub" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="graph/index" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> · Render graph</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">▸</div>
+        <div>
+          <p class="chapter-kicker">Module hub</p>
+          <h1>Render graph</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Module</div>
+        <p>Design units under <strong>graph</strong> — what it is, how it is implemented, why the design exists.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page. Full tree: <a href="../sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="render-graph.html">
+          <div class="num">render-graph</div>
+          <h3>RenderGraph</h3>
+          <p>Declare passes, barriers, compile order.</p>
+        </a>
+        <a class="tree-card" href="frame-resources.html">
+          <div class="num">frame-resources</div>
+          <h3>Frame resources ring</h3>
+          <p>MAX_FRAMES_IN_FLIGHT=3, fences, staging, per-frame UBOs.</p>
+        </a>
+        <a class="tree-card" href="async-compute.html">
+          <div class="num">async-compute</div>
+          <h3>Async compute queue</h3>
+          <p>Optional async compute path.</p>
+        </a>
+        <a class="tree-card" href="ibl-processor.html">
+          <div class="num">ibl-processor</div>
+          <h3>IBL processor</h3>
+          <p>Env map processing (cubemap/prefilter) helpers.</p>
+        </a>
+        <a class="tree-card" href="particles.html">
+          <div class="num">particles</div>
+          <h3>Particle system</h3>
+          <p>CPU/GPU particle orchestration.</p>
+        </a>
+        <a class="tree-card" href="picking.html">
+          <div class="num">picking</div>
+          <h3>Picking</h3>
+          <p>Ray pick helpers for selection.</p>
+        </a>
+        <a class="tree-card" href="culling.html">
+          <div class="num">culling</div>
+          <h3>Culling</h3>
+          <p>CPU/GPU cull helpers (HiZ / light cull compute).</p>
+        </a>
+      </div>
+
+
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

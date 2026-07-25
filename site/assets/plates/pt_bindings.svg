@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1480" role="img" aria-label="Path tracer descriptor binding map set 0">
+  <title>OHAO PathTracer · Descriptor set 0 bindings (shipped)</title>
+  <defs>
+    <style>
+      .bg { fill: #0a0b0e; }
+      .card { fill: #171b24; stroke: #2a3140; stroke-width: 1; }
+      .h { font-family: 'DM Sans', system-ui, sans-serif; fill: #c9a27a; font-size: 11px; letter-spacing: 2px; }
+      .t { font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif; fill: #ebe4d6; font-size: 15px; }
+      .s { font-family: 'DM Sans', system-ui, sans-serif; fill: #a39c8e; font-size: 11px; }
+      .n { font-family: 'IBM Plex Mono', ui-monospace, monospace; fill: #9ad4e8; font-size: 12px; }
+      .tag { font-family: 'DM Sans', system-ui, sans-serif; fill: #6eb8d4; font-size: 9px; letter-spacing: 1px; }
+      .foot { font-family: 'DM Sans', system-ui, sans-serif; fill: #6e685c; font-size: 11px; letter-spacing: 1.5px; }
+    </style>
+  </defs>
+  <rect class="bg" width="1100" height="1480"/>
+  <text x="60" y="52" class="h">PLATE · PATH TRACER DESCRIPTORS</text>
+  <text x="60" y="88" class="t" style="font-size:28px">Set 0 binding map (as shipped)</text>
+  <text x="60" y="118" class="s">path_tracer_descriptors.cpp · pt_raygen.rgen · CLAUDE.md</text>
+
+  <!-- Column headers -->
+  <text x="70" y="165" class="tag">#</text>
+  <text x="120" y="165" class="tag">TYPE</text>
+  <text x="360" y="165" class="tag">CONTENT</text>
+  <text x="780" y="165" class="tag">STAGES / NOTES</text>
+  <line x1="60" y1="178" x2="1040" y2="178" stroke="#2a3140"/>
+
+  <!-- Rows: binding data -->
+  <g id="rows" font-size="12">
+    <!-- generated as rects -->
+  </g>
+  <!-- Manual rows for clarity -->
+  <g transform="translate(0,190)">
+    <!-- helper: y = i*36 -->
+    <rect class="card" x="60" y="0" width="980" height="32" rx="2"/>
+    <text x="74" y="21" class="n">0</text>
+    <text x="120" y="21" class="s">ACCEL_STRUCTURE</text>
+    <text x="360" y="21" class="t" style="font-size:13px">TLAS (topLevelAS)</text>
+    <text x="780" y="21" class="s">raygen</text>
+
+    <rect class="card" x="60" y="36" width="980" height="32" rx="2"/>
+    <text x="74" y="57" class="n">1</text>
+    <text x="120" y="57" class="s">STORAGE rgba32f</text>
+    <text x="360" y="57" class="t" style="font-size:13px">Accumulation buffer (HDR mean)</text>
+    <text x="780" y="57" class="s">raygen</text>
+
+    <rect class="card" x="60" y="72" width="980" height="32" rx="2"/>
+    <text x="74" y="93" class="n">2</text>
+    <text x="120" y="93" class="s">STORAGE rgba8</text>
+    <text x="360" y="93" class="t" style="font-size:13px">Tonemapped output image</text>
+    <text x="780" y="93" class="s">raygen</text>
+
+    <rect class="card" x="60" y="108" width="980" height="32" rx="2"/>
+    <text x="74" y="129" class="n">3</text>
+    <text x="120" y="129" class="s">SSBO</text>
+    <text x="360" y="129" class="t" style="font-size:13px">Per-instance / material rows</text>
+    <text x="780" y="129" class="s">rgen+chit</text>
+
+    <rect class="card" x="60" y="144" width="980" height="32" rx="2"/>
+    <text x="74" y="165" class="n">4</text>
+    <text x="120" y="165" class="s">SSBO</text>
+    <text x="360" y="165" class="t" style="font-size:13px">Vertex normals</text>
+    <text x="780" y="165" class="s">closesthit</text>
+
+    <rect class="card" x="60" y="180" width="980" height="32" rx="2"/>
+    <text x="74" y="201" class="n">5</text>
+    <text x="120" y="201" class="s">SSBO</text>
+    <text x="360" y="201" class="t" style="font-size:13px">Triangle indices</text>
+    <text x="780" y="201" class="s">chit+anyhit</text>
+
+    <rect class="card" x="60" y="216" width="980" height="32" rx="2"/>
+    <text x="74" y="237" class="n">6</text>
+    <text x="120" y="237" class="s">STORAGE rgba32f</text>
+    <text x="360" y="237" class="t" style="font-size:13px">Albedo AOV (OIDN guide)</text>
+    <text x="780" y="237" class="s">raygen</text>
+
+    <rect class="card" x="60" y="252" width="980" height="32" rx="2"/>
+    <text x="74" y="273" class="n">7</text>
+    <text x="120" y="273" class="s">STORAGE rgba32f</text>
+    <text x="360" y="273" class="t" style="font-size:13px">Normal AOV (OIDN / DLSS pack mode)</text>
+    <text x="780" y="273" class="s">raygen</text>
+
+    <rect class="card" x="60" y="288" width="980" height="32" rx="2"/>
+    <text x="74" y="309" class="n">8</text>
+    <text x="120" y="309" class="s">SSBO</text>
+    <text x="360" y="309" class="t" style="font-size:13px">Vertex UVs</text>
+    <text x="780" y="309" class="s">chit+anyhit</text>
+
+    <rect class="card" x="60" y="324" width="980" height="32" rx="2"/>
+    <text x="74" y="345" class="n">9</text>
+    <text x="120" y="345" class="s">SSBO</text>
+    <text x="360" y="345" class="t" style="font-size:13px">Material ID per triangle</text>
+    <text x="780" y="345" class="s">chit+anyhit</text>
+
+    <rect class="card" x="60" y="360" width="980" height="32" rx="2"/>
+    <text x="74" y="381" class="n">10</text>
+    <text x="120" y="381" class="s">SSBO</text>
+    <text x="360" y="381" class="t" style="font-size:13px">matColors · 3×vec4 per material</text>
+    <text x="780" y="381" class="s">chit+anyhit</text>
+
+    <rect class="card" x="60" y="396" width="980" height="32" rx="2" style="stroke:#6eb8d4"/>
+    <text x="74" y="417" class="n">11</text>
+    <text x="120" y="417" class="s">SSBO</text>
+    <text x="360" y="417" class="t" style="font-size:13px">GPULight[] + lightCount · NEE source</text>
+    <text x="780" y="417" class="s">rgen+miss</text>
+
+    <rect class="card" x="60" y="432" width="980" height="32" rx="2"/>
+    <text x="74" y="453" class="n">12</text>
+    <text x="120" y="453" class="s">COMBINED ×N</text>
+    <text x="360" y="453" class="t" style="font-size:13px">Bindless textures[] array</text>
+    <text x="780" y="453" class="s">chit+miss+ahit</text>
+
+    <rect class="card" x="60" y="468" width="980" height="32" rx="2"/>
+    <text x="74" y="489" class="n">13–16</text>
+    <text x="120" y="489" class="s">STORAGE / hist</text>
+    <text x="360" y="489" class="t" style="font-size:13px">Surface / shading history (temporal)</text>
+    <text x="780" y="489" class="s">raygen</text>
+
+    <rect class="card" x="60" y="504" width="980" height="32" rx="2" style="stroke:#c9a27a"/>
+    <text x="74" y="525" class="n">17</text>
+    <text x="120" y="525" class="s">SSBO float[]</text>
+    <text x="360" y="525" class="t" style="font-size:13px">Env marginal CDF (rows)</text>
+    <text x="780" y="525" class="s">env IS</text>
+
+    <rect class="card" x="60" y="540" width="980" height="32" rx="2" style="stroke:#c9a27a"/>
+    <text x="74" y="561" class="n">18</text>
+    <text x="120" y="561" class="s">SSBO float[]</text>
+    <text x="360" y="561" class="t" style="font-size:13px">Env conditional CDF (per row)</text>
+    <text x="780" y="561" class="s">env IS</text>
+
+    <rect class="card" x="60" y="576" width="980" height="32" rx="2"/>
+    <text x="74" y="597" class="n">19</text>
+    <text x="120" y="597" class="s">STORAGE rg16f</text>
+    <text x="360" y="597" class="t" style="font-size:13px">Motion vectors</text>
+    <text x="780" y="597" class="s">NRD / DLSS</text>
+
+    <rect class="card" x="60" y="612" width="980" height="32" rx="2"/>
+    <text x="74" y="633" class="n">20</text>
+    <text x="120" y="633" class="s">STORAGE r32f</text>
+    <text x="360" y="633" class="t" style="font-size:13px">Depth AOV / ViewZ</text>
+    <text x="780" y="633" class="s">NRD guide</text>
+
+    <rect class="card" x="60" y="648" width="980" height="32" rx="2"/>
+    <text x="74" y="669" class="n">21</text>
+    <text x="120" y="669" class="s">STORAGE r16f</text>
+    <text x="360" y="669" class="t" style="font-size:13px">Roughness AOV</text>
+    <text x="780" y="669" class="s">guides</text>
+
+    <rect class="card" x="60" y="684" width="980" height="32" rx="2" style="stroke:#6eb8d4"/>
+    <text x="74" y="705" class="n">22</text>
+    <text x="120" y="705" class="s">STORAGE rgba32f</text>
+    <text x="360" y="705" class="t" style="font-size:13px">Diffuse radiance + hit-dist (YCoCg pack for NRD)</text>
+    <text x="780" y="705" class="s">demod</text>
+
+    <rect class="card" x="60" y="720" width="980" height="32" rx="2" style="stroke:#6eb8d4"/>
+    <text x="74" y="741" class="n">23</text>
+    <text x="120" y="741" class="s">STORAGE rgba32f</text>
+    <text x="360" y="741" class="t" style="font-size:13px">Specular radiance + hit-dist</text>
+    <text x="780" y="741" class="s">demod</text>
+
+    <rect class="card" x="60" y="756" width="980" height="32" rx="2"/>
+    <text x="74" y="777" class="n">24</text>
+    <text x="120" y="777" class="s">STORAGE rgba8</text>
+    <text x="360" y="777" class="t" style="font-size:13px">Diffuse albedo c·(1−m)</text>
+    <text x="780" y="777" class="s">demod factor</text>
+
+    <rect class="card" x="60" y="792" width="980" height="32" rx="2"/>
+    <text x="74" y="813" class="n">25</text>
+    <text x="120" y="813" class="s">STORAGE rgba8</text>
+    <text x="360" y="813" class="t" style="font-size:13px">Specular color / F0</text>
+    <text x="780" y="813" class="s">demod factor</text>
+
+    <rect class="card" x="60" y="828" width="980" height="32" rx="2"/>
+    <text x="74" y="849" class="n">26</text>
+    <text x="120" y="849" class="s">STORAGE rgb10_a2</text>
+    <text x="360" y="849" class="t" style="font-size:13px">NRD normal+roughness packed</text>
+    <text x="780" y="849" class="s">REBLUR</text>
+
+    <rect class="card" x="60" y="864" width="980" height="32" rx="2"/>
+    <text x="74" y="885" class="n">27–28</text>
+    <text x="120" y="885" class="s">STORAGE rgba32f</text>
+    <text x="360" y="885" class="t" style="font-size:13px">NRD denoised diffuse / specular (set 0 slots)</text>
+    <text x="780" y="885" class="s">raygen layout</text>
+
+    <rect class="card" x="60" y="900" width="980" height="32" rx="2" style="stroke:#6eb8d4"/>
+    <text x="74" y="921" class="n">29–31</text>
+    <text x="120" y="921" class="s">STORAGE image</text>
+    <text x="360" y="921" class="t" style="font-size:13px">ReSTIR GI reservoir prev planes 0–2 (read)</text>
+    <text x="780" y="921" class="s">Phase 1</text>
+
+    <rect class="card" x="60" y="936" width="980" height="32" rx="2" style="stroke:#6eb8d4"/>
+    <text x="74" y="957" class="n">32–34</text>
+    <text x="120" y="957" class="s">STORAGE image</text>
+    <text x="360" y="957" class="t" style="font-size:13px">ReSTIR GI reservoir curr planes 0–2 (write)</text>
+    <text x="780" y="957" class="s">ping-pong</text>
+
+    <rect class="card" x="60" y="972" width="980" height="32" rx="2" style="stroke:#c9a27a"/>
+    <text x="74" y="993" class="n">35</text>
+    <text x="120" y="993" class="s">STORAGE r32f</text>
+    <text x="360" y="993" class="t" style="font-size:13px">DLSS-RR specular hit-distance guide</text>
+    <text x="780" y="993" class="s">realtime</text>
+  </g>
+
+  <text x="60" y="1210" class="h">SOURCE OF TRUTH</text>
+  <text x="60" y="1240" class="s">path_tracer_descriptors.cpp · createDescriptorResources() · bindings[36] (0…35)</text>
+  <text x="60" y="1258" class="s">29–34 = ReSTIR GI reservoir ping-pong · 35 = DLSS-RR spec hit-dist (not NRD compose beauty).</text>
+  <text x="60" y="1286" class="s">NRD composed HDR / tonemap beauty live on separate compose/tonemap sets — not these set-0 indices.</text>
+
+  <text x="550" y="1440" text-anchor="middle" class="foot">FIG. BIND-1  ·  OHAO PATHTRACER DESCRIPTOR SET 0  ·  FULL-PAGE PLATE</text>
+</svg>

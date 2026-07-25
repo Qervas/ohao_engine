@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shaders · RT program family — OHAO Monograph</title>
+  <meta name="description" content="pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="shaders/rt-shaders" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sitemap.html">← Sitemap</a> · RT program family</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">shaders</p>
+          <h1>RT program family</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="prose reveal">
+<p>Full RT program family: path tracer stages, hybrid shadow/GI, NRD compose, SVGF/à-trous, cinematic post.</p>
+</div>
+<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="prose reveal">
+<p>pt_* for full PT; rt_shadow_* / rt_gi_* for hybrid; compute post for denoise/cinematic.</p>
+</div>
+<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="prose reveal">
+<p>One SPIR-V family documented together so binding/SBT changes stay coordinated.</p>
+</div>
+<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="prose reveal">
+<p>pt_raygen.rgen = reference brute force; realtime/offline variants add NEE/MIS/AOV packing.</p>
+<p>Hybrid: rt_shadow_* visibility; rt_gi_* one-bounce inject into deferred.</p>
+<p>Post-RT: NRD compose unpack, optional SVGF/à-trous, cinematic bloom/DoF.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_shadow.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_shadow.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_shadow.rahit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_gi.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_gi.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_gi.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/nrd_compose.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_svgf_temporal.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_svgf_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_bloom_extract.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_bloom_blur.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_dof.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_composite.comp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="overlay-gizmo.html"><div class="label">← Prev</div><div class="title">Overlay gizmo shaders</div></a><a class="next" href="disabled.html"><div class="label">Next →</div><div class="title">Disabled shader archive</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

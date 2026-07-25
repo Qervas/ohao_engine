@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>01 · Architecture · Request path — OHAO Monograph</title>
+  <meta name="description" content="CLI/example → Scene → VulkanRenderer::initialize → setScene → render → pixels." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="architecture/request-path" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../architecture.html">← Module hub</a> · Request path</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">architecture</p>
+          <h1>Request path</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>CLI/example → Scene → VulkanRenderer::initialize → setScene → render → pixels.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="prose reveal">
+<p>The request path is the single mental model for every OHAO binary: a thin driver builds a Scene, hands it to VulkanRenderer, chooses a RenderMode, and either presents a swapchain or reads pixels.</p>
+<p>Examples (interactive, cornell_box, turntable, model_viewer) share this path; they differ only in scene construction and CLI flags.</p>
+</div>
+<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="prose reveal">
+<p>Parse CLI (model path, HDR env, --mode, --denoise, spp).</p>
+<p>Construct Scene; loaders fill Mesh/Material/Light components without touching Vulkan.</p>
+<p>VulkanRenderer(w,h).initialize() creates instance, device, queues, frame ring, bindless pool.</p>
+<p>setScene uploads geometry and materials, then buildBLASTLAS when RT is needed.</p>
+<p>setRenderMode selects Forward, Deferred, RTRealtime, or RTOffline; ensureRTRenderer lazily constructs PathTracer.</p>
+<p>render() records and submits; getPixels copies staging after fence wait for offline/goldens.</p>
+<ul>
+<li>Parse CLI (model, env, mode, denoise)</li>
+<li>Build Scene + load assets into components</li>
+<li>VulkanRenderer(w,h).initialize() cold start</li>
+<li>setScene → upload + BLAS/TLAS</li>
+<li>setRenderMode / ensureRTRenderer as needed</li>
+<li>render() loop or single shot; getPixels / present</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="prose reveal">
+<p>One API surface means tests, demos, and tools never fork renderer semantics. Lazy RT avoids dual 4K path-tracer OOM when you only needed deferred.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Scene must not include vulkan.h</li>
+<li>initialize before setScene</li>
+<li>wait fence before staging readback</li>
+<li>TLAS instance order matches material rows after upload</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="prose reveal">
+<p>The engine is a library: no editor host required.</p>
+<p>Examples are thin drivers over the same API surface.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/cornell_box.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="../architecture.html"><div class="label">← Hub</div><div class="title">01 · Architecture</div></a><a class="next" href="invariants.html"><div class="label">Next →</div><div class="title">Cross-module invariants</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

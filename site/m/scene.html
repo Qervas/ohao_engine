@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>02 · Scene & ECS — OHAO Monograph</title>
+  <meta name="description" content="Actor lifecycle, loaders, hand-off to GPU." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="scene" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 02 · Scene & ECS</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">02</div>
+        <div>
+          <p class="chapter-kicker">Foundations · deep dive</p>
+          <h1>Scene &amp; ECS</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>How a world is represented <em>before</em> Vulkan: actors, components, loaders, physics attachment, and the hand-off when the renderer uploads. After this, “scene” is not a vague bag of meshes.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#lifecycle">Scene lifecycle</a></li>
+          <li><a href="#actor">Actor &amp; components</a></li>
+          <li><a href="#load">Asset load workflow</a></li>
+          <li><a href="#phys">Physics attachment</a></li>
+          <li><a href="#hand">Hand-off to renderer</a></li>
+          <li><a href="#files">Files</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="lifecycle">Scene lifecycle</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">From construction to simulation</div>
+        <ol>
+          <li><span class="em">Scene(name)</span> creates a root actor <code>"World"</code>, registers it, constructs <code>PhysicsWorld</code> with default gravity (0,−9.81,0)</li>
+          <li>Examples/tools call <code>createActor</code> / load models into actors</li>
+          <li><code>initialize()</code> walks all actors → each component <code>initialize()</code></li>
+          <li>Per-frame: optional physics <code>step</code>, actor <code>update</code>, then renderer reads components</li>
+          <li><code>destroy</code> / removeActor unregisters hierarchy and tears down components</li>
+        </ol>
+      </div>
+      <div class="prose reveal">
+        <p>Lookups: by id, by exact name, by partial name, by tag. Maps: <code>actors</code> (id) and <code>actorsByName</code>.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="actor">Actor &amp; component workflow</h2></div>
+      <div class="prose reveal">
+        <p class="lead">Every <code>Actor</code> is a <code>SceneObject</code> with hierarchy (parent/children) and a component bag. Constructor always installs a <code>TransformComponent</code>.</p>
+      </div>
+      <figure class="plate reveal">
+        <div class="plate-frame svg-frame" data-no-glossary>
+          <svg data-no-glossary="1" viewBox="0 0 900 340" xmlns="http://www.w3.org/2000/svg">
+            <rect x="350" y="20" width="200" height="50" rx="4" fill="#171b24" stroke="#6eb8d4"/><text x="450" y="50" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="16">Actor</text>
+            <line x1="450" y1="70" x2="450" y2="100" stroke="#6e685c"/>
+            <line x1="120" y1="100" x2="780" y2="100" stroke="#6e685c"/>
+            <line x1="120" y1="100" x2="120" y2="120" stroke="#6e685c"/>
+            <line x1="300" y1="100" x2="300" y2="120" stroke="#6e685c"/>
+            <line x1="480" y1="100" x2="480" y2="120" stroke="#6e685c"/>
+            <line x1="660" y1="100" x2="660" y2="120" stroke="#6e685c"/>
+            <line x1="780" y1="100" x2="780" y2="120" stroke="#6e685c"/>
+            <rect x="50" y="120" width="140" height="70" rx="3" fill="#11141a" stroke="#c9a27a"/><text x="120" y="160" text-anchor="middle" fill="#c9a27a" font-size="13" font-family="DM Sans, system-ui, sans-serif">Transform</text>
+            <rect x="230" y="120" width="140" height="70" rx="3" fill="#11141a" stroke="#c9a27a"/><text x="300" y="160" text-anchor="middle" fill="#c9a27a" font-size="13" font-family="DM Sans, system-ui, sans-serif">Mesh</text>
+            <rect x="410" y="120" width="140" height="70" rx="3" fill="#11141a" stroke="#c9a27a"/><text x="480" y="160" text-anchor="middle" fill="#c9a27a" font-size="13" font-family="DM Sans, system-ui, sans-serif">Material</text>
+            <rect x="590" y="120" width="140" height="70" rx="3" fill="#11141a" stroke="#6eb8d4"/><text x="660" y="160" text-anchor="middle" fill="#6eb8d4" font-size="13" font-family="DM Sans, system-ui, sans-serif">Light</text>
+            <rect x="720" y="210" width="140" height="70" rx="3" fill="#11141a" stroke="#8a6f52"/><text x="790" y="250" text-anchor="middle" fill="#c9a27a" font-size="13" font-family="DM Sans, system-ui, sans-serif">Physics</text>
+            <path d="M660 190 V245 H790" fill="none" stroke="#6e685c"/>
+            <text x="450" y="320" text-anchor="middle" fill="#6e685c" font-size="11" font-family="DM Sans, system-ui, sans-serif" letter-spacing="2">FIG. SC-1  ·  COMPOSITION</text>
+          </svg>
+        </div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. SC-1</span>
+          <p>Renderer queries components; physics binds through <code>PhysicsComponent</code> into the scene’s world.</p>
+        </figcaption>
+      </figure>
+      <div class="algo reveal">
+        <div class="algo-bar">Actor lifecycle methods</div>
+        <ol>
+          <li><span class="em">initialize</span> — each component + children</li>
+          <li><span class="em">start</span> — first-frame hooks</li>
+          <li><span class="em">update(dt)</span> — logic; transform may be written by physics</li>
+          <li><span class="em">render</span> — rarely used for GPU draw; visual path is renderer-driven</li>
+          <li><span class="em">destroy</span> — reverse teardown</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why components not inheritance</div>
+        <p>A light does not need a mesh; a static prop does not need a rigid body. Composition keeps loaders and the renderer generic: “for each MeshComponent, upload…”.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="load">Asset load workflow</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">From file to components</div>
+        <ol>
+          <li>Detect format (extension / header)</li>
+          <li><strong>GLTF/GLB</strong> → tinygltf: nodes, primitives, metallic-roughness, embedded images</li>
+          <li><strong>FBX/…</strong> → Assimp: meshes, materials, embedded textures</li>
+          <li><strong>OBJ</strong> → custom parser + texture folder heuristics; filter alpha-card junk materials</li>
+          <li>Build CPU <code>Model</code> / mesh data; create or fill Mesh + Material components on actors</li>
+          <li>Auto up-axis fix (Y vs Z) so DamagedHelmet-class assets stand correctly</li>
+          <li>Per-triangle material IDs for multi-material meshes (RT needs them)</li>
+        </ol>
+      </div>
+      <div class="prose reveal">
+        <p>Loaders do <strong>not</strong> touch Vulkan. GPU upload is a later phase owned by Ch.&nbsp;03.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="phys">Physics attachment</h2></div>
+      <div class="prose reveal">
+        <p>Scene owns one <code>PhysicsWorld</code>. Attaching simulation: add <code>PhysicsComponent</code>, configure shape/body type, register with the world. Each step, transforms can write back so rendering sees motion. Details in Ch.&nbsp;11.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="hand">Hand-off to renderer</h2></div>
+      <div class="prose reveal">
+        <p class="lead">Contract at the boundary:</p>
+        <ul>
+          <li>Scene pointer is stable for the frame</li>
+          <li>MeshComponent → positions/indices/UVs/normals available on CPU (or already uploaded handles)</li>
+          <li>MaterialComponent → PBR params + logical texture names/indices</li>
+          <li>LightComponent → typed lights for UBO/SSBO packing</li>
+          <li>Transform → world matrix for TLAS instances and model matrices</li>
+        </ul>
+      </div>
+      <div class="decision reveal">
+        <div class="decision-head"><span class="decision-tag">Design</span><h4>Scene never includes vulkan.h</h4></div>
+        <div class="decision-body">
+          <p>Keeps unit tests and tools able to build scenes without a GPU. The renderer is the only Vulkan citizen for visual data.</p>
+        </div>
+      </div>
+      <div class="section-rule"><h2 id="files">Files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>scene/scene.*</code><span class="desc">Ownership, physics world, initialize</span></div>
+        <div class="row"><code>actor/actor.*</code><span class="desc">Hierarchy + components</span></div>
+        <div class="row"><code>component/*</code><span class="desc">Transform mesh material light</span></div>
+        <div class="row"><code>asset/model_*.cpp</code><span class="desc">GLTF / FBX / OBJ</span></div>
+        <div class="row"><code>component_factory.*</code><span class="desc">Primitive actor kits</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="scene/actors.html">
+          <div class="num">actors</div>
+          <h3>Actors &amp; hierarchy</h3>
+          <p>Actor as SceneObject with parent/children and lifecycle.</p>
+        </a>
+        <a class="tree-card" href="scene/components.html">
+          <div class="num">components</div>
+          <h3>Components</h3>
+          <p>Mesh, Material, Light, Transform, factory packs.</p>
+        </a>
+        <a class="tree-card" href="scene/loaders.html">
+          <div class="num">loaders</div>
+          <h3>Asset loaders</h3>
+          <p>GLTF (tinygltf), FBX (Assimp), OBJ custom, primitives.</p>
+        </a>
+        <a class="tree-card" href="scene/scene-api.html">
+          <div class="num">scene-api</div>
+          <h3>Scene API</h3>
+          <p>createActor, lookup, tags, physics world ownership, serialize hooks.</p>
+        </a>
+        <a class="tree-card" href="scene/transform.html">
+          <div class="num">transform</div>
+          <h3>Transform math</h3>
+          <p>TRS composition and world matrix used by upload/TLAS.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="architecture.html"><div class="label">← Previous</div><div class="title">01 · Architecture</div></a>
+        <a class="next" href="gpu.html"><div class="label">Next →</div><div class="title">03 · GPU</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

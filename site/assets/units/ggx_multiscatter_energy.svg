@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" class="unit-diagram" role="img" aria-label="GGX single-scatter energy loss vs roughness, with multi-scatter compensation">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">GGX DIRECTIONAL ALBEDO E(roughness), NdotV=1</text>
+<!-- axes -->
+<line x1="70" y1="40" x2="70" y2="260" stroke="#3d4a58" stroke-width="1"/>
+<line x1="70" y1="260" x2="680" y2="260" stroke="#3d4a58" stroke-width="1"/>
+<text x="24" y="52" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">1.0</text>
+<text x="24" y="150" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.7</text>
+<text x="24" y="262" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.4</text>
+<text x="66" y="278" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0</text>
+<text x="660" y="278" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">1</text>
+<text x="360" y="296" fill="#8a8490" font-family="DM Sans,sans-serif" font-size="12">roughness →</text>
+<!-- compensated total ~= 1 (flat top) -->
+<polyline points="70,52 375,54 680,58" fill="none" stroke="#7dba8a" stroke-width="2"/>
+<text x="470" y="46" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">single + multi-scatter (energy conserved)</text>
+<!-- single-scatter only: droops toward high roughness -->
+<polyline points="70,54 200,66 340,104 470,150 600,196 680,224" fill="none" stroke="#c4784a" stroke-width="2"/>
+<text x="360" y="200" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">single-scatter GGX (loses energy)</text>
+<!-- lost-energy shading gap -->
+<text x="120" y="240" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">gap = energy Kulla-Conty/Turquin adds back</text>
+<text x="28" y="314" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual shape from GGX_E() polynomial (Turquin 2019) — brdf_ggx.glsl. Not a captured render.</text>
+</svg>
