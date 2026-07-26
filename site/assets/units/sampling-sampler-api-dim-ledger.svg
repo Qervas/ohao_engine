@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 280" class="unit-diagram" role="img" aria-label="One branch of the first-bounce dimension ledger of pt_raygen_offline.rgen: dims 0 to 7 grouped into two Owen-scramble pads of four, with the camera jitter taking dims 0 and 1, the light index taking dim 2, and the light-position 2D sample taking dims 3 and 4 across the pad boundary. A directional light spends no dimensions on a position, moving every later draw two slots earlier.">
+  <rect x="0" y="0" width="720" height="280" fill="#0f1419"/>
+
+  <text x="24" y="30" font-family="IBM Plex Mono,monospace" font-size="13" fill="#c4a574">dimIdx &#8594; (pad, local Sobol dimension)   &#8212;   pt_raygen_offline.rgen, bounce 0, sphere/spot/area light</text>
+
+  <!-- pad groups -->
+  <rect x="56" y="60" width="284" height="86" rx="6" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+  <rect x="352" y="60" width="284" height="86" rx="6" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+  <text x="66" y="78" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">pad 0 &#183; seed = h(pixel)</text>
+  <text x="362" y="78" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">pad 1 &#183; seed = h(pixel) &#8853; &#966;</text>
+
+  <!-- pad 0 cells: dims 0..3 -->
+  <rect x="66" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="97" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#e8e2d6">0</text>
+  <text x="97" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=0</text>
+
+  <rect x="133" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="164" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#e8e2d6">1</text>
+  <text x="164" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=1</text>
+
+  <rect x="200" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="231" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#e8e2d6">2</text>
+  <text x="231" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=2</text>
+
+  <rect x="267" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#c4784a" stroke-width="1.6"/>
+  <text x="298" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#c4784a">3</text>
+  <text x="298" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=3</text>
+
+  <!-- pad 1 cells: dims 4..7 -->
+  <rect x="362" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#c4784a" stroke-width="1.6"/>
+  <text x="393" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#c4784a">4</text>
+  <text x="393" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=0</text>
+
+  <rect x="429" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="460" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#e8e2d6">5</text>
+  <text x="460" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=1</text>
+
+  <rect x="496" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="527" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#e8e2d6">6</text>
+  <text x="527" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=2</text>
+
+  <rect x="563" y="88" width="63" height="42" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="594" y="106" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#e8e2d6">7</text>
+  <text x="594" y="122" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">&#8467;=3</text>
+
+  <!-- pad boundary -->
+  <line x1="346" y1="52" x2="346" y2="200" stroke="#c4784a" stroke-width="1" stroke-dasharray="3 4"/>
+
+  <!-- consumer brackets -->
+  <path d="M66 164 L66 172 L196 172 L196 164" fill="none" stroke="#7dba8a" stroke-width="1.2"/>
+  <text x="131" y="190" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#7dba8a">camera jitter (2D)</text>
+
+  <path d="M200 164 L200 172 L263 172 L263 164" fill="none" stroke="#7dba8a" stroke-width="1.2"/>
+  <text x="231" y="190" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#7dba8a">light index (1D)</text>
+
+  <path d="M267 164 L267 178 L425 178 L425 164" fill="none" stroke="#c4784a" stroke-width="1.6"/>
+  <text x="346" y="198" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#c4784a">first light-position sample (2D) &#8212; straddles the pad boundary</text>
+
+  <text x="24" y="234" font-family="DM Sans,sans-serif" font-size="12" fill="#6e685c">Within a pad, four dimensions share one Owen seed and are jointly stratified. A 2D draw that crosses a boundary gets two</text>
+  <text x="24" y="250" font-family="DM Sans,sans-serif" font-size="12" fill="#6e685c">independently scrambled coordinates instead. This is one branch: a directional light takes no position sample, so env-MIS</text>
+  <text x="24" y="266" font-family="DM Sans,sans-serif" font-size="12" fill="#6e685c">would start at dim 3 rather than dim 5, and every draw after it moves with it.</text>
+</svg>

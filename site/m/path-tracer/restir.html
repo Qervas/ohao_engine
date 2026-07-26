@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · ReSTIR GI reservoirs — OHAO Monograph</title>
+  <meta name="description" content="Ping-pong reservoir planes on bindings 29–34." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/restir" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · ReSTIR GI reservoirs</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>ReSTIR GI reservoirs</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Ping-pong reservoir planes on bindings 29–34.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#keeping-the-sample-instead-of-the-average">Keeping the sample instead of the average</a></li><li><a href="#twelve-floats-three-planes">Twelve floats, three planes</a></li><li><a href="#the-weight-that-makes-a-reused-sample-legal">The weight that makes a reused sample legal</a></li><li><a href="#re-evaluating-the-target-is-the-entire-correctness-argument">Re-evaluating the target is the entire correctness argument</a></li><li><a href="#spatial-reuse-rides-one-frame-behind">Spatial reuse rides one frame behind</a></li><li><a href="#the-wiring-head-no-longer-has">The wiring HEAD no longer has</a></li><li><a href="#two-sharp-edges-in-the-layout">Two sharp edges in the layout</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="keeping-the-sample-instead-of-the-average">Keeping the sample instead of the average</h2></div>
+<div class="prose reveal">
+<p>A one-sample diffuse bounce does not fail as pixel grain. It *boils*: every frame the cosine ray lands somewhere else, the wall&#x27;s indirect term jumps, and accumulation smears it into a crawling stain. Averaging cannot help — an averaged colour is welded to the shading point that produced it.</p>
+<p>ReSTIR (Ouyang et al. 2021) carries the **sample** instead: the vertex the bounce ray hit, its normal, the radiance leaving it, and enough bookkeeping to re-weight it for the surface the pixel is shading now. A sample can be re-evaluated at a new shading point; a colour cannot. Hence six full-resolution images and a block of the descriptor set.</p>
+</div>
+<div class="section-rule"><h2 id="twelve-floats-three-planes">Twelve floats, three planes</h2></div>
+<div class="prose reveal">
+<p>Six fields: the secondary vertex `x_s`, its normal `n_s`, the outgoing radiance `L_o` toward the primary hit, the RIS weight sum `wSum`, a confidence count `M`, and the contribution weight `W`.</p>
+<div class="citation-chip"><code class="citation-code">struct GIReservoir {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L213" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:213</a></div>
+<p>Only five are persisted. Three RGBA32F planes give twelve floats: three `vec3`s in RGB, and in the alphas `M`, `W`, and a validity flag set only where the primary ray hit geometry. `wSum` is dropped — a stored reservoir re-enters the stream with weight `p̂ · W · M`, reconstructible from the rest.</p>
+<p>The planes are allocated twice — read as *prev*, written as *curr* — so a single raygen dispatch can read-modify-write without aliasing itself:</p>
+<div class="citation-chip"><code class="citation-code">// --- ReSTIR GI reservoir ping-pong: 3 RGBA32F planes × 2 (curr/prev) ---</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_images.cpp#L265" target="_blank" rel="noopener">ohao/render/rt/path_tracer_images.cpp:265</a></div>
+<p>They occupy a contiguous six-binding block in the path tracer&#x27;s set 0: 29–31 prev, 32–34 curr.</p>
+<div class="citation-chip"><code class="citation-code">for (uint32_t b = 29; b &lt;= 34; ++b) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L192" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:192</a></div>
+<p>The price is unconditional: six `R32G32B32A32_SFLOAT` images at render resolution — 96 bytes per pixel, roughly 190 MiB at 1920×1080.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/path-tracer-restir-reservoir-planes.svg" alt="Conceptual layout — the alpha-channel packing of M, W and the validity flag, and the binding→image mapping across a ping-pong pair. Field names and binding numbers read from pt_raygen_realtime.rgen and path_tracer_descriptors.cpp; the byte figure is arithmetic, not a measurement." loading="lazy" /><figcaption>Conceptual layout — the alpha-channel packing of M, W and the validity flag, and the binding→image mapping across a ping-pong pair. Field names and binding numbers read from pt_raygen_realtime.rgen and path_tracer_descriptors.cpp; the byte figure is arithmetic, not a measurement.</figcaption></figure>
+</div>
+<div class="section-rule"><h2 id="the-weight-that-makes-a-reused-sample-legal">The weight that makes a reused sample legal</h2></div>
+<div class="prose reveal">
+<p>Resampled importance sampling draws $M$ cheap candidates $x_i$ from a source pdf $p$, then keeps one survivor $y$ in proportion to a *target* $\hat p$ closer to the integrand than $p$ is:</p>
+<div class="math-block">$$
+\langle I\rangle \;=\; \frac{f(y)}{\hat p(y)}\cdot\frac{1}{M}\sum_{i=1}^{M} w_i,
+\qquad w_i=\frac{\hat p(x_i)}{p(x_i)}
+$$</div>
+<p>$f$ is the diffuse GI at the primary hit $x_1$ — $(\rho/\pi)\,L_o\cos\theta$, for $\rho$ the diffuse albedo (zero on metals) and $\theta$ the angle between the normal and the direction to $x_s$; $p$ is the cosine-hemisphere pdf $\cos\theta/\pi$ the bounce was drawn from; $\hat p$ is a scalar stand-in for $f$, its luminance:</p>
+<div class="citation-chip"><code class="citation-code">return giLum((albedoD / OHAO_PI) * Lo * cosT);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L234" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:234</a></div>
+<p>Everything right of $f(y)$ collapses into the number stored as $W = (\sum w_i) / (M\,\hat p(y))$, so shading is just $f(y)\cdot W$:</p>
+<div class="citation-chip"><code class="citation-code">merged.W = (pHatHeld &gt; 0.0 &amp;&amp; merged.M &gt; 0.0) ? merged.wSum / (merged.M * pHatHeld) : 0.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1647" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1647</a></div>
+<p>`M` counts candidates, not frames: the N-samples-per-frame loop streams each initial bounce into one reservoir before any reuse —</p>
+<div class="citation-chip"><code class="citation-code">giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1529" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1529</a></div>
+<p>— but only the bounces that *hit* something. That call is the sole `r.M += 1.0` and sits in the else-branch; a cosine ray escaping to the environment goes straight into the shaded result:</p>
+<div class="citation-chip"><code class="citation-code">giEnvMissTotal += giAlbedoD * payload.color;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1388" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1388</a></div>
+<p>So `M = N` in a closed box, and less under an HDRI.</p>
+</div>
+<div class="section-rule"><h2 id="re-evaluating-the-target-is-the-entire-correctness-argument">Re-evaluating the target is the entire correctness argument</h2></div>
+<div class="prose reveal">
+<p>The stored reservoir re-enters the stream with weight $\hat p&#x27;(y)\cdot W\cdot M$, where $\hat p&#x27;$ is the target **re-computed at the current shading point** — not the $\hat p$ in force when it was taken:</p>
+<div class="citation-chip"><code class="citation-code">float pHatPrev = giTargetPHat(giAlbedoD, firstHitNormal,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1611" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1611</a></div>
+<p>Two guards sit on top. The reprojected pixel must clear the geometry gate the beauty accumulation uses — position within `max(0.03, 0.02·d)`, normal dot ≥ 0.9, roughness delta ≤ 0.12 — so a disocclusion cannot inherit a stranger&#x27;s sample. And a shadow ray from $x_1$ to $x_s$ zeroes $\hat p&#x27;$ when the reused vertex has become occluded, stopping light bleeding through a wall that closed between frames:</p>
+<div class="citation-chip"><code class="citation-code">if (payload.hitDist &gt;= 0.0) pHatPrev = 0.0;  // occluded</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1625" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1625</a></div>
+<p>Inherited confidence is then clamped to twenty times the current frame&#x27;s:</p>
+<div class="citation-chip"><code class="citation-code">float mClamped = min(prevR.M, 20.0 * giCurr.M);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1629" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1629</a></div>
+<p>That clamp also bounds the bias, because both combiners are M-weighted, not MIS-weighted: a candidate enters carrying $\hat p\cdot W\cdot M$, no balance term. The shader calls the temporal one biased — unbiased only in the limit, and only because that reuse is same-domain —</p>
+<div class="citation-chip"><code class="citation-code">// Combiner is the biased M-weighted RIS combiner (unbiased in the limit for</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1562" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1562</a></div>
+<p>— and repeats the label for the spatial fold, where the sample crosses to a different primary hit and that argument lapses:</p>
+<div class="citation-chip"><code class="citation-code">// --- Fold neighbor into the spatial reservoir (biased M-combiner × J).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1735" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1735</a></div>
+<p>GRIS pairwise or generalized-balance weights would remove it; none are computed here.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`W` is neither a colour nor a probability. It is the scalar that re-weights a sample taken for a *different* shading point — valid only because $\hat p$ was recomputed against the current surface. Cache the old $\hat p$ and the reservoir becomes a slow, wrong blur that looks plausible.</p></div>
+</div>
+<div class="section-rule"><h2 id="spatial-reuse-rides-one-frame-behind">Spatial reuse rides one frame behind</h2></div>
+<div class="prose reveal">
+<p>Phase 2 folds in K = 4 neighbours from a screen-space disk whose radius shrinks 15 % per tap — 20, 17, 14, 11 px:</p>
+<div class="citation-chip"><code class="citation-code">float rr = RADIUS * (1.0 - 0.15 * float(k)) * sqrt(du.x);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1689" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1689</a></div>
+<p>Its centre is not this pixel but the primary hit reprojected into the *previous* frame&#x27;s screen space — the frame those reservoirs belong to — or `pixel` if that reprojection leaves the frame:</p>
+<div class="citation-chip"><code class="citation-code">baseCenter = clamp(ivec2(sUV * vec2(pc.params.xy)),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1679" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1679</a></div>
+<p>A neighbour&#x27;s sample was integrated over *its* solid angle at *its* primary hit, so reuse needs the change-of-measure Jacobian (Ouyang et al. Eq. 11):</p>
+<div class="math-block">$$
+J=\left|\frac{\cos\phi_r/\lVert x_s-x_{1r}\rVert^{2}}
+{\cos\phi_q/\lVert x_s-x_{1q}\rVert^{2}}\right|
+$$</div>
+<p>$x_{1r}$ is this pixel&#x27;s primary hit, $x_{1q}$ the neighbour&#x27;s; each $\phi$ is the angle at $x_s$ between $n_s$ and the direction back to the corresponding primary hit. Without $J$, samples reused across a depth or grazing-angle discontinuity are weighted as if they subtended the same solid angle at both receivers — silhouettes band light or dark. The ratio is then clamped to $[10^{-3},10^{3}]$ as numerical insurance:</p>
+<div class="citation-chip"><code class="citation-code">return clamp(J, 1e-3, 1e3);                       // numerical safety only (rarely active)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L254" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:254</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>One raygen dispatch covers the whole ReSTIR pipeline, so a thread&#x27;s neighbours have no current-frame reservoirs yet. The textbook fix is a second pass with its own pipeline, SBT and descriptor plumbing. The engine instead reads the previous frame&#x27;s temporal reservoirs at 29–31 with their surface and shading history: spatial reuse for zero new GPU passes, one frame stale. Under a moving camera that cost is never paid — reuse stops entirely.</p></div>
+<p>Both paths carry the same `!viewChanged` gate:</p>
+<div class="citation-chip"><code class="citation-code">bool giReuse = (!restirGiOff) &amp;&amp; (historyFrameCount &gt; 0u) &amp;&amp; (!viewChanged)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1572" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1572</a></div>
+<div class="citation-chip"><code class="citation-code">bool spatialOn = (!restirGiOff) &amp;&amp; (!restirGiNoSpatial)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1668" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1668</a></div>
+<p>`viewChanged` is `pc.control.z`, from `m_viewChangedThisFrame`: `notifyViewChanged()` raises it, `render` clears it each frame, `interactive` sets it whenever the camera moved. A continuously moving camera therefore runs neither pass; what surfaces is a noisy single-frame RIS estimate, not stale-neighbour lag.</p>
+<p>Only the *temporal* reservoir goes back to the ping-pong planes, captured before any neighbour is folded in; the spatial result is shading-only:</p>
+<div class="citation-chip"><code class="citation-code">imageStore(currGIReservoir0, pixel, vec4(merged.xs, merged.M));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1650" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1650</a></div>
+<div class="citation-chip"><code class="citation-code">GIReservoir spatialR = merged;   // seed with r&#x27;s temporal reservoir</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1667" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1667</a></div>
+</div>
+<div class="section-rule"><h2 id="the-wiring-head-no-longer-has">The wiring HEAD no longer has</h2></div>
+<div class="prose reveal">
+<p>Everything above is live GLSL and the layout still reserves 29–34, but the host code that joined them is gone: the descriptor update in `PathTracer::render` builds a 29-entry write array and stops at binding 28, and no `dstBinding` above 28 exists anywhere in the tree.</p>
+<div class="citation-chip"><code class="citation-code">VkWriteDescriptorSet writes[29] = {};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L160" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:160</a></div>
+<p>`m_giReservoirViews` appears only at image creation and destruction, no barrier moves those images to `VK_IMAGE_LAYOUT_GENERAL`, and `m_giReservoirWriteIndex` is assigned `0` in three places and incremented in none — the ping-pong cannot alternate. The shader&#x27;s four `PT_FLAG_RESTIRGI_*` bits, 5–8 of `pc.control.x`, are set by nothing.</p>
+<p>No commit deleted this. The merge `c894ebf` took `path_tracer_render.cpp` from a branch forked at `1910fd9`, two hours before ReSTIR landed in `cd87dea`: parent `a726db3` still holds `writes[40]` and a live `m_giReservoirWriteIndex = 1u - m_giReservoirWriteIndex`; the merge result holds neither, and `cornell_box` drops from nine `restir` matches to one, `restir_probe` with it.</p>
+<p>Bindings 29–34 carry no `PARTIALLY_BOUND` flag — that is on binding 12 alone — so this is not a legal &quot;optional descriptor&quot; configuration. A statically-used descriptor that is never written is undefined behaviour; what a driver does with it is not characterised here.</p>
+</div>
+<div class="section-rule"><h2 id="two-sharp-edges-in-the-layout">Two sharp edges in the layout</h2></div>
+<div class="prose reveal">
+<p>The storage-image pool is sized to exactly the 25 storage-image bindings, six of them reservoir planes:</p>
+<div class="citation-chip"><code class="citation-code">{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B), +2 denoised out (4.C), +6 ReSTIR GI reservoir (29-34), +1 spec hit-dist (35)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L230" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:230</a></div>
+<p>No slack: a 26th storage image added without editing that literal fails `vkAllocateDescriptorSets` with `VK_ERROR_OUT_OF_POOL_MEMORY` at startup, nowhere near the cause.</p>
+<p>The second edge predates ReSTIR but the reservoir block widened it. Vulkan requires `VARIABLE_DESCRIPTOR_COUNT` on the set&#x27;s highest-numbered binding; here it sits on the bindless texture array at 12, with 23 higher-numbered bindings above:</p>
+<div class="citation-chip"><code class="citation-code">bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L208" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:208</a></div>
+<p>The comment directly above that line still claims the flag is on &quot;the LAST binding only&quot;.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>$\hat p$ must be re-evaluated at the current primary hit before the held sample is shaded. Reusing the stored $\hat p$, or a stale `W`, distorts the GI while still looking smooth.</li>
+<li>The spatial pass must not write back into the ping-pong planes; persisting it compounds sample correlation until the GI bakes.</li>
+<li>Bindings 29–34 must be written every frame with prev/curr swapped and the images in `VK_IMAGE_LAYOUT_GENERAL` before the raygen runs. Neither happens in HEAD.</li>
+<li>The `{STORAGE_IMAGE, 25}` entry is exact: bump it with `bindings[36]`, `flagsInfo.bindingCount` and `layoutInfo.bindingCount`. The `29..34` loop assumes array index equals binding number.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_images.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="bindings.html"><div class="label">← Prev</div><div class="title">Descriptor map 0–35</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

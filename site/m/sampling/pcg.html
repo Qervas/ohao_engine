@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>07 · Sampling · PCG realtime — OHAO Monograph</title>
+  <meta name="description" content="Hash-based sampler for interactive path." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="sampling/pcg" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sampling.html">← Module hub</a> · PCG realtime</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">sampling</p>
+          <h1>PCG realtime</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Hash-based sampler for interactive path.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#the-profile-picks-the-sampler-and-the-pipeline-never-hears-about-it">The profile picks the sampler, and the pipeline never hears about it</a></li><li><a href="#a-full-period-lcg-behind-a-bit-mixing-permutation">A full-period LCG behind a bit-mixing permutation</a></li><li><a href="#the-seed-is-a-plane-through-pixel-space">The seed is a plane through pixel space</a></li><li><a href="#dim-is-an-argument-this-sampler-discards">`dim` is an argument this sampler discards</a></li><li><a href="#the-half-open-interval-one-sampler-promises-and-the-other-does-not">The half-open interval one sampler promises and the other does not</a></li><li><a href="#how-the-choice-reaches-the-gpu">How the choice reaches the GPU</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="the-profile-picks-the-sampler-and-the-pipeline-never-hears-about-it">The profile picks the sampler, and the pipeline never hears about it</h2></div>
+<div class="prose reveal">
+<p>OHAO ships two samplers behind one GLSL interface, and which one runs is meant to be a property of the render profile rather than a setting a user turns. `RTRealtimeRenderer` binds `pt_raygen_realtime.rgen` and is constructed with `kRealtimeRTSettings`, and that struct names PCG:</p>
+<div class="citation-chip"><code class="citation-code">.samplerType = SamplerType::PCG,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L46" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:46</a></div>
+<p>The intent does not survive the initialisation order. `samplerType` has exactly one reader in the tree — pipeline creation, where it becomes a specialization constant — and that read happens inside `PathTracer::init`:</p>
+<div class="citation-chip"><code class="citation-code">if (!createRTPipeline()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L112" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:112</a></div>
+<p>`RTProfileRendererBase::init` calls that first and pushes the profile&#x27;s settings down afterwards:</p>
+<div class="citation-chip"><code class="citation-code">if (!m_pathTracer.init(device, physicalDevice, width, height,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L100" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:100</a></div>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setRenderSettings(m_settings);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L106" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:106</a></div>
+<p>So at the moment the constant is baked, `m_renderSettings` is still its member-initializer default:</p>
+<div class="citation-chip"><code class="citation-code">RTRenderSettings m_renderSettings{kOfflineRTSettings};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L265" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:265</a></div>
+<p>and that default&#x27;s sampler is Sobol.</p>
+<div class="citation-chip"><code class="citation-code">.samplerType = SamplerType::Sobol,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L59" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:59</a></div>
+<p>`PathTracer::createRTPipeline` has exactly one call site, and neither `PathTracer::setRenderSettings` nor `PathTracer::resize` rebuilds the pipeline, so the later assignment never reaches any SPIR-V. Both profiles specialize their raygen to `SAMPLER_SOBOL`; the realtime profile&#x27;s `SamplerType::PCG` is live C++ state that no shader ever sees. Everything below describes an implementation that is compiled, self-consistent, and currently unreachable on the GPU.</p>
+<p>No example parses a `--sampler` flag; switching sampler is supposed to mean switching profile, which also switches raygen, bounce budget and denoiser. This implementation has exactly one consumer — `sampler_api.glsl` — and its constants appear nowhere else in the tree: the deferred pipeline&#x27;s `rt_shadow.rgen` and `rt_gi.rgen` roll their own `hash(vec2)` and never touch this interface.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The realtime profile asks for PCG because Sobol&#x27;s cost is per *dimension*, not per sample: each `getSample1D_sobol` runs a bit-serial loop over the set bits of the sample index against a direction-number table, then a Burley Owen scramble of two full 32-bit bit-reversals and four multiplies. A realtime path consumes dozens of dimensions per pixel per frame. PCG is one multiply-add plus a fixed seven-operation permutation per uniform, dimension count irrelevant. What it gives up is stratification — and the tree measures exactly how much.</p></div>
+<p>The verification log compares them at equal 16 spp on the `envlit_turntable` scene, from when PCG was still the offline default: Sobol reaches 0.002584 local 5×5 variance against PCG&#x27;s 0.002863, logged as a 9.8% improvement.</p>
+<div class="citation-chip"><code class="citation-code">| PCG (previous)  | 0.002863  | 0.069884 |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reference_scenes/custom/envlit_turntable/verification_log.md#L45" target="_blank" rel="noopener">tests/reference_scenes/custom/envlit_turntable/verification_log.md:45</a></div>
+<p>That understates it, because roughly half of each figure is scene detail rather than noise — the same log&#x27;s 4096-spp reference puts the signal-only floor at 0.001383, which is 48% of the PCG number and 54% of the Sobol one.</p>
+<div class="citation-chip"><code class="citation-code">- Ground-truth local 5x5 variance:        0.001383  (signal detail only)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/reference_scenes/custom/envlit_turntable/verification_log.md#L19" target="_blank" rel="noopener">tests/reference_scenes/custom/envlit_turntable/verification_log.md:19</a></div>
+<p>Subtracting that floor, sampling noise falls from 0.001480 to 0.001201: a 19% reduction, derived from the logged numbers rather than separately measured. Real, but not the order-of-magnitude gap &quot;low-discrepancy&quot; invites you to expect.</p>
+</div>
+<div class="section-rule"><h2 id="a-full-period-lcg-behind-a-bit-mixing-permutation">A full-period LCG behind a bit-mixing permutation</h2></div>
+<div class="prose reveal">
+<p>The generator is PCG-RXS-M-XS in its 32-bit form. State advance is a plain linear congruential step:</p>
+<div class="math-block">$$
+s_{n+1} = \left(a\,s_n + c\right) \bmod 2^{32}, \qquad a = 747796405,\; c = 2891336453
+$$</div>
+<div class="citation-chip"><code class="citation-code">_pcg_state = _pcg_state * 747796405u + 2891336453u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L14" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:14</a></div>
+<p>Here $s_n$ is the 32-bit state and the modulus is free — it is just uint overflow. Because $a \equiv 1 \pmod 4$ and $c$ is odd, the Hull–Dobell conditions hold, so the state cycles through all $2^{32}$ values from *any* seed. The `+ 1u` in the seed is therefore not load-bearing for period; nothing about the seed can shorten the cycle.</p>
+<p>A raw LCG is unusable as-is: bit $k$ of the state has period $2^{k+1}$, so the low bit merely alternates. The output permutation fixes that before anything leaves the generator — with $\gg$ a logical shift and $\oplus$ xor:</p>
+<div class="math-block">$$
+k = (s \gg 28) + 4, \qquad w = \big((s \gg k) \oplus s\big)\cdot 277803737, \qquad \text{out} = (w \gg 22) \oplus w
+$$</div>
+<div class="citation-chip"><code class="citation-code">uint w = ((_pcg_state &gt;&gt; ((_pcg_state &gt;&gt; 28u) + 4u)) ^ _pcg_state) * 277803737u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L15" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:15</a></div>
+<p>The first step is the &quot;random xorshift&quot;: the shift distance $k \in [4, 19]$ is chosen by the state&#x27;s own top four bits, so mixing depth varies with the input and no fixed bit-position correlation survives. The odd multiplier propagates low bits upward, and the final fold pushes the top ten bits back down. Only then does the value become a float — which is why dividing the *output* by $2^{32}$ is legitimate while dividing the raw state would not be. Ordering matters here too: `_pcg_next` advances before it permutes, so the seed itself is never observable.</p>
+</div>
+<div class="section-rule"><h2 id="the-seed-is-a-plane-through-pixel-space">The seed is a plane through pixel space</h2></div>
+<div class="prose reveal">
+<p>Seeding is where the cheapness shows. There is no hash — the state starts as an affine function of the pixel and the sample index:</p>
+<div class="math-block">$$
+s_0(x, y, i) = 1973x + 9277y + 26699\,i + 1 \pmod{2^{32}}
+$$</div>
+<div class="citation-chip"><code class="citation-code">_pcg_state = pixel.x * 1973u + pixel.y * 9277u + sampleIdx * 26699u + 1u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L10" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:10</a></div>
+<p>Two invocations share their whole stream exactly when their seeds collide, so this line&#x27;s quality is a lattice question. Within one frame $i$ is fixed and a collision needs $1973\,\Delta x + 9277\,\Delta y \equiv 0$. At 8K the left side is at most $1973 \cdot 7680 + 9277 \cdot 4320 \approx 5.5 \times 10^{7}$, far below $2^{32}$, so the congruence is an ordinary equality; $\gcd(1973, 9277) = 1$ then forces $9277 \mid \Delta x$, and 9277 exceeds any shipping image width. No two pixels in a frame ever share a stream.</p>
+<p>Across the sample index it is not so clean. Solving $1973\,\Delta x + 9277\,\Delta y = -26699$ gives the minimal offset $(\Delta x, \Delta y) = (1966, -421)$, which fits inside a 2560×1440 frame: pixel $p$ at sample $i$ and pixel $p + (1966, -421)$ at sample $i+1$ would draw identical uniforms for the whole path. Neither estimate is biased by this — each still sees a well-permuted stream. It is structure that a per-pixel hash (Sobol seeds through a full Murmur-style finalizer) would not have.</p>
+</div>
+<div class="section-rule"><h2 id="dim-is-an-argument-this-sampler-discards">`dim` is an argument this sampler discards</h2></div>
+<div class="prose reveal">
+<p>The interface takes a dimension index. PCG ignores it and returns the next value in its stream:</p>
+<div class="citation-chip"><code class="citation-code">float getSample1D_pcg(uint dim) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L20" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:20</a></div>
+<p>For Sobol that argument is load-bearing — `getSample1D_sobol(dim)` is a pure function of (sample index, dimension, pixel seed), with `dim &gt;&gt; 2` selecting an independently-scrambled 4D pad. For PCG only call *order and count* matter, and the realtime raygen is laid out as though that were not so. It consumes the sub-pixel jitter at dimensions 0–1, then re-seeds inside its per-sample loop and resumes bookkeeping at dimension 2:</p>
+<div class="citation-chip"><code class="citation-code">samplerInit(uvec2(pixel), frameIdx * samplesPerFrame + s);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L385" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:385</a></div>
+<div class="citation-chip"><code class="citation-code">// is samplerInit(pixel, frameIdx) — same seed as before. dims 0..1 stay</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L382" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:382</a></div>
+<p>With the default `samplesPerFrame = 1` that re-seed computes `frameIdx * 1 + 0` — the same seed used for the jitter a few lines earlier. Sobol is untouched, because dimension 2 is a different function evaluation. PCG would restart the stream: `dimIdx = 2u` buys it nothing, and the frame&#x27;s first path uniform comes out numerically equal to `jitter.x + 0.5`. On a primary hit with a non-empty light SSBO that uniform is the one that selects the NEE light, so the light chosen at a pixel would become a function of where inside the pixel the camera ray landed. The jitter partitioned here is the sub-pixel *x* offset, so with $L$ lights, light $k$ is only ever paired with one $1/L$-wide band of $x$ — a vertical strip of the pixel footprint rather than a point drawn from all of it.</p>
+<div class="citation-chip"><code class="citation-code">vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L304" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:304</a></div>
+<p>None of that happens in any shipping configuration, because the ordering above leaves this raygen specialized to Sobol. It is exactly the dimension reuse the padded-Sobol accounting exists to prevent, waiting behind a one-line fix to the initialisation order.</p>
+</div>
+<div class="section-rule"><h2 id="the-half-open-interval-one-sampler-promises-and-the-other-does-not">The half-open interval one sampler promises and the other does not</h2></div>
+<div class="prose reveal">
+<p>Sobol shifts right by 8 and scales by $2^{-24}$, capping at $1 - 2^{-24}$, and says so:</p>
+<div class="citation-chip"><code class="citation-code">// Match the CPU 24-bit right-shift approach — guarantees [0, 1).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_sobol.glsl#L74" target="_blank" rel="noopener">shaders/includes/rt/sampler_sobol.glsl:74</a></div>
+<p>PCG&#x27;s 31 lines make no claim about their range at all. They divide the full 32-bit output by $2^{32}$ in `float` precision:</p>
+<div class="citation-chip"><code class="citation-code">return float(_pcg_next()) / 4294967296.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L21" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:21</a></div>
+<p>Near $2^{32}$ the spacing of `float32` is 256, so the 128 largest uint outputs round up to exactly $2^{32}$ and the quotient is exactly 1.0 — probability $2^{-25}$, one sample in 33.5 million. Nothing downstream would break if that value were ever produced, because the three kinds of site that turn a uniform into an index are all bounded: every light-selection site in all three raygen shaders follows `uint(u * lightCount)` with a `min(..., lightCount - 1u)` clamp; the environment CDF lookup is a binary search with a pre-clamped upper bound; and ReSTIR-GI&#x27;s spatial-reuse tap clamps its neighbour offset to the framebuffer.</p>
+<div class="citation-chip"><code class="citation-code">int hi = int(H) - 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L18" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:18</a></div>
+<div class="citation-chip"><code class="citation-code">ivec2 qPix = clamp(baseCenter + off, ivec2(0), ivec2(pc.params.xy) - 1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1693" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1693</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The clamps, not the sampler, are what make PCG&#x27;s open-interval violation harmless. Any new consumer that indexes an array with a raw `getSample1D` result inherits a one-in-33-million out-of-bounds read that cannot happen under Sobol at all.</p></div>
+</div>
+<div class="section-rule"><h2 id="how-the-choice-reaches-the-gpu">How the choice reaches the GPU</h2></div>
+<div class="prose reveal">
+<p>Selection happens at pipeline creation, not per ray: `sampler_api.glsl` declares the sampler as a specialization constant and branches on it.</p>
+<div class="citation-chip"><code class="citation-code">layout(constant_id = 0) const uint SAMPLER_TYPE = SAMPLER_SOBOL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_api.glsl#L16" target="_blank" rel="noopener">shaders/includes/rt/sampler_api.glsl:16</a></div>
+<p>The CPU writes `m_renderSettings.samplerType` into a `VkSpecializationInfo` attached to exactly one stage.</p>
+<div class="citation-chip"><code class="citation-code">stages[0].pSpecializationInfo = &amp;samplerSpecInfo;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L88" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:88</a></div>
+<p>Stage 0 is the raygen, which is currently sufficient: `sampler_api.glsl` is included by exactly three files — `pt_raygen.rgen`, `pt_raygen_offline.rgen`, `pt_raygen_realtime.rgen` — and by no closest-hit, miss or any-hit shader. Note also that the GLSL default is `SAMPLER_SOBOL` while the C++ enum gives PCG the value 0: an *absent* specialization yields Sobol, a *zero-filled* one yields PCG. The specialization written here is never absent — it is simply always read one step too early.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`PathTracer::createRTPipeline` reads `m_renderSettings.samplerType` at build time and has exactly one call site, inside `PathTracer::init`. A profile that wants a non-default sampler must push its settings down *before* `init`; none does, so every RT pipeline in the tree is specialized from the `kOfflineRTSettings` member initializer.</li>
+<li>The sampler specialization reaches the raygen stage only. If a closest-hit or miss shader ever includes `sampler_api.glsl`, it compiles with the declared default `SAMPLER_SOBOL` regardless of profile, and the two stages silently draw from different samplers.</li>
+<li>`_pcg_state` is a single module-scope uint: one stream per invocation, and only one. A second decorrelated stream can only be had by re-seeding, which discards the first — so any `dimIdx` reservation scheme built around a re-seed protects Sobol and not PCG.</li>
+<li>`getSample1D` may return exactly 1.0 under PCG and never under Sobol. Consumers must clamp indices or use bounded searches; light selection, the environment CDF lookup and ReSTIR-GI&#x27;s spatial tap all do.</li>
+<li>Neither sampler&#x27;s GLSL is value-tested. `sobol_test.cpp` asserts against the C++ `SobolGenerator::sample1D` and `owenScramble` only; the GLSL&#x27;s claim to mirror them byte-for-byte is a source comment, not an assertion. PCG has no CPU-side reference implementation at all, and the only PCG assertion in the suite is the `isQmcSampler` trait predicate. A typo in either permutation&#x27;s constants would not fail the test build.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/reference_scenes/custom/envlit_turntable/verification_log.md</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_pcg.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_sobol.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/env_sampling.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_api.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_pipeline.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="sobol.html"><div class="label">← Prev</div><div class="title">Sobol + Owen</div></a><a class="next" href="mis.html"><div class="label">Next →</div><div class="title">MIS heuristics</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

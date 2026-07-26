@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 336" class="unit-diagram" role="img"
+     aria-label="One primary ray from the camera hits a surface; the raygen forks into a specular sub-path and a diffuse sub-path, each with its own next-event-estimation shadow rays, feeding three separate image bindings.">
+  <defs>
+    <marker id="ptrg-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c4784a"/>
+    </marker>
+    <marker id="ptrg-arw-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7dba8a"/>
+    </marker>
+    <marker id="ptrg-arw-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e685c"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="336" fill="#0f1419"/>
+
+  <!-- ===== left: geometry ===== -->
+  <text x="16" y="24" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">one launch, one pixel</text>
+
+  <!-- camera -->
+  <path d="M18,168 L46,152 L46,184 Z" fill="#1a222c" stroke="#3d4a58" stroke-width="1.5"/>
+  <text x="16" y="204" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="11">camera</text>
+
+  <!-- surface -->
+  <path d="M120,206 L266,206" stroke="#3d4a58" stroke-width="2"/>
+  <path d="M124,214 L134,206 M144,214 L154,206 M164,214 L174,206 M184,214 L194,206 M204,214 L214,206 M224,214 L234,206 M244,214 L254,206"
+        stroke="#3d4a58" stroke-width="1"/>
+  <circle cx="186" cy="206" r="4.5" fill="#c4784a"/>
+  <text x="150" y="234" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="11">first hit x&#8321;</text>
+
+  <!-- primary ray -->
+  <path d="M48,172 L180,203" stroke="#c4784a" stroke-width="2" marker-end="url(#ptrg-arw)"/>
+  <text x="56" y="164" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10.5">Stage A</text>
+
+  <!-- light -->
+  <circle cx="300" cy="44" r="15" fill="#1a222c" stroke="#c4a574" stroke-width="1.5"/>
+  <text x="322" y="41" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">sphere light</text>
+  <text x="322" y="55" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">+ env map (IS)</text>
+
+  <!-- shadow rays (dashed, muted) -->
+  <path d="M190,201 L288,55" stroke="#6e685c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ptrg-arw-m)"/>
+  <path d="M336,140 L306,60" stroke="#6e685c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ptrg-arw-m)"/>
+  <path d="M344,268 L312,62" stroke="#6e685c" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ptrg-arw-m)"/>
+  <text x="196" y="120" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">NEE shadow rays</text>
+
+  <!-- Stage B: specular sub-path -->
+  <path d="M190,202 L332,142" stroke="#c4784a" stroke-width="2" marker-end="url(#ptrg-arw)"/>
+  <path d="M340,144 L430,120" stroke="#c4784a" stroke-width="1.6" marker-end="url(#ptrg-arw)"/>
+  <circle cx="336" cy="140" r="3.5" fill="#c4784a"/>
+  <text x="228" y="163" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10.5">Stage B &#183; specular lobe</text>
+
+  <!-- Stage C: diffuse sub-path -->
+  <path d="M190,210 L340,266" stroke="#7dba8a" stroke-width="2" marker-end="url(#ptrg-arw-d)"/>
+  <path d="M348,270 L432,254" stroke="#7dba8a" stroke-width="1.6" marker-end="url(#ptrg-arw-d)"/>
+  <circle cx="344" cy="268" r="3.5" fill="#7dba8a"/>
+  <text x="212" y="292" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10.5">Stage C &#183; cosine hemisphere</text>
+
+  <!-- ===== right: destinations ===== -->
+  <rect x="470" y="70" width="234" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="482" y="90" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">specularRadiance &#183; binding 23</text>
+  <text x="482" y="106" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">specContrib, hit-dist in .a</text>
+
+  <rect x="470" y="146" width="234" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="482" y="166" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">accumBuffer &#183; binding 1</text>
+  <text x="482" y="182" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">radiance (beauty), spp in .w</text>
+
+  <rect x="470" y="222" width="234" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="482" y="242" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">diffuseRadiance &#183; binding 22</text>
+  <text x="482" y="258" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">diffContrib, hit-dist in .a</text>
+
+  <!-- routing -->
+  <path d="M436,116 L466,94" stroke="#c4784a" stroke-width="1.6" marker-end="url(#ptrg-arw)"/>
+  <path d="M436,124 L466,164" stroke="#c4784a" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#ptrg-arw)"/>
+  <path d="M438,252 L466,244" stroke="#7dba8a" stroke-width="1.6" marker-end="url(#ptrg-arw-d)"/>
+  <path d="M438,246 L466,178" stroke="#7dba8a" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#ptrg-arw-d)"/>
+
+  <text x="470" y="300" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">solid = sole target &#183; dashed = also summed into beauty</text>
+  <text x="16" y="322" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">Bounce-0 NEE and env-MIS split their diffuse and specular BRDF terms between both channels.</text>
+</svg>

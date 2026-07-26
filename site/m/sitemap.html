@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sitemap — OHAO Monograph</title>
+  <meta name="description" content="Full monograph tree" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="sitemap" data-root=".." data-depth="1">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+<p class="crumb"><a href="../index.html">Monograph</a> · Full sitemap</p>
+<header class="chapter-head reveal"><div class="chapter-num">∑</div><div>
+<p class="chapter-kicker">Codebase coverage</p><h1>Sitemap</h1></div></header>
+<div class="thesis-box reveal"><div class="label">Scope</div>
+<p>Every design unit maps to real paths under <code>ohao/</code> and <code>shaders/</code>. Non-product research trees are omitted from the public face. Each leaf documents <strong>what</strong>, <strong>how</strong>, and <strong>why</strong>.</p></div>
+<h2 class="gloss-group">01 · Architecture</h2><ul class="prose">
+<li><a href="architecture.html"><strong>Hub</strong> — architecture.html</a></li>
+<li><a href="architecture/request-path.html">Request path</a> — CLI/example → Scene → VulkanRenderer::initialize → setScene → render → pixels.</li>
+<li><a href="architecture/invariants.html">Cross-module invariants</a> — Contracts that break pixels silently if violated.</li>
+<li><a href="architecture/module-map.html">Module ownership map</a> — Which directory owns which concern; forbidden dependencies.</li>
+</ul>
+<h2 class="gloss-group">01b · Core</h2><ul class="prose">
+<li><a href="core/index.html"><strong>Hub</strong></a></li>
+<li><a href="core/types-concepts.html">Types &amp; concepts</a> — GpuPod, common_types, C++20 concepts used across modules.</li>
+<li><a href="core/event-bus.html">EventBus</a> — Thread-safe pub/sub with typed subscribe helpers.</li>
+<li><a href="core/command-result.html">Command history &amp; Result</a> — Undo/redo command pattern and fallible Result type.</li>
+<li><a href="core/console-widget.html">Console widget</a> — In-engine console / log surface for debug tooling.</li>
+</ul>
+<h2 class="gloss-group">02 · Scene</h2><ul class="prose">
+<li><a href="scene.html"><strong>Hub</strong> — scene.html</a></li>
+<li><a href="scene/actors.html">Actors &amp; hierarchy</a> — Actor as SceneObject with parent/children and lifecycle.</li>
+<li><a href="scene/components.html">Components</a> — Mesh, Material, Light, Transform, factory packs.</li>
+<li><a href="scene/loaders.html">Asset loaders</a> — GLTF (tinygltf), FBX (Assimp), OBJ custom, primitives.</li>
+<li><a href="scene/scene-api.html">Scene API</a> — createActor, lookup, tags, physics world ownership, serialize hooks.</li>
+<li><a href="scene/transform.html">Transform math</a> — TRS composition and world matrix used by upload/TLAS.</li>
+</ul>
+<h2 class="gloss-group">03 · GPU / Vulkan</h2><ul class="prose">
+<li><a href="gpu.html"><strong>Hub</strong> — gpu.html</a></li>
+<li><a href="gpu/renderer-facade.html">VulkanRenderer facade</a> — Public API: modes, setScene, ensureRT, denoise, pixels, present.</li>
+<li><a href="gpu/init.html">Device init</a> — createInstance → pickPhysicalDevice → createLogicalDevice feature chain.</li>
+<li><a href="gpu/bindless.html">Bindless textures</a> — BindlessTextureManager: variable count array, update-after-bind.</li>
+<li><a href="gpu/buffers-alloc.html">Buffers &amp; allocator</a> — VMA-style allocation, staging, UBOs, GPU allocator helpers.</li>
+<li><a href="gpu/scene-upload.html">Scene upload</a> — Meshes → VB/IB map; materials; lights; env.</li>
+<li><a href="gpu/rt-build.html">RT build (BLAS/TLAS)</a> — buildBLASTLAS order, instance transforms, material lockstep.</li>
+<li><a href="gpu/dispatch.html">Render dispatch</a> — renderDeferred vs RT path, staging readback ring.</li>
+<li><a href="gpu/layout-meta.html">Layout contracts</a> — OHAO_ASSERT_GPU_LAYOUT, MaterialGpuPack, push-constant sizes.</li>
+<li><a href="gpu/pipeline-fb.html">Legacy pipeline &amp; framebuffer</a> — Forward pipeline creation, offscreen FB, shadow resources.</li>
+</ul>
+<h2 class="gloss-group">04 · Materials</h2><ul class="prose">
+<li><a href="materials.html"><strong>Hub</strong> — materials.html</a></li>
+<li><a href="materials/pbr-model.html">PBR metallic-roughness</a> — F0, ORM convention, roughness floors.</li>
+<li><a href="materials/ggx.html">GGX implementation</a> — D/F/G terms, Smith correlated, energy helpers.</li>
+<li><a href="materials/pack.html">GPU material pack</a> — 3×vec4 matColors, texture bit-cast indices.</li>
+<li><a href="materials/advanced.html">Advanced material includes</a> — advanced_brdf, material_sampling, material_types.</li>
+<li><a href="materials/lights.html">Lights dual packing</a> — GPULight SSBO (64) vs deferred LightData UBO (8).</li>
+</ul>
+<h2 class="gloss-group">05 · Deferred</h2><ul class="prose">
+<li><a href="deferred.html"><strong>Hub</strong> — deferred.html</a></li>
+<li><a href="deferred/orchestrator.html">DeferredRenderer orchestrator</a> — Pass ownership, resize, setScene, graph execute.</li>
+<li><a href="deferred/pass-base.html">RenderPassBase</a> — Shared init/cleanup/shader path helpers for passes.</li>
+<li><a href="deferred/gbuffer.html">GBuffer pass</a> — MRT packing, bindless, velocity, push constants.</li>
+<li><a href="deferred/csm.html">CSM shadows</a> — Cascade split, depth array, unjittered camera.</li>
+<li><a href="deferred/lighting.html">Deferred lighting</a> — Light loop, IBL, SSAO bind, BRDF eval.</li>
+<li><a href="deferred/ssao.html">SSAO</a> — Screen-space AO pass + compute path.</li>
+<li><a href="deferred/ssr-sss.html">SSR &amp; SSS</a> — Experimental reflections and subsurface blur.</li>
+<li><a href="deferred/sky.html">Sky pass</a> — HDR sky / atmosphere composite into lighting output.</li>
+<li><a href="deferred/post.html">Post stack</a> — Bloom, TAA, tonemap orchestration.</li>
+<li><a href="deferred/gizmo.html">Gizmo pass</a> — Debug/editor overlay meshes.</li>
+</ul>
+<h2 class="gloss-group">06 · Path tracer</h2><ul class="prose">
+<li><a href="path-tracer.html"><strong>Hub</strong> — path-tracer.html</a></li>
+<li><a href="path-tracer/host.html">Host lifecycle</a> — ensureRTRenderer, images, pipeline, SBT, descriptors.</li>
+<li><a href="path-tracer/profiles.html">Profiles &amp; meta</a> — RTRenderSettings, Realtime vs Offline traits.</li>
+<li><a href="path-tracer/as.html">Acceleration structures</a> — BLAS/TLAS API, rebuild vs update.</li>
+<li><a href="path-tracer/raygen.html">Raygen integrator</a> — Stages A/B/C, NEE, dual-lobe, AOV writes.</li>
+<li><a href="path-tracer/hit-miss.html">Hit &amp; miss shaders</a> — closesthit materials, anyhit alpha, miss env.</li>
+<li><a href="path-tracer/bindings.html">Descriptor map 0–35</a> — Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</li>
+<li><a href="path-tracer/restir.html">ReSTIR GI reservoirs</a> — Ping-pong reservoir planes on bindings 29–34.</li>
+</ul>
+<h2 class="gloss-group">07 · Sampling</h2><ul class="prose">
+<li><a href="sampling.html"><strong>Hub</strong> — sampling.html</a></li>
+<li><a href="sampling/sampler-api.html">Sampler API</a> — sampler_api.glsl dispatch, specialization constant.</li>
+<li><a href="sampling/sobol.html">Sobol + Owen</a> — Offline low-discrepancy stream.</li>
+<li><a href="sampling/pcg.html">PCG realtime</a> — Hash-based sampler for interactive path.</li>
+<li><a href="sampling/mis.html">MIS heuristics</a> — Balance and power in mis.glsl.</li>
+<li><a href="sampling/env-cdf.html">Environment CDF</a> — CPU build + GPU sampleEnvMap/pdfEnvMap.</li>
+</ul>
+<h2 class="gloss-group">08 · Hybrid RT</h2><ul class="prose">
+<li><a href="hybrid.html"><strong>Hub</strong> — hybrid.html</a></li>
+<li><a href="hybrid/shadow-technique.html">RT shadow technique</a> — init → SBT → render visibility from GBuffer.</li>
+<li><a href="hybrid/gi-technique.html">RT GI technique</a> — 1-bounce GI inject, material albedos.</li>
+<li><a href="hybrid/visibility.html">Visibility helpers</a> — Shared RT visibility utilities.</li>
+</ul>
+<h2 class="gloss-group">09 · Denoise</h2><ul class="prose">
+<li><a href="denoise.html"><strong>Hub</strong> — denoise.html</a></li>
+<li><a href="denoise/types.html">Denoise modes &amp; traits</a> — DenoiseMode enum + DenoiseModeTraits resource needs.</li>
+<li><a href="denoise/oidn.html">OIDN</a> — Offline guided denoise path.</li>
+<li><a href="denoise/nrd.html">NRD REBLUR + compose</a> — Pack YCoCg, dispatch, unpack compose, cinematic post.</li>
+<li><a href="denoise/dlss.html">DLSS Ray Reconstruction</a> — NGX dlssd init, guides, binding 35 hit-dist.</li>
+<li><a href="denoise/atrous.html">À-trous / SVGF-style</a> — Internal spatial/temporal denoise compute.</li>
+<li><a href="denoise/cinematic.html">Cinematic RT post</a> — Bloom extract/blur, DoF, composite after NRD.</li>
+</ul>
+<h2 class="gloss-group">Shaders</h2><ul class="prose">
+<li><a href="shaders/index.html"><strong>Hub</strong></a></li>
+<li><a href="shaders/layout.html">Shader tree layout</a> — core / rt / postprocess / compute / includes / shadow / particles.</li>
+<li><a href="shaders/includes-common.html">Common includes</a> — math, color, encoding, reconstruction, constants, types.</li>
+<li><a href="shaders/includes-lighting.html">Lighting includes</a> — IBL, attenuation, light types, phase, blinn_phong.</li>
+<li><a href="shaders/includes-shadow.html">Shadow includes</a> — CSM sampling, PCF, shadow types.</li>
+<li><a href="shaders/includes-fx.html">Atmosphere &amp; water includes</a> — Gerstner waves, cloud density fields.</li>
+<li><a href="shaders/postprocess-chain.html">Postprocess shader chain</a> — Fullscreen, bloom, TAA, tonemap, sky, SSR, SSS.</li>
+<li><a href="shaders/rt-includes.html">RT shader includes</a> — pbr_unpack, rt_masks, NRD frontend used by raygen.</li>
+<li><a href="shaders/compute.html">Compute shaders</a> — BRDF LUT, env prefilter, HiZ, light cull, skinning, composite, DoF.</li>
+<li><a href="shaders/core-gbuffer-lighting.html">Core GBuffer &amp; lighting shaders</a> — gbuffer.vert/frag, deferred_lighting.frag MRT contract.</li>
+<li><a href="shaders/forward.html">Forward shaders</a> — Legacy forward.vert/frag path.</li>
+<li><a href="shaders/particles-sh.html">Particle shaders</a> — Emit, update, render.</li>
+<li><a href="shaders/overlay-gizmo.html">Overlay gizmo shaders</a> — Editor/debug gizmo vert+frag.</li>
+<li><a href="shaders/rt-shaders.html">RT program family</a> — pt_*, rt_shadow_*, rt_gi_*, NRD compose, SVGF, cinematic.</li>
+<li><a href="shaders/disabled.html">Disabled shader archive</a> — shaders/_disabled holds retired experiments — not in active build.</li>
+</ul>
+<h2 class="gloss-group">Camera</h2><ul class="prose">
+<li><a href="camera/index.html"><strong>Hub</strong></a></li>
+<li><a href="camera/camera.html">Camera</a> — View/proj, FPS/orbit style controls used by examples.</li>
+<li><a href="camera/scene-framer.html">Scene framer</a> — Auto-frame bounds for turntable/model viewer.</li>
+</ul>
+<h2 class="gloss-group">Render graph</h2><ul class="prose">
+<li><a href="graph/index.html"><strong>Hub</strong></a></li>
+<li><a href="graph/render-graph.html">RenderGraph</a> — Declare passes, barriers, compile order.</li>
+<li><a href="graph/frame-resources.html">Frame resources ring</a> — MAX_FRAMES_IN_FLIGHT=3, fences, staging, per-frame UBOs.</li>
+<li><a href="graph/async-compute.html">Async compute queue</a> — Optional async compute path.</li>
+<li><a href="graph/ibl-processor.html">IBL processor</a> — Env map processing (cubemap/prefilter) helpers.</li>
+<li><a href="graph/particles.html">Particle system</a> — CPU/GPU particle orchestration.</li>
+<li><a href="graph/picking.html">Picking</a> — Ray pick helpers for selection.</li>
+<li><a href="graph/culling.html">Culling</a> — CPU/GPU cull helpers (HiZ / light cull compute).</li>
+</ul>
+<h2 class="gloss-group">11 · Physics</h2><ul class="prose">
+<li><a href="physics.html"><strong>Hub</strong> — physics.html</a></li>
+<li><a href="physics/backend.html">Backend plugin</a> — IPhysicsBackend, factory, null fallback, Jolt.</li>
+<li><a href="physics/world.html">PhysicsWorld</a> — Config, state machine, step, body registry.</li>
+<li><a href="physics/bodies.html">Bodies &amp; shapes</a> — RigidBody, all shape types, factory, PhysicsComponent.</li>
+<li><a href="physics/forces.html">Force generators</a> — Registry, gravity, spring, drag, volumes, fields, presets.</li>
+<li><a href="physics/materials-phys.html">Physics materials</a> — Friction/restitution style materials.</li>
+<li><a href="physics/math-constants.html">Physics math &amp; constants</a> — Shared scalars, clamp helpers, math utils.</li>
+<li><a href="physics/debug.html">Force debugger</a> — Debug visualization hooks.</li>
+</ul>
+<h2 class="gloss-group">10 · Audio</h2><ul class="prose">
+<li><a href="audio.html"><strong>Hub</strong> — audio.html</a></li>
+<li><a href="audio/system.html">AudioSystem facade</a> — Init, categories, handles, 3D, volumes.</li>
+</ul>
+<h2 class="gloss-group">Build &amp; status</h2><ul class="prose">
+<li><a href="systems/index.html"><strong>Hub</strong></a></li>
+<li><a href="systems/build.html">Build system</a> — CMake options, targets, shaders target, examples.</li>
+<li><a href="systems/examples.html">Examples map</a> — cornell_box, model_viewer, env_demo, interactive, turntable.</li>
+<li><a href="systems/tests.html">Tests &amp; goldens</a> — Unit suites and golden image gate.</li>
+<li><a href="systems/status.html">Status discipline</a> — Evidence-based feature matrix protocol.</li>
+<li><a href="systems/public-scope.html">Public scope note</a> — What the monograph deliberately omits.</li>
+</ul>
+<p class="prose" style="color:var(--ivory-mute)">93 design units generated.</p>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

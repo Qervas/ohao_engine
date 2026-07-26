@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · Profiles &amp; meta — OHAO Monograph</title>
+  <meta name="description" content="RTRenderSettings, Realtime vs Offline traits." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/profiles" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · Profiles &amp; meta</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>Profiles &amp; meta</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>RTRenderSettings, Realtime vs Offline traits.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#two-constants-and-the-two-things-they-do-not-cover">Two constants, and the two things they do not cover</a></li><li><a href="#the-trait-layer-is-a-mirror-barely-held-flat">The trait layer is a mirror, barely held flat</a></li><li><a href="#denoise-policy-written-as-a-table-instead-of-an-if-chain">Denoise policy written as a table instead of an if-chain</a></li><li><a href="#two-transports-two-lifetimes">Two transports, two lifetimes</a></li><li><a href="#the-sampler-that-never-actually-switches">The sampler that never actually switches</a></li><li><a href="#a-profile-is-an-object-and-it-owns-a-raygen">A profile is an object, and it owns a raygen</a></li><li><a href="#what-the-two-finals-actually-decide">What the two finals actually decide</a></li><li><a href="#what-the-per-frame-reset-stomps">What the per-frame reset stomps</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="two-constants-and-the-two-things-they-do-not-cover">Two constants, and the two things they do not cover</h2></div>
+<div class="prose reveal">
+<p>OHAO ships one ray-tracing renderer with two personalities. `PathTracer` has no subclass anywhere in the tree and no `#ifdef` picks a profile: most of the difference between the two is a pair of `constexpr` aggregates in `rt_settings.hpp`.</p>
+<div class="citation-chip"><code class="citation-code">inline constexpr RTRenderSettings kRealtimeRTSettings{</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L37" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:37</a></div>
+<p>Two differences sit outside the aggregates. Each profile object binds its own raygen SPIR-V module, so there genuinely is a separate device code path chosen by which profile is constructed; and each answers one virtual differently. Both come back below.</p>
+<p>The realtime profile takes two bounces, a PCG sampler, in-shader spatial denoising, and a firefly clamp at luminance 10. The offline profile takes four bounces, an Owen-scrambled Sobol sampler, no in-shader denoise, no clamp, and OIDN as its default post-process.</p>
+<p>The transported 10 is not the operative threshold everywhere. The realtime raygen uses `pc.tuning.x` directly at each NEE and environment contribution, but scales it by 0.75 for the final clamp on accumulated beauty, so that one clamps at 7.5:</p>
+<div class="citation-chip"><code class="citation-code">float realtimeClamp = pc.tuning.x * 0.75;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1554" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1554</a></div>
+<p>The offline constant deserves attention for the opposite reason: it does not merely clear the flag, it also zeroes the threshold.</p>
+<div class="citation-chip"><code class="citation-code">.fireflyClampLuminance = 0.0f,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L58" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:58</a></div>
+<p>That redundancy is deliberate. Every raygen gates the clamp on *both* the flag bit and a positive threshold, so an offline render stays unbiased even if some future caller flips the boolean by accident. Clamping outliers is exactly the kind of variance-for-bias trade an interactive preview wants and a reference render must never make.</p>
+</div>
+<div class="section-rule"><h2 id="the-trait-layer-is-a-mirror-barely-held-flat">The trait layer is a mirror, barely held flat</h2></div>
+<div class="prose reveal">
+<p>`rt_meta.hpp` restates the same numbers a second time, as individual `static constexpr` members of `RTProfileTraits&lt;Profile&gt;`. This is genuine duplication — the aggregates are already usable in constant expressions — and the header holds almost none of it in sync. Exactly three `static_assert`s tie a trait back to the aggregate it mirrors: `default_max_bounces` for each profile, and `Offline::default_denoise`.</p>
+<div class="citation-chip"><code class="citation-code">static_assert(RTProfileTraits&lt;RTRenderProfile::Realtime&gt;::default_max_bounces ==</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L74" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:74</a></div>
+<p>The rest can drift unchecked. `default_sampler`, `firefly_clamp_luminance`, `enable_firefly_clamp`, `enable_internal_denoise`, `enable_auxiliary_aovs`, `allow_external_denoiser`, `prefer_accumulation` and `Realtime::default_denoise` are duplicated with no assertion at all — changing the trait below to Sobol compiles clean while `kRealtimeRTSettings` still declares PCG.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr SamplerType default_sampler      = SamplerType::PCG;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L44" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:44</a></div>
+<p>What the duplication is *for* is a type that carries a profile: `RTFeatureFlags&lt;Profile, Mode&gt;` pairs a profile trait with a denoise-mode trait and exposes the pair as compile-time booleans. The aggregate could have carried that weight itself — `makeFeatureSettings` reads and writes `RTRenderSettings` fields directly inside a `constexpr` function guarded by `if constexpr`:</p>
+<div class="citation-chip"><code class="citation-code">if constexpr (DenoiseModeTraits&lt;Mode&gt;::needs_cpu_readback) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L271" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:271</a></div>
+<p>And nothing in the shipping engine instantiates any of it. `RTProfileTraits`, `RTFeatureFlags`, `makeProfileSettings&lt;Profile&gt;()` and the wrapper below have their only call sites in `tests/engine/engine_tests.cpp`; a grep over `ohao/` and `examples/` finds none. The engine reaches the two constants directly, through the two object hierarchies the later sections describe.</p>
+<div class="citation-chip"><code class="citation-code">setRenderSettings(makeFeatureSettings&lt;Profile, Mode&gt;());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L198" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:198</a></div>
+</div>
+<div class="section-rule"><h2 id="denoise-policy-written-as-a-table-instead-of-an-if-chain">Denoise policy written as a table instead of an if-chain</h2></div>
+<div class="prose reveal">
+<p>`DenoiseModeTraits&lt;Mode&gt;` answers nine yes/no questions about a denoiser as `static constexpr bool` members: CPU readback, motion vectors, a diffuse/specular split, sub-pixel jitter, multi-sample AOV means, ownership of temporal accumulation, realtime capability, offline capability, and whether the backend runs on the GPU. They are not independent: `is_gpu_backend` selects the same mode set as `needs_motion_vectors`, {NRD, Atrous, DLSSRR}.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr bool is_gpu_backend =</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L140" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:140</a></div>
+<p>Each is a boolean expression over the mode enum, mirrored by a constexpr free function for runtime callers. Three of them are read directly by the per-frame path — jitter, AOV accumulation, and the fresh-sample rule that forces `historyFrameCount` to zero for SVGF and DLSS-RR.</p>
+<div class="citation-chip"><code class="citation-code">pc.control.y = freshSample ? 0u : m_historyFrameCount;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L712" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:712</a></div>
+<p>Three more feed `applyDenoisePolicy`, which is allowed to override the profile: motion vectors or a diff/spec split force auxiliary AOVs on, and CPU readback raises `allowExternalDenoiser`.</p>
+<div class="citation-chip"><code class="citation-code">if (denoiseNeedsMotionVectors(s.denoiseMode) || denoiseNeedsDiffSpecSplit(s.denoiseMode)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L202" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:202</a></div>
+<p>`applyDenoisePolicy` runs inside `PathTracer::setRenderSettings`, so in principle selecting NRD on a profile that ships with auxiliary AOVs off would turn them on.</p>
+<div class="citation-chip"><code class="citation-code">m_renderSettings = applyDenoisePolicy(settings);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L309" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:309</a></div>
+<p>In practice it is a no-op on every shipping path. Both profile constants already set `enableAuxiliaryAOVs = true`, and every settings object that reaches `PathTracer` descends from one of the two, so the AOV branch cannot fire; the other branch writes `allowExternalDenoiser`, which nothing reads.</p>
+<p>Three traits are decorative. `is_offline_capable` has zero references anywhere in the repository, tests included. `is_realtime_capable` and its runtime wrapper `denoiseIsRealtimeCapable` are exercised only by the engine test suite — nothing in the engine refuses to run OIDN interactively; the CPU readback simply makes it slow. And `needs_cpu_readback`&#x27;s single effect is the dead `allowExternalDenoiser` write above.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr bool is_offline_capable =</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L135" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:135</a></div>
+</div>
+<div class="section-rule"><h2 id="two-transports-two-lifetimes">Two transports, two lifetimes</h2></div>
+<div class="prose reveal">
+<p>Settings reach the GPU by two mechanisms with very different update rates, and the split is the single most important thing to internalise about this unit.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/path-tracer-profiles-transport.svg" alt="Conceptual map of how each RTRenderSettings field reaches the GPU. Groupings and packing are read from path_tracer_pipeline.cpp, path_tracer_render.cpp and renderer.cpp; no measured numbers." loading="lazy" /><figcaption>Conceptual map of how each RTRenderSettings field reaches the GPU. Groupings and packing are read from path_tracer_pipeline.cpp, path_tracer_render.cpp and renderer.cpp; no measured numbers.</figcaption></figure>
+<p>Nearly everything that can change per frame travels in the 256-byte push-constant block. Bounce count and per-frame sample count share one 32-bit word rather than taking a field each, because the block is already at the size the code fixes as its ceiling:</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t packedBouncesAndSpf = (spf &lt;&lt; 16) | (m_maxBounces &amp; 0xFFFFu);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L696" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:696</a></div>
+<p>That ceiling is a compile-time constant asserted against the struct, not a device limit read back from `VkPhysicalDeviceLimits` — `maxPushConstantsSize` occurs in this tree only inside a comment. Vulkan guarantees 128 bytes; 256 is a bet on RT-class hardware that the code makes and never checks.</p>
+<div class="citation-chip"><code class="citation-code">inline constexpr std::size_t kPTPushConstantsBytes = 256;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L26" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:26</a></div>
+<p>Only the realtime raygen unpacks the high half and loops on it; the offline raygen masks it off and traces one path per dispatch.</p>
+<div class="citation-chip"><code class="citation-code">uint samplesPerFrame = max(pc.params.w &gt;&gt; 16, 1u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L287" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:287</a></div>
+<p>`denoiseMode` is the field this dichotomy has to admit as an exception. It is rewritten every frame like the rest, but the mode itself takes neither transport: it selects host-side work — which of the à-trous, DLSS-RR, NRD or OIDN passes runs around the trace — and reaches the shader only as derived values, two control bits and the zeroed history count above.</p>
+<div class="citation-chip"><code class="citation-code">if (m_renderSettings.denoiseMode == DenoiseMode::Atrous &amp;&amp; m_atrousDenoiser) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L743" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:743</a></div>
+<p>The sampler choice takes the other route. It is a Vulkan specialization constant baked into the raygen SPIR-V at pipeline creation:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t samplerTypeVal = static_cast&lt;uint32_t&gt;(m_renderSettings.samplerType);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L80" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:80</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The sampler dispatch sits in the innermost loop of the tracer — every dimension of every bounce goes through `getSample1D` / `getSample2D`. A push-constant or uniform branch there would be live in every invocation. As a specialization constant the branch folds away entirely during SPIR-V specialization, at the price of making the sampler *pipeline-creation state* rather than per-frame state. That price is real, and the next section is what it cost.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-sampler-that-never-actually-switches">The sampler that never actually switches</h2></div>
+<div class="prose reveal">
+<p>`PathTracer::init` builds the RT pipeline as one of its steps, and `createRTPipeline` is called from nowhere else in the class.</p>
+<div class="citation-chip"><code class="citation-code">if (!createRTPipeline()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L112" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:112</a></div>
+<p>But the profile&#x27;s settings are pushed into the tracer *after* `init` returns — `RTProfileRendererBase::init` calls `setShaderSet`, then `init`, and only then `setRenderSettings`.</p>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setShaderSet(m_shaderSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L99" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:99</a></div>
+<p>At the moment the pipeline is created, `m_renderSettings` therefore still holds its default member initializer, which is the offline profile:</p>
+<div class="citation-chip"><code class="citation-code">RTRenderSettings m_renderSettings{kOfflineRTSettings};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L265" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:265</a></div>
+<p>So both profiles specialize `constant_id = 0` to Sobol. `kRealtimeRTSettings` declares PCG and that value never reaches SPIR-V. The failure is silent because the value that *is* specialized happens to be a usable sampler, not because the shader has a safety net: `createRTPipeline` attaches a `VkSpecializationInfo` with one map entry to every pipeline it builds, so a supplied value always wins.</p>
+<div class="citation-chip"><code class="citation-code">samplerSpecInfo.mapEntryCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L83" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:83</a></div>
+<p>The GLSL side declares Sobol as its own default, but that initializer is unreachable in both profiles for exactly that reason:</p>
+<div class="citation-chip"><code class="citation-code">layout(constant_id = 0) const uint SAMPLER_TYPE = SAMPLER_SOBOL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_api.glsl#L16" target="_blank" rel="noopener">shaders/includes/rt/sampler_api.glsl:16</a></div>
+<p>The consequence is a quality question, not a crash: the realtime profile pays for a QMC sampler it was not designed around. Fixing it means either applying the settings before `init` or recreating the pipeline when `samplerType` changes — the same shape of fix `setRenderSettings` already applies to images when the DLSS render scale moves.</p>
+</div>
+<div class="section-rule"><h2 id="a-profile-is-an-object-and-it-owns-a-raygen">A profile is an object, and it owns a raygen</h2></div>
+<div class="prose reveal">
+<p>`RTRealtimeRenderer` and `RTOfflineRenderer` are thin finals over a shared base that wraps a `PathTracer` and forwards over forty accessors. What they genuinely differ on is the constructor&#x27;s `PathTracerShaderSet`:</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L220" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:220</a></div>
+<p>Because both concrete profiles override the shader set and `PathTracer` is only ever instantiated as a member of that base, the struct&#x27;s default raygen is unreachable in the shipping engine:</p>
+<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_pt_raygen.rgen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L55" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:55</a></div>
+<p>`shaders/rt/pt_raygen.rgen` is still compiled — the shader CMake globs the directory — but nothing binds its SPIR-V. Treat it as the common ancestor the two profile raygens diverged from, not as a live third profile.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-two-finals-actually-decide">What the two finals actually decide</h2></div>
+<div class="prose reveal">
+<p>`RTProfileRendererBase` implements the forwarding, and leaves four pure virtuals to the finals: `getName`, `getProfile`, `getDefaultSettings` and `resetsAccumulationOnViewChange`. The first three return identity and constants, and `IRTRendererProfile::getDefaultSettings` has no callers at all. The profiles&#x27; real payload — the settings aggregate and the shader set — is not virtual: it is handed up through the base constructor.</p>
+<div class="citation-chip"><code class="citation-code">RTProfileRendererBase(RTRenderSettings settings, PathTracerShaderSet shaderSet)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L90" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:90</a></div>
+<p>Only the fourth virtual changes behaviour, and what it decides is what a camera move means.</p>
+<div class="citation-chip"><code class="citation-code">if (resetsAccumulationOnViewChange()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L181" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:181</a></div>
+<p>Offline answers yes and hard-resets — sample index back to the render seed, history counters to zero, NRD&#x27;s previous matrices to identity. Realtime answers no:</p>
+<div class="citation-chip"><code class="citation-code">bool resetsAccumulationOnViewChange() const override { return false; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L212" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:212</a></div>
+<p>and instead raises a per-frame flag that the raygen reads as a temporal bootstrap hint. Keeping the accumulation buffer alive across a camera move is what makes an interactive viewport usable; throwing it away is what makes a reference render correct.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-per-frame-reset-stomps">What the per-frame reset stomps</h2></div>
+<div class="prose reveal">
+<p>There is a second profile hierarchy, and this is where it surfaces. `IRTRenderPipeline` — `RTRealtimePipeline`, `RTOfflinePipeline` — is a stateless description of a mode rather than a renderer: four const methods, no Vulkan objects, held by value on `VulkanRenderer`. It shares three method names with `IRTRendererProfile` and nothing else.</p>
+<div class="citation-chip"><code class="citation-code">class RTRealtimePipeline final : public IRTRenderPipeline {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_render_pipeline.hpp#L17" target="_blank" rel="noopener">ohao/render/rt/rt_render_pipeline.hpp:17</a></div>
+<p>Per frame, `prepareRTSceneForFrame` overwrites the renderer&#x27;s settings with that pipeline object&#x27;s defaults before doing anything else. The values come from the pipeline; the profile renderer&#x27;s identically-named `getDefaultSettings` is not what supplies them.</p>
+<div class="citation-chip"><code class="citation-code">m_rtSettings = pipeline.getDefaultSettings();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L525" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:525</a></div>
+<p>Only anisotropy strength, anisotropy rotation and subsurface strength are carried across that assignment; `applyRTRenderSettings` then re-injects the interactive sample count and — for Atrous and DLSS-RR only — the user&#x27;s `--denoise` override. Anything else set through `setRTRenderSettings`, `maxBounces` most obviously, never survives to a dispatch at all: `renderRTPipeline` calls `prepareRTSceneForFrame` first and records the trace afterwards, so the value is overwritten before any raygen can read it.</p>
+<div class="citation-chip"><code class="citation-code">prepareRTSceneForFrame(pipeline, false);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L149" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:149</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The profile constants are authoritative every frame, not just at startup. A knob that is not on the explicit preserve list is not a setting, it is a value discarded before the next dispatch reads it. The sampler is the mirror image: it is authoritative once, at init, and currently authoritative with the wrong profile&#x27;s value.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Both profile renderers are created lazily by `ensureRTRenderer` and released only in `VulkanRenderer::shutdown`. Switching modes at runtime leaves two full `PathTracer` instances resident, each owning its own set of over twenty screen-sized storage images (roughly half of them RGBA32F), and `forEachRTRenderer` re-uploads materials, textures and lights to both.</li>
+<li>`setRenderSettings` must be called between frames, never inside a command buffer: a change of DLSS render scale makes it wait on device idle and reallocate every render target.</li>
+<li>`preferAccumulation` and `allowExternalDenoiser` exist in the struct and in the traits, but no code reads them to change behaviour — they appear only in the profile log line. Do not add logic that assumes they are already honoured. {{cite ohao/gpu/vulkan/renderer.cpp &quot;externalDenoiser=&quot;}}</li>
+<li>The offline profile&#x27;s freedom from firefly clamping depends on two independent conditions (flag clear, threshold zero). Restoring the struct default of 10.0 without also clearing the flag would silently bias reference renders. {{cite ohao/render/rt/path_tracer_render.cpp &quot;if (m_renderSettings.enableFireflyClamp) pc.control.x |= kPTFlagEnableFireflyClamp;&quot;}}</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_api.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_render_pipeline.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="host.html"><div class="label">← Prev</div><div class="title">Host lifecycle</div></a><a class="next" href="as.html"><div class="label">Next →</div><div class="title">Acceleration structures</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

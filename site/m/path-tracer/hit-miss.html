@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · Hit &amp; miss shaders — OHAO Monograph</title>
+  <meta name="description" content="closesthit materials, anyhit alpha, miss env." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/hit-miss" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · Hit &amp; miss shaders</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>Hit &amp; miss shaders</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>closesthit materials, anyhit alpha, miss env.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#everything-a-hit-knows-must-fit-in-one-payload">Everything a hit knows must fit in one payload</a></li><li><a href="#rebuilding-a-surface-from-three-indices">Rebuilding a surface from three indices</a></li><li><a href="#a-tangent-frame-that-does-not-know-about-uvs">A tangent frame that does not know about UVs</a></li><li><a href="#one-descriptor-array-two-image-formats">One descriptor array, two image formats</a></li><li><a href="#the-miss-shader-is-both-the-sky-and-the-shadow-test">The miss shader is both the sky and the shadow test</a></li><li><a href="#two-equirectangular-conventions-one-texture">Two equirectangular conventions, one texture</a></li><li><a href="#the-any-hit-that-traversal-never-calls">The any-hit that traversal never calls</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="everything-a-hit-knows-must-fit-in-one-payload">Everything a hit knows must fit in one payload</h2></div>
+<div class="prose reveal">
+<p>The path tracer&#x27;s bindless texture array is declared for closest-hit, any-hit and miss only — no raygen stage appears in binding 12&#x27;s mask, and none of the three raygen profiles declares a sampler of its own.</p>
+<div class="citation-chip"><code class="citation-code">bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L91" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:91</a></div>
+<p>Every material fact the integrator needs is therefore squeezed through a single `RayPayload`, redeclared field-for-field in five files: the three raygen profiles, `pt_closesthit.rchit` and `pt_miss.rmiss`. There is no shared header, so a field added to one copy and not the others does not fail to compile — it reinterprets the neighbouring floats.</p>
+<p>One field is already write-only. The closest-hit publishes the instance&#x27;s custom index, which here holds a running global triangle offset rather than an actor id, and nothing reads it back:</p>
+<div class="citation-chip"><code class="citation-code">payload.hitInstance = gl_InstanceCustomIndexEXT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L40" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:40</a></div>
+<p>A single payload also imposes an ordering rule. Shadow rays reuse miss index 0 — the same `pt_miss.rmiss` — so a visibility test that *escapes* overwrites `payload.color`, `payload.hitDist` and `payload.envPdf`. An occluded one runs no shader at all: the shadow trace carries `TerminateOnFirstHit | Opaque | SkipClosestHitShader`, so a hit invokes nothing and `payload.hitDist` keeps the `999.0` sentinel the raygen wrote one line earlier — which is precisely how the caller tells the two outcomes apart.</p>
+<div class="citation-chip"><code class="citation-code">hitPos + N * 0.01, 0.001, L, shadowDist, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L392" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:392</a></div>
+<p>Either way the raygen must snapshot the hit into locals before it fires anything:</p>
+<div class="citation-chip"><code class="citation-code">vec3 emissive = payload.color;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L266" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:266</a></div>
+<p>Move a shadow ray above that line and the first escaping one turns the surface&#x27;s own emission into the sky.</p>
+</div>
+<div class="section-rule"><h2 id="rebuilding-a-surface-from-three-indices">Rebuilding a surface from three indices</h2></div>
+<div class="prose reveal">
+<p>The closest-hit receives barycentrics and a primitive id, nothing else. It resolves the triangle through the scene-wide flattened index buffer, interpolates UVs and vertex normals, and rotates the result to world space. When the interpolated normal is degenerate — squared length under 1e-4, what a mesh carrying no vertex normals produces — it falls back to a box normal built from the sign of the dominant object-space coordinate:</p>
+<div class="citation-chip"><code class="citation-code">else localN = vec3(0, 0, sign(hitLocal.z));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L76" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:76</a></div>
+<p>A box normal is right for an axis-aligned quad and wrong for anything curved, which is why the two-sided flip is gated on that same branch. In the shipped scenes neither ever runs. Each Cornell wall is handed an explicit inward unit normal that `addQuad` copies into all four of its vertices, the primitive sphere uses its normalised position, and `rt_build.cpp` copies `Vertex::normal` verbatim into the RT normal buffer — so the squared length is 1, the interpolated branch always wins, and the fallback is dead code on the reference scene rather than the thing that makes it work.</p>
+<div class="citation-chip"><code class="citation-code">v.normal = normal;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/cornell_box.cpp#L39" target="_blank" rel="noopener">examples/cornell_box.cpp:39</a></div>
+<div class="citation-chip"><code class="citation-code">vertex.normal = {x, y, z};  // Normalized position = normal for sphere</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/component_factory.cpp#L374" target="_blank" rel="noopener">ohao/scene/component/component_factory.cpp:374</a></div>
+<div class="citation-chip"><code class="citation-code">normals[i] = glm::vec4(verts[i].normal, 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L121" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:121</a></div>
+<p>The OBJ and glTF loaders substitute `(0,1,0)` when a file carries none, so they cannot reach the fallback either.</p>
+<div class="citation-chip"><code class="citation-code">vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L404" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:404</a></div>
+<div class="citation-chip"><code class="citation-code">v.normal = glm::vec3(0.0f, 1.0f, 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L222" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:222</a></div>
+<p>The one live path that can still produce a zero normal is FBX: `ufbx` writes the vertex normal only when the mesh has a normal layer, so a mesh without one leaves `Vertex::normal` at its zero-initialised default.</p>
+<div class="citation-chip"><code class="citation-code">if (mesh-&gt;vertex_normal.exists)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L262" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:262</a></div>
+<p>Real meshes therefore get no flip, and every TLAS instance disables triangle culling, so a hit from behind keeps its outward normal.</p>
+<div class="citation-chip"><code class="citation-code">vkInst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_acceleration_structure.cpp#L445" target="_blank" rel="noopener">ohao/render/rt/rt_acceleration_structure.cpp:445</a></div>
+<p>Nothing goes negative — every NEE branch clamps `N·V` to 0.001 — but `N·L` is clamped at zero, so every light on the far side contributes exactly nothing and the back face renders black rather than wrongly lit.</p>
+<div class="citation-chip"><code class="citation-code">float NdotL = max(dot(N, L), 0.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L385" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:385</a></div>
+<p>From the same three vertex normals the shader derives a curvature proxy: the total angular disagreement between them, scaled by eight and clamped.</p>
+<div class="math-block">$$
+\kappa = \operatorname{clamp}\!\Big(8\sum_{i<j}\big(1-\hat{n}_i\cdot\hat{n}_j\big),\,0,\,1\Big)
+$$</div>
+<p>$\hat{n}_0,\hat{n}_1,\hat{n}_2$ are the triangle&#x27;s normalised vertex normals and the sum runs over their three distinct pairs. Read literally, that is the spread of one triangle&#x27;s normals — edge length times curvature — so it tracks tessellation as much as shape. The comment above it calls the value near zero on smoothly-curved regions; the engine&#x27;s own sphere contradicts that. At 32 sectors by 16 stacks adjacent vertex normals differ by $\pi/16 \approx 0.196$ rad, so on an equatorial face the three pair terms sum to about $0.077$ and $\kappa \approx 0.6$ — arithmetic on those two constants, not a measurement.</p>
+<div class="citation-chip"><code class="citation-code">const int stacks = 16;   // latitude</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/component_factory.cpp#L352" target="_blank" rel="noopener">ohao/scene/component/component_factory.cpp:352</a></div>
+<div class="citation-chip"><code class="citation-code">curv = clamp(curv * 8.0, 0.0, 1.0);  // scale so typical face values land 0..1</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L93" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:93</a></div>
+<p>It fails the other direction too: a hard crease authored with split per-face normals presents three identical vertex normals, giving $\kappa = 0$ exactly. So what the closest-hit computes is a tessellation-weighted smoothness estimate, not the corner detector the comment describes — a usable knob, not geometry.</p>
+<p>The value rides in `payload.attenuation.z`, computed once in the closest-hit for all three profiles, and has exactly one reader — the offline profile&#x27;s subsurface term, which uses it to widen the diffusion kernel:</p>
+<div class="citation-chip"><code class="citation-code">float curvature = clamp(payload.attenuation.z, 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L287" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:287</a></div>
+<p>The shared decoder every raygen runs on that payload touches `.x` and `.y` only, so under the default and realtime profiles the field is written and never read.</p>
+<div class="citation-chip"><code class="citation-code">void unpackHitPbr(vec3 att, out float roughness, out float metallic) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/includes/pbr_unpack.glsl#L8" target="_blank" rel="noopener">shaders/rt/includes/pbr_unpack.glsl:8</a></div>
+</div>
+<div class="section-rule"><h2 id="a-tangent-frame-that-does-not-know-about-uvs">A tangent frame that does not know about UVs</h2></div>
+<div class="prose reveal">
+<p>The RT vertex stream carries no tangent, so normal mapping in the closest-hit builds an orthonormal basis from the shading normal alone — Frisvad&#x27;s $a = 1/(1+n_z)$ construction, which buys its speed by avoiding a normalisation and a square root, not a branch. The branch is unavoidable: the form is singular at $n_z = -1$, and the shader guards it explicitly.</p>
+<div class="citation-chip"><code class="citation-code">if (worldNormal.z &lt; -0.9999) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L122" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:122</a></div>
+<p>The tangent-space normal is then applied in that basis:</p>
+<div class="citation-chip"><code class="citation-code">worldNormal = normalize(T * mapN.x + B * mapN.y + worldNormal * mapN.z);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L132" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:132</a></div>
+<p>The engine already documents why that basis is poor when direction matters: `ggx_aniso.glsl` rejected Frisvad for its anisotropy tangent for exactly this reason.</p>
+<div class="citation-chip"><code class="citation-code">// varies discontinuously with N — neighbouring pixels on a sphere see totally</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L18" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:18</a></div>
+<p>The rasteriser has the real thing — a per-vertex tangent with handedness, Gram-Schmidt orthogonalised against the shading normal:</p>
+<div class="citation-chip"><code class="citation-code">T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L80" target="_blank" rel="noopener">shaders/core/gbuffer.frag:80</a></div>
+<p>So one normal map perturbs in a UV-aligned frame under the deferred pipeline and in an arbitrary, N-dependent frame under the path tracer. The `mapN.z` component — the bulk of most normal maps — survives either way, which is why RT renders still look bumpy. Directional detail does not: brushed metal, scratches and woven cloth rotate per pixel in the RT path and will not match the raster preview.</p>
+</div>
+<div class="section-rule"><h2 id="one-descriptor-array-two-image-formats">One descriptor array, two image formats</h2></div>
+<div class="prose reveal">
+<p>The material row is three `vec4`s indexed by material id, with texture handles smuggled through float bit patterns and `0xFFFFFFFF` meaning &quot;none&quot;:</p>
+<div class="citation-chip"><code class="citation-code">vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, unused, unused, unused)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L99" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:99</a></div>
+<p>Binding 3, the per-instance buffer carrying an older sign-and-magnitude encoding, is still declared here and never indexed:</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 3) readonly buffer MaterialBuffer { vec4 materials[]; } materialBuf;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L23" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:23</a></div>
+<p>Scene textures arrive as layers of one `R8G8B8A8_UNORM` array image exposed through per-layer 2D views, which is why colour fetches need a manual transfer-function decode an `_SRGB` view would have applied for free:</p>
+<div class="citation-chip"><code class="citation-code">imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L593" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:593</a></div>
+<div class="citation-chip"><code class="citation-code">albedo *= pow(sampled, vec3(2.2));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L112" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:112</a></div>
+<p>The HDR environment map sits in the *same* GLSL array as an `R32G32B32A32_SFLOAT` image — legal because combined-image-sampler descriptors are independent — which is how the miss shader reads values above 1.0 from a binding whose other entries are clamped to `[0,1]`. The array has a single mip level and nothing in the RT path computes ray differentials, so minified textures alias.</p>
+</div>
+<div class="section-rule"><h2 id="the-miss-shader-is-both-the-sky-and-the-shadow-test">The miss shader is both the sky and the shadow test</h2></div>
+<div class="prose reveal">
+<p>`pt_miss.rmiss` signals escape by writing a negative distance, and that one float is the entire occlusion protocol:</p>
+<div class="citation-chip"><code class="citation-code">payload.hitDist = -1.0;  // signal miss</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L59" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:59</a></div>
+<p>This is what lets environment next-event estimation cost one ray instead of two. The raygen draws a direction from the environment CDF, traces a shadow ray along it, and if the ray escapes it consumes the radiance the miss shader just wrote — visibility and the light&#x27;s emission resolved in a single traversal:</p>
+<div class="citation-chip"><code class="citation-code">vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L481" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:481</a></div>
+<p>The same economy is a cost on every other shadow ray that escapes: area-light NEE traces through the identical miss shader, which fetches the environment texel and then evaluates `pdfEnvMap` — an `acos`, an `atan2` and up to four indexed CDF loads — to report a PDF that caller never reads. The expensive half is not shared: the two binary searches live in `sampleEnvMap`, which only the raygen calls.</p>
+<div class="citation-chip"><code class="citation-code">payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L78" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:78</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>With no environment map the miss returns black, not a constant ambient. A fake sky term is the cheaper-looking choice and it is wrong for closed scenes: GI rays that slip through a wall seam pick it up and carry sky light — and its grain — back into a sealed room. Indoor scenes are lit only by their own lights. {{cite shaders/rt/pt_miss.rmiss &quot;payload.color = vec3(0.0);&quot;}}</p></div>
+</div>
+<div class="section-rule"><h2 id="two-equirectangular-conventions-one-texture">Two equirectangular conventions, one texture</h2></div>
+<div class="prose reveal">
+<p>The miss shader and the environment importance sampler both map directions to equirectangular UVs, and they do not agree. For a unit direction $d$ the miss shader uses</p>
+<div class="math-block">$$
+v_{\text{miss}} = \frac{\arcsin d_y}{\pi} + \frac{1}{2}
+$$</div>
+<div class="citation-chip"><code class="citation-code">return vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L55" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:55</a></div>
+<p>while `env_sampling.glsl`, which turns CDF texels into directions and inverts the map for MIS, uses</p>
+<div class="math-block">$$
+v_{\text{cdf}} = \frac{\arccos d_y}{\pi}
+$$</div>
+<div class="citation-chip"><code class="citation-code">float theta = v * OHAO_PI;               // [0, pi], theta=0 at +Y, pi at -Y</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L44" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:44</a></div>
+<p>Since $\arccos x = \tfrac{\pi}{2} - \arcsin x$, the two are related by $v_{\text{miss}} = 1 - v_{\text{cdf}}$ — an exact vertical mirror. The horizontal axis agrees; both derive $u$ from $\operatorname{atan2}(d_z, d_x)$. They would still be consistent if the CDF&#x27;s rows ran opposite to the texture&#x27;s, but `EnvCDF::build` consumes the same `stbi_loadf` array that is memcpy&#x27;d unflipped into the image.</p>
+<div class="citation-chip"><code class="citation-code">envCDF.build(hdrPixels, ew, eh);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L429" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:429</a></div>
+<p>A direction drawn from the brightest row of the CDF is therefore looked up by the miss shader in the mirrored row. Engine-wide the convention splits two against two, not one outlier against the rest: the miss shader and `deferred_lighting.frag` both build $0.5 + \theta/\pi$ from $\theta = \arcsin d_y$, while `env_sampling.glsl` and the cinematic composite both land on $0.5 - \theta/\pi$. What matters is not the census but which pair shares a texture — and the two that disagree here are the sampler that picks the direction and the miss shader that shades it.</p>
+<div class="citation-chip"><code class="citation-code">vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L277" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:277</a></div>
+<div class="citation-chip"><code class="citation-code">vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/cinematic_composite.comp#L60" target="_blank" rel="noopener">shaders/rt/cinematic_composite.comp:60</a></div>
+<p>MIS still combines two well-formed weights, but the estimator underneath is not unbiased either. `sampleEnvMap` throws away the residual of $u_1,u_2$ after the two searches and returns `equirectPixelToDir`, which resolves the texel *centre* — so the procedure draws from a discrete set of $W \times H$ directions while reporting a continuous solid-angle density.</p>
+<div class="citation-chip"><code class="citation-code">float u = (float(x) + 0.5) / float(W);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L41" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:41</a></div>
+<p>The env-NEE term is thus a midpoint Riemann sum over texel centres, evaluated against the bilinearly filtered radiance the miss shader fetches: a systematic quadrature error that no sample count removes, sitting on top of an importance distribution the mirrored $v$ leaves anti-correlated with the radiance it exists to track. Both are read from the code, not measured.</p>
+</div>
+<div class="section-rule"><h2 id="the-any-hit-that-traversal-never-calls">The any-hit that traversal never calls</h2></div>
+<div class="prose reveal">
+<p>`pt_anyhit.rahit` implements a hard 0.5 cutout, and the shader itself is sound: it takes alpha from the diffuse texture, so any textured cutout material would be tested correctly if the stage ever ran.</p>
+<div class="citation-chip"><code class="citation-code">uint diffuseTexIdx = floatBitsToUint(matColor.a);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_anyhit.rahit#L33" target="_blank" rel="noopener">shaders/rt/pt_anyhit.rahit:33</a></div>
+<p>It never runs. That is the whole of what makes it inert: every BLAS is built with `VK_GEOMETRY_OPAQUE_BIT_KHR` and every `traceRayEXT` passes `gl_RayFlagsOpaqueEXT`, either of which alone suppresses the stage.</p>
+<p>A second, independent gap sits behind that one. The material row has no alpha slot — the `.a` lane of the base-colour row is where the diffuse texture index lives — so an untextured material with a transparent base colour could not be cut out even with traversal fixed. `MaterialData` does carry an alpha mode, but only the glTF loader ever writes it; the OBJ and FBX paths leave the default, and it reaches no GPU buffer in any case:</p>
+<div class="citation-chip"><code class="citation-code">mat.alphaMode = MaterialData::AlphaMode::MASK;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L115" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:115</a></div>
+<div class="citation-chip"><code class="citation-code">enum class AlphaMode { OPAQUE, MASK, BLEND } alphaMode = AlphaMode::OPAQUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.hpp#L66" target="_blank" rel="noopener">ohao/scene/asset/model.hpp:66</a></div>
+<p>What ships instead is deletion at load time — the OBJ path drops alpha-card triangles by material name:</p>
+<div class="citation-chip"><code class="citation-code">// Filter alpha-card geometry that lacks proper alpha textures</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L210" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:210</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Read the any-hit as a specification, not as behaviour. Making it run takes three independent changes — clear the geometry opaque bit, drop the per-ray opaque flag, and add an alpha or alpha-mode field to the material row — and any one of them alone changes nothing.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`RayPayload` is duplicated across `pt_closesthit.rchit`, `pt_miss.rmiss` and all three raygen profiles with no shared header. Edit one and you must edit all five; a mismatch is silent.</li>
+<li>Shadow rays use miss index 0, so one that escapes clobbers `payload.color`, `payload.hitDist` and `payload.envPdf`; an occluded one runs no shader and leaves the payload alone. Read albedo, normal, position and emission into locals before tracing anything.</li>
+<li>`payload.hitDist &lt; 0.0` is the only occlusion signal. A miss that stops writing it turns every shadow ray into a hit and every surface black.</li>
+<li>`pt_miss.rmiss` declares a `vec4 jitter` it never reads, purely so its push-constant block size matches the layout the raygen defines. Trimming it invalidates the layout.</li>
+<li>Only degenerate-normal geometry is flipped two-sided, and no shipped scene produces one; culling is disabled TLAS-wide, so a real mesh hit from behind keeps its outward normal and renders black through the `N·L` clamp.</li>
+<li>Normal maps use a Frisvad basis in the path tracer and a UV-derived tangent basis in the GBuffer. Directional detail will not match between the two.</li>
+<li>The closest-hit&#x27;s header comment still describes a two-`vec4` material layout; the code reads three. Binding 3 is declared here and never indexed.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>examples/cornell_box.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/component_factory.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_gltf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_fbx.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_acceleration_structure.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/includes/pbr_unpack.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/material/ggx_aniso.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/env_sampling.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_composite.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="raygen.html"><div class="label">← Prev</div><div class="title">Raygen integrator</div></a><a class="next" href="bindings.html"><div class="label">Next →</div><div class="title">Descriptor map 0–35</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · Host lifecycle — OHAO Monograph</title>
+  <meta name="description" content="ensureRTRenderer, images, pipeline, SBT, descriptors." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/host" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · Host lifecycle</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>Host lifecycle</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>ensureRTRenderer, images, pipeline, SBT, descriptors.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#six-steps-that-do-not-commute">Six steps that do not commute</a></li><li><a href="#render-resolution-is-not-output-resolution">Render resolution is not output resolution</a></li><li><a href="#why-dead-members-are-compiled-into-every-build">Why dead members are compiled into every build</a></li><li><a href="#one-descriptor-set-rewritten-every-frame">One descriptor set, rewritten every frame</a></li><li><a href="#256-bytes-and-the-word-that-had-to-hold-two-numbers">256 bytes, and the word that had to hold two numbers</a></li><li><a href="#the-jitter-is-computed-on-the-host">The jitter is computed on the host</a></li><li><a href="#two-counters-and-the-clear-that-never-happens">Two counters, and the clear that never happens</a></li><li><a href="#seven-images-that-are-allocated-and-never-bound">Seven images that are allocated and never bound</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="six-steps-that-do-not-commute">Six steps that do not commute</h2></div>
+<div class="prose reveal">
+<p>`PathTracer` is the largest single owner of GPU state in the engine: roughly thirty images, a host-visible material SSBO, one descriptor set, an RT pipeline, a shader binding table, and five optional denoise/post backends held by pointer. `init()` runs six build steps whose order is forced by data dependencies, not taste: `createRTPipeline` needs the descriptor set layout to build a pipeline layout, and `createShaderBindingTable` needs the finished pipeline to query group handles plus `vkGetBufferDeviceAddress` to publish the SBT&#x27;s strided regions — which is itself resolved in step one.</p>
+<p>Step one exists for three of the four pointers it fetches. `vkCreateRayTracingPipelinesKHR`, `vkGetRayTracingShaderGroupHandlesKHR` and `vkCmdTraceRaysKHR` are `KHR` extension entry points that no loader exports as core symbols; they are looked up by name on the device and the whole init aborts if any comes back null — the cheapest place to discover that a device advertised the extension but the driver did not deliver it.</p>
+<div class="citation-chip"><code class="citation-code">return vkCreateRayTracingPipelinesKHR &amp;&amp; vkGetRayTracingShaderGroupHandlesKHR &amp;&amp;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L47" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:47</a></div>
+<p>The fourth pointer the same function loads is not a ray-tracing entry point and does not share that justification. It is fetched under the unsuffixed name `vkGetBufferDeviceAddress` — core Vulkan since 1.2 — and the instance is created with `apiVersion = VK_API_VERSION_1_3`, so on a conforming loader it cannot come back null and its term in the `&amp;&amp;` chain is dead.</p>
+<div class="citation-chip"><code class="citation-code">(PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(m_device, &quot;vkGetBufferDeviceAddress&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L45" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:45</a></div>
+<div class="citation-chip"><code class="citation-code">.apiVersion = VK_API_VERSION_1_3,  // Vulkan 1.3 for RT + buffer device address</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L20" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:20</a></div>
+<p>One number in the pipeline create-info is worth pausing on. It declares a maximum ray recursion depth of two, with a comment that path tracing &quot;needs bounce recursion&quot; — but the bounce loop in every raygen variant is iterative, and no closest-hit, any-hit or miss shader in `shaders/rt/` calls `traceRayEXT`. Every ray is launched from the raygen, so the pipeline never recurses past depth one.</p>
+<div class="citation-chip"><code class="citation-code">pipelineInfo.maxPipelineRayRecursionDepth = 2;  // path tracing needs bounce recursion</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L160" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:160</a></div>
+</div>
+<div class="section-rule"><h2 id="render-resolution-is-not-output-resolution">Render resolution is not output resolution</h2></div>
+<div class="prose reveal">
+<p>The caller passes display dimensions; `PathTracer` keeps two pairs. `m_outW/m_outH` is what was asked for, `m_width/m_height` is what the raygen dispatch and every AOV are sized to. They are equal in every mode except a DLSS upscaling preset, where `computeRenderResolution()` shrinks the render pair.</p>
+<div class="citation-chip"><code class="citation-code">computeRenderResolution();   // sets m_width/m_height (render res)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L88" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:88</a></div>
+<p>The shrink is not a plain multiply: DLSS wants even dimensions, so the scaled value is masked down to even and floored at two — the render resolution is therefore almost never exactly `scale × output`.</p>
+<div class="citation-chip"><code class="citation-code">v &amp;= ~1u;                 // align down to even</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L293" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:293</a></div>
+<p>Two images escape the render pair, and both are sized to *output*. The RGBA8 beauty is the first: under upscaling it is the full-res target the DLSS tonemap writes, so the raygen&#x27;s own beauty store into it at render size is discarded.</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.extent = {m_outW, m_outH, 1};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_images.cpp#L65" target="_blank" rel="noopener">ohao/render/rt/path_tracer_images.cpp:65</a></div>
+<p>The second is the DLSS-RR `COLOR_OUT` image — RGBA16F, allocated at the end of the same `createImages()` behind `#ifdef OHAO_DLSS_ENABLED`. It is what DLSS upscales the render-res guide buffers *into*, which is exactly why it cannot be render-sized; the DLSS tonemap compute then reads it and writes the RGBA8 beauty. Both exceptions therefore exist for the same reason, and both are live in the one mode where render and output differ.</p>
+<div class="citation-chip"><code class="citation-code">if (vkCreateImage(m_device, &amp;imageInfo, nullptr, &amp;m_dlssColorOutImage) != VK_SUCCESS) return false;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_images.cpp#L980" target="_blank" rel="noopener">ohao/render/rt/path_tracer_images.cpp:980</a></div>
+<p>`init()` runs before any denoise mode has been applied, so the scale there is always 1. A later `setRenderSettings()` that switches into DLSS-RR is what triggers the device-idle, destroy-all-images, recreate-all-images pass.</p>
+</div>
+<div class="section-rule"><h2 id="why-dead-members-are-compiled-into-every-build">Why dead members are compiled into every build</h2></div>
+<div class="prose reveal">
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The NRD members — `unique_ptr&lt;NrdDenoiser&gt;`, `NrdCompositor`, `NrdCinematicPost` — are declared unconditionally in the header even when NRD is off; only the method bodies that touch them are `#ifdef`-guarded. The rejected alternative, wrapping the members in `#ifdef OHAO_NRD_ENABLED` like the DLSS block below them, is an ODR violation here: that macro is `PRIVATE` to one library, while a second library also instantiates `PathTracer`&#x27;s layout through `rt_profile_renderer.hpp`.  {{cite ohao/render/CMakeLists.txt &quot;target_compile_definitions(ohao_renderer PRIVATE OHAO_NRD_ENABLED)&quot;}}  The DLSS members *can* be conditional precisely because that macro is defined on both targets, keeping the layout identical. The asymmetry in the header is a faithful mirror of the build graph; flipping either side silently changes `sizeof(PathTracer)` in half the program.  {{cite ohao/gpu/vulkan/CMakeLists.txt &quot;target_compile_definitions(ohao_gpu_vulkan PRIVATE OHAO_DLSS_ENABLED)&quot;}}</p></div>
+<p>The same incompleteness forces the constructor and destructor out of line: a `unique_ptr` to a forward-declared denoiser cannot instantiate its deleter in the header. Both live in `path_tracer.cpp`, the one translation unit that includes every backend&#x27;s real header.</p>
+</div>
+<div class="section-rule"><h2 id="one-descriptor-set-rewritten-every-frame">One descriptor set, rewritten every frame</h2></div>
+<div class="prose reveal">
+<p>There is no descriptor caching and no per-frame-in-flight duplication: the pool is created with `maxSets = 1` and `render()` rebuilds up to 29 writes from scratch before every trace. The array is sized exactly to the worst case, so adding a binding without growing it overruns a stack buffer.</p>
+<div class="citation-chip"><code class="citation-code">VkWriteDescriptorSet writes[29] = {};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L160" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:160</a></div>
+<p>Several of those slots are geometry SSBOs the scene may not have uploaded yet. Rather than skip the write and leave a descriptor undefined, every null buffer handle falls back to the material buffer — a 256-entry host-visible allocation that always exists after `init()` and therefore doubles as the universal dummy.</p>
+<div class="citation-chip"><code class="citation-code">normalBufInfo.buffer = m_normalBuffer != VK_NULL_HANDLE ? m_normalBuffer : m_materialBuffer;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L122" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:122</a></div>
+<p>Rewriting one shared set is only defined if no pending submission still references it, and nothing here establishes that. `renderRTPipeline()` waits on the fence of the frame slot it is about to reuse — frame *N−3* — and `MAX_FRAMES_IN_FLIGHT` is 3, so frames *N−1* and *N−2* can still be executing when `vkUpdateDescriptorSets` lands on the same `VkDescriptorSet`. Of the 36 bindings only binding 12 carries `UPDATE_AFTER_BIND`; the other 35 do not. Treat this as an open hazard rather than a contract: the fixes are a per-frame-in-flight set, or a wait that covers every in-flight submission.</p>
+<div class="citation-chip"><code class="citation-code">*   1. At frame start: waitForFrame(currentFrame) - blocks until frame N-3 completes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L88" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:88</a></div>
+</div>
+<div class="section-rule"><h2 id="256-bytes-and-the-word-that-had-to-hold-two-numbers">256 bytes, and the word that had to hold two numbers</h2></div>
+<div class="prose reveal">
+<p>The push-constant block is asserted at 256 bytes — the device maximum on most RT GPUs — so when a genuine per-frame sample count was needed there was no room to append a field. It went into the high half of the word that already held the bounce limit.</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t packedBouncesAndSpf = (spf &lt;&lt; 16) | (m_maxBounces &amp; 0xFFFFu);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L696" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:696</a></div>
+<p>Only the realtime raygen unpacks the high half and loops on it; the base and offline raygens mask it off and trace one path per dispatch. The same push constant means two different things depending on which SPIR-V the profile loaded.</p>
+<div class="citation-chip"><code class="citation-code">uint samplesPerFrame = max(pc.params.w &gt;&gt; 16, 1u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L287" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:287</a></div>
+</div>
+<div class="section-rule"><h2 id="the-jitter-is-computed-on-the-host">The jitter is computed on the host</h2></div>
+<div class="prose reveal">
+<p>No mode samples at pixel centre. Every raygen already draws its own stochastic sub-pixel offset per sample — `getSample2D(dimIdx) - 0.5` — and adds it to the primary-ray UV in all denoise modes.</p>
+<div class="citation-chip"><code class="citation-code">vec2 uv = (vec2(pixel) + 0.5 + jitter + pc.jitter.xy) / vec2(pc.params.xy);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L304" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:304</a></div>
+<p>What the host contributes, and only when the mode is NRD or DLSS-RR, is the second term in that sum: `pc.jitter.xy`, a *deterministic* offset. Determinism is the whole point — the same numbers are handed to the denoiser so it can subtract them during temporal reprojection. NRD receives them as `cameraJitter`/`cameraJitterPrev`; DLSS-RR receives them negated as `InJitterOffsetX/Y`. A shift the denoiser could not name would misalign history rather than widen the footprint. The offset is the radical inverse of the frame index in bases 2 and 3 — the Halton sequence — recentred on zero:</p>
+<div class="math-block">$$
+\Phi_b(i) = \sum_{k \ge 0} d_k\, b^{-(k+1)}, \qquad i = \sum_{k \ge 0} d_k\, b^{k}, \qquad \mathbf{j}_n = \big(\Phi_2(i_n) - \tfrac12,\; \Phi_3(i_n) - \tfrac12\big)
+$$</div>
+<p>$b$ is the base, $d_k$ the digits of index $i$ in that base, and $\mathbf{j}_n$ the pixel offset for frame $n$. The loop in `render()` is that sum written out, with `f` accumulating $b^{-(k+1)}$. The index is taken modulo 16 and then incremented, because $\Phi_b(0) = 0$ would spend one of the sixteen slots on &quot;no jitter at all&quot;. Every other denoise mode gets `pc.jitter.xy = 0` and keeps only the sampler&#x27;s own random offset.</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t idx = (m_haltonIndex % 16u) + 1u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L87" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:87</a></div>
+<div class="citation-chip"><code class="citation-code">camera.jitter     = {m_jitterCurrent.x, m_jitterCurrent.y};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L894" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:894</a></div>
+<div class="citation-chip"><code class="citation-code">evalParams.InJitterOffsetX = -in.jitterX;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/dlss_rr.cpp#L287" target="_blank" rel="noopener">ohao/render/rt/denoise/dlss_rr.cpp:287</a></div>
+</div>
+<div class="section-rule"><h2 id="two-counters-and-the-clear-that-never-happens">Two counters, and the clear that never happens</h2></div>
+<div class="prose reveal">
+<p>`m_sampleIndex` and `m_historyFrameCount` both advance once per frame and are not interchangeable: the first seeds the sampler, the second drives temporal logic. A reset sends the history counter to zero but restores the sample index to a caller-settable seed rather than zero, so finite-difference and inverse-rendering runs replay an identical sample sequence across parameter perturbations.</p>
+<div class="citation-chip"><code class="citation-code">m_sampleIndex = m_renderSeed;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L190" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:190</a></div>
+<p>The accumulation buffer is never cleared. On the frame where the history counter is zero its barrier declares the old layout `UNDEFINED`, licensing the driver to discard the contents; on every later frame the same barrier is a `GENERAL → GENERAL` read-modify-write acquire.</p>
+<div class="citation-chip"><code class="citation-code">accumBarrier.oldLayout = (m_historyFrameCount == 0) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L483" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:483</a></div>
+<p>The post-processing images use the same idiom with per-instance latch booleans instead of a shared counter — and `createImages()` re-arms them, so a resize re-fires the `UNDEFINED → GENERAL` transition on the freshly created `VkImage` instead of trusting a stale &quot;already transitioned&quot;.</p>
+<div class="citation-chip"><code class="citation-code">m_nrdComposeFirstFrame = true;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_images.cpp#L802" target="_blank" rel="noopener">ohao/render/rt/path_tracer_images.cpp:802</a></div>
+</div>
+<div class="section-rule"><h2 id="seven-images-that-are-allocated-and-never-bound">Seven images that are allocated and never bound</h2></div>
+<div class="prose reveal">
+<p>The descriptor set layout declares 36 bindings. Bindings 29–34 are the ReSTIR GI reservoir ping-pong and 35 is the DLSS specular hit-distance guide; all seven images are created and destroyed with the rest, and the realtime raygen declares all seven. It cannot store to all of them: 29–31 are the *prev* half of the ping-pong, declared `readonly` and only ever `imageLoad`ed. Stores go to 32–34, the *curr* half declared `writeonly`, and to 35.</p>
+<div class="citation-chip"><code class="citation-code">for (uint32_t b = 29; b &lt;= 34; ++b) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L192" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:192</a></div>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D prevGIReservoir0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L32" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:32</a></div>
+<p>No `vkUpdateDescriptorSets` call anywhere in `ohao/` targets those bindings — the per-frame rewrite stops at 28, and only binding 12 carries `PARTIALLY_BOUND`. Those descriptors are never written while a shader reads them. Treat the reservoir plumbing as allocated-but-unwired until a writer appears.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`PathTracer` holds only *borrowed* handles for scene data. The environment CDF buffers, the env map view and sampler, and every geometry SSBO belong to `VulkanRenderer`; `destroy()` nulls the cached CDF handles rather than freeing them, because freeing them here would double-free.  {{cite ohao/render/rt/path_tracer.cpp &quot;m_envMarginalCDFBuffer = VK_NULL_HANDLE;&quot;}}</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`init()` must not be reordered: function pointers first, descriptor layout before pipeline layout, pipeline before SBT.</li>
+<li>The two profile renderers each own a full `PathTracer`, and each `PathTracer` allocates its own set of roughly thirty images, so an eager pair doubles the render-target footprint. They are created lazily on the first `setRenderMode()` into that mode instead.</li>
+<li>The single descriptor set is rewritten from the host at the top of `render()`, and bindings 13–16 flip between ping-pong views each frame, so the rewrite is not idempotent — and it is not synchronised against the two more recent submissions that may still hold the set.</li>
+<li>`setMaterialAlbedos` / `setMaterialData` copy at most 256 entries and silently drop the rest — the material SSBO is a fixed 256-instance allocation.</li>
+<li>`destroy()` waits for device idle, tears down the denoisers, nulls the borrowed CDF handles, and only then destroys the SBT, pipeline, descriptors, material buffer and images. The destructor calls it, so an object outliving its `VkDevice` is a use-after-free.</li>
+<li>Switching to or from a DLSS upscaling preset reallocates every render target, so `setRenderSettings()` is safe only between frames — never inside a command buffer.</li>
+<li>The `PathTracerShaderSet` defaults name `rt_pt_raygen.rgen.spv`, but both shipped profiles pass explicit sets (`..._realtime`, `..._offline`), so the default never loads in-tree.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_images.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/dlss_rr.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_module.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_render_pipeline.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/render_module.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="../path-tracer.html"><div class="label">← Hub</div><div class="title">06 · Path tracer</div></a><a class="next" href="profiles.html"><div class="label">Next →</div><div class="title">Profiles &amp; meta</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

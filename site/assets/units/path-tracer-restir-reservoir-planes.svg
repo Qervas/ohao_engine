@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img"
+     aria-label="Left: one pixel's ReSTIR GI reservoir packed into three RGBA32F planes, with x_s, n_s and L_o in the RGB channels and M, W and a validity flag smuggled into the alpha channels. Right: the ping-pong table mapping descriptor bindings 29 to 31 and 32 to 34 onto two physical image sets on alternating frames.">
+  <rect x="0" y="0" width="720" height="300" fill="#0f1419"/>
+
+  <!-- ===================== Panel A: plane packing ===================== -->
+  <rect x="16" y="16" width="340" height="268" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="30" y="40" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Per-pixel reservoir → 3 × RGBA32F</text>
+
+  <!-- channel headers -->
+  <text x="125" y="66" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c" text-anchor="middle">R</text>
+  <text x="188" y="66" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c" text-anchor="middle">G</text>
+  <text x="251" y="66" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c" text-anchor="middle">B</text>
+  <text x="314" y="66" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4784a" text-anchor="middle">A</text>
+
+  <!-- plane 0 -->
+  <text x="30" y="99" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">plane 0</text>
+  <rect x="96"  y="78" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="159" y="78" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="222" y="78" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="285" y="78" width="58" height="32" rx="3" fill="#0f1419" stroke="#c4784a"/>
+  <text x="125" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">x_s.x</text>
+  <text x="188" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">x_s.y</text>
+  <text x="251" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">x_s.z</text>
+  <text x="314" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a" text-anchor="middle">M</text>
+
+  <!-- plane 1 -->
+  <text x="30" y="139" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">plane 1</text>
+  <rect x="96"  y="118" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="159" y="118" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="222" y="118" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="285" y="118" width="58" height="32" rx="3" fill="#0f1419" stroke="#c4784a"/>
+  <text x="125" y="139" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">n_s.x</text>
+  <text x="188" y="139" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">n_s.y</text>
+  <text x="251" y="139" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">n_s.z</text>
+  <text x="314" y="139" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a" text-anchor="middle">W</text>
+
+  <!-- plane 2 -->
+  <text x="30" y="179" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">plane 2</text>
+  <rect x="96"  y="158" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="159" y="158" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="222" y="158" width="58" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="285" y="158" width="58" height="32" rx="3" fill="#0f1419" stroke="#c4784a"/>
+  <text x="125" y="179" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">L_o.r</text>
+  <text x="188" y="179" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">L_o.g</text>
+  <text x="251" y="179" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">L_o.b</text>
+  <text x="314" y="179" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a" text-anchor="middle">valid</text>
+
+  <line x1="30" y1="206" x2="342" y2="206" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <text x="30" y="228" font-family="DM Sans,sans-serif" font-size="11" fill="#c4a574">alpha channels carry the bookkeeping</text>
+  <text x="30" y="248" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">wSum is not stored — the merge rebuilds it</text>
+  <text x="30" y="264" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">as p̂ · W · M from the three fields above</text>
+
+  <!-- ===================== Panel B: ping-pong ===================== -->
+  <rect x="372" y="16" width="332" height="268" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="386" y="40" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Binding → physical image, per frame</text>
+
+  <text x="583" y="66" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c" text-anchor="middle">frame N</text>
+  <text x="661" y="66" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c" text-anchor="middle">frame N+1</text>
+
+  <text x="386" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">29–31</text>
+  <text x="386" y="114" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">read prev</text>
+  <rect x="548" y="78" width="70" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="626" y="78" width="70" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="583" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">set A</text>
+  <text x="661" y="99" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">set B</text>
+
+  <text x="386" y="149" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">32–34</text>
+  <text x="386" y="164" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">write curr</text>
+  <rect x="548" y="128" width="70" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <rect x="626" y="128" width="70" height="32" rx="3" fill="#0f1419" stroke="#3d4a58"/>
+  <text x="583" y="149" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">set B</text>
+  <text x="661" y="149" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6" text-anchor="middle">set A</text>
+
+  <path d="M 618 94 L 700 94 L 700 116 L 570 116 L 570 128" fill="none" stroke="#7dba8a" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="386" y="196" font-family="DM Sans,sans-serif" font-size="11" fill="#7dba8a">swap driven by m_giReservoirWriteIndex</text>
+
+  <line x1="386" y1="212" x2="690" y2="212" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <text x="386" y="234" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">6 images = 3 planes × 2 sets, 96 B / pixel</text>
+  <text x="386" y="254" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">In HEAD no descriptor write targets 29–34,</text>
+  <text x="386" y="270" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">and the swap index never advances.</text>
+</svg>

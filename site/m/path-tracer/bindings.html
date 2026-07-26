@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>06 · Path tracer · Descriptor map 0–35 — OHAO Monograph</title>
+  <meta name="description" content="Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="path-tracer/bindings" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../path-tracer.html">← Module hub</a> · Descriptor map 0–35</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">path-tracer</p>
+          <h1>Descriptor map 0–35</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Full set-0 layout including ReSTIR 29–34 and DLSS hit-dist 35.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#one-set-is-the-entire-interface">One set is the entire interface</a></li><li><a href="#stage-flags-carry-information-the-binding-numbers-do-not">Stage flags carry information the binding numbers do not</a></li><li><a href="#the-bindless-array-and-the-flag-that-never-moved">The bindless array and the flag that never moved</a></li><li><a href="#nothing-is-allowed-to-be-unbound-almost">Nothing is allowed to be unbound — almost</a></li><li><a href="#where-the-invariant-stops-holding-29-35">Where the invariant stops holding: 29–35</a></li><li><a href="#format-qualifiers-are-load-bearing-the-comments-beside-them-are-not">Format qualifiers are load-bearing; the comments beside them are not</a></li><li><a href="#the-pool-has-no-slack-either">The pool has no slack either</a></li><li><a href="#two-profiles-one-layout">Two profiles, one layout</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="one-set-is-the-entire-interface">One set is the entire interface</h2></div>
+<div class="prose reveal">
+<p>A ray-tracing dispatch has nowhere to hide per-draw state: raygen, closest-hit, any-hit and miss all execute inside a single `vkCmdTraceRaysKHR` against whatever was bound before it. OHAO takes that literally. The RT pipeline layout declares one descriptor set and one push-constant range, so every buffer, image and acceleration structure any RT stage can reach must occupy a numbered slot in set 0.</p>
+<div class="citation-chip"><code class="citation-code">layoutInfo.setLayoutCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L139" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:139</a></div>
+<p>`createDescriptorResources` builds that set once at init as a fixed array whose last entry is 35, and allocates it from a pool holding exactly one set.</p>
+<div class="citation-chip"><code class="citation-code">bindings[35].binding         = 35;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L201" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:201</a></div>
+<div class="citation-chip"><code class="citation-code">poolInfo.maxSets = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L238" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:238</a></div>
+<p>There is no per-frame duplication of the set. The same `VkDescriptorSet` handle is rewritten host-side inside `render()` and rebound before every trace — while the frame manager cycles three command-buffer slots and waits only on the fence of the slot it is about to reuse, so up to two earlier submissions can still be referencing that set at the moment it is overwritten.</p>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L19" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:19</a></div>
+</div>
+<div class="section-rule"><h2 id="stage-flags-carry-information-the-binding-numbers-do-not">Stage flags carry information the binding numbers do not</h2></div>
+<div class="prose reveal">
+<p>The binding number says where a resource lives; `stageFlags` says who may ask for it, and that split encodes the traversal architecture rather than decorating it. Vertex normals, indices, UVs, per-triangle material IDs and material colours (4, 5, 8, 9, 10) are invisible to raygen — they exist to be unpacked at a hit. Four of those additionally carry `ANY_HIT`, because alpha cut-out has to resolve a texel *during* traversal, before a hit is committed, and therefore needs the index, UV and material tables from inside the any-hit shader:</p>
+<div class="citation-chip"><code class="citation-code">bindings[5].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L51" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:51</a></div>
+<p>The bindless texture array is the mirror image. It is visible to closest-hit, any-hit and miss — miss samples the equirectangular environment map out of the same array — and deliberately not to raygen:</p>
+<div class="citation-chip"><code class="citation-code">bindings[12].stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_ANY_HIT_BIT_KHR;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L91" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:91</a></div>
+<p>So none of the path tracer&#x27;s raygen shaders can sample a texture: not one of `pt_raygen.rgen`, `pt_raygen_offline.rgen` or `pt_raygen_realtime.rgen` declares a `sampler2D`, and shaded colour has to arrive through the ray payload. That is a property of *this* layout, not of the engine — the deferred pipeline&#x27;s RT shadow and RT GI passes build their own set 0 and read GBuffer samplers straight from raygen:</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 2) uniform sampler2D gBufferPosition;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L10" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:10</a></div>
+<p>Most AOV storage images are the exact opposite, raygen-only, because the raygen owns the pixel coordinate and a hit shader has no idea which pixel invoked it. Bindings 27 and 28 are the exception, and they are the first warning that the flags are not a reliable guide to who writes what: no shader in the tree declares them at all, and the layout file says why they carry `RAYGEN` anyway.</p>
+<div class="citation-chip"><code class="citation-code">// Written by NRD compute dispatch (T3). Raygen stage flag kept for layout parity.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L178" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:178</a></div>
+</div>
+<div class="section-rule"><h2 id="the-bindless-array-and-the-flag-that-never-moved">The bindless array and the flag that never moved</h2></div>
+<div class="prose reveal">
+<p>Binding 12 is sized for 1024 descriptors regardless of how many textures the scene actually has.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t m_maxBindlessTextures = 1024;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L267" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:267</a></div>
+<p>Three descriptor binding flags apply to it. Two still do work; the third is a leftover.</p>
+<div class="citation-chip"><code class="citation-code">| VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L209" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:209</a></div>
+<p>`PARTIALLY_BOUND` is what makes the write legal: the per-frame update covers only `m_bindlessTextureCount` descriptors and leaves the rest of the 1024 undefined, which would otherwise be illegal the moment the set is bound. What makes it *safe* is the sentinel in the material encoding — index `0xFFFFFFFF` means &quot;no texture&quot;, and every sampler fetch in the closest-hit shader is guarded by that test, so the undefined tail is never indexed:</p>
+<div class="citation-chip"><code class="citation-code">if (diffuseTexIdx != 0xFFFFFFFFu) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L109" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:109</a></div>
+<p>`UPDATE_AFTER_BIND` makes the *timing* legal. The single set is rewritten every frame with earlier submissions still in flight, so without the flag the bindless array would be updated while bound in a pending command buffer. The flag sits on binding 12 alone; every other binding written in the same `vkUpdateDescriptorSets` call has no such cover.</p>
+<div class="citation-chip"><code class="citation-code">| VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L210" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:210</a></div>
+<p>The variable-count flag is the leftover. It currently buys nothing — the allocation asks for exactly `m_maxBindlessTextures` descriptors, the same number the layout already declares, so nothing is elided. It is also in the wrong place. Vulkan requires the binding carrying `VARIABLE_DESCRIPTOR_COUNT` to have the highest binding number in the set; here it sits on 12,</p>
+<div class="citation-chip"><code class="citation-code">bindingFlags[12] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L208" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:208</a></div>
+<p>under a comment still asserting the invariant that once made it legal:</p>
+<div class="citation-chip"><code class="citation-code">// Enable bindless: variable count on the LAST binding only</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L206" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:206</a></div>
+<p>That was true when the layout ended at 12. Bindings 13–35 arrived in at least ten separate additions: the unlabelled surface/shading history quad at 13–16 and the env CDF pair at 17–18, then eight that still carry their sub-plan label in the layout file — 3.A, 3.B, 3.C, 3.C.6, 4.B, 4.C, ReSTIR GI Phase 1, and DLSS-RR at the end.</p>
+<div class="citation-chip"><code class="citation-code">// Binding 35: DLSS-RR specular hit-distance guide (R32F storage image).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L199" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:199</a></div>
+<p>The flag stayed put through all of them. Two fixes exist and neither has been applied. Deleting `VARIABLE_DESCRIPTOR_COUNT` from `bindingFlags[12]` is free: the allocation already requests the full 1024, so the binding&#x27;s descriptor count is unchanged, no shader line moves, and nothing observable differs. Renumbering the bindless array above 35 keeps the flag and puts it where Vulkan wants it, at the cost of editing the `layout(set = 0, binding = ...)` line in every RT shader that samples a texture. Only the second has an excuse.</p>
+</div>
+<div class="section-rule"><h2 id="nothing-is-allowed-to-be-unbound-almost">Nothing is allowed to be unbound — almost</h2></div>
+<div class="prose reveal">
+<p>Because only binding 12 is partially bound, every other slot must hold a live handle before the trace, even when the resource is conceptually absent. Geometry SSBOs alias onto the material buffer when their real buffer does not exist yet, so the descriptor is valid even though its contents are meaningless:</p>
+<div class="citation-chip"><code class="citation-code">normalBufInfo.buffer = m_normalBuffer != VK_NULL_HANDLE ? m_normalBuffer : m_materialBuffer;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L122" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:122</a></div>
+<p>And with no HDR environment loaded, the light-upload path fabricates a four-byte CDF buffer holding a single `1.0` rather than leave bindings 17 and 18 empty:</p>
+<div class="citation-chip"><code class="citation-code">if (!m_envMarginalCDFBuffer)    createDummyCDF(m_envMarginalCDFBuffer, m_envMarginalCDFMemory);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L525" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:525</a></div>
+<p>Binding 11 gets neither treatment, and it is the counter-example to the paragraph above. Its write is conditional on the light buffer existing:</p>
+<div class="citation-chip"><code class="citation-code">if (m_lightBuffer != VK_NULL_HANDLE) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L260" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:260</a></div>
+<p>That buffer is created only once the scene has yielded at least one `LightComponent`, and there is no dummy fallback. The CDF fabrication above lives inside that same `if (!gpuLights.empty())` block, so in a light-less scene it does not run either:</p>
+<div class="citation-chip"><code class="citation-code">if (!gpuLights.empty()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L254" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:254</a></div>
+<p>All three path-tracer raygens and the miss shader statically read binding 11. In the raygens the guard that looks like it protects the access — `if (lightBuf.lightCount &gt; 0u)` — is itself a load from that buffer; the miss shader reads `lightBuf.envMapTexIdx` with no guard at all:</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 11) readonly buffer LightBuffer {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L27" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:27</a></div>
+<p>So a scene with no `LightComponent` binds 11, 17 and 18 unwritten, none of them carrying `PARTIALLY_BOUND` — the same hazard this page reserves for 29–35 below. This is not hypothetical: `env_demo --lighting=none` builds exactly that scene, deliberately creating no light actors and leaning on the HDR environment alone.</p>
+<div class="citation-chip"><code class="citation-code">// LightingMode::None → no lights, HDR env IBL only (pure environment)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L414" target="_blank" rel="noopener">examples/env_demo.cpp:414</a></div>
+<p>The writes are packed rather than sparse: a running `writeCount` skips the optional bindings (11, 12, 17, 18), so after binding 11 the write index and the binding number diverge. The array is sized to exactly the maximum the function can emit — eleven unconditional writes for bindings 0–10, the four optional ones, and fourteen more for 13–16 and 19–28:</p>
+<div class="citation-chip"><code class="citation-code">VkWriteDescriptorSet writes[29] = {};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L160" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:160</a></div>
+<p>Add one more unconditional binding to that function without raising the 29, and the last write lands past the end of a stack array.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-invariant-stops-holding-29-35">Where the invariant stops holding: 29–35</h2></div>
+<div class="prose reveal">
+<p>Bindings 29–34 are the ReSTIR GI reservoir ping-pong (three RGBA32F planes read, three written) and 35 is the DLSS-RR specular hit-distance guide. They are in the layout, their images are created and destroyed alongside the rest, and the realtime raygen declares and uses them:</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 29, rgba32f) uniform readonly  image2D prevGIReservoir0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L32" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:32</a></div>
+<p>But `PathTracer` issues exactly one descriptor update, and its final write targets binding 28:</p>
+<div class="citation-chip"><code class="citation-code">vkUpdateDescriptorSets(m_device, writeCount, writes, 0, nullptr);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L473" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:473</a></div>
+<p>Grepping the engine for `m_giReservoirViews` and `m_specHitDistView` turns up image creation and teardown, plus two `m_specHitDistView` getters with no callers — and no `VkDescriptorImageInfo` built from any of them. On the realtime profile those seven descriptors are therefore bound but never written, and unlike binding 12 they carry no `PARTIALLY_BOUND` flag. This is a structural reading of the code, not an observed failure: validation layers were not run for this page, and the shader-side ReSTIR code (temporal and spatial reuse both) is present and compiled in.</p>
+</div>
+<div class="section-rule"><h2 id="format-qualifiers-are-load-bearing-the-comments-beside-them-are-not">Format qualifiers are load-bearing; the comments beside them are not</h2></div>
+<div class="prose reveal">
+<p>For a storage image the format in the GLSL `layout(...)` qualifier is not documentation — Vulkan requires it to match the format of the bound image view. Two comments in the layout file get that wrong. Binding 21 is annotated R8 UNORM:</p>
+<div class="citation-chip"><code class="citation-code">// Binding 21: roughness AOV (R8 UNORM storage image) — Sub-plan 3.B</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L141" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:141</a></div>
+<p>The image is created `R16_SFLOAT`, and all three raygen variants declare it `r16f`:</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.format = VK_FORMAT_R16_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_images.cpp#L395" target="_blank" rel="noopener">ohao/render/rt/path_tracer_images.cpp:395</a></div>
+<p>Binding 26 is annotated RGBA8 UNORM. The image and its view are `A2B10G10R10_UNORM_PACK32`, and the shader side declares `rgb10_a2`:</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_images.cpp#L600" target="_blank" rel="noopener">ohao/render/rt/path_tracer_images.cpp:600</a></div>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 26, rgb10_a2) uniform image2D normalRoughnessAOV;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L24" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:24</a></div>
+<p>That format is not a preference. The NRD build is forced to `NRD_NORMAL_ENCODING = 2`, which is its `NRD_NORMAL_ENCODING_R10G10B10A2_UNORM` mode, so the packed normal-roughness AOV can be handed to REBLUR without a repack:</p>
+<div class="citation-chip"><code class="citation-code">set(NRD_NORMAL_ENCODING    &quot;2&quot; CACHE STRING &quot;&quot; FORCE)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/external/cmake/nrd.cmake#L22" target="_blank" rel="noopener">external/cmake/nrd.cmake:22</a></div>
+<p>Shader and image agree in both cases, so nothing renders wrong today; what is unsafe is trusting these comments when adding binding 36.</p>
+</div>
+<div class="section-rule"><h2 id="the-pool-has-no-slack-either">The pool has no slack either</h2></div>
+<div class="prose reveal">
+<p>The pool reserves 25 storage images and 9 storage buffers, which is exactly what the layout consumes: 18 output, AOV and history images, the six reservoir planes, and the hit-distance guide.</p>
+<div class="citation-chip"><code class="citation-code">{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 25},  // +1 MV (3.A), +2 depth/roughness (3.B), +2 diff/spec radiance (3.C), +2 albedo/specColor (3.C.6), +1 normalRoughness (4.B), +2 denoised out (4.C), +6 ReSTIR GI reservoir (29-34), +1 spec hit-dist (35)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L230" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:230</a></div>
+<p>Adding a storage-image binding without bumping that count makes `vkAllocateDescriptorSets` return `VK_ERROR_OUT_OF_POOL_MEMORY` and `createDescriptorResources` return false. That failure is named, not silent — `init()` prints it to stderr and aborts:</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[PathTracer] Failed to create descriptor resources&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L108" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:108</a></div>
+<p>It is total, though. `ensureRTRenderer` drops the half-built profile when `init` fails, and the RT dispatch then returns immediately because `getRTRenderer` hands back null, so no trace is ever recorded:</p>
+<div class="citation-chip"><code class="citation-code">if (!rtRenderer || !m_rtAccel) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L133" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:133</a></div>
+</div>
+<div class="section-rule"><h2 id="two-profiles-one-layout">Two profiles, one layout</h2></div>
+<div class="prose reveal">
+<p>The engine ships two RT profiles and no more — the enum has `Realtime` and `Offline`:</p>
+<div class="citation-chip"><code class="citation-code">enum class RTRenderProfile {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L12" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:12</a></div>
+<p>They are two separate `PathTracer` instances of the same class, and they differ in more than the raygen: bounce count, sampler, firefly clamp, internal denoise, external denoiser and denoise mode are all set per profile.</p>
+<div class="citation-chip"><code class="citation-code">.samplerType = SamplerType::PCG,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L46" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:46</a></div>
+<p>The descriptor code is the one thing they do not differ in: neither `createDescriptorResources` nor the per-frame write function branches on the profile. That is what the 36-slot union buys. A third raygen file, `pt_raygen.rgen`, survives as the struct default in `PathTracerShaderSet`,</p>
+<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_pt_raygen.rgen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L55" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:55</a></div>
+<p>but both profile classes pass an explicit shader set to the base constructor, so nothing in a shipping path binds it:</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_realtime.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L205" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:205</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>One layout for both profiles, rather than one per profile. Per-profile layouts would keep each set minimal and make &quot;declared but never written&quot; impossible to express — the realtime set would carry 29–35 and the offline set, whose raygen does not declare them, would not — at the cost of two descriptor code paths, two pools, and two per-frame write functions to keep in step. The union buys exactly one property: the host descriptor code never has to know which profile it is serving, so adding a profile is a subclass plus a raygen, not a third descriptor path. Everything this page keeps running into — 1024 texture slots reserved whatever the scene holds, seven unwritten bindings, a variable-count flag stranded in the middle of the set — is the bill for that property.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Set 0 is a union, not a contract. A binding appearing in `createDescriptorResources` proves only that a slot was reserved. Whether anything is written into it lives in `path_tracer_render.cpp`, and for 29–35 it currently is not.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The layout&#x27;s `UPDATE_AFTER_BIND_POOL` flag and the pool&#x27;s `UPDATE_AFTER_BIND` flag must be set together, but dropping one is not symmetrical with dropping the other: without the pool flag, `vkAllocateDescriptorSets` is the invalid call; without the layout flag, `vkCreateDescriptorSetLayout` already is, because `bindingFlags[12]` carries `UPDATE_AFTER_BIND_BIT`. Only binding 12 uses the capability.</li>
+<li>Every `layout(set = 0, binding = N)` across the four RT stages must match the number *and* the descriptor type in `createDescriptorResources`, and for storage images the format qualifier must match the view format.</li>
+<li>Bindings 4, 5, 8, 9, 10 are hit-stage only, and 12 excludes raygen. Reading them from the wrong stage is a layout mismatch at pipeline creation, not a compile error in the shader.</li>
+<li>Binding 11 is written only if the scene produced at least one light. A scene with no `LightComponent` leaves 11, 17 and 18 bound but unwritten while the raygens and the miss shader statically read them.</li>
+<li>One descriptor set is shared by every frame while the frame manager rotates three slots (`MAX_FRAMES_IN_FLIGHT = 3`), so the `vkUpdateDescriptorSets` in `render()` mutates a set that earlier submissions may still reference. Most writes rebind the same handles each frame; the history ping-pong at 13–16 does not.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/path_tracer_pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_shadow.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>examples/env_demo.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_images.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>external/cmake/nrd.cmake</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>site/assets/plates/pt_bindings.svg</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="hit-miss.html"><div class="label">← Prev</div><div class="title">Hit &amp; miss shaders</div></a><a class="next" href="restir.html"><div class="label">Next →</div><div class="title">ReSTIR GI reservoirs</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

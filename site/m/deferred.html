@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>05 · Deferred — OHAO Monograph</title>
+  <meta name="description" content="Full deferred frame graph and host wiring." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="deferred" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 05 · Deferred</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">05</div>
+        <div>
+          <p class="chapter-kicker">Pipelines · deep dive</p>
+          <h1>Deferred raster</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>Walk one deferred frame as <code>DeferredRenderer::render</code> actually builds it: jitter, render graph, hybrid inject, lighting, post. Plus what the GBuffer stores and why.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#plates">Plates</a></li>
+          <li><a href="#host">Host wiring</a></li>
+          <li><a href="#graph">Pass graph (code order)</a></li>
+          <li><a href="#gbuf">GBuffer write path</a></li>
+          <li><a href="#light">Lighting consume path</a></li>
+          <li><a href="#limits">Limits</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="plates">Plates</h2></div>
+      <figure class="plate fullpage reveal">
+        <div class="plate-frame"><img src="../assets/plates/gbuffer_layout_strip.svg" alt="GBuffer layout strip"/></div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. GB-1</span>
+          <p>MRT packing layout (didactic — not a live channel dump).</p></figcaption>
+      </figure>
+      <figure class="plate reveal">
+        <div class="plate-frame"><img src="../assets/concept/gbuffer_channels_conceptual.jpg" alt="Conceptual GBuffer"/></div>
+        <figcaption class="plate-cap"><span class="plate-id">Plate GB-C1</span>
+          <p><span class="concept-badge">Conceptual illustration — not engine output</span></p></figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="host">Host wiring (before the graph)</h2></div>
+      <div class="prose reveal">
+        <p><code>VulkanRenderer::renderDeferred</code> prepares the child every frame:</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">renderDeferred prelude</div>
+        <ol>
+          <li>Wait ring fence; copy staging → CPU pixel buffer</li>
+          <li><code>setScene</code>, camera view/proj/pos on DeferredRenderer</li>
+          <li>If RT AS live → enable hybrid shadow path; pass TLAS pointer</li>
+          <li>Pass env map view/sampler for IBL</li>
+          <li>Pass VB/IB + meshBufferMap</li>
+          <li><code>updateLightBuffer</code>; optional sky/sun direction blend into fallback directional</li>
+          <li>Begin command buffer → <code>deferredRenderer->render(cmd, frameIndex)</code></li>
+          <li>Copy final HDR/LDR output to staging; submit; advance frame</li>
+        </ol>
+      </div>
+
+      <div class="section-rule"><h2 id="graph">Pass graph (inside DeferredRenderer::render)</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">Graph build + execute</div>
+        <ol>
+          <li>TAA: fetch jitter; build <span class="em">jittered projection</span> for GBuffer only</li>
+          <li>Update pass uniforms (scene, light dir, camera, invViewProj)</li>
+          <li><code>m_renderGraph.reset()</code> then add passes with resource declarations</li>
+          <li><span class="em">CSM</span> — cascade depth from unjittered camera (stable shadows)</li>
+          <li><span class="em">GBuffer</span> — MRT + depth; finalLayout shader-read for colors</li>
+          <li><span class="em">SSAO</span> — then bind result into lighting</li>
+          <li>If TLAS instances &gt; 0: <span class="em">RT shadow</span> compute/trace pass (pos/normal/depth)</li>
+          <li>If TLAS: <span class="em">RT GI</span> (+ albedo)</li>
+          <li><span class="em">Deferred lighting</span> — PBR + shadows + IBL + RT inputs</li>
+          <li>Sky, optional SSS/SSR, bloom/TAA/tonemap post stack</li>
+          <li>Optional GPU timestamp queries around passes</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why jitter GBuffer but not CSM</div>
+        <p>TAA needs sub-pixel phase in the color history. Cascaded shadows that jitter every frame shimmer. Split the projections.</p>
+      </div>
+      <div class="jargon reveal"><div class="j-term">Jargon · render graph</div>
+        <p>OHAO’s graph declares image reads/writes so barriers can be inserted between passes. Each pass still owns its VkRenderPass/framebuffer — hybrid of modern graph + classic Vulkan objects.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="gbuf">GBuffer write path</h2></div>
+      <div class="prose reveal">
+        <p>Vertex: skinned or static; push constants carry model, viewProj, prevMVP, material params, albedo, emissive indices. Fragment (<code>gbuffer.frag</code>):</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">gbuffer.frag essentials</div>
+        <ol>
+          <li>Sample albedo bindless if index valid</li>
+          <li>Optional normal map via TBN</li>
+          <li>ORM: ao*=R, rough*=G, metal*=B; rough = max(rough, 0.04)</li>
+          <li>out0 = (worldPos, metallic); out1 = (octNormal, rough, emissiveY); out2 = (albedo, ao)</li>
+          <li>velocity = 0.5 * (ndc_curr − ndc_prev)</li>
+        </ol>
+      </div>
+
+      <div class="section-rule"><h2 id="light">Lighting consume path</h2></div>
+      <div class="prose reveal">
+        <p><code>deferred_lighting.frag</code> reconstructs surface from GBuffer, loops lights (UBO, max 8), evaluates BRDF (Ch.&nbsp;04), applies CSM and optional RT visibility, multiplies SSAO, adds IBL (equirect LOD ≈ 9·roughness) with analytical BRDF-LUT fallback when the real LUT is zeroed — so chrome is not pure black when only <code>setEnvMap</code> was used.</p>
+      </div>
+      <div class="math-block reveal">\[
+        L_o=\sum_k f(v,l_k)\,L_k\,(n\!\cdot\!l_k)\,V_k + L_{\mathrm{IBL}}
+      \]</div>
+
+      <div class="section-rule"><h2 id="limits">Limits</h2></div>
+      <div class="aside warn reveal"><div class="aside-label">Not bugs</div>
+        <p>No multi-bounce room GI in pure deferred. Hybrid RT is a sparse inject, not full PT. SSS/SSR experimental. See Status.</p>
+      </div>
+      <div class="file-map reveal">
+        <div class="row"><code>deferred_renderer.cpp</code><span class="desc">Graph + inject</span></div>
+        <div class="row"><code>gbuffer_pass.* / gbuffer.frag</code><span class="desc">MRT</span></div>
+        <div class="row"><code>csm_pass.*</code><span class="desc">Cascades</span></div>
+        <div class="row"><code>deferred_lighting_pass.*</code><span class="desc">PBR + IBL</span></div>
+        <div class="row"><code>post_processing_pipeline.*</code><span class="desc">SSAO bloom TAA</span></div>
+        <div class="row"><code>render/graph/*</code><span class="desc">Barriers</span></div>
+        <div class="row"><code>render_dispatch.cpp</code><span class="desc">Host frame</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="deferred/orchestrator.html">
+          <div class="num">orchestrator</div>
+          <h3>DeferredRenderer orchestrator</h3>
+          <p>Pass ownership, resize, setScene, graph execute.</p>
+        </a>
+        <a class="tree-card" href="deferred/pass-base.html">
+          <div class="num">pass-base</div>
+          <h3>RenderPassBase</h3>
+          <p>Shared init/cleanup/shader path helpers for passes.</p>
+        </a>
+        <a class="tree-card" href="deferred/gbuffer.html">
+          <div class="num">gbuffer</div>
+          <h3>GBuffer pass</h3>
+          <p>MRT packing, bindless, velocity, push constants.</p>
+        </a>
+        <a class="tree-card" href="deferred/csm.html">
+          <div class="num">csm</div>
+          <h3>CSM shadows</h3>
+          <p>Cascade split, depth array, unjittered camera.</p>
+        </a>
+        <a class="tree-card" href="deferred/lighting.html">
+          <div class="num">lighting</div>
+          <h3>Deferred lighting</h3>
+          <p>Light loop, IBL, SSAO bind, BRDF eval.</p>
+        </a>
+        <a class="tree-card" href="deferred/ssao.html">
+          <div class="num">ssao</div>
+          <h3>SSAO</h3>
+          <p>Screen-space AO pass + compute path.</p>
+        </a>
+        <a class="tree-card" href="deferred/ssr-sss.html">
+          <div class="num">ssr-sss</div>
+          <h3>SSR &amp; SSS</h3>
+          <p>Experimental reflections and subsurface blur.</p>
+        </a>
+        <a class="tree-card" href="deferred/sky.html">
+          <div class="num">sky</div>
+          <h3>Sky pass</h3>
+          <p>HDR sky / atmosphere composite into lighting output.</p>
+        </a>
+        <a class="tree-card" href="deferred/post.html">
+          <div class="num">post</div>
+          <h3>Post stack</h3>
+          <p>Bloom, TAA, tonemap orchestration.</p>
+        </a>
+        <a class="tree-card" href="deferred/gizmo.html">
+          <div class="num">gizmo</div>
+          <h3>Gizmo pass</h3>
+          <p>Debug/editor overlay meshes.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="materials.html"><div class="label">← Previous</div><div class="title">04 · Materials</div></a>
+        <a class="next" href="path-tracer.html"><div class="label">Next →</div><div class="title">06 · Path tracer</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

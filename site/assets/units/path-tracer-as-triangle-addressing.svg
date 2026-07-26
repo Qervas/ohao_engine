@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 356" class="unit-diagram" role="img"
+     aria-label="Diagram of OHAO's triangle addressing: one shared index buffer segmented per actor, each BLAS pointing at the buffer base with a primitiveOffset, each TLAS instance carrying the running triangle offset in instanceCustomIndex, and the closest-hit shader recombining them into a global triangle id.">
+  <defs>
+    <marker id="asArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="asArrowAcc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="356" fill="#0f1419"/>
+
+  <!-- ROW 1: shared index buffer -->
+  <text x="40" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">upload time — one VkBuffer, indices already biased to global vertex ids</text>
+
+  <rect x="40" y="36" width="640" height="38" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+  <line x1="253" y1="36" x2="253" y2="74" stroke="#3d4a58" stroke-width="1"/>
+  <line x1="466" y1="36" x2="466" y2="74" stroke="#3d4a58" stroke-width="1"/>
+
+  <text x="146" y="60" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="13" text-anchor="middle">actor A indices</text>
+  <text x="359" y="60" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="13" text-anchor="middle">actor B indices</text>
+  <text x="573" y="60" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="13" text-anchor="middle">actor C indices</text>
+
+  <text x="42" y="88" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">iOff 0</text>
+  <text x="255" y="88" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">iOff nA</text>
+  <text x="468" y="88" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">iOff nA+nB</text>
+
+  <!-- base address pointer -->
+  <line x1="40" y1="104" x2="40" y2="36" stroke="#c4784a" stroke-width="1.2" marker-end="url(#asArrowAcc)"/>
+  <text x="48" y="106" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10">indexData.deviceAddress = buffer base (all three BLAS)</text>
+
+  <!-- ROW 2: BLAS -->
+  <text x="40" y="136" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">BLAS build — only the read window moves</text>
+
+  <rect x="40" y="146" width="200" height="44" fill="#1a222c" stroke="#3d4a58" stroke-width="1" rx="2"/>
+  <rect x="253" y="146" width="200" height="44" fill="#1a222c" stroke="#3d4a58" stroke-width="1" rx="2"/>
+  <rect x="466" y="146" width="200" height="44" fill="#1a222c" stroke="#3d4a58" stroke-width="1" rx="2"/>
+
+  <text x="52" y="164" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">BLAS 0</text>
+  <text x="265" y="164" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">BLAS 1</text>
+  <text x="478" y="164" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">BLAS 2</text>
+
+  <text x="52" y="181" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">primitiveOffset = 0</text>
+  <text x="265" y="181" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">primitiveOffset = 4·nA</text>
+  <text x="478" y="181" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">primitiveOffset = 4·(nA+nB)</text>
+
+  <line x1="140" y1="146" x2="140" y2="76" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+  <line x1="353" y1="146" x2="353" y2="76" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+  <line x1="566" y1="146" x2="566" y2="76" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+
+  <text x="680" y="172" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="end">firstVertex = 0</text>
+
+  <!-- ROW 3: TLAS instances -->
+  <text x="40" y="222" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">TLAS instance — 24-bit instanceCustomIndex carries the running triangle offset</text>
+
+  <rect x="40" y="232" width="200" height="34" fill="#1a222c" stroke="#c4784a" stroke-width="1" rx="2"/>
+  <rect x="253" y="232" width="200" height="34" fill="#1a222c" stroke="#c4784a" stroke-width="1" rx="2"/>
+  <rect x="466" y="232" width="200" height="34" fill="#1a222c" stroke="#c4784a" stroke-width="1" rx="2"/>
+
+  <text x="52" y="254" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">customIndex = 0</text>
+  <text x="265" y="254" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">customIndex = tA</text>
+  <text x="478" y="254" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">customIndex = tA+tB</text>
+
+  <line x1="140" y1="232" x2="140" y2="192" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+  <line x1="353" y1="232" x2="353" y2="192" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+  <line x1="566" y1="232" x2="566" y2="192" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+
+  <!-- ROW 4: shader recombination -->
+  <rect x="40" y="292" width="640" height="44" fill="#1a222c" stroke="#7dba8a" stroke-width="1" rx="2"/>
+  <text x="52" y="311" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11">closest-hit / any-hit</text>
+  <text x="52" y="328" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID   →   indices[3·globalTriID + k]</text>
+
+  <line x1="353" y1="292" x2="353" y2="268" stroke="#3d4a58" stroke-width="1" marker-end="url(#asArrow)"/>
+</svg>

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 418" class="unit-diagram" role="img" aria-label="Four transport paths for RTRenderSettings fields: sampler type baked into a Vulkan specialization constant at pipeline creation, most fields packed into push constants every frame, denoiseMode selecting host-side passes rather than crossing either boundary, and two fields with no consumer at all.">
+  <rect x="0" y="0" width="720" height="418" fill="#0f1419"/>
+
+  <text x="20" y="26" font-family="DM Sans,sans-serif" font-size="14" fill="#e8e2d6">Where each RTRenderSettings field actually goes</text>
+  <text x="20" y="44" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#6e685c">field group</text>
+  <text x="392" y="44" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#6e685c">transport &#183; lifetime</text>
+
+  <!-- Lane A: specialization constant -->
+  <rect x="20" y="54" width="340" height="66" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="34" y="76" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">samplerType</text>
+  <text x="34" y="96" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">PCG (realtime) / Sobol (offline)</text>
+  <text x="34" y="112" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">declared per profile</text>
+
+  <line x1="360" y1="87" x2="386" y2="87" stroke="#c4784a" stroke-width="1.5"/>
+  <path d="M386 87 l-7 -4 v8 z" fill="#c4784a"/>
+
+  <rect x="392" y="54" width="308" height="66" rx="4" fill="#1a222c" stroke="#c4784a"/>
+  <text x="406" y="76" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">VkSpecializationInfo, constant_id = 0</text>
+  <text x="406" y="96" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">written once, inside PathTracer::init()</text>
+  <text x="406" y="112" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">&#8212; before the profile settings arrive</text>
+
+  <!-- Lane B: push constants -->
+  <rect x="20" y="134" width="340" height="118" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="34" y="156" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">maxBounces, samplesPerFrame</text>
+  <text x="34" y="176" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">enableAuxiliaryAOVs</text>
+  <text x="34" y="196" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">enableInternalDenoise</text>
+  <text x="34" y="216" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">enableFireflyClamp + Luminance</text>
+  <text x="34" y="236" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">anisotropy*, subsurfaceStrength</text>
+
+  <line x1="360" y1="193" x2="386" y2="193" stroke="#7dba8a" stroke-width="1.5"/>
+  <path d="M386 193 l-7 -4 v8 z" fill="#7dba8a"/>
+
+  <rect x="392" y="134" width="308" height="118" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+  <text x="406" y="156" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">PTPushConstants</text>
+  <text x="406" y="176" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">params.w</text>
+  <text x="474" y="176" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">spf &#171; 16 | bounces</text>
+  <text x="406" y="196" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">control.x</text>
+  <text x="474" y="196" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">flag bits 0..4</text>
+  <text x="406" y="216" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">tuning / jitter</text>
+  <text x="500" y="216" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">floats</text>
+  <text x="406" y="240" font-family="DM Sans,sans-serif" font-size="11" fill="#7dba8a">rewritten before every trace dispatch</text>
+
+  <!-- Lane C: denoiseMode selects host-side passes -->
+  <rect x="20" y="266" width="340" height="80" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="34" y="288" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">denoiseMode</text>
+  <text x="34" y="308" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">None / OIDN / NRD / Atrous / DLSSRR</text>
+  <text x="34" y="328" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">rewritten every frame, like lane B</text>
+
+  <line x1="360" y1="306" x2="386" y2="306" stroke="#c4a574" stroke-width="1.5"/>
+  <path d="M386 306 l-7 -4 v8 z" fill="#c4a574"/>
+
+  <rect x="392" y="266" width="308" height="80" rx="4" fill="#1a222c" stroke="#c4a574"/>
+  <text x="406" y="288" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">host-side pass selection</text>
+  <text x="406" y="308" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">picks the &#224;-trous / DLSS-RR / NRD / OIDN pass</text>
+  <text x="406" y="328" font-family="DM Sans,sans-serif" font-size="11" fill="#c4a574">shader sees only derived control bits</text>
+
+  <!-- Lane D: dead -->
+  <rect x="20" y="360" width="340" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="34" y="382" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">preferAccumulation</text>
+  <text x="34" y="402" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">allowExternalDenoiser</text>
+
+  <line x1="360" y1="386" x2="386" y2="386" stroke="#3d4a58" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <path d="M386 386 l-7 -4 v8 z" fill="#3d4a58"/>
+
+  <rect x="392" y="360" width="308" height="52" rx="4" fill="#141a22" stroke="#3d4a58" stroke-dasharray="4 3"/>
+  <text x="406" y="382" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">one std::cout line</text>
+  <text x="406" y="402" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">no reader changes behaviour</text>
+</svg>

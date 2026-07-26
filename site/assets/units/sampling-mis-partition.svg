@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 372" class="unit-diagram" role="img" aria-label="Three estimators reach the environment map from one shading point; each carries a balance-heuristic weight, but the environment-sampling side quotes a mixture PDF while the two BSDF chains quote single-lobe PDFs on their first segment. Analytic lights and emissive surface hits sit outside the partition with no weight.">
+  <defs>
+    <marker id="mis-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="mis-arrow-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="372" fill="#0f1419"/>
+
+  <text x="16" y="24" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Direct environment lighting at one shading point — who estimates it, and with what weight</text>
+
+  <!-- shading point -->
+  <circle cx="42" cy="160" r="7" fill="#c4a574"/>
+  <text x="16" y="188" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">shading</text>
+  <text x="18" y="200" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">point</text>
+
+  <!-- fan-out arrows -->
+  <path d="M50 156 C 90 130, 100 100, 132 82" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#mis-arrow)"/>
+  <path d="M52 160 L 132 160" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#mis-arrow)"/>
+  <path d="M50 166 C 90 192, 100 218, 132 236" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#mis-arrow)"/>
+
+  <!-- lane 1: env-IS -->
+  <rect x="136" y="56" width="196" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="148" y="76" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#c4a574">env-IS  sampleEnvMap()</text>
+  <text x="148" y="95" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">p_e   solid angle</text>
+
+  <!-- lane 2: spec chain -->
+  <rect x="136" y="134" width="196" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="148" y="154" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#c4a574">specular chain misses</text>
+  <text x="148" y="173" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">p_s = D·NoH / 4VoH</text>
+
+  <!-- lane 3: diff chain -->
+  <rect x="136" y="212" width="196" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="148" y="232" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#c4a574">diffuse chain misses</text>
+  <text x="148" y="251" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">p_d = cos θ / π</text>
+
+  <!-- connectors to weights -->
+  <path d="M332 82 L 388 82" fill="none" stroke="#c4784a" stroke-width="1.4" marker-end="url(#mis-arrow-a)"/>
+  <path d="M332 160 L 388 160" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#mis-arrow)"/>
+  <path d="M332 238 L 388 238" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#mis-arrow)"/>
+
+  <!-- weight boxes -->
+  <rect x="392" y="56" width="204" height="52" rx="4" fill="#1a222c" stroke="#c4784a"/>
+  <text x="404" y="76" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#e8e2d6">w = p_e / (p_e + q)</text>
+  <text x="404" y="95" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a">q = mix(p_d, p_s, α)  ← mixture</text>
+
+  <rect x="392" y="134" width="204" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="404" y="154" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#e8e2d6">w = p_s / (p_s + p_e)</text>
+  <text x="404" y="173" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a">lobe pdf — segment 1</text>
+
+  <rect x="392" y="212" width="204" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="404" y="232" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#e8e2d6">w = p_d / (p_d + p_e)</text>
+  <text x="404" y="251" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a">lobe pdf — segment 1</text>
+
+  <!-- outputs -->
+  <path d="M596 74 L 640 66" fill="none" stroke="#c4784a" stroke-width="1.2" marker-end="url(#mis-arrow-a)"/>
+  <path d="M596 92 L 640 100" fill="none" stroke="#c4784a" stroke-width="1.2" marker-end="url(#mis-arrow-a)"/>
+  <text x="646" y="70" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#c4a574">spec</text>
+  <text x="646" y="104" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#c4a574">diff</text>
+
+  <path d="M596 160 L 640 160" fill="none" stroke="#3d4a58" stroke-width="1.2" marker-end="url(#mis-arrow)"/>
+  <text x="646" y="164" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#c4a574">spec</text>
+  <path d="M596 238 L 640 238" fill="none" stroke="#3d4a58" stroke-width="1.2" marker-end="url(#mis-arrow)"/>
+  <text x="646" y="242" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#c4a574">diff</text>
+
+  <!-- partition bracket note -->
+  <text x="392" y="288" font-family="DM Sans,sans-serif" font-size="11.5" fill="#6e685c">one mixture weight is applied to both halves; the</text>
+  <text x="392" y="303" font-family="DM Sans,sans-serif" font-size="11.5" fill="#6e685c">chains answer with lobe pdfs — the pairs do not sum to 1</text>
+
+  <!-- outside the partition -->
+  <rect x="16" y="316" width="688" height="44" rx="4" fill="none" stroke="#6e685c" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="30" y="336" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#c4a574">outside the partition:</text>
+  <text x="176" y="336" font-family="DM Sans,sans-serif" font-size="12" fill="#e8e2d6">analytic-light NEE (lightBuf) and emissive-surface hits on chain rays</text>
+  <text x="30" y="352" font-family="DM Sans,sans-serif" font-size="12" fill="#6e685c">carry no MIS weight against each other — and emissive meshes appear in both, as auto-generated sphere proxies.</text>
+</svg>

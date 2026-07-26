@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glossary — OHAO Monograph</title>
+  <meta name="description" content="Hover glossary of OHAO graphics jargon: GGX, NEE, MIS, TLAS, NRD, and more." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="glossary" data-root="..">
+  <div class="progress" aria-hidden="true"></div>
+    <nav class="toc" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · Glossary</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">G</div>
+        <div>
+          <p class="chapter-kicker">Reference</p>
+          <h1>Glossary</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">How to use</div>
+        <p>Every dotted underline in the chapters is a jargon term. <strong>Hover</strong> (or keyboard-focus) it for a short definition. This page lists the full dictionary so you can browse or search without context.</p>
+      </div>
+      <p class="gloss-hint reveal">Tip: acronyms like GGX are auto-linked in chapter prose — not inside code blocks.</p>
+      <div class="gloss-search reveal">
+        <input type="search" id="gloss-q" placeholder="Filter terms (e.g. NEE, roughness, shadow)…" autocomplete="off" />
+      </div>
+      <h2 class="gloss-group" id="g-assets">Assets</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="FBX" data-group="Assets">
+        <h3>FBX</h3>
+        <div class="expand">Autodesk FBX</div>
+        <p>DCC interchange format. Loaded through Assimp for meshes/materials (animation path was renovation-scoped).</p>
+      </article>
+      <article class="gloss-card" data-key="GLB" data-group="Assets">
+        <h3>GLB</h3>
+        <div class="expand">Binary glTF</div>
+        <p>Single-file binary package of a glTF scene (meshes, materials, textures).</p>
+      </article>
+      <article class="gloss-card" data-key="glTF" data-group="Assets">
+        <h3>glTF</h3>
+        <div class="expand">GL Transmission Format</div>
+        <p>Standard 3D asset format (often .glb). OHAO loads metallic-roughness PBR via tinygltf.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-audio">Audio</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="miniaudio" data-group="Audio">
+        <h3>miniaudio</h3>
+        <div class="expand">miniaudio library</div>
+        <p>Single-file audio library. AudioSystem is a thin facade over it (SFX/Music/Ambient, 3D listener).</p>
+      </article>
+      <article class="gloss-card" data-key="SFX" data-group="Audio">
+        <h3>SFX</h3>
+        <div class="expand">Sound effects category</div>
+        <p>One-shot gameplay/UI sounds. One of three AudioSystem mix buses (with Music and Ambient).</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-camera">Camera</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="FOV" data-group="Camera">
+        <h3>FOV</h3>
+        <div class="expand">Field of View</div>
+        <p>Angular width of the camera frustum. Extracted from the inverse projection in the path tracer.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-deferred">Deferred</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="CSM" data-group="Deferred">
+        <h3>CSM</h3>
+        <div class="expand">Cascaded Shadow Maps</div>
+        <p>Split the view frustum into distance cascades, each with its own shadow map, so nearby shadows stay sharp without a huge single map.</p>
+      </article>
+      <article class="gloss-card" data-key="G-buffer" data-group="Deferred">
+        <h3>G-buffer</h3>
+        <div class="expand">Geometry Buffer</div>
+        <p>Same as GBuffer: MRT surface data for deferred lighting.</p>
+      </article>
+      <article class="gloss-card" data-key="GBuffer" data-group="Deferred">
+        <h3>GBuffer</h3>
+        <div class="expand">Geometry Buffer</div>
+        <p>Multiple render targets that store surface data (position, normal, albedo, …) so lighting can run as a full-screen pass without re-drawing meshes per light.</p>
+      </article>
+      <article class="gloss-card" data-key="MRT" data-group="Deferred">
+        <h3>MRT</h3>
+        <div class="expand">Multiple Render Targets</div>
+        <p>Writing several color attachments in one pass (e.g. GBuffer0–2 + velocity).</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-denoise">Denoise</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="DLSS" data-group="Denoise">
+        <h3>DLSS</h3>
+        <div class="expand">Deep Learning Super Sampling</div>
+        <p>NVIDIA family of neural upscalers/reconstructors. In this repo, Ray Reconstruction (DLSS-RR) is the relevant mode when NGX is linked.</p>
+      </article>
+      <article class="gloss-card" data-key="DLSS-RR" data-group="Denoise">
+        <h3>DLSS-RR</h3>
+        <div class="expand">DLSS Ray Reconstruction</div>
+        <p>NVIDIA NGX path that denoises/reconstructs ray-traced signals with AI, using extended AOV guides (motion, hit distance, …).</p>
+      </article>
+      <article class="gloss-card" data-key="NGX" data-group="Denoise">
+        <h3>NGX</h3>
+        <div class="expand">NVIDIA GameWorks / DLSS SDK host</div>
+        <p>SDK layer that hosts DLSS/DLSS-RR. CMake enables OHAO_DLSS when the static NGX lib is present.</p>
+      </article>
+      <article class="gloss-card" data-key="NRD" data-group="Denoise">
+        <h3>NRD</h3>
+        <div class="expand">NVIDIA Real-time Denoisers</div>
+        <p>Realtime denoise suite. OHAO uses REBLUR-style paths; inputs must be packed (YCoCg + normalized hit distance), not raw linear RGB.</p>
+      </article>
+      <article class="gloss-card" data-key="OIDN" data-group="Denoise">
+        <h3>OIDN</h3>
+        <div class="expand">Open Image Denoise (Intel)</div>
+        <p>CPU/GPU denoise library. OHAO’s default offline path: beauty guided by albedo + normal AOVs.</p>
+      </article>
+      <article class="gloss-card" data-key="REBLUR" data-group="Denoise">
+        <h3>REBLUR</h3>
+        <div class="expand">NRD REBLUR denoiser</div>
+        <p>NRD algorithm for noisy diffuse/specular radiance with hit-distance guidance. Demands correct AOV packing.</p>
+      </article>
+      <article class="gloss-card" data-key="YCoCg" data-group="Denoise">
+        <h3>YCoCg</h3>
+        <div class="expand">Luma / chroma color encoding</div>
+        <p>Color space used when packing radiance for NRD: Y = brightness, Co/Cg = chroma. Feeding linear RGB here caused the magenta-helmet bug.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-host">Host</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="GLFW" data-group="Host">
+        <h3>GLFW</h3>
+        <div class="expand">Graphics Library Framework</div>
+        <p>Window/input library used by the interactive example viewer—not required by the core offscreen renderer.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-imaging">Imaging</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="ACES" data-group="Imaging">
+        <h3>ACES</h3>
+        <div class="expand">Academy Color Encoding System (tonemap)</div>
+        <p>Film-style curve that compresses HDR values into displayable LDR. One of OHAO’s tonemap operators.</p>
+      </article>
+      <article class="gloss-card" data-key="AOV" data-group="Imaging">
+        <h3>AOV</h3>
+        <div class="expand">Arbitrary Output Variable</div>
+        <p>Extra render targets beside beauty—albedo, normal, depth, roughness, diffuse/specular radiance—used for denoising and debugging.</p>
+      </article>
+      <article class="gloss-card" data-key="HDR" data-group="Imaging">
+        <h3>HDR</h3>
+        <div class="expand">High Dynamic Range</div>
+        <p>Colors stored above the 0–1 display range (e.g. RGBA32F accumulation) before tonemapping compresses them for the screen.</p>
+      </article>
+      <article class="gloss-card" data-key="LOD" data-group="Imaging">
+        <h3>LOD</h3>
+        <div class="expand">Level of Detail</div>
+        <p>Mip level or quality tier. Deferred IBL uses roughness to pick an env-map LOD.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-light-transport">Light transport</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="GI" data-group="Light transport">
+        <h3>GI</h3>
+        <div class="expand">Global Illumination</div>
+        <p>Light that has bounced at least once (indirect). Full path tracing estimates multi-bounce GI; hybrid RT often does one bounce only.</p>
+      </article>
+      <article class="gloss-card" data-key="MIS" data-group="Light transport">
+        <h3>MIS</h3>
+        <div class="expand">Multiple Importance Sampling</div>
+        <p>Blend two (or more) sampling strategies—e.g. “sample the light” and “sample the BRDF”—with weights from their PDFs so neither strategy alone creates huge fireflies.</p>
+      </article>
+      <article class="gloss-card" data-key="NEE" data-group="Light transport">
+        <h3>NEE</h3>
+        <div class="expand">Next Event Estimation</div>
+        <p>Explicitly sample a point on a light and cast a shadow ray, instead of waiting for a random bounce to hit the light by chance. Cuts noise on small bright lights.</p>
+      </article>
+      <article class="gloss-card" data-key="PDF" data-group="Light transport">
+        <h3>PDF</h3>
+        <div class="expand">Probability Density Function</div>
+        <p>How likely a continuous random sample was. Monte Carlo divides contribution by the PDF so rare and common samples stay unbiased.</p>
+      </article>
+      <article class="gloss-card" data-key="PT" data-group="Light transport">
+        <h3>PT</h3>
+        <div class="expand">Path Tracing / Path Tracer</div>
+        <p>Monte Carlo method that follows light paths with random bounces. OHAO’s KHR ray-tracing offline/realtime profiles.</p>
+      </article>
+      <article class="gloss-card" data-key="ReSTIR" data-group="Light transport">
+        <h3>ReSTIR</h3>
+        <div class="expand">Reservoir Spatio-Temporal Importance Resampling</div>
+        <p>Resamples light candidates over space and time for efficient many-light / GI sampling. Reservoir planes live at set-0 bindings 29–34 in the path tracer.</p>
+      </article>
+      <article class="gloss-card" data-key="spp" data-group="Light transport">
+        <h3>spp</h3>
+        <div class="expand">Samples Per Pixel</div>
+        <p>How many independent path samples contribute to one pixel before (or while) averaging. Higher spp → less noise, more cost.</p>
+      </article>
+      <article class="gloss-card" data-key="SPP" data-group="Light transport">
+        <h3>SPP</h3>
+        <div class="expand">Samples Per Pixel</div>
+        <p>Same as spp: Monte Carlo samples averaged into one pixel.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-lighting">Lighting</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="HDRI" data-group="Lighting">
+        <h3>HDRI</h3>
+        <div class="expand">High Dynamic Range Image (environment)</div>
+        <p>Floating-point environment map that can store sun-bright values. Sampled for path-tracer miss/env MIS and deferred IBL.</p>
+      </article>
+      <article class="gloss-card" data-key="IBL" data-group="Lighting">
+        <h3>IBL</h3>
+        <div class="expand">Image-Based Lighting</div>
+        <p>Lighting from an environment map (usually HDR equirectangular) instead of only analytic lights. Used in deferred reflections and path-tracer miss rays.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-materials">Materials</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="BRDF" data-group="Materials">
+        <h3>BRDF</h3>
+        <div class="expand">Bidirectional Reflectance Distribution Function</div>
+        <p>How much light reflects from an incoming direction toward an outgoing direction at a surface. OHAO uses Cook-Torrance with a GGX microfacet lobe + Lambert diffuse.</p>
+      </article>
+      <article class="gloss-card" data-key="BSDF" data-group="Materials">
+        <h3>BSDF</h3>
+        <div class="expand">Bidirectional Scattering Distribution Function</div>
+        <p>Generalization of the BRDF that can include transmission (refraction) as well as reflection.</p>
+      </article>
+      <article class="gloss-card" data-key="BSSRDF" data-group="Materials">
+        <h3>BSSRDF</h3>
+        <div class="expand">Bidirectional Scattering Surface Reflectance Distribution Function</div>
+        <p>True subsurface transport model (entry and exit points differ). Heavier than the engine’s approximate SSS hacks.</p>
+      </article>
+      <article class="gloss-card" data-key="Cook-Torrance" data-group="Materials">
+        <h3>Cook-Torrance</h3>
+        <div class="expand">Cook–Torrance microfacet specular</div>
+        <p>Specular BRDF form D·G·F / (4 n·v n·l). OHAO evaluates D=GGX with height-correlated Smith G.</p>
+      </article>
+      <article class="gloss-card" data-key="F0" data-group="Materials">
+        <h3>F0</h3>
+        <div class="expand">Base reflectance at normal incidence</div>
+        <p>How reflective a surface is when viewed head-on. Dielectrics ≈ 0.04; metals tint F0 toward base color. F₀ = lerp(0.04, baseColor, metallic).</p>
+      </article>
+      <article class="gloss-card" data-key="Fresnel" data-group="Materials">
+        <h3>Fresnel</h3>
+        <div class="expand">Fresnel reflectance</div>
+        <p>Surfaces reflect more at grazing angles. Schlick approximation: F = F₀ + (1−F₀)(1−cosθ)⁵.</p>
+      </article>
+      <article class="gloss-card" data-key="GGX" data-group="Materials">
+        <h3>GGX</h3>
+        <div class="expand">Trowbridge–Reitz / GGX normal distribution</div>
+        <p>Industry-standard microfacet NDF used in modern PBR. Controls how spread-out specular highlights are as roughness increases. Implemented in brdf_ggx.glsl.</p>
+      </article>
+      <article class="gloss-card" data-key="Lambert" data-group="Materials">
+        <h3>Lambert</h3>
+        <div class="expand">Lambertian diffuse</div>
+        <p>Ideal matte reflector: f = albedo/π. Used for the diffuse lobe alongside GGX specular.</p>
+      </article>
+      <article class="gloss-card" data-key="NDF" data-group="Materials">
+        <h3>NDF</h3>
+        <div class="expand">Normal Distribution Function</div>
+        <p>In microfacet theory: statistical distribution of tiny surface facet normals. GGX is OHAO’s NDF for specular highlights.</p>
+      </article>
+      <article class="gloss-card" data-key="ORM" data-group="Materials">
+        <h3>ORM</h3>
+        <div class="expand">Occlusion / Roughness / Metallic map</div>
+        <p>Packed texture: R = ambient occlusion, G = roughness, B = metallic (glTF convention). Multiplies material scalars in GBuffer and RT.</p>
+      </article>
+      <article class="gloss-card" data-key="PBR" data-group="Materials">
+        <h3>PBR</h3>
+        <div class="expand">Physically Based Rendering</div>
+        <p>Shading that follows energy-aware material models (metallic-roughness, Fresnel, microfacet BRDFs) so assets look consistent under different lights.</p>
+      </article>
+      <article class="gloss-card" data-key="SSS" data-group="Materials">
+        <h3>SSS</h3>
+        <div class="expand">Subsurface Scattering</div>
+        <p>Light that enters a surface and exits nearby (skin, wax). OHAO’s SSS pass is biased look-dev, not a full BSSRDF.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-math">Math</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="AABB" data-group="Math">
+        <h3>AABB</h3>
+        <div class="expand">Axis-Aligned Bounding Box</div>
+        <p>Box aligned to world axes used for culling and broad-phase collision.</p>
+      </article>
+      <article class="gloss-card" data-key="NDC" data-group="Math">
+        <h3>NDC</h3>
+        <div class="expand">Normalized Device Coordinates</div>
+        <p>Post-projection coordinates (roughly −1…1). Used for velocity (TAA) and camera ray construction.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-physics">Physics</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="Jolt" data-group="Physics">
+        <h3>Jolt</h3>
+        <div class="expand">Jolt Physics</div>
+        <p>Third-party rigid-body engine behind OHAO’s IPhysicsBackend implementation.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-post">Post</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="DoF" data-group="Post">
+        <h3>DoF</h3>
+        <div class="expand">Depth of Field</div>
+        <p>Optical blur for out-of-focus regions. Available as an experimental post effect.</p>
+      </article>
+      <article class="gloss-card" data-key="SSAO" data-group="Post">
+        <h3>SSAO</h3>
+        <div class="expand">Screen-Space Ambient Occlusion</div>
+        <p>Approximate contact shadows/occlusion from the depth (and normals) already in the G-buffer—cheap ambient darkening in crevices.</p>
+      </article>
+      <article class="gloss-card" data-key="SSGI" data-group="Post">
+        <h3>SSGI</h3>
+        <div class="expand">Screen-Space Global Illumination</div>
+        <p>Approximate bounce lighting from on-screen data only. Experimental / look-dev in deferred.</p>
+      </article>
+      <article class="gloss-card" data-key="SSR" data-group="Post">
+        <h3>SSR</h3>
+        <div class="expand">Screen-Space Reflections</div>
+        <p>Trace reflections in screen space using depth; fast but misses off-screen geometry. Experimental in OHAO deferred.</p>
+      </article>
+      <article class="gloss-card" data-key="TAA" data-group="Post">
+        <h3>TAA</h3>
+        <div class="expand">Temporal Anti-Aliasing</div>
+        <p>Blend the current frame with history using motion vectors to smooth edges and reduce shimmer. Needs sub-pixel jitter.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-ray-tracing">Ray tracing</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="AS" data-group="Ray tracing">
+        <h3>AS</h3>
+        <div class="expand">Acceleration Structure</div>
+        <p>Generic term for BLAS/TLAS used to accelerate ray–triangle tests on the GPU.</p>
+      </article>
+      <article class="gloss-card" data-key="BLAS" data-group="Ray tracing">
+        <h3>BLAS</h3>
+        <div class="expand">Bottom-Level Acceleration Structure</div>
+        <p>Vulkan RT structure for one mesh’s triangles. Built once per static mesh; referenced by TLAS instances.</p>
+      </article>
+      <article class="gloss-card" data-key="RT" data-group="Ray tracing">
+        <h3>RT</h3>
+        <div class="expand">Ray Tracing</div>
+        <p>Casting rays through an acceleration structure. Includes full path tracing and cheaper hybrid queries (shadow/GI rays).</p>
+      </article>
+      <article class="gloss-card" data-key="SBT" data-group="Ray tracing">
+        <h3>SBT</h3>
+        <div class="expand">Shader Binding Table</div>
+        <p>GPU table that maps ray-query geometry to raygen / miss / hit shader groups in a ray-tracing pipeline.</p>
+      </article>
+      <article class="gloss-card" data-key="TLAS" data-group="Ray tracing">
+        <h3>TLAS</h3>
+        <div class="expand">Top-Level Acceleration Structure</div>
+        <p>Vulkan RT structure of instances. Each instance points at a BLAS plus a transform. Shared by the path tracer and hybrid RT techniques.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-realtime">Realtime</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="FPS" data-group="Realtime">
+        <h3>FPS</h3>
+        <div class="expand">Frames Per Second</div>
+        <p>How many images the interactive path presents each second.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-sampling">Sampling</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="CDF" data-group="Sampling">
+        <h3>CDF</h3>
+        <div class="expand">Cumulative Distribution Function</div>
+        <p>Running integral of a PDF. Env maps build marginal/conditional CDFs so bright texels are sampled more often.</p>
+      </article>
+      <article class="gloss-card" data-key="PCG" data-group="Sampling">
+        <h3>PCG</h3>
+        <div class="expand">Permuted Congruential Generator</div>
+        <p>Fast hash-style RNG used for the realtime path-tracer profile when Sobol is too heavy.</p>
+      </article>
+      <article class="gloss-card" data-key="Sobol" data-group="Sampling">
+        <h3>Sobol</h3>
+        <div class="expand">Sobol quasi-Monte Carlo sequence</div>
+        <p>Low-discrepancy sample sequence (often Owen-scrambled). Default offline path-tracer sampler for faster convergence than pure random.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-scene">Scene</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="ECS" data-group="Scene">
+        <h3>ECS</h3>
+        <div class="expand">Entity Component System (actor/component model)</div>
+        <p>Scene objects (actors) hold components (mesh, material, light, physics) instead of deep inheritance trees.</p>
+      </article>
+      <article class="gloss-card" data-key="TRS" data-group="Scene">
+        <h3>TRS</h3>
+        <div class="expand">Translation / Rotation / Scale</div>
+        <p>The three parts of a transform. Composed into a matrix for rendering and physics sync.</p>
+      </article>
+      </div>
+      <h2 class="gloss-group" id="g-vulkan">Vulkan</h2>
+      <div class="gloss-grid">
+      <article class="gloss-card" data-key="Bindless" data-group="Vulkan">
+        <h3>Bindless</h3>
+        <div class="expand">Bindless textures</div>
+        <p>Textures addressed by index in a large array (sampler2D textures[]) instead of rebinding descriptor sets per draw.</p>
+      </article>
+      <article class="gloss-card" data-key="KHR" data-group="Vulkan">
+        <h3>KHR</h3>
+        <div class="expand">Khronos (Vulkan extension prefix)</div>
+        <p>In this engine: VK_KHR_ray_tracing_pipeline / acceleration_structure—the official Vulkan ray-tracing APIs.</p>
+      </article>
+      <article class="gloss-card" data-key="SSBO" data-group="Vulkan">
+        <h3>SSBO</h3>
+        <div class="expand">Shader Storage Buffer Object</div>
+        <p>Large GPU buffer readable/writable in shaders (lights, materials, CDFs). More flexible than a small UBO.</p>
+      </article>
+      <article class="gloss-card" data-key="UBO" data-group="Vulkan">
+        <h3>UBO</h3>
+        <div class="expand">Uniform Buffer Object</div>
+        <p>Small, frequently updated GPU buffer for constants (camera, few lights). Deferred uses a tight light UBO budget.</p>
+      </article>
+      <article class="gloss-card" data-key="VMA" data-group="Vulkan">
+        <h3>VMA</h3>
+        <div class="expand">Vulkan Memory Allocator</div>
+        <p>Library that simplifies GPU memory allocation for buffers and images.</p>
+      </article>
+      </div>
+      <nav class="pager">
+        <a href="status.html"><div class="label">← Previous</div><div class="title">13 · Status</div></a>
+        <a class="next" href="../index.html"><div class="label">Cover →</div><div class="title">00 · Home</div></a>
+      </nav>
+      <script>
+        (function () {
+          const q = document.getElementById("gloss-q");
+          if (!q) return;
+          q.addEventListener("input", () => {
+            const s = q.value.trim().toLowerCase();
+            document.querySelectorAll(".gloss-card").forEach((card) => {
+              const hay = (card.dataset.key + " " + card.textContent).toLowerCase();
+              card.style.display = !s || hay.includes(s) ? "" : "none";
+            });
+            document.querySelectorAll(".gloss-group").forEach((h) => {
+              let el = h.nextElementSibling;
+              let any = false;
+              if (el && el.classList.contains("gloss-grid")) {
+                any = [...el.querySelectorAll(".gloss-card")].some((c) => c.style.display !== "none");
+              }
+              h.style.display = any || !s ? "" : "none";
+              if (el) el.style.display = h.style.display;
+            });
+          });
+        })();
+      </script>
+
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+
+</body>
+</html>

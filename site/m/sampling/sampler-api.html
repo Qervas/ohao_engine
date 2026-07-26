@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>07 · Sampling · Sampler API — OHAO Monograph</title>
+  <meta name="description" content="sampler_api.glsl dispatch, specialization constant." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="sampling/sampler-api" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sampling.html">← Module hub</a> · Sampler API</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">sampling</p>
+          <h1>Sampler API</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>sampler_api.glsl dispatch, specialization constant.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#one-name-two-different-contracts">One name, two different contracts</a></li><li><a href="#what-the-dim-argument-actually-buys">What the dim argument actually buys</a></li><li><a href="#the-pads-move-at-runtime-not-just-at-edit-time">The pads move at runtime, not just at edit time</a></li><li><a href="#a-specialization-constant-not-a-uniform">A specialization constant, not a uniform</a></li><li><a href="#the-stage-that-gets-the-constant-and-the-three-that-do-not">The stage that gets the constant, and the three that do not</a></li><li><a href="#baked-once-at-pipeline-creation">Baked once, at pipeline creation</a></li><li><a href="#the-half-open-interval-only-one-backend-keeps">The half-open interval only one backend keeps</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="one-name-two-different-contracts">One name, two different contracts</h2></div>
+<div class="prose reveal">
+<p>`pt_raygen_realtime.rgen` asks for randomness at forty distinct call sites and `pt_raygen_offline.rgen` at twenty-nine — pixel jitter, light index, area-light point, environment direction, BSDF lobe choice, Russian roulette — and every one of them goes through `getSample1D(dim)` or `getSample2D(dim)`.</p>
+<p>Those two are the shaders that run. `PathTracerShaderSet` still *defaults* to a third, `rt_pt_raygen.rgen.spv`,</p>
+<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_pt_raygen.rgen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L55" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:55</a></div>
+<p>but the engine&#x27;s only `PathTracer` is a member of `RTProfileRendererBase`, whose `init()` overwrites the whole shader set before the pipeline is built,</p>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setShaderSet(m_shaderSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L99" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:99</a></div>
+<p>and the only two subclasses of that base name the realtime and offline variants. `rt_pt_raygen.rgen.spv` is compiled and never loaded. Everything below traces `pt_raygen_offline.rgen` unless it says otherwise.</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_realtime.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L205" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:205</a></div>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L220" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:220</a></div>
+<p>What sits behind that one function name are two implementations whose contracts are not the same, and an integrator written to a discipline that only one of them enforces.</p>
+<p>`sampler_pcg.glsl` is a **stream**. A single `uint` state is advanced by an LCG step and a bit-mixing output function on every call; the `dim` argument is accepted and thrown away, so the value you receive depends entirely on how many times this invocation has already asked.</p>
+<div class="citation-chip"><code class="citation-code">float getSample1D_pcg(uint dim) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L20" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:20</a></div>
+<p>`sampler_sobol.glsl` is a **lookup**. `samplerInit_sobol` records the sample index and a hash of the pixel coordinate, and then nothing mutates for the rest of the ray: each returned value is a pure function of (pixel, sample index, dimension).</p>
+<div class="citation-chip"><code class="citation-code">_sobol_index = sampleIdx;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_sobol.glsl#L61" target="_blank" rel="noopener">shaders/includes/rt/sampler_sobol.glsl:61</a></div>
+<p>That is why each raygen threads a `dimIdx` counter by hand, bumping it by exactly the number of scalars consumed at every site. Under PCG the bookkeeping is decoration — drop a `dimIdx += 2u` and the image is bit-identical. Under Sobol the same omission makes two unrelated decisions read one coordinate, and the estimator acquires a correlation no sample count will average out. The counter is load-bearing in exactly one of the two configurations: a bug that is invisible in the mode you were debugging in.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-dim-argument-actually-buys">What the dim argument actually buys</h2></div>
+<div class="prose reveal">
+<p>The committed direction-number table holds four Sobol dimensions.</p>
+<div class="citation-chip"><code class="citation-code">const uint OHAO_SOBOL_DIMS = 4u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_sobol_tables.glsl#L8" target="_blank" rel="noopener">shaders/includes/rt/sampler_sobol_tables.glsl:8</a></div>
+<p>A single camera path spends far more than four, so the Sobol backend reads `dim` as a two-part address: the high bits pick a *pad*, the low two bits pick the local Sobol dimension inside it, and each pad is re-scrambled with its own Owen seed derived from the pixel hash and the golden-ratio constant `0x9e3779b9`.</p>
+<div class="citation-chip"><code class="citation-code">uint seed = _sobol_pixelSeed ^ (pad * 0x9e3779b9u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_sobol.glsl#L71" target="_blank" rel="noopener">shaders/includes/rt/sampler_sobol.glsl:71</a></div>
+<p>Inside one pad, four dimensions are jointly stratified. Across pads you get independence instead — the standard trade in padded QMC, on the assumption that the integrand&#x27;s important dimensions come early.</p>
+<p>The API-visible consequence is that `getSample2D(d)` is not a 2D primitive: it is `getSample1D(d)` paired with `getSample1D(d+1)`, so a 2D draw that starts at `d ≡ 3 (mod 4)` lands one component in each of two pads and loses the joint stratification it looks like it is asking for. This is not hypothetical. The camera jitter takes dims 0–1,</p>
+<div class="citation-chip"><code class="citation-code">vec2 jitter = getSample2D(dimIdx) - 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L145" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:145</a></div>
+<p>the bounce-0 next-event-estimation block spends dim 2 on the light index, and the light-position sample inside it therefore begins at dim 3 — split across pads 0 and 1.</p>
+<div class="citation-chip"><code class="citation-code">// ==== Analytic direct NEE at bounce 0 ====</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L310" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:310</a></div>
+<p>That is a trace of one path, not a fixed map. The whole NEE block is gated on a non-empty light buffer; inside it the sphere, spot and area branches each take two dimensions for the light point while the directional branch takes its direction straight from the light and consumes none; and the env-MIS draw that follows is itself gated on a loaded environment map. So the environment sample starts at dim 5, dim 3 or dim 2 depending on the scene and on which light type this particular path drew.</p>
+<div class="citation-chip"><code class="citation-code">// ==== Analytic direct env-MIS at bounce 0 ====</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L505" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:505</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/sampling-sampler-api-dim-ledger.svg" alt="Conceptual — one branch of the first-bounce dimension ledger of pt_raygen_offline.rgen, traced by hand from the dimIdx arithmetic for the case where the sampled light is a sphere, spot or area light. A directional light, or an empty light buffer, shifts every later draw. Not a measurement." loading="lazy" /><figcaption>Conceptual — one branch of the first-bounce dimension ledger of pt_raygen_offline.rgen, traced by hand from the dimIdx arithmetic for the case where the sampled light is a sphere, spot or area light. A directional light, or an empty light buffer, shifts every later draw. Not a measurement.</figcaption></figure>
+</div>
+<div class="section-rule"><h2 id="the-pads-move-at-runtime-not-just-at-edit-time">The pads move at runtime, not just at edit time</h2></div>
+<div class="prose reveal">
+<p>`dimIdx` is a running count, not an allocation, so any branch that consumes a different number of dimensions shifts every later draw *of that path* into a different pad. The clearest case is the specular direction chosen at the primary hit: a surface with `roughness &gt; 0.01` spends two dimensions jittering the mirror direction,</p>
+<div class="citation-chip"><code class="citation-code">if (roughness &gt; 0.01) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L585" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:585</a></div>
+<p>and two more if the jittered direction ends up below the horizon.</p>
+<div class="citation-chip"><code class="citation-code">if (dot(reflected, N) &lt; 0.0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L589" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:589</a></div>
+<p>Russian roulette then terminates paths at different depths, so how many dimensions a path has spent by bounce 3 is a function of its own history.</p>
+<div class="citation-chip"><code class="citation-code">float p = max(specThroughput.r, max(specThroughput.g, specThroughput.b));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L835" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:835</a></div>
+<p>What padded Sobol buys is stratification along a pixel&#x27;s *sample sequence*: for a fixed dimension, that pixel&#x27;s samples 0…N−1 form a low-discrepancy set. That only means anything if dimension *d* denotes the same decision on every sample, and here it does not — which light, and therefore which light type, is drawn from dim 2; the horizon-reject test is decided by the jitter sample itself; roulette ends different samples at different depths. Past the first data-dependent branch, one sample&#x27;s dimension *d* is a light point and another&#x27;s a specular jitter, sharing one low-discrepancy sequence. What is stable across a pixel&#x27;s samples is dims 0–2 — camera jitter and the light index — which is the short end of the prefix the padded-QMC assumption leans on. Nothing after it is protected, and no `dimIdx` discipline in the source can protect it.</p>
+</div>
+<div class="section-rule"><h2 id="a-specialization-constant-not-a-uniform">A specialization constant, not a uniform</h2></div>
+<div class="prose reveal">
+<p>The dispatch itself is three thin functions — `samplerInit`, `getSample1D`, `getSample2D` — each a single comparison against `SAMPLER_TYPE`.</p>
+<div class="citation-chip"><code class="citation-code">float getSample1D(uint dim) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_api.glsl#L29" target="_blank" rel="noopener">shaders/includes/rt/sampler_api.glsl:29</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Two alternatives were available. A push constant or UBO field would make the sampler switchable per frame, at the price of a genuine dynamic branch at every sample site with both backends&#x27; state live. Two preprocessor variants (`-DSAMPLER_PCG`) would cost nothing at runtime but double the shader build and leave two SPIR-V blobs that can drift apart. OHAO uses a Vulkan specialization constant instead: one GLSL source, one `.spv` on disk, and a branch whose condition is fixed when the pipeline is created — so the driver&#x27;s SPIR-V compiler folds it, and the loser&#x27;s code is dead before the first ray is traced.</p></div>
+<p>The GLSL declares `constant_id = 0` with a compile-time default of Sobol, and the host names the same id as a `constexpr`.</p>
+<div class="citation-chip"><code class="citation-code">layout(constant_id = 0) const uint SAMPLER_TYPE = SAMPLER_SOBOL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_api.glsl#L16" target="_blank" rel="noopener">shaders/includes/rt/sampler_api.glsl:16</a></div>
+<div class="citation-chip"><code class="citation-code">inline constexpr uint32_t kSamplerSpecConstantId = 0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/sampler_types.hpp#L17" target="_blank" rel="noopener">ohao/render/rt/sampler_types.hpp:17</a></div>
+<p>The *values* are a different matter. `SamplerType::PCG = 0, Sobol = 1` on the host and `SAMPLER_PCG 0u` / `SAMPLER_SOBOL 1u` in the GLSL are two independently hand-written literal pairs.</p>
+<div class="citation-chip"><code class="citation-code">PCG   = 0,   // pseudo-random; realtime default</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/sampler_types.hpp#L13" target="_blank" rel="noopener">ohao/render/rt/sampler_types.hpp:13</a></div>
+<div class="citation-chip"><code class="citation-code">#define SAMPLER_PCG   0u</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_api.glsl#L12" target="_blank" rel="noopener">shaders/includes/rt/sampler_api.glsl:12</a></div>
+<p>There is no generated header, no `static_assert`, and no test that compares the two — the one engine test that touches this header asserts only that `isQmcSampler` picks out Sobol. Renumbering the enum would compile, link, run, and silently select the other backend.</p>
+<div class="citation-chip"><code class="citation-code">EXPECT(isQmcSampler(SamplerType::Sobol) &amp;&amp; !isQmcSampler(SamplerType::PCG), &quot;QMC&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L650" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:650</a></div>
+</div>
+<div class="section-rule"><h2 id="the-stage-that-gets-the-constant-and-the-three-that-do-not">The stage that gets the constant, and the three that do not</h2></div>
+<div class="prose reveal">
+<p>`VkSpecializationInfo` is attached to stage 0 only.</p>
+<div class="citation-chip"><code class="citation-code">stages[0].pSpecializationInfo = &amp;samplerSpecInfo;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L88" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:88</a></div>
+<p>That is correct today: the only files that `#include` `sampler_api.glsl` are the three raygen shaders, and `pt_miss.rmiss`, `pt_closesthit.rchit` and `pt_anyhit.rahit` make no sampler calls at all. It is also a trap with no diagnostic. The stage array is zero-initialised, so the miss and hit stages carry a null `pSpecializationInfo`: a sampler call added to the closest-hit shader would compile, link and run on the GLSL *default* — Sobol — whatever the host asked for, with raygen and hit shader drawing from two different generators.</p>
+</div>
+<div class="section-rule"><h2 id="baked-once-at-pipeline-creation">Baked once, at pipeline creation</h2></div>
+<div class="prose reveal">
+<p>The value that reaches SPIR-V is read from the tracer&#x27;s settings at the moment the pipeline is built,</p>
+<div class="citation-chip"><code class="citation-code">uint32_t samplerTypeVal = static_cast&lt;uint32_t&gt;(m_renderSettings.samplerType);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_pipeline.cpp#L80" target="_blank" rel="noopener">ohao/render/rt/path_tracer_pipeline.cpp:80</a></div>
+<p>and `PathTracer::setRenderSettings` — which does reallocate render targets when the DLSS render scale moves — never recreates the RT pipeline. So `samplerType` is not a runtime knob: it is a constructor argument in disguise. Worse, at the instant it is read `m_renderSettings` is still the member&#x27;s own default,</p>
+<div class="citation-chip"><code class="citation-code">RTRenderSettings m_renderSettings{kOfflineRTSettings};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L265" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:265</a></div>
+<p>because the profile wrapper calls `PathTracer::init()` — which builds the pipeline — and only then pushes its own settings down.</p>
+<div class="citation-chip"><code class="citation-code">if (!m_pathTracer.init(device, physicalDevice, width, height,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L100" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:100</a></div>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setRenderSettings(m_settings);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L106" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:106</a></div>
+<p>Every pipeline the `PathTracer` creates is therefore specialized to Sobol, including the realtime profile&#x27;s, whose settings table asks for PCG. (The two other RT pipelines in the engine, in `RTShadowTechnique` and `RTGITechnique`, attach no `VkSpecializationInfo` at all — none of their shaders pulls in `sampler_api.glsl`, so they have no `SAMPLER_TYPE` to specialize.)</p>
+<div class="citation-chip"><code class="citation-code">.samplerType = SamplerType::PCG,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L46" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:46</a></div>
+<p>Nothing renders wrong — Sobol is unbiased — but the sampler selector is a field that is stored and never applied, and this API exposes no way to change the answer after `init`. (*Profiles and meta* works the same ordering from the settings side.)</p>
+</div>
+<div class="section-rule"><h2 id="the-half-open-interval-only-one-backend-keeps">The half-open interval only one backend keeps</h2></div>
+<div class="prose reveal">
+<p>Sobol takes the top 24 bits of the scrambled word and scales by $2^{-24}$, which lands exactly on a float32 grid and is provably below 1.</p>
+<div class="citation-chip"><code class="citation-code">return float(scrambled &gt;&gt; 8) * (1.0 / 16777216.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_sobol.glsl#L75" target="_blank" rel="noopener">shaders/includes/rt/sampler_sobol.glsl:75</a></div>
+<p>PCG divides the whole 32-bit word by $2^{32}$ instead.</p>
+<div class="citation-chip"><code class="citation-code">return float(_pcg_next()) / 4294967296.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_pcg.glsl#L21" target="_blank" rel="noopener">shaders/includes/rt/sampler_pcg.glsl:21</a></div>
+<p>Float32 spacing just below $2^{32}$ is 256, so unsigned words within 128 of $2^{32}$ round *up* to it and the quotient is exactly 1.0. The two backends therefore return samples from different intervals — $[0,1)$ for Sobol, $[0,1]$ for PCG — through the same function signature. In the raygens this is absorbed rather than prevented: the NEE light index is computed as `uint(u * lightCount)` and immediately clamped with `min(selectedLightIdx, lightCount - 1u)` at every light-selection site — three of them in `pt_raygen_offline.rgen`, four in `pt_raygen_realtime.rgen` — so a returned 1.0 costs a slightly biased light choice rather than a read past the end of the light SSBO.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`dim` is not a hint. Under Sobol it *is* the sample&#x27;s identity — and `dimIdx` is a running count, so which pad a draw lands in moves for two different reasons: adding, removing or reordering a sampling site shifts every later draw in the source, and a directional light, a mirror-smooth surface or an early Russian roulette exit shifts them at runtime, per path.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`samplerInit` must run before any `getSample*` in an invocation: under Sobol it sets the sample index and pixel seed, under PCG the stream state. There is no default-initialised fallback.</li>
+<li>`getSample2D(d)` consumes dims `d` and `d+1`; the caller must advance `dimIdx` by 2. A missed increment is a no-op under PCG and a correlation bug under Sobol.</li>
+<li>The specialization constant is attached to the raygen stage only. Any sampler call added to a miss, closest-hit or any-hit shader gets the GLSL default (Sobol) with no warning.</li>
+<li>`SamplerType`&#x27;s numeric values and the `SAMPLER_PCG`/`SAMPLER_SOBOL` defines are two hand-written literal pairs with no cross-check. Renumber one and the GPU silently runs the other backend.</li>
+<li>The sampler is fixed at `PathTracer::init()`. Changing `samplerType` afterwards updates the struct and nothing else; a real switch needs pipeline recreation.</li>
+<li>PCG can return exactly 1.0, Sobol cannot. Any consumer mapping a sample onto an array index must clamp.</li>
+<li>`sampler_sobol.glsl` claims in a comment to mirror `owen_scramble.cpp` byte-for-byte, and `sampler_sobol_tables.glsl` duplicates the CPU direction numbers. The CPU side is unit-tested against Joe-Kuo reference points; nothing tests that the GLSL port still agrees. Divergence shows up as slower convergence, not as a failure.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_pcg.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_sobol.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_sobol_tables.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/sampler_api.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/sampler_types.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/engine/engine_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="../sampling.html"><div class="label">← Hub</div><div class="title">07 · Sampling</div></a><a class="next" href="sobol.html"><div class="label">Next →</div><div class="title">Sobol + Owen</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

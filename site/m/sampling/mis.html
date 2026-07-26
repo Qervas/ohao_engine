@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>07 · Sampling · MIS heuristics — OHAO Monograph</title>
+  <meta name="description" content="Balance and power in mis.glsl." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="sampling/mis" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sampling.html">← Module hub</a> · MIS heuristics</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">sampling</p>
+          <h1>MIS heuristics</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Balance and power in mis.glsl.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#two-ways-to-find-the-sky">Two ways to find the sky</a></li><li><a href="#one-heuristic-ships-one-does-not">One heuristic ships, one does not</a></li><li><a href="#the-partition-covers-the-environment-and-nothing-else">The partition covers the environment and nothing else</a></li><li><a href="#both-sides-must-be-quoted-in-solid-angle">Both sides must be quoted in solid angle</a></li><li><a href="#the-delta-escape-hatch">The delta escape hatch</a></li><li><a href="#where-the-partition-does-not-close">Where the partition does not close</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="two-ways-to-find-the-sky">Two ways to find the sky</h2></div>
+<div class="prose reveal">
+<p>From a shading point the path tracer can reach the environment map two ways: sample the env map&#x27;s luminance CDF and shadow-trace toward the chosen texel, or sample the BSDF, let the bounce ray escape, and take what the miss shader returns. Both are unbiased estimators of the same integral, and each fails where the other works. Env sampling wastes nearly every sample on a smooth surface, where almost no env direction has meaningful BSDF response; BSDF sampling wastes nearly every sample under a small bright sun, which almost no BSDF direction hits. Running both and adding counts the environment twice.</p>
+<p>Multiple importance sampling is the correction — scale each sample by how likely the *other* strategy was to have produced that same direction. This unit is the two-function header that computes that scale, and the larger question of which estimator pairs OHAO applies it to.</p>
+</div>
+<div class="section-rule"><h2 id="one-heuristic-ships-one-does-not">One heuristic ships, one does not</h2></div>
+<div class="prose reveal">
+<div class="math-block">$$
+w_A(\omega) = \frac{p_A(\omega)}{p_A(\omega) + p_B(\omega)}, \qquad w_A(\omega) + w_B(\omega) = 1
+$$</div>
+<p>Here $p_A$ and $p_B$ are the two strategies&#x27; probability densities *evaluated at the same direction* $\omega$, both in solid-angle measure — Veach and Guibas&#x27; balance heuristic. Its whole guarantee is the second equation: because the weights sum to one at every direction, the combined estimator stays unbiased no matter how badly the two densities disagree.</p>
+<div class="citation-chip"><code class="citation-code">return pdfA / max(pdfA + pdfB, 1e-6);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/mis.glsl#L8" target="_blank" rel="noopener">shaders/includes/rt/mis.glsl:8</a></div>
+<p>The `max(..., 1e-6)` guards in a useful direction. Both densities are non-negative, so the ratio is already bounded above by 1 and clamping the *denominator* from below can only push the weight down. Where both collapse — a direction neither strategy would plausibly have generated — the weight decays toward zero rather than producing a NaN: a divide-by-zero traded for bounded energy loss, never a firefly.</p>
+<p>The power heuristic ($\beta = 2$), which squares both densities before the ratio, is present in the file and has zero callers anywhere in `shaders/` or `ohao/`:</p>
+<div class="citation-chip"><code class="citation-code">float misPowerHeuristic(float pdfA, float pdfB) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/mis.glsl#L12" target="_blank" rel="noopener">shaders/includes/rt/mis.glsl:12</a></div>
+<p>This one really is unused, not a formula inlined elsewhere under another name: every MIS weight in every raygen profile goes through `misBalanceHeuristic`.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Veach&#x27;s result is that the balance heuristic&#x27;s variance exceeds that of *any* other weighting function by at most a small additive term, so the ceiling on what $\beta = 2$ can buy is low — and the squaring costs extra multiplies per bounce, per chain, per sample. The file&#x27;s own comment concedes the trade (&quot;slightly better in practice but more expensive&quot;). Leaving it in costs nothing at runtime: with no call site the SPIR-V compiler eliminates it, and `strings` over the three built raygen modules finds `misBalanceHeuristic` as an `OpName` in all of them and `misPowerHeuristic` in none. Names survive in those binaries, so the absence is elimination, not stripping — dead source, not dead compiled code.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-partition-covers-the-environment-and-nothing-else">The partition covers the environment and nothing else</h2></div>
+<div class="prose reveal">
+<p>`PathTracer` carries a default raygen in its shader-set struct and nothing binds it. The class is only ever instantiated as `RTProfileRendererBase::m_pathTracer`, and that base&#x27;s `init()` overwrites the default as its very first statement:</p>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setShaderSet(m_shaderSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L99" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:99</a></div>
+<p>The two profiles `VulkanRenderer` can construct supply the only two raygens the engine ever loads: `pt_raygen_realtime.rgen` for `RenderMode::RTRealtime`, and for offline renders</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L220" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:220</a></div>
+<p>so `pt_raygen.rgen` is compiled by the build and bound by no shipping path. Everything below reads `pt_raygen_offline.rgen`.</p>
+<p>That shader calls `misBalanceHeuristic` five times, and every call has an env-map density on one side — three for env-importance-sampled shadow rays, two for chain rays that escape to the sky. There is no MIS weight anywhere else in it. `pt_raygen_realtime.rgen` calls it six times; the sixth has a different shape and is taken up at the end of this page.</p>
+<p>Analytic lights are therefore outside the partition. The bounce-0 NEE block picks one light uniformly, samples its surface, shadow-traces, and scales the result by a geometric area-to-solid-angle factor and a `lightCount` compensation for the pick:</p>
+<div class="citation-chip"><code class="citation-code">vec3 directContribution = Le * (diff * nlDiff + spec * NdotL) * weight * float(lightBuf.lightCount);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L481" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:481</a></div>
+<p>The only other thing applied to that sum — and to the split diffuse/specular halves derived from it — is the firefly clamp, live whenever the clamp flag and `pc.tuning.x` are both set:</p>
+<div class="citation-chip"><code class="citation-code">if (lumD &gt; pc.tuning.x) neeDiffuse  *= pc.tuning.x / lumD;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L496" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:496</a></div>
+<p>A variance hack, not an MIS term. For genuine point and directional lights the absence is correct: a delta light cannot be hit by a BSDF sample, so there is no second estimator to weight against. But the RT light buffer holds more than delta lights — emissive meshes become sphere-light proxies on upload:</p>
+<div class="citation-chip"><code class="citation-code">// Auto-generate lights from emissive materials</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L183" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:183</a></div>
+<p>and those meshes still emit when a chain ray lands on them, because the closest-hit shader writes their emissive texture into `payload.color` and the raygen adds it to the chain throughput unweighted. An emissive mesh is thus reachable by two uncoordinated estimators. The proxy is a coarse fit — mesh centre, radius `0.3 ×` bounding-box diagonal, an intensity heuristic over bright texels — so the overlap is not a clean factor of two, just unmanaged. MIS is exactly the tool that would manage it, and it is not wired to that pair.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Every MIS weight in OHAO has the environment map on one side. &quot;NEE versus BSDF&quot; as a general mechanism does not exist here; env-IS versus BSDF-escape does.</p></div>
+</div>
+<div class="section-rule"><h2 id="both-sides-must-be-quoted-in-solid-angle">Both sides must be quoted in solid angle</h2></div>
+<div class="prose reveal">
+<p>A ratio of densities means nothing unless both are in the same measure. The env sampler draws from a 2D CDF built over equirectangular pixels — a density in UV space — and converts to solid angle by dividing out the Jacobian of the mapping:</p>
+<div class="math-block">$$
+p_\Omega(\omega) = \frac{p_{uv}(u,v)}{2\pi^2 \sin\theta}
+$$</div>
+<p>$p_{uv}$ is the luminance-proportional density over the normalised $(u,v)$ square, $\theta$ the polar angle, and $2\pi \cdot \pi \cdot \sin\theta$ the area stretch at that latitude — which is why the poles, where $\sin\theta \to 0$, need the `1e-4` floor the code applies before dividing:</p>
+<div class="citation-chip"><code class="citation-code">pdf = pdfUV / (OHAO_TWOPI * OHAO_PI * sinT);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L72" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:72</a></div>
+<p>The BSDF side needs the env density at a direction the env sampler never chose, so the miss shader inverts the equirect mapping and reports it through the payload:</p>
+<div class="citation-chip"><code class="citation-code">payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L78" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:78</a></div>
+<p>That is the ordering constraint here: `payload.envPdf` is produced by the miss shader and consumed by the raygen only after `traceRayEXT` returns. A miss shader that forgets to set it, or sets it in UV measure while `sampleEnvMap` returns solid angle, does not crash — it produces a smooth, plausible brightness error that survives any number of samples.</p>
+</div>
+<div class="section-rule"><h2 id="the-delta-escape-hatch">The delta escape hatch</h2></div>
+<div class="prose reveal">
+<p>The balance heuristic assumes both strategies have finite densities. A mirror lobe does not: its density is a Dirac delta, against which any finite $p_e$ should win zero weight. The specular chain detects that case by roughness, parks `specLastBsdfPdf` at 1.0, and flags the bounce:</p>
+<div class="citation-chip"><code class="citation-code">if (roughness &lt; 0.05) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L599" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:599</a></div>
+<p>The flag is read in exactly one place in the file — where that chain escapes to the sky, to skip the weight entirely:</p>
+<div class="citation-chip"><code class="citation-code">if (payload.envPdf &gt; 0.0 &amp;&amp; pc.control.w &gt; 0u &amp;&amp; !specLastBounceWasDelta) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L628" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:628</a></div>
+<p>so a mirror reflection of a bright sky feature arrives at full strength. The counterfactual is not a halving: with the parked pdf of 1.0, dropping the skip would weight that ray by $1/(1 + p_e)$, and for the sharp sun texel the sentence is about $p_e$ is large — the reflection would be all but extinguished.</p>
+<p>That `0.05` is a threshold, not a measurement, and it moves only one side of the pair: the bounce-0 env-IS weight never consults the flag. Widening the band therefore forces the BSDF side to 1 over directions where the env-IS side still discounts itself by a factor below one, the two sum above one, and the band it swallows is double-counted, not lost. `pt_raygen_realtime.rgen` cuts elsewhere — its `0.05` test sits inside an `#ifdef OHAO_CRUDE_GLOSSY` A/B branch that nothing in the repository defines, and the live path splits at</p>
+<div class="citation-chip"><code class="citation-code">if (roughness &lt; 0.02) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L761" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:761</a></div>
+<p>with a VNDF sampler and an exact VNDF density behind it.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-partition-does-not-close">Where the partition does not close</h2></div>
+<div class="prose reveal">
+<figure class="unit-figure reveal"><img src="../../assets/units/sampling-mis-partition.svg" alt="Conceptual — the estimator/weight structure at a primary hit, read from pt_raygen_offline.rgen, not a measured render. The env-IS lane quotes a lobe-mixture density q to both of its output channels; on their first segment the two BSDF chains each answer with a single-lobe density." loading="lazy" /><figcaption>Conceptual — the estimator/weight structure at a primary hit, read from pt_raygen_offline.rgen, not a measured render. The env-IS lane quotes a lobe-mixture density q to both of its output channels; on their first segment the two BSDF chains each answer with a single-lobe density.</figcaption></figure>
+<p>The raygen is dual-ray: from every primary hit it deterministically traces both a specular and a diffuse chain. Only the diffuse one carries a true $f\cos\theta/p$ — cosine sampling collapses the ratio to the albedo:</p>
+<div class="citation-chip"><code class="citation-code">diffThroughput = albedo;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L914" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:914</a></div>
+<p>The specular one carries a constant tint, under a comment that already calls itself simplified:</p>
+<div class="citation-chip"><code class="citation-code">specThroughput = mix(vec3(1.0), albedo, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L597" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:597</a></div>
+<p>That expression is not $f\cos\theta/p$ for any GGX lobe. The shader that does implement the real ratio is the realtime one, from a VNDF-sampled half-vector whose weight collapses to Fresnel times the Smith $G_2/G_1$:</p>
+<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L792" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:792</a></div>
+<p>On the first segment nothing is chosen stochastically, so each offline chain reports a single-lobe density with no selection factor, and both say so:</p>
+<div class="citation-chip"><code class="citation-code">specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L608" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:608</a></div>
+<div class="citation-chip"><code class="citation-code">// MIS PDF for env-miss weighting: pure cosine-hemisphere PDF (no lobe-mix factor).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L915" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:915</a></div>
+<p>Both comments are scoped to that first segment, and the code stops being deterministic right after it. From bounce 1 on, each chain draws `bsdfChoice` and picks a lobe, and the density it reports from then on carries exactly the selection factor the comments deny:</p>
+<div class="citation-chip"><code class="citation-code">specLastBsdfPdf = specProb * pdf_spec;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L879" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:879</a></div>
+<p>with a mirrored $(1-\text{specProb})\cos\theta/\pi$ on the diffuse branch, and the same pair again inside the diffuse chain. The clean partition below is a statement about the primary hit only.</p>
+<p>The env-IS side does not follow suit even there. It builds a Fresnel-derived lobe-selection probability $\alpha$ and blends the two lobe densities into one mixture $q$:</p>
+<div class="citation-chip"><code class="citation-code">float specProbMIS = max(fresnel.r, max(fresnel.g, fresnel.b)) * (1.0 - roughness * 0.9);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L541" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:541</a></div>
+<p>then applies the single weight $w = p_e / (p_e + q)$ to *both* the diffuse and specular halves of its own contribution. A mixture density is the right object when one lobe is picked at random; under a deterministic dual-ray split the correct partitions are per-lobe — $\{p_e, p_d\}$ for the diffuse half, $\{p_e, p_s\}$ for the specular half. Substituting $q$ for each:</p>
+<div class="math-block">$$
+\frac{p_e}{p_e + q} + \frac{p_d}{p_d + p_e} \ne 1, \qquad q = (1-\alpha)p_d + \alpha p_s
+$$</div>
+<p>with equality only at $\alpha = 0$, and symmetrically the specular pair closes only at $\alpha = 1$. Because $q$ lies between $p_d$ and $p_s$, a surface with $p_s &gt; p_d$ underweights env light into its diffuse channel and overweights it into its specular channel.</p>
+<p>The endpoints are the common cases and they come out right. A metal has $\alpha$ forced to 1 by the `mix(specProbMIS, 1.0, metallic)` on the next line, and no diffuse lobe to lose. A dielectric gets $\alpha = \max(F)\,(1 - 0.9\,\text{roughness})$, whose second factor is 0.1 at roughness 1 while $\max(F)$ is the Schlick term at the incident cosine — starting at the $F_0 = 0.04$ the shader assigns dielectrics and climbing toward 1 at grazing. A fully rough dielectric therefore sees $\alpha$ between 0.004 and 0.1: small either way, so $q \approx p_d$ and the diffuse pair closes. The defect lives in between, on glossy dielectrics where both lobes carry energy and their densities differ by orders of magnitude. The claim here is the algebra; the visible magnitude has not been measured. It matters more than it looks, because those two halves are also the demodulated AOVs the realtime denoisers consume separately.</p>
+<p>The mixture is near-universal but not universal. Every env-IS block in `pt_raygen_offline.rgen` builds it — the two inside the chains as well as the one at the primary hit — and so do the realtime raygen&#x27;s three. The one env-IS block in the tree that does not is the realtime ReSTIR-GI initial candidate, which weights an env sample taken at the secondary vertex against a bare cosine density and no mixture at all:</p>
+<div class="citation-chip"><code class="citation-code">float w = misBalanceHeuristic(envPdf, pdfDiffuseMIS);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1517" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1517</a></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Both densities must be in solid-angle measure. A producer returning UV density rebalances the weights instead of failing.</li>
+<li>Argument order encodes which strategy is weighted: `misBalanceHeuristic(pdfA, pdfB)` returns the weight for **A**. Call sites pass `(envPdf, bsdfPdf)` on env-IS rays and `(bsdfPdf, payload.envPdf)` on escaped chain rays; swapping either inverts the partition, and the symptom is a brightness shift, not a crash.</li>
+<li>`payload.envPdf` is written by the miss shader, so a BSDF-side env hit is weightable only after `traceRayEXT` returns. A new miss shader must set or zero it, or the raygen reads a stale value.</li>
+<li>A near-delta specular bounce must set `specLastBounceWasDelta`; otherwise its finite stand-in density enters the ratio and mirror reflections of bright sky lose energy.</li>
+<li>An area-light MIS pair would need a way to look up the light density of the primitive a BSDF ray hit. No such map exists, which is why analytic lights sit outside the partition.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/includes/rt/mis.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/env_sampling.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="pcg.html"><div class="label">← Prev</div><div class="title">PCG realtime</div></a><a class="next" href="env-cdf.html"><div class="label">Next →</div><div class="title">Environment CDF</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img" aria-label="Byte map of one material row: three vec4 slots, twelve float lanes, coloured by which upload pass writes each lane">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="24" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">ONE MATERIAL = 3 vec4 = 48 BYTES  ·  binding 10, vec4 matColors[]</text>
+
+<text x="96" y="62" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">.x</text>
+<text x="246" y="62" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">.y</text>
+<text x="396" y="62" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">.z</text>
+<text x="546" y="62" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">.w</text>
+
+<!-- slot 0 -->
+<text x="24" y="98" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">+0</text>
+<rect x="96" y="72" width="148" height="42" fill="#1a222c" stroke="#7dba8a" stroke-width="1.5"/>
+<rect x="246" y="72" width="148" height="42" fill="#1a222c" stroke="#7dba8a" stroke-width="1.5"/>
+<rect x="396" y="72" width="148" height="42" fill="#1a222c" stroke="#7dba8a" stroke-width="1.5"/>
+<rect x="546" y="72" width="148" height="42" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
+<text x="106" y="98" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">baseColor.r</text>
+<text x="256" y="98" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">baseColor.g</text>
+<text x="406" y="98" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">baseColor.b</text>
+<text x="556" y="98" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">diffuseTexIdx</text>
+
+<!-- slot 1 -->
+<text x="24" y="154" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">+16</text>
+<rect x="96" y="128" width="148" height="42" fill="#1a222c" stroke="#7dba8a" stroke-width="1.5"/>
+<rect x="246" y="128" width="148" height="42" fill="#1a222c" stroke="#7dba8a" stroke-width="1.5"/>
+<rect x="396" y="128" width="148" height="42" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
+<rect x="546" y="128" width="148" height="42" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
+<text x="106" y="154" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">roughness</text>
+<text x="256" y="154" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">metallic</text>
+<text x="406" y="154" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">normalTexIdx</text>
+<text x="556" y="154" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">emissiveTexIdx</text>
+
+<!-- slot 2 -->
+<text x="24" y="210" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">+32</text>
+<rect x="96" y="184" width="148" height="42" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
+<rect x="246" y="184" width="148" height="42" fill="#141a22" stroke="#3d4a58" stroke-width="1" stroke-dasharray="4 3"/>
+<rect x="396" y="184" width="148" height="42" fill="#141a22" stroke="#3d4a58" stroke-width="1" stroke-dasharray="4 3"/>
+<rect x="546" y="184" width="148" height="42" fill="#141a22" stroke="#3d4a58" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="102" y="210" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">roughMetalTexIdx</text>
+<text x="290" y="210" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="12">unused 0.0</text>
+<text x="440" y="210" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="12">unused 0.0</text>
+<text x="590" y="210" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="12">unused 0.0</text>
+
+<!-- legend -->
+<line x1="96" y1="250" x2="130" y2="250" stroke="#7dba8a" stroke-width="2"/>
+<text x="140" y="254" fill="#c4c0b6" font-family="DM Sans,sans-serif" font-size="12">rewritten every updateRTMaterialParams() — scalar lanes</text>
+<line x1="96" y1="272" x2="130" y2="272" stroke="#c4784a" stroke-width="2"/>
+<text x="140" y="276" fill="#c4c0b6" font-family="DM Sans,sans-serif" font-size="12">bit-cast uint32 — written once by uploadRTTextureArray()</text>
+<line x1="96" y1="294" x2="130" y2="294" stroke="#3d4a58" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="140" y="298" fill="#c4c0b6" font-family="DM Sans,sans-serif" font-size="12">zero-filled by uploadRTMaterialBuffers(), never read</text>
+
+<text x="24" y="328" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual byte map. Lane names and writer passes read from layout_meta.hpp and rt_build.cpp — not a memory capture.</text>
+</svg>

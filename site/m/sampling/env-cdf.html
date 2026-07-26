@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>07 · Sampling · Environment CDF — OHAO Monograph</title>
+  <meta name="description" content="CPU build + GPU sampleEnvMap/pdfEnvMap." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="sampling/env-cdf" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../sampling.html">← Module hub</a> · Environment CDF</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">sampling</p>
+          <h1>Environment CDF</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>CPU build + GPU sampleEnvMap/pdfEnvMap.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#the-light-you-cannot-sample-uniformly">The light you cannot sample uniformly</a></li><li><a href="#the-sin-that-has-to-be-there">The sinθ that has to be there</a></li><li><a href="#two-binary-searches-per-sample">Two binary searches per sample</a></li><li><a href="#the-flip-between-the-sampler-and-the-sky">The flip between the sampler and the sky</a></li><li><a href="#what-happens-with-no-environment-map">What happens with no environment map</a></li><li><a href="#where-the-tables-live-and-what-leaks">Where the tables live, and what leaks</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="the-light-you-cannot-sample-uniformly">The light you cannot sample uniformly</h2></div>
+<div class="prose reveal">
+<p>An HDR environment map is an area light with W×H emitters and several orders of magnitude between its brightest texel and its dimmest. Pick a direction uniformly on the sphere and the chance of landing on the solar disc is its solid angle over 4π: a half-degree sun subtends about 6×10⁻⁵ sr, so roughly five samples in a million. Every other sample returns sky-blue instead of sun, and the estimator converges like a lottery. The fix is the textbook one: tabulate a discrete 2D distribution over texels proportional to the light each carries, and invert it by binary search on the GPU.</p>
+<p>OHAO builds that table on the CPU, once, from the float buffer `stbi_loadf` returned — after that buffer has already been memcpy&#x27;d into a staging buffer, copied into a `DEVICE_LOCAL` image and waited on. The build is the last read of the host copy before `stbi_image_free` drops it, not a step on the way to the upload:</p>
+<div class="citation-chip"><code class="citation-code">envCDF.build(hdrPixels, ew, eh);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L429" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:429</a></div>
+<p>Out come a conditional CDF per row (W floats × H rows) and a marginal CDF over rows (H floats), handed to every RT profile with the map&#x27;s width, height and unnormalised integral.</p>
+</div>
+<div class="section-rule"><h2 id="the-sin-that-has-to-be-there">The sinθ that has to be there</h2></div>
+<div class="prose reveal">
+<p>The distribution is tabulated in texture coordinates, but the path tracer needs a density in solid angle. For the equirectangular parameterisation the shader uses — longitude φ = (u − ½)·2π, colatitude θ = vπ — the two measures differ by</p>
+<div class="math-block">$$
+d\omega \;=\; \sin\theta\,d\theta\,d\varphi \;=\; 2\pi^2 \sin\theta \; du\,dv
+$$</div>
+<p>so a density that is flat in (u,v) is *not* flat on the sphere: it crowds the poles, where a row of texels covers almost no solid angle. Converting, a target of p(ω) ∝ L(ω) requires the tabulated weight to be L·sinθ. That factor is exactly what the builder writes, with θ taken at the row centre, θ_y = π(y + ½)/H, and L the Rec.709 luminance of the texel:</p>
+<div class="citation-chip"><code class="citation-code">float w = luminance(pixels[base], pixels[base + 1], pixels[base + 2]) * sinTheta;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/env_cdf.cpp#L30" target="_blank" rel="noopener">ohao/render/rt/env_cdf.cpp:30</a></div>
+<p>The payoff shows up on the GPU. Each row CDF is normalised by its own row sum S_y and the marginal by the grand total T, so the probability of a texel is the product of one step from each table, and the row sums cancel:</p>
+<div class="math-block">$$
+P(x,y) \;=\; \frac{w_{x,y}}{S_y}\cdot\frac{S_y}{T} \;=\; \frac{w_{x,y}}{T}
+\qquad p_{uv} = P\,W H, \qquad p_\omega = \frac{p_{uv}}{2\pi^2\sin\theta_y} \;\propto\; L_{x,y}
+$$</div>
+<p>The sinθ inserted at build time is annihilated by the Jacobian at sample time, leaving a solid-angle density proportional to luminance alone. Note what is *absent* from that chain: T. Because both tables are already normalised, the shader never needs the integral — which is why `sampleEnvMap` accepts an `envIntegral` argument that its body never reads, even though all three raygen profiles dutifully pass `pc.tuning.z` into it.</p>
+<div class="citation-chip"><code class="citation-code">void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L52" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:52</a></div>
+</div>
+<div class="section-rule"><h2 id="two-binary-searches-per-sample">Two binary searches per sample</h2></div>
+<div class="prose reveal">
+<p>Sampling is a `lower_bound` over the marginal to choose a row, then a second one over that row&#x27;s conditional to choose a column:</p>
+<div class="citation-chip"><code class="citation-code">if (envMarg.data[uint(mid)] &lt; u) lo = mid + 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L21" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:21</a></div>
+<p>For a 4096×2048 HDRI that is 11 plus 12 dependent, warp-divergent SSBO loads to locate the texel, and `pt_raygen.rgen` takes one such sample at bounce 0 plus one per bounce of each of its specular and diffuse chains. The density is then reconstructed by differencing the two tables — four further loads, 27 per environment sample away from the tables&#x27; first entries — rather than read from a separate PDF image. The same CDF answers &quot;which texel&quot; and &quot;how likely&quot;, so there is nothing to keep in sync:</p>
+<div class="citation-chip"><code class="citation-code">float pdfUV = condDiff * margDiff * float(W) * float(H);  // density in UV space</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L69" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:69</a></div>
+<p>Dividing that by the Jacobian needs sinθ in the denominator, and it is clamped to 1e-4 first — bounding the PDF at the poles instead of letting it run away for a texel that subtends nothing.</p>
+<p>The same file exports `pdfEnvMap`, which quantises an arbitrary direction back to the texel grid and differences the same two tables. The miss shader calls it and reports the result in the ray payload, so a BSDF-sampled ray that escapes into the sky can be MIS-weighted against the light strategy:</p>
+<div class="citation-chip"><code class="citation-code">payload.envPdf = pdfEnvMap(dir, pc.control.w, uint(pc.tuning.y));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L78" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:78</a></div>
+<p>The two are not the same function of ω, and that matters for the balance heuristic, which only sums to one if both strategies evaluate the *same* density for a given direction. `sampleEnvMap` takes sinθ from the centre of the row it just chose; `pdfEnvMap` takes it from the direction it was handed. The CDF steps are shared, the Jacobian is not: the sampler&#x27;s sinθ is a step function of the row, `pdfEnvMap`&#x27;s varies continuously within it.</p>
+<div class="citation-chip"><code class="citation-code">float theta = (float(y) + 0.5) / float(H) * OHAO_PI;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L61" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:61</a></div>
+<p>On the directions the sampler itself emits the two agree, because those directions *are* row centres. For a BSDF-sampled direction they differ by sinθ_y/sinθ(ω), which is within a texel&#x27;s worth of 1 across most of the sphere and worst at the poles, where sinθ varies fastest across a row: for a direction inside 1e-4 rad of the pole `pdfEnvMap`&#x27;s denominator bottoms out at the clamp while `sampleEnvMap` uses sinθ₀ ≈ 7.7e-4 for that same top row of a 2048-high map — a factor of 7.7 between the two sides of one weight.</p>
+</div>
+<div class="section-rule"><h2 id="the-flip-between-the-sampler-and-the-sky">The flip between the sampler and the sky</h2></div>
+<div class="prose reveal">
+<p>`sampleEnvMap` returns a direction, never a radiance. The raygen fires an occlusion ray along it and takes whatever colour the miss shader hands back:</p>
+<div class="citation-chip"><code class="citation-code">vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L481" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:481</a></div>
+<p>That leaves two functions responsible for one texel↔direction map: `equirectPixelToDir`/`pdfEnvMap` in `env_sampling.glsl`, and `dirToEquirect` in `pt_miss.rmiss`. They agree on longitude. On latitude one uses arccosine of the up axis, the other arcsine:</p>
+<div class="citation-chip"><code class="citation-code">float theta = acos(clamp(dir.y, -1.0, 1.0));         // [0, pi]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L79" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:79</a></div>
+<div class="citation-chip"><code class="citation-code">float theta = asin(clamp(dir.y, -1.0, 1.0));  // [-pi/2, pi/2]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L54" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:54</a></div>
+<p>Since acos(y)/π = ½ − asin(y)/π, the two v coordinates satisfy v_env = 1 − v_miss: they are vertical mirrors. The importance sampler finds a bright texel in row y and emits the direction whose radiance the miss shader then fetches from row H−1−y. For any environment that is not symmetric about the horizon — which is every real capture — the CDF steers samples at the mirror image of the bright region.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/sampling-env-cdf-vflip.svg" alt="Conceptual: the same texture row, resolved to opposite poles by the two latitude conventions in the tree. Derived by reading the two functions, not from a captured render." loading="lazy" /><figcaption>Conceptual: the same texture row, resolved to opposite poles by the two latitude conventions in the tree. Derived by reading the two functions, not from a captured render.</figcaption></figure>
+<p>Both conventions ship, and the sampler&#x27;s is the minority one. `pt_miss.rmiss`, `deferred_lighting.frag` (twice — the reflection lookup and the irradiance lookup) and `equirect_to_cubemap.comp` all write v as asin(y)/π + ½:</p>
+<div class="citation-chip"><code class="citation-code">vec2 envUV = vec2(phi / 6.2831853 + 0.5, theta / 3.1415926 + 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L277" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:277</a></div>
+<div class="citation-chip"><code class="citation-code">vec2 uv = vec2(phi / (2.0 * PI) + 0.5, theta / PI + 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/equirect_to_cubemap.comp#L38" target="_blank" rel="noopener">shaders/compute/equirect_to_cubemap.comp:38</a></div>
+<p>Only `cinematic_composite.comp` lands on the sampler&#x27;s side, and it gets there from an `asin` as well: its θ is arcsine, and `0.5 - theta / PI` is algebraically acos(y)/π. So the split is real rather than one stray function — but it is three files to two, against the sampler:</p>
+<div class="citation-chip"><code class="citation-code">vec2  uv    = vec2(phi / (2.0 * PI) + 0.5, 0.5 - theta / PI);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/cinematic_composite.comp#L60" target="_blank" rel="noopener">shaders/rt/cinematic_composite.comp:60</a></div>
+<p>Nothing in the build catches it. The sinθ weight is flip-invariant (sin θ = sin(π − θ)), so the integral is unchanged, and the unit tests only assert that the CDFs are monotone, normalised, and concentrate around a hot texel — all true of a mirrored table:</p>
+<div class="citation-chip"><code class="citation-code">TEST(EnvCDF, HotSpotConcentratesCDF) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/env_cdf_test.cpp#L41" target="_blank" rel="noopener">tests/renderer/env_cdf_test.cpp:41</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The flip costs variance, not correctness: radiance always comes from the traced ray, never from the PDF, and MIS covers the gap — where the environment PDF is small or zero the balance weight on the BSDF strategy goes to one, and the raygen defaults that weight to 1.0 outright when `payload.envPdf` is zero. The sun is still found — by BSDF sampling, at BSDF-sampling variance, which is exactly the cost the CDF exists to avoid paying.  What the flip does not excuse is that env-IS is not an unbiased estimator to begin with. `sampleEnvMap` returns `equirectPixelToDir(x, y, W, H)` unmodified — the exact texel centre, with no intra-texel jitter — so the strategy draws from W·H fixed directions and the expectation of its NEE term is a texel-by-texel midpoint quadrature of L·f·cosθ·w rather than the integral. That error is set by the map&#x27;s resolution and does not shrink with spp.</p></div>
+<div class="citation-chip"><code class="citation-code">if (payload.envPdf &gt; 0.0 &amp;&amp; pc.control.w &gt; 0u &amp;&amp; !specLastBounceWasDelta) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L560" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:560</a></div>
+<div class="citation-chip"><code class="citation-code">dir = equirectPixelToDir(x, y, W, H);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L58" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:58</a></div>
+<p>The same env-NEE block carries a second biasing operation, in all three raygen profiles, gated on the `PT_FLAG_ENABLE_FIREFLY_CLAMP` bit of `control.x`: `envContribution` and its diffuse and specular AOV splits are each scaled down to the `pc.tuning.x` luminance ceiling. `kOfflineRTSettings` clears that bit; `kRealtimeRTSettings` sets it.</p>
+<div class="citation-chip"><code class="citation-code">float lumD = dot(envDiffuse,  vec3(0.2126, 0.7152, 0.0722));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L490" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:490</a></div>
+<div class="citation-chip"><code class="citation-code">.enableFireflyClamp = true,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L44" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:44</a></div>
+</div>
+<div class="section-rule"><h2 id="what-happens-with-no-environment-map">What happens with no environment map</h2></div>
+<div class="prose reveal">
+<p>Bindings 17 and 18 are declared unconditionally in the RT descriptor layout, for raygen and miss stages both, and both shaders reference them statically — so something must be bound there in every scene, including a Cornell box with no HDRI at all.</p>
+<div class="citation-chip"><code class="citation-code">// 17: Env marginal CDF (storage buffer) — accessed by raygen + miss</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L117" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:117</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Rather than compile a second pipeline (or specialise the raygen) for the no-env case, the upload path binds a one-float dummy and signals &quot;no environment&quot; out-of-band through push constants: width, height and integral all go out as zero, and the shaders gate every env-IS block on `pc.control.w &gt; 0u`. One pipeline, one layout, two four-byte allocations — against the alternative of doubling the shader permutation count to save eight bytes.</p></div>
+<div class="citation-chip"><code class="citation-code">float v = 1.0f; memcpy(dp, &amp;v, sizeof(float));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L522" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:522</a></div>
+<div class="citation-chip"><code class="citation-code">// control.w = envCDFWidth. If 0, shader must skip env importance sampling.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L471" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:471</a></div>
+<p>The builder has a second degenerate case. A completely black row sums to zero, so its conditional CDF would be all zeros; the builder fills it with a uniform ramp instead:</p>
+<div class="citation-chip"><code class="citation-code">// Degenerate black row — fall back to uniform</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/env_cdf.cpp#L40" target="_blank" rel="noopener">ohao/render/rt/env_cdf.cpp:40</a></div>
+<p>In a map with any light in it that ramp is unreachable. `searchMarginal` returns the lowest row whose marginal entry reaches u, and a zero-sum row&#x27;s entry is the same running total over the same grand total as its predecessor&#x27;s — identical bits — so for any u &gt; 0 the search resolves to the earlier row and never lands on the black one.</p>
+<p>It earns its keep in exactly one case: a map whose *every* row is black. The marginal then falls back to a uniform ramp too, every row becomes reachable, and the two ramps compose into uniform sampling in (u,v) with `pdfUV` of exactly 1 — which, over the 2π²sinθ Jacobian, is the correctly normalised solid-angle density for that sampling. Without the row fallback that case would instead walk `searchConditional` to column W−1 with a `condDiff` of zero, and the caller&#x27;s `envPdf &gt; 0.0` guard would reject every env sample.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-tables-live-and-what-leaks">Where the tables live, and what leaks</h2></div>
+<div class="prose reveal">
+<p>The HDR image is staged through a transfer buffer into `DEVICE_LOCAL` memory. The CDFs are not: they are allocated `HOST_VISIBLE | HOST_COHERENT`, mapped, memcpy&#x27;d, and left there for the GPU to binary-search in place.</p>
+<div class="citation-chip"><code class="citation-code">void* dp; vkMapMemory(m_device, outMem, 0, sz, 0, &amp;dp);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L448" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:448</a></div>
+<p>For a 4096×2048 map the conditional table alone is 8.4 M floats — 32 MiB — of randomly-accessed data on a heap whose residency depends on which memory type the driver reports first for those flags.</p>
+<p>The buffers are destroyed only in `VulkanRenderer::shutdown`. The branch that builds them fires whenever the requested env path differs from the loaded one, and it overwrites `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` without destroying the previous pair — so switching HDRIs at runtime leaks both tables and the env image behind them. Loading one environment and keeping it, which is what every shipped example does, never hits this.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Bindings 17/18 are re-written from `m_envMarginalCDFBuffer` / `m_envConditionalCDFBuffer` on every `PathTracer::render`, so a stale handle cannot survive a frame — but the write is *skipped* when the handle is null, and raygen and miss reference those bindings statically. A scene that reaches its first render without `setEnvCDFBuffers` ever having run would dispatch against two descriptors that were never written. The dummy pair `light_upload` allocates is what makes that unreachable.</li>
+<li>Width, height and integral travel in push constants (`control.w`, `tuning.y`, `tuning.z`), not in the buffers. A `control.w` of 0 means &quot;skip env importance sampling entirely&quot;, not &quot;the map is 0 wide&quot;.</li>
+<li>`sampleEnvMap` and `pdfEnvMap` share the two CDF tables and the acos latitude convention, but take sinθ from different places — the chosen row&#x27;s centre and the queried direction. They agree on the directions the sampler emits and diverge elsewhere, worst at the poles, so the balance weights do not sum to exactly one for BSDF-sampled directions. Neither matches `dirToEquirect` in `pt_miss.rmiss`, and *that* mismatch costs variance, not correctness.</li>
+<li>The CDF is rebuilt only when the environment *path* changes, so `envIntensity` relighting never touches it — correctly, since a uniform scale leaves the normalised distribution identical.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/env_cdf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/rt/env_sampling.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/equirect_to_cubemap.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_composite.comp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/renderer/env_cdf_test.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/env_cdf.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="mis.html"><div class="label">← Prev</div><div class="title">MIS heuristics</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

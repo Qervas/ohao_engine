@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>08 · Hybrid RT — OHAO Monograph</title>
+  <meta name="description" content="Full hybrid inject: technique init, render inputs, deferred graph placement." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,450;0,9..144,500;1,9..144,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body data-page="hybrid" data-root=".." data-depth="1">
+  <div id="toc-mount"></div>
+  <div class="progress" aria-hidden="true"></div>
+  <nav class="toc toc-legacy" aria-label="Chapters">
+    <div class="toc-brand">OHAO · Textbook</div>
+    <p class="toc-title">Engine<span>Implementation monograph</span></p>
+    <a href="../index.html" data-page="home"><span class="num">00</span>Cover &amp; map</a>
+    <div class="group">Foundations</div>
+    <a href="architecture.html" data-page="architecture"><span class="num">01</span>Architecture</a>
+    <a href="scene.html" data-page="scene"><span class="num">02</span>Scene &amp; ECS</a>
+    <a href="gpu.html" data-page="gpu"><span class="num">03</span>GPU / Vulkan</a>
+    <a href="materials.html" data-page="materials"><span class="num">04</span>Materials &amp; PBR</a>
+    <div class="group">Pipelines</div>
+    <a href="deferred.html" data-page="deferred"><span class="num">05</span>Deferred</a>
+    <a href="path-tracer.html" data-page="path-tracer"><span class="num">06</span>Path tracer</a>
+    <a href="sampling.html" data-page="sampling"><span class="num">07</span>Sampling &amp; MIS</a>
+    <a href="hybrid.html" data-page="hybrid"><span class="num">08</span>Hybrid RT</a>
+    <a href="denoise.html" data-page="denoise"><span class="num">09</span>Denoising</a>
+    <div class="group">Systems</div>
+    <a href="audio.html" data-page="audio"><span class="num">10</span>Audio</a>
+    <a href="physics.html" data-page="physics"><span class="num">11</span>Physics</a>
+    <a href="build.html" data-page="build"><span class="num">12</span>Build &amp; run</a>
+    <a href="status.html" data-page="status"><span class="num">13</span>Status</a>
+    <div class="group">Reference</div>
+    <a href="glossary.html" data-page="glossary"><span class="num">G</span>Glossary</a>
+    <div class="toc-foot">C++20 · Vulkan 1.3<br /><a href="https://github.com/Qervas/ohao_engine">GitHub</a></div>
+  </nav>
+  <div class="mobile-toc">OHAO · Implementation Monograph</div>
+  <main class="book">
+    <article class="page">
+      <p class="crumb"><a href="../index.html">Monograph</a> · 08 · Hybrid RT</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">08</div>
+        <div>
+          <p class="chapter-kicker">Pipelines · full depth</p>
+          <h1>Hybrid ray tracing</h1>
+        </div>
+      </header>
+
+      <div class="thesis-box reveal">
+        <div class="label">Chapter contract</div>
+        <p>Document RT shadow and RT GI as first-class techniques: how they init (pipeline + SBT), what they bind each frame, and exactly where deferred inserts them. Not a third world model.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol>
+          <li><a href="#idea">Injection model</a></li>
+          <li><a href="#init">Technique init lifecycle</a></li>
+          <li><a href="#shadow">Shadow render workflow</a></li>
+          <li><a href="#gi">GI render workflow</a></li>
+          <li><a href="#graph">Placement in deferred graph</a></li>
+          <li><a href="#host">Host enable path</a></li>
+          <li><a href="#limits">Limits</a></li>
+        </ol>
+      </nav>
+
+      <div class="section-rule"><h2 id="idea">Injection model</h2></div>
+      <div class="prose reveal">
+        <p class="lead">Deferred still owns beauty. Hybrid answers two questions with rays on the <strong>same TLAS</strong> the path tracer uses: “is this lit?” and “what one-bounce indirect arrives?”</p>
+      </div>
+      <figure class="plate reveal">
+        <div class="plate-frame svg-frame" data-no-glossary>
+          <svg data-no-glossary="1" viewBox="0 0 900 260" xmlns="http://www.w3.org/2000/svg">
+            <rect x="40" y="40" width="380" height="160" rx="6" fill="#171b24" stroke="#c9a27a" stroke-width="1.75"/>
+            <text x="230" y="80" text-anchor="middle" fill="#c9a27a" font-family="DM Sans, system-ui, sans-serif" font-size="12" letter-spacing="2">DEFERRED SPINE</text>
+            <text x="230" y="120" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="16">CSM → GBuffer → SSAO → Light → Post</text>
+            <text x="230" y="155" text-anchor="middle" fill="#a39c8e" font-size="13" font-family="DM Sans, system-ui, sans-serif">owns framebuffer</text>
+            <rect x="480" y="40" width="380" height="160" rx="6" fill="#11141a" stroke="#6eb8d4" stroke-width="1.75"/>
+            <text x="670" y="80" text-anchor="middle" fill="#6eb8d4" font-family="DM Sans, system-ui, sans-serif" font-size="12" letter-spacing="2">RT TECHNIQUES</text>
+            <text x="670" y="120" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces, Georgia, serif" font-size="16">Shadow · 1-bounce GI</text>
+            <text x="670" y="155" text-anchor="middle" fill="#a39c8e" font-size="13" font-family="DM Sans, system-ui, sans-serif">shared TLAS + GBuffer reads</text>
+            <path d="M480 120 H420" stroke="#6eb8d4" stroke-width="2" stroke-dasharray="5 4"/>
+            <text x="450" y="230" text-anchor="middle" fill="#6e685c" font-size="11" font-family="DM Sans, system-ui, sans-serif" letter-spacing="2">FIG. HY-1  ·  INJECT, DON’T FORK</text>
+          </svg>
+        </div>
+        <figcaption class="plate-cap"><span class="plate-id">Fig. HY-1</span>
+          <p>Dashed arrow: results feed lighting; no second scene upload.</p>
+        </figcaption>
+      </figure>
+
+      <div class="section-rule"><h2 id="init">Technique init lifecycle</h2></div>
+      <div class="prose reveal">
+        <p>Both <code>RTShadowTechnique</code> and <code>RTGITechnique</code> follow the same skeleton (see their <code>init</code>):</p>
+      </div>
+      <div class="algo reveal">
+        <div class="algo-bar">init(device, physicalDevice, …)</div>
+        <ol>
+          <li>Load KHR ray-tracing function pointers</li>
+          <li><code>createOutputImage</code> — full-res storage image for visibility or GI</li>
+          <li>GI only: material albedo buffer for secondary shading</li>
+          <li><code>createDescriptorResources</code> — TLAS + GBuffer views + outputs</li>
+          <li><code>createRTPipeline</code> — compact raygen/miss/(hit) group</li>
+          <li><code>createShaderBindingTable</code></li>
+          <li><code>resize</code> when framebuffer size changes</li>
+        </ol>
+      </div>
+      <div class="why-callout reveal"><div class="why-label">Why separate techniques (not PathTracer)</div>
+        <p>Full PT carries 30+ AOVs and multi-bounce state. Hybrid needs thin pipelines that only answer V or Lᵢ¹ and fit inside the deferred graph’s time budget.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="shadow">Shadow render workflow</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">RTShadowTechnique::render(cmd, ShadowInput)</div>
+        <ol>
+          <li>Fill <code>ShadowInput</code>: position/normal/depth views, view/proj, camera pos, size, light direction/type</li>
+          <li>Update descriptors if views changed</li>
+          <li>Push constants / uniforms for light</li>
+          <li><code>traceRays</code> — primary work is visibility rays from GBuffer world pos</li>
+          <li>Output: soft/hard visibility factor image</li>
+          <li>Lighting samples it as Vₖ</li>
+        </ol>
+      </div>
+      <div class="math-block reveal">\[
+        V(x\!\to\!\ell)=\begin{cases}0&\text{any hit before light}\\1&\text{miss}\end{cases}
+      \]</div>
+      <div class="prose reveal">
+        <p>Ray flags typically prioritize <strong>TerminateOnFirstHit</strong> and skip shading — pure occlusion. Soft shadows average multiple samples toward an area/sphere light (same idea as PT NEE, cheaper continuation).</p>
+      </div>
+
+      <div class="section-rule"><h2 id="gi">GI render workflow</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">RTGITechnique::render(cmd, GIInput)</div>
+        <ol>
+          <li>Inputs: position, normal, albedo, depth + camera + TLAS</li>
+          <li>Optional material albedo SSBO for hit shading</li>
+          <li>For each pixel: sample hemisphere at normal; trace one secondary ray</li>
+          <li>On hit: shade with direct / emissive / simple lighting; on miss: env if bound</li>
+          <li>Weight by BRDF×cosine/pdf; write indirect RGB</li>
+          <li>Lighting adds as bounce fill (biased vs full path trace)</li>
+        </ol>
+      </div>
+      <div class="math-block reveal">\[
+        L_i^{(1)}(x)\approx\frac{f_r\,L(y\!\to\!x)\,(n\!\cdot\!\omega)}{p(\omega)}\,V
+      \]</div>
+      <div class="why-callout reveal"><div class="why-label">Why one bounce only</div>
+        <p>Realtime. Multi-bounce color bleeding is PathTracer’s job (Ch.&nbsp;06). Hybrid targets contact GI and soft fill for deferred iteration.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="graph">Placement in deferred graph</h2></div>
+      <div class="algo reveal">
+        <div class="algo-bar">DeferredRenderer::render (relevant slice)</div>
+        <ol>
+          <li>CSM (raster cascades)</li>
+          <li>GBuffer MRT</li>
+          <li>SSAO → bind into lighting</li>
+          <li><span class="em">if</span> AS supported && instanceCount &gt; 0: addComputePass RTShadow</li>
+          <li><span class="em">if</span> same: RT GI pass</li>
+          <li>Deferred lighting consumes V and Lᵢ¹</li>
+          <li>Sky / post</li>
+        </ol>
+      </div>
+      <div class="prose reveal">
+        <p>Graph declares texture reads so barriers place GBuffer in SHADER_READ before RT techniques sample it.</p>
+      </div>
+
+      <div class="section-rule"><h2 id="host">Host enable path</h2></div>
+      <div class="listing reveal"><div class="listing-bar"><span>render_dispatch.cpp · conceptual</span></div>
+<pre>// each deferred frame
+if (m_rtAccel &amp;&amp; m_rtAccel-&gt;isSupported()) {
+  m_deferredRenderer-&gt;setAccelerationStructure(m_rtAccel.get());
+  m_deferredRenderer-&gt;setRTShadowsEnabled(true);
+}
+// techniques only run if instanceCount &gt; 0 inside deferred graph
+</pre></div>
+
+      <div class="section-rule"><h2 id="limits">Limits</h2></div>
+      <div class="aside warn reveal"><div class="aside-label">Honest scope</div>
+        <p>Static BLAS in trunk (animation removed). Hybrid ≠ PT parity. Noise depends on spp/filter — often combined with temporal post, not offline OIDN.</p>
+      </div>
+      <div class="file-map reveal">
+        <div class="row"><code>rt_shadow_technique.cpp</code><span class="desc">init · SBT · render</span></div>
+        <div class="row"><code>rt_gi_technique.cpp</code><span class="desc">init · materials · render</span></div>
+        <div class="row"><code>deferred_renderer.cpp</code><span class="desc">graph inject</span></div>
+        <div class="row"><code>render_dispatch.cpp</code><span class="desc">host enable</span></div>
+        <div class="row"><code>rt_acceleration_structure.*</code><span class="desc">shared TLAS</span></div>
+      </div>
+
+      <div class="section-rule"><h2 id="subtree">Design units in this module</h2></div>
+      <p class="prose reveal" style="color:var(--ivory-mute);max-width:40rem">Each card is a focused design page (what / how / why + sources). Full tree: <a href="sitemap.html">Sitemap</a>.</p>
+      <div class="catalog reveal">
+        <a class="tree-card" href="hybrid/shadow-technique.html">
+          <div class="num">shadow-technique</div>
+          <h3>RT shadow technique</h3>
+          <p>init → SBT → render visibility from GBuffer.</p>
+        </a>
+        <a class="tree-card" href="hybrid/gi-technique.html">
+          <div class="num">gi-technique</div>
+          <h3>RT GI technique</h3>
+          <p>1-bounce GI inject, material albedos.</p>
+        </a>
+        <a class="tree-card" href="hybrid/visibility.html">
+          <div class="num">visibility</div>
+          <h3>Visibility helpers</h3>
+          <p>Shared RT visibility utilities.</p>
+        </a>
+      </div>
+
+      <nav class="pager">
+        <a href="sampling.html"><div class="label">← Previous</div><div class="title">07 · Sampling</div></a>
+        <a class="next" href="denoise.html"><div class="label">Next →</div><div class="title">09 · Denoise</div></a>
+      </nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../js/nav-tree.js"></script>
+  <script defer src="../js/glossary-data.js"></script>
+  <script defer src="../js/glossary.js"></script>
+  <script defer src="../js/chrome.js"></script>
+</body>
+</html>

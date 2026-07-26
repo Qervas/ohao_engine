@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 420" role="img" aria-label="G-Buffer attachment layout strip">
+  <title>G-Buffer layout strip (didactic packing plate)</title>
+  <rect width="1100" height="420" fill="#0a0b0e"/>
+  <text x="40" y="36" fill="#c9a27a" font-family="DM Sans,sans-serif" font-size="11" letter-spacing="2">PLATE · G-BUFFER ATTACHMENTS</text>
+  <text x="40" y="66" fill="#ebe4d6" font-family="Fraunces,Georgia,serif" font-size="22">What each MRT stores (gbuffer.frag)</text>
+  <text x="40" y="92" fill="#a39c8e" font-family="DM Sans,sans-serif" font-size="12">Didactic strip of packing layout — not a live GPU dump of channel images</text>
+
+  <!-- five panels -->
+  <g transform="translate(40,120)">
+    <rect x="0" y="0" width="190" height="220" rx="4" fill="#171b24" stroke="#c9a27a"/>
+    <text x="95" y="36" text-anchor="middle" fill="#c9a27a" font-family="DM Sans" font-size="11" letter-spacing="1">RT0</text>
+    <text x="95" y="70" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces" font-size="16">Position</text>
+    <text x="95" y="100" text-anchor="middle" fill="#a39c8e" font-family="DM Sans" font-size="12">xyz world</text>
+    <text x="95" y="130" text-anchor="middle" fill="#9ad4e8" font-family="IBM Plex Mono" font-size="11">a = metallic</text>
+    <rect x="20" y="150" width="150" height="50" fill="#1a3040" stroke="#2a3140"/>
+    <text x="95" y="180" text-anchor="middle" fill="#6eb8d4" font-family="DM Sans" font-size="11">vec4(pos, m)</text>
+
+    <rect x="210" y="0" width="190" height="220" rx="4" fill="#171b24" stroke="#2a3140"/>
+    <text x="305" y="36" text-anchor="middle" fill="#c9a27a" font-family="DM Sans" font-size="11" letter-spacing="1">RT1</text>
+    <text x="305" y="70" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces" font-size="16">Normal+</text>
+    <text x="305" y="100" text-anchor="middle" fill="#a39c8e" font-family="DM Sans" font-size="12">oct N · rough</text>
+    <text x="305" y="130" text-anchor="middle" fill="#9ad4e8" font-family="IBM Plex Mono" font-size="11">a = emissive Y</text>
+    <rect x="230" y="150" width="150" height="50" fill="#2a2030" stroke="#2a3140"/>
+    <text x="305" y="180" text-anchor="middle" fill="#c9a27a" font-family="DM Sans" font-size="11">oct + α + E</text>
+
+    <rect x="420" y="0" width="190" height="220" rx="4" fill="#171b24" stroke="#2a3140"/>
+    <text x="515" y="36" text-anchor="middle" fill="#c9a27a" font-family="DM Sans" font-size="11" letter-spacing="1">RT2</text>
+    <text x="515" y="70" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces" font-size="16">Albedo</text>
+    <text x="515" y="100" text-anchor="middle" fill="#a39c8e" font-family="DM Sans" font-size="12">baseColor rgb</text>
+    <text x="515" y="130" text-anchor="middle" fill="#9ad4e8" font-family="IBM Plex Mono" font-size="11">a = AO</text>
+    <rect x="440" y="150" width="150" height="50" fill="#302818" stroke="#2a3140"/>
+    <text x="515" y="180" text-anchor="middle" fill="#c9a27a" font-family="DM Sans" font-size="11">vec4(c, ao)</text>
+
+    <rect x="630" y="0" width="190" height="220" rx="4" fill="#171b24" stroke="#2a3140"/>
+    <text x="725" y="36" text-anchor="middle" fill="#c9a27a" font-family="DM Sans" font-size="11" letter-spacing="1">VEL</text>
+    <text x="725" y="70" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces" font-size="16">Velocity</text>
+    <text x="725" y="100" text-anchor="middle" fill="#a39c8e" font-family="DM Sans" font-size="12">screen motion</text>
+    <text x="725" y="130" text-anchor="middle" fill="#9ad4e8" font-family="IBM Plex Mono" font-size="11">0.5 Δndc</text>
+    <rect x="650" y="150" width="150" height="50" fill="#182818" stroke="#2a3140"/>
+    <text x="725" y="180" text-anchor="middle" fill="#7dba8a" font-family="DM Sans" font-size="11">TAA guide</text>
+
+    <rect x="840" y="0" width="190" height="220" rx="4" fill="#171b24" stroke="#6eb8d4"/>
+    <text x="935" y="36" text-anchor="middle" fill="#6eb8d4" font-family="DM Sans" font-size="11" letter-spacing="1">DEPTH</text>
+    <text x="935" y="70" text-anchor="middle" fill="#ebe4d6" font-family="Fraunces" font-size="16">Depth</text>
+    <text x="935" y="100" text-anchor="middle" fill="#a39c8e" font-family="DM Sans" font-size="12">HW depth</text>
+    <text x="935" y="130" text-anchor="middle" fill="#9ad4e8" font-family="IBM Plex Mono" font-size="11">read-only after</text>
+    <rect x="860" y="150" width="150" height="50" fill="#101820" stroke="#2a3140"/>
+    <text x="935" y="180" text-anchor="middle" fill="#6eb8d4" font-family="DM Sans" font-size="11">SSAO / RT</text>
+  </g>
+  <text x="550" y="390" text-anchor="middle" fill="#6e685c" font-family="DM Sans" font-size="11" letter-spacing="2">FIG. GB-1  ·  LAYOUT STRIP  ·  NOT A LIVE CHANNEL DUMP</text>
+</svg>

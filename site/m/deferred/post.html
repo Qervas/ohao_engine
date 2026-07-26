@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>05 · Deferred · Post stack — OHAO Monograph</title>
+  <meta name="description" content="Bloom, TAA, tonemap orchestration." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="deferred/post" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../deferred.html">← Module hub</a> · Post stack</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">deferred</p>
+          <h1>Post stack</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>Bloom, TAA, tonemap orchestration.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="prose reveal">
+<p>Post stack: bloom threshold/down/up, TAA resolve, tonemap (ACES family).</p>
+</div>
+<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="prose reveal">
+<p>PostProcessingPipeline owns order; bloom_pass and taa_pass share HDR/history targets.</p>
+<ul>
+<li>bloom threshold</li>
+<li>downsample</li>
+<li>upsample</li>
+<li>TAA</li>
+<li>tonemap</li>
+</ul>
+</div>
+<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="prose reveal">
+<p>Tone map last so bloom sees HDR peaks; TAA before display reduces shimmer.</p>
+</div>
+<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="prose reveal">
+<p>PostProcessingPipeline owns order; bloom and TAA are separate passes sharing history/HDR targets.</p>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/render/deferred/post_processing_pipeline.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/bloom_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/taa_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/tonemapping.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/taa_resolve.frag</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="sky.html"><div class="label">← Prev</div><div class="title">Sky pass</div></a><a class="next" href="gizmo.html"><div class="label">Next →</div><div class="title">Gizmo pass</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

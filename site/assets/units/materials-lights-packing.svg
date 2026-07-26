@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 372" class="unit-diagram" role="img" aria-label="Byte layout of the path tracer's GPULight SSBO and the deferred pipeline's LightData UBO, and the light type-code remap between them.">
+  <defs>
+    <marker id="ml-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#6e685c"/>
+    </marker>
+    <marker id="ml-arrow-hot" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="372" fill="#0f1419"/>
+
+  <!-- ============ Row A: path tracer SSBO ============ -->
+  <text x="14" y="22" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Path tracer — storage buffer, binding 11, std430</text>
+
+  <!-- 16-byte header -->
+  <rect x="14" y="34" width="176" height="36" fill="#1a222c" stroke="#c4a574" stroke-width="1"/>
+  <line x1="58" y1="34" x2="58" y2="70" stroke="#3d4a58"/>
+  <line x1="102" y1="34" x2="102" y2="70" stroke="#3d4a58"/>
+  <line x1="146" y1="34" x2="146" y2="70" stroke="#3d4a58"/>
+  <text x="36"  y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">count</text>
+  <text x="80"  y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">envIdx</text>
+  <text x="124" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">envScale</text>
+  <text x="168" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6e685c">pad</text>
+  <text x="36"  y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">u32</text>
+  <text x="80"  y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">u32</text>
+  <text x="124" y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">f32</text>
+  <text x="168" y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">u32</text>
+
+  <!-- GPULight[0] -->
+  <rect x="190" y="34" width="330" height="36" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+  <line x1="256" y1="34" x2="256" y2="70" stroke="#3d4a58"/>
+  <line x1="322" y1="34" x2="322" y2="70" stroke="#3d4a58"/>
+  <line x1="388" y1="34" x2="388" y2="70" stroke="#3d4a58"/>
+  <line x1="454" y1="34" x2="454" y2="70" stroke="#3d4a58"/>
+  <text x="223" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">pos + type</text>
+  <text x="289" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">rgb + I</text>
+  <text x="355" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">dir + param</text>
+  <text x="421" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">extra</text>
+  <text x="487" y="50" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">extra2</text>
+  <text x="355" y="63" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">GPULight[0] — 5 × vec4 = 80 B</text>
+
+  <!-- GPULight[1..] -->
+  <rect x="520" y="34" width="132" height="36" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <text x="586" y="55" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#6e685c">GPULight[1]</text>
+  <text x="672" y="55" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">…</text>
+
+  <text x="14"  y="84" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">0</text>
+  <text x="190" y="84" font-family="IBM Plex Mono,monospace" font-size="8" fill="#c4a574">16 — array base forced here by std430 vec4 alignment</text>
+  <text x="520" y="84" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">96</text>
+
+  <!-- ============ Row B: deferred UBO ============ -->
+  <text x="14" y="122" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Deferred — uniform buffer, set 0 binding 5, std140</text>
+
+  <rect x="14" y="134" width="440" height="36" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+  <line x1="80"  y1="134" x2="80"  y2="170" stroke="#3d4a58"/>
+  <line x1="146" y1="134" x2="146" y2="170" stroke="#3d4a58"/>
+  <line x1="212" y1="134" x2="212" y2="170" stroke="#3d4a58"/>
+  <line x1="278" y1="134" x2="278" y2="170" stroke="#3d4a58"/>
+  <text x="47"  y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">pos + type</text>
+  <text x="113" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">dir + range</text>
+  <text x="179" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">rgb + I</text>
+  <text x="245" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#e8e2d6">cones + smIdx</text>
+  <text x="366" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#c4a574">lightSpaceMatrix — 64 B</text>
+  <text x="234" y="163" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">LightData[0] — 128 B</text>
+
+  <rect x="454" y="134" width="132" height="36" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <text x="520" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8.5" fill="#6e685c">LightData[1]</text>
+  <text x="600" y="155" font-family="IBM Plex Mono,monospace" font-size="12" fill="#6e685c">…</text>
+  <rect x="622" y="134" width="84" height="36" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="664" y="150" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">numLights,</text>
+  <text x="664" y="161" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">ambient…</text>
+  <text x="14"  y="184" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">0 — fixed array of 8, no header</text>
+
+  <!-- ============ type-code remap ============ -->
+  <line x1="14" y1="208" x2="706" y2="208" stroke="#3d4a58" stroke-dasharray="2 4"/>
+  <text x="14" y="230" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">The same slider, two integers</text>
+
+  <text x="120" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">LightComponent = GPULight w</text>
+  <text x="580" y="252" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">LightData.position.w</text>
+
+  <!-- left column -->
+  <rect x="30" y="262" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="120" y="277" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">0  Sphere</text>
+  <rect x="30" y="290" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="120" y="305" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">1  Directional</text>
+  <rect x="30" y="318" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="120" y="333" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">2  Spot</text>
+  <rect x="30" y="346" width="180" height="22" fill="#1a222c" stroke="#c4784a"/>
+  <text x="120" y="361" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#c4784a">3  AreaRect</text>
+
+  <!-- right column -->
+  <rect x="490" y="262" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="580" y="277" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">0  directional</text>
+  <rect x="490" y="290" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="580" y="305" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">1  point</text>
+  <rect x="490" y="332" width="180" height="22" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="580" y="347" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#e8e2d6">2  spot</text>
+
+  <!-- crossing links -->
+  <path d="M212 273 C 340 273, 360 301, 488 301" fill="none" stroke="#6e685c" stroke-width="1.3" marker-end="url(#ml-arrow)"/>
+  <path d="M212 301 C 340 301, 360 273, 488 273" fill="none" stroke="#6e685c" stroke-width="1.3" marker-end="url(#ml-arrow)"/>
+  <path d="M212 329 C 340 329, 360 343, 488 343" fill="none" stroke="#6e685c" stroke-width="1.3" marker-end="url(#ml-arrow)"/>
+  <path d="M212 357 C 340 357, 360 345, 488 345" fill="none" stroke="#c4784a" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#ml-arrow-hot)"/>
+  <text x="350" y="286" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">0 and 1 swap</text>
+  <text x="352" y="371" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#c4784a">area collapses to a cone</text>
+</svg>

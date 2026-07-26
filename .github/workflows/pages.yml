@@ -1,0 +1,92 @@
+# Deploy the OHAO implementation monograph (site/) to GitHub Pages.
+name: Deploy textbook (GitHub Pages)
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Stage site (resolve media symlinks into the artifact)
+        run: |
+          set -euo pipefail
+          rm -rf _site_publish
+          mkdir -p _site_publish
+          # Copy site tree; follow symlinks so docs/media + docs/images ship
+          cp -a site/. _site_publish/
+          if [ -L site/media ] || [ -d site/media ]; then
+            rm -rf _site_publish/media
+            mkdir -p _site_publish/media
+            # Real showcase only — exclude inverse research media from public Pages
+            if [ -d docs/media ]; then
+              for f in docs/media/*; do
+                base=$(basename "$f")
+                if [ "$base" = "inverse" ]; then
+                  echo "skip inverse media: $base"
+                  continue
+                fi
+                cp -a "$f" _site_publish/media/
+              done
+            fi
+          fi
+          if [ -L site/images ] || [ -d site/images ]; then
+            rm -rf _site_publish/images
+            mkdir -p _site_publish/images
+            if [ -d docs/images ]; then
+              for f in docs/images/*; do
+                base=$(basename "$f")
+                case "$base" in
+                  inverse_*) echo "skip inverse still: $base"; continue ;;
+                esac
+                cp -a "$f" _site_publish/images/
+              done
+            fi
+          fi
+          test -f _site_publish/index.html
+          test -f _site_publish/m/path-tracer.html
+          test -f _site_publish/m/audio.html
+          test -f _site_publish/assets/plates/pt_bindings.svg
+          # Guard: no inverse product strings in published HTML
+          if grep -RInE 'inverse_fit|Diff-IR|MAPTEST|quality-plate' _site_publish --include='*.html' ; then
+            echo "inverse product content found in site publish tree" >&2
+            exit 1
+          fi
+          echo "Staged publish tree:"
+          find _site_publish -type f | wc -l
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site_publish
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

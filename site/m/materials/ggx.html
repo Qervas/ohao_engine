@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>04 · Materials · GGX implementation — OHAO Monograph</title>
+  <meta name="description" content="D/F/G terms, Smith correlated, energy helpers." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="materials/ggx" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../materials.html">← Module hub</a> · GGX implementation</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">materials</p>
+          <h1>GGX implementation</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>D/F/G terms, Smith correlated, energy helpers.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#the-convention-every-copy-shares">The α convention every copy shares</a></li><li><a href="#the-visibility-term-that-is-not-a-geometry-term">The visibility term that is not a geometry term</a></li><li><a href="#fresnel-an-ibl-approximation-wired-into-direct-lighting">Fresnel: an IBL approximation wired into direct lighting</a></li><li><a href="#the-epsilon-that-eats-the-highlight">The epsilon that eats the highlight</a></li><li><a href="#the-anisotropic-branch-and-the-normalisation-it-drops">The anisotropic branch and the normalisation it drops</a></li><li><a href="#what-is-actually-reachable">What is actually reachable</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="the-convention-every-copy-shares">The α convention every copy shares</h2></div>
+<div class="prose reveal">
+<p>This tree writes the isotropic GGX distribution out twenty-four times. Four of those copies sit behind a function name: `distributionGGX` in `brdf_ggx.glsl`, which only `deferred_lighting.frag` and `forward.frag` reach — through `evaluateBRDF`; `ggxD_anisoOrIso`&#x27;s isotropic branch and `ggxDiso` in `ggx_aniso.glsl`, `#include`d by the three path-tracer raygens and nothing else; and `D_ClearCoat` in `advanced_brdf.glsl`, a file no shader `#include`s. The other twenty are inline. Past bounce 0 the raygens stop calling `ggx_aniso.glsl` and paste the algebra straight into each NEE, env-MIS and pdf branch — six copies in `pt_raygen.rgen`, six in `pt_raygen_offline.rgen`, eight in `pt_raygen_realtime.rgen`.</p>
+<p>The one thing all twenty-four agree on without qualification is the width parameter. Every one of them resolves the artist&#x27;s perceptual roughness to α = roughness² — `ggxDiso` at its call site, the rest internally — and then squares α again inside the Trowbridge-Reitz denominator:</p>
+<div class="math-block">$$
+D(\omega_h)=\frac{\alpha^{2}}{\pi\big[(n\cdot\omega_h)^{2}(\alpha^{2}-1)+1\big]^{2}},\qquad \alpha=\text{roughness}^{2}
+$$</div>
+<p>Here $\omega_h$ is the half-vector between view and light, $n$ the shading normal, and $\alpha$ the lobe width. $D$ is normalised so that $\int D(\omega_h)(n\cdot\omega_h)\,d\omega_h = 1$ over the hemisphere — the microfacets&#x27; projected areas must add back up to the macrosurface. That property is load-bearing, and it is the one this implementation loses. The rasteriser&#x27;s copy:</p>
+<div class="citation-chip"><code class="citation-code">return a2 / max(denom, EPSILON);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L38" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:38</a></div>
+<p>and the copy the raygens call at bounce 0 and then re-type by hand at every bounce after:</p>
+<div class="citation-chip"><code class="citation-code">return a2 / (3.14159265 * denom * denom + 0.0001);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L37" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:37</a></div>
+<p>The double squaring is why a painted roughness of 0.1 is already a near-mirror: α = 0.01, α² = 10⁻⁴. Both stacks also floor roughness at 0.04 before shading — the path tracer in `pt_closesthit.rchit`, the rasteriser in `initBRDFSurface` — so α never falls below 1.6 × 10⁻³.</p>
+<div class="citation-chip"><code class="citation-code">surface.roughness = max(roughness, 0.04);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L127" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:127</a></div>
+<p>The α agreement is not cosmetic — a sampler whose α drifts from the D it importance-samples renders a plausible-looking image with a quietly biased estimator — and `ggx_aniso.glsl` spells the constraint out.</p>
+<div class="citation-chip"><code class="citation-code">// convention here (alpha = roughness^2) MATCHES ggxD_anisoOrIso&#x27;s isotropic</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L62" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:62</a></div>
+<p>Five lines later the same comment block overreaches. `ggxDiso` — the D behind the realtime raygen&#x27;s VNDF pdf — is introduced as &quot;numerically identical&quot; to `ggxD_anisoOrIso`&#x27;s isotropic branch. The α convention does match; the guard does not. The branch adds 10⁻⁴ to its denominator and `ggxDiso` adds 10⁻⁸, and by the quadrature below that factor of 10⁴ is the difference between retaining 2.7% and 91% of the distribution&#x27;s mass at roughness 0.1.</p>
+<div class="citation-chip"><code class="citation-code">// identical to ggxD_anisoOrIso&#x27;s isotropic branch).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L67" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:67</a></div>
+<div class="citation-chip"><code class="citation-code">return a2 / (3.14159265 * denom * denom + 1e-8);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L71" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:71</a></div>
+</div>
+<div class="section-rule"><h2 id="the-visibility-term-that-is-not-a-geometry-term">The visibility term that is not a geometry term</h2></div>
+<div class="prose reveal">
+<p>`geometrySmithCorrelated` is named for a G but returns a V. It is Heitz&#x27;s height-correlated Smith term already divided by the Cook-Torrance denominator:</p>
+<div class="math-block">$$
+V(\omega_o,\omega_i)=\frac{G_2}{4(n\cdot\omega_o)(n\cdot\omega_i)}=\frac{0.5}{(n\cdot\omega_i)\sqrt{\alpha^{2}+(1-\alpha^{2})(n\cdot\omega_o)^{2}}+(n\cdot\omega_o)\sqrt{\alpha^{2}+(1-\alpha^{2})(n\cdot\omega_i)^{2}}}
+$$</div>
+<p>with $\omega_o$ the view direction, $\omega_i$ the light direction, and $G_2$ the joint masking-shadowing fraction. The two square roots are the code&#x27;s `lambdaV` and `lambdaL`, and the leading 0.5 is where the factor of 4 went:</p>
+<div class="citation-chip"><code class="citation-code">return 0.5 / max(lambdaV + lambdaL, EPSILON);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L73" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:73</a></div>
+<p>Consequently the deferred specular is assembled as a bare triple product with no denominator at all:</p>
+<div class="citation-chip"><code class="citation-code">return D * V_term * F;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L105" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:105</a></div>
+<p>This is the sharpest edit trap in the file. Anyone who notices the &quot;missing&quot; Cook-Torrance denominator and restores $1/4(n\cdot\omega_o)(n\cdot\omega_i)$ divides twice: highlights come out four times too dim head-on and wrongly lifted at grazing angles — a change that reads as a plausible material tweak rather than a bug. The raygens keep the two apart, building an *uncorrelated* Schlick-k `G` and dividing by `4 * NdotV * NdotL + 0.001` explicitly in each NEE branch — a second additive epsilon inside the same expression.</p>
+<p>A third arrangement lives in `ggx_aniso.glsl`. `smithG2overG1GGX` is written from the Smith Λ function rather than the square root above, and substituting $\Lambda=\tfrac{1}{2}\!\left(-1+\sqrt{1+\alpha^{2}\tan^{2}\theta}\right)$ into $1/(1+\Lambda_o+\Lambda_i)$ reproduces $2c_oc_i/(c_iS_o+c_oS_i)$ exactly — the same $G_2$ `geometrySmithCorrelated` computes. That is where the resemblance stops. It has exactly one call site in the tree, in the realtime raygen, as the VNDF estimator weight $f\cos/\text{pdf}=F\,G_2/G_1$ with the Fresnel factored out — not as a shading G.</p>
+<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L792" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:792</a></div>
+<p>`pt_raygen.rgen` and `pt_raygen_offline.rgen` never mention it. The two pipelines therefore do not share a masking-shadowing model: the rasteriser shades with height-correlated Smith, every raygen NEE branch shades with the uncorrelated Karis product.</p>
+</div>
+<div class="section-rule"><h2 id="fresnel-an-ibl-approximation-wired-into-direct-lighting">Fresnel: an IBL approximation wired into direct lighting</h2></div>
+<div class="prose reveal">
+<p>`brdf_common.glsl` ships two Schlick Fresnels. The textbook one, with F90 fixed at 1, has no callers anywhere under `shaders/`. The one the deferred BRDF actually calls replaces F90 with `max(1 - roughness, F0)`:</p>
+<div class="math-block">$$
+F(\omega_o\cdot\omega_h)=F_0+\big(\max(1-\text{roughness},\,F_0)-F_0\big)\,(1-\omega_o\cdot\omega_h)^{5}
+$$</div>
+<div class="citation-chip"><code class="citation-code">return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(saturate(1.0 - cosTheta), 5.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L28" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:28</a></div>
+<p>At roughness 0.95 a dielectric&#x27;s F90 collapses from 1.0 to 0.05, i.e. essentially to $F_0$: no grazing boost at all. This variant is normally an image-based-lighting device evaluated at $n\cdot\omega_o$, standing in for a pre-integrated reflectance; OHAO evaluates it per punctual light at $\omega_o\cdot\omega_h$.</p>
+<div class="citation-chip"><code class="citation-code">F = fresnelSchlickRoughness(HdotV, F0, roughness);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L103" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:103</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The rejected alternative is textbook Schlick with F90 = 1 — exactly what all three raygens use inline. Under a rasteriser that Fresnel gives a rough dielectric a bright white rim at grazing angles with nothing to cancel it: the inter-reflection that would swallow it is microfacet-scale transport the deferred pass never traces. Clamping F90 to 1 − roughness buys EEVEE-like edge behaviour at the price of a Fresnel that no longer matches the offline render, so a rough dielectric silhouette is dimmer in the deferred preview than in the path-traced frame.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-epsilon-that-eats-the-highlight">The epsilon that eats the highlight</h2></div>
+<div class="prose reveal">
+<p>Those twenty-four D expressions guard their denominator in four different ways, and only one of them is a floor. `distributionGGX` floors the finished denominator, `max(π·denom², EPSILON)`, with EPSILON defined as 10⁻⁶.</p>
+<div class="citation-chip"><code class="citation-code">#define EPSILON       1e-6</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/constants.glsl#L59" target="_blank" rel="noopener">shaders/includes/common/constants.glsl:59</a></div>
+<p>`ggxD_anisoOrIso`&#x27;s isotropic branch and all twenty inline raygen copies *add* 10⁻⁴. `ggxDiso` adds 10⁻⁸. `D_ClearCoat` guards nothing at all — harmless only because nothing includes the file it sits in.</p>
+<div class="citation-chip"><code class="citation-code">return a2 / (3.14159265 * denom * denom);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/advanced_brdf.glsl#L43" target="_blank" rel="noopener">shaders/includes/material/advanced_brdf.glsl:43</a></div>
+<p>An additive term is not a floor — it never leaves the expression. At the lobe peak the true denominator is $\pi\,\text{roughness}^{8}$, which at the 0.04 roughness floor is about 2 × 10⁻¹¹: roughly five orders of magnitude under `distributionGGX`&#x27;s floor, seven under the added 10⁻⁴, and not quite three under `ggxDiso`&#x27;s 10⁻⁸. The guard, not the GGX algebra, sets the height of the highlight.</p>
+<p>Numerical quadrature of the three shipped guards shows how far each truncation reaches. `distributionGGX` recovers full normalisation by roughness ≈ 0.16 and `ggxDiso` is within 1% of it by 0.14, but the +10⁻⁴ expression — the one on every NEE branch of every raygen — does not until roughness ≈ 0.4, and at roughness 0.2 it retains only 37% of the distribution&#x27;s mass (2.7% at roughness 0.1, 0.07% at the 0.04 floor).</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/materials-ggx-ndf-energy.svg" alt="Hemispherical integral of the three shipped isotropic D guards versus perceptual roughness — measured by numerical quadrature of the GLSL, not a captured render. Two of the three curves come from ggx_aniso.glsl, which ships both a 10⁻⁴ and a 10⁻⁸ guard. A correct NDF integrates to 1 everywhere; the missing mass is the peak of the specular lobe." loading="lazy" /><figcaption>Hemispherical integral of the three shipped isotropic D guards versus perceptual roughness — measured by numerical quadrature of the GLSL, not a captured render. Two of the three curves come from ggx_aniso.glsl, which ships both a 10⁻⁴ and a 10⁻⁸ guard. A correct NDF integrates to 1 everywhere; the missing mass is the peak of the specular lobe.</figcaption></figure>
+<p>Where it bites matters as much as how much. Take the raygen `PathTracer` binds by default:</p>
+<div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_pt_raygen.rgen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L55" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:55</a></div>
+<p>D enters that file at nine sites: six BRDF evaluations — light NEE and env-MIS, at bounce 0 and again on both the specular and the diffuse chain — and three MIS pdfs. The truncation therefore dims specular NEE at every bounce along both chains. What it never touches is indirect specular throughput, which is a bare metal tint:</p>
+<div class="citation-chip"><code class="citation-code">specThroughput = mix(vec3(1.0), albedo, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L529" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:529</a></div>
+<p>The ray it weights is not a mirror ray, though. The comment calling the dual-ray design deterministic is about lobe *selection* — bounce 0 traces a specular and a diffuse child instead of choosing one — not direction. Above roughness 0.01 the reflection is perturbed by a roughness-scaled cosine-hemisphere jitter, with a stochastic fallback below the horizon:</p>
+<div class="citation-chip"><code class="citation-code">vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L519" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:519</a></div>
+<div class="citation-chip"><code class="citation-code">reflected = cosineHemisphere(N, fallbackU);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L523" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:523</a></div>
+<p>Its MIS pdf is where D re-enters the chain:</p>
+<div class="citation-chip"><code class="citation-code">specLastBsdfPdf = pdf_spec;  // pure GGX PDF (no lobe-mix factor in dual-ray)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L540" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:540</a></div>
+<p>So a chrome sphere still reflects the environment at full strength. What shrinks is the direct-light highlight on smooth surfaces, and the MIS weight deciding how much environment radiance the specular ray is allowed to keep.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The `+ 0.0001` in the raygens&#x27; D is not a division guard; it is an undeclared highlight clamp on smooth materials. `kOfflineRTSettings` turns firefly clamping off outright, yet a roughness-0.2 surface loses roughly two thirds of its NEE specular before any clamp logic runs.  {{cite ohao/render/rt/rt_settings.hpp &quot;.enableFireflyClamp = false,&quot;}}  There is no free repair. Flooring the denominator instead of adding to it — what `distributionGGX` already does — still loses 99.1% of the mass at the 0.04 roughness floor, and even `ggxDiso`&#x27;s 10⁻⁸ leaves 93% missing there. Every option changes every existing smooth-material reference render, which is the real reason to touch this carefully rather than not at all.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-anisotropic-branch-and-the-normalisation-it-drops">The anisotropic branch and the normalisation it drops</h2></div>
+<div class="prose reveal">
+<p>The anisotropic path of `ggxD_anisoOrIso` builds an elliptical GGX from a tangent frame projected off world-up. The standard Burley form is</p>
+<div class="math-block">$$
+D=\frac{1}{\pi\alpha_x\alpha_y\Big[\big(\tfrac{T\cdot\omega_h}{\alpha_x}\big)^{2}+\big(\tfrac{B\cdot\omega_h}{\alpha_y}\big)^{2}+(n\cdot\omega_h)^{2}\Big]^{2}}
+$$</div>
+<p>with $T,B$ the tangent and bitangent and $\alpha_x,\alpha_y$ the two lobe widths. The shipped code divides $(T\cdot\omega_h)^2$ by `rT` rather than by `rT²`, which makes `rT` behave as $\alpha_x^{2}$ —</p>
+<div class="citation-chip"><code class="citation-code">float d     = (TdotH * TdotH / rT) + (BdotH * BdotH / rB) + NdotH * NdotH;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L53" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:53</a></div>
+<p>— while the normalisation factor `π·rT·rB` assumes `rT` is $\alpha_x$:</p>
+<div class="citation-chip"><code class="citation-code">return 1.0 / (3.14159265 * rT * rB * d * d + 0.0001);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/material/ggx_aniso.glsl#L54" target="_blank" rel="noopener">shaders/includes/material/ggx_aniso.glsl:54</a></div>
+<p>Both readings cannot hold. Driving anisotropy toward zero and integrating the shipped expression gives $\int D(\omega_h)(n\cdot\omega_h)\,d\omega_h = 1/\text{roughness}^{2}$ rather than 1 — measured as 4.0 at roughness 0.5 and 25 at roughness 0.2 — and the lobe carries the width of α = roughness instead of roughness². The branch therefore does not degenerate into the isotropic branch it sits next to; it steps to a wider, brighter lobe the moment anisotropy crosses the 0.001 gate. Because the same D feeds both the NEE specular and the specular MIS pdf, enabling anisotropy over-brightens the highlight *and* de-normalises the pdf in the same direction.</p>
+<p>This never fires in a default render. The global override defaults to zero and only `env_demo`&#x27;s `--aniso=` flag raises it, so every shipped reference image is on the isotropic branch.</p>
+<div class="citation-chip"><code class="citation-code">float anisotropyStrength{0.0f};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L29" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:29</a></div>
+<p>One reading trap in the same file: its header comment says the tangent frame comes from Frisvad&#x27;s basis, while `worldUpTangent` — the function the D term actually calls — was written specifically to reject Frisvad. Trust the function.</p>
+</div>
+<div class="section-rule"><h2 id="what-is-actually-reachable">What is actually reachable</h2></div>
+<div class="prose reveal">
+<p>`brdf_common.glsl` and `brdf_ggx.glsl` define twenty functions between them; the deferred and forward fragment shaders reach nine. Four of the eleven unreachable ones still have their math shipping under no name at all. `geometrySchlickGGX` and `geometrySmith`, its sole caller, are the `(roughness+1)²/8` remap inlined in every NEE branch of all three raygens. `fresnelSchlick` — textbook Schlick with F90 = 1 — is written out by hand in those same branches and in `ssr.comp`, minus the `saturate`. `lambertianDiffuse` is the `albedo/π` sitting a few lines under each of those Fresnels.</p>
+<div class="citation-chip"><code class="citation-code">vec3 fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L100" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:100</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 diff = kD * albedo / 3.14159;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L411" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:411</a></div>
+<p>Five of the remaining seven are dead in both senses: `f0FromIOR`, `envBRDFApprox`, and the uncorrelated Smith trio, whose $(2\,n\cdot\omega)/(n\cdot\omega+\sqrt{\cdot})$ arrangement appears nowhere else under `shaders/`.</p>
+<div class="citation-chip"><code class="citation-code">float smithG(float NdotV, float NdotL, float roughness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L72" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:72</a></div>
+<p>The last two are one-line compositions the fragment shaders open-code rather than call: `getRoughnessMipLevel` as a literal `roughness * 9.0`, `evaluateBRDFWithShadow` as a multiply by `1 - shadow`.</p>
+<div class="citation-chip"><code class="citation-code">float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L281" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:281</a></div>
+<p>Prune by grepping the formula, not only the name — the twenty-four-copy count at the top of this page is what that grep returns.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`geometrySmithCorrelated` returns a visibility term with $1/4(n\cdot\omega_o)(n\cdot\omega_i)$ folded in, so `evaluateSpecularBRDF` must return `D * V * F` with no denominator. Adding one divides twice.</li>
+<li>Both stacks floor roughness at 0.04 before shading. Lowering that floor does not sharpen the highlight — it drives D further into its epsilon guard.</li>
+<li>`ggxD_anisoOrIso`, `ggxDiso` and `smithG1GGX` must all keep α = roughness². Changing one without the others biases the MIS estimator silently.</li>
+<li>The three *shipped* isotropic D guards — 10⁻⁶ floored, 10⁻⁴ added, 10⁻⁸ added — normalise at roughness 0.16, 0.4 and 0.14 respectively. They are not interchangeable, and editing one changes which existing renders it matches.</li>
+<li>The anisotropic branch is not energy-matched to its own isotropic branch and is off by default. `--aniso=` renders are not radiometrically comparable to isotropic ones.</li>
+<li>The deferred Fresnel clamps F90 to `1 - roughness`; the raygens do not. Rough dielectric silhouettes will not match between preview and offline render.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/includes/brdf/brdf_ggx.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/material/ggx_aniso.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/brdf/brdf_common.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/constants.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/material/advanced_brdf.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/ssr.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="pbr-model.html"><div class="label">← Prev</div><div class="title">PBR metallic-roughness</div></a><a class="next" href="pack.html"><div class="label">Next →</div><div class="title">GPU material pack</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

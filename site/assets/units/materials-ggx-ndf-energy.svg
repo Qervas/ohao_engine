@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img" aria-label="Hemispherical energy of the three shipped isotropic GGX distribution guards versus roughness, showing epsilon-guard truncation below roughness 0.4">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">INTEGRAL OF D(H)(N.H) OVER THE HEMISPHERE — SHOULD BE 1.0</text>
+
+<!-- axes -->
+<line x1="70" y1="40" x2="70" y2="260" stroke="#3d4a58" stroke-width="1"/>
+<line x1="70" y1="260" x2="690" y2="260" stroke="#3d4a58" stroke-width="1"/>
+<line x1="70" y1="52" x2="690" y2="52" stroke="#3d4a58" stroke-width="1" stroke-dasharray="3 4"/>
+<text x="30" y="56" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">1.0</text>
+<text x="30" y="160" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.5</text>
+<text x="30" y="264" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.0</text>
+<text x="66" y="278" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0</text>
+<text x="290" y="278" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.18</text>
+<text x="530" y="278" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.38</text>
+<text x="668" y="278" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">0.5</text>
+<text x="330" y="296" fill="#8a8490" font-family="DM Sans,sans-serif" font-size="12">perceptual roughness →</text>
+
+<!-- shading roughness floor at 0.04 -->
+<line x1="119" y1="40" x2="119" y2="260" stroke="#6e685c" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="124" y="50" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">0.04 floor</text>
+
+<!-- ggxDiso: denominator + 1e-8 -->
+<polyline points="119,246 143,196 168,118 192,71 216,57 241,53 265,53 290,52 314,52 338,52 363,52 387,52 412,52 436,52 460,52 485,52 509,52 534,52 558,52 582,52 607,52 631,52 656,52 680,52" fill="none" stroke="#c4a574" stroke-width="2"/>
+
+<!-- distributionGGX: max(denominator, 1e-6) -->
+<polyline points="119,258 143,251 168,231 192,193 216,135 241,73 265,52 290,52 314,52 338,52 363,52 387,52 412,52 436,52 460,52 485,52 509,52 534,52 558,52 582,52 607,52 631,52 656,52 680,52" fill="none" stroke="#7dba8a" stroke-width="2"/>
+
+<!-- ggxD_anisoOrIso isotropic branch + every inline raygen copy: denominator + 1e-4 -->
+<polyline points="119,260 143,259 168,258 192,254 216,248 241,239 265,225 290,206 314,184 338,159 363,133 387,110 412,92 436,79 460,69 485,63 509,59 534,57 558,55 582,54 607,54 631,53 656,53 680,53" fill="none" stroke="#c4784a" stroke-width="2"/>
+
+<!-- legend -->
+<line x1="418" y1="114" x2="446" y2="114" stroke="#7dba8a" stroke-width="2"/>
+<text x="454" y="118" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">distributionGGX — max(d, 1e-6)</text>
+<line x1="418" y1="136" x2="446" y2="136" stroke="#c4a574" stroke-width="2"/>
+<text x="454" y="140" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="12">ggxDiso — d + 1e-8</text>
+<line x1="418" y1="158" x2="446" y2="158" stroke="#c4784a" stroke-width="2"/>
+<text x="454" y="162" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">ggxD_anisoOrIso — d + 1e-4</text>
+<text x="454" y="178" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">(and all 20 inline raygen copies)</text>
+
+<!-- annotation -->
+<text x="140" y="150" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">missing mass = the peak of the</text>
+<text x="140" y="166" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">specular highlight</text>
+
+<text x="28" y="322" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Measured: adaptive quadrature of the three shipped GLSL guard expressions over the hemisphere, not a captured render.</text>
+</svg>

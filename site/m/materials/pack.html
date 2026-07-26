@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>04 · Materials · GPU material pack — OHAO Monograph</title>
+  <meta name="description" content="3×vec4 matColors, texture bit-cast indices." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="materials/pack" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../materials.html">← Module hub</a> · GPU material pack</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">materials</p>
+          <h1>GPU material pack</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>3×vec4 matColors, texture bit-cast indices.</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#a-struct-that-exists-on-only-one-side">A struct that exists on only one side</a></li><li><a href="#integers-that-have-to-travel-as-floats">Integers that have to travel as floats</a></li><li><a href="#three-passes-fill-one-buffer-and-device-memory-is-the-only-copy">Three passes fill one buffer, and device memory is the only copy</a></li><li><a href="#the-constants-that-are-load-bearing-and-the-ones-that-are-decoration">The constants that are load-bearing, and the ones that are decoration</a></li><li><a href="#a-header-that-only-looks-like-padding">A header that only looks like padding</a></li><li><a href="#what-the-layout-assertion-cannot-see">What the layout assertion cannot see</a></li><li><a href="#the-bill-for-an-overloaded-lane">The bill for an overloaded lane</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="a-struct-that-exists-on-only-one-side">A struct that exists on only one side</h2></div>
+<div class="prose reveal">
+<p>There is no material struct on the GPU. Binding 10 of the path-tracer descriptor set is a flat array of `vec4` and nothing else:</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 10) readonly buffer MatColorBuffer { vec4 matColors[]; } matColorBuf;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L32" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:32</a></div>
+<p>A material is therefore a convention rather than a type: three consecutive vec4s, twelve float lanes, and a meaning per lane that every producer and consumer has to agree on independently. The closest-hit shader reassembles the row by hand, one indexed load per slot, before it knows what any lane holds:</p>
+<div class="citation-chip"><code class="citation-code">vec4 matParams2 = matColorBuf.matColors[matID * 3u + 2u];  // (roughMetalTexIdx, unused, unused, unused)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L99" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:99</a></div>
+<p>`layout_meta.hpp` is where that convention is written down. The stride there is derived from the slot count — `kMaterialBytes = kMaterialVec4s * sizeof(glm::vec4)` — and the derived value is then pinned against a literal:</p>
+<div class="citation-chip"><code class="citation-code">static_assert(MaterialGpuPack::kBytes == 48, &quot;material pack is 3 * 16 bytes&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L56" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:56</a></div>
+</div>
+<div class="section-rule"><h2 id="integers-that-have-to-travel-as-floats">Integers that have to travel as floats</h2></div>
+<div class="prose reveal">
+<p>Four of the twelve lanes hold bindless texture indices — uint32 values in an array whose element type is float. `packIdx` folds a signed layer index and the &quot;no texture&quot; case onto one uint32:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t u = (idx &gt;= 0) ? static_cast&lt;uint32_t&gt;(idx) : 0xFFFFFFFFu;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L801" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:801</a></div>
+<p>and then reinterprets the bits instead of converting the value:</p>
+<div class="citation-chip"><code class="citation-code">float f; memcpy(&amp;f, &amp;u, sizeof(float)); return f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L802" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:802</a></div>
+<p>The closest-hit shader reverses that with `floatBitsToUint` before testing against the missing-texture sentinel:</p>
+<div class="citation-chip"><code class="citation-code">if (diffuseTexIdx != 0xFFFFFFFFu) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L109" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:109</a></div>
+<p>A value conversion would not have worked: binary32 represents integers exactly only up to $2^{24}$, and 0xFFFFFFFF has no exact float representation at all. Reinterpretation is exact, but it parks every index in a numerically hostile region. Let $i$ be the uint32 index and $\mathrm{bits}^{-1}(i)$ the binary32 number whose bit pattern equals $i$. For $0 &lt; i &lt; 2^{23}$ the exponent field is all zeros, so the result is subnormal:</p>
+<div class="math-block">$$
+\mathrm{bits}^{-1}(i) = i \cdot 2^{-149}
+$$</div>
+<p>Bindless indices are small, so *every nonzero texture index in the pack is a subnormal float* (index 3 reads as $4.2 \times 10^{-45}$); index 0 reinterprets as $+0.0$, and the sentinel is a NaN. All three survive only because nothing does arithmetic on those lanes — they are memcpy&#x27;d in, loaded, bit-cast out. A pass that multiplied, interpolated, or ran under flush-to-zero there would not crash; it would silently repoint the scene&#x27;s textures.</p>
+</div>
+<div class="section-rule"><h2 id="three-passes-fill-one-buffer-and-device-memory-is-the-only-copy">Three passes fill one buffer, and device memory is the only copy</h2></div>
+<div class="prose reveal">
+<p>The pack is never assembled in one place. `uploadRTMaterialBuffers()` builds the rows first, all four index lanes set to the sentinel, from a function-local vector destroyed at the end of the call. `uploadRTTextureArray()` runs second — it cannot run earlier, because bindless layer indices do not exist until the texture array is built — maps the same allocation and patches only the index lanes:</p>
+<div class="citation-chip"><code class="citation-code">matColors[i * 3 + 2].x = packIdx(i &lt; globalRoughMetalTexLayer.size() ? globalRoughMetalTexLayer[i] : -1); // roughMetalTexIdx</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L809" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:809</a></div>
+<p>That order is fixed by the caller:</p>
+<div class="citation-chip"><code class="citation-code">uploadRTMaterialBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L379" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:379</a></div>
+<p>No assertion enforces it. The patch loop&#x27;s only precondition is that the buffer exists and the layer table is non-empty, so an inverted order would skip every real index in silence rather than crash:</p>
+<div class="citation-chip"><code class="citation-code">if (m_rtMatColorBuffer &amp;&amp; m_rtMatColorMemory &amp;&amp; !globalMatTexLayer.empty()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L793" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:793</a></div>
+<p>The third visit is the inverse-rendering inner loop. `updateRTMaterialParams()` is called from inside `RenderSession::render()`, and one objective evaluation renders every fit view — three by default (`numViews{3}`, clamped to eight on the command line) — so the buffer is re-mapped once per view per loss sample, not once per evaluation:</p>
+<div class="citation-chip"><code class="citation-code">const bool matsOk = renderer.updateRTMaterialParams();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/render_session.hpp#L50" target="_blank" rel="noopener">ohao/inverse/render_session.hpp:50</a></div>
+<div class="citation-chip"><code class="citation-code">for (int v = 0; v &lt; nViews; ++v) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/staged_fit.hpp#L224" target="_blank" rel="noopener">ohao/inverse/staged_fit.hpp:224</a></div>
+<p>It pushes new albedo, roughness and metallic without rebuilding acceleration structures. Because the texture indices live in the same rows and exist nowhere on the CPU, that pass has to write component by component:</p>
+<div class="citation-chip"><code class="citation-code">matColors[matIdx * 3 + 1].x = mc2.w; // roughness packed in .w of materialColors</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L356" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:356</a></div>
+<p>Replacing those scalar stores with whole-`vec4` assignments — the obvious tidy-up — would zero `.z` and `.w`, and bit pattern 0 is not the sentinel: it is texture index 0. Every material would start sampling whichever image landed on bindless layer 0 — wrong textures, not black.</p>
+<p>The three passes also disagree about which actors count. `uploadRTMaterialBuffers()` and `uploadRTTextureArray()` both take every actor that has a model; the solver pass additionally skips the invisible ones:</p>
+<div class="citation-chip"><code class="citation-code">if (!mc || !mc-&gt;getModel() || !mc-&gt;isVisible()) continue;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L333" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:333</a></div>
+<p>`matIdx` is a running counter over whatever survives that filter, so one hidden actor slides every later material short of the row the build pass gave it. Nothing goes out of bounds — the loop stops at `m_rtMatCount` — and the solver writes its albedo, roughness and metallic into the wrong materials.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/materials-pack-matrow.svg" alt="Conceptual byte map of one 48-byte material row, coloured by which of the three upload passes writes each lane. Lane names and writer passes read from layout_meta.hpp and rt_build.cpp; not a memory capture." loading="lazy" /><figcaption>Conceptual byte map of one 48-byte material row, coloured by which of the three upload passes writes each lane. Lane names and writer passes read from layout_meta.hpp and rt_build.cpp; not a memory capture.</figcaption></figure>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Interleaving the indices into the float rows keeps a whole material inside one binding. The alternative — a parallel SSBO of uints beside the colours — needs no bit-casting and no NaN/subnormal discipline, but costs a second descriptor binding and a second buffer to keep in step across all three upload passes, including the solver loop that re-maps the pack once per rendered view. It does not save a fetch: the closest-hit already issues three separate loads from binding 10 before it decodes a single index. OHAO pays for the one binding with the standing rule that four of the twelve lanes are opaque bits.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-constants-that-are-load-bearing-and-the-ones-that-are-decoration">The constants that are load-bearing, and the ones that are decoration</h2></div>
+<div class="prose reveal">
+<p>`MaterialGpuPack` offers `byteOffset()` and `vec4Count()` so nobody has to write the stride by hand, and a canonical `kNoTexture`:</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t    kNoTexture = 0xFFFFFFFFu;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L39" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:39</a></div>
+<p>Grep says otherwise. `byteOffset` and `vec4Count` are called only by their own self-asserts and by `tests/engine/engine_tests.cpp`; `kNoTexture` is referenced nowhere outside its own header. `rt_build.cpp` — the only file that writes binding 10 — spells `0xFFFFFFFFu` out three times instead: twice while building the sentinel rows, once inside `packIdx`. The bit-cast idiom is copied further, into `scene_upload.cpp` and `gbuffer_pass.cpp`, but those two pack indices into the forward and deferred per-draw push constants, never into this buffer, and they take their sentinel from `UINT32_MAX`. Every consumer hardcodes the stride 3. The drift is already in the tree:</p>
+<div class="citation-chip"><code class="citation-code">// allMatColors has 2 vec4s per material, so divide by 2 for material count</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L208" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:208</a></div>
+<p>That comment survives from the two-vec4 era and sits directly above a division by 3. The static asserts are still worth having, but they are a lock, not a derivation: editing `kMaterialVec4s` breaks the build instead of updating the strides, because the strides are in the .cpp files.</p>
+</div>
+<div class="section-rule"><h2 id="a-header-that-only-looks-like-padding">A header that only looks like padding</h2></div>
+<div class="prose reveal">
+<p>The light SSBO plays the same game with a sharper move. `GPULight` is five vec4s, 80 bytes, and the raygen shaders declare binding 11 as `{ uint lightCount; GPULight lights[]; }`. Under std430 a struct of vec4s aligns to 16, so the array cannot begin at offset 4 — it begins at 16, and the writer hardcodes exactly that:</p>
+<div class="citation-chip"><code class="citation-code">VkDeviceSize lightDataOffset = 16;  // align GPULight array to 16 bytes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L257" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:257</a></div>
+<p>The 12 bytes between the count and the first light look like alignment slack. They are not. `pt_miss.rmiss` declares the *same binding* as a different block — four scalars, no light array — and reads the environment-map index and HDRI intensity out of that gap:</p>
+<div class="citation-chip"><code class="citation-code">uint envMapTexIdx;    // bindless index of HDR env map (0xFFFFFFFF = none)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L28" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:28</a></div>
+<p>One buffer, two structurally different views chosen per shader stage. The header is initialised by a 16-byte memset of 0xFF so that `envMapTexIdx` defaults to the same sentinel the material pack uses:</p>
+<div class="citation-chip"><code class="citation-code">memset(mapped, 0xFF, 16);  // init header to 0xFFFFFFFF (no env map by default)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L276" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:276</a></div>
+<p>and because that memset runs on *every* light upload, the environment index has to be re-stamped afterwards or the miss shader loses the HDRI — a coupling between the light path and the environment path that no struct definition hints at.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-layout-assertion-cannot-see">What the layout assertion cannot see</h2></div>
+<div class="prose reveal">
+<p>Both packs are guarded by one macro:</p>
+<div class="citation-chip"><code class="citation-code">OHAO_ASSERT_GPU_LAYOUT(GPULight, layout::kGPULightBytes);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L17" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:17</a></div>
+<p>It expands to two static asserts — that the type satisfies `GpuPod` (trivially copyable, standard layout) and that `sizeof` equals the stated number. Both are facts about C++. Nothing in the tree reflects the SPIR-V, and the GLSL `GPULight` is hand-copied into `pt_raygen.rgen`, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen` with no shared include. The assertion catches a C++ edit and is blind to a shader edit.</p>
+<p>The same header carries a constant that reads like a hard limit and is not one:</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t MAX_GPU_LIGHTS = 64;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L19" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:19</a></div>
+<p>Nothing references it. The RT light buffer is sized from the collected vector, and the shaders clamp their light choice against `lightBuf.lightCount`, never against 64. The deferred side is the opposite case — its cap is a fixed array length, so it genuinely bounds the loop:</p>
+<div class="citation-chip"><code class="citation-code">LightData lights[MAX_LIGHTS];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L95" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:95</a></div>
+</div>
+<div class="section-rule"><h2 id="the-bill-for-an-overloaded-lane">The bill for an overloaded lane</h2></div>
+<div class="prose reveal">
+<p>Compactness is bought by giving one lane several meanings, and the light pack shows the price. `dirAndParam.w` is a radius for sphere lights and an inner cone angle in degrees for spot lights:</p>
+<div class="citation-chip"><code class="citation-code">glm::vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius, spot:innerAngle)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L13" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:13</a></div>
+<div class="citation-chip"><code class="citation-code">dirParam = lc-&gt;getInnerConeAngle();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L167" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:167</a></div>
+<p>The shader-side copy of that struct has already lost half the documentation:</p>
+<div class="citation-chip"><code class="citation-code">vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L21" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:21</a></div>
+<p>and the code matches the comment it kept. Each NEE block in `pt_raygen.rgen` hoists `float lightRadius = light.dirAndParam.w;` before dispatching on light type, and the spot branch consumes that value twice — once inside `cos(radians(...))`, which is correct, and once as the radius of the sphere it samples an emitter point on, which is not. The block appears three times in that file (bounce 0, then once per attribution channel at bounce ≥ 1), so no line inside it is a unique citation anchor; the struct declaration above is. It is also copied whole into the other two raygens — three more in `pt_raygen_offline.rgen`, four in `pt_raygen_realtime.rgen` — ten independent copies of the same branch, none sharing an include.</p>
+<p>The two explicit $4\pi r^2$ factors do cancel: the pre-branch normalisation divides the emitter&#x27;s power by the sphere area, and the spot branch&#x27;s weight multiplies it back. Nothing else cancels. The emitter point is sampled *on* that sphere, so the shadow-ray direction, the distance feeding $1/d^2$, and the cone falloff evaluated along the scattered direction all move with $r$. With the default cone:</p>
+<div class="citation-chip"><code class="citation-code">float innerConeAngle = 15.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/light_component.hpp#L87" target="_blank" rel="noopener">ohao/scene/component/light_component.hpp:87</a></div>
+<p>a spot light aims its shadow ray at a uniformly random point on a sphere of radius 15 *world units* around the light, then evaluates the cone falloff along that scattered direction. Nothing is out of range, no assertion fires, the pack is exactly 80 bytes, and the units are wrong.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The static asserts prove that 48 is 48 and 80 is 80. Nothing proves that a lane still means what its comment says, or that the GLSL copy of a struct still matches the C++ one. Every genuine defect in this unit is semantic — a stale comment, a re-hardcoded stride, an angle read as a radius — sitting underneath a size contract that passes.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`uploadRTMaterialBuffers()` must run before `uploadRTTextureArray()`: the first writes sentinel index lanes, the second is the only code that ever writes real bindless indices. No assertion enforces it — inverted, the patch&#x27;s non-empty guard skips the write in silence and every material keeps the sentinel.</li>
+<li>`updateRTMaterialParams()` must write individual components. Whole-vec4 stores zero the packed texture indices, and 0 is a valid index, not the sentinel.</li>
+<li>`updateRTMaterialParams()` skips invisible mesh actors while both build passes take them, so its running `matIdx` desynchronises from the row layout the moment one actor is hidden, and it patches the wrong materials.</li>
+<li>Nothing may do arithmetic on the four index lanes. Nonzero indices are subnormal floats, index 0 is $+0.0$, the sentinel is a NaN; all three are safe only as opaque bits.</li>
+<li>The light-buffer header is memset to 0xFF on every `uploadLightBuffer()`, so `m_envMapTexIdx` must be re-stamped after each rebuild or `pt_miss.rmiss` reads &quot;no environment map&quot;.</li>
+<li>The GLSL `GPULight` lives in three hand-maintained raygen copies. `OHAO_ASSERT_GPU_LAYOUT` sees none of them, and no test reflects the SPIR-V.</li>
+<li>`MAX_GPU_LIGHTS` is documentation, not a bound. The RT light SSBO is sized from the scene.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/render_session.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/staged_fit.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/gpu_light.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/light_component.hpp</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="ggx.html"><div class="label">← Prev</div><div class="title">GGX implementation</div></a><a class="next" href="advanced.html"><div class="label">Next →</div><div class="title">Advanced material includes</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>

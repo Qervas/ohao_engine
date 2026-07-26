@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>04 · Materials · Lights dual packing — OHAO Monograph</title>
+  <meta name="description" content="GPULight SSBO (64) vs deferred LightData UBO (8)." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500&family=Fraunces:opsz,wght@9..144,300;9..144,500&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="../../styles.css" />
+</head>
+<body data-page="materials/lights" data-root="../.." data-depth="2">
+  <div class="progress" aria-hidden="true"></div>
+  <div id="toc-mount"></div>
+  <div class="mobile-toc">OHAO · Codebase tree</div>
+  <main class="book">
+    <article class="page">
+
+      <p class="crumb"><a href="../../index.html">Monograph</a> ·
+        <a href="../sitemap.html">Tree</a> ·
+        <a href="../materials.html">← Module hub</a> · Lights dual packing</p>
+      <header class="chapter-head reveal">
+        <div class="chapter-num">§</div>
+        <div>
+          <p class="chapter-kicker">materials</p>
+          <h1>Lights dual packing</h1>
+        </div>
+      </header>
+      <div class="thesis-box reveal">
+        <div class="label">Design unit</div>
+        <p>GPULight SSBO (64) vs deferred LightData UBO (8).</p>
+      </div>
+      <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
+        <ol><li><a href="#the-same-integer-means-two-different-lights">The same integer means two different lights</a></li><li><a href="#eighty-bytes-and-one-hundred-twenty-eight">Eighty bytes and one hundred twenty-eight</a></li><li><a href="#the-sixteen-bytes-std430-hands-over">The sixteen bytes std430 hands over</a></li><li><a href="#radiance-divided-by-a-sphere-the-light-may-not-be">Radiance divided by a sphere the light may not be</a></li><li><a href="#one-light-per-shadow-ray-and-the-factor-that-pays-for-it">One light per shadow ray, and the factor that pays for it</a></li><li><a href="#the-include-that-nothing-includes">The include that nothing includes</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+      </nav>
+
+<div class="section-rule"><h2 id="the-same-integer-means-two-different-lights">The same integer means two different lights</h2></div>
+<div class="prose reveal">
+<p>A scene author sets one thing: a `LightComponent` whose `LightType` runs Sphere = 0, Directional = 1, Spot = 2, AreaRect = 3.</p>
+<div class="citation-chip"><code class="citation-code">Sphere = 0,       // point light with radius (soft shadows)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/light_component.hpp#L11" target="_blank" rel="noopener">ohao/scene/component/light_component.hpp:11</a></div>
+<p>Neither light buffer ends up holding only those. Both pipelines also synthesise one light per actor whose material carries an emissive texture — the ray-traced side stamps it in as a sphere at the mesh centre, the deferred side as a point light — so every count on this page is scene lights plus emissive stand-ins:</p>
+<div class="citation-chip"><code class="citation-code">gl.positionAndType = glm::vec4(center, 0.0f);  // sphere type</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L230" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:230</a></div>
+<div class="citation-chip"><code class="citation-code">light.position = glm::vec4(center, 1.0f);  // type 1 = point light</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L473" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:473</a></div>
+<p>The path tracer takes the component enum unmodified — the value is cast straight to float and dropped into `positionAndType.w`:</p>
+<div class="citation-chip"><code class="citation-code">gl.positionAndType = glm::vec4(pos, static_cast&lt;float&gt;(lc-&gt;getLightType()));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L163" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:163</a></div>
+<p>The deferred pipeline does not. Its `LightData` uses the classic raster convention, 0 = directional, 1 = point, 2 = spot:</p>
+<div class="citation-chip"><code class="citation-code">alignas(16) glm::vec4 position;      // xyz = position, w = type (0=dir, 1=point, 2=spot)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L77" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:77</a></div>
+<p>so `updateLightBuffer` swaps 0 and 1 on the way in. The remap is a single nested ternary, and it is written out verbatim in both overloads of the function — the immediate upload and the per-frame one — which is why it has no line of its own to cite:</p>
+<pre class="code-block reveal"><code>int deferredType = (lightComp-&gt;getLightType() == LightType::Sphere) ? 1 : (lightComp-&gt;getLightType() == LightType::Directional) ? 0 : 2;</code></pre>
+<p>AreaRect = 3 has no raster equivalent, so the else-arm sends it to 2, and the deferred lighting loop treats the rectangle as a cone — attenuated by the component&#x27;s cone angles, 30° and 45° on a default-constructed `LightComponent`, which nobody authoring an area light ever set:</p>
+<div class="citation-chip"><code class="citation-code">attenuation *= calculateSpotAttenuation(L, normalize(light.direction.xyz),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L240" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:240</a></div>
+<p>Those two numbers do not come from where you would look for them. `LightComponent` declares default member initialisers of 15° and 30°, and its one constructor&#x27;s initialiser list overrides them with 30° and 45°, along with the header&#x27;s intensity and range. Only the members that list omits — `radius` and the area edges — keep the advertised defaults:</p>
+<div class="citation-chip"><code class="citation-code">, innerConeAngle(30.0f)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/light_component.cpp#L13" target="_blank" rel="noopener">ohao/scene/component/light_component.cpp:13</a></div>
+<p>The two overloads are not the maintenance risk the duplicated block suggests; they are already the maintenance bug. The packing block is byte-identical, but a dozen lines below it the no-light fallbacks have diverged: the immediate path installs a warm default sun whose intensity is $\pi$, cancelling the diffuse BRDF&#x27;s $1/\pi$, while the per-frame path installs a white one at intensity 1. An unlit scene is roughly $\pi$ times brighter through one than through the other, and which one you get depends on the render path: `renderDeferred` and `renderLegacy` call the immediate overload, `renderMultiFrame` calls the per-frame one:</p>
+<div class="citation-chip"><code class="citation-code">defaultLight.color = glm::vec4(1.0f, 0.98f, 0.95f, glm::pi&lt;float&gt;());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L319" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:319</a></div>
+<div class="citation-chip"><code class="citation-code">defaultLight.color = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L407" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:407</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/materials-lights-packing.svg" alt="Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, renderer.hpp and light_upload.cpp; the diagram is conceptual, not a memory dump." loading="lazy" /><figcaption>Byte layout of both light buffers and the type-code crossing between them. Offsets and struct sizes are read from gpu_light.hpp, renderer.hpp and light_upload.cpp; the diagram is conceptual, not a memory dump.</figcaption></figure>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`positionAndType.w` carries the LightComponent enum; `LightData.position.w` does not. Read either code with the other table in hand and every sphere light becomes a sun. Area lights exist only on the ray-traced side.</p></div>
+</div>
+<div class="section-rule"><h2 id="eighty-bytes-and-one-hundred-twenty-eight">Eighty bytes and one hundred twenty-eight</h2></div>
+<div class="prose reveal">
+<p>The ray-traced pack is the small one. `GPULight` is five `vec4`s, std430, with a static assert pinning the size so a stray member cannot silently desynchronise it from the GLSL mirror:</p>
+<div class="citation-chip"><code class="citation-code">// 5 vec4s = 80 bytes per light, std430 layout</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L9" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:9</a></div>
+<p>`LightData` is 128 bytes, and 64 of those are a per-light shadow matrix the path tracer has no use for — it traces the shadow ray instead of projecting into a map:</p>
+<div class="citation-chip"><code class="citation-code">alignas(16) glm::mat4 lightSpaceMatrix; // Transform to light space for shadow mapping (64 bytes)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L81" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:81</a></div>
+<p>The capacity story inverts too. The deferred UBO is a fixed array of `MAX_LIGHTS = 8`, and both loops that fill it — scene `LightComponent`s first, then the cached emissive stand-ins — `break` once it is full, so light nine is silently dropped and an emissive mesh can eat the slot a hand-placed light wanted:</p>
+<div class="citation-chip"><code class="citation-code">LightData lights[MAX_LIGHTS];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L95" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:95</a></div>
+<p>The RT side declares a cap of 64 that nothing anywhere reads — the SSBO is sized from the collected vector at upload time, so the real limit is device memory, not the constant:</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t MAX_GPU_LIGHTS = 64;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L19" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:19</a></div>
+<div class="citation-chip"><code class="citation-code">VkDeviceSize bufSize = lightDataOffset + gpuLights.size() * sizeof(GPULight);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L258" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:258</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The obvious alternative is one union struct feeding both pipelines, and the byte counts say why it was not taken: a shared layout drags the 64-byte shadow matrix into a buffer the raygen re-reads once per next-event sample, and drags area edges and a sampling radius into a uniform buffer whose eight slots are the scarcest resource in the deferred pass. Two packs cost a remap function. One pack costs bandwidth in the hot loop of both pipelines.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-sixteen-bytes-std430-hands-over">The sixteen bytes std430 hands over</h2></div>
+<div class="prose reveal">
+<p>`GPULight` has `vec4` alignment, so std430 rounds the array base of any buffer that begins with a `uint` counter up to 16 regardless. The upload spends eight of those twelve leftover bytes — the bindless environment-map index at offset 4, an HDRI intensity scale at offset 8 — and leaves the last four as true padding, holding whatever the header fill left there:</p>
+<div class="citation-chip"><code class="citation-code">VkDeviceSize lightDataOffset = 16;  // align GPULight array to 16 bytes</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L257" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:257</a></div>
+<p>The header is cleared to all-ones first, which makes the environment-map slot read `0xFFFFFFFF` — the sentinel the miss shader tests for &quot;no HDRI&quot; — before the real count is written over the first four bytes and the intensity scale over the third word:</p>
+<div class="citation-chip"><code class="citation-code">memset(mapped, 0xFF, 16);  // init header to 0xFFFFFFFF (no env map by default)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L276" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:276</a></div>
+<div class="citation-chip"><code class="citation-code">memcpy(static_cast&lt;uint8_t*&gt;(mapped) + 8, &amp;m_envIntensityScale, sizeof(float));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L282" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:282</a></div>
+<p>Binding 11 is declared four times across the ray-tracing stages, in two shapes. All three raygen shaders name only `lightCount` and let std430 alignment skip the rest of the header. `pt_miss.rmiss` spells the header out in full — `lightCount`, `envMapTexIdx`, `envIntensity`, then a `uint _pad` it never reads — because it is the stage that samples the environment, and it needs the third word as much as the second: the index selects the HDRI, the scale multiplies it.</p>
+<div class="citation-chip"><code class="citation-code">float envIntensity;   // HDRI scale (default 1.0; inverse/relight)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L29" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:29</a></div>
+<div class="citation-chip"><code class="citation-code">payload.color = texture(textures[nonuniformEXT(lightBuf.envMapTexIdx)], uv).rgb * envS;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L66" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:66</a></div>
+<p>That side channel creates the sharpest ordering constraint on the page. `uploadLightBuffer` destroys and reallocates the buffer on every call, so nothing in the header survives a re-upload; even when the HDR reload is skipped because the path is unchanged, both the index and the intensity scale have to be stamped back into the fresh header, or the scene loses its sky the moment a light moves:</p>
+<div class="citation-chip"><code class="citation-code">// allocated light buffer (header is memset to 0xFF each upload).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L289" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:289</a></div>
+</div>
+<div class="section-rule"><h2 id="radiance-divided-by-a-sphere-the-light-may-not-be">Radiance divided by a sphere the light may not be</h2></div>
+<div class="prose reveal">
+<p>`dirAndParam.w` is overloaded: the packer fills it with the sphere radius, then, two lines later, overwrites it with the inner cone angle in degrees when the type is Spot.</p>
+<div class="citation-chip"><code class="citation-code">float dirParam = lc-&gt;getRadius();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L165" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:165</a></div>
+<p>The bounce-0 next-event-estimation block of the default `pt_raygen.rgen` converts intensity to radiance *before* it branches on type, using the surface area of a sphere of that radius:</p>
+<div class="citation-chip"><code class="citation-code">// ==== Analytic direct NEE at bounce 0 ====</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L304" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:304</a></div>
+<p>Write $c$ and $I$ for the packed colour and intensity, $r=\max(\texttt{dirAndParam.w},0.01)$, $d$ for the distance from the shading point to the sampled light point, $\theta_\ell$ for the angle at the light between its normal and the incoming direction, $s$ for the clamped spot cone falloff, and $A$ for the rectangle area in `extra2.w`. The block forms $L_e = cI/\max(4\pi r^2, 0.01)$ once, then each branch multiplies by its own geometric weight, giving</p>
+<div class="math-block">$$
+L_e w = \frac{cI\cos\theta_\ell}{d^2},\quad \frac{cI}{4\pi r^2},\quad \frac{cI s^2}{d^2},\quad \frac{cI A\cos\theta_\ell}{4\pi r^2 d^2}
+$$</div>
+<p>for sphere, directional, spot and area respectively. The $4\pi r^2$ reappears inside the sphere and spot weights and cancels, which is why growing a sphere light softens its shadow without brightening it. It does not cancel for the other two: a directional light&#x27;s brightness and a rect light&#x27;s brightness both scale as $1/r^2$ in a radius that means nothing for either shape. The radius is one of the members the constructor leaves alone, so it really is 0.5 by default, which makes the divisor $4\pi r^2$ exactly $\pi$ — so out of the box both shapes are quietly *darkened* by $1/\pi$:</p>
+<div class="citation-chip"><code class="citation-code">float radius = 0.5f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/light_component.hpp#L86" target="_blank" rel="noopener">ohao/scene/component/light_component.hpp:86</a></div>
+<p>The spot branch is worse than a scale factor. It reads `dirAndParam.w` twice in the same block — once through `cos(radians(...))` as an angle, which is correct, and once unconverted as the radius of the sphere it jitters the sampled light point over. The C++ struct is the only place in the tree where both meanings are written down. `pt_raygen.rgen` and `pt_raygen_offline.rgen` copy the comment but keep only the `sphere:radius` half; `pt_raygen_realtime.rgen` carries no member comments at all. Anyone reading a shader alone sees one meaning:</p>
+<div class="citation-chip"><code class="citation-code">glm::vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius, spot:innerAngle)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/gpu_light.hpp#L13" target="_blank" rel="noopener">ohao/render/rt/gpu_light.hpp:13</a></div>
+<div class="citation-chip"><code class="citation-code">vec4 dirAndParam;        // xyz=direction, w=param (sphere:radius)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L21" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:21</a></div>
+<div class="citation-chip"><code class="citation-code">vec4 dirAndParam;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L50" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:50</a></div>
+<p>A default-constructed spot, inner cone 30°, therefore has its sample point scattered over a sphere of radius 30 world units, so its direction and its shadow ray are close to meaningless. Sphere, directional and area lights do not share the fault — but every raygen does. The same clamp-then-jitter pairing sits in each next-event block of all three: three in `pt_raygen.rgen`, three in `pt_raygen_offline.rgen`, four in `pt_raygen_realtime.rgen`.</p>
+</div>
+<div class="section-rule"><h2 id="one-light-per-shadow-ray-and-the-factor-that-pays-for-it">One light per shadow ray, and the factor that pays for it</h2></div>
+<div class="prose reveal">
+<p>Each next-event sample picks a single light uniformly rather than looping over all of them. With $N_\ell$ entries in the buffer — scene lights plus the synthesised emissive ones — the selection density is $p(\ell)=1/N_\ell$, and an unbiased estimator divides by it, so the contribution is multiplied by the light count:</p>
+<div class="math-block">$$
+\hat L_d = \frac{L_e\,w\,f_r\cos\theta_s}{p(\ell)} = N_\ell\,L_e\,w\,f_r\cos\theta_s
+$$</div>
+<p>where $f_r$ is the Cook-Torrance value evaluated inline in the same block and $\theta_s$ is the angle at the shading point. That `* float(lightBuf.lightCount)` is the visible half of the division:</p>
+<div class="citation-chip"><code class="citation-code">vec3 directContribution = Le * (diff + spec) * NdotL * weight * float(lightBuf.lightCount);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L414" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:414</a></div>
+<p>The whole decode-and-sample block appears three times in `pt_raygen.rgen` — once at the primary hit and once inside each of the two indirect bounce paths, where the identical expression is pre-multiplied by that path&#x27;s specular or diffuse throughput. It was then copied wholesale into the two profile raygens: three more blocks in `pt_raygen_offline.rgen`, four in `pt_raygen_realtime.rgen`. Neither file is dead — both are bound by a live render profile:</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L220" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:220</a></div>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_realtime.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L205" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:205</a></div>
+<p>The ten copies are not clones — the realtime sphere branch has since been replaced with solid-angle sampling, and the offline block&#x27;s primary hit wraps the diffuse `NdotL` with a subsurface term the specular half does not get — but the header decode, the type dispatch and the `dirAndParam.w` overload are the same in all of them. A light-layout change lands in ten places across three files.</p>
+<p>The shadow ray uses the sampled point&#x27;s distance, not the light&#x27;s radius, as `Tmax`, and the three positional branches shorten it by 0.02 so the ray stops just short of the light&#x27;s own geometry; the origin is pushed 0.01 along the shading normal and `Tmin` is 0.001:</p>
+<div class="citation-chip"><code class="citation-code">hitPos + N * 0.01, 0.001, L, shadowDist, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L392" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:392</a></div>
+<p>Directional lights get a hard-coded `Tmax` of 10000 instead, which is a scene-scale assumption rather than a computed bound.</p>
+</div>
+<div class="section-rule"><h2 id="the-include-that-nothing-includes">The include that nothing includes</h2></div>
+<div class="prose reveal">
+<p>`shaders/includes/lighting/light_types.glsl` defines the `LIGHT_*` constants, a `LightParams` struct, direction and distance extractors, and an ambient helper. No file in `shaders/` or `ohao/` includes it. Its formulas still ship, though, written out by hand: `forward.frag` branches on identically-named macros pulled from `includes/common/types.glsl`, and `deferred_lighting.frag` inlines the same direction selection and the same `ambient * albedo * ao` product with bare integer literals. Unused file, live math.</p>
+<p>The header is not merely redundant, it is a trap: its `LIGHT_POINT` is 1, and 1 is *directional* in the `GPULight` table this page opened with.</p>
+<div class="citation-chip"><code class="citation-code">#define LIGHT_POINT       1</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_types.glsl#L23" target="_blank" rel="noopener">shaders/includes/lighting/light_types.glsl:23</a></div>
+<p>Including it into a ray-tracing stage to avoid retyping three constants inverts the two most common light types in the engine.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The environment-map index at byte 4 and the intensity scale at byte 8 die with the buffer on every `uploadLightBuffer`. Both must be re-stamped after the reallocation even when the HDR is not reloaded, or the sky goes black on the next light edit.</li>
+<li>`positionAndType.w` is the raw `LightType`; `LightData.position.w` is the remapped raster code. Anything reading a light type must know which buffer it came from.</li>
+<li>`dirAndParam.w` means radius for sphere/directional/area and inner cone angle in degrees for spot. Every spot branch in all three raygens reads both meanings; only the angle reading is correct.</li>
+<li>Both buffers are filled from `LightComponent`s *and* from lights synthesised per emissive-textured actor. `lightCount` — and therefore the estimator&#x27;s $N_\ell$ — counts both, and the deferred eight-slot budget is shared between them.</li>
+<li>The deferred UBO holds exactly eight lights and drops the rest without warning; the RT SSBO is sized at upload and ignores its own `MAX_GPU_LIGHTS = 64`.</li>
+<li>The estimator multiplies by `lightCount` because it selects one light uniformly. Replacing uniform selection with importance sampling means replacing that factor with the real inverse density.</li>
+<li>The two `updateLightBuffer` overloads must be edited together. They already disagree on the no-light fallback, so a scene with zero `LightComponent`s renders at different brightness through `renderMultiFrame` than through `renderDeferred`.</li>
+</ul>
+</div>
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/scene/component/light_component.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/buffer_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/light_component.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/gpu_light.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/lighting/light_types.glsl</code><span class="desc"></span></div>
+      </div>
+      <div class="aside ray reveal">
+        <div class="aside-label">Navigate</div>
+        <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.
+        <a href="../sitemap.html">Sitemap</a> · hover glossary terms anywhere.</p>
+      </div>
+
+<nav class="pager"><a href="advanced.html"><div class="label">← Prev</div><div class="title">Advanced material includes</div></a><a class="next" href="../sitemap.html"><div class="label">Tree →</div><div class="title">Sitemap</div></a></nav>
+    </article>
+  </main>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script defer src="../../js/nav-tree.js"></script>
+  <script defer src="../../js/glossary-data.js"></script>
+  <script defer src="../../js/glossary.js"></script>
+  <script defer src="../../js/chrome.js"></script>
+</body>
+</html>
