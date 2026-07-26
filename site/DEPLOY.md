@@ -13,8 +13,12 @@ The static site lives in **`site/`** at the repo root. GitHub Actions workflow:
 The workflow:
 
 - Stages `site/` into an artifact
-- Resolves `media` / `images` symlinks from `docs/` **excluding inverse research media**
-- Fails the build if inverse product strings appear in HTML
+- **Always** copies showcase files from `docs/media` and `docs/images` into the
+  artifact (local `site/media` / `site/images` are optional untracked symlinks
+  for local preview only — they are **not** required in git)
+- Excludes inverse research media
+- Fails if cover assets are missing (`media/helmet_orbit.mp4`,
+  `images/hero_outdoor_graded.jpg`) or if inverse product strings appear in HTML
 - Deploys with `actions/deploy-pages`
 
 Public URL shape (project pages):

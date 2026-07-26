@@ -6,6 +6,8 @@ on:
     branches: [master, main]
     paths:
       - "site/**"
+      - "docs/media/**"
+      - "docs/images/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -28,45 +30,58 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Stage site (resolve media symlinks into the artifact)
+      - name: Stage site (materialize media + images from docs/)
         run: |
           set -euo pipefail
           rm -rf _site_publish
           mkdir -p _site_publish
-          # Copy site tree; follow symlinks so docs/media + docs/images ship
+
+          # Site HTML/CSS/JS (do not rely on untracked local symlinks)
           cp -a site/. _site_publish/
-          if [ -L site/media ] || [ -d site/media ]; then
-            rm -rf _site_publish/media
-            mkdir -p _site_publish/media
-            # Real showcase only — exclude inverse research media from public Pages
-            if [ -d docs/media ]; then
-              for f in docs/media/*; do
-                base=$(basename "$f")
-                if [ "$base" = "inverse" ]; then
-                  echo "skip inverse media: $base"
-                  continue
-                fi
-                cp -a "$f" _site_publish/media/
-              done
-            fi
+
+          # Drop any media/images symlink or empty dir from the site copy
+          rm -rf _site_publish/media _site_publish/images
+          mkdir -p _site_publish/media _site_publish/images
+
+          # Showcase media from docs/ — always, independent of site/media existing in git.
+          # Exclude inverse research media from the public Pages tree.
+          if [ ! -d docs/media ]; then
+            echo "docs/media missing in checkout" >&2
+            exit 1
           fi
-          if [ -L site/images ] || [ -d site/images ]; then
-            rm -rf _site_publish/images
-            mkdir -p _site_publish/images
-            if [ -d docs/images ]; then
-              for f in docs/images/*; do
-                base=$(basename "$f")
-                case "$base" in
-                  inverse_*) echo "skip inverse still: $base"; continue ;;
-                esac
-                cp -a "$f" _site_publish/images/
-              done
+          for f in docs/media/*; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            if [ "$base" = "inverse" ]; then
+              echo "skip inverse media: $base"
+              continue
             fi
+            cp -a "$f" _site_publish/media/
+            echo "media: $base"
+          done
+
+          if [ ! -d docs/images ]; then
+            echo "docs/images missing in checkout" >&2
+            exit 1
           fi
+          for f in docs/images/*; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")
+            case "$base" in
+              inverse_*) echo "skip inverse still: $base"; continue ;;
+            esac
+            cp -a "$f" _site_publish/images/
+            echo "images: $base"
+          done
+
           test -f _site_publish/index.html
           test -f _site_publish/m/path-tracer.html
           test -f _site_publish/m/audio.html
           test -f _site_publish/assets/plates/pt_bindings.svg
+          # Cover video + poster must ship (index.html references these paths)
+          test -f _site_publish/media/helmet_orbit.mp4
+          test -f _site_publish/images/hero_outdoor_graded.jpg
+
           # Guard: no inverse product strings in published HTML
           if grep -RInE 'inverse_fit|Diff-IR|MAPTEST|quality-plate' _site_publish --include='*.html' ; then
             echo "inverse product content found in site publish tree" >&2
@@ -74,6 +89,8 @@ jobs:
           fi
           echo "Staged publish tree:"
           find _site_publish -type f | wc -l
+          ls -la _site_publish/media/
+          ls -la _site_publish/images/ | head
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
