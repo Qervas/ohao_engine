@@ -33,30 +33,118 @@
         <p>Offline guided denoise path.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-buffer-oidn-is-actually-handed">The buffer OIDN is actually handed</a></li><li><a href="#why-this-backend-is-the-offline-one">Why this backend is the offline one</a></li><li><a href="#the-guides-and-the-one-that-is-encoded-wrong">The guides, and the one that is encoded wrong</a></li><li><a href="#denoise-in-linear-tonemap-after">Denoise in linear, tonemap after</a></li><li><a href="#where-oidn-is-deliberately-forbidden">Where OIDN is deliberately forbidden</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-buffer-oidn-is-actually-handed">The buffer OIDN is actually handed</h2></div>
 <div class="prose reveal">
-<p>Intel Open Image Denoise for offline/reference quality.</p>
+<p>A denoiser is only as good as the estimator underneath it, so the first question is which image leaves the GPU. It is not the tonemapped RGBA8 frame the viewer blits; it is the path tracer&#x27;s accumulation image (binding 1, `RGBA32F`), copied back through a staging buffer along with the albedo and normal AOVs.</p>
+<div class="citation-chip"><code class="citation-code">bool ok = readbackImage(rtRenderer-&gt;getAccumImage(), beauty);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L622" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:622</a></div>
+<p>Which raygen wrote that image is not readable off `PathTracer`, whose default shader set names `rt_pt_raygen.rgen.spv`. Nothing ever runs it: the only code that constructs a `PathTracer` is `RTProfileRendererBase`, and its `init()` replaces the shader set unconditionally — with the realtime or the offline raygen, the only two profiles the renderer hands out. `pt_raygen.rgen` is compiled by the shader directory&#x27;s `GLOB_RECURSE` and never loaded.</p>
+<div class="citation-chip"><code class="citation-code">m_pathTracer.setShaderSet(m_shaderSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L99" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:99</a></div>
+<p>So the shader that produces OIDN&#x27;s input is `pt_raygen_offline.rgen`. What it writes is not a radiance *sum*: `.rgb` holds a running mean and `.w` the sample count, one dispatch per sample, folded in as a plain progressive average over the pixel&#x27;s own history.</p>
+<div class="citation-chip"><code class="citation-code">acc = (prev.rgb * prev.w + radiance) / count;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1259" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1259</a></div>
+<div class="citation-chip"><code class="citation-code">imageStore(accumBuffer, pixel, vec4(acc, count));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1262" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1262</a></div>
+<p>The reprojected-history branch sitting beside it is dead in this shader — it is forced off, because reading a neighbour pixel that sibling invocations are concurrently writing is a race with no defined ordering, and the offline camera is static anyway.</p>
+<div class="citation-chip"><code class="citation-code">// own-pixel progressive-accumulation branch.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1244" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1244</a></div>
+<p>So OIDN receives the Monte-Carlo mean at whatever spp has accrued, in linear HDR, pre-tonemap — which is precisely the input its `RT` filter is trained on. The alpha channel is dropped on the way: `rgba32fToFloat3` copies three of four floats per pixel, discarding the sample count and the 16-byte pixel stride.</p>
+<div class="citation-chip"><code class="citation-code">rgb[i * 3 + 0] = rgba[i * 4 + 0];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L47" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:47</a></div>
+<p>The repacked beauty vector is then bound as both `color` and `output`, so the filter denoises in place and no fourth allocation appears:</p>
+<div class="citation-chip"><code class="citation-code">filter.setImage(&quot;output&quot;, beauty.data(), oidn::Format::Float3, width, height);  // in-place</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L22" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:22</a></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="why-this-backend-is-the-offline-one">Why this backend is the offline one</h2></div>
 <div class="prose reveal">
-<p>oidn_denoise after enough spp; guided by albedo/normal when available.</p>
+<p>Every call builds the whole OIDN stack from scratch: a device and its `commit()`, then an `RT` filter and its own `commit()`. All of it is function-local, so no device, engine or filter state survives to the next invocation.</p>
+<div class="citation-chip"><code class="citation-code">oidn::DeviceRef device = oidn::newDevice(oidn::DeviceType::Default);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L17" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:17</a></div>
+<div class="citation-chip"><code class="citation-code">filter.commit();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L30" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:30</a></div>
+<p>Add the three full-resolution readbacks — each allocating its own staging buffer, submitting a command buffer and blocking on `vkQueueWaitIdle`, preceded by a `vkDeviceWaitIdle` — and the per-invocation cost is structural, not tunable. The only thing that keeps it usable in the GLFW viewer is a one-shot cache: `render()` invalidates it, the first `getPixels()` after that pays for the whole chain, and repeat calls in the same frame are free.</p>
+<div class="citation-chip"><code class="citation-code">if (m_denoiseCacheValid) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L710" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:710</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>OIDN can run on a CUDA/SYCL/HIP device and import Vulkan allocations as external memory, which would keep the whole thing on-GPU. OHAO does not do that — and the `DeviceType::Default` request is not what stops it: `Default` asks OIDN for a device, not for the CPU. What forces the PCIe round trip is the API level the call site uses. `oidnDenoise` takes host spans and hands `setImage` the plain pointers inside them, never external-memory-backed `oidn::BufferRef`s, so the pixels must be resident on the CPU before `execute()` runs, whatever device it runs on.  {{cite ohao/render/rt/denoise/oidn_denoise.cpp &quot;bool oidnDenoise(std::span&lt;float&gt; beauty, std::span&lt;const float&gt; albedo,&quot;}}  The rejected alternative buys frame time the offline profile does not need, at the cost of a second device/allocator lifetime to keep in sync with the Vulkan one — and the realtime slots are already filled by NRD, à-trous and DLSS-RR, all of which stay GPU-side. OIDN is the reference backend; latency is explicitly not its job.</p></div>
+<p>The dispatch reflects that: `getPixels()` early-returns for `None`, `Atrous` and `DLSSRR` — all three already have their result in `m_pixelBuffer`, the last two because they filter on the GPU into the output image — and `NRD` takes its own GPU readback branch. OIDN is never tested for; it is the fall-through.</p>
+<div class="citation-chip"><code class="citation-code">if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L706" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:706</a></div>
+<p>The `bool denoised = false;` guard immediately above the call is a fossil of the era when OptiX was tried first and OIDN was the fallback; `--denoise=optix` now parses straight to OIDN with a warning.</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[Denoise] --denoise=optix is no longer supported — falling back to OIDN\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/denoise_types.cpp#L24" target="_blank" rel="noopener">ohao/render/rt/denoise/denoise_types.cpp:24</a></div>
+<p>The practical consequence: any `DenoiseMode` added later without an entry in that early-return will silently be routed through OIDN&#x27;s readback path.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-guides-and-the-one-that-is-encoded-wrong">The guides, and the one that is encoded wrong</h2></div>
 <div class="prose reveal">
-<p>Best quality when latency is irrelevant.</p>
+<p>Albedo and normal guides let the filter preserve texture and geometric edges it would otherwise smear. OHAO always supplies both — the header supports empty spans to skip a guide, but the single in-engine caller passes all three buffers, and auxiliary AOVs default to on.</p>
+<div class="citation-chip"><code class="citation-code">bool enableAuxiliaryAOVs{true};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L21" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:21</a></div>
+<p>Two things about those guides do not match what OIDN documents. First, the normal AOV is stored in a half-range encoding:</p>
+<div class="citation-chip"><code class="citation-code">imageStore(normalAOV, pixel, vec4(N * 0.5 + 0.5, 1.0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L268" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:268</a></div>
+<p>and it is passed to the filter with no decode step anywhere between the readback and `setImage`:</p>
+<div class="citation-chip"><code class="citation-code">filter.setImage(&quot;normal&quot;, const_cast&lt;float*&gt;(normal.data()), oidn::Format::Float3, width, height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L27" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:27</a></div>
+<p>The OIDN manual is unusually explicit here: the `normal` image must hold world- or view-space vectors in $[-1, 1]$, and normals mapped to $[0, 1]$ are *not* acceptable and must be remapped. What the filter sees is therefore an all-positive, half-scale vector field — still edge-correlated, so it is not useless, but not the signal the network was trained on. The fix is one decode, either in the raygen&#x27;s AOV write or between readback and `setImage`.</p>
+<p>The same raygen already writes true $[-1,1]$ normals into binding 7 — with perceptual roughness in `.w` — but only behind the `PT_FLAG_DLSSRR` bit. The encoding is therefore selected by `DenoiseMode`, not by render profile: `RTRenderProfile` has exactly two values, `Realtime` and `Offline`, and DLSS-RR is not one of them. OIDN is simply on the wrong side of that gate.</p>
+<div class="citation-chip"><code class="citation-code">imageStore(normalAOV, pixel, vec4(N, roughness));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L281" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:281</a></div>
+<p>Second, the guides are not accumulated. Bindings 6 and 7 are overwritten by every sample, while the camera jitters within the pixel each sample, so the guide that survives to readback is the *last* sample&#x27;s first hit rather than the pixel&#x27;s average — OIDN&#x27;s manual asks for anti-aliased, accumulated features. On a primary miss the albedo AOV is filled with environment radiance, which for an HDRI routinely exceeds the $[0,1]$ range the albedo guide is specified over.</p>
+<div class="citation-chip"><code class="citation-code">imageStore(albedoAOV, pixel, vec4(payload.color, 1.0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L248" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:248</a></div>
+<p>Neither defect is compensated for. `cleanAux` — the hint that would tell OIDN these guides are already clean — appears nowhere in the tree: it is not left at its default as a decision, it is simply never considered.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="denoise-in-linear-tonemap-after">Denoise in linear, tonemap after</h2></div>
 <div class="prose reveal">
-<p>Intel Open Image Denoise for offline/reference — quality over latency.</p>
-<p>Typically runs after enough spp accumulate; guided by albedo/normal when available.</p>
+<p>Only after filtering does the HDR result become 8-bit. In the offline profile the CPU-side tonemap is a deliberate mirror of the one in the raygen, so that toggling `--denoise=oidn` changes the noise and nothing else. Both apply the Narkowicz ACES fit</p>
+<div class="math-block">$$
+\text{ACES}(x) = \operatorname{clamp}\!\left(\frac{x\,(a x + b)}{x\,(c x + d) + e},\, 0,\, 1\right),\quad (a,b,c,d,e) = (2.51,\,0.03,\,2.43,\,0.59,\,0.14)
+$$</div>
+<p>to exposure-scaled linear radiance $x = 0.5\,L$, then encode with $\gamma = 2.2$. The coefficients live once in C++ and once in GLSL:</p>
+<div class="citation-chip"><code class="citation-code">float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L56" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:56</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 ldr = ACES(denoised * 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1339" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1339</a></div>
+<p>and the exposure the denoised path passes is the same 0.5 the shader hard-codes.</p>
+<div class="citation-chip"><code class="citation-code">m_denoisedPixelBuffer = ohao::float3ToRGBA8(beauty3.data(), rw, rh, /*exposure*/ 0.5f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L758" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:758</a></div>
+<p>The mirror only holds where the GPU does nothing but tonemap, which is a property of the profile rather than of the tonemap. `kRealtimeRTSettings` turns the raygen&#x27;s own à-trous filter and luminance rescale on, so the realtime GPU frame is tonemapped *after* filtering while the OIDN path tonemaps the raw accumulation — same ACES fit, different input.</p>
+<div class="citation-chip"><code class="citation-code">.enableInternalDenoise = true,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L43" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:43</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 ldr = ACES(denoised * 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1907" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1907</a></div>
+<p>That pairing is reachable: the GLFW viewer defaults to `RTRealtime` and applies `--denoise=` on top of the preset, and nothing rejects it — `allowExternalDenoiser`, `false` for realtime, is only ever printed in a startup log. Toggling the flag there moves the grade, not just the noise.</p>
+<div class="citation-chip"><code class="citation-code">cli.rtMode = RenderMode::RTRealtime;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L127" target="_blank" rel="noopener">examples/interactive.cpp:127</a></div>
+<div class="citation-chip"><code class="citation-code">&lt;&lt; &quot;, externalDenoiser=&quot; &lt;&lt; (m_rtSettings.allowExternalDenoiser ? &quot;allowed&quot; : &quot;off&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L474" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:474</a></div>
+<p>The two tonemaps are not bit-identical either. The GPU store into an `rgba8` UNORM image rounds to nearest; the CPU path truncates.</p>
+<div class="citation-chip"><code class="citation-code">rgba8[i * 4 + 0] = static_cast&lt;uint8_t&gt;(std::clamp(r * 255.0f, 0.0f, 255.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/oidn_denoise.cpp#L72" target="_blank" rel="noopener">ohao/render/rt/denoise/oidn_denoise.cpp:72</a></div>
+<p>That is a uniform sub-LSB downward bias — invisible by eye, but enough to move a per-pixel diff against a `--denoise=none` reference, which matters if you are using such diffs as a regression signal.</p>
+</div>
+<div class="section-rule"><h2 id="where-oidn-is-deliberately-forbidden">Where OIDN is deliberately forbidden</h2></div>
+<div class="prose reveal">
+<p>The inverse-rendering module keeps the denoiser out of the optimizer. Every render whose pixels feed the image loss — and therefore every finite-difference gradient taken of that loss — is rendered with `DenoiseMode::None`, in the synthetic and the lab-capture branch alike.</p>
+<div class="citation-chip"><code class="citation-code">(!cfg.labBundle.empty()) ? DenoiseMode::None : DenoiseMode::None;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/staged_fit.hpp#L228" target="_blank" rel="noopener">ohao/inverse/staged_fit.hpp:228</a></div>
+<p>Presentation renders are a separate slot, and there the default is *on*: `showDenoise` starts at `DenoiseMode::OIDN`, and the CLI accepts only `none` or `oidn` for it.</p>
+<div class="citation-chip"><code class="citation-code">DenoiseMode showDenoise{DenoiseMode::OIDN};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/fit_config.hpp#L40" target="_blank" rel="noopener">ohao/inverse/fit_config.hpp:40</a></div>
+<div class="citation-chip"><code class="citation-code">if (a.cfg.showDenoise != DenoiseMode::None &amp;&amp; a.cfg.showDenoise != DenoiseMode::OIDN) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/fit_config.hpp#L356" target="_blank" rel="noopener">ohao/inverse/fit_config.hpp:356</a></div>
+<p>That default reaches past presentation. The SHOW RMSE, PSNR and SSIM a run prints as its headline result are computed on the recovered image rendered with `showDenoise`, against a synthetic target rendered through `showDenoise` too — so by default both sides of the comparison have been through the prior.</p>
+<div class="citation-chip"><code class="citation-code">labM.showRmse = rmseRGB(recoveredPrimary, tb.targetsShow[0]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/fit_engine.hpp#L326" target="_blank" rel="noopener">ohao/inverse/fit_engine.hpp:326</a></div>
+<div class="citation-chip"><code class="citation-code">session.render(v, cfg.show, cfg.seed, cfg.showDenoise);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/fit_targets.hpp#L207" target="_blank" rel="noopener">ohao/inverse/fit_targets.hpp:207</a></div>
+<p>Real-photo lab mode is the one configuration that forces the presentation denoiser off, and its holdout and relight evaluations render with `None` as well.</p>
+<div class="citation-chip"><code class="citation-code">cfg.showDenoise = DenoiseMode::None;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/fit_targets.hpp#L59" target="_blank" rel="noopener">ohao/inverse/fit_targets.hpp:59</a></div>
+<div class="citation-chip"><code class="citation-code">constexpr DenoiseMode kLabEvalDenoise = DenoiseMode::None;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/fit_lab_eval.hpp#L85" target="_blank" rel="noopener">ohao/inverse/fit_lab_eval.hpp:85</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>A neural denoiser is a strong, non-linear, spatially-correlated prior. It makes a converged render look converged, and it makes an unconverged render *also* look converged — so any measurement taken through it is measuring the prior as much as the integrator. OHAO holds that line where a biased signal would corrupt the fit itself — the loss and the finite-difference gradients — and does not hold it for the reported image metrics, which outside lab mode are computed prior-on.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`oidnDenoise` reads the accumulation image, whose `.rgb` is already a running mean. Anything that changes that to a raw sum breaks the denoise path silently: OIDN&#x27;s HDR filter would see radiance scaled by the sample count.</li>
+<li>`getPixels()` must run after `render()` and before the next one; `render()` clears the denoise cache and the readback re-submits on the graphics queue with a device-wide wait.</li>
+<li>The normal guide is `N * 0.5 + 0.5`, not the `[-1,1]` OIDN specifies. Adding a decode is a quality fix that no test will notice: the only committed regression corpus, `tests/golden/manifest.json`, renders both its scenes with `--denoise=none`, so no golden image in the tree has ever passed through OIDN.</li>
+<li>Three tonemaps must move together, or `--denoise=none` and `--denoise=oidn` stop being comparable in grade: `float3ToRGBA8` in C++, plus the one in each live raygen, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen`. Editing `pt_raygen.rgen` changes nothing at runtime — no renderer binds it.</li>
+<li>The build takes whatever OIDN the host provides — `find_package(OpenImageDenoise REQUIRED)` pins no version — so a host-side OIDN upgrade changes the filter under unchanged source.</li>
+<li>The LDR path (`hdr = false`) has no in-engine caller; every call site passes `hdr = true`.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/rt/denoise/oidn_denoise.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/denoise/oidn_denoise.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/denoise_types.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/staged_fit.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/fit_config.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/fit_engine.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/fit_targets.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/fit_lab_eval.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/oidn_denoise.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

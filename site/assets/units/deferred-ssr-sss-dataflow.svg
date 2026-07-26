@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="Dataflow of the deferred SSS and SSR passes: lighting HDR image feeds SSS, SSS output feeds SSR and tonemap, while SkyPass and particles write back into the lighting HDR image that tonemap no longer reads">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<defs>
+<marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L7,3 L0,6 z" fill="#3d4a58"/>
+</marker>
+<marker id="ahw" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+<path d="M0,0 L7,3 L0,6 z" fill="#c4784a"/>
+</marker>
+</defs>
+
+<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">DEFERRED FRAME TAIL — WHO WRITES WHAT, AND WHO READS IT</text>
+
+<!-- pass boxes -->
+<rect x="30" y="52" width="140" height="38" fill="#1a222c" stroke="#3d4a58"/>
+<text x="100" y="76" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">DeferredLighting</text>
+
+<rect x="215" y="52" width="140" height="38" fill="#1a222c" stroke="#3d4a58"/>
+<text x="285" y="70" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SSSPass</text>
+<text x="285" y="83" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">H -&gt; temp -&gt; V</text>
+
+<rect x="400" y="52" width="125" height="38" fill="#1a222c" stroke="#3d4a58"/>
+<text x="462" y="76" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SSRPass</text>
+
+<!-- image boxes -->
+<rect x="30" y="130" width="140" height="38" fill="#141b23" stroke="#6e685c" stroke-dasharray="3 3"/>
+<text x="100" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">HDR lit image</text>
+<text x="100" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F</text>
+
+<rect x="215" y="130" width="140" height="38" fill="#141b23" stroke="#6e685c" stroke-dasharray="3 3"/>
+<text x="285" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">sssOut</text>
+<text x="285" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F</text>
+
+<rect x="400" y="130" width="125" height="38" fill="#141b23" stroke="#6e685c" stroke-dasharray="3 3"/>
+<text x="462" y="148" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">ssrOut</text>
+<text x="462" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">RGBA16F</text>
+
+<rect x="560" y="130" width="140" height="38" fill="#1a222c" stroke="#7dba8a"/>
+<text x="630" y="148" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">tonemapping.frag</text>
+<text x="630" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">hdr + ssr</text>
+
+<!-- late writers -->
+<rect x="215" y="228" width="125" height="34" fill="#1a222c" stroke="#c4784a"/>
+<text x="277" y="250" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">SkyPass</text>
+<rect x="380" y="228" width="125" height="34" fill="#1a222c" stroke="#c4784a"/>
+<text x="442" y="250" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">Particles</text>
+
+<!-- edges -->
+<line x1="100" y1="90" x2="100" y2="126" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="108" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">writes</text>
+
+<polyline points="170,149 192,149 192,71 211,71" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="176" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">reads</text>
+
+<line x1="285" y1="90" x2="285" y2="126" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<polyline points="355,149 377,149 377,71 396,71" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="361" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">reads</text>
+
+<line x1="462" y1="90" x2="462" y2="126" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<line x1="525" y1="149" x2="556" y2="149" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="519" y="140" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">binding 2</text>
+
+<polyline points="285,168 285,196 630,196 630,172" fill="none" stroke="#3d4a58" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="404" y="208" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">binding 0 — post-FX HDR input</text>
+
+<!-- late write-back path -->
+<polyline points="442,228 442,214 100,214 100,172" fill="none" stroke="#c4784a" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#ahw)"/>
+<line x1="277" y1="228" x2="277" y2="214" stroke="#c4784a" stroke-width="1.4" stroke-dasharray="4 3"/>
+<text x="120" y="228" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">write back, too late</text>
+
+<text x="28" y="290" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">SkyPass and the particle pass render into the HDR lit image after SSSPass has already copied it.</text>
+<text x="28" y="305" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">While SSSPass is alive, tonemap reads sssOut — so those writes never reach the frame.</text>
+<text x="28" y="322" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">Conceptual — read from the pass ordering in DeferredRenderer::render(). Not a captured frame or a profile.</text>
+</svg>

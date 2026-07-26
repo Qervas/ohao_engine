@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" class="unit-diagram" role="img"
+     aria-label="Timeline showing that VulkanRenderer::render copies the frame staging buffer before recording, so the CPU pixel buffer lags three render calls behind.">
+  <defs>
+    <marker id="rfArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="250" fill="#0f1419"/>
+
+  <!-- latency arcs: call k submits, call k+3 reads -->
+  <path d="M 65 104 Q 241 26 417 104"  fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#rfArrow)"/>
+  <path d="M 182 104 Q 358 26 534 104" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#rfArrow)"/>
+  <path d="M 299 104 Q 475 26 651 104" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#rfArrow)"/>
+  <text x="358" y="20" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="12" fill="#c4784a">
+    GPU work submitted at call k is only read back at call k+3
+  </text>
+
+  <!-- row 1: render() calls -->
+  <text x="12" y="122" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">render()</text>
+  <g font-family="IBM Plex Mono,monospace" font-size="12">
+    <g>
+      <rect x="12"  y="104" width="107" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="65"  y="129" text-anchor="middle" fill="#e8e2d6">#1 → slot 0</text>
+    </g>
+    <g>
+      <rect x="129" y="104" width="107" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="182" y="129" text-anchor="middle" fill="#e8e2d6">#2 → slot 1</text>
+    </g>
+    <g>
+      <rect x="246" y="104" width="107" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="299" y="129" text-anchor="middle" fill="#e8e2d6">#3 → slot 2</text>
+    </g>
+    <g>
+      <rect x="363" y="104" width="107" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="417" y="129" text-anchor="middle" fill="#e8e2d6">#4 → slot 0</text>
+    </g>
+    <g>
+      <rect x="480" y="104" width="107" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="534" y="129" text-anchor="middle" fill="#e8e2d6">#5 → slot 1</text>
+    </g>
+    <g>
+      <rect x="597" y="104" width="107" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="651" y="129" text-anchor="middle" fill="#e8e2d6">#6 → slot 2</text>
+    </g>
+  </g>
+
+  <!-- row 2: what getPixels() sees -->
+  <text x="12" y="178" font-family="DM Sans,sans-serif" font-size="12" fill="#c4a574">
+    m_pixelBuffer contents when render() returns
+  </text>
+  <g font-family="IBM Plex Mono,monospace" font-size="12">
+    <rect x="12"  y="188" width="107" height="38" rx="4" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
+    <text x="65"  y="212" text-anchor="middle" fill="#6e685c">unwritten</text>
+    <rect x="129" y="188" width="107" height="38" rx="4" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
+    <text x="182" y="212" text-anchor="middle" fill="#6e685c">unwritten</text>
+    <rect x="246" y="188" width="107" height="38" rx="4" fill="#1a222c" stroke="#3d4a58" stroke-dasharray="3 3"/>
+    <text x="299" y="212" text-anchor="middle" fill="#6e685c">unwritten</text>
+    <rect x="363" y="188" width="107" height="38" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+    <text x="417" y="212" text-anchor="middle" fill="#7dba8a">image of #1</text>
+    <rect x="480" y="188" width="107" height="38" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+    <text x="534" y="212" text-anchor="middle" fill="#7dba8a">image of #2</text>
+    <rect x="597" y="188" width="107" height="38" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+    <text x="651" y="212" text-anchor="middle" fill="#7dba8a">image of #3</text>
+  </g>
+
+  <text x="12" y="243" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">
+    MAX_FRAMES_IN_FLIGHT = 3 — hence the "+ 3" in every offline render loop.
+  </text>
+</svg>

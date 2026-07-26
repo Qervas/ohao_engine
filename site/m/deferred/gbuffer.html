@@ -33,33 +33,127 @@
         <p>MRT packing, bindless, velocity, push constants.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#what-the-record-has-to-hold">What the record has to hold</a></li><li><a href="#the-packing-that-buys-a-channel">The packing that buys a channel</a></li><li><a href="#world-position-and-the-fp16-tax-on-it">World position, and the fp16 tax on it</a></li><li><a href="#the-clear-colour-is-the-coverage-bit">The clear colour is the coverage bit</a></li><li><a href="#what-the-velocity-vector-does-not-see">What the velocity vector does not see</a></li><li><a href="#the-per-draw-path">The per-draw path</a></li><li><a href="#the-descriptor-set-nobody-reads">The descriptor set nobody reads</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="what-the-record-has-to-hold">What the record has to hold</h2></div>
 <div class="prose reveal">
-<p>GBuffer pass rasterizes scene into MRT: albedo, normals, material params, motion vectors, depth — fuel for deferred lighting and denoisers.</p>
+<p>A deferred renderer bets that everything the lighting equation needs about a visible surface fits into a fixed-size per-pixel record, so shading cost stops scaling with geometry × lights. The interesting part is never the bet; it is the record — what fits, what was dropped to make it fit, and which downstream pass finds out.</p>
+<p>OHAO writes five attachments in one subpass: world position + metallic, an encoded normal + roughness + emissive luminance, albedo + AO, a two-component velocity vector, and depth. That is 28 bytes per pixel, roughly 55 MiB resident at the 1920×1080 default the pass initialises to.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/deferred-gbuffer-channels.svg" alt="Conceptual layout, not a captured render. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer.frag." loading="lazy" /><figcaption>Conceptual layout, not a captured render. Cell widths are proportional to bytes per pixel; formats and channel assignments are read from createGBuffer() and gbuffer.frag.</figcaption></figure>
+<p>Check one thing before trusting anything else written about this buffer: the normal target is `R16G16B16A16_SFLOAT`, not a packed 10-bit format.</p>
+<div class="citation-chip"><code class="citation-code">attachments[1].format = VK_FORMAT_R16G16B16A16_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L483" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:483</a></div>
+<p>Comments in five files still name a packed 10-bit format for this attachment, including the header of the shared octahedral decoder:</p>
+<div class="citation-chip"><code class="citation-code">// Octahedron normal encoding/decoding (A2R10G10B10 GBuffer format)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L11" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:11</a></div>
+<p>Three of those five, and four of the nine shaders that `#include` that header, sit under `shaders/_disabled/` — a directory nothing actually excludes, because the shader target globs the tree recursively and compiles it too:</p>
+<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
+<p>The octahedral encoding is a leftover from the 10-bit format. It is not vestigial — it is now paying for something else.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-packing-that-buys-a-channel">The packing that buys a channel</h2></div>
 <div class="prose reveal">
-<p>gbuffer.vert: world pos, normal, tangent, dual UV, current+prev clip for velocity.</p>
-<p>gbuffer.frag: bindless textures, material packing, nonuniformEXT indices.</p>
+<p>Octahedral mapping projects a unit normal onto an octahedron and folds the lower hemisphere outward, turning any direction on the sphere into two numbers in [-1, 1] with no seam and near-uniform angular density. The G-buffer writes it biased into [0, 1] alongside two unrelated scalars:</p>
+<div class="citation-chip"><code class="citation-code">outGBuffer1 = vec4(encodedNormal, roughness, emissiveLuminance);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L125" target="_blank" rel="noopener">shaders/core/gbuffer.frag:125</a></div>
+<p>At 16 bits per channel the encoding buys almost no precision over storing `N.xyz` directly — half-float already resolves a normal component far below the visible threshold. What it buys is one *channel*. The normal costs two slots instead of three; roughness would have fitted in the fourth slot of an `N.xyz` layout anyway, so the one slot the encoding actually liberates is the last, and it carries the emissive intensity that would otherwise need its own attachment.</p>
+<p>The price is colour. Only luminance survives the write, so deferred lighting reconstructs the emitted colour by tinting albedo with it:</p>
+<div class="citation-chip"><code class="citation-code">vec3 emissive = albedo * emissiveLuminance;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L311" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:311</a></div>
+<p>A red glow on a white surface renders white. That is a deliberate trade, but it means emissive look-dev cannot be trusted against the raster viewport.</p>
+<p>Roughness is floored before storage:</p>
+<div class="citation-chip"><code class="citation-code">roughness = max(roughness, 0.04);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L110" target="_blank" rel="noopener">shaders/core/gbuffer.frag:110</a></div>
+<p>`initBRDFSurface` applies the same floor again, but only to the copy it owns:</p>
+<div class="citation-chip"><code class="citation-code">surface.roughness = max(roughness, 0.04);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L127" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:127</a></div>
+<p>Deferred lighting keeps the raw local value alongside that surface and uses it for everything image-based — the environment-map mip selection, the roughness-aware Fresnel term, and the split-sum BRDF-LUT lookup all read the unclamped local, not `surface.roughness`:</p>
+<div class="citation-chip"><code class="citation-code">float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L281" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:281</a></div>
+<p>For those uses the G-buffer clamp is the only floor there is, so it is not redundant. It is also not sufficient, because the weather modifiers run before the surface is built and can push the local value back under it — wet horizontal faces remap roughness toward `max(roughness * 0.15, 0.02)`, which bottoms out at 0.02:</p>
+<div class="citation-chip"><code class="citation-code">roughness  = mix(roughness, max(roughness * 0.15, 0.02), w);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L177" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:177</a></div>
+<p>The other raw reader, screen-space reflections, is insensitive to the floor in either direction. It uses the channel exactly twice: a `roughness &gt; 0.7` rejection branch, which a 0.04 floor can never flip, and a `1.0 - roughness` hit fade, which it can move by at most 4%.</p>
+<div class="citation-chip"><code class="citation-code">if (roughness &gt; 0.7 &amp;&amp; metallic &lt; 0.5) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L48" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:48</a></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="world-position-and-the-fp16-tax-on-it">World position, and the fp16 tax on it</h2></div>
 <div class="prose reveal">
-<p>Decouple geometry bandwidth from light count; motion vectors unlock TAA and DLSS.</p>
+<p>GBuffer0 stores the interpolated world position outright rather than making consumers reconstruct it from depth:</p>
+<div class="citation-chip"><code class="citation-code">outGBuffer0 = vec4(fragWorldPos, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L113" target="_blank" rel="noopener">shaders/core/gbuffer.frag:113</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Reconstruction from `D32_SFLOAT` plus an inverse view-projection is the standard alternative, and it is cheaper: 8 bytes per pixel saved, full float precision kept. OHAO rejects it because five consumers read this target directly — deferred lighting, SSR, the subsurface-scattering blur, and the RT shadow and RT GI raygens — and two of them launch rays from the value. Storing it once removes a class of per-consumer reconstruction bugs. The rejection is not total: SSAO reconstructs view-space position from depth instead, so the engine already pays for both approaches.</p></div>
+<p>The precision cost is worth quantifying, because it is not uniform. A binary16 value carries a 10-bit stored mantissa, so the gap between adjacent representable numbers near a magnitude $|x|$ is</p>
+<div class="math-block">$$
+\Delta(x) = 2^{\lfloor \log_2 |x| \rfloor - 10}
+$$</div>
+<p>where $\lfloor \log_2 |x| \rfloor$ is the binary exponent. Near the origin this is invisible. For a coordinate in [64, 128) the exponent is 6, giving $\Delta = 2^{-4} = 0.0625$; at 1000 units, $\Delta = 0.5$. Round-to-nearest leaves the stored coordinate within half a gap of the true one, so the error to compare against anything is $\Delta/2$, not $\Delta$. Compare it to the fixed offset the RT shadow raygen applies to the position it reads back out of this buffer:</p>
+<div class="citation-chip"><code class="citation-code">vec3 origin = worldPos + N * 0.05;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L58" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:58</a></div>
+<p>The bias is 0.05. Half a gap first exceeds it in [128, 256), where $\Delta = 0.125$ and the worst-case per-component error is 0.0625 — past roughly 128 units from the origin, quantisation can displace the ray origin further than the bias was meant to lift it, and the ray can start on the wrong side of its own surface. Scenes authored far from the origin develop shadow acne that will not reproduce near it — the buffer format, not the tracer, is the cause.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-clear-colour-is-the-coverage-bit">The clear colour is the coverage bit</h2></div>
 <div class="prose reveal">
-<p>Vertex: world pos, normal, tangent, dual UV, current+prev clip for velocity.</p>
-<p>Fragment MRT: albedo, packed normal, material params, motion vectors.</p>
-<p>Bindless textures via nonuniformEXT; material push constants carry indices.</p>
+<p>There is no coverage channel and no stencil. Consumers decide &quot;was anything rasterised here&quot; by testing GBuffer0 against its clear value of `(0,0,0,0)`:</p>
+<div class="citation-chip"><code class="citation-code">if (gBuffer0Sample.rgb == vec3(0.0) &amp;&amp; gBuffer0Sample.a == 0.0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L155" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:155</a></div>
+<p>The identical exact-equality test is duplicated in `rt_shadow.rgen`, `rt_gi.rgen`, and `postprocess/ssr.comp`. The fifth reader opts out entirely: the subsurface blur has no coverage test, gates on a skin heuristic over albedo and metallic instead, and then treats `length(position)` as an edge-aware depth proxy — so a sky tap arrives as a legal coordinate of magnitude zero rather than as an absence:</p>
+<div class="citation-chip"><code class="citation-code">float sampleDepth = length(texture(gBufferPosition, sampleUV).rgb);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L88" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:88</a></div>
+<p>The Gaussian depth weight rejects those taps only because a skin pixel is normally far from the world origin; on skin that passes near it, sky taps get real weight in the blur.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>GBuffer0&#x27;s clear value is load-bearing. Change it or renumber the attachments and four independent shaders silently begin treating geometry as sky — no validation error, because each is still reading a legal float. Storing view-space instead of world-space position breaks the buffer differently and just as quietly: the coverage test still fires correctly on unwritten pixels, because the clear value is unchanged, but every reader goes on treating the coordinate as world space — the two raygens trace from it, SSR marches from it, deferred lighting differences it against the camera position — and the one locus that *is* misclassified moves from the world origin to the camera. Any non-metallic surface passing exactly through the world origin is already misclassified today.</p></div>
+</div>
+<div class="section-rule"><h2 id="what-the-velocity-vector-does-not-see">What the velocity vector does not see</h2></div>
+<div class="prose reveal">
+<p>The vertex stage carries two clip positions; the fragment stage differences them into a screen-space UV delta:</p>
+<div class="citation-chip"><code class="citation-code">outVelocity = (currentNDC - prevNDC) * 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L136" target="_blank" rel="noopener">shaders/core/gbuffer.frag:136</a></div>
+<p>Two asymmetries are baked into that subtraction. First, the previous-frame matrix is built from the *current* model matrix, so an object that moved between frames contributes nothing:</p>
+<div class="citation-chip"><code class="citation-code">const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L271" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:271</a></div>
+<p>This is a camera-motion buffer. TAA and any denoiser downstream reprojects a moving object as if it were static and rejects its history on the colour clamp instead — visible as loss of temporal accumulation on animated geometry rather than as smearing.</p>
+<p>Second, the current frame&#x27;s projection is TAA-jittered before it reaches the pass, while the stored previous view-projection is not:</p>
+<div class="citation-chip"><code class="citation-code">m_prevViewProj = m_proj * m_view;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L654" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:654</a></div>
+<p>The recorded delta therefore carries this frame&#x27;s sub-pixel jitter. Anything consuming the buffer for other than `historyUV = uv - velocity` — an optical-flow metric, motion blur, a DLSS motion input — must account for that term.</p>
+</div>
+<div class="section-rule"><h2 id="the-per-draw-path">The per-draw path</h2></div>
+<div class="prose reveal">
+<p>Draw granularity is one material run, not one mesh. `buildMaterialDrawRanges` run-length-encodes the model&#x27;s per-triangle material IDs and emits a push-constant update plus a `vkCmdDrawIndexed` per run, so a mesh whose triangles already arrive grouped by material costs a handful of draws and one with interleaved materials costs one draw per group. Nothing in the engine does the grouping: the loaders append `materialPerTriangle` in traversal order, one GLTF primitive or one Assimp mesh at a time, and no sort by material exists anywhere in the asset pipeline. Runs are grouped by construction or not at all.</p>
+<div class="citation-chip"><code class="citation-code">materialPerTriangle.push_back(matIdx);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L319" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:319</a></div>
+<p>Each run resolves its four bindless texture slots by building a string and hashing it:</p>
+<div class="citation-chip"><code class="citation-code">const std::string textureName = actor.getName() + &quot;_&quot; + suffix + &quot;_&quot; + std::to_string(materialIndex);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L82" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:82</a></div>
+<p>`findTexture` then copies that string into a second one before probing up to two maps:</p>
+<div class="citation-chip"><code class="citation-code">const std::string keyStr(key);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/bindless_texture_manager.cpp#L515" target="_blank" rel="noopener">ohao/gpu/vulkan/bindless_texture_manager.cpp:515</a></div>
+<p>So at least eight string constructions and four to eight hash lookups per material run per frame, to recover four integers that do not change between frames. The convention `&lt;actor&gt;_&lt;slot&gt;_&lt;materialIndex&gt;` couples the loader&#x27;s naming to this pass; rename either side and textures fall back silently to the flat material colour.</p>
+<p>Frustum culling scales worse. The local AABB is recomputed from every vertex of the model, every frame, for every actor, with nothing cached on the mesh:</p>
+<div class="citation-chip"><code class="citation-code">localAABB.min = glm::min(localAABB.min, v.position);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L226" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:226</a></div>
+<p>The cull test itself is correct; the O(vertices) preamble in front of it is not amortised. The CPU cost of deciding whether to skip a draw therefore scales with the vertex count of the draw being skipped, and is paid again next frame whether or not the actor or the camera moved.</p>
+<p>The push-constant block is 240 bytes:</p>
+<div class="citation-chip"><code class="citation-code">};  // 240 bytes — fits in 256-byte push constant limit</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.hpp#L121" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.hpp:121</a></div>
+<p>Vulkan guarantees only 128. This pass needs nearly twice the floor, and nothing in the tree queries `maxPushConstantsSize` before creating the layout. On a conformant-but-minimal device the range is a Valid Usage violation (`VUID-VkPipelineLayoutCreateInfo-pPushConstantRanges-00294`), which is undefined behaviour rather than a required error return. The validation layers report it; the spec does not oblige `vkCreatePipelineLayout` to fail, so whether this degrades loudly or silently depends on how the device was launched. Sixteen bytes of headroom remain on a 256-byte device.</p>
+</div>
+<div class="section-rule"><h2 id="the-descriptor-set-nobody-reads">The descriptor set nobody reads</h2></div>
+<div class="prose reveal">
+<p>`createDescriptors()` builds a complete five-binding combined-image-sampler set over the G-buffer, with its own nearest-filter sampler, and re-creates it on every resize. Its two accessors have zero callers in the tree:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] VkDescriptorSet getGBufferDescriptor() const { return m_gbufferDescriptor; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.hpp#L69" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.hpp:69</a></div>
+<p>This is not the &quot;unused function, live formula&quot; trap — the work is genuinely duplicated rather than shared. `DeferredLightingPass` builds an equivalent set itself from the raw image views, with its own sampler, inside the wider layout it needs anyway:</p>
+<div class="citation-chip"><code class="citation-code">m_gbufferPass-&gt;getPositionView(),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L278" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:278</a></div>
+<p>The accidental benefit is that resize is safe: `createDescriptors()` destroys its pool and allocates a fresh `VkDescriptorSet`, so the handle changes every resize, and nobody holds a stale one only because nobody holds one at all.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>GBuffer0&#x27;s clear value `(0,0,0,0)` *is* the coverage bit, tested by exact float equality in four of its five readers. Changing the clear colour or the attachment order breaks all four with no diagnostic; changing the position&#x27;s space leaves the test intact and breaks the two ray-tracing readers instead.</li>
+<li>`m_prevViewProj` must still hold last frame&#x27;s value when `setViewProjection` runs, and must not be refreshed until the frame ends. Refresh it first and `prevMVP` is built from this frame&#x27;s *unjittered* `m_proj * m_view` while the vertex stage transforms with the *jittered* projection, so velocity collapses to the sub-pixel jitter delta rather than to zero — TAA keeps reprojecting, onto itself.</li>
+<li>Velocity encodes camera motion only and includes the current frame&#x27;s TAA jitter. It is not an object-motion vector.</li>
+<li>The pass requires `maxPushConstantsSize &gt;= 240`, above the 128-byte Vulkan floor, and never checks it.</li>
+<li>Bindless sentinels are inconsistent: albedo and normal test `!= 0xFFFFFFFFu`, while rough/metal and emissive test a hard-coded capacity — {{cite shaders/core/gbuffer.frag &quot;if (roughMetalTexIdx &lt; 4096u) {&quot;}} — matching `BindlessTextureManager`&#x27;s default `maxTextures` of 4096. Raise that capacity and those two slots stop binding above index 4095.</li>
+<li>Backface culling is disabled (`VK_CULL_MODE_NONE`, to match the forward pipeline), so every closed mesh rasterises both faces and the depth test alone resolves them.</li>
+<li>The vertex shader declares bone index and weight inputs it never reads; skinning was removed from this pass and the slots remain only to match the shared `Vertex` layout.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/deferred/gbuffer_pass.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/brdf/brdf_common.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/ssr.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_shadow.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/sss_blur.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_gltf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/bindless_texture_manager.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

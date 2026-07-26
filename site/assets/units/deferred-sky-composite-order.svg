@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 386" class="unit-diagram" role="img" aria-label="Order in which sky.frag accumulates its terms, showing which are gated by the night factor">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">sky.frag main() — ACCUMULATION ORDER</text>
+
+<!-- 1 daySky -->
+<rect x="28" y="40" width="404" height="38" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="42" y="64" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">daySky = preethamSky(view, sun, T) * sunIntensity</text>
+<text x="446" y="64" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">sun clamped to y &#8805; 0.001</text>
+
+<!-- 2 night -->
+<rect x="28" y="90" width="404" height="38" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="42" y="114" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">nightGradient = gradient + milkyWay + starField</text>
+<text x="446" y="114" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">stars faded inside moon glow</text>
+
+<!-- join arrows -->
+<path d="M436 59 L470 59" stroke="#3d4a58" stroke-width="1" fill="none"/>
+<path d="M228 128 L228 146" stroke="#3d4a58" stroke-width="1" fill="none"/>
+<path d="M228 78 L228 90" stroke="#3d4a58" stroke-width="1" fill="none"/>
+
+<!-- 3 mix -->
+<rect x="28" y="148" width="404" height="38" rx="4" fill="#1a222c" stroke="#c4a574"/>
+<text x="42" y="172" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">skyColor = mix(daySky, nightGradient, nf)</text>
+<text x="446" y="172" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="11">the only nf cross-fade</text>
+
+<path d="M228 186 L228 204" stroke="#3d4a58" stroke-width="1" fill="none"/>
+
+<!-- 4 twilight -->
+<rect x="28" y="206" width="404" height="38" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="42" y="230" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">skyColor += twilight</text>
+<text x="446" y="230" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">only when -0.2 &lt; sun.y &lt; 0.1</text>
+
+<path d="M228 244 L228 262" stroke="#3d4a58" stroke-width="1" fill="none"/>
+
+<!-- 5 moon -->
+<rect x="28" y="264" width="404" height="38" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="42" y="288" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">skyColor += moonDisc(...) * nf</text>
+<text x="446" y="288" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">outside the mix — scaled by nf once</text>
+
+<path d="M228 302 L228 320" stroke="#3d4a58" stroke-width="1" fill="none"/>
+
+<!-- 6 sun disc -->
+<rect x="28" y="322" width="404" height="26" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="42" y="340" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">skyColor += (sunDisc*40 + corona*2) * sunColor * sunFade</text>
+<text x="446" y="340" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">not gated by nf at all</text>
+
+<!-- 7 cloud -->
+<rect x="28" y="352" width="404" height="26" rx="4" fill="#1a222c" stroke="#c4784a"/>
+<text x="42" y="370" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">skyColor = skyColor*cloud.a + cloud.rgb</text>
+<text x="446" y="370" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">binding 1 — no producer in the tree</text>
+</svg>

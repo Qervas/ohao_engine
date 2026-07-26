@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img"
+     aria-label="Per-frame image schedule of AtrousDenoiser::dispatch: the temporal pass writes scratch colour A and variance vA, then five a-trous iterations ping-pong between A, B and the persistent history image HC, with the final iteration writing the RGBA8 beauty. HC is produced by iteration 0 and is read both by iteration 1 and by the temporal pass of the next frame.">
+  <defs>
+    <marker id="dap-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="dap-arw-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c4784a"/>
+    </marker>
+    <style>
+      .bg   { fill: #0f1419; }
+      .pnl  { fill: #1a222c; stroke: #3d4a58; stroke-width: 1; }
+      .box  { fill: #1a222c; stroke: #3d4a58; stroke-width: 1.2; }
+      .hot  { fill: #1a222c; stroke: #c4784a; stroke-width: 1.4; }
+      .lbl  { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: #e8e2d6; }
+      .lblx { font-family: "IBM Plex Mono", monospace; font-size: 10px; fill: #e8e2d6; }
+      .hotl { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: #c4784a; }
+      .cap  { font-family: "DM Sans", sans-serif; font-size: 11.5px; fill: #c4a574; }
+      .mut  { font-family: "DM Sans", sans-serif; font-size: 10.5px; fill: #6e685c; }
+      .acc  { font-family: "DM Sans", sans-serif; font-size: 10.5px; fill: #c4784a; }
+      .ln   { stroke: #3d4a58; stroke-width: 1.3; fill: none; }
+      .lnacc{ stroke: #c4784a; stroke-width: 1.5; fill: none; }
+      .sep  { stroke: #3d4a58; stroke-width: 0.7; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="720" height="340"/>
+
+  <text class="cap" x="14" y="20">AtrousDenoiser::dispatch — one frame: two pipelines, six dispatches, five images</text>
+
+  <rect class="pnl" x="12" y="30" width="696" height="192" rx="3"/>
+
+  <!-- header -->
+  <text class="mut" x="24"  y="50">dispatch</text>
+  <text class="mut" x="235" y="50" text-anchor="middle">colour in</text>
+  <text class="mut" x="340" y="50" text-anchor="middle">colour out</text>
+  <text class="mut" x="480" y="50" text-anchor="middle">var in</text>
+  <text class="mut" x="585" y="50" text-anchor="middle">var out</text>
+  <line class="sep" x1="20" y1="58" x2="700" y2="58"/>
+
+  <!-- row 1: temporal -->
+  <text class="lblx" x="24"  y="80">Pass 1  rt_svgf_temporal</text>
+  <text class="lbl"  x="235" y="80" text-anchor="middle">beauty RGBA8</text>
+  <path class="ln" d="M290 76 L322 76" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="340" y="80" text-anchor="middle">A</text>
+  <text class="mut"  x="480" y="80" text-anchor="middle">(none)</text>
+  <path class="ln" d="M520 76 L552 76" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="585" y="80" text-anchor="middle">vA</text>
+  <line class="sep" x1="20" y1="88" x2="700" y2="88"/>
+
+  <!-- row 2: iter 0 -->
+  <text class="lblx" x="24"  y="108">Pass 2  iter 0   step 1</text>
+  <text class="lbl"  x="235" y="108" text-anchor="middle">A</text>
+  <path class="ln" d="M290 104 L322 104" marker-end="url(#dap-arw)"/>
+  <text class="hotl" x="340" y="108" text-anchor="middle">HC</text>
+  <text class="lbl"  x="480" y="108" text-anchor="middle">vA</text>
+  <path class="ln" d="M520 104 L552 104" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="585" y="108" text-anchor="middle">vB</text>
+  <line class="sep" x1="20" y1="116" x2="700" y2="116"/>
+
+  <!-- row 3: iter 1 -->
+  <text class="lblx" x="24"  y="136">        iter 1   step 2</text>
+  <text class="hotl" x="235" y="136" text-anchor="middle">HC</text>
+  <path class="ln" d="M290 132 L322 132" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="340" y="136" text-anchor="middle">B</text>
+  <text class="lbl"  x="480" y="136" text-anchor="middle">vB</text>
+  <path class="ln" d="M520 132 L552 132" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="585" y="136" text-anchor="middle">vA</text>
+  <line class="sep" x1="20" y1="144" x2="700" y2="144"/>
+
+  <!-- row 4: iter 2 -->
+  <text class="lblx" x="24"  y="164">        iter 2   step 4</text>
+  <text class="lbl"  x="235" y="164" text-anchor="middle">B</text>
+  <path class="ln" d="M290 160 L322 160" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="340" y="164" text-anchor="middle">A</text>
+  <text class="lbl"  x="480" y="164" text-anchor="middle">vA</text>
+  <path class="ln" d="M520 160 L552 160" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="585" y="164" text-anchor="middle">vB</text>
+  <line class="sep" x1="20" y1="172" x2="700" y2="172"/>
+
+  <!-- row 5: iter 3 -->
+  <text class="lblx" x="24"  y="192">        iter 3   step 8</text>
+  <text class="lbl"  x="235" y="192" text-anchor="middle">A</text>
+  <path class="ln" d="M290 188 L322 188" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="340" y="192" text-anchor="middle">B</text>
+  <text class="lbl"  x="480" y="192" text-anchor="middle">vB</text>
+  <path class="ln" d="M520 188 L552 188" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="585" y="192" text-anchor="middle">vA</text>
+  <line class="sep" x1="20" y1="200" x2="700" y2="200"/>
+
+  <!-- row 6: iter 4 -->
+  <text class="lblx" x="24"  y="216">        iter 4   step 16</text>
+  <text class="lbl"  x="235" y="216" text-anchor="middle">B</text>
+  <path class="ln" d="M290 212 L322 212" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="340" y="216" text-anchor="middle">beauty RGBA8</text>
+  <text class="lbl"  x="480" y="216" text-anchor="middle">vA</text>
+  <path class="ln" d="M520 212 L552 212" marker-end="url(#dap-arw)"/>
+  <text class="lbl"  x="585" y="216" text-anchor="middle">vB</text>
+
+  <!-- feedback: HC -> next frame's temporal prevColor -->
+  <path class="lnacc" d="M364 104 L420 104 L420 258 L406 258" marker-end="url(#dap-arw-acc)" stroke-dasharray="5 3"/>
+  <rect class="hot" x="150" y="242" width="254" height="32" rx="2"/>
+  <text class="acc" x="277" y="262" text-anchor="middle">next frame — Pass 1 binding 4 (prevColor)</text>
+
+  <text class="mut" x="14" y="298">A, B = colorImg[0..1] RGBA16F scratch     vA, vB = varImg[0..1] R16F scratch     HC = histColor[parity] RGBA16F, persistent</text>
+  <text class="mut" x="14" y="314">HC is written once, by iteration 0, and read twice: by iteration 1 this frame, and by the temporal pass of the next frame.</text>
+  <text class="mut" x="14" y="330">iter 4 also has an RGBA16F output bound (A) that it never writes — isFinal routes the store to the RGBA8 beauty instead.</text>
+</svg>

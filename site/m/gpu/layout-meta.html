@@ -33,34 +33,113 @@
         <p>OHAO_ASSERT_GPU_LAYOUT, MaterialGpuPack, push-constant sizes.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-boundary-with-no-type-checker">A boundary with no type checker</a></li><li><a href="#what-the-two-assertions-actually-prove">What the two assertions actually prove</a></li><li><a href="#the-two-blocks-above-the-guaranteed-floor">The two blocks above the guaranteed floor</a></li><li><a href="#the-drift-the-macro-was-built-for-sitting-in-the-tree">The drift the macro was built for, sitting in the tree</a></li><li><a href="#the-counter-example-the-macro-never-touched">The counter-example the macro never touched</a></li><li><a href="#two-sentinel-decoders-in-one-shader">Two sentinel decoders in one shader</a></li><li><a href="#what-material-actually-delivers">What `Material` actually delivers</a></li><li><a href="#a-material-system-that-was-finished-and-never-connected">A material system that was finished and never connected</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-boundary-with-no-type-checker">A boundary with no type checker</h2></div>
 <div class="prose reveal">
-<p>layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with GLSL. Material and MaterialInstance are CPU authoring types that pack into SSBO rows.</p>
+<p>Between `vkCmdPushConstants` and a GLSL `layout(push_constant)` block there is no type. The driver copies bytes; the shader casts them to whatever its own declaration says they are. Nothing in the Vulkan API, the SPIR-V validator or the C++ compiler compares the two, and a mismatch yields neither a validation error nor a crash — it yields a plausible wrong image. `layout_meta.hpp` converts the one part of that risk that is mechanically checkable, the byte size of the C++ side, into a compile error. Six canonical constants live there. Two are written as the arithmetic the shader ABI implies:</p>
+<div class="citation-chip"><code class="citation-code">inline constexpr std::size_t kObjectPushConstantsBytes =</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L22" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:22</a></div>
+<p>The other four are literals — `kGPULightBytes` is `80` with `// 5 * vec4` beside it, `kPTPushConstantsBytes` a bare `256` — so for those the number and its justification can drift apart unwatched. Nor is the header purely declarative: `MaterialGpuPack` adds two constexpr accessors for the three-`vec4` material stride and pins them with static asserts against hand-computed answers, so an edit to `kMaterialVec4s` fails here rather than in a shader.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="what-the-two-assertions-actually-prove">What the two assertions actually prove</h2></div>
 <div class="prose reveal">
-<p>OHAO_ASSERT_GPU_LAYOUT fails the build if C++ and shader disagree.</p>
-<p>MaterialInstance holds texture indices and factors before pack.</p>
+<p>`OHAO_ASSERT_GPU_LAYOUT(Type, Bytes)` expands to a pair of static asserts. The second is the obvious one:</p>
+<div class="citation-chip"><code class="citation-code">static_assert(sizeof(Type) == (Bytes),                                     \</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/concepts.hpp#L87" target="_blank" rel="noopener">ohao/core/concepts.hpp:87</a></div>
+<p>The first requires `GpuPod`, which is `is_trivially_copyable_v` **and** `is_standard_layout_v`. Trivial copyability makes the `memcpy` into mapped device memory defined behaviour instead of a habit. Standard layout is the half people skip, and the one doing structural work: it forbids reordering members declared across different access-control sections, guarantees the first member sits at offset 0, and is the precondition for `offsetof` being defined at all. Without it a struct could satisfy the size check while the field order the shader assumes does not formally exist.</p>
+<p>Neither assertion says anything about the other side of the boundary — both are statements about C++ types, evaluated by the C++ compiler, and no build step reflects the SPIR-V. The macro catches *someone added a float to the struct* and is blind to *someone reordered the GLSL block*. Five structs carry it: `ObjectPushConstants` at 240 bytes, `LightData` at 128, `GPULight` at 80, `PTPushConstants` at 256, `MeshBufferInfo` at 16. The last has no GLSL block to reorder: every use is a CPU-side draw range — `vkCmdDrawIndexed` arguments, BLAS geometry offsets — and nothing uploads it. It carries the macro for the trivial-copyability half alone.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-two-blocks-above-the-guaranteed-floor">The two blocks above the guaranteed floor</h2></div>
 <div class="prose reveal">
-<p>Silent layout drift is undebuggable; assert at compile time.</p>
+<p>Vulkan guarantees only 128 bytes of push-constant space; anything above that is a device capability, not a promise. Two of the five contracts sit above the floor by design — 240 bytes for the raster per-draw block, 256 for the path tracer&#x27;s — and no code queries `maxPushConstantsSize`; across `ohao/`, `shaders/` and `examples/` the identifier occurs once, inside a comment. On a minimum-spec device the failure surfaces at pipeline-layout creation, not at compile time.</p>
+<p>Only one of the two is actually at a ceiling. `ObjectPushConstants` still has 16 bytes of headroom under the 256 the code assumes. The path-tracer block has none: when a per-frame sample count had to reach the raygen shaders there was no room for another field:</p>
+<div class="citation-chip"><code class="citation-code">// 256-byte device maxPushConstantsSize, so we cannot append a field — the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L692" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:692</a></div>
+<p>so it was folded into the top half of a lane that already held the bounce limit:</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t packedBouncesAndSpf = (spf &lt;&lt; 16) | (m_maxBounces &amp; 0xFFFFu);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L696" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:696</a></div>
+<p>The base and offline raygens mask the high bits off; the realtime raygen loops on them. A size contract that is exactly satisfied has stopped being a check and become a design constraint.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-drift-the-macro-was-built-for-sitting-in-the-tree">The drift the macro was built for, sitting in the tree</h2></div>
 <div class="prose reveal">
-<p>layout_meta.hpp is the single source of truth for GPU struct sizes/offsets shared with GLSL.</p>
-<p>Material + MaterialInstance are CPU-side authoring; packed rows feed bindless + PT material SSBO.</p>
-<p>OHAO_ASSERT_GPU_LAYOUT fails the build if C++ and shader disagree — silent pink is worse.</p>
+<p>The forward pipeline is where the blind spot shows. `createPipeline()` builds `m_pipeline` out of `core_forward.vert` and `core_forward.frag`:</p>
+<div class="citation-chip"><code class="citation-code">std::string fragPath = m_shaderBasePath + &quot;core_forward.frag.spv&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/pipeline.cpp#L182" target="_blank" rel="noopener">ohao/gpu/vulkan/pipeline.cpp:182</a></div>
+<p>Its layout declares a push range of `sizeof(ObjectPushConstants)`, and `renderSceneObjects()` fills all six fields and pushes all 240 bytes into that layout:</p>
+<div class="citation-chip"><code class="citation-code">vkCmdPushConstants(cmd, m_pipelineLayout,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L273" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:273</a></div>
+<p>The two shaders that range feeds declare a 96-byte block agreeing with the C++ struct on exactly one member:</p>
+<div class="citation-chip"><code class="citation-code">vec3 baseColor;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.vert#L33" target="_blank" rel="noopener">shaders/core/forward.vert:33</a></div>
+<p>After `mat4 model` the C++ side has `viewProj`; the shader expects `baseColor`, `metallic`, `roughness`, `ao`. So `pc.baseColor` reads bytes 64–75 — the first column of the view-projection matrix — and multiplies it into the vertex colour. `forward.frag` continues that block with two packed texture indices at bytes 88 and 92, tests them against the missing-texture sentinel, passes for essentially any matrix, and indexes the bindless array with the bit pattern of a float.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/gpu-layout-meta-pushconst-drift.svg" alt="Conceptual byte map of the 240-byte per-draw push range: what C++ writes, what gbuffer.vert declares, and what forward.vert/.frag declares. Offsets computed from the struct and GLSL block declarations; not a memory capture." loading="lazy" /><figcaption>Conceptual byte map of the 240-byte per-draw push range: what C++ writes, what gbuffer.vert declares, and what forward.vert/.frag declares. Offsets computed from the struct and GLSL block declarations; not a memory capture.</figcaption></figure>
+<p>Nothing asserts this and nothing has caught it, because no shipped example reaches the forward path. Four of the five route through `resolveMode()`, which returns `Deferred` or the ray-traced mode the CLI parsed, never `Forward`:</p>
+<div class="citation-chip"><code class="citation-code">if (opts.useDeferred) return RenderMode::Deferred;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_cli.hpp#L84" target="_blank" rel="noopener">examples/example_cli.hpp:84</a></div>
+<p>`env_demo` skips that helper and pushes its own mode variable, which its argument loop can only set to `RTOffline` or `RTRealtime`. Forward survives as the renderer&#x27;s default field value and the fallback branch of `render()`:</p>
+<div class="citation-chip"><code class="citation-code">RenderMode m_renderMode{RenderMode::Forward};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L526" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:526</a></div>
+</div>
+<div class="section-rule"><h2 id="the-counter-example-the-macro-never-touched">The counter-example the macro never touched</h2></div>
+<div class="prose reveal">
+<p>The deferred pass is where packer and shader agree, and the macro had nothing to do with it. `GBufferPass` never touches `ObjectPushConstants`; it declares its own `GBufferUBO`, a field-for-field byte clone, unasserted and unlinked to `layout_meta.hpp`:</p>
+<div class="citation-chip"><code class="citation-code">};  // 240 bytes — fits in 256-byte push constant limit</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.hpp#L121" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.hpp:121</a></div>
+<p>The comment immediately above that struct says &quot;Total: 224 bytes (3 mat4 + 2 vec4)&quot;. It is three `mat4`s and three `vec4`s — 240 — and the shader copied the 224:</p>
+<div class="citation-chip"><code class="citation-code">// Total: 224 bytes (3 mat4 + 2 vec4) — fits within 256-byte NVIDIA limit</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L33" target="_blank" rel="noopener">shaders/core/gbuffer.frag:33</a></div>
+<p>A stale byte count propagating from a C++ header into a shader header is precisely what the size assert exists to make impossible, and it is sitting on the one per-draw block in the tree that has no size assert.</p>
+<p>What the pass does get right is the packing. C++ packs two floats and two bit-cast texture indices —</p>
+<div class="citation-chip"><code class="citation-code">ubo.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L333" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:333</a></div>
+<p>— and `gbuffer.frag` pulls each lane out of the position the packer put it in:</p>
+<div class="citation-chip"><code class="citation-code">uint albedoTexIdx = floatBitsToUint(pc.materialParams.w);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L60" target="_blank" rel="noopener">shaders/core/gbuffer.frag:60</a></div>
+<p>Note the order: metallic in `.x`, roughness in `.y`, the roughness-metallic index in `.z`, the albedo index in `.w`. The path tracer&#x27;s material row 1 holds `(roughness, metallic, normalTexIdx, emissiveTexIdx)`; its albedo index lives in row 0&#x27;s `.a` and its roughness-metallic index in row 2&#x27;s `.x`:</p>
+<div class="citation-chip"><code class="citation-code">matColors[i * 3 + 1].z = packIdx(i &lt; globalNormalTexLayer.size() ? globalNormalTexLayer[i] : -1);     // normalTexIdx</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L807" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:807</a></div>
+<p>Both are &quot;two floats then two packed indices&quot;, both 16 bytes, and all four lanes disagree. Hand-porting one to the other exchanges roughness with metallic *and* hands the normal and emissive maps to the code expecting the roughness-metallic and albedo maps — at full frame rate, every assertion green.</p>
+</div>
+<div class="section-rule"><h2 id="two-sentinel-decoders-in-one-shader">Two sentinel decoders in one shader</h2></div>
+<div class="prose reveal">
+<p>Inside `gbuffer.frag` that encoding is decoded two different ways. Albedo and normal compare against the sentinel; roughness-metallic and emissive compare against a magnitude instead:</p>
+<div class="citation-chip"><code class="citation-code">if (roughMetalTexIdx &lt; 4096u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L101" target="_blank" rel="noopener">shaders/core/gbuffer.frag:101</a></div>
+<p>4096 is not arbitrary — it is the bindless array&#x27;s default capacity:</p>
+<div class="citation-chip"><code class="citation-code">GpuAllocator* allocator, uint32_t maxTextures = 4096,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/bindless_texture_manager.hpp#L73" target="_blank" rel="noopener">ohao/gpu/vulkan/bindless_texture_manager.hpp:73</a></div>
+<p>The two tests agree on every value the packer produces, so this is not a live bug; it is a hazard in two directions. `&lt; 4096u` rejects the garbage a drifted push block supplies and `!= 0xFFFFFFFFu` does not — which is why both of the forward path&#x27;s lookups are dangerous: `forward.frag` tests `albedoTexIdx` and `normalTexIdx` — bytes 88 and 92, inside the view-projection matrix — against the sentinel alone, and either one then indexes `textures[]` with a matrix element&#x27;s bit pattern. And the bound is a literal, so raising `maxTextures` past 4096 hides the high descriptors from two of the four lookups and leaves them visible to the other two.</p>
+</div>
+<div class="section-rule"><h2 id="what-material-actually-delivers">What `Material` actually delivers</h2></div>
+<div class="prose reveal">
+<p>The CPU authoring struct in `material.hpp` carries thirty-one members — index of refraction, transmission, clear coat, subsurface colour and radius, normal intensity, height scale, nine texture paths and the seven `use*` flags gating them, and a thirteen-value preset enum whose `Custom` case is an explicit no-op, leaving twelve presets. Eight of the thirty-one reach a GPU buffer: base colour, roughness and metallic as numbers; four of the nine texture paths — albedo, normal, roughness, emissive — resolved through `BindlessTextureManager` and bit-cast into the same push block by both packers; and `emissive`, collapsed to a boolean, and on the deferred path only inside the emissive-texture branch:</p>
+<div class="citation-chip"><code class="citation-code">emissiveStrength = glm::length(mat.emissive) &gt; 0.01f ? 1.0f : 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L324" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:324</a></div>
+<p>No pipeline reads `Material`&#x27;s `ior`, `transmission`, `clearCoat`, `subsurface`, `normalIntensity` or `heightScale`; the only code that touches them is `material.cpp`&#x27;s own presets, so `applyPreset()` on `Type::Glass` sets a transmission of 0.9 that nothing samples. Nothing checks that gap, because there is nothing to check against: `Material` is not a GPU struct and carries no layout assertion.</p>
+</div>
+<div class="section-rule"><h2 id="a-material-system-that-was-finished-and-never-connected">A material system that was finished and never connected</h2></div>
+<div class="prose reveal">
+<p>`material_instance.hpp` holds a second, complete material stack: a 176-byte `PBRMaterialParams` with eight bindless texture indices and a thirteen-flag feature mask, a `MaterialInstance` with clamped setters and dirty tracking, and a `MaterialManager` that allocates a persistently mapped storage buffer for 1024 materials, builds its own descriptor set layout and flushes only the dirty rows. Outside `tests/renderer/renderer_pipeline_tests.cpp` nothing in `ohao/` or `examples/` constructs a `MaterialManager`, and no block in `shaders/` declares a matching layout. Its guard reflects that — not the engine macro but a weaker pair, `GpuPod` plus a modulo:</p>
+<div class="citation-chip"><code class="citation-code">static_assert(sizeof(PBRMaterialParams) % 16 == 0, &quot;PBRMaterialParams must be 16-byte aligned&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/material_instance.hpp#L129" target="_blank" rel="noopener">ohao/gpu/vulkan/material_instance.hpp:129</a></div>
+<p>An alignment check pins the struct to no particular size: any edit adding or removing a multiple of 16 bytes passes. Right strength with no shader on the other end, wrong strength the day one appears.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Sizes are pinned from a constants header rather than derived from the shaders. The alternative — one declaration shared by both sides, either a header the GLSL `#include`s or SPIR-V reflection at pipeline creation — makes *offsets* checkable, not just totals. The toolchain already supports the include half: `shaders/includes/common/types.glsl` declares the 128-byte `Light` struct once, and `forward.frag` and `shadow_depth.vert` pull it in. Nothing else does — `deferred_lighting.frag` includes only `encoding.glsl` and `brdf_ggx.glsl` and re-declares the same struct by hand, so the one shared-declaration mechanism in the tree is already routed around by the pipeline that ships. Its cost is that every C++ struct becomes downstream of shader preprocessing and layout questions become runtime failures. OHAO took the cheap half — one place to edit a size, review for everything else. The forward push block is the bill for the half it skipped.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`OHAO_ASSERT_GPU_LAYOUT` proves two things about a C++ type: that it can be memcpy&#x27;d, and that it is N bytes. It cannot see the GLSL that reads those bytes, so every defect that leaves the total unchanged — a reordered field, a lane that changed meaning, a shader block written against an older struct — passes it.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`PTPushConstants` sits exactly at the 256-byte limit the code assumes, so no field can be appended. `params.w` carries `samplesPerFrame` in its high 16 bits and `maxBounces` in its low 16; the realtime raygen unpacks the high half, base and offline mask it off.</li>
+<li>Nothing queries `maxPushConstantsSize`, and two of the five asserted structs exceed Vulkan&#x27;s guaranteed 128 bytes. On a minimum-spec device the failure is a rejected pipeline layout, not a failed build.</li>
+<li>`core/forward.vert` and `core/forward.frag` declare a 96-byte push block that disagrees with `ObjectPushConstants` after byte 64. No shipped example selects `RenderMode::Forward` today; re-enabling it without rewriting the block reads matrix entries as material parameters and a float&#x27;s bit pattern as a bindless texture index.</li>
+<li>`GBufferPass::GBufferUBO` is a byte clone of `ObjectPushConstants` with no `OHAO_ASSERT_GPU_LAYOUT` and no link to `layout_meta.hpp`. Its own header comment says both 224 and 240 bytes, and `gbuffer.frag` copied the 224. Editing either struct leaves the other silent.</li>
+<li>The deferred per-draw block orders lanes `(metallic, roughness, roughMetalTexIdx, albedoTexIdx)`; the path tracer&#x27;s material row 1 orders them `(roughness, metallic, normalTexIdx, emissiveTexIdx)`. All four lanes differ, and neither ordering is asserted against its shader.</li>
+<li>`gbuffer.frag` decodes one sentinel two ways — `!= 0xFFFFFFFFu` for albedo and normal, `&lt; 4096u` for roughness-metallic and emissive. That literal must track `BindlessTextureManager`&#x27;s `maxTextures` by hand.</li>
+<li>`PBRMaterialParams` is guarded only by `sizeof % 16 == 0`. If a shader ever binds it, replace that with an exact-byte `OHAO_ASSERT_GPU_LAYOUT` first.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/concepts.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/forward.vert</code><span class="desc"></span></div>
+        <div class="row"><code>examples/example_cli.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/bindless_texture_manager.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/material_instance.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/material.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/material.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/gpu/vulkan/material_instance.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/material_instance.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

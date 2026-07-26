@@ -33,43 +33,96 @@
         <p>Pass ownership, resize, setScene, graph execute.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-schedule-written-by-hand-checked-by-a-graph">A schedule written by hand, checked by a graph</a></li><li><a href="#declarecolorwrite-a-promise-about-a-render-pass-the-graph-cannot-see">declareColorWrite: a promise about a render pass the graph cannot see</a></li><li><a href="#the-layout-the-graph-never-learns">The layout the graph never learns</a></li><li><a href="#the-barrier-that-covers-one-cascade-in-four">The barrier that covers one cascade in four</a></li><li><a href="#the-one-use-frameindex-has-is-the-one-it-is-wrong-for">The one use frameIndex has is the one it is wrong for</a></li><li><a href="#the-half-of-the-frame-the-graph-never-sees">The half of the frame the graph never sees</a></li><li><a href="#ordering-constraints-that-are-not-obvious">Ordering constraints that are not obvious</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-schedule-written-by-hand-checked-by-a-graph">A schedule written by hand, checked by a graph</h2></div>
 <div class="prose reveal">
-<p>DeferredRenderer owns the AAA raster stack: GBuffer, CSM, SSAO, lighting, sky, post, gizmo, optional RT shadow/GI inject.</p>
+<p>Up to twelve stages run per deferred frame, all recorded into one command buffer by `DeferredRenderer::render`. Six go through `RenderGraph`; the rest go straight onto `cmd`. That split is most of the class, because the graph does far less than its name implies.</p>
+<p>It does not schedule. `topologicalSort` copies passes into the execution list in `addPass` order and stops:</p>
+<div class="citation-chip"><code class="citation-code">// Simple linear ordering for now (passes are added in correct order)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/graph/render_graph.cpp#L570" target="_blank" rel="noopener">ohao/render/graph/render_graph.cpp:570</a></div>
+<p>So CSM → GBuffer → SSAO → RTShadow → RTGI → DeferredLighting is a decision made by hand in `render()`, not from declared dependencies. What the graph earns is barriers: `computeBarriers` walks that order tracking each texture&#x27;s last access and emits a `VkImageMemoryBarrier` at the first read following a write.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="declarecolorwrite-a-promise-about-a-render-pass-the-graph-cannot-see">declareColorWrite: a promise about a render pass the graph cannot see</h2></div>
 <div class="prose reveal">
-<p>initialize(device, phys); setScene; setCameraData; set lights/geometry buffers.</p>
-<p>render(cmd, frameIndex) runs passes; RenderGraph inserts barriers while passes own VkRenderPass objects.</p>
-<p>onResize reallocates targets.</p>
+<p>Three of the six are graphics passes — CSM, GBuffer, DeferredLighting — each owning its `VkRenderPass` and framebuffers, built before the graph existed; SSAO, RTShadow and RTGI enter through `addComputePass` and own neither. The graph could take those render passes over, through `useColorAttachment`. It uses the other door:</p>
+<div class="citation-chip"><code class="citation-code">// NOT added to colorAttachments — the pass manages its own VkRenderPass</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/graph/render_graph.cpp#L154" target="_blank" rel="noopener">ohao/render/graph/render_graph.cpp:154</a></div>
+<p>`declareColorWrite` and `declareDepthWrite` record a `ResourceAccess` for barriers and withhold the attachment, so `vulkanRenderPass` stays `VK_NULL_HANDLE` and `execute` invokes the lambda with no render pass open around it — which is what lets the pass begin its own inside.</p>
+<p>The price is an invariant nothing checks: the layout handed to `declare*Write` must be the `finalLayout` of the render pass the graph never sees. GBuffer declares `DEPTH_STENCIL_READ_ONLY_OPTIMAL` for depth, which has to match attachment 4 of its five-attachment render pass:</p>
+<div class="citation-chip"><code class="citation-code">attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L520" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:520</a></div>
+<p>Change it, forget the declaration, and nothing fails to build — the next barrier carries an `oldLayout` the image is not in. Of those five attachments only depth, normal and albedo are imported; position and velocity are outside the graph&#x27;s tracking entirely.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Letting the graph own attachments would mean redrawing every pass into graph-allocated images, trading hand-tuned load ops and subpass dependencies for barrier bookkeeping. Demoting it to a barrier calculator bought the missing shadow-map transition without touching CSM, GBuffer or lighting internals — at the cost of a declared layout kept in sync by discipline.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-layout-the-graph-never-learns">The layout the graph never learns</h2></div>
+<div class="prose reveal">
+<p>`PhysicalTexture::currentLayout` is written at import, reset to `UNDEFINED` by `reset()` each frame, and updated inside `execute` as barriers are issued — never during compilation. Since `compile()` runs `computeBarriers` first, every tracked texture reads as `UNDEFINED` while the barriers are computed.</p>
+<p>That stays invisible on the anticipated path: a read following a *write* takes its `oldLayout` from the write&#x27;s declared layout. A read following another *read* fails `isWrite()` and falls to the second branch, which sources `oldLayout` from the stale field and pairs it with `TOP_OF_PIPE` and an empty access mask:</p>
+<div class="citation-chip"><code class="citation-code">// Transition from undefined</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/graph/render_graph.cpp#L619" target="_blank" rel="noopener">ohao/render/graph/render_graph.cpp:619</a></div>
+<p>`gbuffer_normal` is read by SSAO and again by DeferredLighting, so the graph emits exactly that — after the write, immediately before lighting samples it. `UNDEFINED` licenses the driver to discard the contents, the source scope carries no dependency, and both are legal, so validation stays silent.</p>
+</div>
+<div class="section-rule"><h2 id="the-barrier-that-covers-one-cascade-in-four">The barrier that covers one cascade in four</h2></div>
+<div class="prose reveal">
+<p>The CSM shadow map is a four-layer array, 2048 × 2048 per cascade, imported through `CSMPass::getShadowMapArrayView()`. `PhysicalTexture` has no layer count, and the barrier the graph emits hardcodes one layer starting at zero:</p>
+<div class="citation-chip"><code class="citation-code">imageBarrier.subresourceRange.layerCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/graph/render_graph.cpp#L447" target="_blank" rel="noopener">ohao/render/graph/render_graph.cpp:447</a></div>
+<p>So the `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL` transition before deferred lighting — the barrier this integration was added to supply — applies to cascade 0 only, while the lighting shader samples the full array view. The fix belongs on `PhysicalTexture`, not here.</p>
+</div>
+<div class="section-rule"><h2 id="the-one-use-frameindex-has-is-the-one-it-is-wrong-for">The one use frameIndex has is the one it is wrong for</h2></div>
+<div class="prose reveal">
+<p>`render()` hands `frameIndex` to every pass `execute` it calls. `PostProcessingPipeline` forwards it to SSAO, bloom and TAA; every leaf implementation throws it away, the parameter commented out in the signature:</p>
+<div class="citation-chip"><code class="citation-code">void DeferredLightingPass::execute(VkCommandBuffer cmd, uint32_t /*frameIndex*/) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L88" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:88</a></div>
+<p>The descriptor sets these passes own are indexed by target, not frame — TAA&#x27;s history pair, bloom&#x27;s per-mip vector — so there is nothing for a frame index to select. Its one live consumer is `TAAPass::getJitterOffset`, read at the top of `render()` to perturb the projection. There it is the wrong number.</p>
+<p>Jitter goes into the matrix, not the camera:</p>
+<div class="citation-chip"><code class="citation-code">jitteredProj[2][0] += jitter.x;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L292" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:292</a></div>
+<p>GLM matrices are column-major, so `[2][0]` is the entry in row 0, column 2 — call it $P_{02}$. For a right-handed perspective $w_{\text{clip}} = -z_v$ and $P_{02} = 0$, so adding $j_x$ there gives, for a view-space point $(x_v, z_v)$:</p>
+<div class="math-block">$$
+x_{\text{ndc}} = \frac{P_{00}\,x_v + j_x\,z_v}{-z_v} = -\frac{P_{00}\,x_v}{z_v} - j_x
+$$</div>
+<p>The $z_v$ cancels: the shift is a constant $-j_x$ in NDC at every depth. The frustum is sheared, not the camera translated — near and far planes stay put, no parallax appears, only the sample grid moves.</p>
+<p>Both the amount and the sequence are off. NDC spans two units across $W$ pixels, so a shift of $j_x$ is $j_x W/2$ pixels; the jitter is a Halton offset $h_x \in [-0.5, 0.5)$ over $W$, landing as $h_x/2$ pixels — half the nominal sub-pixel step:</p>
+<div class="citation-chip"><code class="citation-code">return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/taa_pass.cpp#L144" target="_blank" rel="noopener">ohao/render/deferred/taa_pass.cpp:144</a></div>
+<p>The sequence also never advances: `TAAPass` builds 16 Halton samples indexed `frameIndex % 16`, but the entry point passes `m_currentFrame`:</p>
+<div class="citation-chip"><code class="citation-code">m_deferredRenderer-&gt;render(cmd, m_currentFrame);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L113" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:113</a></div>
+<p>which is the frame-resource ring index, wrapping at `MAX_FRAMES_IN_FLIGHT` = 3:</p>
+<div class="citation-chip"><code class="citation-code">return (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L167" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:167</a></div>
+<p>Only samples 0, 1 and 2 are ever reached: base-2 offsets $h_x \in \{0, -\tfrac14, +\tfrac14\}$, which after the halving is three positions spanning 0.25 px against 0.45 px for the full sixteen (base-3, 0.28 px against 0.43 px).</p>
+<p>The same jitter poisons motion vectors: the GBuffer gets `jitteredProj` while `m_prevViewProj` is stored unjittered at the end of `render()`, and `gbuffer.frag` writes velocity as half the NDC difference of the two — a screen-constant $-j_x/2$ UV bias that changes every frame.</p>
+</div>
+<div class="section-rule"><h2 id="the-half-of-the-frame-the-graph-never-sees">The half of the frame the graph never sees</h2></div>
+<div class="prose reveal">
+<figure class="unit-figure reveal"><img src="../../assets/units/deferred-orchestrator-frame-schedule.svg" alt="Frame schedule and HDR dataflow, read from render() — conceptual, not a captured render or a profile. Green ticks mark graph-inserted barriers; the dashed accent arrow is the particle pass writing into an image nothing downstream reads." loading="lazy" /><figcaption>Frame schedule and HDR dataflow, read from render() — conceptual, not a captured render or a profile. Green ticks mark graph-inserted barriers; the dashed accent arrow is the particle pass writing into an image nothing downstream reads.</figcaption></figure>
+<p>After `m_renderGraph.execute(cmd)` returns, SSS, SSR, sky, particles, post-processing and gizmos are recorded directly, each rolling its own barriers. `SSSPass` blurs the lit scene into a *separate* image, and `sss_blur.comp` passes non-skin pixels through unchanged — so that image is a full copy of the frame at the moment SSS ran, and post-processing prefers it when it exists:</p>
+<div class="citation-chip"><code class="citation-code">m_sssPass-&gt;getOutputView() : m_lightingPass-&gt;getOutputView();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L621" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:621</a></div>
+<p>But sky and particles are recorded *after* SSS and draw into the lighting image, so whatever they write never reaches the tonemapper. Since `deferred_lighting.frag` sets `outColor = vec4(0.0)` wherever the GBuffer position sample is exactly zero, and `sky.frag` fills whatever the GBuffer left at far depth (it discards below 0.9999), that is the whole sky. `onResize` compounds it: it reaches the GBuffer, lighting, post, gizmo, sky and RT-GI passes but never `SSSPass::onResize` or `SSRPass::onResize`, so those images stay at 1920 × 1080.</p>
+</div>
+<div class="section-rule"><h2 id="ordering-constraints-that-are-not-obvious">Ordering constraints that are not obvious</h2></div>
+<div class="prose reveal">
+<p>The RT shadow and GI blocks sit above `m_renderGraph.compile()`, and the comment beside them calls that a descriptor deadline. It is not one: `updateDescriptorSets` is a host-side `vkUpdateDescriptorSets`, `VulkanRenderer::renderDeferred` does not submit until after `vkEndCommandBuffer`, and `RTShadowTechnique::getOutput` returns the same persistent `m_shadowMaskView` every frame. The record-time dependency is the push constant: `DeferredLightingPass::execute` zeroes `m_params.flags`, re-derives the RT-shadow bit from `m_rtShadowView`, and pushes it.</p>
+<div class="citation-chip"><code class="citation-code">m_params.flags |= 32;  // RT shadows (bit 5)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L171" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:171</a></div>
+<p>`setRTShadowMask` sets that member; move it below `execute` and the first frame silently falls back to CSM.</p>
+<p>The wall clock hides a similar dependency. `m_totalTime` advances in one place only, inside the particle block; RT GI reconstructs a frame counter from it as `m_totalTime * 60.0f`, the sky pass takes it unscaled as a star seed. If `ParticleSystem` fails to initialise — non-fatal — the clock freezes at zero and both lose per-frame variation.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`RenderGraph` here is a barrier calculator, not a scheduler and not a resource manager. Pass order, lifetimes and every barrier outside the six graph passes are hand-written.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
 <ul>
-<li>CSM</li>
-<li>GBuffer</li>
-<li>SSAO</li>
-<li>Lighting (+ optional RT)</li>
-<li>Sky</li>
-<li>Bloom/TAA/Tonemap</li>
-<li>Gizmo</li>
+<li>The layout passed to `declare*Write` must equal the `finalLayout` of that pass&#x27;s own `VkRenderPass`, and a declaring pass must never also take a graph-owned attachment. Neither is validated.</li>
+<li>A tracked texture read by two graph passes in a row gets a second barrier with `oldLayout = UNDEFINED` and `TOP_OF_PIPE` as its source: `currentLayout` is never refreshed during compilation.</li>
+<li>`setRTShadowMask` must precede `DeferredLightingPass::execute`, which re-derives the RT-shadow flag bit from `m_rtShadowView` and pushes it. The `vkUpdateDescriptorSets` beside it is host-side and survives the move.</li>
+<li>Anything written into the lighting HDR image after the SSS dispatch never reaches post-processing while `SSSPass` is alive; sky and particles are both in that window.</li>
+<li>`importGraphTextures()` must run after any pass reallocates its images, or the graph holds destroyed `VkImage` handles.</li>
+<li>`frameIndex` is a ring index of period 3, not a monotonic counter, so `TAAPass::getJitterOffset` sees three values.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
-<div class="prose reveal">
-<p>Orchestrator pattern keeps each pass small; hybrid RT plugs in without rewriting lighting.</p>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>Owns GBuffer, CSM, lighting, SSAO, SSR/SSS, sky, post, gizmo, optional RT shadow/GI techniques.</p>
-<p>render(cmd, frameIndex) is the per-frame entry; RenderGraph inserts barriers between passes.</p>
-<p>setScene + geometry buffers come from VulkanRenderer after upload.</p>
-<p>Hybrid: RTShadowTechnique / RTGITechnique inject visibility and bounce GI into lighting.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/deferred/deferred_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/graph/render_graph.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/taa_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

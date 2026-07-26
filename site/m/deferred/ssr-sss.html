@@ -33,31 +33,130 @@
         <p>Experimental reflections and subsurface blur.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#two-effects-one-bet">Two effects, one bet</a></li><li><a href="#the-reflection-ray-marches-in-world-space">The reflection ray marches in world space</a></li><li><a href="#the-hi-z-tracer-that-did-not-ship">The Hi-Z tracer that did not ship</a></li><li><a href="#composite-a-dead-alpha-channel-and-one-dangerous-default">Composite: a dead alpha channel, and one dangerous default</a></li><li><a href="#skin-with-no-material-flag">Skin with no material flag</a></li><li><a href="#the-kernel-and-the-sigma-hidden-in-a-magic-100">The kernel, and the sigma hidden in a magic 100</a></li><li><a href="#what-the-blur-actually-blurs">What the blur actually blurs</a></li><li><a href="#ordering-hazards-nobody-declared">Ordering hazards nobody declared</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="two-effects-one-bet">Two effects, one bet</h2></div>
 <div class="prose reveal">
-<p>Experimental SSR (HiZ ray march) and SSS blur for skin-like materials — quality gated on the deferred hub.</p>
+<p>`SSRPass` and `SSSPass` make the same wager: everything they need is already in the frame. Each reads one HDR colour image plus three GBuffer attachments and nothing else — no acceleration structure, no second geometry submission — as 16×16 compute dispatches over a fixed 1920×1080 grid writing `R16G16B16A16_SFLOAT`. But they are chained, not parallel. SSS consumes the deferred lighting output; the local `litOutput` is then reassigned to SSS&#x27;s blurred image, and *that* is what SSR is handed as its `litScene`:</p>
+<div class="citation-chip"><code class="citation-code">m_ssrPass-&gt;setLitSceneView(litOutput);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L540" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:540</a></div>
+<p>So on the default path — `SSSPass` is only reset if it fails to initialise — every screen-space reflection returns post-SSS radiance, and reflected skin is blurred twice. Both passes are created unconditionally by `DeferredRenderer` and run on every deferred frame: no quality flag, no scene-content test, and neither appears in the pass list `getPipelineInfo()` reports. What differs is how far each pushes the bet, and how each is wired into the tail of the frame — which is where the sharp edges are.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-reflection-ray-marches-in-world-space">The reflection ray marches in world space</h2></div>
 <div class="prose reveal">
-<p>ssr.comp / sss_blur.comp with pass wrappers.</p>
+<p>The shipping SSR is a linear world-space march, not a screen-space one. `maxDistance` is 20 world units and the loop is a fixed 64 iterations, so every step advances the ray by exactly 0.3125 units regardless of where the pixel is or which way the reflection points:</p>
+<div class="citation-chip"><code class="citation-code">m_params.maxDistance = 20.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssr_pass.cpp#L29" target="_blank" rel="noopener">ohao/render/deferred/ssr_pass.cpp:29</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 samplePos = rayStart + reflDir * (stepSize * float(i + 1));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L66" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:66</a></div>
+<p>Each sample is then pushed through `viewProj` and divided by w to get a UV. Marching in world space and projecting per step is the cheap way to write SSR, and it costs uniform screen coverage: a reflection heading into the screen resamples one texel dozens of times, while a ray skimming along the view plane can jump many pixels per step and walk straight over a thin occluder. A screen-space DDA has the opposite, better behaviour — one step, one pixel.</p>
+<p>The hit test asks whether the ray&#x27;s post-projection depth has just crossed the stored depth by less than `thickness`:</p>
+<div class="citation-chip"><code class="citation-code">if (rayDepth &gt; sceneDepth &amp;&amp; rayDepth &lt; sceneDepth + thickness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L86" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:86</a></div>
+<p>Both sides of that comparison are non-linear device depth. The comment immediately above it says otherwise:</p>
+<div class="citation-chip"><code class="citation-code">// Linearize both depths for comparison</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L83" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:83</a></div>
+<p>No linearisation happens. The comparison is still self-consistent — `ndc.z` and the `D32_SFLOAT` GBuffer depth live in the same space — but the threshold is 0.05 *of the projected depth range*, not 5 cm:</p>
+<div class="citation-chip"><code class="citation-code">m_params.thickness = 0.05f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssr_pass.cpp#L30" target="_blank" rel="noopener">ohao/render/deferred/ssr_pass.cpp:30</a></div>
+<p>Perspective depth compresses distance, so the accepted slab is razor-thin near the camera and widens sharply further out: far-field rays are accepted well behind the real surface while near-field contacts are rejected. Anyone &quot;fixing&quot; this by linearising both sides must retune `thickness` into world units at the same time, or SSR goes dark.</p>
+<p>A second, smaller mismatch sits in the same comparison. The GBuffer — depth attachment included — is rasterised through a TAA-jittered projection:</p>
+<div class="citation-chip"><code class="citation-code">jitteredProj[2][0] += jitter.x;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L292" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:292</a></div>
+<p>while `SSRPass` is handed the clean, unjittered matrix:</p>
+<div class="citation-chip"><code class="citation-code">m_ssrPass-&gt;setCameraData(m_proj * m_view, m_cameraPos);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L539" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:539</a></div>
+<p>so every `sampleUV` the march computes is offset from the depth buffer it reads by that frame&#x27;s sub-pixel jitter, in a different direction each frame. `m_taaEnabled` defaults to false, which makes the offset exactly zero; the `model_viewer` example enables TAA in deferred mode, and there the offset is always present.</p>
+<p>Two thresholds decide which pixels get a ray at all. Rough dielectrics are skipped, metals always traced:</p>
+<div class="citation-chip"><code class="citation-code">if (roughness &gt; 0.7 &amp;&amp; metallic &lt; 0.5) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L48" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:48</a></div>
+<p>and sky is detected by exact float equality against the GBuffer clear value:</p>
+<div class="citation-chip"><code class="citation-code">if (worldPos == vec3(0.0) &amp;&amp; metallic == 0.0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L37" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:37</a></div>
+<p>That works only because attachment 0 is cleared to exactly zero and untouched pixels keep it bit-for-bit — and it also classifies a real dielectric sitting on the world origin as sky.</p>
+<div class="citation-chip"><code class="citation-code">clearValues[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}}; // Position (rgb) + Metallic (a)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L156" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:156</a></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-hi-z-tracer-that-did-not-ship">The Hi-Z tracer that did not ship</h2></div>
 <div class="prose reveal">
-<p>Optional quality; not required for cornell golden path.</p>
+<p>A second, considerably more serious SSR exists in the tree — McGuire–Mara screen-space ray tracing: descend a hierarchical depth pyramid, step coarse where the ray is clear, refine on a suspected hit, binary-search the crossing, with roughness and edge fades.</p>
+<div class="citation-chip"><code class="citation-code">// Screen-Space Reflections using hierarchical ray marching</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/ssr.comp#L4" target="_blank" rel="noopener">shaders/_disabled/ssr.comp:4</a></div>
+<p>It lives under `shaders/_disabled/`. The CMake glob is recursive, so it still compiles to `_disabled_ssr.comp.spv` on every build — but no C++ loads that module. `SSRPass` loads the linear one:</p>
+<div class="citation-chip"><code class="citation-code">VkShaderModule shader = loadShaderModule(&quot;postprocess_ssr.comp.spv&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssr_pass.cpp#L122" target="_blank" rel="noopener">ohao/render/deferred/ssr_pass.cpp:122</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The Hi-Z tracer needs a depth mip pyramid nothing in the deferred pipeline builds — `shaders/compute/hiz_generate.comp` exists but has no caller. The 64-step linear march was kept because it needs only the GBuffer that already exists. The price is exactly the artefact class above: distance-dependent thickness and non-uniform screen sampling. Reviving the Hi-Z path is a pyramid-generation problem, not a shader problem.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="composite-a-dead-alpha-channel-and-one-dangerous-default">Composite: a dead alpha channel, and one dangerous default</h2></div>
 <div class="prose reveal">
-<p>SSR ray-marches HiZ for glossy reflections; SSS blur for skin-like materials — quality flags on hub.</p>
+<p>SSR writes `hitColor * fresnel * hitAlpha` into RGB and `hitAlpha` into alpha, so RGB is pre-multiplied by the coverage stored beside it. The tonemap samples all four channels and then uses three:</p>
+<div class="citation-chip"><code class="citation-code">hdrColor += ssr.rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/tonemapping.frag#L95" target="_blank" rel="noopener">shaders/postprocess/tonemapping.frag:95</a></div>
+<p>`ssrInput` occurs exactly twice in the tree — its binding declaration and this `texture()` call — so `ssr.a` is written every frame and read by nothing. Pre-multiplied RGB plus a coverage alpha is the input to an OVER composite, `hdr * (1 - a) + ssr.rgb`; a bare `+=` leaves the surface&#x27;s own specular from the lighting pass at full strength and stacks the reflection on top instead of trading one for the other in proportion to `hitAlpha`. The overshoot is bounded — `hitAlpha` is capped at 0.8 and faded by march distance and roughness — but it is an error, and the channel that would correct it is already being produced.</p>
+<p>The second hazard is the fallback: with no SSR view bound, binding 2 is filled with the HDR input itself.</p>
+<div class="citation-chip"><code class="citation-code">imageInfos[2].imageView = m_ssrView != VK_NULL_HANDLE ? m_ssrView : m_hdrInputView;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.cpp#L303" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.cpp:303</a></div>
+<p>The comment there calls that &quot;zero reflections&quot;, but under an additive composite it is a doubled exposure of the whole frame. If `SSRPass` ever fails to initialise, the frame gets twice as bright rather than losing reflections.</p>
+</div>
+<div class="section-rule"><h2 id="skin-with-no-material-flag">Skin with no material flag</h2></div>
+<div class="prose reveal">
+<p>`SSSPass` has no skin bit to read. The GBuffer carries position+metallic, octahedral normal + roughness + emissive, and albedo+AO — no material class — so the blur infers skin from albedo chromaticity: non-metal, enough red, red at least as strong as green, not blue-dominant.</p>
+<div class="citation-chip"><code class="citation-code">step(albedo.g, albedo.r) *                       // red &gt; green (warm tone)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L46" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:46</a></div>
+<p>The product of those four terms is `skinFactor`, used both as the early-out and as the final `mix` weight — but it is not continuous. `step(albedo.g, albedo.r)` is a hard 0/1 switch at `albedo.r == albedo.g`, so the weight jumps from zero to the full smoothstep product the instant red edges past green. A second hard cut follows immediately:</p>
+<div class="citation-chip"><code class="citation-code">if (skinFactor &lt; 0.01) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L68" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:68</a></div>
+<p>Only the two `smoothstep` terms fade. Wherever an albedo texture crosses r = g — a desaturated patch, a filtered texel between a warm and a neutral one — the blur switches on along a contour instead of ramping across it. The test also fires on terracotta, rust and red cloth, and misses dark skin whose albedo red falls below the `smoothstep(0.1, 0.35)` toe. The function&#x27;s own comment claims parity with the lighting shader:</p>
+<div class="citation-chip"><code class="citation-code">// Detect skin material (same heuristic as lighting shader)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L41" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:41</a></div>
+<p>No counterpart exists in `deferred_lighting.frag` today; that comment is stale.</p>
+</div>
+<div class="section-rule"><h2 id="the-kernel-and-the-sigma-hidden-in-a-magic-100">The kernel, and the sigma hidden in a magic 100</h2></div>
+<div class="prose reveal">
+<p>The blur is separable in the Jimenez sense: a horizontal pass into a temp image, then a vertical pass into the output, driving the same pipeline with a different `direction` push constant.</p>
+<div class="citation-chip"><code class="citation-code">executePass(cmd, m_litSceneView, VK_NULL_HANDLE, m_tempView, m_temp, glm::vec2(1, 0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/sss_pass.cpp#L226" target="_blank" rel="noopener">ohao/render/deferred/sss_pass.cpp:226</a></div>
+<p>Seven taps at offsets −3…+3 are scaled by `sssWidth`, fixed at 8 pixels, so the kernel reaches ±24 pixels of the pass&#x27;s 1920×1080 grid. Fixed, not defaulted: `SSSPass::setSSSWidth` exists and has no caller anywhere in the tree, so the member initialiser is the only width the shipped pipeline can ever run.</p>
+<div class="citation-chip"><code class="citation-code">float m_sssWidth{8.0f};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/sss_pass.hpp#L38" target="_blank" rel="noopener">ohao/render/deferred/sss_pass.hpp:38</a></div>
+<p>Weights are per-channel, encoding the fact that red scatters furthest through dermis: the centre tap keeps 90.6% of blue but only 54.4% of red, and each channel&#x27;s seven weights sum to exactly 1.</p>
+<div class="citation-chip"><code class="citation-code">vec3(0.544, 0.786, 0.906),  // center sample — most weight</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L35" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:35</a></div>
+<p>Each tap is then gated by a Gaussian in depth difference — the term meant to stop the blur bleeding across a silhouette:</p>
+<div class="citation-chip"><code class="citation-code">float depthWeight = exp(-depthDiff * depthDiff * 100.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L92" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:92</a></div>
+<p>Written as a normal distribution, the literal 100 fixes a falloff length:</p>
+<div class="math-block">$$
+w_{\text{depth}} = \exp\!\left(-\frac{\Delta r^2}{2\sigma^2}\right), \qquad \frac{1}{2\sigma^2} = 100 \;\Rightarrow\; \sigma = \frac{1}{\sqrt{200}} \approx 0.071
+$$</div>
+<p>$\Delta r$ is the difference in the depth proxy between the centre tap and a neighbour, and $\sigma$ is the separation at which that neighbour&#x27;s weight has fallen to $e^{-1/2} \approx 0.61$ — still most of its kernel weight, so $\sigma$ is not a cutoff. The gate is much softer than the number suggests: the weight reaches 0.1 only at $\Delta r \approx 0.15$ and 0.01 at $\Delta r \approx 0.21$. In a scene authored in metres the hard-coded 100 therefore means &quot;attenuate gently out to ~15 cm, reject beyond ~21 cm&quot;. That is the one place the pass silently assumes a world scale, and the scale it assumes is generous.</p>
+<p>The subtlety is what the proxy is. It is not view depth; it is the length of the GBuffer world position, i.e. distance from the *world origin*:</p>
+<div class="citation-chip"><code class="citation-code">float centerDepth = length(posSample.rgb);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L74" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:74</a></div>
+<p>There is no camera term in that line at all, so the iso-surfaces of the proxy are spheres centred on the world origin and they do not move when the camera does. Two surfaces on opposite sides of the origin at the same radius have $\Delta r = 0$ and blur into each other wherever they land on screen. The degenerate case is the one skin actually gets: put a head at the origin and every point on it sits at nearly the same radius — nose tip and back of the skull alike — so $\Delta r \approx 0$ over the whole surface and the gate does nothing whatsoever. Move the character far away and the shells flatten into locally planar sheets, which is *better* geometry, just planes oriented by the origin rather than by the view. Either way, a depth-aware weight that ignores the camera cannot track a silhouette, which is the only thing this term exists to protect.</p>
+</div>
+<div class="section-rule"><h2 id="what-the-blur-actually-blurs">What the blur actually blurs</h2></div>
+<div class="prose reveal">
+<p>Jimenez&#x27;s separable SSS blurs *diffuse irradiance* and adds specular back afterwards, because a blurred highlight is exactly the wrong look for skin. This pass binds the composited lighting output — diffuse, specular, emissive and IBL together:</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 0) uniform sampler2D litScene;       // HDR lighting</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/sss_blur.comp#L10" target="_blank" rel="noopener">shaders/postprocess/sss_blur.comp:10</a></div>
+<p>so specular is softened along with everything else, at the one fixed width. Closing that gap is not a kernel change: it needs the lighting pass to emit diffuse and specular separately.</p>
+</div>
+<div class="section-rule"><h2 id="ordering-hazards-nobody-declared">Ordering hazards nobody declared</h2></div>
+<div class="prose reveal">
+<p>The render graph tracks barriers for CSM → GBuffer → SSAO → Lighting. SSS and SSR run *after* `m_renderGraph.execute(cmd)` on the raw command buffer with hand-written `vkCmdPipelineBarrier` calls, so their transitions are invisible to the graph. SSS then rebinds the frame&#x27;s current HDR view for everything downstream:</p>
+<div class="citation-chip"><code class="citation-code">litOutput = m_sssPass-&gt;getOutputView();  // downstream uses blurred output</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L532" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:532</a></div>
+<p>and post-processing prefers the SSS output whenever the pass exists:</p>
+<div class="citation-chip"><code class="citation-code">VkImageView hdrView = (m_sssPass &amp;&amp; m_sssPass-&gt;getOutputView()) ?</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L620" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:620</a></div>
+<p>But two passes still write into the *original* lighting image after SSS has sampled it — the Preetham sky (enabled by default) and the particle forward pass:</p>
+<div class="citation-chip"><code class="citation-code">// 4.6. Sky pass — fills sky pixels with Preetham sky</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L548" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:548</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/deferred-ssr-sss-dataflow.svg" alt="Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Solid arrows are reads and writes that reach the tonemap; the dashed accent path is written after SSSPass has already copied the image, so it is dropped." loading="lazy" /><figcaption>Conceptual dataflow of the deferred frame tail, read from the pass ordering in DeferredRenderer::render(). Not a captured frame. Solid arrows are reads and writes that reach the tonemap; the dashed accent path is written after SSSPass has already copied the image, so it is dropped.</figcaption></figure>
+<p>A second gap sits in the same area. `DeferredRenderer::onResize` forwards to the GBuffer, RT GI, lighting, post-processing, gizmo and sky passes — and not to SSS or SSR:</p>
+<div class="citation-chip"><code class="citation-code">void DeferredRenderer::onResize(uint32_t width, uint32_t height) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L657" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:657</a></div>
+<p>Both passes implement a correct `onResize`; nobody calls it. Their images stay at the 1920×1080 allocated at init, and `screenSize` in the push constants comes from the same stale `m_width`/`m_height`, so after a window resize they produce a correctly scaled 1080p result that post-processing samples with the new viewport&#x27;s UVs.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Neither pass has an enable switch and neither is registered with the render graph. They are always on, always hand-barriered, and permanently 1920×1080 — full-resolution only until the window is first resized. Any change to the order of the block between `m_renderGraph.execute()` and post-processing changes what ends up in the frame.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>SSR&#x27;s `thickness` is in projected depth units, not world units. Linearising the depth comparison without retuning it disables all reflections.</li>
+<li>SSR&#x27;s sky test is exact equality with the GBuffer clear colour. Changing `clearValues[0]` to anything non-zero makes SSR trace rays for the sky.</li>
+<li>The tonemap&#x27;s SSR fallback binds the HDR input under an additive composite: a missing SSR view doubles scene brightness rather than contributing nothing.</li>
+<li>`SSSPass` must run after everything that writes the lighting HDR image, because post-processing switches its input to the SSS output. Passes writing to the lighting image later — currently SkyPass and particles — do not reach the frame.</li>
+<li>`DeferredRenderer::cleanup()` releases the particle system, sky, gizmo, post-processing, lighting, CSM and GBuffer passes and nothing else. `m_sssPass`, `m_ssrPass`, `m_rtShadow` and `m_rtGI` survive it and are freed only when `~DeferredRenderer` destroys their `unique_ptr`s. Calling `cleanup()` manually and then destroying the `VkDevice` destroys all four against a dead device.</li>
+<li>The tonemap ignores SSR&#x27;s alpha channel. Anyone switching the `+=` to a correct OVER composite gets the coverage for free from `ssr.a`; anyone deleting the alpha write first makes that fix impossible.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/deferred/ssr_pass.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/deferred/sss_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/ssr_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/ssr.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/ssr.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/tonemapping.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/post_processing_pipeline.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/postprocess/sss_blur.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/sss_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/sss_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/ssr_pass.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

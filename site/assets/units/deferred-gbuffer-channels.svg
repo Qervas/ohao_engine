@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="OHAO G-buffer attachment layout: five render targets, cell width proportional to bytes per pixel, totalling 28 bytes per pixel.">
+  <rect x="0" y="0" width="720" height="300" fill="#0f1419"/>
+
+  <text x="12" y="22" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">G-buffer attachment layout — cell width is proportional to bytes</text>
+
+  <!-- GBuffer0 : RGBA16F, 8 B -->
+  <text x="12" y="64" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">GBuffer0</text>
+  <g stroke="#3d4a58" stroke-width="1">
+    <rect x="132" y="44" width="80" height="30" fill="#1a222c"/>
+    <rect x="212" y="44" width="80" height="30" fill="#1a222c"/>
+    <rect x="292" y="44" width="80" height="30" fill="#1a222c"/>
+    <rect x="372" y="44" width="80" height="30" fill="#1a222c"/>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">
+    <text x="172" y="63">wpos.x</text>
+    <text x="252" y="63">wpos.y</text>
+    <text x="332" y="63">wpos.z</text>
+    <text x="412" y="63">metallic</text>
+  </g>
+  <text x="466" y="64" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">R16G16B16A16_SFLOAT · 8 B</text>
+
+  <!-- GBuffer1 : RGBA16F, 8 B -->
+  <text x="12" y="106" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">GBuffer1</text>
+  <g stroke="#3d4a58" stroke-width="1">
+    <rect x="132" y="86" width="80" height="30" fill="#1a222c"/>
+    <rect x="212" y="86" width="80" height="30" fill="#1a222c"/>
+  </g>
+  <g stroke="#3d4a58" stroke-width="1">
+    <rect x="292" y="86" width="80" height="30" fill="#1a222c"/>
+  </g>
+  <g stroke="#c4784a" stroke-width="1.4">
+    <rect x="372" y="86" width="80" height="30" fill="#241a17"/>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">
+    <text x="172" y="105">oct.x</text>
+    <text x="252" y="105">oct.y</text>
+    <text x="332" y="105">roughness</text>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4784a" text-anchor="middle">
+    <text x="412" y="105">emissive Y</text>
+  </g>
+  <text x="466" y="106" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">R16G16B16A16_SFLOAT · 8 B</text>
+
+  <!-- GBuffer2 : RGBA8 SRGB, 4 B -->
+  <text x="12" y="148" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">GBuffer2</text>
+  <g stroke="#3d4a58" stroke-width="1">
+    <rect x="132" y="128" width="40" height="30" fill="#1a222c"/>
+    <rect x="172" y="128" width="40" height="30" fill="#1a222c"/>
+    <rect x="212" y="128" width="40" height="30" fill="#1a222c"/>
+    <rect x="252" y="128" width="40" height="30" fill="#1a222c"/>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">
+    <text x="152" y="147">R</text>
+    <text x="192" y="147">G</text>
+    <text x="232" y="147">B</text>
+    <text x="272" y="147">AO</text>
+  </g>
+  <text x="466" y="148" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">R8G8B8A8_SRGB · 4 B</text>
+
+  <!-- Velocity : RG16F, 4 B -->
+  <text x="12" y="190" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">Velocity</text>
+  <g stroke="#3d4a58" stroke-width="1">
+    <rect x="132" y="170" width="80" height="30" fill="#1a222c"/>
+    <rect x="212" y="170" width="80" height="30" fill="#1a222c"/>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">
+    <text x="172" y="189">du</text>
+    <text x="252" y="189">dv</text>
+  </g>
+  <text x="466" y="190" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">R16G16_SFLOAT · 4 B</text>
+
+  <!-- Depth : D32F, 4 B -->
+  <text x="12" y="232" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">Depth</text>
+  <g stroke="#3d4a58" stroke-width="1">
+    <rect x="132" y="212" width="160" height="30" fill="#1a222c"/>
+  </g>
+  <text x="212" y="231" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">non-linear z</text>
+  <text x="466" y="232" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">D32_SFLOAT · 4 B</text>
+
+  <line x1="12" y1="256" x2="708" y2="256" stroke="#3d4a58" stroke-width="1"/>
+
+  <rect x="12" y="268" width="12" height="12" fill="#241a17" stroke="#c4784a" stroke-width="1.4"/>
+  <text x="32" y="278" font-family="DM Sans,sans-serif" font-size="11" fill="#c4a574">the one channel freed because the octahedral normal costs 2 slots, not 3</text>
+  <text x="708" y="278" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a" text-anchor="end">28 B/pixel · 55.4 MiB at 1920x1080</text>
+</svg>

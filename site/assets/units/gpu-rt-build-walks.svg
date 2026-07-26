@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="Two lanes of triangle numbering. The geometry lane skips a hidden actor; the material-ID lane does not, so a global triangle id lands on the wrong material row.">
+  <rect x="0" y="0" width="720" height="330" fill="#0f1419"/>
+
+  <text x="20" y="26" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">One actor-map iteration order, two filter predicates</text>
+
+  <!-- actor chips -->
+  <text x="20" y="52" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">actors (unordered_map order)</text>
+  <rect x="20" y="60" width="150" height="30" rx="3" fill="#1a222c" stroke="#6e685c" stroke-dasharray="4 3"/>
+  <text x="95" y="79" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">A · hidden · 500 tri</text>
+  <rect x="180" y="60" width="150" height="30" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="255" y="79" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">B · 1000 tri</text>
+  <rect x="340" y="60" width="150" height="30" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="415" y="79" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">C · 600 tri</text>
+
+  <!-- lane 1: geometry -->
+  <text x="20" y="130" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">geometry / m_meshBufferMap &#8212; filter: getModel() &amp;&amp; isVisible()</text>
+  <rect x="60" y="140" width="280" height="34" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="200" y="162" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">B  tri 0 &#8230; 999</text>
+  <rect x="340" y="140" width="168" height="34" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="424" y="162" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">C  1000 &#8230; 1599</text>
+  <text x="518" y="162" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">A absent</text>
+
+  <!-- offset marker -->
+  <line x1="340" y1="132" x2="340" y2="248" stroke="#c4784a" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <circle cx="340" cy="140" r="3.5" fill="#c4784a"/>
+  <circle cx="340" cy="248" r="3.5" fill="#c4784a"/>
+
+  <!-- lane 2: material ids -->
+  <text x="20" y="222" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">matID + material rows &#8212; filter: getModel() only</text>
+  <rect x="60" y="232" width="140" height="34" fill="#1a222c" stroke="#6e685c" stroke-dasharray="4 3"/>
+  <text x="130" y="254" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">A  0 &#8230; 499</text>
+  <rect x="200" y="232" width="280" height="34" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="340" y="254" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">B  500 &#8230; 1499</text>
+  <rect x="480" y="232" width="168" height="34" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="564" y="254" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">C  1500 &#8230; 2099</text>
+
+  <!-- annotation -->
+  <text x="60" y="296" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a">globalTriID = 1000</text>
+  <text x="60" y="313" font-family="DM Sans,sans-serif" font-size="12" fill="#e8e2d6">first triangle of C in the geometry lane, but row 1000 belongs to B in the material lane.</text>
+</svg>

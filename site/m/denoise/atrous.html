@@ -33,33 +33,103 @@
         <p>Internal spatial/temporal denoise compute.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#filtering-the-wrong-image-on-purpose">Filtering the wrong image on purpose</a></li><li><a href="#pass-1-reprojection-and-the-two-ways-history-dies">Pass 1: reprojection, and the two ways history dies</a></li><li><a href="#the-moments-and-why-the-first-four-frames-are-different">The moments, and why the first four frames are different</a></li><li><a href="#pass-2-what-the-variance-actually-buys">Pass 2: what the variance actually buys</a></li><li><a href="#l-0-4-and-how-it-was-chosen">σ_l = 0.4, and how it was chosen</a></li><li><a href="#the-schedule-and-the-image-that-is-three-things-at-once">The schedule, and the image that is three things at once</a></li><li><a href="#the-motion-vectors-svgf-actually-receives">The motion vectors SVGF actually receives</a></li><li><a href="#two-compiled-shaders-that-nothing-runs">Two compiled shaders that nothing runs</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="filtering-the-wrong-image-on-purpose">Filtering the wrong image on purpose</h2></div>
 <div class="prose reveal">
-<p>In-engine edge-aware à-trous / SVGF-style denoise with zero external dependency.</p>
+<p>Every other denoiser here wants linear radiance: NRD demodulated by albedo and split diffuse/specular, OIDN as HDR colour with albedo and normal AOVs. OHAO&#x27;s own SVGF takes the opposite input — the RGBA8 image the realtime raygen has already run through ACES and a 1/2.2 gamma curve:</p>
+<div class="citation-chip"><code class="citation-code">vec3 ldr = ACES(denoised * 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1907" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1907</a></div>
+<p>It is also the last pass&#x27;s destination — overwritten in place, so nothing downstream changes.</p>
+<div class="citation-chip"><code class="citation-code">VkImage     beautyImage  = VK_NULL_HANDLE; // m_outputImage (RGBA8) — in AND final out</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/atrous_denoise.hpp#L20" target="_blank" rel="noopener">ohao/render/rt/denoise/atrous_denoise.hpp:20</a></div>
+<p>Nor is that input raw. `kRealtimeRTSettings` turns the in-raygen denoise on and nothing on the Atrous path clears it, so before the tonemap the raygen has already run a 5×5 edge-aware bilateral over every pixel whose local variance clears a threshold, then rescaled to preserve luminance. Its two wider passes re-read the centre&#x27;s own running value and are algebraically identity, so SVGF gets a step-1 bilateral&#x27;s output.</p>
+<div class="citation-chip"><code class="citation-code">.enableInternalDenoise = true,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L43" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:43</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Demodulation — divide out albedo, filter the illumination, multiply back — is the standard move, and it is what produced NRD&#x27;s failure modes here: black metals and magenta casts from a mismatched guide. Filtering the composited image cannot produce either. The price: temporal average and spatial kernel both run on gamma-encoded values, so the mean of N frames is not the gamma of the mean radiance.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="pass-1-reprojection-and-the-two-ways-history-dies">Pass 1: reprojection, and the two ways history dies</h2></div>
 <div class="prose reveal">
-<p>atrous_denoise + denoise_atrous.comp / rt_svgf_*.comp.</p>
+<p>The temporal pass reads the motion-vector AOV — pixel-space `currPix - prevPix`, so the previous location is `pixel - motion`, snapped to the nearest texel. History must survive two per-pixel rejections: landing inside the image, and matching the geometry history this pass wrote last frame — view Z plus normal:</p>
+<div class="citation-chip"><code class="citation-code">if (zrel &gt; 0.1 || ndot &lt; 0.9) valid = false;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_svgf_temporal.comp#L78" target="_blank" rel="noopener">shaders/rt/rt_svgf_temporal.comp:78</a></div>
+<p>`zrel` normalises the depth difference by the larger of the two depths, so the 10% tolerance is scale-free; `ndot &lt; 0.9` rejects beyond roughly 26° of rotation. Survivors blend into an exponential moving average that decays as history accumulates:</p>
+<div class="math-block">$$
+c_n = (1-\alpha)\,c_{n-1} + \alpha\,c,\qquad \alpha = \max\!\left(\tfrac{1}{n},\ 0.05\right)
+$$</div>
+<p>where $c$ is this frame&#x27;s beauty, $c_{n-1}$ the reprojected history, and $n$ the per-pixel history length, clamped at 32. Without the floor the image stops responding to lighting changes; 0.05 caps the effective window at 20 frames — and since the floor binds at $n = 20$, the 32-frame clamp never changes $\alpha$.</p>
+<div class="citation-chip"><code class="citation-code">float alpha  = max(1.0 / newLen, 0.05);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_svgf_temporal.comp#L97" target="_blank" rel="noopener">shaders/rt/rt_svgf_temporal.comp:97</a></div>
+<p>One storage detail is load-bearing. The depth AOV writes `1e30` for background, but the geometry history is RGBA16F, whose largest finite value is 65504 — `1e30` cannot round-trip. Clamping Z into fp16 range before storing is what makes background compare cleanly against foreground at a silhouette:</p>
+<div class="citation-chip"><code class="citation-code">float curZc = min(curZ, 1.0e4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_svgf_temporal.comp#L60" target="_blank" rel="noopener">shaders/rt/rt_svgf_temporal.comp:60</a></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-moments-and-why-the-first-four-frames-are-different">The moments, and why the first four frames are different</h2></div>
 <div class="prose reveal">
-<p>Fallback when NRD/DLSS unavailable.</p>
+<p>The same EMA is applied to the first and second raw moments of luminance, $m_1 = \mathbb{E}[l]$ and $m_2 = \mathbb{E}[l^2]$, giving a running variance:</p>
+<div class="math-block">$$
+\mathrm{Var} = m_2 - m_1^2
+$$</div>
+<p>with $l = 0.2126R + 0.7152G + 0.0722B$. This is the point of Pass 1: the spatial filter needs a per-pixel estimate of *how noisy this pixel still is*, and a temporal moment pair gives one for free — with the caveat above, that on the realtime profile $l$ is already-filtered luminance, so the moments measure residual noise, not Monte-Carlo variance.</p>
+<p>A two-frame history gives a meaningless variance, so below four frames the pass also computes the spatial 3×3 luminance variance of the current beauty and takes the larger:</p>
+<div class="citation-chip"><code class="citation-code">if (newLen &lt; 4.0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_svgf_temporal.comp#L109" target="_blank" rel="noopener">shaders/rt/rt_svgf_temporal.comp:109</a></div>
+<p>Freshly disoccluded pixels are driven entirely by that spatial estimate.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="pass-2-what-the-variance-actually-buys">Pass 2: what the variance actually buys</h2></div>
 <div class="prose reveal">
-<p>In-engine fallback when NRD/DLSS unavailable: edge-aware à-trous + optional SVGF temporal.</p>
-<p>Does not match NRD quality but has zero external dependency.</p>
+<p>The spatial pass is a 5×5 B3-spline à-trous wavelet — the same 25 taps every iteration, spacing doubling 1→16. Tap radius stays 2 at every level, so five dispatches reach a cascaded support radius of $2(1{+}2{+}4{+}8{+}16) = 62$ px for 125 taps; one gather over that 125×125 window would cost 15625. Each tap weight carries three edge-stopping exponentials:</p>
+<div class="math-block">$$
+w = h_{ij}\;
+e^{-\frac{|l_c - l_q|}{\sigma_l\sqrt{\overline{\mathrm{Var}}}+\varepsilon}}\;
+e^{-\frac{\max(1-n_c\cdot n_q,\,0)}{\sigma_n^2+\varepsilon}}\;
+e^{-\frac{|z_c - z_q|}{\sigma_z^2+\varepsilon}}
+$$</div>
+<p>$h_{ij}$ is the separable B3-spline weight, $c$ and $q$ index the centre and the tap, $z$ is linear view Z, and $\overline{\mathrm{Var}}$ is the centre variance after a 3×3 Gaussian prefilter, raw per-pixel variance being too noisy to weight on. $n$ is the world normal decoded from the `N*0.5+0.5` AOV but *not* renormalised as Pass 1 renormalises, so $n_c\cdot n_q$ can exceed 1 — two background texels decode to $(-1,-1,-1)$ and dot to 3. The clamp is what stops that from amplifying the weight instead of attenuating it. The luminance term is what differs from a plain à-trous, which weights squared RGB distance against a constant — the same for converged and noisy pixels:</p>
+<div class="citation-chip"><code class="citation-code">w *= exp(-abs(cL - sL) / (sqrtVar * pc.sigmaL + 1e-6));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_svgf_atrous.comp#L94" target="_blank" rel="noopener">shaders/rt/rt_svgf_atrous.comp:94</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Variance is the whole algorithm. Where $\mathrm{Var}$ is small the denominator collapses, any luminance difference drives $w \to 0$, and a converged pixel keeps its detail; where it is large the weight stays near 1 and the filter averages aggressively. The kernel never changes — only its willingness to cross an edge.</p></div>
+<p>Variance is filtered alongside colour, but with the *square* of each tap weight: the variance of a weighted mean of independent samples scales as $\sum w^2 / (\sum w)^2$, not as the mean of the variances.</p>
+</div>
+<div class="section-rule"><h2 id="l-0-4-and-how-it-was-chosen">σ_l = 0.4, and how it was chosen</h2></div>
+<div class="prose reveal">
+<p>The three sensitivities are compile-time constants, overridable by env var for sweeps, and the source records the measurement that settled `kSigmaL`: at σ_l = 4 the result came out *smoother than* the plain à-trous (mean |Laplacian| 3.25); at σ_l = 0.4 it beat both the plain filter (5.70 vs 4.38) and OIDN (4.98) at matched flat-metal noise.</p>
+<div class="citation-chip"><code class="citation-code">constexpr float kSigmaL      = 0.4f;   // luminance weight (scaled by sqrt(variance))</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/atrous_denoise.cpp#L38" target="_blank" rel="noopener">ohao/render/rt/denoise/atrous_denoise.cpp:38</a></div>
+<p>The recorded rationale is structural: Pass 1 has already removed most of the noise, so Pass 2 only cleans a residual — and on the realtime profile the in-raygen bilateral took some first. A spatial stage doing the heavy lifting needs a permissive σ_l; one following a strong temporal stage must not.</p>
+</div>
+<div class="section-rule"><h2 id="the-schedule-and-the-image-that-is-three-things-at-once">The schedule, and the image that is three things at once</h2></div>
+<div class="prose reveal">
+<figure class="unit-figure reveal"><img src="../../assets/units/denoise-atrous-pingpong.svg" alt="Per-frame image schedule, transcribed from the inColor/outColor/inVar/outVar tables in atrous_denoise.cpp. Conceptual — a dataflow reading of the source, not a captured trace." loading="lazy" /><figcaption>Per-frame image schedule, transcribed from the inColor/outColor/inVar/outVar tables in atrous_denoise.cpp. Conceptual — a dataflow reading of the source, not a captured trace.</figcaption></figure>
+<p>Five iterations need only two scratch colour images: the persistent history doubles as the third. Iteration 0 writes `histColor[parity]`, at once iteration 1&#x27;s input and next frame&#x27;s history — SVGF&#x27;s standard feedback point, the first wavelet level being stable without losing the detail wider iterations destroy.</p>
+<div class="citation-chip"><code class="citation-code">const VkImageView inColor[kNumIterations]  = { A,  HC, B,  A,  B  };</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/atrous_denoise.cpp#L482" target="_blank" rel="noopener">ohao/render/rt/denoise/atrous_denoise.cpp:482</a></div>
+<p>All five descriptor sets are written before the first dispatch is recorded: a set bound by a recorded command cannot be updated, so rewriting one between dispatches would be invalid.</p>
+</div>
+<div class="section-rule"><h2 id="the-motion-vectors-svgf-actually-receives">The motion vectors SVGF actually receives</h2></div>
+<div class="prose reveal">
+<p>Atrous mode forces `historyFrameCount = 0` in the raygen push constants every frame, so the engine&#x27;s cross-frame accumulation is bypassed and the denoiser owns temporal integration. (How many paths it carries is a separate control, `samplesPerFrame`, averaged in-raygen.) Two of the three raygen variants gate motion-vector output on that same zeroed counter:</p>
+<div class="citation-chip"><code class="citation-code">if (firstHitDist &gt; 0.0 &amp;&amp; historyFrameCount &gt; 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L207" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:207</a></div>
+<p>With the offline profile bound it is false on every Atrous frame, so the motion-vector AOV is identically zero and reprojection degenerates to `prevPixel == pixel` — the smaller problem there. That profile also resets accumulation on view change, which raises `pc.reset` and makes Pass 1 discard *all* history unconditionally — not per-pixel, not by geometry test — for every frame the camera moves. The realtime raygen was fixed by gating on the frame index, which advances in all modes:</p>
+<div class="citation-chip"><code class="citation-code">if (firstHitDist &gt; 0.0 &amp;&amp; frameIdx &gt; 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L421" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:421</a></div>
+<p>The interactive viewer defaults to the realtime profile, so the shipping path gets correct vectors; the other two raygens do not.</p>
+</div>
+<div class="section-rule"><h2 id="two-compiled-shaders-that-nothing-runs">Two compiled shaders that nothing runs</h2></div>
+<div class="prose reveal">
+<p>`AtrousDenoiser` creates exactly two pipelines, from `rt_rt_svgf_temporal.comp.spv` and `rt_rt_svgf_atrous.comp.spv`. The CMake glob compiles every `.comp` under `shaders/`, so `rt_atrous.comp` and `denoise_atrous.comp` also produce SPIR-V — but nothing loads either name, and the `RTDenoiser` that would have driven them is a header with no translation unit and no callers.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Beauty, normal, depth and motion must be in `VK_IMAGE_LAYOUT_GENERAL` behind a `RAY_TRACING → COMPUTE` barrier before `dispatch()`; the denoiser barriers its own six dispatches but never transitions borrowed inputs.</li>
+<li>Iteration 0&#x27;s colour output *is* next frame&#x27;s history. Editing the ping-pong tables without moving the history binding breaks accumulation silently — the image still denoises, it never converges.</li>
+<li>`resetHistory` fires when `m_historyFrameCount == 0`: first frame, or any `resetAccumulation()`. The realtime profile does not call it on a camera move, so history survives the drag; the offline profile&#x27;s `resetsAccumulationOnViewChange()` returns true, so every moved frame resets and SVGF filters one frame alone.</li>
+<li>History images are framebuffer-sized, destroyed and re-created on resize; the first-frame `UNDEFINED → GENERAL` latch re-arms with them.</li>
+<li>`--denoise=atrous` has no build-time gate, unlike `nrd` and `dlssrr`, which fall back to `none` when their libraries were not built.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/denoise/atrous_denoise.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/rt/rt_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/rt_svgf_temporal.comp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/rt_svgf_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/atrous_denoise.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_atrous.comp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

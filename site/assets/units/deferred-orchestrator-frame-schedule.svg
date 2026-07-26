@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 392" class="unit-diagram" role="img"
+     aria-label="Frame schedule of DeferredRenderer::render: six passes recorded through the render graph, six recorded directly onto the command buffer, and the HDR image dataflow in which particles are rasterized into the lighting image after subsurface scattering has already copied out of it.">
+  <defs>
+    <marker id="dor-arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="dor-arw-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c4784a"/>
+    </marker>
+    <style>
+      .bg   { fill: #0f1419; }
+      .pnl  { fill: #1a222c; stroke: #3d4a58; stroke-width: 1; }
+      .box  { fill: #1a222c; stroke: #3d4a58; stroke-width: 1.2; }
+      .lbl  { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: #e8e2d6; }
+      .lblx { font-family: "IBM Plex Mono", monospace; font-size: 9.5px; fill: #e8e2d6; }
+      .cap  { font-family: "DM Sans", sans-serif; font-size: 11.5px; fill: #c4a574; }
+      .mut  { font-family: "DM Sans", sans-serif; font-size: 10.5px; fill: #6e685c; }
+      .acc  { font-family: "DM Sans", sans-serif; font-size: 10.5px; fill: #c4784a; }
+      .ln   { stroke: #3d4a58; stroke-width: 1.4; fill: none; }
+      .lnacc{ stroke: #c4784a; stroke-width: 1.6; fill: none; }
+      .tick { stroke: #7dba8a; stroke-width: 1.6; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="720" height="392"/>
+
+  <!-- Band A: render graph -->
+  <text class="cap" x="14" y="20">inside m_renderGraph — layout barriers computed from declared reads/writes</text>
+  <rect class="pnl" x="12" y="28" width="696" height="56" rx="3" stroke-dasharray="4 3"/>
+
+  <rect class="box" x="20" y="40" width="98" height="32" rx="2"/>
+  <text class="lbl" x="69" y="60" text-anchor="middle">CSM</text>
+  <rect class="box" x="132" y="40" width="98" height="32" rx="2"/>
+  <text class="lbl" x="181" y="60" text-anchor="middle">GBuffer</text>
+  <rect class="box" x="244" y="40" width="98" height="32" rx="2"/>
+  <text class="lbl" x="293" y="60" text-anchor="middle">SSAO</text>
+  <rect class="box" x="356" y="40" width="98" height="32" rx="2"/>
+  <text class="lbl" x="405" y="60" text-anchor="middle">RTShadow</text>
+  <rect class="box" x="468" y="40" width="98" height="32" rx="2"/>
+  <text class="lbl" x="517" y="60" text-anchor="middle">RTGI</text>
+  <rect class="box" x="580" y="40" width="120" height="32" rx="2"/>
+  <text class="lblx" x="640" y="60" text-anchor="middle">DeferredLighting</text>
+
+  <line class="tick" x1="125" y1="46" x2="125" y2="66"/>
+  <line class="tick" x1="237" y1="46" x2="237" y2="66"/>
+  <line class="tick" x1="349" y1="46" x2="349" y2="66"/>
+  <line class="tick" x1="461" y1="46" x2="461" y2="66"/>
+  <line class="tick" x1="573" y1="46" x2="573" y2="66"/>
+  <text class="mut" x="14" y="98">green ticks = vkCmdPipelineBarrier inserted by the graph. Order is the addPass() order — the sort is the identity.</text>
+
+  <!-- Band B: direct recording -->
+  <text class="cap" x="14" y="132">recorded straight onto the command buffer — every pass rolls its own barriers</text>
+  <rect class="pnl" x="12" y="140" width="696" height="56" rx="3"/>
+
+  <rect class="box" x="20" y="152" width="98" height="32" rx="2"/>
+  <text class="lbl" x="69" y="172" text-anchor="middle">SSS</text>
+  <rect class="box" x="132" y="152" width="98" height="32" rx="2"/>
+  <text class="lbl" x="181" y="172" text-anchor="middle">SSR</text>
+  <rect class="box" x="244" y="152" width="98" height="32" rx="2"/>
+  <text class="lbl" x="293" y="172" text-anchor="middle">Sky</text>
+  <rect class="box" x="356" y="152" width="98" height="32" rx="2"/>
+  <text class="lbl" x="405" y="172" text-anchor="middle">Particles</text>
+  <rect class="box" x="468" y="152" width="98" height="32" rx="2"/>
+  <text class="lbl" x="517" y="172" text-anchor="middle">PostFX</text>
+  <rect class="box" x="580" y="152" width="120" height="32" rx="2"/>
+  <text class="lbl" x="640" y="172" text-anchor="middle">Gizmo</text>
+
+  <!-- Dataflow -->
+  <text class="cap" x="14" y="232">image dataflow through the tail of the frame</text>
+
+  <rect class="box" x="20" y="248" width="180" height="46" rx="2"/>
+  <text class="lblx" x="110" y="268" text-anchor="middle">HDR lighting image</text>
+  <text class="mut" x="110" y="283" text-anchor="middle">R16G16B16A16_SFLOAT</text>
+
+  <rect class="box" x="272" y="248" width="180" height="46" rx="2"/>
+  <text class="lblx" x="362" y="268" text-anchor="middle">SSS output image</text>
+  <text class="mut" x="362" y="283" text-anchor="middle">separate allocation</text>
+
+  <rect class="box" x="524" y="248" width="176" height="46" rx="2"/>
+  <text class="lblx" x="612" y="268" text-anchor="middle">tonemapped output</text>
+  <text class="mut" x="612" y="283" text-anchor="middle">read by getFinalOutput()</text>
+
+  <!-- lighting pass writes HDR: anchored on the DeferredLighting box in band A -->
+  <path class="ln" d="M700 56 L713 56 L713 228 L90 228 L90 246" marker-end="url(#dor-arw)"/>
+  <text class="mut" x="400" y="220" text-anchor="middle">DeferredLighting writes here; SkyPass fills background pixels in place</text>
+
+  <path class="ln" d="M202 271 L270 271" marker-end="url(#dor-arw)"/>
+  <text class="mut" x="236" y="263" text-anchor="middle">SSS</text>
+  <path class="ln" d="M454 271 L522 271" marker-end="url(#dor-arw)"/>
+  <text class="mut" x="488" y="263" text-anchor="middle">PostFX</text>
+
+  <!-- particles dead end -->
+  <path class="lnacc" d="M405 186 L405 202 L140 202 L140 246" marker-end="url(#dor-arw-acc)" stroke-dasharray="5 3"/>
+  <text class="acc" x="20" y="322">Particles rasterize into the HDR lighting image — but SSS copied out of it earlier in the frame,</text>
+  <text class="acc" x="20" y="338">and PostFX consumes the SSS output. While SSSPass is alive, particle pixels never reach the tonemapper.</text>
+
+  <text class="mut" x="20" y="366">SSS and SSR output images are never resized: DeferredRenderer::onResize() does not forward to them.</text>
+</svg>

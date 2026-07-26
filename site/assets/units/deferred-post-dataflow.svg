@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="Post-processing dataflow: bloom branches off the pre-TAA HDR image and rejoins inside the tonemap fragment shader">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="20" y="24" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">PostProcessingPipeline::execute() — IMAGE FLOW</text>
+
+<!-- source -->
+<rect x="16" y="118" width="132" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="82" y="140" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">lighting / SSS</text>
+<text x="82" y="157" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">HDR RGBA16F</text>
+
+<!-- bloom branch -->
+<path d="M148 132 L172 132 L172 72 L192 72" fill="none" stroke="#c4784a" stroke-width="1.5"/>
+<polygon points="192,72 184,68 184,76" fill="#c4784a"/>
+<rect x="196" y="46" width="196" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="294" y="68" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">BloomPass</text>
+<text x="294" y="85" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">threshold → 13-tap ↓ → tent ↑ (8 mips)</text>
+
+<!-- taa branch -->
+<path d="M148 156 L172 156 L172 216 L192 216" fill="none" stroke="#3d4a58" stroke-width="1.5"/>
+<polygon points="192,216 184,212 184,220" fill="#3d4a58"/>
+<rect x="196" y="190" width="196" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="294" y="212" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">TAAPass</text>
+<text x="294" y="229" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">2 × RGBA16F history, ping-pong</text>
+
+<!-- joins -->
+<path d="M392 72 L416 72 L416 124 L436 124" fill="none" stroke="#c4784a" stroke-width="1.5"/>
+<polygon points="436,124 428,120 428,128" fill="#c4784a"/>
+<path d="M392 216 L416 216 L416 160 L436 160" fill="none" stroke="#3d4a58" stroke-width="1.5"/>
+<polygon points="436,160 428,156 428,164" fill="#3d4a58"/>
+
+<rect x="440" y="106" width="164" height="72" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+<text x="522" y="126" text-anchor="middle" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">tonemapping.frag</text>
+<text x="522" y="145" text-anchor="middle" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">b0 hdr  b1 bloom  b2 ssr</text>
+<text x="522" y="163" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">composite + exposure + curve</text>
+
+<path d="M604 142 L634 142" fill="none" stroke="#3d4a58" stroke-width="1.5"/>
+<polygon points="634,142 626,138 626,146" fill="#3d4a58"/>
+<rect x="638" y="116" width="66" height="52" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+<text x="671" y="138" text-anchor="middle" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">final</text>
+<text x="671" y="155" text-anchor="middle" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">RGBA8 UNORM</text>
+
+<text x="196" y="118" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">bloom taps the pre-TAA image; there is no separate composite pass</text>
+
+<!-- ssao aside -->
+<rect x="16" y="256" width="470" height="32" rx="4" fill="none" stroke="#3d4a58" stroke-dasharray="4 3"/>
+<text x="30" y="276" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">SSAOPass — same object, but executeSSAO() is called earlier, before the lighting pass</text>
+</svg>

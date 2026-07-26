@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img" aria-label="Dataflow of the five cinematic post dispatches: bloom extract, two downsample blurs, composite, depth-of-field gather.">
+  <defs>
+    <marker id="dcArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="dcArrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="720" height="340" fill="#0f1419"/>
+
+  <!-- band labels -->
+  <text x="12" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">HDR · linear · imageLoad (storage)</text>
+  <text x="708" y="26" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="end">extents from path_tracer_images.cpp</text>
+
+  <!-- row 1: HDR source + bloom mips -->
+  <rect x="16" y="40" width="152" height="50" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="92" y="60" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">b29 composed HDR</text>
+  <text x="92" y="77" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">RGBA32F · W×H</text>
+
+  <rect x="228" y="40" width="130" height="50" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="293" y="60" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">bloom mip 0</text>
+  <text x="293" y="77" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">RGBA16F · W/2</text>
+
+  <rect x="410" y="40" width="130" height="50" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="475" y="60" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">bloom mip 1</text>
+  <text x="475" y="77" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">RGBA16F · W/4</text>
+
+  <rect x="578" y="40" width="126" height="50" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="641" y="60" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">bloom mip 2</text>
+  <text x="641" y="77" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">RGBA16F · W/8</text>
+
+  <line x1="168" y1="65" x2="222" y2="65" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <text x="195" y="57" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">extract</text>
+  <line x1="358" y1="65" x2="404" y2="65" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <text x="381" y="57" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">blur</text>
+  <line x1="540" y1="65" x2="572" y2="65" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <text x="556" y="57" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">blur</text>
+
+  <!-- layout flip rule -->
+  <line x1="16" y1="112" x2="704" y2="112" stroke="#6e685c" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="704" y="107" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="end">mips: GENERAL → SHADER_READ_ONLY_OPTIMAL (sampled)</text>
+
+  <!-- feeds into composite -->
+  <line x1="92" y1="90" x2="92" y2="146" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <line x1="293" y1="90" x2="293" y2="146" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <line x1="475" y1="90" x2="475" y2="146" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <line x1="641" y1="90" x2="641" y2="128" stroke="#3d4a58" stroke-width="1.5"/>
+  <polyline points="641,128 560,128 560,146" fill="none" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+
+  <!-- composite -->
+  <rect x="16" y="150" width="560" height="52" rx="4" fill="#1a222c" stroke="#c4784a" stroke-width="1.5"/>
+  <text x="296" y="171" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12" text-anchor="middle">cinematic_composite.comp</text>
+  <text x="296" y="189" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11" text-anchor="middle">sky reconstruct · exposure · +bloom · Khronos PBR Neutral · grade · vignette</text>
+
+  <!-- depth pill -->
+  <rect x="596" y="150" width="108" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="650" y="171" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">b20 depth</text>
+  <text x="650" y="188" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">R32F view-z</text>
+  <line x1="596" y1="176" x2="580" y2="176" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <polyline points="650,202 650,268 528,268" fill="none" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+
+  <!-- HDR/LDR boundary -->
+  <text x="12" y="222" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11">▼ HDR ends here — everything below is 8-bit sRGB-encoded</text>
+
+  <!-- row 3 -->
+  <rect x="16" y="242" width="160" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="96" y="263" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">b32 pre-DoF LDR</text>
+  <text x="96" y="280" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">RGBA8 · W×H</text>
+
+  <rect x="356" y="242" width="172" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="442" y="263" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">cinematic_dof.comp</text>
+  <text x="442" y="280" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10" text-anchor="middle">16-tap CoC gather</text>
+
+  <rect x="568" y="242" width="136" height="52" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+  <text x="636" y="263" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">b30 final LDR</text>
+  <text x="636" y="280" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">RGBA8 → readback</text>
+
+  <polyline points="96,202 96,236" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#dcArrowA)"/>
+  <line x1="176" y1="268" x2="350" y2="268" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+  <line x1="528" y1="268" x2="562" y2="268" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dcArrow)"/>
+
+  <text x="12" y="322" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">Five dispatches per frame; the blur pipeline is bound once and reused for both mip steps via two pre-allocated descriptor sets.</text>
+</svg>

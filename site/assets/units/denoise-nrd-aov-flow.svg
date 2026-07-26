@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 430" class="unit-diagram" role="img" aria-label="Data flow from raygen AOVs through NRD REBLUR to the compose pass and the cinematic tail, marking the region in which radiance is YCoCg-encoded.">
+  <rect x="0" y="0" width="720" height="430" fill="#0f1419"/>
+
+  <!-- YCoCg domain band -->
+  <rect x="8" y="52" width="704" height="222" fill="#c4784a" fill-opacity="0.07" stroke="#c4784a" stroke-opacity="0.45" stroke-dasharray="5 4" rx="6"/>
+  <text x="700" y="70" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4784a">radiance is YCoCg + normalized hitDist in here</text>
+
+  <!-- Stage 1: raygen -->
+  <rect x="20" y="82" width="680" height="72" fill="#1a222c" stroke="#3d4a58" rx="4"/>
+  <text x="32" y="100" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">pt_raygen_offline.rgen / pt_raygen_realtime.rgen</text>
+  <text x="330" y="100" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">(both #include nrd_frontend.glsl)</text>
+
+  <rect x="32" y="110" width="96" height="32" fill="#0f1419" stroke="#3d4a58" rx="3"/>
+  <text x="80" y="123" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">19 IN_MV</text>
+  <text x="80" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RG16F</text>
+
+  <rect x="138" y="110" width="96" height="32" fill="#0f1419" stroke="#3d4a58" rx="3"/>
+  <text x="186" y="123" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">20 IN_VIEWZ</text>
+  <text x="186" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">R32F</text>
+
+  <rect x="244" y="110" width="132" height="32" fill="#0f1419" stroke="#3d4a58" rx="3"/>
+  <text x="310" y="123" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">26 IN_NORMAL_ROUGHNESS</text>
+  <text x="310" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">A2B10G10R10_UNORM_PACK32</text>
+
+  <rect x="386" y="110" width="148" height="32" fill="#0f1419" stroke="#c4784a" rx="3"/>
+  <text x="460" y="123" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4784a">22 IN_DIFF_RADIANCE_HITDIST</text>
+  <text x="460" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA32F &#183; demodulated</text>
+
+  <rect x="544" y="110" width="148" height="32" fill="#0f1419" stroke="#c4784a" rx="3"/>
+  <text x="618" y="123" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4784a">23 IN_SPEC_RADIANCE_HITDIST</text>
+  <text x="618" y="135" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA32F</text>
+
+  <path d="M360 154 L360 174" stroke="#6e685c" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- Stage 2: REBLUR -->
+  <rect x="20" y="180" width="680" height="60" fill="#1a222c" stroke="#3d4a58" rx="4"/>
+  <text x="32" y="198" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">NRD REBLUR_DIFFUSE_SPECULAR</text>
+  <text x="240" y="198" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">NrdDenoiser::denoise() &#8212; NRI-wrapped VkImages, compute only, restoreInitialState</text>
+
+  <rect x="386" y="204" width="148" height="26" fill="#0f1419" stroke="#c4784a" rx="3"/>
+  <text x="460" y="221" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4784a">27 OUT_DIFF (still YCoCg)</text>
+
+  <rect x="544" y="204" width="148" height="26" fill="#0f1419" stroke="#c4784a" rx="3"/>
+  <text x="618" y="221" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4784a">28 OUT_SPEC (still YCoCg)</text>
+
+  <path d="M360 240 L360 266" stroke="#6e685c" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- Stage 3: compose -->
+  <rect x="20" y="272" width="680" height="70" fill="#1a222c" stroke="#3d4a58" rx="4"/>
+  <text x="32" y="290" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">nrd_compose.comp</text>
+  <text x="150" y="290" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">8&#215;8 workgroup &#183; nrdYCoCgToLinear, then remodulate</text>
+
+  <rect x="32" y="300" width="150" height="30" fill="#0f1419" stroke="#3d4a58" rx="3"/>
+  <text x="107" y="313" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">24 diffuse albedo</text>
+  <text x="107" y="324" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA8</text>
+
+  <rect x="192" y="300" width="150" height="30" fill="#0f1419" stroke="#3d4a58" rx="3"/>
+  <text x="267" y="313" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">25 spec colour (F0-ish)</text>
+  <text x="267" y="324" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA8</text>
+
+  <text x="356" y="319" font-family="IBM Plex Mono,monospace" font-size="14" fill="#6e685c">&#8594;</text>
+
+  <rect x="386" y="300" width="306" height="30" fill="#0f1419" stroke="#7dba8a" rx="3"/>
+  <text x="539" y="313" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#7dba8a">29 composed HDR &#8212; linear RGB again</text>
+  <text x="539" y="324" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">RGBA32F &#183; diff&#183;albedo + spec&#183;specColor</text>
+
+  <path d="M360 342 L360 362" stroke="#6e685c" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- Stage 4: cinematic -->
+  <rect x="20" y="368" width="680" height="48" fill="#1a222c" stroke="#3d4a58" rx="4"/>
+  <text x="32" y="386" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">NrdCinematicPost</text>
+  <text x="150" y="386" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">bloom extract &#8594; 2&#215; blur &#8594; composite &#8594; 32 &#8594; DoF gather &#8594; 30 (RGBA8 LDR)</text>
+  <text x="32" y="404" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">binding 30 is what VulkanRenderer::getPixels() reads back in DenoiseMode::NRD</text>
+
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6e685c"/>
+    </marker>
+  </defs>
+</svg>

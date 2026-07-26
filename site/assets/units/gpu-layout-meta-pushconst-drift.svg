@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="Byte map of the 240-byte per-draw push constant range, comparing the C++ ObjectPushConstants struct against the GLSL blocks declared by gbuffer.vert and forward.vert, which disagree after the first 64 bytes.">
+  <rect x="0" y="0" width="720" height="300" fill="#0f1419"/>
+
+  <text x="20" y="26" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">One push-constant range, three declarations of what is in it</text>
+
+  <!-- byte ruler -->
+  <line x1="60" y1="46" x2="680" y2="46" stroke="#3d4a58" stroke-width="1"/>
+  <g font-family="IBM Plex Mono,monospace" font-size="9" fill="#6e685c">
+    <line x1="60"    y1="42" x2="60"    y2="50" stroke="#3d4a58"/><text x="60"  y="38" text-anchor="middle">0</text>
+    <line x1="225.3" y1="42" x2="225.3" y2="50" stroke="#3d4a58"/><text x="225.3" y="38" text-anchor="middle">64</text>
+    <line x1="308"   y1="42" x2="308"   y2="50" stroke="#3d4a58"/><text x="308" y="38" text-anchor="middle">96</text>
+    <line x1="390.7" y1="42" x2="390.7" y2="50" stroke="#3d4a58"/><text x="390.7" y="38" text-anchor="middle">128</text>
+    <line x1="556"   y1="42" x2="556"   y2="50" stroke="#3d4a58"/><text x="556" y="38" text-anchor="middle">192</text>
+    <line x1="680"   y1="42" x2="680"   y2="50" stroke="#3d4a58"/><text x="680" y="38" text-anchor="middle">240</text>
+  </g>
+
+  <!-- Row A: C++ struct -->
+  <text x="20" y="82" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">C++</text>
+  <text x="20" y="94" font-family="DM Sans,sans-serif" font-size="9" fill="#6e685c">writes</text>
+  <g>
+    <rect x="60"    y="66" width="165.3" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="225.3" y="66" width="165.4" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="390.7" y="66" width="165.3" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="556"   y="66" width="41.3"  height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="597.3" y="66" width="41.4"  height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="638.7" y="66" width="41.3"  height="30" fill="#1a222c" stroke="#3d4a58"/>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">
+    <text x="142.6" y="85">model</text>
+    <text x="308"   y="85">viewProj</text>
+    <text x="473.3" y="85">prevMVP</text>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#c4a574" text-anchor="middle">
+    <text x="576.6" y="85">matPar</text>
+    <text x="618"   y="85">albedo</text>
+    <text x="659.3" y="85">emiss</text>
+  </g>
+
+  <!-- Row B: gbuffer.vert -->
+  <text x="20" y="142" font-family="IBM Plex Mono,monospace" font-size="10" fill="#7dba8a">GLSL</text>
+  <text x="20" y="154" font-family="DM Sans,sans-serif" font-size="9" fill="#6e685c">gbuffer</text>
+  <g>
+    <rect x="60"    y="126" width="165.3" height="30" fill="#1a222c" stroke="#7dba8a"/>
+    <rect x="225.3" y="126" width="165.4" height="30" fill="#1a222c" stroke="#7dba8a"/>
+    <rect x="390.7" y="126" width="165.3" height="30" fill="#1a222c" stroke="#7dba8a"/>
+    <rect x="556"   y="126" width="41.3"  height="30" fill="#1a222c" stroke="#7dba8a"/>
+    <rect x="597.3" y="126" width="41.4"  height="30" fill="#1a222c" stroke="#7dba8a"/>
+    <rect x="638.7" y="126" width="41.3"  height="30" fill="#1a222c" stroke="#7dba8a"/>
+  </g>
+  <text x="370" y="145" font-family="DM Sans,sans-serif" font-size="10" fill="#7dba8a" text-anchor="middle">same six fields, same offsets</text>
+
+  <!-- Row C: forward.vert / forward.frag -->
+  <text x="20" y="202" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4784a">GLSL</text>
+  <text x="20" y="214" font-family="DM Sans,sans-serif" font-size="9" fill="#6e685c">forward</text>
+  <g>
+    <rect x="60"    y="186" width="165.3" height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="225.3" y="186" width="31"    height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="256.3" y="186" width="10.4"  height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="266.7" y="186" width="10.3"  height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="277"   y="186" width="10.3"  height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="287.3" y="186" width="10.4"  height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="297.7" y="186" width="10.3"  height="30" fill="#1a222c" stroke="#c4784a"/>
+    <rect x="308"   y="186" width="372"   height="30" fill="none" stroke="#3d4a58" stroke-dasharray="3 4"/>
+  </g>
+  <text x="142.6" y="205" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">model</text>
+  <text x="494" y="205" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c" text-anchor="middle">not declared by the shader (bytes 96–240)</text>
+
+  <!-- drift band -->
+  <rect x="225.3" y="60" width="82.7" height="162" fill="#c4784a" fill-opacity="0.09" stroke="none"/>
+  <line x1="225.3" y1="60" x2="225.3" y2="222" stroke="#c4784a" stroke-width="1" stroke-dasharray="4 3"/>
+  <line x1="308"   y1="60" x2="308"   y2="222" stroke="#c4784a" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- callout -->
+  <path d="M225.3 234 L225.3 240 L308 240 L308 234" fill="none" stroke="#c4784a" stroke-width="1"/>
+  <line x1="266.6" y1="240" x2="266.6" y2="250" stroke="#c4784a" stroke-width="1"/>
+  <text x="266.6" y="264" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a" text-anchor="middle">forward.vert reads baseColor / metallic / roughness / ao here —</text>
+  <text x="266.6" y="278" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a" text-anchor="middle">the bytes C++ filled with the view-projection matrix</text>
+  <text x="266.6" y="292" font-family="DM Sans,sans-serif" font-size="9" fill="#6e685c" text-anchor="middle">forward.frag continues the same block with two packed texture indices at bytes 88 and 92</text>
+</svg>

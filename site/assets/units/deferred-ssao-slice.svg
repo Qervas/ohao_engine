@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="GTAO slice geometry: reference horizon angles measured from the view vector versus the angles ssao.comp actually measures from the tangent sweep axis">
+<rect width="100%" height="100%" fill="#0f1419"/>
+
+<text x="24" y="24" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.4">ONE GTAO SLICE THROUGH THE PIXEL</text>
+
+<!-- ============ LEFT PANEL: reference formulation ============ -->
+<rect x="20" y="38" width="330" height="238" fill="#1a222c" stroke="#3d4a58" stroke-width="1" rx="3"/>
+<text x="34" y="58" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">what integrateAO() assumes</text>
+
+<!-- surface -->
+<line x1="40" y1="230" x2="330" y2="230" stroke="#3d4a58" stroke-width="1.5"/>
+<!-- occluder -->
+<path d="M262,230 L262,178 L318,178 L318,230 Z" fill="#0f1419" stroke="#3d4a58" stroke-width="1"/>
+<text x="266" y="196" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10">occluder</text>
+
+<!-- P -->
+<circle cx="180" cy="230" r="3.5" fill="#e8e2d6"/>
+<text x="172" y="248" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">P</text>
+
+<!-- normal N -->
+<line x1="180" y1="230" x2="180" y2="130" stroke="#e8e2d6" stroke-width="1.6"/>
+<path d="M180,124 l-4,9 l8,0 Z" fill="#e8e2d6"/>
+<text x="186" y="134" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">N</text>
+
+<!-- view vector V -->
+<line x1="180" y1="230" x2="96" y2="152" stroke="#c4a574" stroke-width="1.6"/>
+<path d="M92,148 l1.5,10 l8.5,-4.5 Z" fill="#c4a574"/>
+<text x="76" y="146" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">V</text>
+
+<!-- angle n arc between N and V -->
+<path d="M180,180 A50,50 0 0,0 145,194" fill="none" stroke="#c4a574" stroke-width="1.2" stroke-dasharray="3 2"/>
+<text x="146" y="176" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">n</text>
+
+<!-- horizon rays, both measured off V, clamped into normal hemisphere -->
+<line x1="180" y1="230" x2="262" y2="178" stroke="#c4784a" stroke-width="1.6"/>
+<text x="228" y="212" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10">h2</text>
+<line x1="180" y1="230" x2="60" y2="230" stroke="#c4784a" stroke-width="1.6" stroke-dasharray="5 3"/>
+<text x="106" y="224" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10">h1 (clamped to n − π/2)</text>
+
+<text x="34" y="266" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10.5">h1, h2 and n share one frame: all angles off V.</text>
+
+<!-- ============ RIGHT PANEL: what the code measures ============ -->
+<rect x="370" y="38" width="330" height="238" fill="#1a222c" stroke="#3d4a58" stroke-width="1" rx="3"/>
+<text x="384" y="58" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">what ssao.comp measures</text>
+
+<line x1="390" y1="230" x2="680" y2="230" stroke="#3d4a58" stroke-width="1.5"/>
+<path d="M612,230 L612,178 L668,178 L668,230 Z" fill="#0f1419" stroke="#3d4a58" stroke-width="1"/>
+
+<circle cx="530" cy="230" r="3.5" fill="#e8e2d6"/>
+<text x="522" y="248" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">P</text>
+
+<!-- world-space normal, drawn tilted to signal it is not in this frame -->
+<line x1="530" y1="230" x2="562" y2="136" stroke="#e8e2d6" stroke-width="1.6" stroke-dasharray="4 3"/>
+<path d="M564,130 l-7.5,6.5 l7.5,3 Z" fill="#e8e2d6"/>
+<text x="568" y="136" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">N (world)</text>
+
+<!-- view vector -->
+<line x1="530" y1="230" x2="446" y2="152" stroke="#c4a574" stroke-width="1.6"/>
+<path d="M442,148 l1.5,10 l8.5,-4.5 Z" fill="#c4a574"/>
+<text x="426" y="146" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">−P̂ (view)</text>
+
+<!-- sweep axis dir, both marches measured against it -->
+<line x1="530" y1="230" x2="606" y2="230" stroke="#7dba8a" stroke-width="1.8"/>
+<path d="M612,230 l-9,-4 l0,8 Z" fill="#7dba8a"/>
+<text x="556" y="222" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10">dir</text>
+
+<!-- forward march taps -->
+<circle cx="551" cy="230" r="2.2" fill="#c4784a"/>
+<circle cx="570" cy="230" r="2.2" fill="#c4784a"/>
+<circle cx="589" cy="230" r="2.2" fill="#c4784a"/>
+<circle cx="608" cy="230" r="2.2" fill="#c4784a"/>
+<!-- backward march taps -->
+<circle cx="509" cy="230" r="2.2" fill="#c4784a"/>
+<circle cx="490" cy="230" r="2.2" fill="#c4784a"/>
+<circle cx="471" cy="230" r="2.2" fill="#c4784a"/>
+<circle cx="452" cy="230" r="2.2" fill="#c4784a"/>
+<text x="398" y="248" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="10">backward taps: cos still vs +dir → −1 → h2 ≈ π</text>
+
+<text x="384" y="266" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="10.5">Three different frames feed one arc integral.</text>
+
+<text x="24" y="300" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual geometry, not a captured render. Left: Jimenez et al. 2016 GTAO slice. Right: the frames actually used by</text>
+<text x="24" y="316" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">shaders/compute/ssao.comp — normal from the world-space GBuffer, horizons off the tangent sweep axis, n off the view ray.</text>
+</svg>

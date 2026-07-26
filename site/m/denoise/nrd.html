@@ -33,48 +33,140 @@
         <p>Pack YCoCg, dispatch, unpack compose, cinematic post.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#three-encodings-reblur-insists-on">Three encodings REBLUR insists on</a></li><li><a href="#demodulation-and-why-only-the-diffuse-gets-divided">Demodulation, and why only the diffuse gets divided</a></li><li><a href="#where-the-lerp-pair-stops-being-exact">Where the lerp pair stops being exact</a></li><li><a href="#ycocg-and-the-two-ways-to-get-magenta">YCoCg, and the two ways to get magenta</a></li><li><a href="#the-hit-distance-is-a-control-signal-not-data">The hit distance is a control signal, not data</a></li><li><a href="#which-raygen-actually-speaks-nrd">Which raygen actually speaks NRD</a></li><li><a href="#lending-nrd-a-device-it-did-not-create">Lending NRD a device it did not create</a></li><li><a href="#compose-is-deliberately-trivial">Compose is deliberately trivial</a></li><li><a href="#tuning-for-a-path-tracer-instead-of-a-game">Tuning for a path tracer instead of a game</a></li><li><a href="#the-cinematic-tail">The cinematic tail</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="three-encodings-reblur-insists-on">Three encodings REBLUR insists on</h2></div>
 <div class="prose reveal">
-<p>NRD REBLUR realtime denoise: pack radiance as YCoCg + normalized hit-distance, dispatch, compose unpack, optional cinematic post.</p>
+<p>NVIDIA&#x27;s REBLUR is a spatio-temporal accumulator that reads meaning out of the bits you hand it, and it refuses almost everything a path tracer naturally produces. Its diffuse and specular inputs must be *demodulated* (surface colour divided out), carried in *YCoCg* rather than linear RGB, and their alpha channel must hold a hit distance already *normalized* into [0,1] by NRD&#x27;s own view-depth-and-roughness formula. Get either of the first two wrong and the failure is not subtle noise — it is a hue shift; get the third wrong and REBLUR quietly filters at the wrong radius.</p>
+<p>Only one of the three round-trips inside a single file. The 43-line `nrd_frontend.glsl`, included by two raygens and the compose pass, holds both directions of the YCoCg rotation, but only the forward direction of the hit-distance map — and neither half of the demodulation, whose divide is in the raygen and whose matching multiply is in `nrd_compose.comp`.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/denoise-nrd-aov-flow.svg" alt="Conceptual data flow with the real binding numbers and formats from path_tracer_render.cpp — not a captured render. The dashed band marks the region in which radiance is YCoCg; crossing that boundary in the wrong direction is what turns a denoiser bug into a hue shift." loading="lazy" /><figcaption>Conceptual data flow with the real binding numbers and formats from path_tracer_render.cpp — not a captured render. The dashed band marks the region in which radiance is YCoCg; crossing that boundary in the wrong direction is what turns a denoiser bug into a hue shift.</figcaption></figure>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="demodulation-and-why-only-the-diffuse-gets-divided">Demodulation, and why only the diffuse gets divided</h2></div>
 <div class="prose reveal">
-<p>nrd_frontend.glsl pack in raygen; NrdDenoiser dispatch; nrd_compose.comp unpack; NrdCinematicPost optional.</p>
-<ul>
-<li>pack AOVs</li>
-<li>NRD dispatch</li>
-<li>compose unpack</li>
-<li>optional cinematic</li>
-</ul>
+<p>Temporal filters smooth *lighting*, and lighting is smooth; albedo is not. Radiance that still carries texture detail makes the filter fight the texture, so the diffuse channel is divided by first-hit albedo before packing, with a floor to survive metals, where diffuse albedo is zero:</p>
+<div class="citation-chip"><code class="citation-code">vec3 diffDemod = diffContrib / max(firstHitDiffAlbedo, vec3(0.03));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1346" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1346</a></div>
+<p>The specular channel is *not* divided by anything — which looks like an omission until you find the other half. The indirect specular ray carries a throughput that is white for dielectrics and base-colour for metals, and the AOV compose multiplies back is built to be its complement:</p>
+<div class="citation-chip"><code class="citation-code">specThroughput = mix(vec3(1.0), albedo, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L597" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:597</a></div>
+<div class="citation-chip"><code class="citation-code">firstHitSpecColor  = mix(F0, vec3(1.0), metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L295" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:295</a></div>
+<p>Writing $\mathbf{a}$ for base colour and $m$ for metallic, the two lerps multiply to a single application of the Fresnel colour at both endpoints of the slider:</p>
+<div class="math-block">$$
+\underbrace{\mathrm{lerp}(1,\mathbf{a},m)}_{\text{applied inside the path}}\times\underbrace{\mathrm{lerp}(F_0,1,m)}_{\text{applied in compose}}=\begin{cases}F_0 & m=0\\ \mathbf{a} & m=1\end{cases}
+$$</div>
+<p>and because a metal&#x27;s $F_0$ *is* its base colour, both branches equal $F_0$.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="where-the-lerp-pair-stops-being-exact">Where the lerp pair stops being exact</h2></div>
 <div class="prose reveal">
-<p>Temporal denoise reuses AOVs already required for hybrid/PT. Wrong pack = magenta classic bug.</p>
+<p>That identity holds for the indirect chain, which is the only thing `specThroughput` scales. It does not hold for the bounce-0 direct lobe. The analytic NEE and env-MIS terms at the primary hit run with throughput 1 and fold a full Schlick $F$ into the BRDF before adding to `specContrib`:</p>
+<div class="citation-chip"><code class="citation-code">vec3 neeSpecular = neeCommon * spec * NdotL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L492" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:492</a></div>
+<p>For metals that is still one application: $F\approx F_0=\mathbf{a}$ inside the ray, $\times 1$ in compose. For dielectrics it is two — the radiance already carries $F$, and compose multiplies by $F_0\approx 0.04$ a second time. Primary dielectric highlights are therefore darker in the NRD composite than in the beauty buffer, which applies the same `spec` term exactly once. The realtime raygen widens the gap: its live VNDF branch sets `specThroughput` to true Fresnel rather than $\mathrm{lerp}(1,\mathbf{a},m)$, so its *indirect* dielectric specular is double-counted as well.</p>
+<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L792" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:792</a></div>
+<p>The comment sitting on the specColor line records what the lerp is defending against:</p>
+<div class="citation-chip"><code class="citation-code">// compose must NOT re-apply it — doing so double-darkened metals to near-black.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L292" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:292</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The lerp pair was written to fix metals, not dielectrics. The rejected alternative is the obvious one — `specColor = F0`, no lerp to white — and because a metal&#x27;s $F_0$ is its base colour, that multiplied base colour into radiance that already carried it, driving metals to near-black. Lerping the AOV to white at $m=1$ removes the second application and costs no extra AOV; the dielectric bounce-0 case above is the part of the bill still outstanding.</p></div>
+</div>
+<div class="section-rule"><h2 id="ycocg-and-the-two-ways-to-get-magenta">YCoCg, and the two ways to get magenta</h2></div>
+<div class="prose reveal">
+<p>The forward transform is the standard reversible luma/chroma rotation ported from `NRD.hlsli`, where $Y$ is luma and $C_o,C_g$ are the orange and green chroma axes:</p>
+<div class="math-block">$$
+Y=\tfrac14 R+\tfrac12 G+\tfrac14 B,\qquad C_o=\tfrac12(R-B),\qquad C_g=-\tfrac14 R+\tfrac12 G-\tfrac14 B
+$$</div>
+<p>The inverse is done without a matrix: $t=Y-C_g$ recovers $(R+B)/2$, so $G=Y+C_g$, $R=t+C_o$, $B=t-C_o$. Algebraically exact — but the unpack still clamps, because a spatio-temporal filter reconstructs a value that was never in the original gamut and can land slightly negative:</p>
+<div class="citation-chip"><code class="citation-code">return max(r, vec3(0.0));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/nrd_frontend.glsl#L24" target="_blank" rel="noopener">shaders/includes/rt/nrd_frontend.glsl:24</a></div>
+<p>Two distinct mistakes produce the same magenta symptom, and the code carries a comment for each. Skip the pack, and REBLUR reads red as luma and green/blue as chroma; compose then rotates an already-linear triple through the inverse basis:</p>
+<div class="citation-chip"><code class="citation-code">// Without this, REBLUR treats RGB as YCoCg and compose remodulates garbage → magenta.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L1348" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:1348</a></div>
+<p>Pack correctly but skip demodulation, and the input is in the right basis but the wrong space — the filter&#x27;s cross-channel behaviour drifts on albedo-coloured radiance, and compose applies surface colour a second time. The recorded symptom there was a blue-to-magenta shift *plus* a visible darkening.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Magenta in the NRD path is almost never a denoiser bug. It means a producer and a consumer disagree about which colour space binding 22/23 is in. Check the pack before you touch anything in NRD.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-hit-distance-is-a-control-signal-not-data">The hit distance is a control signal, not data</h2></div>
+<div class="prose reveal">
+<p>REBLUR uses alpha to decide how hard to filter each pixel, so the world-space ray length has to be mapped into [0,1] against a scene-scale reference. With $d$ the ray length, $z$ the first hit&#x27;s view-space depth and $s\in[0,1]$ a lobe-spread term:</p>
+<div class="math-block">$$
+f=(A+|z|B)\cdot\mathrm{lerp}(C,1,s),\qquad \hat d=\mathrm{clamp}\!\left(\tfrac{d}{f},0,1\right)
+$$</div>
+<p>Nothing reads $z$ back from binding 20. The raygen computes it at the primary hit, keeps it in a local, and writes it to that binding for NRD&#x27;s separate `IN_VIEWZ` slot; the normalization uses the local:</p>
+<div class="citation-chip"><code class="citation-code">firstHitViewZ = -viewPos.z;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L233" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:233</a></div>
+<p>The constants are NRD&#x27;s `ReblurHitDistanceParameters` defaults, hardcoded in GLSL:</p>
+<div class="citation-chip"><code class="citation-code">const vec3 NRD_HIT_DIST_PARAMS = vec3(3.0, 0.1, 20.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/nrd_frontend.glsl#L9" target="_blank" rel="noopener">shaders/includes/rt/nrd_frontend.glsl:9</a></div>
+<p>$s$ is where OHAO knowingly diverges. NRD derives it from a richer function of roughness; the shader substitutes $\text{roughness}^2$ and says so:</p>
+<div class="citation-chip"><code class="citation-code">float smc = roughness * roughness; // lobe-spread proxy (NRD uses a richer F)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/nrd_frontend.glsl#L29" target="_blank" rel="noopener">shaders/includes/rt/nrd_frontend.glsl:29</a></div>
+<p>Diffuse and specular also *measure* $d$ differently. Diffuse records only the first secondary hit — one segment, the local occluder. Specular sums the whole chain while it stays specular, so a mirror reports the distance to the virtual image rather than to the mirror:</p>
+<div class="citation-chip"><code class="citation-code">specHitDist += payload.hitDist;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L623" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:623</a></div>
+<p>The sharp edge is that $A$ exists twice. The shader hardcodes it at 3.0; the C++ profile re-declares it and pushes it into `ReblurSettings` — while $B$ and $C$ are left at NRD&#x27;s defaults and have no C++ knob at all:</p>
+<div class="citation-chip"><code class="citation-code">s.hitDistanceParameters.A         = p.hitDistanceParamA;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_denoise.cpp#L227" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_denoise.cpp:227</a></div>
+<p>Change `hitDistanceParamA` and the two halves normalize against different scales, with no build-time check that they agree.</p>
+</div>
+<div class="section-rule"><h2 id="which-raygen-actually-speaks-nrd">Which raygen actually speaks NRD</h2></div>
+<div class="prose reveal">
+<p>Three raygen shaders write bindings 22/23; only two of them include the front-end. `pt_raygen.rgen` still writes the pre-NRD layout — linear RGB with a raw, unnormalized distance in alpha:</p>
+<div class="citation-chip"><code class="citation-code">AOV_ACCUMULATE_WRITE(diffuseRadiance,  pixel, vec4(diffContrib, diffHitDist));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L1267" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:1267</a></div>
+<p>That is the *default* member of `PathTracerShaderSet`, and it is exactly the magenta configuration. Nothing shipped reaches it — `VulkanRenderer` constructs only the realtime and offline profile renderers, each passing an explicit shader set naming its own raygen — but anyone reusing `PathTracer` directly will.</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L220" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:220</a></div>
+<p>A second gate matters before profiling: the REBLUR dispatch is not conditioned on the active denoise mode, only on the denoiser existing and auxiliary AOVs being on, which both shipped profiles enable unconditionally:</p>
+<div class="citation-chip"><code class="citation-code">if (m_nrdDenoiser &amp;&amp; m_renderSettings.enableAuxiliaryAOVs) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L869" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:869</a></div>
+<p>So REBLUR, compose and the cinematic chain execute on every RT frame even under `--denoise=oidn` or `none`; only `getPixels()` in `DenoiseMode::NRD` reads the result back.</p>
+</div>
+<div class="section-rule"><h2 id="lending-nrd-a-device-it-did-not-create">Lending NRD a device it did not create</h2></div>
+<div class="prose reveal">
+<p>NRD&#x27;s Vulkan path goes through NRI, which normally creates its own device. Here it is handed OHAO&#x27;s, described by a `DeviceCreationVKDesc` carrying the extension lists the app passed to `vkCreateInstance` and `vkCreateDevice`. The instance list is copied verbatim:</p>
+<div class="citation-chip"><code class="citation-code">m_impl-&gt;instanceExtensionsStorage.assign(instanceExtensions.begin(), instanceExtensions.end());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_denoise.cpp#L87" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_denoise.cpp:87</a></div>
+<p>The device list loses three. NRI&#x27;s dispatch-table resolver eagerly looks up `vkCmdTraceRaysIndirect2KHR` whenever it sees `VK_KHR_ray_tracing_pipeline`, and that entry point lives in `VK_KHR_ray_tracing_maintenance1`, which OHAO does not enable. REBLUR is compute-only, so acceleration-structure, RT-pipeline and deferred-host-operations names are filtered out of the NRI-facing copy:</p>
+<div class="citation-chip"><code class="citation-code">std::strcmp(e, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) == 0 ||</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_denoise.cpp#L84" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_denoise.cpp:84</a></div>
+<p>Resources cross as raw `VkImage` plus `VkFormat`, not image views — NRI builds its own views from the format. All seven slots are declared as already being in `SHADER_RESOURCE_STORAGE` (`VK_IMAGE_LAYOUT_GENERAL`). For the five inputs that is where the raygen leaves them. The two `OUT_` images are written by no shader before this point; the host puts them in `GENERAL` with an explicit `UNDEFINED`→`GENERAL` barrier recorded ahead of the trace, in the same block that transitions the AOVs:</p>
+<div class="citation-chip"><code class="citation-code">aovBarriers[10].image = m_outDiffRadianceImage;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L608" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:608</a></div>
+<p>The snapshot then asks for the layouts to be restored afterwards so compose and the host readbacks find what they expect:</p>
+<div class="citation-chip"><code class="citation-code">snapshot.restoreInitialState = true;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_denoise.cpp#L293" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_denoise.cpp:293</a></div>
+</div>
+<div class="section-rule"><h2 id="compose-is-deliberately-trivial">Compose is deliberately trivial</h2></div>
+<div class="prose reveal">
+<p>`NrdCompositor` owns a standalone compute pipeline whose descriptor set layout is independent of the path tracer&#x27;s RT layout: five storage images, no push constants, an 8×8 workgroup. The whole shader is an unpack and a remodulate:</p>
+<div class="citation-chip"><code class="citation-code">vec3 composed = diffRad * diffAlbedo + specRad * specColor;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/nrd_compose.comp#L32" target="_blank" rel="noopener">shaders/rt/nrd_compose.comp:32</a></div>
+<p>Alpha is dropped here. NRD&#x27;s own input contract defines the normalized hit distance as ambient occlusion on the diffuse channel and specular occlusion on the specular one, and says the `.w` of REBLUR&#x27;s output carries the filtered version — a signal an application can spend on second-bounce diffuse or on damping IBL. OHAO spends it on nothing: compose reads `.rgb` and discards `.w`, so here it really is only a control signal for REBLUR&#x27;s own filter widths.</p>
+</div>
+<div class="section-rule"><h2 id="tuning-for-a-path-tracer-instead-of-a-game">Tuning for a path tracer instead of a game</h2></div>
+<div class="prose reveal">
+<p>REBLUR ships with a 30-frame linear accumulation window. OHAO feeds it AOVs that are already averaged over N samples, so the profile pushes the window to REBLUR&#x27;s documented ceiling of 63 instead — the code states both numbers where it makes the change:</p>
+<div class="citation-chip"><code class="citation-code">// Maximum linearly accumulated frames. NRD default 30; we bump to 63</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_denoise.hpp#L119" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_denoise.hpp:119</a></div>
+<p>The &quot;multi-sample&quot; part is a running mean written by the raygen itself: in NRD mode each of the five AOV bindings is blended with its previous value at weight $1/(n{+}1)$, so after $N$ samples the image is intended to hold their mean rather than the last sample.</p>
+<div class="citation-chip"><code class="citation-code">_ohaoAovCur = mix(_ohaoAovPrev, _ohaoAovCur, 1.0 / _ohaoAovN);   \</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L74" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:74</a></div>
+<p>That is an `imageLoad` of the previous dispatch&#x27;s contents, and the mean is only as good as those contents. Every `render()` re-records the AOV transition block with `oldLayout = VK_IMAGE_LAYOUT_UNDEFINED`, which the spec explicitly permits an implementation to treat as a discard — the running average is a property the code relies on rather than one Vulkan guarantees:</p>
+<div class="citation-chip"><code class="citation-code">aovBarriers[5].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L561" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:561</a></div>
+<p>The other half of the temporal story is throwing history away. On any frame where the view changed, the host reports frame index 0 *and* overwrites the previous view/projection matrices with the current ones, so NRD cannot reproject from a stale pose and trail a ghost behind a moving camera:</p>
+<div class="citation-chip"><code class="citation-code">camera.frameIndex = m_viewChangedThisFrame ? 0u : m_historyFrameCount;  // 4.F T2: bootstrap on view change</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L896" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:896</a></div>
+<p>That bootstrap costs one spatial-only frame per camera move — the trade the code takes over smeared geometry.</p>
+</div>
+<div class="section-rule"><h2 id="the-cinematic-tail">The cinematic tail</h2></div>
+<div class="prose reveal">
+<p>`NrdCinematicPost` consumes the composed HDR at binding 29 and runs bloom extract, two downsample-blur passes, a tonemap composite, then a depth-of-field gather. Two things in here read as one thing and are another. First, the tonemap: `cinematic_composite.comp` still carries a complete AgX implementation — inset and outset matrices, the 6th-order contrast fit — but `main()` calls none of it and applies Khronos PBR Neutral instead:</p>
+<div class="citation-chip"><code class="citation-code">// 4. Tonemap — Khronos PBR Neutral (the asset-visualization industry</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/cinematic_composite.comp#L168" target="_blank" rel="noopener">shaders/rt/cinematic_composite.comp:168</a></div>
+<p>Second, a naming hazard that survives an earlier revision: the input struct&#x27;s `tonemappedOut` field no longer carries the final image. Since DoF was added the composite writes the *pre*-DoF image at binding 32, and only the gather writes binding 30 — which is what the host reads back.</p>
+<div class="citation-chip"><code class="citation-code">/// NOTE: `tonemappedOut` in `inputs` is wired to the pre-DoF LDR image</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_cinematic.hpp#L127" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_cinematic.hpp:127</a></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>IN_DIFF/SPEC are YCoCg+hitDist not linear RGB</li>
-<li>Compose must unpack before display</li>
+<li>Bindings 22/23 are YCoCg + normalized hit distance, and 27/28 come back the same way. A consumer that reads them as linear RGB — a debug visualizer, say — shows scrambled hue, not an obvious error.</li>
+<li>`NRD_HIT_DIST_PARAMS.x` (3.0, in GLSL) must match `NrdReblurProfile::hitDistanceParamA`. Changing one desynchronizes the normalization silently; nothing checks.</li>
+<li>`setCommonSettings()` must run before every `denoise()` — it carries the frame index and the previous view/projection NRD reprojects from. `setInputResources()` only stashes handles into the impl and they persist across frames, so the per-frame call is redundant; what breaks is failing to re-stash after any AOV image is recreated, since `denoise()` forwards whatever is there with no validation.</li>
+<li>`specColor` (binding 25) is `lerp(F0, 1, metallic)`, not `F0`. The `1` at the metal end is what stops metals being darkened twice. The `F0` at the dielectric end is the single correct application only for the offline raygen&#x27;s indirect chain, where `specThroughput` is 1 — bounce-0 direct specular already carries Schlick `F` on both raygens, and the realtime indirect chain carries it too.</li>
+<li>The multi-sample AOV mean assumes the previous dispatch&#x27;s image contents survive an `UNDEFINED`→`GENERAL` transition. Nothing in the API promises that; a driver that discards turns the mean into the last sample.</li>
+<li>The REBLUR + compose + cinematic chain runs whenever auxiliary AOVs are enabled, whatever the denoise mode. It is fixed per-frame cost in every RT profile, not something `--denoise=none` avoids.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>REBLUR expects IN_DIFF/SPEC as YCoCg + normalized hit-distance — not linear RGB.</p>
-<p>nrd_frontend.glsl: nrdPackRadianceHitDist / nrdYCoCgToLinear.</p>
-<p>Compose unpacks after REBLUR; wrong pack = magenta or washed output (classic bug).</p>
-<p>NrdCinematicPost optional bloom/DoF after stable denoised HDR.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/rt/denoise/nrd_denoise.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/rt/denoise/nrd_compose.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/rt/denoise/nrd_cinematic.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/rt/nrd_frontend.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/nrd_denoise.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/nrd_compose.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/nrd_denoise.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/cinematic_composite.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/nrd_cinematic.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/nrd_compose.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

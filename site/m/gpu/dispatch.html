@@ -33,35 +33,109 @@
         <p>renderDeferred vs RT path, staging readback ring.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#four-bodies-that-share-a-skeleton">Four bodies that share a skeleton</a></li><li><a href="#three-ways-to-reach-transfer-src-optimal">Three ways to reach TRANSFER_SRC_OPTIMAL</a></li><li><a href="#the-eight-byte-image-the-readback-cannot-hold">The eight-byte image the readback cannot hold</a></li><li><a href="#three-cameras-for-one-scene">Three cameras for one scene</a></li><li><a href="#the-far-plane-the-cascades-believe-in">The far plane the cascades believe in</a></li><li><a href="#the-light-that-goes-nowhere">The light that goes nowhere</a></li><li><a href="#the-sun-that-overwrites-your-only-light">The sun that overwrites your only light</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="four-bodies-that-share-a-skeleton">Four bodies that share a skeleton</h2></div>
 <div class="prose reveal">
-<p>Render dispatch branches on RenderMode: deferred graph vs PathTracer::render, with staging readback on the frame ring.</p>
+<p>`render_dispatch.cpp` is where &quot;render one frame&quot; becomes recorded Vulkan commands. It defines eight functions, four of which are whole-frame bodies — `renderDeferred`, `renderRTPipeline`, `renderMultiFrame` (the forward path) and `renderLegacy` — and `render()` picks exactly one of those four per call. The other four are support: `copyDeferredOutputToPixelBuffer` (the subject of the next section), `resize`, `readbackHDRBuffers`, and a `readTerrainHeights` stubbed to `false`. The first three bodies open with the same five steps in the same order: take the current ring slot, wait on its fence, memcpy its staging buffer into the CPU pixel vector, reset the fence, then reset and re-record that slot&#x27;s command buffer. Reading before recording is what makes slot reuse safe: the staging buffer is both the destination of the copy this frame records and the source of the readback this frame performs, and the fence guarantees the older copy has landed.</p>
+<p>Those three prologues are copies, not calls to a shared helper.</p>
+<p>What they do not share is how much of `FrameResources` they consume. The struct replicates six things per slot — command buffer, fence, camera UBO, light UBO, descriptor set, staging buffer. Only the forward path touches the middle three: it writes the per-frame UBOs through `updateUniformBuffer(frameIndex)` / `updateLightBuffer(frameIndex)` and binds `frame.descriptorSet` for both the shadow pass and the main pass.</p>
+<div class="citation-chip"><code class="citation-code">renderShadowPass(cmd, frame.descriptorSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L281" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:281</a></div>
+<p>The deferred and RT bodies use three fields only — `commandBuffer`, `renderFence`, `stagingBuffer` — because `DeferredRenderer` and `PathTracer` own their own descriptors and uniform storage. Half of `FrameResources` therefore exists for the one mode nothing in the repo ships.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="three-ways-to-reach-transfer-src-optimal">Three ways to reach TRANSFER_SRC_OPTIMAL</h2></div>
 <div class="prose reveal">
-<p>Wait fence on ring slot → record → submit → advance frame.</p>
-<p>getPixels memcpy only after wait — never overwrite in-flight staging.</p>
+<p>Every body ends in `vkCmdCopyImageToBuffer`. The three pipelined bodies copy into the current ring slot&#x27;s staging buffer; `renderLegacy` copies into `m_stagingBuffer`, a single non-ring allocation created alongside the offscreen framebuffer.</p>
+<div class="citation-chip"><code class="citation-code">m_stagingBuffer, 1, &amp;region);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L470" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:470</a></div>
+<p>Four bodies, but only three mechanisms for getting the source image into `VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL`. The forward path gets it for free: the offscreen render pass declares the colour attachment&#x27;s `finalLayout` as `TRANSFER_SRC_OPTIMAL`, so `vkCmdEndRenderPass` performs the transition and the copy needs no barrier. `renderLegacy` draws into the same colour image through the same render pass and inherits the same transition — hence four bodies, three mechanisms.</p>
+<div class="citation-chip"><code class="citation-code">colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/framebuffer.cpp#L14" target="_blank" rel="noopener">ohao/gpu/vulkan/framebuffer.cpp:14</a></div>
+<p>The RT path delegates: `PathTracer::render` ends with its own barrier on the output image, and the dispatch code records the assumption in a comment instead of re-checking it.</p>
+<div class="citation-chip"><code class="citation-code">// Output is already in TRANSFER_SRC_OPTIMAL from render()</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L173" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:173</a></div>
+<p>The deferred path is the only one that pays for the transition itself, with the previous layout written as a constant.</p>
+<div class="citation-chip"><code class="citation-code">toTransferSrc.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L213" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:213</a></div>
+<p>That constant is a cross-module contract compiled into a barrier. It holds today because the tonemap render pass ends in `SHADER_READ_ONLY_OPTIMAL`. Any post-process step appended after tonemapping that leaves the final image in `GENERAL` turns this into an invalid transition with no compile-time warning.</p>
+</div>
+<div class="section-rule"><h2 id="the-eight-byte-image-the-readback-cannot-hold">The eight-byte image the readback cannot hold</h2></div>
+<div class="prose reveal">
+<p>`DeferredRenderer::getFinalOutputImage()` returns the post-processing output only when post-processing actually executed; otherwise it falls back to the lighting pass&#x27;s own image.</p>
+<div class="citation-chip"><code class="citation-code">return m_lightingPass-&gt;getOutputImage();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L780" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:780</a></div>
+<p>Those two images do not have the same format. The tonemapped output is `R8G8B8A8_UNORM`; the lighting pass output is the HDR target.</p>
+<div class="citation-chip"><code class="citation-code">m_hdrOutput.format = VK_FORMAT_R16G16B16A16_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L442" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:442</a></div>
+<p>Every staging buffer in the ring is sized for four bytes per pixel.</p>
+<div class="citation-chip"><code class="citation-code">size_t stagingBufferSize = m_width * m_height * 4; // RGBA</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L301" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:301</a></div>
+<p>`vkCmdCopyImageToBuffer` derives its byte count from the source format and extent, not from the destination buffer, so on the fallback branch it would read eight bytes per pixel out of the image and write them into an allocation sized for four — an overrun of the destination, not a benign truncation. The copy is invalid on the source side as well: the lighting pass creates its HDR image with colour-attachment and sampled usage only, and `vkCmdCopyImageToBuffer` requires `TRANSFER_SRC_BIT` on the image it reads.</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L455" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:455</a></div>
+<p>The place a four-byte assumption degrades quietly rather than corrupting is the CPU side, where each pipelined body memcpys exactly `m_width * m_height * 4` bytes out of the mapped staging buffer no matter what was copied in.</p>
+<p>Nothing in this file guards the fallback. The tonemap step that produces the four-byte image is skipped when `m_tonemappingEnabled` is false, when the HDR input view is null, and when any of `m_tonemapPipeline`, `m_tonemapFramebuffer` or `m_tonemapDescSet` is null; `getFinalOutputImage` additionally falls back when `m_postProcessing` itself is null. Every one of those reaches the fallback with tonemapping still nominally on, and the one flag that reaches it deliberately is not private either — it is bound into the `ohao_renderer` Python module as `set_tonemapping_enabled`.</p>
+<div class="citation-chip"><code class="citation-code">.def(&quot;set_tonemapping_enabled&quot;, &amp;PostProcessingPipeline::setTonemappingEnabled)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/python/renderer_bindings.cpp#L309" target="_blank" rel="noopener">tests/python/renderer_bindings.cpp:309</a></div>
+</div>
+<div class="section-rule"><h2 id="three-cameras-for-one-scene">Three cameras for one scene</h2></div>
+<div class="prose reveal">
+<p>The dispatcher is also where camera state becomes GPU state, and it does that three different ways. The forward path never consults the camera&#x27;s projection at all: it rebuilds one from a hard-coded 45° vertical FOV and the framebuffer aspect, then flips Y for Vulkan clip space.</p>
+<div class="citation-chip"><code class="citation-code">void VulkanRenderer::updateUniformBuffer(uint32_t frameIndex) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L113" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:113</a></div>
+<p>The deferred path hands `DeferredRenderer` the camera&#x27;s own matrix, which that class flips internally.</p>
+<div class="citation-chip"><code class="citation-code">m_deferredRenderer-&gt;setCameraData(view, proj, camPos, 0.1f, 1000.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L37" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:37</a></div>
+<p>The RT path discards the camera&#x27;s matrix and builds a fresh one from the camera&#x27;s FOV, deliberately unflipped because the raygen shader resolves image-space Y itself.</p>
+<div class="citation-chip"><code class="citation-code">glm::mat4 ptProj = glm::perspective(glm::radians(m_camera-&gt;getFov()), aspect, 0.1f, 1000.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L163" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:163</a></div>
+<p>The comment above that line says it uses the same FOV and aspect as deferred, for consistent framing. Only the FOV half of that reaches a ray. `PathTracer::render` inverts the matrix into the 256-byte push-constant block, and the ray-generation code in both raygens the two RT profiles bind — `pt_raygen_realtime.rgen` for `RTRealtime`, `pt_raygen_offline.rgen` for `RTOffline` — takes exactly one number out of `invProj`: element `[1][1]`, which for a `glm::perspective` matrix is $\tan(\theta_v/2)$ and carries no aspect at all. The horizontal extent is rebuilt inside the shader from the framebuffer dimensions the push constant already carries in `params.xy`.</p>
+<div class="citation-chip"><code class="citation-code">float tanFovX = tanFovY * aspect;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L313" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:313</a></div>
+<p>So the aspect argument at the `glm::perspective` call reaches no ray: passing 1.6 there would leave every primary direction bit-identical. It is not wholly dead — the same raygens invert `invProj` back into a view-projection matrix for the motion-vector AOV, and that use is aspect-sensitive — but it has no say in the framing.</p>
+<div class="citation-chip"><code class="citation-code">mat4 currViewProj = inverse(pc.invProj) * inverse(pc.invView);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L425" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:425</a></div>
+<p>The framing still diverges, one layer lower down.</p>
+<p>Horizontal field of view follows from the vertical one and whatever aspect the consumer actually applies:</p>
+<div class="math-block">$$
+\tan\frac{\theta_h}{2} = a\,\tan\frac{\theta_v}{2}
+$$</div>
+<p>Here $\theta_v$ is the vertical FOV — 45° hard-coded on the forward path, `Camera::getFov()` on the other two — and $a$ is the aspect the pixel is finally shaded with, not necessarily the one written at the call site. Deferred inherits $a$ from the matrix `Camera` built, and `VulkanRenderer` constructs its `Camera` with all default arguments; the default aspect is 16:10, and neither `setAspectRatio` nor `setPerspectiveProjection` is called anywhere in `ohao/`, `examples/` or `tests/`.</p>
+<div class="citation-chip"><code class="citation-code">float aspect = 16.0f / 10.0f,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.hpp#L20" target="_blank" rel="noopener">ohao/render/camera/camera.hpp:20</a></div>
+<p>The RT raygen takes $a$ from the framebuffer instead. Every example renders 16:9 — 1920×1080 in `cornell_box`, `model_viewer` and `env_demo`, 1280×720 in `turntable` and `interactive` — so RT&#x27;s horizontal frustum comes out $(16/9)/(16/10) \approx 1.11\times$ wider than deferred&#x27;s: the same scene, framed 11% differently, decided by nothing but which mode was selected. Correcting the `glm::perspective` argument would not close the gap. Either the raygen stops deriving its own aspect, or `Camera` is told the real one.</p>
+</div>
+<div class="section-rule"><h2 id="the-far-plane-the-cascades-believe-in">The far plane the cascades believe in</h2></div>
+<div class="prose reveal">
+<p>The `setCameraData` call cited above passes two scalars beside the matrix — `0.1f, 1000.0f` — written as literals rather than read from the camera that produced the matrix. `Camera`&#x27;s constructor defaults the far plane to 100, and since `setPerspectiveProjection` has no callers, that default is what every deferred frame rasterises with.</p>
+<div class="citation-chip"><code class="citation-code">float farPlane = 100.0f</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.hpp#L22" target="_blank" rel="noopener">ohao/render/camera/camera.hpp:22</a></div>
+<p>Those scalars are not decoration. `DeferredRenderer` forwards them to `CSMPass::setCameraData`, which recomputes the cascade splits from them on the spot, blending a logarithmic and a linear subdivision of the near-to-far interval.</p>
+<div class="citation-chip"><code class="citation-code">float ratio = m_farPlane / m_nearPlane;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L471" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:471</a></div>
+<p>The four cascades are therefore distributed over a range ten times deeper than the projection can draw. The deepest split is the far plane itself, so the last cascade&#x27;s entire extent — from wherever cascade three ends out to 1000 — lies past the point at which geometry is already clipped, and the shadow-map resolution budgeted for it is spent on nothing. This is a sharper defect than the aspect mismatch above, and it has the same cause: a scalar written at the call site instead of read from the object that owns it.</p>
+</div>
+<div class="section-rule"><h2 id="the-light-that-goes-nowhere">The light that goes nowhere</h2></div>
+<div class="prose reveal">
+<p>The RT dispatch closes its `render` call with four arguments that read like the scene&#x27;s key light — a position four units up, intensity 30, warm white, radius 1.</p>
+<div class="citation-chip"><code class="citation-code">glm::vec3(0.0f, 4.0f, 0.0f), 30.0f,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L167" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:167</a></div>
+<p>`PathTracer::render` accepts all four and uses none of them — they appear in the signature and nowhere in the body; only `view` and `proj` survive, as `invView` / `invProj` in the 256-byte push-constant block. The lights the tracer samples arrive instead as a GPU SSBO, whose handle is set by `prepareRTSceneForFrame` earlier in `renderRTPipeline`, before the command buffer is even opened. Deleting the four parameters would change no pixel — which is why they are worth naming: they invite someone to brighten the scene by editing a number that has no consumer.</p>
+</div>
+<div class="section-rule"><h2 id="the-sun-that-overwrites-your-only-light">The sun that overwrites your only light</h2></div>
+<div class="prose reveal">
+<p>`renderDeferred` does something no other body does: it edits the light buffer after uploading it. When the buffer reports exactly one light, it replaces `lights[0].direction` with the sky pass&#x27;s sun direction, blends that toward a cool moon direction at 8% intensity as `nightFactor` rises, recomputes the shadow matrix, and lerps ambient intensity from 0.12 down to 0.04.</p>
+<div class="citation-chip"><code class="citation-code">if (ld &amp;&amp; ld-&gt;numLights == 1) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L62" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:62</a></div>
+<p>The intent is stated where the buffer is filled: a scene with no lights gets one fabricated directional light, and the comment says its direction is synced by `renderDeferred`.</p>
+<div class="citation-chip"><code class="citation-code">// If no lights in scene, add a default directional light (direction synced by renderDeferred)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L313" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:313</a></div>
+<p>But `numLights == 1` cannot tell a fabricated light from an authored one. A scene with a single directional light — the ordinary outdoor case — has its authored direction silently overwritten by the sky&#x27;s sun on every deferred frame. The fix is a flag on the fallback light, not a count; the count is genuinely ambiguous.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>`renderLegacy` is the rejected design, preserved in source. It submits, blocks on `vkWaitForFences`, then maps, copies and unmaps the staging memory in the same call — so its pixels are correct on the very first call, with no ring and no lag. What it costs is the entire point of the other three bodies: a full CPU-GPU round trip per frame with the CPU idle for the whole GPU pass. The pipelined path trades correct-on-first-call for throughput and accepts a readback that lags by the ring depth. It is worth reading and not worth reaching: `render()` only falls back to it inside the forward branch, after the RT and deferred branches have both declined, and every example plus the smoke test selects Deferred, RTRealtime or RTOffline before rendering anything. In the deferred and RT branches a `FrameResources` that failed to initialise is never caught at all — those bodies run against uninitialised slots rather than degrading to the legacy path.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Nothing in this file checks that the four modes agree with each other. Dispatch is the last point where camera, layout and light state are translated into GPU state, and it translates them differently per mode: three projection paths, three owners of the same layout transition, near/far literals that contradict the matrix they travel with, and one mode that rewrites the light buffer behind the scene&#x27;s back. Differences between modes that look like renderer bugs are usually decided here, not in a shader.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
 <ul>
-<li>wait fence on ring slot</li>
-<li>memcpy staging → pixel buffer</li>
-<li>record cmd, submit, advance frame</li>
+<li>The image returned by `getFinalOutputImage()` must be four bytes per pixel and must already be in `SHADER_READ_ONLY_OPTIMAL`. The layout half holds on both branches — the lighting pass&#x27;s own render pass also ends in `SHADER_READ_ONLY_OPTIMAL` — but the format half holds only when post-processing&#x27;s tonemap step ran, and nothing checks it.</li>
+<li>`resize()` must call `resizeStagingBuffers` and reset `m_currentFrame` to 0 before the next `render()`. `resizeStagingBuffers` destroys, re-creates and re-maps all three slot buffers at the new size; skip it and the per-frame `memcpy` reads `width * height * 4` bytes from an allocation still sized for the old dimensions.</li>
+<li>The ring permits up to three overlapping submissions, but `PathTracer` owns a single descriptor set that it rewrites at the top of every `render()`, and only binding 12 (bindless textures) is declared `UPDATE_AFTER_BIND`. Most of those writes are idempotent — the same views and buffers every frame — but bindings 13-16 are not: the surface-history and shading-history image pairs are ping-ponged, with `m_surfaceHistoryWriteIndex` and `m_shadingHistoryWriteIndex` flipped at the end of each `render()`, so four descriptors on a non-`UPDATE_AFTER_BIND` set change every frame while two earlier submissions may still be executing against them. This hazard is already shipped, not hypothetical.</li>
+<li>Submissions carry no semaphores; the per-slot fence is the only synchronisation object in the frame path. Introducing a second queue (async compute, a transfer queue for readback) requires adding one, because nothing here would order the work.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
-<div class="prose reveal">
-<p>MAX_FRAMES_IN_FLIGHT=3 hides latency; violating fence order races readback.</p>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>Branches on RenderMode: deferred graph vs PathTracer::render.</p>
-<p>MAX_FRAMES_IN_FLIGHT=3; never overwrite in-flight staging.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/framebuffer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/python/renderer_bindings.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/buffer_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_realtime.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/camera/camera.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

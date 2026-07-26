@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 356" class="unit-diagram" role="img"
+     aria-label="Data flow of DenoiseMode: the CLI string is parsed once, then stored in two independent copies. VulkanRenderer::m_denoiseMode drives the getPixels readback tap. PathTracer's RTRenderSettings::denoiseMode drives the per-frame trait queries, but is reset to the pipeline default every frame and only re-seeded for Atrous and DLSSRR.">
+  <defs>
+    <marker id="dtmf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="dtmf-arrow-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="356" fill="#0f1419"/>
+
+  <text x="16" y="24" font-family="DM Sans,sans-serif" font-size="14" fill="#e8e2d6">
+    One parsed mode, two stored copies, two sets of readers
+  </text>
+
+  <!-- ── row 1: renderer-side copy ───────────────────────────────── -->
+  <rect x="16" y="50" width="104" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="68" y="70" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">--denoise=</text>
+  <text x="68" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">nrd | atrous …</text>
+
+  <line x1="120" y1="71" x2="146" y2="71" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
+
+  <rect x="148" y="50" width="152" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="224" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">parseDenoiseMode</text>
+  <text x="224" y="82" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">backend not built → None</text>
+
+  <line x1="300" y1="71" x2="326" y2="71" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
+
+  <rect x="328" y="50" width="212" height="42" rx="4" fill="#1a222c" stroke="#c4a574"/>
+  <text x="434" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">VulkanRenderer::m_denoiseMode</text>
+  <text x="434" y="82" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">latched by m_denoiseModeOverridden</text>
+
+  <line x1="540" y1="71" x2="566" y2="71" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
+
+  <rect x="568" y="50" width="136" height="42" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="636" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">getPixels()</text>
+  <text x="636" y="82" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">picks the output tap</text>
+
+  <!-- ── the narrow bridge between the two copies ────────────────── -->
+  <path d="M 434 92 L 434 148 L 470 148 L 470 228" fill="none" stroke="#c4784a" stroke-width="1.5"
+        stroke-dasharray="5 3" marker-end="url(#dtmf-arrow-a)"/>
+  <text x="482" y="146" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">re-seeded only for Atrous and DLSSRR</text>
+  <text x="482" y="161" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">None / OIDN / NRD never cross this arrow</text>
+
+  <!-- ── row 2: tracer-side copy ─────────────────────────────────── -->
+  <rect x="16" y="228" width="184" height="48" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="108" y="246" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">pipeline default</text>
+  <text x="108" y="262" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">Realtime → None, Offline → OIDN</text>
+
+  <line x1="200" y1="252" x2="226" y2="252" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
+  <text x="213" y="296" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">overwritten every frame</text>
+  <path d="M 213 288 L 213 262" fill="none" stroke="#6e685c" stroke-width="1" stroke-dasharray="3 3"/>
+
+  <rect x="228" y="228" width="228" height="48" rx="4" fill="#1a222c" stroke="#c4a574"/>
+  <text x="342" y="246" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">PathTracer m_renderSettings</text>
+  <text x="342" y="262" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">.denoiseMode</text>
+
+  <line x1="456" y1="252" x2="482" y2="252" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#dtmf-arrow)"/>
+
+  <rect x="484" y="220" width="220" height="64" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="594" y="238" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#7dba8a">the three live trait queries</text>
+  <text x="594" y="253" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">needsPixelJitter · needsAov-</text>
+  <text x="594" y="266" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">Accumulation · wantsFreshSample</text>
+  <text x="594" y="279" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">→ raygen push constants</text>
+
+  <text x="16" y="330" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">
+    The NRD dispatch itself hangs off neither copy: it runs whenever the NRD instance exists and enableAuxiliaryAOVs is set.
+  </text>
+</svg>

@@ -33,33 +33,132 @@
         <p>Meshes → VB/IB map; materials; lights; env.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#one-walk-and-everything-downstream">One walk, and everything downstream</a></li><li><a href="#the-rebase-that-decides-both-draw-calls">The rebase that decides both draw calls</a></li><li><a href="#geometry-that-is-its-own-staging-buffer">Geometry that is its own staging buffer</a></li><li><a href="#two-hundred-forty-bytes-the-forward-shaders-do-not-agree-about">Two hundred forty bytes the forward shaders do not agree about</a></li><li><a href="#textures-are-uploaded-by-writing-back-into-the-scene">Textures are uploaded by writing back into the scene</a></li><li><a href="#an-emissive-texture-promoted-to-a-light">An emissive texture, promoted to a light</a></li><li><a href="#why-the-hdri-loads-from-inside-the-light-path">Why the HDRI loads from inside the light path</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="one-walk-and-everything-downstream">One walk, and everything downstream</h2></div>
 <div class="prose reveal">
-<p>Scene upload walks MeshComponents into VB/IB maps, packs material rows, dual-packs lights for deferred vs path tracer, and prepares env handles.</p>
+<p>`updateSceneBuffers` is the only place a `Scene`&#x27;s *geometry* turns into GPU state, and it is not incremental. It stalls the device — the buffers it is about to free may still be referenced by in-flight command buffers — destroys the vertex and index buffers, rebuilds them from every visible actor, then rebuilds acceleration structures, RT material rows, bindless textures and the RT light SSBO on top, and finally re-derives the host-side emissive light cache the deferred pipeline reads.</p>
+<div class="citation-chip"><code class="citation-code">vkDeviceWaitIdle(m_device);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L28" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:28</a></div>
+<p>Lights are outside that deal. `updateLightBuffer` re-walks the actor map once per rendered frame, reading each `LightComponent`&#x27;s position, direction, colour, range and cone angles straight into the deferred light UBO; the RT SSBO is refreshed by `updateRTLightParams`, which never enters this function. Move a light and the deferred pipeline needs no upload at all. Move a mesh and all of the above runs.</p>
+<div class="citation-chip"><code class="citation-code">void VulkanRenderer::updateLightBuffer(uint32_t frameIndex) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L334" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:334</a></div>
+<p>Every GPU-side step past the geometry copy hangs off `buildAccelerationStructures`, which returns before doing any of it when the device has no ray-tracing support. There the RT material rows, the BLAS/TLAS build, the bindless texture upload and the light SSBO never happen — and since `uploadDeferredTextures` is the only path model textures take into the bindless manager, the deferred pipeline gets none of them either. Only `cacheEmissiveLights`, which is called separately and touches no GPU object, survives that early return.</p>
+<div class="citation-chip"><code class="citation-code">if (!m_rtAccel || !m_rtAccel-&gt;isSupported()) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L373" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:373</a></div>
+<p>Two passes build the combined buffers. The first walks the actor map, counts vertices and indices so the combined vectors reserve exactly once, and collects each visible actor into a `std::vector`; the second concatenates from that vector, not from the map. Each actor&#x27;s slice is recorded as a `MeshBufferInfo` — four `uint32_t`s whose offsets count *elements*, not bytes — keyed by actor ID.</p>
+<div class="citation-chip"><code class="citation-code">m_meshBufferMap[actor-&gt;getID()] = MeshBufferInfo{</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L68" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:68</a></div>
+<p>The container behind the walk is a `std::unordered_map&lt;uint64_t, Actor::Ptr&gt;`, so concatenation order is hash order, not authoring order — the raster draw loop, the shadow loop and the BLAS builder each re-find their slice by actor ID rather than recomputing offsets.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>This is a teardown, not an update. Most of the sharp edges below follow from that — the environment map needs a load cache only because the function is re-entered.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-rebase-that-decides-both-draw-calls">The rebase that decides both draw calls</h2></div>
 <div class="prose reveal">
-<p>scene_upload.cpp builds interleaved geometry and MeshBufferInfo map.</p>
-<p>light_upload.cpp packs LightComponents into GPULight SSBO and deferred LightData.</p>
-<p>No Vulkan types remain in scene/ — this boundary owns the conversion.</p>
+<p>As each model&#x27;s indices are appended they are biased by the running vertex offset, so the combined index buffer holds global vertex ids rather than mesh-local ones.</p>
+<div class="citation-chip"><code class="citation-code">combinedIndices.push_back(index + vertexOffset);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L81" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:81</a></div>
+<p>That `+ vertexOffset` is why both draw loops in this file issue `vkCmdDrawIndexed(cmd, indexCount, 1, indexOffset, 0, 0)`: `firstIndex` picks the slice and the `vertexOffset` argument is zero because the bias is already in the data. Those two draw calls are the only byte-identical thing about the loops. Everything around them differs — pipeline, render pass, viewport and scissor, descriptor set, pipeline layout, and the push-constant payload: the main loop fills all six members of `ObjectPushConstants`, the shadow loop sets `pc.model` on a zero-initialised struct and pushes the same 240 bytes.</p>
+<div class="citation-chip"><code class="citation-code">vkCmdPushConstants(cmd, m_pipelineLayout,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L273" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:273</a></div>
+<div class="citation-chip"><code class="citation-code">vkCmdPushConstants(cmd, m_shadowPipelineLayout,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L360" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:360</a></div>
+<p>The ray tracer leans on the same bias from the other side: each BLAS is handed the buffer *base* with `firstVertex = 0`, which the acceleration-structure unit covers. The coupling is the point — moving the bias out of upload and into the draw call&#x27;s `vertexOffset` argument leaves the rasterizer correct and silently breaks every BLAS.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="geometry-that-is-its-own-staging-buffer">Geometry that is its own staging buffer</h2></div>
 <div class="prose reveal">
-<p>Upload is the only place scene becomes GPU state; keeping it explicit makes TLAS/material lockstep enforceable.</p>
+<p>The raster vertex buffer is created with `TRANSFER_SRC` next to `VERTEX_BUFFER`, and its memory is requested `HOST_VISIBLE | HOST_COHERENT` with no `DEVICE_LOCAL` bit — filled by a plain `memcpy` through a temporary mapping, never staged.</p>
+<div class="citation-chip"><code class="citation-code">bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L114" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:114</a></div>
+<p>The ray tracer then copies that same buffer into a device-local one carrying the acceleration-structure build-input, device-address and storage usages.</p>
+<div class="citation-chip"><code class="citation-code">bufInfo.usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L40" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:40</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The textbook alternative is a throwaway staging buffer, a device-local vertex buffer for raster and a separate device-local copy for RT — three allocations, two copies. OHAO keeps the host-visible buffer permanently and lets it double as the RT staging source, so a re-upload is a `memcpy` rather than a command submission. The price is that the rasterizer&#x27;s per-frame vertex fetch reads memory nobody asked to be device-local: `findMemoryType` returns the first heap satisfying the requested bits, so which physical memory that is depends on the device&#x27;s type list, not on intent.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="two-hundred-forty-bytes-the-forward-shaders-do-not-agree-about">Two hundred forty bytes the forward shaders do not agree about</h2></div>
 <div class="prose reveal">
-<p>Walks MeshComponents → interleaved VB/IB + MeshBufferInfo map.</p>
-<p>Material rows packed into SSBO; lights dual-pack for deferred vs PT.</p>
-<p>No Vulkan types in scene/ — upload is the boundary.</p>
+<p>The per-draw material path is push-constant only: `renderSceneObjects` reads a `MaterialComponent`, resolves up to four bindless textures by *string name*, and bit-punts each `uint32_t` slot index into a float so it can travel in a `vec4`.</p>
+<div class="citation-chip"><code class="citation-code">pc.materialParams = glm::vec4(metallic, roughness, packIdx(roughMetalTexIdx), packIdx(albedoTexIdx));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L269" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:269</a></div>
+<p>`ObjectPushConstants` is three `mat4`s then three `vec4`s — 240 bytes, well above the 128-byte `maxPushConstantsSize` the Vulkan spec guarantees, and the pipeline layout declares the whole range.</p>
+<div class="citation-chip"><code class="citation-code">3 * sizeof(glm::mat4) + 3 * sizeof(glm::vec4); // 240</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L23" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:23</a></div>
+<p>The shaders that layout serves declare something else. `createPipeline` builds this pipeline from `core/forward.vert` and `core/forward.frag`, and both open with `mat4 model` followed by loose scalars — so their `baseColor` lands at byte 64, `metallic` at 76, `roughness` at 80 and `ao` at 84, with the fragment shader&#x27;s two texture indices at 88 and 92. The CPU writes `viewProj` across bytes 64–127.</p>
+<div class="citation-chip"><code class="citation-code">// Load shaders (new AAA directory structure: core/forward.vert/frag)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/pipeline.cpp#L180" target="_blank" rel="noopener">ohao/gpu/vulkan/pipeline.cpp:180</a></div>
+<div class="citation-chip"><code class="citation-code">float albedoTexIdx;   // uint32 packed as float (0xFFFFFFFF = no texture)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L53" target="_blank" rel="noopener">shaders/core/forward.frag:53</a></div>
+<p>The forward fragment shader&#x27;s albedo, metallic, roughness and both bindless indices are therefore columns of the view-projection matrix reinterpreted as material data, and the index guard rejects only the exact bit pattern `0xFFFFFFFF` before indexing the descriptor array:</p>
+<div class="citation-chip"><code class="citation-code">if (albedoIdx != 0xFFFFFFFFu) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L150" target="_blank" rel="noopener">shaders/core/forward.frag:150</a></div>
+<p>The three `vec4`s the upload code packs at bytes 192–239 sit past the end of every block those shaders declare. Only this path is affected: the deferred GBuffer pass has its own draw loop and matching block, and the shadow pass writes only `model`, the one field both sides agree on.</p>
+<p>How live that is cuts both ways. `RenderMode::Forward` is the *default-initialised* value of `m_renderMode` — what any caller that never calls `setRenderMode` gets, and what a caller is left holding when `setRenderMode` refuses, which it does for Deferred without a deferred renderer and for an RT profile without RT support.</p>
+<div class="citation-chip"><code class="citation-code">RenderMode m_renderMode{RenderMode::Forward};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L526" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:526</a></div>
+<p>Yet nothing in the tree asks for it: the shared example CLI&#x27;s `rtMode` starts at `RTOffline` and is only ever assigned an RT profile, `resolveMode` returns that or `Deferred`, and the smoke test selects `RTOffline`. No in-tree call site passes `RenderMode::Forward`. The mismatch is reachable by any embedder and currently driven by nobody.</p>
+<div class="citation-chip"><code class="citation-code">RenderMode rtMode{RenderMode::RTOffline};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_cli.hpp#L23" target="_blank" rel="noopener">examples/example_cli.hpp:23</a></div>
+<p>Verified here: both shader declarations, the C++ struct, the pipeline&#x27;s shader paths, the push site and every `setRenderMode` call site in the tree. Not verified here: the resulting image.</p>
+</div>
+<div class="section-rule"><h2 id="textures-are-uploaded-by-writing-back-into-the-scene">Textures are uploaded by writing back into the scene</h2></div>
+<div class="prose reveal">
+<p>`uploadDeferredTextures` pushes each model&#x27;s albedo, normal, rough/metal and emissive images into the bindless manager, then writes the generated name back into the actor&#x27;s `MaterialComponent`.</p>
+<div class="citation-chip"><code class="citation-code">matComp-&gt;getMaterial().albedoTexture = texName;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L52" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:52</a></div>
+<p>That write-back is what makes the draw loop&#x27;s string lookup resolvable at all, but it turns upload into a mutation of the scene rather than a read of it. The assignment sits inside the per-material loop, so a model with several albedo textures leaves only the last one named — the raster path is one material per actor, while the RT path keeps per-triangle material ids. Scalar roughness and metallic collapse the same way, to material 0, but only when the model carries any `materialColors` at all; metallic falls back to `0.0f` when the per-material metallic array is empty rather than reading material 0.</p>
+<div class="citation-chip"><code class="citation-code">float metallic = !model-&gt;materialMetallic.empty() ? model-&gt;materialMetallic[0] : 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L78" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:78</a></div>
+<p>Nothing deduplicates either: `loadTextureFromMemory` allocates a fresh slot per call and never releases the previous handle, so each re-entry into `updateSceneBuffers` spends another N slots out of the manager&#x27;s 4096.</p>
+<p>The rough/metal branch also advertises a repack it does not perform. Its comment describes a swizzle from Assimp&#x27;s raw GLTF channel order into the engine&#x27;s AO/roughness/metallic layout; the loop copies R→R, G→G, B→B and forces alpha to 255.</p>
+<div class="citation-chip"><code class="citation-code">repacked[p*4+1] = g;   // G = Roughness</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L101" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:101</a></div>
+<p>An identity copy with an opacity fix. Not wrong — the two orderings coincide — but the comment is the only thing implying a conversion happens.</p>
+</div>
+<div class="section-rule"><h2 id="an-emissive-texture-promoted-to-a-light">An emissive texture, promoted to a light</h2></div>
+<div class="prose reveal">
+<p>An actor whose model declares an emissive texture may have a light synthesised for it, with the intensity derived by reading the texture on the CPU. Write $R_p, G_p, B_p$ for a texel&#x27;s channels in $[0,1]$, $Y(p)$ for Rec. 709 relative luminance, $S$ for the texels bright enough to count and $P$ for their summed luminance:</p>
+<div class="math-block">$$
+Y(p) = 0.2126\,R_p + 0.7152\,G_p + 0.0722\,B_p, \qquad S = \{\,p : Y(p) > 0.05\,\}, \qquad P = \sum_{p \in S} Y(p)
+$$</div>
+<div class="math-block">$$
+I = \min(0.1\,P,\;20), \qquad c = \frac{1}{|S|}\sum_{p \in S}\big(R_p, G_p, B_p\big)
+$$</div>
+<p>Two gates decide whether the light exists at all, and neither is the per-texel $Y(p) &gt; 0.05$ that defines $S$. The first is $P &gt; 0.1$ on the whole texture: below it the scan runs, costs a full texture read, and produces nothing.</p>
+<div class="citation-chip"><code class="citation-code">if (totalPower &gt; 0.1f) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L227" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:227</a></div>
+<p>The second is a `break` at the foot of the per-material loop, placed *outside* the power test, so only the first material carrying a non-negative emissive index is ever examined. A model whose second material is the real emitter gets nothing.</p>
+<div class="citation-chip"><code class="citation-code">break;  // one light per actor</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L245" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:245</a></div>
+<p>The colour $c$ is a *mean* over $S$ and is independent of texture resolution. The intensity $I$ is a *sum* and is not: the same emitter authored at 2K instead of 1K feeds roughly four times the power into the same formula, and shifts the $P &gt; 0.1$ gate by the same factor. The clamp at 20 hides the intensity half of that for most textures; nothing hides the gate.</p>
+<div class="citation-chip"><code class="citation-code">float intensity = std::min(totalPower * 0.1f, 20.0f);  // scale power to reasonable intensity</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L228" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:228</a></div>
+<p>The light&#x27;s geometry is half in world space and half not: its centre is the model-space bounding-box midpoint pushed through the actor&#x27;s world matrix, its radius 0.3 times the model-space diagonal, never scaled by that matrix.</p>
+<div class="citation-chip"><code class="citation-code">float radius = glm::length(bmax - bmin) * 0.3f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L201" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:201</a></div>
+<p>Scaling an emissive actor moves its light correctly and leaves its size behind. The whole block exists twice — here as a `GPULight` written into the RT light SSBO, and again in `cacheEmissiveLights` as a deferred `LightData` point light with a range of ten radii — with the same two gates, the same clamp and the same mismatch. The second copy is not a GPU upload: it fills a host-side `std::vector&lt;LightData&gt;` that the per-frame `updateLightBuffer` appends to the deferred light UBO after the scene&#x27;s own `LightComponent`s.</p>
+</div>
+<div class="section-rule"><h2 id="why-the-hdri-loads-from-inside-the-light-path">Why the HDRI loads from inside the light path</h2></div>
+<div class="prose reveal">
+<p>The environment map has nothing to do with lights except that its bindless index rides in the light buffer&#x27;s 16-byte header. The code takes that literally: the HDR decode, the importance-sampling CDF build and the CDF upload all sit inside the branch that runs only when at least one light was collected.</p>
+<div class="citation-chip"><code class="citation-code">if (!gpuLights.empty()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L254" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:254</a></div>
+<p>A scene with no `LightComponent`s and no emissive meshes therefore gets no light buffer, no environment map, no CDFs, and binding 11 is never handed anything. That shape is not hypothetical: `env_demo --lighting=none` loads the HDR path and then creates no `LightComponent` at all, so the HDRI reaches the GPU only if some mesh clears the $P &gt; 0.1$ gate above.</p>
+<div class="citation-chip"><code class="citation-code">// LightingMode::None → no lights, HDR env IBL only (pure environment)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L414" target="_blank" rel="noopener">examples/env_demo.cpp:414</a></div>
+<p>The loader is guarded by a path cache, and the comment explaining why is the most useful line in the file: re-decoding the HDR on every `updateSceneBuffers` leaked whole images until it crashed. The re-entrant caller that makes that matter is the differentiable-rendering forward pass: `forwardStudioDeferred` calls `updateSceneBuffers` on every single render.</p>
+<div class="citation-chip"><code class="citation-code">(void)renderer.updateSceneBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/diff/diff_vk_forward.hpp#L66" target="_blank" rel="noopener">ohao/render/diff/diff_vk_forward.hpp:66</a></div>
+<p>It compounds twice over: one loss evaluation renders `kAvg * nViews` times — 2, with the fit&#x27;s `nViews = 2`, `kAvg = 1` — and one finite-difference coordinate probe is two loss evaluations. Probing a single tile channel is therefore four full teardown-and-rebuild cycles, and a sweep does that for every channel of every tile.</p>
+<div class="citation-chip"><code class="citation-code">const int nViews = 2;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/diff_fit.hpp#L66" target="_blank" rel="noopener">ohao/inverse/diff_fit.hpp:66</a></div>
+<div class="citation-chip"><code class="citation-code">const double Lp = lossAt(trialP);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/diff_fit.hpp#L189" target="_blank" rel="noopener">ohao/inverse/diff_fit.hpp:189</a></div>
+<p>The RT-side inverse loops avoid the cost deliberately: `RenderSession` re-uploads materials and light/env scale in place and reaches `updateSceneBuffers` only when one of those in-place updates fails.</p>
+<div class="citation-chip"><code class="citation-code">// Material + light/env-scale edits only — never rebuild BLAS / reload HDR.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/render_session.hpp#L49" target="_blank" rel="noopener">ohao/inverse/render_session.hpp:49</a></div>
+<div class="citation-chip"><code class="citation-code">float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &amp;ew, &amp;eh, &amp;ec, 4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L310" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:310</a></div>
+<p>Two details survive that fix. The image is `R32G32B32A32_SFLOAT` — 16 bytes per texel, so a 4096×2048 panorama is 128 MB resident plus an equal host staging buffer — created directly beneath a comment claiming RGBA16F. And only the image *view* is retained; the `VkImage` and its `VkDeviceMemory` are function locals nothing destroys, so switching environments at runtime keeps the previous one alive.</p>
+<div class="citation-chip"><code class="citation-code">imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L317" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:317</a></div>
+<div class="citation-chip"><code class="citation-code">VkImage envImage;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L326" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:326</a></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Indices are global: the raster draw must pass `vertexOffset = 0` and the BLAS build `firstVertex = 0`. Rebasing without changing both corrupts one pipeline in silence.</li>
+<li>`MeshBufferInfo` offsets are element counts, and actor order is `unordered_map` order — look slices up by actor ID, never by position.</li>
+<li>`updateSceneBuffers` owns geometry, not lights: `updateLightBuffer` re-reads every `LightComponent` per frame, and `updateRTLightParams` rebuilds the RT SSBO on its own. Editing a light and then calling this function buys nothing but a device stall.</li>
+<li>On an RT-capable device `updateSceneBuffers` is not idempotent: it re-uploads every texture into fresh bindless slots and frees none, so repeated calls drain the 4096-slot table. Without RT support none of that runs — including the bindless upload the deferred pipeline depends on.</li>
+<li>`uploadDeferredTextures` writes texture names, roughness and metallic back into `MaterialComponent`. Code treating the scene as const across an upload is wrong.</li>
+<li>The environment map reaches the GPU only when RT is supported and at least one light was collected. A scene lit purely by an HDRI still needs one `LightComponent` or one emissive mesh past the summed-luminance gate.</li>
+<li>`ObjectPushConstants` and the `core/forward.*` push blocks diverge past the first `mat4`. Only `model` is safe to rely on through those pipeline layouts.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/buffer_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/forward.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/example_cli.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/env_demo.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/diff/diff_vk_forward.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/diff_fit.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/render_session.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

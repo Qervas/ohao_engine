@@ -33,32 +33,95 @@
         <p>DenoiseMode enum + DenoiseModeTraits resource needs.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#five-values-and-a-hole-where-optix-used-to-be">Five values, and a hole where OptiX used to be</a></li><li><a href="#the-same-table-written-twice">The same table written twice</a></li><li><a href="#what-the-traits-actually-gate">What the traits actually gate</a></li><li><a href="#the-copy-the-tracer-reads-is-not-the-copy-you-set">The copy the tracer reads is not the copy you set</a></li><li><a href="#applydenoisepolicy-widens-it-never-refuses">applyDenoisePolicy widens; it never refuses</a></li><li><a href="#a-header-and-a-shader-that-were-never-wired">A header and a shader that were never wired</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="five-values-and-a-hole-where-optix-used-to-be">Five values, and a hole where OptiX used to be</h2></div>
 <div class="prose reveal">
-<p>DenoiseMode enum + traits declaring which AOV guides each backend needs.</p>
+<p>`DenoiseMode` is the single token every part of the RT stack uses to say which denoiser is in play, and its enumerators are numbered explicitly and non-contiguously. Value 2 is missing: the OptiX backend was deleted (it segfaulted on shutdown), and the survivors kept their old numbers rather than closing the gap, so NRD is still 3 and the two later additions took 4 and 5.</p>
+<div class="citation-chip"><code class="citation-code">NRD    = 3,   // NVIDIA RayTracingDenoiser (Sub-plan 4)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/denoise_types.hpp#L16" target="_blank" rel="noopener">ohao/render/rt/denoise/denoise_types.hpp:16</a></div>
+<p>The gap costs nothing, because the numeric value never crosses a boundary: nothing packs a `DenoiseMode` into a push constant, writes it to a file, or casts an integer back into one. `denoiseModeIndex` is the only function that reads the underlying value at all, and it has no callers. The numbering is source hygiene, not an ABI.</p>
+<p>The parser degrades instead of failing. `optix` still parses, to OIDN, with a warning on stderr, so old scripts keep running:</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[Denoise] --denoise=optix is no longer supported — falling back to OIDN\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/denoise_types.cpp#L24" target="_blank" rel="noopener">ohao/render/rt/denoise/denoise_types.cpp:24</a></div>
+<p>More importantly, `nrd` and `dlssrr` are gated on the build defines that decide whether those backends were compiled in at all; if they weren&#x27;t, the string resolves to `None` rather than to a mode whose implementation is absent.</p>
+<div class="citation-chip"><code class="citation-code">&lt;&lt; &quot; requested but OHAO_DLSS=OFF at build time — falling back to None\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/denoise_types.cpp#L41" target="_blank" rel="noopener">ohao/render/rt/denoise/denoise_types.cpp:41</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>What the fallback buys is mechanical, and only the mechanism is recorded — no comment or commit message weighs an alternative. The frame-final `getPixels()` dispatches on the mode, and the NRD arm reads back the binding-30 tonemapped image:  {{cite ohao/gpu/vulkan/renderer.cpp &quot;if (m_denoiseMode == DenoiseMode::NRD) {&quot;}}  That image&#x27;s allocation carries no build guard, but everything that *writes* it lives inside one:  {{cite ohao/render/rt/path_tracer_render.cpp &quot;#ifdef OHAO_NRD_ENABLED&quot;}}  So an `NRD` mode reaching a non-NRD build would not error: the readback finds a live `VkImage`, returns success, and hands back contents nothing ever wrote. Degrading at parse time keeps that mode out of the switch entirely.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-same-table-written-twice">The same table written twice</h2></div>
 <div class="prose reveal">
-<p>denoise_types.hpp; CLI --denoise=dlssrr|nrd|oidn|atrous|none.</p>
+<p>`rt_meta.hpp` states the per-mode requirements once as a class template whose members are constant expressions, then again as free functions that switch on a runtime value and return the corresponding trait. Both spellings exist because the two callers differ: `if constexpr` needs the compile-time form, a mode that arrived from `argv` needs the runtime one.</p>
+<p>`DenoiseModeTraits` is not the dead half. The runtime functions do not restate its table; they switch on the mode and return the trait, so editing the class is what changes behaviour — with one exception, below. What is unreached is the `if constexpr` convenience layer stacked on top of it: `RTFeatureFlags` is named only by `tests/engine/engine_tests.cpp`, `makeFeatureSettings` only there and inside `PathTracer::setFeatureSettings`, and `setFeatureSettings` itself has no callers anywhere in the tree. The chain ends in the test file or in nothing.</p>
+<p>The seam is in the runtime mirror. Every query delegates to the trait class except the AOV-accumulation one, which restates the predicate directly:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] constexpr bool denoiseNeedsAovAccumulation(DenoiseMode m) noexcept {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L188" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:188</a></div>
+<div class="citation-chip"><code class="citation-code">static constexpr bool needs_aov_accumulation =</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L124" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:124</a></div>
+<p>Editing `needs_aov_accumulation` in the traits class therefore changes nothing that runs. It is the one place where the header&#x27;s &quot;same numbers, switch → traits&quot; promise is not kept.</p>
+<p>A second seam is structural. The five requirement queries — CPU readback, motion vectors, diff/spec split, pixel jitter, fresh sample — each carry a `default:` arm, so a sixth enumerator would silently answer `false` to all of them. The three exhaustive ones (`denoiseModeName`, `isValidDenoiseMode`, `denoiseIsRealtimeCapable`) list every case and then fall through to a trailing `return`, so the same enumerator would read as invalid and print as `&quot;unknown&quot;`. The project&#x27;s CMake adds no `-Wall` or `-Werror`, which leaves `-Wswitch` off, so neither shape produces a diagnostic: a newly added mode arrives requiring nothing, and the build stays green.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="what-the-traits-actually-gate">What the traits actually gate</h2></div>
 <div class="prose reveal">
-<p>Traits prevent calling DLSS without hit-dist or NRD without packing.</p>
+<p>Three trait queries reach the raygen from inside the tracer&#x27;s per-frame record, all as push-constant state rather than as pipeline selection. The other three — motion vectors, diff/spec split, CPU readback — have their only production consumer in `applyDenoisePolicy`, two sections down.</p>
+<p>Sub-pixel jitter is the first: for `NRD` and `DLSSRR`, the tracer offsets the sample grid by a Halton(2,3) point each frame so the denoiser&#x27;s temporal accumulation integrates a wider footprint than centre-sampling would.</p>
+<div class="citation-chip"><code class="citation-code">if (denoiseNeedsPixelJitter(m_renderSettings.denoiseMode)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L86" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:86</a></div>
+<p>The predicate is an enumerated pair, not a property. `Atrous` owns temporal reprojection too — it is SVGF, with a reprojection pass and a persistent history buffer — and is still excluded; the else arm groups it with `None` and `OIDN` on pixel centres, the stated reason being parity:</p>
+<div class="citation-chip"><code class="citation-code">// None/OIDN/Atrous keep pixel-center sampling — zero jitter preserves parity.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L91" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:91</a></div>
+<p>The sequence index is bumped by one before use, because Halton&#x27;s zeroth term is exactly 0 — indistinguishable from &quot;no jitter&quot;, and it would waste one of the 16 slots in the period:</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t idx = (m_haltonIndex % 16u) + 1u;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L87" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:87</a></div>
+<p>Second, `denoiseNeedsAovAccumulation` sets a raygen control bit that makes the five NRD guide images hold a running mean over the frame&#x27;s samples instead of the last one. Third, `denoiseWantsFreshSample` zeroes the history counter the raygen uses, so the beauty image is a genuine 1-spp sample and the denoiser — not the tracer — owns temporal integration:</p>
+<div class="citation-chip"><code class="citation-code">pc.control.y = freshSample ? 0u : m_historyFrameCount;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L712" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:712</a></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-copy-the-tracer-reads-is-not-the-copy-you-set">The copy the tracer reads is not the copy you set</h2></div>
 <div class="prose reveal">
-<p>DenoiseMode: None | OIDN | NRD | Atrous | DLSSRR (and related).</p>
-<p>Traits declare which AOV guides each backend needs (albedo, normal, hit-dist, motion).</p>
-<p>CLI: --denoise=dlssrr | nrd | oidn | atrous | none.</p>
+<p>The mode is stored twice. `--denoise` writes `VulkanRenderer::m_denoiseMode` and latches an override flag; the path tracer reads its own `RTRenderSettings::denoiseMode`, which is overwritten from the active RT pipeline&#x27;s defaults at the top of every frame:</p>
+<div class="citation-chip"><code class="citation-code">m_rtSettings = pipeline.getDefaultSettings();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L525" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:525</a></div>
+<p>Immediately afterwards the user&#x27;s choice is re-seeded into it — but only when `--denoise` latched the override, and then only for two of the five modes:</p>
+<div class="citation-chip"><code class="citation-code">(m_denoiseMode == DenoiseMode::Atrous || m_denoiseMode == DenoiseMode::DLSSRR)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L489" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:489</a></div>
+<p>So the set of values that can actually appear in `PathTracer::m_renderSettings.denoiseMode` during a frame is: `None` (the realtime profile default), `OIDN` (the offline profile default), `Atrous`, and `DLSSRR`. `NRD` is not in that set and cannot get there through any shipped entry point: the re-seed is scoped to the two modes the tracer dispatches GPU-side, so `None`, `OIDN` and `NRD` keep the profile-default `denoiseMode` untouched. The aniso, SSS, and samples-per-frame fields, by contrast, survive the same reset for every mode.</p>
+<div class="citation-chip"><code class="citation-code">.denoiseMode = DenoiseMode::OIDN,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L60" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:60</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/denoise-types-modeflow.svg" alt="Conceptual data flow, not measured: how the parsed mode reaches its two independent storage sites and which readers consult each. Box contents are read from renderer.cpp, rt_settings.hpp and path_tracer_render.cpp." loading="lazy" /><figcaption>Conceptual data flow, not measured: how the parsed mode reaches its two independent storage sites and which readers consult each. Box contents are read from renderer.cpp, rt_settings.hpp and path_tracer_render.cpp.</figcaption></figure>
+<p>This is coherent rather than broken, because the NRD dispatch does not consult the mode at all. It runs whenever the NRD instance was created and auxiliary AOVs are enabled — which both stock profiles do:</p>
+<div class="citation-chip"><code class="citation-code">if (m_nrdDenoiser &amp;&amp; m_renderSettings.enableAuxiliaryAOVs) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L869" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:869</a></div>
+<p>The consequence: under `--denoise=nrd`, `denoiseNeedsPixelJitter` and `denoiseNeedsAovAccumulation` — the two traits whose definitions name NRD first — both evaluate `false`, because they are asked about the profile default, not the CLI mode. Halton jitter and multi-sample AOV averaging are reachable only by getting `NRD` past the per-frame reset, which today means adding it to the re-seed condition above.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`DenoiseMode` is not a switch that turns denoising on. GPU denoise work is scheduled by resource existence (`m_nrdDenoiser`, `enableAuxiliaryAOVs`); the mode is a tag on the *output tap*, deciding which image `getPixels()` hands back. Reading it as an on/off switch is how the two-copy behaviour above becomes surprising.</p></div>
+</div>
+<div class="section-rule"><h2 id="applydenoisepolicy-widens-it-never-refuses">applyDenoisePolicy widens; it never refuses</h2></div>
+<div class="prose reveal">
+<p>One function reconciles a mode with the settings it needs, and it has exactly one production call site — the tracer&#x27;s settings setter, which every path funnels through:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] constexpr RTRenderSettings applyDenoisePolicy(RTRenderSettings s) noexcept {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L201" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:201</a></div>
+<div class="citation-chip"><code class="citation-code">m_renderSettings = applyDenoisePolicy(settings);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.cpp#L309" target="_blank" rel="noopener">ohao/render/rt/path_tracer.cpp:309</a></div>
+<p>Both of its rules are monotone — they only flip a flag from false to true — which is what makes it safe on every frame&#x27;s settings push. It is also, on every input the running engine can produce, a no-op: both stock profiles already set `enableAuxiliaryAOVs`, and the only mode wanting CPU readback (OIDN) only ever arrives attached to the offline profile, which already allows an external denoiser. The unit test hand-constructs `enableAuxiliaryAOVs = false` — a state no pipeline default produces — to make the function do any work at all.</p>
+<p>What it does *not* do is reject. The traits declare capability —</p>
+<div class="citation-chip"><code class="citation-code">static constexpr bool is_realtime_capable =</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L132" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:132</a></div>
+<p>— but nothing consults capability before running a mode. `denoiseIsRealtimeCapable`&#x27;s only caller is an assertion in the engine test suite; `is_offline_capable` has no caller at all, tests included — its definition is its sole occurrence in the tree. `isValidDenoiseMode` is uncalled too, and guards a boundary that does not exist: no integer is ever cast into a `DenoiseMode` anywhere.</p>
+</div>
+<div class="section-rule"><h2 id="a-header-and-a-shader-that-were-never-wired">A header and a shader that were never wired</h2></div>
+<div class="prose reveal">
+<p>`denoiser.hpp` declares `RTDenoiser`, an à-trous wavelet filter with an `init`/`denoise`/`destroy` shape and a five-iteration default. No matching `.cpp` was ever committed, and no translation unit includes the header: the identifier appears exactly once in the repository, at its own declaration, whose comment points at the replacement.</p>
+<div class="citation-chip"><code class="citation-code">/// Legacy A-Trous wavelet denoiser (compute). Prefer DenoiseMode::Atrous (SVGF) for new work.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoiser.hpp#L8" target="_blank" rel="noopener">ohao/render/rt/denoiser.hpp:8</a></div>
+<p>Both halves landed dead, together, in commit `3e48342` — a bilateral-filter change whose message says the compute shader was &quot;added for future multi-pass A-Trous implementation — not wired up yet&quot;. `denoise_atrous.comp` matches the never-implemented class exactly: four bindings in the order `denoise()` takes its views, and the identical `{stepSize, sigmaColor, sigmaNormal, sigmaDepth}` push block.</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 3, rgba32f) uniform readonly image2D accumBuffer; // has depth/position info</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/compute/denoise_atrous.comp#L12" target="_blank" rel="noopener">shaders/compute/denoise_atrous.comp:12</a></div>
+<p>It is still compiled into `build/shaders/compute_denoise_atrous.comp.spv`, and nothing loads it. The live `DenoiseMode::Atrous` path is a later, unrelated implementation: full SVGF, two compute passes with persistent history, driven by `AtrousDenoiser` out of `shaders/rt/`. Deleting `denoiser.hpp` and its shader is safe; assuming the file name tells you which à-trous is running is not.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`applyDenoisePolicy` runs on every per-frame settings push, so it must stay monotone and idempotent. A rule that clears a flag would fight the pipeline defaults once per frame.</li>
+<li>Adding a `DenoiseMode` means touching `denoiseModeName`, `isValidDenoiseMode`, the traits class, and every `default:`-carrying runtime mirror. Nothing in the build will tell you if you miss one.</li>
+<li>`denoiseNeedsAovAccumulation` bypasses `DenoiseModeTraits`. Change the trait and the free function together or they disagree silently.</li>
+<li>A mode that must influence the raygen has to survive the per-frame reset in `prepareRTSceneForFrame`, i.e. be listed in the re-seed condition in `applyRTRenderSettings`. Setting it once through `setRTRenderSettings` does not stick.</li>
+<li>`parseDenoiseMode` must never return a mode whose backend was compiled out; the readback switch in `getPixels()` assumes the mode implies its resources were written.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/rt/denoise/denoise_types.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/denoise_types.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/rt_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/denoiser.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/compute/denoise_atrous.comp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

@@ -33,30 +33,100 @@
         <p>Debug/editor overlay meshes.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-pass-that-is-fully-wired-and-never-runs">A pass that is fully wired and never runs</a></li><li><a href="#compositing-after-the-frame-is-already-finished">Compositing after the frame is already finished</a></li><li><a href="#the-format-the-pass-promises-and-the-two-it-can-receive">The format the pass promises, and the two it can receive</a></li><li><a href="#lines-and-the-generator-that-makes-them">Lines, and the generator that makes them</a></li><li><a href="#the-highlight-that-cannot-work-and-why">The highlight that cannot work, and why</a></li><li><a href="#two-more-edges-before-you-enable-this">Two more edges before you enable this</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-pass-that-is-fully-wired-and-never-runs">A pass that is fully wired and never runs</h2></div>
 <div class="prose reveal">
-<p>Debug/editor overlay meshes after the main stack.</p>
+<p>Start with the fact a hostile reader finds in ten seconds of grep, because everything else here depends on it. `GizmoPass` is constructed, its pipeline and render pass are created, its shaders are compiled into the build — and in the current tree nothing ever turns it on. The enable flag defaults false:</p>
+<div class="citation-chip"><code class="citation-code">bool m_gizmoEnabled{false};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L173" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:173</a></div>
+<p>and the only function that can flip it, `DeferredRenderer::setGizmoEnabled`, has no callers anywhere in `ohao/`, `examples/`, or `tests/`.</p>
+<div class="citation-chip"><code class="citation-code">void DeferredRenderer::setGizmoEnabled(bool enabled) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L838" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:838</a></div>
+<p>That is what &quot;no editor&quot; looks like from the renderer&#x27;s side: the handle-drawing machinery exists and waits for a selection UI nobody has written. Everything below describes a loaded gun, not a fired one — which is exactly why the three latent defects below have never been caught by running the engine.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="compositing-after-the-frame-is-already-finished">Compositing after the frame is already finished</h2></div>
 <div class="prose reveal">
-<p>gizmo_pass + gizmo_meshes + overlay shaders.</p>
+<p>The gizmo block is the last thing `DeferredRenderer::render` records — it runs after post-processing and owns no render target. It borrows whichever image the frame ended on:</p>
+<div class="citation-chip"><code class="citation-code">m_gizmoPass-&gt;setTargetImage(finalImage, finalView);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L646" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:646</a></div>
+<p>Normally that is post-processing&#x27;s LDR output. The fallback, taken when `PostProcessingPipeline::didExecute` reports false, is the deferred lighting pass&#x27;s HDR image:</p>
+<div class="citation-chip"><code class="citation-code">finalImage = m_lightingPass-&gt;getOutputImage();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L641" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:641</a></div>
+<p>Calling that &quot;the lighting output&quot; would be wrong by this point in the frame. `SkyPass::setHDROutput` is wired to exactly that view and image, so the Preetham sky is already in it, and `createParticleFramebuffer` builds the forward particle framebuffer from the same view:</p>
+<div class="citation-chip"><code class="citation-code">VkImageView hdrView = m_lightingPass-&gt;getOutputView();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L1029" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:1029</a></div>
+<p>What is *not* in it is the subsurface blur — post-processing prefers `m_sssPass-&gt;getOutputView()` whenever the SSS pass has one, and this image is the unblurred alternative. The choice is not arbitrary, though: it mirrors `DeferredRenderer::getFinalOutputImage` exactly, so the handles land on whatever image the frame is actually going to hand out.</p>
+<p>Compositing rather than clearing is the whole trick — the attachment uses `LOAD_OP_LOAD`, so the beauty frame survives and only drawn pixels change:</p>
+<div class="citation-chip"><code class="citation-code">colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L313" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:313</a></div>
+<p>Two consequences are easy to miss. On the post-processing path the draw lands *after* tonemapping, so gizmo colors are literal framebuffer values: the red `(0.9, 0.2, 0.2)` axis is that red at any scene exposure, which is right for UI and wrong for anything you might be tempted to reuse this pass for. (On the fallback path the same constants go into a scene-referred HDR image instead, and that property is lost.) And although the blend state is configured for standard `SRC_ALPHA / ONE_MINUS_SRC_ALPHA` blending, the fragment shader hardcodes alpha to 1.0, so the blend equation degenerates to a plain overwrite — the blending setup is inert as shipped.</p>
+<div class="citation-chip"><code class="citation-code">outColor = vec4(fragColor, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/overlay/gizmo.frag#L7" target="_blank" rel="noopener">shaders/overlay/gizmo.frag:7</a></div>
+<p>The layout handling around the render pass rewards careful reading. `execute` barriers the borrowed image from `SHADER_READ_ONLY_OPTIMAL` up to `COLOR_ATTACHMENT_OPTIMAL`; the render pass declares that same initial layout and a final layout back to `SHADER_READ_ONLY_OPTIMAL`; and then the *second* barrier declares old and new layouts that are identical.</p>
+<div class="citation-chip"><code class="citation-code">barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // finalLayout from render pass</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L181" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:181</a></div>
+<p>That is deliberate. The render pass already performed the transition; the trailing barrier exists only to establish the execution and memory dependency so a later blit or sampler sees the written pixels. Deleting it as &quot;a no-op layout change&quot; introduces a real hazard.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-format-the-pass-promises-and-the-two-it-can-receive">The format the pass promises, and the two it can receive</h2></div>
 <div class="prose reveal">
-<p>Selection and force viz without polluting GBuffer.</p>
+<p>Here is the first latent defect. The gizmo render pass hardcodes its color attachment format:</p>
+<div class="citation-chip"><code class="citation-code">colorAttachment.format = VK_FORMAT_R8G8B8A8_SRGB;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L311" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:311</a></div>
+<p>Neither candidate target has that format. The post-processing final output is UNORM, deliberately, because the tonemap shader applies gamma in software instead of relying on hardware sRGB encode:</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM; // LDR output — shader does manual gamma, no HW sRGB</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/post_processing_pipeline.cpp#L320" target="_blank" rel="noopener">ohao/render/deferred/post_processing_pipeline.cpp:320</a></div>
+<p>and the lighting-pass fallback is a half-float HDR target:</p>
+<div class="citation-chip"><code class="citation-code">m_hdrOutput.format = VK_FORMAT_R16G16B16A16_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L442" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:442</a></div>
+<p>Framebuffer creation requires each image view&#x27;s format to match the render pass attachment it fills, so `setTargetImage` builds an incompatible framebuffer in both cases. The code does check the result and null the handle on failure, and `execute` early-outs on a null framebuffer, so on a driver that rejects it the symptom is a missing gizmo plus one `GizmoPass: Failed to create framebuffer` line on stderr, not a crash. The pass object itself stays alive and retries every time the target handles change. Whoever wires up selection must fix the format first.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="lines-and-the-generator-that-makes-them">Lines, and the generator that makes them</h2></div>
 <div class="prose reveal">
-<p>Line/solid debug meshes drawn after tonemap path for selection and force viz.</p>
+<p>The geometry is a `LINE_LIST` of 24-byte position+color vertices with no normal, no UV, and — importantly for the next section — no axis identifier:</p>
+<div class="citation-chip"><code class="citation-code">struct GizmoVertex {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/gizmo/gizmo_meshes.hpp#L9" target="_blank" rel="noopener">ohao/render/gizmo/gizmo_meshes.hpp:9</a></div>
+<p>Lines rasterise 2 px wide, legal only because the device asked for the optional `wideLines` feature — unconditionally, with no `vkGetPhysicalDeviceFeatures` query anywhere in the tree to check it first:</p>
+<div class="citation-chip"><code class="citation-code">deviceFeatures2.features.wideLines = VK_TRUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L231" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:231</a></div>
+<p>Requesting an unsupported feature makes `vkCreateDevice` fail, so a GPU without `wideLines` never reaches a degraded gizmo — `createLogicalDevice` returns false and `VulkanRenderer::initialize` aborts. This pipeline is also the only thing in the tree that needs the feature: every other `rasterizer.lineWidth` in `ohao/` is `1.0f`, including the GBuffer wireframe variant whose source comment blames `wideLines` for a creation failure `lineWidth = 1.0f` cannot cause.</p>
+<p>The generator&#x27;s `addLine` helper appends two brand-new vertices per segment and never shares them:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t base = static_cast&lt;uint32_t&gt;(vertices.size());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/gizmo/gizmo_meshes.cpp#L9" target="_blank" rel="noopener">ohao/render/gizmo/gizmo_meshes.cpp:9</a></div>
+<p>so the index buffer is the identity permutation `0,1,2,3,…` and `vkCmdDrawIndexed` does exactly what `vkCmdDraw` would, at the cost of an extra allocation and bind. The counts are small enough that it has never mattered: translate is 51 segments (102 vertices, 2,448 bytes), scale is 39, and rotate — three 32-segment rings — is the largest at 96 segments and 4,608 bytes.</p>
+<p>Cones and circles both need an orthonormal basis perpendicular to a given axis, and both build it identically. For a unit axis $\mathbf{a}$, base centre $\mathbf{b}$, radius $r$ and $N$ segments with $\theta_i = 2\pi i / N$:</p>
+<div class="math-block">$$
+\mathbf{p}_1=\frac{\mathbf{a}\times\mathbf{u}}{\lVert\mathbf{a}\times\mathbf{u}\rVert},\qquad \mathbf{p}_2=\mathbf{a}\times\mathbf{p}_1,\qquad \mathbf{c}_i=\mathbf{b}+r\left(\mathbf{p}_1\cos\theta_i+\mathbf{p}_2\sin\theta_i\right)
+$$</div>
+<p>$\mathbf{u}$ is the reference vector the cross product is taken against; it must not be parallel to $\mathbf{a}$ or the cross collapses to zero. The code picks world-up, switching to world-right when the axis comes within about 8° of vertical — the branch the Y-axis arrow always takes:</p>
+<div class="citation-chip"><code class="citation-code">perp1 = glm::normalize(glm::cross(axis, glm::vec3(0, 1, 0)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/gizmo/gizmo_meshes.cpp#L23" target="_blank" rel="noopener">ohao/render/gizmo/gizmo_meshes.cpp:23</a></div>
+<p>$\mathbf{p}_2$ is not renormalised, and does not need to be: $\mathbf{a}$ and $\mathbf{p}_1$ are unit and orthogonal, so their cross product already has unit length.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The pipeline disables depth test *and* depth write, and its render pass has no depth attachment at all — the alternative, sampling GBuffer depth so scene geometry occludes the handles, was not taken.  {{cite ohao/render/deferred/gizmo_pass.cpp &quot;depthStencil.depthTestEnable = VK_FALSE;&quot;}}  A handle you cannot see is a handle you cannot grab; an object embedded in terrain would become untranslatable. The price is that the rotation gizmo draws all three rings in full, front and back, with no cue about which half of each circle is on the near side. Editors that solve this clip each ring to the camera-facing hemisphere; OHAO does not, and the generator has no view direction to do it with.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-highlight-that-cannot-work-and-why">The highlight that cannot work, and why</h2></div>
+<div class="prose reveal">
+<p>`setHighlightedAxis` stores an axis into `m_highlightedAxis`, and nothing reads that member — the push constant hardcodes the highlight weight to zero:</p>
+<div class="citation-chip"><code class="citation-code">pc.highlightColor = glm::vec4(GizmoMeshes::HIGHLIGHT_COLOR, 0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L170" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:170</a></div>
+<p>so the vertex shader&#x27;s blend always returns the untouched vertex color:</p>
+<div class="citation-chip"><code class="citation-code">fragColor = mix(inColor, params.highlightColor.xyz, params.highlightColor.w);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/overlay/gizmo.vert#L17" target="_blank" rel="noopener">shaders/overlay/gizmo.vert:17</a></div>
+<p>Setting `w = 1` would not fix this — it would turn *every* axis yellow at once. The push constant is uniform across the single indexed draw and `GizmoVertex` carries no axis id, so the shader cannot tell X segments from Y segments. Finishing hover highlighting needs one of two structural changes: split the draw into three index ranges and push a different weight per range, or add a fourth vertex attribute and compare it in the shader. The stored axis is a placeholder for a decision nobody has made.</p>
+</div>
+<div class="section-rule"><h2 id="two-more-edges-before-you-enable-this">Two more edges before you enable this</h2></div>
+<div class="prose reveal">
+<p>The push constant block is `mat4 + mat4 + vec4` = 144 bytes.</p>
+<div class="citation-chip"><code class="citation-code">pushConstant.size = sizeof(GizmoPushConstants);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L296" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:296</a></div>
+<p>Vulkan&#x27;s guaranteed minimum `maxPushConstantsSize` is 128. Nothing in the tree queries the actual limit; the only record of it is a comment in the path tracer, which packs two values into one field rather than exceed 256 bytes:</p>
+<div class="citation-chip"><code class="citation-code">// 256-byte device maxPushConstantsSize, so we cannot append a field — the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L692" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:692</a></div>
+<p>So on the development hardware nothing fails, but this layout is not portable to a minimum-spec device. That failure lands somewhere quite different from the format mismatch: `vkCreatePipelineLayout` rejects the range at init, so `createPipeline` returns false, `initialize` prints `GizmoPass: Failed to create pipeline`, and the caller logs `GizmoPass failed (non-fatal)` and destroys the whole pass object — one loud message at startup rather than a per-frame framebuffer retry. The fix costs nothing: no shader here needs `viewProj` and `model` separately, and premultiplying them on the CPU drops the block to 80 bytes.</p>
+<p>Changing gizmo mode marks the geometry dirty, and the rebuild happens inside `execute`, on the recording path, by destroying and reallocating the buffers:</p>
+<div class="citation-chip"><code class="citation-code">void GizmoPass::updateGizmoBuffers() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L459" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:459</a></div>
+<p>There is no fence wait and no frames-in-flight ring here; `cleanup` calls `vkDeviceWaitIdle`, this path does not. Switching translate → rotate while earlier command buffers referencing the old buffers are still in flight is a use-after-free. It has never fired because mode switching requires an editor.</p>
+<p>One piece of resize logic looks redundant and is not. `setTargetImage` memoises on handle equality and returns early when image and view are unchanged:</p>
+<div class="citation-chip"><code class="citation-code">if (m_targetImage == image &amp;&amp; m_targetImageView == imageView) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gizmo_pass.cpp#L79" target="_blank" rel="noopener">ohao/render/deferred/gizmo_pass.cpp:79</a></div>
+<p>so `onResize` deliberately clears the cached handles, forcing a framebuffer rebuild next frame even if the driver recycles the same handle values for the recreated post-processing target.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>A complete, compiled, never-executed overlay stage. Its three latent defects — a render-pass format matching neither possible target, a 144-byte push-constant block against Vulkan&#x27;s 128-byte guaranteed minimum, and a buffer rebuild with no in-flight synchronisation — are invisible precisely because `DeferredRenderer::setGizmoEnabled` has no callers. Wiring a selection UI to it surfaces the format bug on frame one and the sync bug on the first mode switch; the push-constant block only bites on hardware nobody has run this on.</p></div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/deferred/gizmo_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gizmo_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/overlay/gizmo.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/post_processing_pipeline.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/gizmo/gizmo_meshes.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/gizmo/gizmo_meshes.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/overlay/gizmo.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gizmo_pass.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>
