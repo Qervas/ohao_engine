@@ -33,47 +33,133 @@
         <p>Actor as SceneObject with parent/children and lifecycle.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-only-sceneobject-there-is">The only SceneObject there is</a></li><li><a href="#two-transforms-with-the-same-name">Two transforms with the same name</a></li><li><a href="#the-hierarchy-nothing-builds">The hierarchy nothing builds</a></li><li><a href="#what-breaks-the-moment-the-hierarchy-is-used">What breaks the moment the hierarchy is used</a></li><li><a href="#composition-through-two-containers">Composition through two containers</a></li><li><a href="#registration-is-a-side-effect-of-attachment">Registration is a side effect of attachment</a></li><li><a href="#teardown-does-less-than-it-looks">Teardown does less than it looks</a></li><li><a href="#nothing-ticks-the-actors">Nothing ticks the actors</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-only-sceneobject-there-is">The only SceneObject there is</h2></div>
 <div class="prose reveal">
-<p>Actor is the scene graph node: identity, name, parent/children, lifecycle, and a bag of components. Transform is always present.</p>
+<p>`SceneObject` reads like the base of a family: identity, name, transform, model, material. Exactly one class derives from it — `Actor` — and `Actor` re-implements nearly every member it inherits. It is not a base plus a specialisation; it is one class with a fossil layer underneath, and the rest of this page follows from that.</p>
+<p>Two of those five members are still load-bearing, and they are exactly the two `Actor` forwards to rather than shadows. The name is stored only in `SceneObject` — `Actor::getName` calls straight through — and `Scene` keys its second owning map on the result:</p>
+<div class="citation-chip"><code class="citation-code">actorsByName[actor-&gt;getName()] = actor;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L388" target="_blank" rel="noopener">ohao/scene/scene.cpp:388</a></div>
+<p>Identity is the other. Each `SceneObject` takes the next value of a process-global atomic counter that starts at 1 and is never recycled:</p>
+<div class="citation-chip"><code class="citation-code">objectID = nextObjectID.fetch_add(1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene_object.cpp#L9" target="_blank" rel="noopener">ohao/scene/scene_object.cpp:9</a></div>
+<p>That number is not merely a scene-map key: the renderer keys its per-actor vertex/index allocations by it, so the ObjectID is the join between CPU scene state and GPU geometry, and the shadow, GBuffer and RT passes all resolve their draw ranges through it.</p>
+<div class="citation-chip"><code class="citation-code">m_meshBufferMap[actor-&gt;getID()] = MeshBufferInfo{</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L68" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:68</a></div>
+<p>Because the counter is per-process and monotone, an ObjectID means nothing across runs. `Actor` carries a `guid` string documented as the stable identity for serialisation; no code in the tree ever calls `setGuid`.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/scene-actors-ownership.svg" alt="Conceptual ownership map, read from the type declarations and from grepping callers — not a measured or captured structure. Green edges are owning shared_ptr; orange are live raw pointers registered through onComponentAdded; grey are members the type declares that no caller ever writes." loading="lazy" /><figcaption>Conceptual ownership map, read from the type declarations and from grepping callers — not a measured or captured structure. Green edges are owning shared_ptr; orange are live raw pointers registered through onComponentAdded; grey are members the type declares that no caller ever writes.</figcaption></figure>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="two-transforms-with-the-same-name">Two transforms with the same name</h2></div>
 <div class="prose reveal">
-<ul>
-<li>construct → addComponent → initialize → start → update → destroy</li>
-</ul>
-<p>Hierarchy walks update world transforms before mesh/physics consumers read them.</p>
-<p>Actor::Ptr is shared ownership from Scene maps.</p>
-<ul>
-<li>Transform always present</li>
-</ul>
+<p>`SceneObject` stores a `Transform` by value and exposes it as `getTransform()`:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] Transform&amp; getTransform() { return transform; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene_object.hpp#L27" target="_blank" rel="noopener">ohao/scene/scene_object.hpp:27</a></div>
+<p>`Actor` declares a member function of the same name returning a `TransformComponent*`. The return types differ, so this is neither an override nor an overload set — it is plain name hiding, and since every call site holds an `Actor` or `Actor::Ptr`, renderer, physics, picking and examples all bind to the component version. The inherited `Transform` is constructed inside every actor and read by nobody.</p>
+<p>The component version is always non-null: the constructor installs it before any user code runs.</p>
+<div class="citation-chip"><code class="citation-code">addComponent&lt;TransformComponent&gt;();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L22" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:22</a></div>
+<p>Model and material are shadowed the same way, except that `Actor` writes *both* copies — `setModel` routes into a `MeshComponent`, creating one if absent, then also writes the inherited field:</p>
+<div class="citation-chip"><code class="citation-code">SceneObject::setModel(model);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L282" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:282</a></div>
+<p>Two of the three getters — `getModel` and the const `getMaterial` — prefer the component and fall back to the base, so the shadowed copy surfaces on an actor whose component was removed afterwards, handing back state no draw loop will find. The non-const overload does not fall back at all:</p>
+<div class="citation-chip"><code class="citation-code">Material&amp; Actor::getMaterial() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L313" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:313</a></div>
+<p>With no `MaterialComponent` present it installs a fresh one and returns *its* default, discarding whatever `Actor::setMaterial` had already written into `SceneObject::material`. For material the shadowing surfaces as lost data, not as a stale read.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-hierarchy-nothing-builds">The hierarchy nothing builds</h2></div>
 <div class="prose reveal">
-<p>Composition over deep inheritance: renderers iterate MeshComponents, not class hierarchies.</p>
+<p>`Actor` carries a parent pointer, a child vector, `setParent`, `addChild`, `removeChild` and `detachFromParent`, and `Scene` recurses through `getChildren()` when registering an actor. The only callers of `Actor::setParent` and `Actor::addChild` in the tree are each other, inside `actor.cpp`: no loader, factory, example or test parents one actor to another, and the `World` root the `Scene` constructor creates is registered and never used as a parent.</p>
+<p>So the registration walk terminates after one step and the transform chain is never formed. The composition that machinery exists for —</p>
+<div class="math-block">$$
+M^{\text{world}}_i \;=\; M^{\text{world}}_{p(i)}\; M^{\text{local}}_i
+$$</div>
+<p>where $M^{\text{local}}_i$ is actor $i$&#x27;s TRS matrix, $p(i)$ its parent, and the recursion bottoms out at a root whose world matrix is its local one. It is implemented lazily on the transform component, walking up the chain on demand:</p>
+<div class="citation-chip"><code class="citation-code">worldMatrix = parent-&gt;getWorldMatrix() * localMatrix;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/transform_component.cpp#L239" target="_blank" rel="noopener">ohao/scene/component/transform_component.cpp:239</a></div>
+<p>and the *only* line in the engine that ever supplies a $p(i)$ is inside the uncalled `Actor::setParent`:</p>
+<div class="citation-chip"><code class="citation-code">transform-&gt;setParent(parent-&gt;getTransform());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L164" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:164</a></div>
+<p>With no caller for that line, `parent` is null on every `TransformComponent` the engine builds, the product collapses to $M^{\text{world}}_i = M^{\text{local}}_i$, and every `getWorldMatrix()` the renderer uploads is a plain local TRS. Nothing looks wrong today because nothing asks for nesting — but &quot;the scene graph is flat&quot; is a property of the call sites, not of the data structure.</p>
+</div>
+<div class="section-rule"><h2 id="what-breaks-the-moment-the-hierarchy-is-used">What breaks the moment the hierarchy is used</h2></div>
+<div class="prose reveal">
+<p>Two things in the dormant code will bite whoever wires it up. First, `setParent` and `addChild` call each other. Nothing marks the re-entry; the recursion is bounded by ordinary state tests — `setParent` returns when `parent == newParent`, and `addChild` returns when the child is already listed:</p>
+<div class="citation-chip"><code class="citation-code">if (std::find(children.begin(), children.end(), child) != children.end()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L175" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:175</a></div>
+<p>Termination is safe. What is fragile is the statement order *inside* `addChild`: the append happens before the re-entry, and that is the only reason the inner frame sees a duplicate to reject.</p>
+<div class="citation-chip"><code class="citation-code">children.push_back(child);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L180" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:180</a></div>
+<p>Move that line below the `child-&gt;setParent(this)` call — a plausible tidy-up, since the membership test above looks like it already covers the case — and the inner and outer frames each append, so the child lands in `children` twice. Every walk over `children` then visits it twice, and `removeChild` erases one occurrence per call, leaving an actor still listed as a child of a parent it no longer points at.</p>
+<p>`removeChild` unlinks by writing the raw field directly:</p>
+<div class="citation-chip"><code class="citation-code">child-&gt;parent = nullptr;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L197" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:197</a></div>
+<p>It never touches the `TransformComponent`. `setParent` is the only routine that keeps the two parallel hierarchies in step, so an actor detached through `removeChild`, `detachFromParent` or `~Actor` — which unlinks its children exactly that way — keeps a transform still pointing into the departing parent&#x27;s component. In the destructor case that is a dangling pointer a few lines later.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Both directions of the hierarchy are raw `Actor*` while the Scene owns actors as `shared_ptr` in two maps. An owning child list would make parent and child a reference cycle and leak every branch; a `weak_ptr` list would cost a lock on every traversal of a structure that exists to be walked. The raw-pointer choice is right, and `~Actor` pays for it by unlinking its children and detaching from its parent. What goes unpaid is the *second* graph, `TransformComponent::parent`, which only `setParent` maintains. Two graphs, one maintainer.</p></div>
+</div>
+<div class="section-rule"><h2 id="composition-through-two-containers">Composition through two containers</h2></div>
+<div class="prose reveal">
+<p>Components live in an insertion-ordered vector and, separately, in a map from `std::type_index` to one shared pointer:</p>
+<div class="citation-chip"><code class="citation-code">componentsByType[std::type_index(typeid(T))] = component;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.hpp#L93" target="_blank" rel="noopener">ohao/scene/actor/actor.hpp:93</a></div>
+<p>The vector defines iteration order for every lifecycle call; the map defines lookup. The key is `typeid(T)` at the `addComponent&lt;T&gt;` call site — the static type, not the dynamic one — and holds one entry per type. Two unguarded consequences follow:</p>
+<ul>
+<li>`getComponent&lt;Base&gt;()` never finds something added as</li>
+</ul>
+<p>`addComponent&lt;Derived&gt;()`. Lookup is exact-type, so component inheritance is invisible to the query API.</p>
+<ul>
+<li>A second component of the same type overwrites the map slot but *appends* to</li>
+</ul>
+<p>the vector. The first becomes unreachable through `getComponent` and survives `removeComponent&lt;T&gt;`, which erases only the instance the map points at — yet it was already handed to the Scene by `onComponentAdded`, and every walk over the vector, `Actor::initialize` included, still touches it.</p>
+</div>
+<div class="section-rule"><h2 id="registration-is-a-side-effect-of-attachment">Registration is a side effect of attachment</h2></div>
+<div class="prose reveal">
+<p>An actor on its own tells the Scene nothing. The coupling is a virtual hook: `addComponent` calls `onComponentAdded`, which `dynamic_pointer_cast`s for the two types the Scene keeps flat registries of — mesh and physics — and pushes the raw pointer in; `setScene` replays that hook over every existing component as the actor enters or leaves a scene. Those registries are the Scene&#x27;s flat, non-owning view of the actor graph, and only one of the two is ever read back: `Scene::updatePhysics` walks `physicsComponents`, while `getMeshComponents()` has no callers at all — every draw, upload and shadow loop iterates `getAllActors()` and asks each actor for its `MeshComponent` instead.</p>
+<p>The order inside `addComponent` is the subtle part:</p>
+<div class="citation-chip"><code class="citation-code">if (isActive()) { component-&gt;initialize(); }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.hpp#L94" target="_blank" rel="noopener">ohao/scene/actor/actor.hpp:94</a></div>
+<p>`initialize()` runs *before* `onComponentAdded`, so before the Scene can inject any state. For `PhysicsComponent` that first call finds a null physics world and does nothing but set a flag:</p>
+<div class="citation-chip"><code class="citation-code">void PhysicsComponent::initialize() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/components/physics_component.cpp#L381" target="_blank" rel="noopener">ohao/physics/components/physics_component.cpp:381</a></div>
+<p>The Scene hook then supplies the world and calls `initialize()` a second time, which is when the rigid body is actually created:</p>
+<div class="citation-chip"><code class="citation-code">component-&gt;initialize();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L186" target="_blank" rel="noopener">ohao/scene/scene.cpp:186</a></div>
+<p>So `Component::initialize()` must be idempotent *and* tolerate missing dependencies — a hard contract on every component type, enforced by nothing.</p>
+</div>
+<div class="section-rule"><h2 id="teardown-does-less-than-it-looks">Teardown does less than it looks</h2></div>
+<div class="prose reveal">
+<p>`removeComponent&lt;T&gt;` is the careful path — destroy, clear owner, notify. `removeAllComponents`, the path `~Actor` takes, is not:</p>
+<div class="citation-chip"><code class="citation-code">componentsByType.clear();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L214" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:214</a></div>
+<p>It drops both containers and calls neither `destroy()` nor `onComponentRemoved`. Teardown is correct today only because `Scene::removeActor` gets there first: `setScene(nullptr)` runs `onComponentRemoved` for every component and pulls the raw pointers out of the mesh and physics registries. The Scene&#x27;s own maps are not what keep the actor alive while that runs — `unregisterActor` erases both owning maps *before* it makes the call:</p>
+<div class="citation-chip"><code class="citation-code">actors.erase(actor-&gt;getID());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L396" target="_blank" rel="noopener">ohao/scene/scene.cpp:396</a></div>
+<p>What still holds the actor up is the by-value `Actor::Ptr` parameter that `removeActor`, `unregisterActorHierarchy` and `unregisterActor` each take:</p>
+<div class="citation-chip"><code class="citation-code">void Scene::unregisterActor(Actor::Ptr actor) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L394" target="_blank" rel="noopener">ohao/scene/scene.cpp:394</a></div>
+<p>That by-value is load-bearing, not stylistic. `Scene::removeActor(uint64_t)` hands over the map&#x27;s own element, so taking the parameter by `const&amp;` would let `actors.erase` destroy the very `shared_ptr` that the next line, `actorsByName.erase(actor-&gt;getName())`, dereferences. `MeshComponent::destroy` independently unregisters itself through its owner, so the two routes overlap harmlessly:</p>
+<div class="citation-chip"><code class="citation-code">scene-&gt;onMeshComponentRemoved(this);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/mesh_component.cpp#L75" target="_blank" rel="noopener">ohao/scene/component/mesh_component.cpp:75</a></div>
+<p>That route has its own ordering requirement: `removeComponent&lt;T&gt;` calls `destroy()` while the owner is still set, and clears it afterwards. Swap the two statements and `MeshComponent::destroy` loses its way back to the Scene.</p>
+</div>
+<div class="section-rule"><h2 id="nothing-ticks-the-actors">Nothing ticks the actors</h2></div>
+<div class="prose reveal">
+<p>`Actor::initialize`, `start`, `update`, `render` and `destroy` each walk the component vector, then recurse into children. `Scene::update` drives one of them:</p>
+<div class="citation-chip"><code class="citation-code">actor-&gt;update(deltaTime);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L230" target="_blank" rel="noopener">ohao/scene/scene.cpp:230</a></div>
+<p>and `Scene::update` itself has no callers, nor do `Scene::initialize` and `Scene::render`; `Actor::start` has none anywhere. `Actor::initialize` runs once per actor built through `Scene::createActorWithComponents`, from the component factory&#x27;s setup step, and never again. The only per-frame component path is `Scene::updatePhysics`, which walks the physics registry directly and never touches an `Actor` — and its caller `VulkanRenderer::updatePhysics` is uncalled by any example. Everything else the renderer pulls: each frame it reads `actor-&gt;getTransform()-&gt;getWorldMatrix()` and the mesh/material components straight out of the actor map.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`Actor` is a lookup record, not a runtime object. Nothing schedules it and nothing nests it. Its `active` flag decides only whether `addComponent` eagerly initialises, and gates a tick that never runs; the draw loops filter on `MeshComponent::isVisible()`, and `editorVisible` has no readers at all. Three visibility-shaped flags, one of them consulted.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>Transform always present on Actor</li>
-<li>Scene owns actor maps by id and name</li>
+<li>`componentsByType` is keyed on the static type at the `addComponent&lt;T&gt;` call</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>actor.hpp: defines `class Scene`.</p>
-<p>actor.hpp: defines `class Component`.</p>
-<p>actor.hpp: defines `class Model`.</p>
-<p>scene_object.hpp: defines `class SceneObject`.</p>
+<p>site. One component per exact type is reachable; a second of the same type is orphaned in the vector — invisible to `getComponent`, untouched by `removeComponent&lt;T&gt;`, yet already registered with the Scene by `onComponentAdded`.</p>
+<ul>
+<li>`Component::initialize()` may run more than once, and may run before the Scene</li>
+</ul>
+<p>has supplied its dependencies. Non-idempotent initialisation duplicates whatever it creates.</p>
+<ul>
+<li>An actor must leave a scene through `Scene::removeActor` before its last</li>
+</ul>
+<p>`shared_ptr` drops; `~Actor` clears its components silently, so a bypass leaves dangling `MeshComponent*` / `PhysicsComponent*` in the Scene&#x27;s registries.</p>
+<ul>
+<li>`Actor::setParent` is the only routine that keeps the actor graph and the</li>
+</ul>
+<p>transform graph in step. `removeChild` and `detachFromParent` unlink the first and leave the second pointing at the old parent.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/scene/actor/actor.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/actor/actor.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/scene_object.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/scene_object.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/actor/actor.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/transform_component.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/actor/actor.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/components/physics_component.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/mesh_component.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

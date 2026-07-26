@@ -33,40 +33,113 @@
         <p>Init, categories, handles, 3D, volumes.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-buses-that-are-not-buses">The buses that are not buses</a></li><li><a href="#three-scalars-and-no-limiter">Three scalars, and no limiter</a></li><li><a href="#spatialisation-is-opt-in-because-the-default-is-on">Spatialisation is opt-in because the default is on</a></li><li><a href="#where-the-mutex-stops">Where the mutex stops</a></li><li><a href="#one-translation-unit-pays-for-miniaudio">One translation unit pays for miniaudio</a></li><li><a href="#the-reaper-and-who-calls-it">The reaper, and who calls it</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-buses-that-are-not-buses">The buses that are not buses</h2></div>
 <div class="prose reveal">
-<p>AudioSystem facade over miniaudio: SFX/Music/Ambient buses, handles, 3D listener, volume clamps.</p>
+<p>`SoundCategory` reads like a mixer strip — SFX, Music, Ambient, each with its own volume, each stoppable and pausable as a group. miniaudio ships a first-class object for exactly that shape: `ma_sound_group`, a node you splice between voices and the engine endpoint. OHAO does not use it. Both play paths pass a null group pointer, which attaches every voice straight to the engine&#x27;s endpoint:</p>
+<div class="citation-chip"><code class="citation-code">m_engine.get(), pathStr.c_str(), flags, nullptr, nullptr, sound.get());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L77" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:77</a></div>
+<p>A category is therefore two ordinary C++ things: an enum tag stored on the owning `SoundInstance`, and a scalar folded into that one voice&#x27;s gain. Nothing in the audio graph corresponds to &quot;music&quot;. Changing a category volume is a linear walk over every live sound, re-multiplying the ones whose tag matches:</p>
+<div class="citation-chip"><code class="citation-code">if (instance.category == category) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L219" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:219</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/audio-system-bus-topology.svg" alt="Shipped signal graph (left) against the ma_sound_group topology the facade does not use (right). Conceptual — the left panel is derived from the null pGroup argument in both play paths, not a captured node-graph dump." loading="lazy" /><figcaption>Shipped signal graph (left) against the ma_sound_group topology the facade does not use (right). Conceptual — the left panel is derived from the null pGroup argument in both play paths, not a captured node-graph dump.</figcaption></figure>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>`ma_sound_group` would make `setCategoryVolume` O(1) instead of O(active sounds), and — the part that matters more — would give the mix a real insertion point, because miniaudio can splice effect nodes into a node graph but not into a float. The flat design buys a facade with no hidden state: `stopCategory` is a `std::erase_if` over a map, not a graph edit, and the entire mixer is four floats you can print — one master and a three-element category array. The price is that ducking music under dialogue, or putting a limiter on the SFX bus, is not a feature you add later — it is a topology change.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="three-scalars-and-no-limiter">Three scalars, and no limiter</h2></div>
 <div class="prose reveal">
-<p>initialize → loadSound(path, category) → play / play3D → setCategoryVolume / setMasterVolume → shutdown</p>
-<p>ma_engine/ma_sound forward-declared; SoundHandle 0 invalid.</p>
+<p>Each voice&#x27;s gain is a bare three-way product, computed in C++ and pushed down with a single `ma_sound_set_volume`:</p>
+<div class="math-block">$$
+v = v_b\,v_c\,v_m
+$$</div>
+<div class="citation-chip"><code class="citation-code">instance.baseVolume * m_categoryVolumes[static_cast&lt;std::size_t&gt;(catIdx)] * m_masterVolume;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L300" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:300</a></div>
+<p>$v_b$ is the per-sound base volume passed to `playSound`, $v_c$ the category scalar, $v_m$ the master. `updateSoundVolume` clamps nothing itself; the clamp sits at the entry points, where `clampVolume` applies $\mathrm{cl}(x) = \min(\max(x,0),1)$ to whatever the caller supplies — in both play paths, in `setSoundVolume`, in `setCategoryVolume` and in `setMasterVolume`. Every factor is therefore already in $[0,1]$ before the multiply, and so is the product: a voice can be attenuated, never amplified. That ceiling is per voice, not per mix — the endpoint sums N voices with nothing after it, so a dozen simultaneous unity-gain effects clip the output while every individual gain is legally &quot;at most 1&quot;.</p>
+<p>The clamp is the only shaping in the chain, and it is linear amplitude rather than perceptual: a master slider at 0.5 is −6 dB, which reads as &quot;somewhat quieter&quot;, not &quot;half as loud&quot;. A UI wired straight to this value is top-heavy, and no curve is applied anywhere to fix that.</p>
+</div>
+<div class="section-rule"><h2 id="spatialisation-is-opt-in-because-the-default-is-on">Spatialisation is opt-in because the default is on</h2></div>
+<div class="prose reveal">
+<p>miniaudio enables spatialisation on every `ma_sound` by default, so the non-positional path has to switch it back off — otherwise a UI click would be panned and attenuated according to wherever the listener happens to be standing:</p>
+<div class="citation-chip"><code class="citation-code">ma_sound_set_spatialization_enabled(sound.get(), MA_FALSE);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L83" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:83</a></div>
+<p>That line is load-bearing, not defensive. The positional path sets the same flag to `MA_TRUE` — already the default — and then writes the distance model out longhand:</p>
+<div class="citation-chip"><code class="citation-code">ma_sound_set_min_distance(sound.get(), 1.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L125" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:125</a></div>
+<div class="citation-chip"><code class="citation-code">ma_sound_set_max_distance(sound.get(), 50.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L126" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:126</a></div>
+<div class="citation-chip"><code class="citation-code">ma_sound_set_attenuation_model(sound.get(), ma_attenuation_model_inverse);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L127" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:127</a></div>
+<p>Only one of those three calls changes miniaudio&#x27;s behaviour. `ma_spatializer_config_init` already selects the inverse model, already sets a minimum distance of 1, and already sets rolloff to 1 — the last of which the facade never touches. The library&#x27;s default *maximum* distance is `MA_FLT_MAX`, so 50 is the one constant the facade actually owns; the other two are defaults written down, which is worth something as a pin against a library upgrade but is not a design decision.</p>
+<p>miniaudio&#x27;s inverse model (OpenAL&#x27;s `AL_INVERSE_DISTANCE_CLAMPED`) computes a scalar gain from the listener-to-source distance $d$:</p>
+<div class="math-block">$$
+g(d) = \frac{d_{\min}}{d_{\min} + \rho\,\big(\mathrm{clamp}(d,\,d_{\min},\,d_{\max}) - d_{\min}\big)}
+$$</div>
+<p>With $d_{\min}=1$ and $d_{\max}=50$ world units as set above and rolloff $\rho=1$ inherited, the expression collapses to $g(d) = 1/\mathrm{clamp}(d,1,50)$: flat unity inside one unit, honest inverse-distance out to fifty, then a hard floor of $1/50 = 0.02$, roughly −34 dB.</p>
+<p>The floor is the sharp edge. A looping ambient a kilometre away is neither culled nor silenced; it is held at 2% gain, still decoded, still mixed, forever. Culling by distance would be the caller&#x27;s job.</p>
+</div>
+<div class="section-rule"><h2 id="where-the-mutex-stops">Where the mutex stops</h2></div>
+<div class="prose reveal">
+<p>`m_mutex` guards `m_sounds` and nothing else. That is a narrower promise than the class&#x27;s shape implies, and it shows in four places.</p>
+<p>The handle counter is bumped outside the lock — both play paths call `nextHandle()` before entering the critical section, and the counter is a plain non-atomic read-modify-write:</p>
+<div class="citation-chip"><code class="citation-code">return m_nextHandle++;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L305" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:305</a></div>
+<p>Two threads playing concurrently can be issued the same handle, and the second insertion then destroys the first sound through the map.</p>
+<p>The mixer scalars are written outside the lock. `setMasterVolume` stores the clamped float first and only then locks to walk the map; `setCategoryVolume` has the same shape:</p>
+<div class="citation-chip"><code class="citation-code">m_masterVolume = clampVolume(volume);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L264" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:264</a></div>
+<p>The reads are not symmetric, and the asymmetry does not save it. `updateSoundVolume` reads both scalars with the mutex held — all five of its call sites are inside locked regions — but a reader holding a lock the writer never takes is still racing. The two public getters do not even have that: `getMasterVolume` is an inline return in the header, and `getCategoryVolume` is an out-of-line read behind a category-validity branch, neither of them locked:</p>
+<div class="citation-chip"><code class="citation-code">return m_categoryVolumes[static_cast&lt;std::size_t&gt;(soundCategoryIndex(category))];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L227" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:227</a></div>
+<p>Torn float reads are not a real hazard on the targets OHAO builds for, but these are races and a sanitiser will say so.</p>
+<p>The third one bites. Both play paths capture a raw `ma_sound*`, move the owning instance into the map, release the lock, and only then start the sound. Nothing in the code says why the start is outside the critical section, and there is little to buy: `ma_sound_start` on a freshly initialised sound takes no lock of its own — it reads a few atomics and exchanges the node&#x27;s state. What the ordering costs is a window in which a raw pointer to a map-owned object is live while the map is unlocked, and `stopAll` needs no handle to run:</p>
+<div class="citation-chip"><code class="citation-code">void AudioSystem::stopAll() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L272" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:272</a></div>
+<p>and clearing the map runs `MaSoundDeleter`, which uninitialises and frees the object that raw pointer still refers to:</p>
+<div class="citation-chip"><code class="citation-code">ma_sound_uninit(sound);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L20" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:20</a></div>
+<p>A `stopAll` or `stopCategory` landing in that window starts a freed `ma_sound`. `stopSound` cannot reach it — the handle has not been returned yet — but the category-wide and global stops can, and the mutex exists precisely to promise they cannot.</p>
+<p>The fourth is the widest, and it is not a window but a whole function. `shutdown()` takes no lock at all: it clears `m_sounds`, destroys the engine and clears `m_initialized`, and the destructor calls it.</p>
+<div class="citation-chip"><code class="citation-code">m_engine.reset(); // MaEngineDeleter uninits the engine</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L54" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:54</a></div>
+<p>A `playSound`, `update` or `stopAll` running concurrently with teardown is an unguarded mutation of exactly the container the mutex is supposed to own, racing a thread that never takes the mutex at all. `m_initialized` is the same story one size down: written there, read without the lock by `update()`&#x27;s early-out and by the inline `isInitialized()`. Single-threaded teardown is the only regime in which this is safe, and nothing in the class enforces it.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>There is no audio graph here beyond a flat fan-in to one endpoint. Every &quot;bus&quot; behaviour — category volume, category stop, master volume — is C++ iterating a map and calling `ma_sound_set_volume` per voice. The mutex covers that map while it is being walked; it does not cover the writes to the mixer scalars, the handle counter, or `shutdown()`.</p></div>
+</div>
+<div class="section-rule"><h2 id="one-translation-unit-pays-for-miniaudio">One translation unit pays for miniaudio</h2></div>
+<div class="prose reveal">
+<p>The header forward-declares miniaudio&#x27;s two types as incomplete structs:</p>
+<div class="citation-chip"><code class="citation-code">struct ma_engine;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.hpp#L26" target="_blank" rel="noopener">ohao/audio/audio_system.hpp:26</a></div>
+<p>and owns them through `std::unique_ptr` with stateless custom deleters whose `operator()` is declared in the header and defined in the `.cpp`, where the types are complete. A `unique_ptr` with a custom deleter never needs the pointee to be complete — it only needs to call the deleter — so no translation unit that merely uses `AudioSystem` pays for miniaudio&#x27;s single-header build. `miniaudio.h` is included in exactly one file in the tree, and that file is the one that asks for the implementation to be emitted:</p>
+<div class="citation-chip"><code class="citation-code">#define MINIAUDIO_IMPLEMENTATION</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L1" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:1</a></div>
+<p>The library semantics this page leans on — default-on spatialisation, the spatializer&#x27;s default model and distances, non-rewinding stop — belong to a particular version, and the fetch names one rather than a moving ref:</p>
+<div class="citation-chip"><code class="citation-code">URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.21.zip</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/external/cmake/miniaudio.cmake#L12" target="_blank" rel="noopener">external/cmake/miniaudio.cmake:12</a></div>
+<p>That pin only binds on the branch that fetches. The module looks first for a `miniaudio.h` already sitting in the build tree and, finding one, uses it with no version check:</p>
+<div class="citation-chip"><code class="citation-code">message(STATUS &quot;miniaudio: Using pre-fetched header at ${MINIAUDIO_LOCAL_DIR}&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/external/cmake/miniaudio.cmake#L6" target="_blank" rel="noopener">external/cmake/miniaudio.cmake:6</a></div>
+<p>So a stale or hand-dropped header in `build/_deps` is consumed silently, and the URL above documents what a clean configure would download, not necessarily what compiled.</p>
+</div>
+<div class="section-rule"><h2 id="the-reaper-and-who-calls-it">The reaper, and who calls it</h2></div>
+<div class="prose reveal">
+<p>Finished one-shots are not freed when they end; they are freed when someone asks. `update()` is the only reaper, and its predicate is &quot;not looping and at end&quot;:</p>
+<div class="citation-chip"><code class="citation-code">&amp;&amp; ma_sound_at_end(instance.sound.get())) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L289" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:289</a></div>
+<p>Skip it and every fired one-shot stays in the map, attached to the endpoint, being mixed as silence. Which leads to the honest part: nothing in the engine calls it. `ohao_audio` is on the link line of every example —</p>
+<div class="citation-chip"><code class="citation-code">-Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/CMakeLists.txt#L12" target="_blank" rel="noopener">examples/CMakeLists.txt:12</a></div>
+<p>— but no example, renderer, or scene source references `AudioSystem` at all. The only code that drives the facade is its own test suite, which pins the handle contract — a missing file returns `INVALID_SOUND_HANDLE` rather than throwing — and skips every device-dependent case when `initialize()` fails, so machines with no audio device still pass:</p>
+<div class="citation-chip"><code class="citation-code">bool testPlayInvalidPath() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/audio/audio_system_tests.cpp#L202" target="_blank" rel="noopener">tests/audio/audio_system_tests.cpp:202</a></div>
+<p>The suite does call `update()` and `setListenerPosition` — but never with a sound alive:</p>
+<div class="citation-chip"><code class="citation-code">// Calling update with no active sounds should be fine</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/audio/audio_system_tests.cpp#L296" target="_blank" rel="noopener">tests/audio/audio_system_tests.cpp:296</a></div>
+<p>The one `playSound` in the file points at a path that does not exist, so no test ever creates a voice. The reaper&#x27;s predicate never runs, the gain product is never applied to a real `ma_sound`, and distance attenuation — the thing the 50-unit floor is about — is not touched at all. This page describes a facade that is built, linked and tested, and not yet wired to a frame.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
 <ul>
-<li>initialize</li>
-<li>loadSound</li>
-<li>play/play3D</li>
-<li>set volumes</li>
-<li>shutdown</li>
+<li>`m_sounds` must be cleared before `m_engine` is released — each sound holds a reference-counted handle on engine-owned decoded data, and `MaEngineDeleter` runs `ma_engine_uninit` unconditionally. `shutdown()` does it in that order and the destructor calls `shutdown()`; swapping those two lines is a use-after-free at exit.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
-<div class="prose reveal">
-<p>Game-ready audio without OpenAL; one facade for tools and runtime.</p>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>miniaudio under the hood; ma_engine/ma_sound forward-declared to keep headers light.</p>
-<p>SoundCategory: SFX | Music | Ambient with per-bus volume clamps [0,1].</p>
-<p>SoundHandle 0 = INVALID; play APIs are handle-based (no exceptions).</p>
-<p>3D: setListener(pos, forward, up); positional play for SFX.</p>
+<div class="citation-chip"><code class="citation-code">m_sounds.clear(); // MaSoundDeleter uninits each sound</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L53" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:53</a></div>
+<ul>
+<li>`m_categoryVolumes` is a hard-coded `std::array&lt;float, 3&gt;`, not sized from `SoundCategory::Count`. Add a fourth category, teach `isValidSoundCategory` to accept it, and `setCategoryVolume` writes out of bounds — silently, because the index comes from the enum and nothing checks it against the array.</li>
+</ul>
+<div class="citation-chip"><code class="citation-code">std::array&lt;float, 3&gt; m_categoryVolumes{{1.0f, 1.0f, 1.0f}}; // SFX, Music, Ambient</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.hpp#L158" target="_blank" rel="noopener">ohao/audio/audio_system.hpp:158</a></div>
+<ul>
+<li>`pauseSound` is `ma_sound_stop`, which in miniaudio does not rewind, so `resumeSound`&#x27;s `ma_sound_start` continues from the cursor. `stopSound` is different in kind: it erases the instance, so the handle dies with the sound.</li>
+<li>Handles are never recycled and 0 is reserved, so a stale handle is a lookup miss and every setter no-ops. &quot;Reaped&quot;, &quot;stopped&quot; and &quot;never existed&quot; are indistinguishable from outside — `isPlaying` returns false for all three, and for a paused sound as well.</li>
+<li>One listener, index 0, fixed at engine init. Split-screen would need `listenerCount` raised and a pinned listener index per sound; neither exists.</li>
+</ul>
+<div class="citation-chip"><code class="citation-code">config.listenerCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L36" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:36</a></div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/audio/audio_system.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/audio/audio_system.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/audio/audio_system.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>external/cmake/miniaudio.cmake</code><span class="desc"></span></div>
+        <div class="row"><code>examples/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>tests/audio/audio_system_tests.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/audio/audio_module.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

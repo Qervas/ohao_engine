@@ -33,31 +33,104 @@
         <p>TRS composition and world matrix used by upload/TLAS.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#two-transform-classes-behind-one-accessor-name">Two transform classes behind one accessor name</a></li><li><a href="#the-order-of-the-product">The order of the product</a></li><li><a href="#a-dirty-flag-that-clears-on-one-path-only">A dirty flag that clears on one path only</a></li><li><a href="#the-hierarchy-nothing-uses">The hierarchy nothing uses</a></li><li><a href="#four-consumers-four-conventions">Four consumers, four conventions</a></li><li><a href="#motion-vectors-with-no-object-history">Motion vectors with no object history</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="two-transform-classes-behind-one-accessor-name">Two transform classes behind one accessor name</h2></div>
 <div class="prose reveal">
-<p>TRS transform math: local matrix from translation/rotation/scale; world matrix via parent chain. Upload and TLAS read world only.</p>
+<p>`ohao/scene/transform.hpp` declares a complete TRS transform — position, unit quaternion, per-axis scale, cached local and world matrices, a dirty flag. Grep the tree for anything that calls one of its methods and you get nothing. The class is instantiated exactly once per entity, as a private member of the `SceneObject` base every `Actor` inherits from:</p>
+<div class="citation-chip"><code class="citation-code">Transform transform;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene_object.hpp#L48" target="_blank" rel="noopener">ohao/scene/scene_object.hpp:48</a></div>
+<p>and then immediately shadowed. `SceneObject::getTransform()` returns `Transform&amp;`; `Actor::getTransform()` returns a pointer to a different class entirely, the `TransformComponent` added in the `Actor` constructor:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] TransformComponent* getTransform() const;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.hpp#L66" target="_blank" rel="noopener">ohao/scene/actor/actor.hpp:66</a></div>
+<p>Every consumer in the engine — the GBuffer pass, the CSM pass, TLAS instance build, the light SSBO upload, picking — reaches the transform through an `Actor`, so every consumer gets the component. The inherited `Transform` is 172 bytes of identity matrix per actor that no code ever reads (measured with `sizeof` under GCC and this tree&#x27;s default GLM configuration, where `mat4` is 64 bytes and `vec3` is unpadded).</p>
+<p>What is *not* dead is the math inside it. The T·R·S product in `transform.cpp` is built factor-for-factor identically in `TransformComponent::updateLocalMatrix`, so the file you are reading is a stale copy of live code rather than an unused idea.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-order-of-the-product">The order of the product</h2></div>
 <div class="prose reveal">
-<p>Dirty flags recompute world matrices on demand during update or upload.</p>
-<p>Used by MeshComponent world poses and physics sync.</p>
+<p>Both classes build the local matrix as the same ordered product:</p>
+<div class="math-block">$$
+M_{\text{local}} = T(\mathbf{t})\; R(q)\; S(\mathbf{s})
+$$</div>
+<p>where $\mathbf{t}$ is the local position, $q$ the local unit quaternion expanded to a rotation matrix by `glm::toMat4`, and $\mathbf{s}$ the per-axis scale. GLM uses the column-vector convention, so a point is transformed as $M\mathbf{v}$ and the rightmost factor applies first: scale acts along the object&#x27;s own axes, then rotation orients it, then translation places it. That is the only ordering under which an artist&#x27;s &quot;make this twice as wide&quot; edit stays axis-aligned to the model regardless of how the object is rotated.</p>
+<div class="citation-chip"><code class="citation-code">localMatrix = translationMatrix * rotationMatrix * scaleMatrix;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/transform_component.cpp#L226" target="_blank" rel="noopener">ohao/scene/component/transform_component.cpp:226</a></div>
+<p>The cost of this representation is that it cannot express shear. A non-uniform scale above a rotated child in a hierarchy produces a composed world matrix that is genuinely sheared, and no TRS triple reproduces it. `getWorldRotation()` and `getWorldScale()` paper over that by calling `glm::decompose` and discarding the skew and perspective out-parameters:</p>
+<div class="citation-chip"><code class="citation-code">glm::quat TransformComponent::getWorldRotation() const {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/transform_component.cpp#L109" target="_blank" rel="noopener">ohao/scene/component/transform_component.cpp:109</a></div>
+<p>so on such a chain that pair returns values which do not rebuild the matrix they came from. `getWorldPosition()` is exempt: it reads the world matrix&#x27;s translation column, `getWorldMatrix()[3]`, and decomposes nothing. All three take those branches only when a parent exists, so in the shipping tree none of them fires, for the reason in the next-but-one section.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="a-dirty-flag-that-clears-on-one-path-only">A dirty flag that clears on one path only</h2></div>
 <div class="prose reveal">
-<p>TLAS instances need stable world matrices; recomputing every frame without dirty flags is free performance loss.</p>
+<p>In the legacy `Transform`, `getLocalMatrix()` is the only accessor that consults the flag: it rebuilds, caches into both `localMatrix` and `worldMatrix`, and clears `dirty`.</p>
+<div class="citation-chip"><code class="citation-code">glm::mat4 Transform::getLocalMatrix() const {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/transform.cpp#L32" target="_blank" rel="noopener">ohao/scene/transform.cpp:32</a></div>
+<p>Every world accessor instead goes through a private helper that rebuilds the full product unconditionally and never looks at, or clears, the flag:</p>
+<div class="citation-chip"><code class="citation-code">void Transform::updateWorldMatrix() const {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/transform.cpp#L47" target="_blank" rel="noopener">ohao/scene/transform.cpp:47</a></div>
+<p>So `getWorldMatrix()` costs a fresh quaternion-to-matrix expansion and two matrix multiplies on *every* call, and leaves `dirty` exactly as it found it — `updateWorldMatrix` neither reads the flag nor writes it. Move the object and then read world before local, and the identical product is built twice: once by `updateWorldMatrix()`, which cannot clear a flag it never touches, and again by `getLocalMatrix()`, which still sees the setter&#x27;s `dirty`. The public `isDirty()` accessor has no callers at all. This is the concrete reason the class was superseded rather than extended.</p>
+<p>`TransformComponent` fixes it with two flags — `dirty` for the local matrix, `worldDirty` for the composed one. Both are raised together by the single `setDirty()` every mutator funnels through, and each is cleared by its own rebuild helper. `setDirty()` also, crucially, pushes that invalidation *downward*:</p>
+<div class="citation-chip"><code class="citation-code">child-&gt;setDirty();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/transform_component.cpp#L201" target="_blank" rel="noopener">ohao/scene/component/transform_component.cpp:201</a></div>
+<p>That recursion is the whole reason the component keeps a `children` vector. A flat transform has no way to know that moving it invalidated somebody else&#x27;s cached world matrix.</p>
+<p>One sharp edge survives: `TransformComponent::getLocalMatrix()` is `const` and returns the cached matrix without consulting `dirty`, so it can hand back a matrix that predates the last `setPosition`. It has zero callers today, which is the only reason nobody has been bitten.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Invalidation is pushed at edit time down raw `TransformComponent*` child pointers, rather than the usual alternative — a flat, depth-sorted array of transforms swept once per frame before rendering. The push scheme costs nothing when nothing moves, which suits an offline renderer that re-renders a static scene. What it buys instead is a lifetime problem: the pointers in `children` are unowned, and nothing unwires them.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-hierarchy-nothing-uses">The hierarchy nothing uses</h2></div>
 <div class="prose reveal">
-<p>Local TRS → local matrix; parent chain → world matrix.</p>
-<p>Upload and TLAS instance transforms read world matrices only — dirty flags matter.</p>
+<p>When a parent exists, the world matrix is the recursive product `parent-&gt;getWorldMatrix() * localMatrix`, with every level independently cached, so a chain of depth $d$ costs $d$ matrix multiplies only on the frame its root moves:</p>
+<div class="citation-chip"><code class="citation-code">worldMatrix = parent-&gt;getWorldMatrix() * localMatrix;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/transform_component.cpp#L239" target="_blank" rel="noopener">ohao/scene/component/transform_component.cpp:239</a></div>
+<p>That branch never executes. Nothing outside `actor.cpp`&#x27;s own plumbing calls `setParent` or `addChild` on an actor or a transform, and no importer hands the scene a hierarchy to parent in the first place: `Model` is a flat vertex and index buffer with per-material side arrays and no node list of any kind. The native glTF loader, which `env_demo` and `turntable` call directly, walks the mesh array and never reads a node — the string `nodes` does not occur anywhere in the file:</p>
+<div class="citation-chip"><code class="citation-code">for (const auto&amp; mesh : gltfModel.meshes) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L163" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:163</a></div>
+<p>The ufbx path is the one importer that does read node data, and it disposes of it rather than preserving it: each mesh&#x27;s `geometry_to_node` is baked into vertex positions and normals at load time, so what reaches an actor is again one flat buffer with nothing above it.</p>
+<div class="citation-chip"><code class="citation-code">v.position = glm::vec3(geoTransform * glm::vec4(v.position, 1.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L277" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:277</a></div>
+<p>So in every shipping example, `parent == nullptr`, world *is* local, and the &quot;local == world for now&quot; comment in the dead class is an accurate description of the live one.</p>
+<p>Two contracts are waiting for whoever turns hierarchies on. First, `Actor::detachFromParent()` routes through `removeChild`, which nulls the actor back-pointer directly instead of going through `setParent`:</p>
+<div class="citation-chip"><code class="citation-code">child-&gt;parent = nullptr;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L197" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:197</a></div>
+<p>`setParent` is the only path that also calls `transform-&gt;setParent(...)`, so detaching leaves the child&#x27;s transform still composing against its ex-parent. Second, `~Actor()` detaches through that same path and then destroys the component, whose destructor does not unregister it from the parent&#x27;s `children` vector:</p>
+<div class="citation-chip"><code class="citation-code">~TransformComponent() override = default;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/transform_component.hpp#L18" target="_blank" rel="noopener">ohao/scene/component/transform_component.hpp:18</a></div>
+<p>The next `setDirty()` on the surviving parent walks a freed pointer.</p>
+</div>
+<div class="section-rule"><h2 id="four-consumers-four-conventions">Four consumers, four conventions</h2></div>
+<div class="prose reveal">
+<p>A world matrix leaves the transform system in four different shapes.</p>
+<p>The raster path passes it straight through as a column-major `glm::mat4` push constant. The ray-tracing path cannot: `VkAccelerationStructureInstanceKHR` wants a `VkTransformMatrixKHR`, which is a **row-major `float[3][4]`**. The TLAS builder transposes and memcpys the first 48 bytes:</p>
+<div class="citation-chip"><code class="citation-code">glm::mat4 t = glm::transpose(inst.transform);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_acceleration_structure.cpp#L439" target="_blank" rel="noopener">ohao/render/rt/rt_acceleration_structure.cpp:439</a></div>
+<p>This works because after transposition the first three columns in memory are the original matrix&#x27;s first three rows, which is exactly the 3×4 the API asks for — the discarded fourth column is the affine $(0,0,0,1)$ bottom row. Delete the transpose as a &quot;redundant copy&quot; and the memcpy instead grabs the first three *columns*, so every instance in the TLAS gets a transposed basis and zero translation: geometry collapses to the origin with its rotation inverted.</p>
+<p>The normal matrix is not uploaded at all. It is recomputed per vertex on the GPU:</p>
+<div class="citation-chip"><code class="citation-code">mat3 normalMatrix = transpose(inverse(mat3(pc.model)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.vert#L41" target="_blank" rel="noopener">shaders/core/gbuffer.vert:41</a></div>
+<p>The comment above that line claims uniform scaling, but the code computes the general inverse-transpose, which is correct for non-uniform scale too — the code is stricter than its comment. The price is a 3×3 inverse per vertex per pass rather than one on the CPU per object.</p>
+<p>Culling uses Arvo&#x27;s transform rather than transforming eight corners. With $A$ the upper-left 3×3 of the world matrix, $\mathbf{t}$ its translation column, and $\mathbf{c}, \mathbf{e}$ the local box centre and half-extent:</p>
+<div class="math-block">$$
+\mathbf{c}' = A\mathbf{c} + \mathbf{t}, \qquad e'_i = \sum_{j=0}^{2} \lvert A_{ij}\rvert\, e_j
+$$</div>
+<p>The absolute-value sum is exactly the tightest axis-aligned box around the transformed box. `AABB::transformed` pays one full point transform for the centre plus nine absolute-value multiply-adds for the extent, against eight point transforms for the corner-by-corner version:</p>
+<div class="citation-chip"><code class="citation-code">newExtents[i] += std::abs(model[j][i]) * halfExt[j];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/culling.hpp#L63" target="_blank" rel="noopener">ohao/render/culling.hpp:63</a></div>
+<p>The `model[j][i]` indexing looks transposed only because GLM subscripts column first; column $j$, row $i$ is $A_{ij}$. The saving is then thrown away one level up, where the *local* box is rebuilt from every vertex of the mesh, every frame, before being transformed:</p>
+<div class="citation-chip"><code class="citation-code">localAABB.min = glm::min(localAABB.min, v.position);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L226" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:226</a></div>
+</div>
+<div class="section-rule"><h2 id="motion-vectors-with-no-object-history">Motion vectors with no object history</h2></div>
+<div class="prose reveal">
+<p>The GBuffer pass builds the previous-frame clip matrix from the *previous* view-projection and the *current* model matrix:</p>
+<div class="citation-chip"><code class="citation-code">const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L271" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:271</a></div>
+<p>Only the camera is double-buffered, and the vertex shader reprojects the object&#x27;s *current* position through that product. An object&#x27;s own displacement therefore cancels out of the difference: what lands in the velocity buffer is camera parallax computed on a point the object has already left. Hold the camera still and the residual is just the TAA sub-pixel jitter, which the current frame&#x27;s projection carries and `m_prevViewProj` does not. Move it and the buffer reports a confident wrong vector rather than a conspicuous zero.</p>
+<div class="citation-chip"><code class="citation-code">outVelocity = (currentNDC - prevNDC) * 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L136" target="_blank" rel="noopener">shaders/core/gbuffer.frag:136</a></div>
+<p>Actor transforms do move in this tree. The inverse-rendering dataset exporter jitters three light actors&#x27; positions and re-yaws the hero between samples, and its caller has to throw away the entire GPU binding because of it:</p>
+<div class="citation-chip"><code class="citation-code">session.bound = false; // transforms changed — full rebind</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/export_dataset.hpp#L98" target="_blank" rel="noopener">ohao/inverse/export_dataset.hpp:98</a></div>
+<p>That is an edit *between* renders, though — each sample resets accumulation and runs its own frame batch at fixed transforms — and no shipping example moves an actor at all: all five set their transforms during scene build and thereafter only fly the camera. So the wrong velocity stays invisible until someone animates a transform, and the fix is in the transform system (store last frame&#x27;s world matrix per actor), not in the shader.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The file this page is nominally about does not run. `TransformComponent` is the live implementation, it never composes a parent because nothing parents anything, and its T·R·S product is rebuilt only when a setter runs — which in every shipping example is once per actor at scene build, before the render loop opens. Per frame the transform system does no arithmetic at all: each consumer gets back a cached world matrix that is a copy of its local.</p></div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/scene/transform.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/scene_object.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/actor/actor.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/transform_component.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/transform.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_gltf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_fbx.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/actor/actor.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/transform_component.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_acceleration_structure.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/culling.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/export_dataset.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/transform.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

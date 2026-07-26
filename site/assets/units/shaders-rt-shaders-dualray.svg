@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="Data flow of the dual-ray split in pt_raygen_offline.rgen into the NRD demodulated AOVs and the nrd_compose recomposition">
+  <defs>
+    <marker id="rtA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6e685c"/>
+    </marker>
+    <marker id="rtB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c4784a"/>
+    </marker>
+    <style>
+      .bx { fill:#1a222c; stroke:#3d4a58; stroke-width:1.2; rx:4; }
+      .ac { stroke:#c4784a; }
+      .t  { fill:#e8e2d6; font-family:"DM Sans",sans-serif; font-size:12px; }
+      .m  { fill:#c4a574; font-family:"IBM Plex Mono",monospace; font-size:11px; }
+      .s  { fill:#6e685c; font-family:"DM Sans",sans-serif; font-size:10.5px; }
+      .g  { fill:#7dba8a; font-family:"IBM Plex Mono",monospace; font-size:10.5px; }
+      .ln { stroke:#6e685c; stroke-width:1.2; fill:none; }
+      .lo { stroke:#c4784a; stroke-width:1.2; fill:none; stroke-dasharray:4 3; }
+    </style>
+  </defs>
+  <rect x="0" y="0" width="720" height="300" fill="#0f1419"/>
+
+  <text x="16" y="18" class="m">pt_raygen_offline.rgen — one primary hit, two chains</text>
+
+  <rect class="bx" x="16" y="48" width="126" height="56"/>
+  <text x="26" y="70" class="t">Stage A</text>
+  <text x="26" y="88" class="s">primary hit · NEE · env MIS</text>
+
+  <rect class="bx" x="190" y="30" width="152" height="46"/>
+  <text x="200" y="49" class="t">Stage B</text>
+  <text x="200" y="66" class="s">specular chain → specContrib</text>
+
+  <rect class="bx" x="190" y="100" width="152" height="46"/>
+  <text x="200" y="119" class="t">Stage C</text>
+  <text x="200" y="136" class="s">diffuse chain → diffContrib</text>
+
+  <rect class="bx" x="380" y="30" width="150" height="46"/>
+  <text x="390" y="49" class="m">binding 23</text>
+  <text x="390" y="66" class="s">spec radiance + hitDist</text>
+
+  <rect class="bx" x="380" y="100" width="150" height="46"/>
+  <text x="390" y="119" class="m">binding 22</text>
+  <text x="390" y="136" class="s">diff radiance + hitDist</text>
+
+  <path class="ln" d="M142,70 L170,70 L170,53 L186,53" marker-end="url(#rtA)"/>
+  <path class="ln" d="M142,82 L170,82 L170,123 L186,123" marker-end="url(#rtA)"/>
+  <path class="ln" d="M342,53 L376,53" marker-end="url(#rtA)"/>
+  <path class="ln" d="M342,123 L376,123" marker-end="url(#rtA)"/>
+
+  <text x="552" y="50" class="s">Both are YCoCg-packed with</text>
+  <text x="552" y="66" class="s">a normalized hit-distance.</text>
+  <text x="552" y="82" class="s">Diffuse is divided by its</text>
+  <text x="552" y="98" class="s">albedo first; specular is</text>
+  <text x="552" y="114" class="s">packed as-is.</text>
+
+  <line x1="16" y1="172" x2="704" y2="172" stroke="#3d4a58" stroke-width="1"/>
+
+  <rect class="bx" x="16" y="200" width="150" height="60"/>
+  <text x="26" y="220" class="m">24 · 25 · 26</text>
+  <text x="26" y="237" class="s">diff albedo · F0 ·</text>
+  <text x="26" y="252" class="s">normal+rough (10.10.10.2)</text>
+
+  <rect class="bx" x="212" y="200" width="126" height="60"/>
+  <text x="222" y="226" class="t">REBLUR</text>
+  <text x="222" y="244" class="s">host NRD dispatch</text>
+
+  <rect class="bx" x="384" y="200" width="126" height="60"/>
+  <text x="394" y="226" class="m">27 / 28</text>
+  <text x="394" y="244" class="s">denoised diff / spec</text>
+
+  <rect class="bx ac" x="556" y="200" width="148" height="60"/>
+  <text x="566" y="226" class="m">nrd_compose</text>
+  <text x="566" y="244" class="s">→ binding 29 (HDR)</text>
+
+  <path class="ln" d="M455,146 L455,164 L190,164 L190,222 L208,222" marker-end="url(#rtA)"/>
+  <path class="ln" d="M166,230 L208,230" marker-end="url(#rtA)"/>
+  <path class="ln" d="M338,230 L380,230" marker-end="url(#rtA)"/>
+  <path class="ln" d="M510,230 L552,230" marker-end="url(#rtA)"/>
+  <path class="lo" d="M91,260 L91,282 L630,282 L630,264" marker-end="url(#rtB)"/>
+  <text x="300" y="277" class="g">remodulate: diff·albedo + spec·F0</text>
+</svg>

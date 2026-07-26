@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img" aria-label="Slope-scaled shadow bias versus incidence angle, showing where the shipping 0.01 clamp saturates compared with the unused ten-times-base ceiling">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="28" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">DEPTH BIAS b(theta) = b0 * tan(theta), b0 = 0.005 (host default)</text>
+
+<!-- axes -->
+<line x1="80" y1="44" x2="80" y2="270" stroke="#3d4a58" stroke-width="1"/>
+<line x1="80" y1="270" x2="668" y2="270" stroke="#3d4a58" stroke-width="1"/>
+<text x="30" y="274" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">0.00</text>
+<text x="30" y="237" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">0.01</text>
+<text x="30" y="90" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">0.05</text>
+<text x="76" y="288" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">0</text>
+<text x="366" y="288" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">45</text>
+<text x="646" y="288" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">90</text>
+<text x="330" y="306" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">incidence angle theta (degrees) &#8594;</text>
+
+<!-- ceiling lines -->
+<line x1="80" y1="233" x2="668" y2="233" stroke="#7dba8a" stroke-width="1" stroke-dasharray="2 4"/>
+<line x1="80" y1="87" x2="668" y2="87" stroke="#6e685c" stroke-width="1" stroke-dasharray="2 4"/>
+
+<!-- saturation markers -->
+<line x1="489" y1="233" x2="489" y2="270" stroke="#3d4a58" stroke-width="1" stroke-dasharray="1 3"/>
+<line x1="623" y1="87" x2="623" y2="270" stroke="#3d4a58" stroke-width="1" stroke-dasharray="1 3"/>
+<text x="462" y="266" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10">63.4</text>
+<text x="600" y="266" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">84.3</text>
+
+<!-- unclamped tangent -->
+<polyline points="80,270 177,265 273,259 370,252 434,244 489,233 531,220 563,202 596,166 623,87 630,50"
+          fill="none" stroke="#c4784a" stroke-width="2" stroke-dasharray="5 4"/>
+<text x="452" y="128" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">b0 &#183; tan(theta), unclamped</text>
+
+<!-- shipping curve: tangent then hard clamp -->
+<polyline points="80,270 177,265 273,259 370,252 434,244 489,233 668,233"
+          fill="none" stroke="#7dba8a" stroke-width="2.5"/>
+<text x="500" y="223" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">shipping: clamp(b, 0, 0.01) in shadow_pcf.glsl</text>
+
+<text x="300" y="80" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">unused ceiling in shadow_types.glsl: 10 &#183; b0 = 0.05</text>
+
+<text x="28" y="330" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual: evaluated from the shipped expression, not measured. b0 is the 0.005 the host writes into the light UBO.</text>
+</svg>

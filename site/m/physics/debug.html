@@ -33,31 +33,93 @@
         <p>Debug visualization hooks.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#an-instrument-wired-to-nothing">An instrument wired to nothing</a></li><li><a href="#the-automatic-feed-reads-a-field-nobody-writes">The automatic feed reads a field nobody writes</a></li><li><a href="#net-force-and-total-force-are-different-numbers">Net force and total force are different numbers</a></li><li><a href="#frame-discipline-and-where-it-is-asymmetric">Frame discipline, and where it is asymmetric</a></li><li><a href="#sharp-edges-before-you-wire-it-up">Sharp edges before you wire it up</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="an-instrument-wired-to-nothing">An instrument wired to nothing</h2></div>
 <div class="prose reveal">
-<p>Force debugger visualization hooks.</p>
+<p>`ForceDebugger` is a per-frame recorder for physics forces: it collects labelled force and torque vectors, aggregates them per rigid body, and logs or writes a text report with net force, net torque and application counts. What is missing is a caller. `PhysicsWorld` owns one, built at construction and rebuilt lazily if `enableForceDebugging(true)` finds none:</p>
+<div class="citation-chip"><code class="citation-code">if (enable &amp;&amp; !m_forceDebugger) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L349" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:349</a></div>
+<p>but the fixed-timestep tick never touches it. `stepFixed` applies the force registry, pushes each body&#x27;s accumulated force and torque into whichever `IPhysicsBackend` is live — Jolt when it is compiled in and initialises, the null backend otherwise — steps, and syncs results back:</p>
+<div class="citation-chip"><code class="citation-code">m_forceRegistry.applyForces(bodyPtrs, fixedDt);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L296" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:296</a></div>
+<p>No `startFrame`, no `recordForceApplication`, no `analyzeForceRegistry` appears in that path, or anywhere else in the tree: those three names occur only in `force_debugger.hpp` and `force_debugger.cpp`, where they are declared, defined, and called by each other. Outside `PhysicsWorld`, which only owns the object, the sole file naming the debugger is `physics/examples/force_system_example.hpp`, and it uses only the configuration and query surface — the visualization setters, `getForceVectors`, `getFrameStats`, `generateForceReport` — while asserting in a comment that collection takes care of itself:</p>
+<div class="citation-chip"><code class="citation-code">// The debugger will automatically collect data during simulation steps</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/examples/force_system_example.hpp#L138" target="_blank" rel="noopener">ohao/physics/examples/force_system_example.hpp:138</a></div>
+<p>No translation unit includes that header, and as written it would not compile. The hook whose name promises to drive this has an empty body:</p>
+<div class="citation-chip"><code class="citation-code">// Update debug visualization data</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L329" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:329</a></div>
+<p>The code still ships: the physics CMake target globs its own directory tree, so being unreferenced does not keep it out of the static library.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-automatic-feed-reads-a-field-nobody-writes">The automatic feed reads a field nobody writes</h2></div>
 <div class="prose reveal">
-<p>force_debugger integrates with gizmo/draw paths.</p>
+<p>There are two intended ways in. The manual one, `recordForceApplication`, wants the caller to name each force as it is applied. The automatic one, `analyzeForceRegistry`, walks the body list and synthesises one `net_force` record per body out of `RigidBody::ForceStats`:</p>
+<div class="citation-chip"><code class="citation-code">recordForceApplication(body, forceStats.totalForceApplied,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L141" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:141</a></div>
+<p>That field is incremented in exactly one place in the engine, inside `RigidBody::applyForceTracked`:</p>
+<div class="citation-chip"><code class="citation-code">m_forceStats.totalForceApplied += force;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/dynamics/rigid_body.cpp#L395" target="_blank" rel="noopener">ohao/physics/dynamics/rigid_body.cpp:395</a></div>
+<p>and `applyForceTracked` / `applyTorqueTracked` have zero callers. Every shipping generator reaches for the untracked pair instead. Gravity, drag, buoyancy, wind, magnetic, spring, explosion, vortex and turbulence reach the plain `applyForce` — directly, or through `applyForceAtWorldPoint` — which accumulates into `m_accumulatedForce` and records no statistics:</p>
+<div class="citation-chip"><code class="citation-code">body-&gt;applyForce(buoyantForce);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/environmental_force.cpp#L26" target="_blank" rel="noopener">ohao/physics/forces/environmental_force.cpp:26</a></div>
+<p>and the two purely rotational members of that family, `AngularDragForce` and `AngularSpringForce`, call `applyTorque`, which does the same to `m_accumulatedTorque`:</p>
+<div class="citation-chip"><code class="citation-code">body-&gt;applyTorque(angularDragTorque);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/drag_force.cpp#L91" target="_blank" rel="noopener">ohao/physics/forces/drag_force.cpp:91</a></div>
+<p>So `getForceStats()` returns an all-zero struct, every magnitude falls under the 0.1 default threshold, and the automatic feed records nothing even when called. A second break hides behind the first: `resetForceStats()` has no callers either.</p>
+<div class="citation-chip"><code class="citation-code">void resetForceStats() { m_forceStats = ForceStats{}; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/dynamics/rigid_body.hpp#L169" target="_blank" rel="noopener">ohao/physics/dynamics/rigid_body.hpp:169</a></div>
+<p>The moment someone flips the generators to the tracked variants, `totalForceApplied` becomes a lifetime running total rather than a per-frame net force. Nothing zeroes it: `clearForces()` resets only the accumulators the solver consumes.</p>
+<div class="citation-chip"><code class="citation-code">m_accumulatedForce = glm::vec3(0.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/dynamics/rigid_body.cpp#L215" target="_blank" rel="noopener">ohao/physics/dynamics/rigid_body.cpp:215</a></div>
+<p>It is a `glm::vec3` sum, not a sum of magnitudes, so it does not grow monotonically — opposed forces cancel inside it and it random-walks — but it is stale by construction, and the debugger will label whatever it holds `net_force`. Wiring the tracked call without a per-step reset trades no data for wrong data.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="net-force-and-total-force-are-different-numbers">Net force and total force are different numbers</h2></div>
 <div class="prose reveal">
-<p>Seeing forces beats guessing spring constants.</p>
+<p>Per-body aggregation keeps two quantities whose names suggest they are the same:</p>
+<div class="math-block">$$
+\mathrm{netForce} = \sum_i \mathbf{F}_i, \qquad \mathrm{totalForceApplied} = \sum_i \lVert \mathbf{F}_i \rVert
+$$</div>
+<p>where $\mathbf{F}_i$ is the *i*-th force recorded on that body this frame. The vector sum is what accelerates the body. The scalar sum of magnitudes is what tells you whether a body sitting still is genuinely unloaded or is being pulled apart by two large opposed forces that cancel — the distinction that makes a force debugger worth having.</p>
+<div class="citation-chip"><code class="citation-code">bodyIt-&gt;totalForceApplied += magnitude;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L82" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:82</a></div>
+<p>The name is reused across two structs with different types and opposite meanings: `ForceDebugger::BodyForceStats::totalForceApplied` is the scalar $\sum\lVert\mathbf{F}\rVert$ above, while `RigidBody::ForceStats::totalForceApplied` is a `glm::vec3` holding $\sum\mathbf{F}$. The automatic feed passes the latter into the slot the report prints as net force, which is correct — but only because the two identically-named fields do not mean the same thing.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="frame-discipline-and-where-it-is-asymmetric">Frame discipline, and where it is asymmetric</h2></div>
 <div class="prose reveal">
-<p>force_debugger.hpp: defines `class ForceDebugger`.</p>
-<p>force_debugger.hpp: defines `struct ForceVector`.</p>
-<p>force_debugger.hpp: defines `struct TorqueVector`.</p>
+<p>`startFrame` clears the vectors and the stats block; `endFrame` computes statistics, then applies mode filtering. It looks like it also stamps a collection time, but that branch sits behind `m_profilingEnabled`, which defaults to `false` — the only `setProfilingEnabled(true)` in the tree is in the example header that nothing compiles — so by default the timing fields stay zero. `startFrame` is idempotent by early return, so a nested `DEBUG_FORCE_FRAME` will not wipe the outer frame&#x27;s data on entry:</p>
+<div class="citation-chip"><code class="citation-code">if (m_frameActive) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L19" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:19</a></div>
+<p>The matching destructor is a different story. `endFrame` does not count nesting, so an inner scope closing finalises the outer frame, and every record made afterwards is silently swallowed by the `!m_frameActive` guard. The RAII helper is single-scope-only.</p>
+<p>Ordering inside `endFrame` matters too — statistics run before filtering:</p>
+<div class="citation-chip"><code class="citation-code">updateFrameStatistics();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L34" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:34</a></div>
+<p>so in `NET_FORCES_ONLY` the reported `totalForcesApplied` counts vectors that are erased a line later. Statistics describe what was collected; `getForceVectors()` describes what survived. `generateForceReport` prints both halves of that split in one document: its summary block and per-body breakdown read the pre-filter counts, while its FORCE VECTORS listing walks the post-filter vector, so `NET_FORCES_ONLY` deletes rows from the report and `BY_TYPE` reorders them.</p>
+<div class="citation-chip"><code class="citation-code">report &lt;&lt; force.sourceId &lt;&lt; &quot; -&gt; &quot; &lt;&lt; force.bodyName &lt;&lt; &quot;:\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L251" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:251</a></div>
+<div class="citation-chip"><code class="citation-code">case VisualizationMode::ABOVE_THRESHOLD:</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L352" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:352</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Two of the settings that read as view controls are enforced at record time, not at draw time, and that is the asymmetry to hold on to. The magnitude threshold discards a force before anything counts it — which is why the `ABOVE_THRESHOLD` filter case is empty, the work is already done — and `setShowTorques(false)` discards torques the same way. Neither is reversible after the fact: lowering the threshold reveals nothing already dropped, and raising it removes forces from the statistics, not just from the display. Only the visualization mode is applied post-hoc, and even it is not inert.</p></div>
+</div>
+<div class="section-rule"><h2 id="sharp-edges-before-you-wire-it-up">Sharp edges before you wire it up</h2></div>
+<div class="prose reveal">
+<ul>
+<li>The threshold doubles as the divide-by-zero guard: direction is stored</li>
+</ul>
+<p>normalized, and only the `magnitude &lt; m_minMagnitude` early-out keeps a zero-length force away from `glm::normalize`. Setting the threshold to `0` — the natural &quot;show me everything&quot; move — lets a zero force through and yields a NaN direction. {{cite ohao/physics/debug/force_debugger.cpp &quot;forceVec.direction = glm::normalize(force);&quot;}}</p>
+<ul>
+<li>`setShowTorques(false)` gates *collection*, not drawing, so turning off torque</li>
+</ul>
+<p>rendering also zeroes `maxTorqueMagnitude` and the report&#x27;s net-torque column.</p>
+<div class="citation-chip"><code class="citation-code">if (!m_frameActive || !body || !m_showTorques) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L96" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:96</a></div>
+<ul>
+<li>A torque merges into a per-body row only if a force already created that row;</li>
+</ul>
+<p>it never creates one. A body with large torque and no recorded force gets a torque vector in the visualization list and no line in the body breakdown.</p>
+<div class="citation-chip"><code class="citation-code">if (bodyIt != m_bodyStats.end()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L117" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:117</a></div>
+<ul>
+<li>The per-body row is keyed on the `RigidBody*` address, but the label printed</li>
+</ul>
+<p>beside it is a *different* pointer: `getBodyName` returns the `PhysicsComponent*` in decimal whenever the body has one, and every body the world owns does — `createRigidBody` returns `nullptr` for a null component, so the raw-body fallback below is unreachable for any body in the world. The code&#x27;s own comment concedes the name should be the entity&#x27;s.</p>
+<div class="citation-chip"><code class="citation-code">return &quot;Body_&quot; + std::to_string(reinterpret_cast&lt;size_t&gt;(component));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/debug/force_debugger.cpp#L316" target="_blank" rel="noopener">ohao/physics/debug/force_debugger.cpp:316</a></div>
+<p>So one body is identified by two unrelated addresses, neither stable across runs, while `RigidBody` already carries a monotonic `m_uniqueId` — which `SimulationProfile` uses for exactly this purpose and the debugger never asks for. {{cite ohao/physics/dynamics/rigid_body.hpp &quot;uint32_t getUniqueId() const&quot;}} The lookup is also a linear `std::find_if` over the per-body vector, so recording costs O(forces x bodies).</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>This is an unwired instrument that is also not yet correct. Wiring it takes four edits, and the order matters: move the force generators to `applyForceTracked` *and* the two rotational ones to `applyTorqueTracked` — skip the second and the torque those two apply never reaches `analyzeForceRegistry`&#x27;s net-torque branch, which reads only `totalTorqueApplied` — call `resetForceStats()` on every body once per fixed step, and bracket `stepFixed` with `startFrame` / `analyzeForceRegistry` / `endFrame`. Doing only the first yields plausible, never-reset, wrong numbers. Even fully wired, the defects above remain: the zero-force `normalize`, the nesting-blind destructor, and the torque rows that vanish when no force created them.</p></div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/physics/debug/force_debugger.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/world/physics_world.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/examples/force_system_example.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/debug/force_debugger.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/dynamics/rigid_body.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/environmental_force.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/drag_force.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/dynamics/rigid_body.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/debug/force_debugger.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

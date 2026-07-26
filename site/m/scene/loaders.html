@@ -33,50 +33,134 @@
         <p>GLTF (tinygltf), FBX (Assimp), OBJ custom, primitives.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#two-front-doors-four-parsers">Two front doors, four parsers</a></li><li><a href="#why-fbx-is-parsed-twice">Why FBX is parsed twice</a></li><li><a href="#the-normal-repair-that-also-erases-hard-edges">The normal repair that also erases hard edges</a></li><li><a href="#nobody-walks-the-node-tree">Nobody walks the node tree</a></li><li><a href="#roughness-arrives-by-four-different-roads">Roughness arrives by four different roads</a></li><li><a href="#the-base-color-that-eats-itself">The base color that eats itself</a></li><li><a href="#the-primitive-generator-that-nothing-calls">The primitive generator that nothing calls</a></li><li><a href="#what-actually-crosses-into-the-gpu-layer">What actually crosses into the GPU layer</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="two-front-doors-four-parsers">Two front doors, four parsers</h2></div>
 <div class="prose reveal">
-<p>Asset loaders parse GLTF (tinygltf), FBX (Assimp), OBJ, and procedural primitives into Mesh/Material components — never Vulkan objects.</p>
+<p>The same `.glb` file does not take the same code path through OHAO twice. `ModelLoader::load` sends `.obj` to the hand-written parser, `.fbx` to ufbx, and everything else, GLB and GLTF included, to Assimp. `inverse/scene_builder.hpp` calls it directly; the two viewers reach it through the `Result`-returning `loadResult` wrapper, which adds an empty-path guard, an extension check and an empty-result check, and nothing else.</p>
+<div class="citation-chip"><code class="citation-code">// GLB, GLTF, DAE, etc → Assimp</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L170" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:170</a></div>
+<div class="citation-chip"><code class="citation-code">if (auto r = ModelLoader::loadResult(modelPath)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L186" target="_blank" rel="noopener">examples/interactive.cpp:186</a></div>
+<p>The tinygltf importer in `model_gltf.cpp` is therefore unreachable from the facade — but it is not dead. `env_demo` and `turntable` call `Model::loadFromGLTF` directly, skipping `ModelLoader` entirely.</p>
+<div class="citation-chip"><code class="citation-code">else loaded = model-&gt;loadFromGLTF(modelPath);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L255" target="_blank" rel="noopener">examples/env_demo.cpp:255</a></div>
+<p>So there are two glTF importers on two entry points, and they do not agree. The Assimp route flips the V coordinate on import; the tinygltf route copies `TEXCOORD_0` through untouched. Only one of those can be right for a given sampler convention, and nothing in the tree reconciles them.</p>
+<div class="citation-chip"><code class="citation-code">aiProcess_FlipUVs |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L284" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:284</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/scene-loaders-routing.svg" alt="Which post-processing each load route applies. Conceptual — read from the branch structure in model_loader.cpp and model_gltf.cpp, not measured." loading="lazy" /><figcaption>Which post-processing each load route applies. Conceptual — read from the branch structure in model_loader.cpp and model_gltf.cpp, not measured.</figcaption></figure>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="why-fbx-is-parsed-twice">Why FBX is parsed twice</h2></div>
 <div class="prose reveal">
-<p>Detect format → parse meshes/materials/textures → up-axis fix → fill components.</p>
-<p>model_loader.hpp is the facade; model_gltf.cpp / model_fbx.cpp / model.cpp specialize.</p>
-<p>primitive_mesh_generator builds cornell-style boxes and spheres without files.</p>
-<ul>
-<li>Detect format</li>
-<li>Parse meshes/materials/textures</li>
-<li>Up-axis fix</li>
-<li>Fill Mesh + Material components</li>
-<li>No Vulkan calls</li>
-</ul>
+<p>FBX is the only format OHAO parses with two libraries in sequence, and the reason is a genuine split of competence. ufbx is asked first for the reason the branch comment gives — rotation orders and embedded textures — and it does the coordinate work at load time: it converts the scene to right-handed Y-up and to meters, and it applies each mesh&#x27;s `geometry_to_node` transform. That is the whole recorded justification — the tree states a preference, not a measured comparison against Assimp.</p>
+<div class="citation-chip"><code class="citation-code">// Try ufbx first (correct rotation orders, embedded textures)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L146" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:146</a></div>
+<div class="citation-chip"><code class="citation-code">opts.target_axes = ufbx_axes_right_handed_y_up;    // Convert to Y-up</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L94" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:94</a></div>
+<p>What ufbx hands back is topologically useless. The extraction loop appends a fresh vertex for every triangle corner, so vertex count equals index count exactly — triangle soup, in which no vertex is adjacent to any face but its own.</p>
+<div class="citation-chip"><code class="citation-code">indices.push_back(static_cast&lt;uint32_t&gt;(vertices.size()));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L295" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:295</a></div>
+<p>That is why the whole file is then read a second time through Assimp, purely for `aiProcess_JoinIdenticalVertices` and friends, and the ufbx geometry is thrown away. Only the textures are kept, and the test that keeps them is narrower than it reads: it fires on Assimp&#x27;s *albedo* list being empty, then moves the whole ufbx texture set across — normal, rough-metal and emissive vectors and all four index arrays — over whatever Assimp had. A file where Assimp found a normal map but no base color loses that normal map to a ufbx set that may not contain one.</p>
+<div class="citation-chip"><code class="citation-code">if (assimpModel-&gt;albedoTextures.empty() &amp;&amp; !model-&gt;albedoTextures.empty()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L155" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:155</a></div>
+<div class="citation-chip"><code class="citation-code">assimpModel-&gt;normalTextures = std::move(model-&gt;normalTextures);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L157" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:157</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The obvious alternative — welding the ufbx output ourselves with a position/normal/UV hash — was not taken. Assimp already ships a tested welder plus degenerate-face removal, cache-locality reordering and infacing-normal repair, so a second full parse buys four passes for one dependency call. The cost is that this is the one route where two libraries&#x27; material *orderings* are assumed to match: when the texture guard above fires, `materialTextureIndex` is grafted from ufbx (indexed by `typed_id`) onto geometry whose `materialPerTriangle` uses Assimp&#x27;s indices, and nothing checks that they agree.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-normal-repair-that-also-erases-hard-edges">The normal repair that also erases hard edges</h2></div>
 <div class="prose reveal">
-<p>Keeping loaders Vulkan-free means offline tools and tests can load scenes without a GPU.</p>
+<p>Every model that comes out of `ModelLoader::load` — not just FBX — is run through `repairMeshNormals`. On the FBX route that means the *Assimp* geometry: the reassignment happens first, so the repair never touches ufbx&#x27;s triangle soup.</p>
+<div class="citation-chip"><code class="citation-code">model = assimpModel;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L166" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:166</a></div>
+<p>It buckets vertices by quantised position using an FNV-1a hash of the integer cell coordinates, with a cell edge of one hundred-thousandth of the mesh diagonal:</p>
+<div class="citation-chip"><code class="citation-code">float cellSize = meshSize * 1e-5f;  // ~0.001% of mesh size</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L75" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:75</a></div>
+<p>Face normals are accumulated per bucket as raw cross products. Because $\lVert (p_1-p_0)\times(p_2-p_0)\rVert$ equals twice the triangle area, skipping the normalisation makes the accumulation area-weighted for free — large triangles pull the vertex normal toward their plane in proportion to their area, which is what you want and what a naive normalise-then-sum gets wrong.</p>
+<p>The subtlety is that the result is written back unconditionally, to every vertex whose position bucket exists:</p>
+<div class="citation-chip"><code class="citation-code">v.normal = it-&gt;second;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L125" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:125</a></div>
+<p>The triangle-soup detection nearby looks like it gates the repair. It does not — it only decides whether a log line is printed.</p>
+<div class="citation-chip"><code class="citation-code">if (isTriangleSoup || changed &gt; vertices.size() / 10) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L130" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:130</a></div>
+<p>The consequence is concrete: a cube exported with 24 vertices and six flat face normals still has only 8 distinct *positions*, so the three normals meeting at each corner are averaged into one. Hard creases cannot survive this function. Anything authored with split normals loses them the moment it goes through the facade — while the same file loaded via `loadFromGLTF` keeps them, because that path never calls the repair.</p>
+</div>
+<div class="section-rule"><h2 id="nobody-walks-the-node-tree">Nobody walks the node tree</h2></div>
+<div class="prose reveal">
+<p>None of the loaders traverse the scene graph. The Assimp path checks `mRootNode` for null and then iterates `scene-&gt;mMeshes` linearly, concatenating raw mesh-local vertices with a running offset:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t globalVertexOffset = 0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L386" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:386</a></div>
+<p>The tinygltf path does the same, iterating `gltfModel.meshes` rather than `gltfModel.scenes`/`nodes`:</p>
+<div class="citation-chip"><code class="citation-code">for (const auto&amp; mesh : gltfModel.meshes) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L163" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:163</a></div>
+<p>A file whose meshes are positioned by node transforms — a wheel parented under a hub — therefore imports with every part at its mesh-local coordinates, piled at the origin. Instancing degrades a different way: the loop visits each `aiMesh` exactly once, so a mesh referenced from several nodes contributes one copy however many times the file instances it. Only ufbx contributes any transform at all, and only the *geometry* transform of the mesh&#x27;s first instance, never node-to-world.</p>
+<div class="citation-chip"><code class="citation-code">geoTransform = toGlm(mesh-&gt;instances.data[0]-&gt;geometry_to_node);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L231" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:231</a></div>
+<p>Up-axis correction is not in this module either. It lives downstream in `SceneFramer`, which decides Y-up versus Z-up by comparing the bounding box&#x27;s Y and Z extents and, on the Z-up verdict, emits a ±90° rotation about X — sign picked by whether the Z range reaches above zero. That rotation comes back in `FrameResult` and both viewers set it on the model actor&#x27;s transform, so it really does reorient the geometry; it is simply decided outside `scene/asset`, from extents rather than from any up-axis metadata the file carried.</p>
+<div class="citation-chip"><code class="citation-code">result.modelRotation = glm::quat(glm::radians(glm::vec3(posZIsUp ? -90.0f : 90.0f, 0, 0)));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L58" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:58</a></div>
+<div class="citation-chip"><code class="citation-code">actor-&gt;getTransform()-&gt;setRotation(frame.modelRotation);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L299" target="_blank" rel="noopener">examples/interactive.cpp:299</a></div>
+</div>
+<div class="section-rule"><h2 id="roughness-arrives-by-four-different-roads">Roughness arrives by four different roads</h2></div>
+<div class="prose reveal">
+<p>All four loaders land their answer in the same slot, `materialColors[i].w`, and from there in the RT material buffer. Three of them read an authored roughness factor first; what separates them is the fallback, and the fallbacks do not agree. Let $g\in[0,1]$ be an authored glossiness and $N_s$ a Phong specular exponent. The second formula belongs to the Assimp route alone, which reads $N_s$ from `AI_MATKEY_SHININESS`; its domain is GLB/GLTF/DAE plus the FBX second pass, never OBJ, which is branched to the native parser before Assimp is reached.</p>
+<div class="math-block">$$
+r_{\text{gloss}} = 1 - g, \qquad r_{\text{assimp}} = 1 - \operatorname{clamp}\!\left(\frac{N_s}{1000},\, 0,\, 1\right)
+$$</div>
+<p>ufbx takes `pbr.roughness` when the material has it, inverting it in place if ufbx flags the file as storing roughness-as-glossiness; failing that it takes $1-g$ from `pbr.glossiness`; failing that, if only a roughness or gloss *texture* exists with no scalar beside it, it stamps 1.0 and lets the texture carry the whole range. Only then does it clamp up to 0.04.</p>
+<div class="citation-chip"><code class="citation-code">if (mat-&gt;pbr.roughness.has_value) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L131" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:131</a></div>
+<div class="citation-chip"><code class="citation-code">roughness = std::max(roughness, 0.04f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L145" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:145</a></div>
+<p>The only rationale the tree gives for that floor is physical and dielectric-scoped — no firefly or sampling argument is recorded anywhere, and the bound does not generalise past dielectrics. The closest-hit shader re-applies the identical clamp after texture modulation, so on the RT path the loader-side floor is redundant; it matters only to code that reads `materialColors` without going through that shader.</p>
+<div class="citation-chip"><code class="citation-code">// Physical minimum: no real dielectric surface has roughness &lt; 0.04</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_fbx.cpp#L144" target="_blank" rel="noopener">ohao/scene/asset/model_fbx.cpp:144</a></div>
+<div class="citation-chip"><code class="citation-code">roughness = max(roughness, 0.04);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L148" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:148</a></div>
+<p>The Assimp route reads `AI_MATKEY_ROUGHNESS_FACTOR` first and remaps shininess only if that left the variable at its 0.5 initialiser — an exact float equality against a sentinel, so a material that genuinely authors roughness 0.5 has it silently overwritten by the shininess conversion. The remap itself is not derived from anything: the standard Phong-to-GGX correspondence is $\alpha=\sqrt{2/(N_s+2)}$, and dividing by 1000 instead means an $N_s$ of 100 — a fairly tight highlight — imports as roughness 0.9.</p>
+<div class="citation-chip"><code class="citation-code">if (roughness == 0.5f &amp;&amp; mat-&gt;Get(AI_MATKEY_SHININESS, shininess) == aiReturn_SUCCESS) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_loader.cpp#L327" target="_blank" rel="noopener">ohao/scene/asset/model_loader.cpp:327</a></div>
+<p>tinygltf copies `pbr.roughnessFactor` straight through, then, for the `KHR_materials_pbrSpecularGlossiness` materials that CC3 exports, overwrites it with $1-g$ from `glossinessFactor`. It applies no floor of its own, so the shader&#x27;s clamp is the only one this route ever sees.</p>
+<div class="citation-chip"><code class="citation-code">static_cast&lt;float&gt;(pbr.roughnessFactor)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L351" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:351</a></div>
+<div class="citation-chip"><code class="citation-code">materialColors.back().w = 1.0f - glossiness;  // roughness = 1 - glossiness</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L376" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:376</a></div>
+<p>OBJ is the fourth road and reads nothing. Its MTL parser does store `Ns` in `MaterialData::shininess`, but the only code that converts it — `Scene::importModel`, with a $1-N_s/128$ remap — has no callers anywhere in the tree; the RT material build ignores the field and stamps every material with 0.7.</p>
+<div class="citation-chip"><code class="citation-code">else if (token == &quot;Ns&quot;) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L472" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:472</a></div>
+<div class="citation-chip"><code class="citation-code">pbrMaterial.roughness = glm::clamp(1.0f - (mtlMaterial.shininess / 128.0f), 0.0f, 1.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L336" target="_blank" rel="noopener">ohao/scene/scene.cpp:336</a></div>
+<div class="citation-chip"><code class="citation-code">materialColors.push_back(glm::vec4(mat.diffuse, 0.7f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L246" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:246</a></div>
+<p>Per-texel roughness only appears if a `{material}_gloss_*` image is sitting beside the model, which the loader inverts and repacks into the green channel of a rough-metal texture. That lands where the closest-hit sampler looks — but the sampler *multiplies*, against that 0.7 scalar. A gloss-mapped OBJ therefore cannot exceed roughness 0.7 at any texel, and every texel is scaled to 70% of its authored value rather than used as authored.</p>
+<div class="citation-chip"><code class="citation-code">packed[i * 4 + 1] = 255 - gloss;     // roughness = 1 - gloss</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.cpp#L316" target="_blank" rel="noopener">ohao/scene/asset/model.cpp:316</a></div>
+<div class="citation-chip"><code class="citation-code">roughness *= rm.g;  // G channel = Roughness</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L145" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:145</a></div>
+</div>
+<div class="section-rule"><h2 id="the-base-color-that-eats-itself">The base color that eats itself</h2></div>
+<div class="prose reveal">
+<p>The tinygltf path does one thing no other loader does: after decoding an albedo texture it computes the mean of its texels and writes that back over the material&#x27;s base color.</p>
+<div class="citation-chip"><code class="citation-code">// Override the material base color with the texture&#x27;s average color</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model_gltf.cpp#L422" target="_blank" rel="noopener">ohao/scene/asset/model_gltf.cpp:422</a></div>
+<p>That base color is not an alternative to the texture — the closest-hit shader multiplies them:</p>
+<div class="citation-chip"><code class="citation-code">albedo *= pow(sampled, vec3(2.2));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L112" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:112</a></div>
+<p>So a glTF with the spec-default `baseColorFactor` of 1 renders through `ModelLoader::load` at its authored albedo, and through `env_demo`/`turntable` at roughly (mean texel) × (texel) — visibly darker, and darker in proportion to how dark the texture already is. This is the sharpest of the divergences in the figure above, and the reason to treat the tinygltf route as legacy.</p>
+</div>
+<div class="section-rule"><h2 id="the-primitive-generator-that-nothing-calls">The primitive generator that nothing calls</h2></div>
+<div class="prose reveal">
+<p>`PrimitiveMeshGenerator` has no callers in `ohao/`, `examples/` or `tests/`. Its live twin is `ComponentFactory::generateCubeMesh` and siblings, which duplicate the same cube and UV-sphere construction inside the component layer. Worth recording before anyone deletes the wrong one: the *unused* class implements a real cylinder and a real cone, while the *used* one stubs both out.</p>
+<div class="citation-chip"><code class="citation-code">// TODO: Implement proper cylinder mesh generation</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/component_factory.cpp#L487" target="_blank" rel="noopener">ohao/scene/component/component_factory.cpp:487</a></div>
+<div class="citation-chip"><code class="citation-code">void PrimitiveMeshGenerator::generateCylinder(Model&amp; model, float radius, float height, int segments) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/primitive_mesh_generator.cpp#L225" target="_blank" rel="noopener">ohao/scene/asset/primitive_mesh_generator.cpp:225</a></div>
+</div>
+<div class="section-rule"><h2 id="what-actually-crosses-into-the-gpu-layer">What actually crosses into the GPU layer</h2></div>
+<div class="prose reveal">
+<p>`scene/asset` contains no `VkDevice`, no `vkCreate*` and no command recording. The decoupling that buys is latent, not exercised: nothing under `tests/` or `tools/` loads a model, and the engine suite reaches only the pure `isSupportedExtension` predicate. It is not Vulkan-free either — `Vertex` declares its own `VkVertexInputAttributeDescription` set, so the vertex layout is authored here and merely consumed by the pipeline code.</p>
+<div class="citation-chip"><code class="citation-code">EXPECT(!ModelLoader::isSupportedExtension(&quot;exe&quot;), &quot;exe no&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L462" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:462</a></div>
+<p>That layout carries dead weight. Skeletal animation was removed, but `boneIndices` and `boneWeights` remain in the struct and are still filled by all three of the ufbx, Assimp and tinygltf paths — 32 of every 100 bytes per vertex, uploaded to the GPU, read by nothing.</p>
+<div class="citation-chip"><code class="citation-code">glm::ivec4 boneIndices{0, 0, 0, 0};  // Up to 4 bone influences per vertex</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/asset/model.hpp#L25" target="_blank" rel="noopener">ohao/scene/asset/model.hpp:25</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The loaders&#x27; real output is not a mesh, it is a material table: six per-material arrays — `materialColors` (rgb + roughness in `.w`), `materialMetallic`, and the four texture-index arrays `materialTextureIndex`, `materialNormalTexIndex`, `materialRoughMetalTexIndex`, `materialEmissiveTexIndex` — plus `materialPerTriangle`, which is *not* parallel to them. It carries one entry per triangle and indexes into them. The RT builder walks the six by material id and the seventh by triangle, so every loader must fill all seven under one consistent material numbering, or the path tracer shades the wrong triangles with the wrong textures.</p></div>
+<div class="citation-chip"><code class="citation-code">matColors[matIdx * 3 + 1].x = mc2.w; // roughness packed in .w of materialColors</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L356" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:356</a></div>
+<div class="citation-chip"><code class="citation-code">int emIdx = model-&gt;materialEmissiveTexIndex[matIdx];</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L514" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:514</a></div>
+<div class="citation-chip"><code class="citation-code">for (uint32_t mid : model-&gt;materialPerTriangle) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L211" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:211</a></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>No VkDevice in scene/asset</li>
-<li>Textures referenced by path/index for later bindless upload</li>
+<li>`materialPerTriangle.size()` must equal `indices.size()/3` at every exit. The OBJ path&#x27;s alpha-card filter drops `fur`/`eyelash`/`tear` triangles *before* the per-triangle array is built, which is the only ordering that keeps this true.</li>
+<li>`materialColors[i].w` is roughness, not alpha. `rt_build.cpp` reads it into the RT material buffer&#x27;s roughness slot with no conversion.</li>
+<li>OBJ material indices are assigned while iterating an `unordered_map`, so the numbering is hash order. It is self-consistent within a run, but never persist an OBJ material index across builds.</li>
+<li>`repairMeshNormals` runs on every `ModelLoader::load` result and overwrites author-supplied normals. On the FBX route it never sees ufbx geometry: `model` is reassigned to `assimpModel` before the repair call, so it operates on Assimp&#x27;s already-welded `GenSmoothNormals` output. Moving the repair above that reassignment would run it on triangle soup and then throw the result away. Adding a &quot;skip if the model already has good normals&quot; guard is not a no-op either — it would hand hard creases back to every model that currently loses them through the facade.</li>
+<li>`Model::loadFromFBX` is ufbx, not Assimp, despite the header comment in `model.hpp` still saying &quot;Assimp-based&quot;.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>model_loader.hpp: defines `class ModelLoader`.</p>
-<p>FBX loader via ufbx — handles all FBX rotation orders, pivots, and pre-rotations correctly.</p>
-<p>Falls back to Assimp for non-FBX formats (Collada, etc.)</p>
-<p>primitive_mesh_generator.hpp: defines `class PrimitiveMeshGenerator`.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/scene/asset/model_loader.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/asset/model_gltf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_loader.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/env_demo.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/model_fbx.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_gltf.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/camera/scene_framer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/model.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/component_factory.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/primitive_mesh_generator.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/engine/engine_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/asset/model_loader.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/asset/primitive_mesh_generator.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

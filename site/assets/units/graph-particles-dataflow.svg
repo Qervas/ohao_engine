@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" class="unit-diagram" role="img" aria-label="Matrix of particle buffer fields against the four stages that touch them, marking fields that are written but never read">
+  <rect x="0" y="0" width="720" height="400" fill="#0f1419"/>
+
+  <text x="14" y="22" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12">who writes / who reads — per frame</text>
+
+  <!-- column headers -->
+  <text x="314" y="48" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">host (C++)</text>
+  <text x="426" y="48" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">emit.comp</text>
+  <text x="538" y="48" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">update.comp</text>
+  <text x="650" y="48" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">vert + draw</text>
+  <line x1="14" y1="56" x2="706" y2="56" stroke="#3d4a58" stroke-width="1"/>
+
+  <!-- row 1 -->
+  <rect x="14" y="58" width="692" height="28" fill="#1a222c"/>
+  <text x="22" y="77" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">particle.position</text>
+  <text x="314" y="77" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="426" y="77" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="538" y="77" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R W</text>
+  <text x="650" y="77" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R</text>
+
+  <!-- row 1b -->
+  <rect x="14" y="86" width="692" height="28" fill="#151c25"/>
+  <text x="22" y="105" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">particle.velocity</text>
+  <text x="314" y="105" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="426" y="105" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="538" y="105" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R W</text>
+  <text x="650" y="105" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+
+  <!-- row 2 -->
+  <rect x="14" y="114" width="692" height="28" fill="#1a222c"/>
+  <text x="22" y="133" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">particle.color.rgb</text>
+  <text x="314" y="133" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="426" y="133" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="538" y="133" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="650" y="133" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R</text>
+
+  <!-- row 3 -->
+  <rect x="14" y="142" width="692" height="28" fill="#151c25"/>
+  <text x="22" y="161" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">particle.color.a</text>
+  <text x="314" y="161" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="426" y="161" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="538" y="161" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="650" y="161" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R</text>
+
+  <!-- row 4 -->
+  <rect x="14" y="170" width="692" height="28" fill="#1a222c"/>
+  <text x="22" y="189" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">particle.params.x  (size)</text>
+  <text x="314" y="189" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="426" y="189" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="538" y="189" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R W</text>
+  <text x="650" y="189" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R</text>
+
+  <!-- row 5 (dead) -->
+  <rect x="14" y="198" width="692" height="28" fill="#151c25"/>
+  <rect x="14" y="198" width="3" height="28" fill="#c4784a"/>
+  <text x="22" y="217" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11">particle.params.z  (type)</text>
+  <text x="314" y="217" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="426" y="217" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="538" y="217" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="650" y="217" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+
+  <!-- row 6 -->
+  <rect x="14" y="226" width="692" height="28" fill="#1a222c"/>
+  <text x="22" y="245" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">counter.aliveCount  (bump allocator)</text>
+  <text x="314" y="245" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">init once</text>
+  <text x="426" y="245" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R W</text>
+  <text x="538" y="245" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="650" y="245" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+
+  <!-- row 7 (dead) -->
+  <rect x="14" y="254" width="692" height="28" fill="#151c25"/>
+  <rect x="14" y="254" width="3" height="28" fill="#c4784a"/>
+  <text x="22" y="273" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11">counter.deadCount</text>
+  <text x="314" y="273" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">init once</text>
+  <text x="426" y="273" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="538" y="273" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="650" y="273" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+
+  <!-- row 8 -->
+  <rect x="14" y="282" width="692" height="28" fill="#1a222c"/>
+  <text x="22" y="301" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">indirect.instanceCount</text>
+  <text x="314" y="301" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W = 0</text>
+  <text x="426" y="301" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="538" y="301" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W atomic</text>
+  <text x="650" y="301" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">R (draw)</text>
+
+  <!-- row 9 (dead) -->
+  <rect x="14" y="310" width="692" height="28" fill="#151c25"/>
+  <rect x="14" y="310" width="3" height="28" fill="#c4784a"/>
+  <text x="22" y="329" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11">push.colorEnd / .endSize</text>
+  <text x="314" y="329" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">W</text>
+  <text x="426" y="329" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="538" y="329" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+  <text x="650" y="329" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11" text-anchor="middle">·</text>
+
+  <line x1="14" y1="338" x2="706" y2="338" stroke="#3d4a58" stroke-width="1"/>
+
+  <!-- legend -->
+  <rect x="14" y="354" width="3" height="12" fill="#c4784a"/>
+  <text x="26" y="364" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">written, never read by any stage</text>
+  <text x="300" y="364" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="11">R</text>
+  <text x="312" y="364" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">read</text>
+  <text x="352" y="364" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">W</text>
+  <text x="366" y="364" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">written</text>
+  <text x="418" y="364" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="11">·</text>
+  <text x="428" y="364" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">not touched</text>
+
+  <text x="14" y="386" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">ParticleEmitterConfig::gravity and ::drag never reach a push constant at all — update.comp is pushed two literals.</text>
+</svg>

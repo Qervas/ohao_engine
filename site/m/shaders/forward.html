@@ -33,29 +33,133 @@
         <p>Legacy forward.vert/frag path.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-path-the-renderer-lands-on-when-nothing-else-works">The path the renderer lands on when nothing else works</a></li><li><a href="#geometry-comes-from-a-ubo-material-comes-from-a-matrix">Geometry comes from a UBO, material comes from a matrix</a></li><li><a href="#eight-lights-and-at-most-one-of-them-casts">Eight lights, and at most one of them casts</a></li><li><a href="#the-falloff-that-is-not-inverse-square">The falloff that is not inverse square</a></li><li><a href="#tangent-space-without-a-tangent">Tangent space without a tangent</a></li><li><a href="#display-encoding-has-to-happen-inside-the-fragment-shader">Display encoding has to happen inside the fragment shader</a></li><li><a href="#the-branch-that-is-never-compiled">The branch that is never compiled</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-path-the-renderer-lands-on-when-nothing-else-works">The path the renderer lands on when nothing else works</h2></div>
 <div class="prose reveal">
-<p>Legacy forward.vert/frag with limited lights.</p>
+<p>`VulkanRenderer::render()` tries the RT pipelines, then deferred, and if neither is live it falls through to the raster pair in `shaders/core/`:</p>
+<div class="citation-chip"><code class="citation-code">// Forward rendering path</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L393" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:393</a></div>
+<p>`m_renderMode` is constructed as `Forward`, and `setRenderMode` refuses to switch when the requested backend was never created — it logs and returns, leaving the mode untouched:</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;Deferred rendering not available, staying in Forward mode&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L447" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:447</a></div>
+<p>No example in `examples/` ever asks for `RenderMode::Forward`; they all request Deferred or an RT profile. These two shaders are never chosen — they are what you get when the choice fails, which makes their correctness a reliability question rather than a cleanup one.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="geometry-comes-from-a-ubo-material-comes-from-a-matrix">Geometry comes from a UBO, material comes from a matrix</h2></div>
 <div class="prose reveal">
-<p>Used by RenderMode::Forward smoke paths.</p>
+<p>`forward.vert` takes the model matrix from the push constant but reads view and projection from the camera UBO at set 0, binding 0:</p>
+<div class="citation-chip"><code class="citation-code">gl_Position = camera.proj * camera.view * worldPos;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.vert#L58" target="_blank" rel="noopener">shaders/core/forward.vert:58</a></div>
+<p>That decision splits the path in half. The UBO is rewritten every frame, so vertices land where they should; nothing the pair reads from the push block after the model matrix does.</p>
+<p>Both stages declare the same 96-byte block: `mat4 model`, `vec3 baseColor`, then `metallic`, `roughness`, `ao`, and eight trailing bytes that are inert in the vertex stage —</p>
+<div class="citation-chip"><code class="citation-code">vec2 padding;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.vert#L37" target="_blank" rel="noopener">shaders/core/forward.vert:37</a></div>
+<p>— and carry two bindless texture indices, packed as float bit patterns, in the fragment stage:</p>
+<div class="citation-chip"><code class="citation-code">float albedoTexIdx;   // uint32 packed as float (0xFFFFFFFF = no texture)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L53" target="_blank" rel="noopener">shaders/core/forward.frag:53</a></div>
+<p>The two agree with each other byte for byte: under std430 push rules `baseColor` occupies 64–76, `metallic` 76, `roughness` 80, `ao` 84, and the indices sit at 88 and 92, exactly covering `vec2 padding`. What they disagree with is what the engine pushes. `ObjectPushConstants` places a second matrix at byte 64:</p>
+<div class="citation-chip"><code class="citation-code">glm::mat4 viewProj;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L67" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:67</a></div>
+<p>So `baseColor` is `viewProj`&#x27;s first column, `metallic` is `viewProj[0].w`, `roughness` and `ao` are the first two floats of column 1, and the texture indices are `viewProj[1].z` and `viewProj[1].w`. The &quot;no texture&quot; sentinel is `0xFFFFFFFF`, a bit pattern an ordinary finite float never carries, so the guard passes and the shader samples `textures[]` at whatever index a projection-matrix element encodes — a descriptor read far past the end of the bound array.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`forward.vert` and `forward.frag` are a self-consistent pair that is inconsistent with the buffer the engine pushes. Positions are right because the transform comes from a UBO; every material parameter past byte 64 is a reinterpreted matrix element. Repairing this means rewriting both GLSL blocks against `ObjectPushConstants`, not patching one field.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="eight-lights-and-at-most-one-of-them-casts">Eight lights, and at most one of them casts</h2></div>
 <div class="prose reveal">
-<p>Simple path for debugging without GBuffer.</p>
+<p>The light loop is bounded twice — by the uploaded `numLights` and by the compile-time cap that has to match the C++ `LightUniformBuffer`:</p>
+<div class="citation-chip"><code class="citation-code">#define MAX_LIGHTS 8</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/types.glsl#L16" target="_blank" rel="noopener">shaders/includes/common/types.glsl:16</a></div>
+<p>Eight is the budget for the whole scene, and authored lights have first claim on it. `updateLightBuffer` walks the scene&#x27;s `LightComponent`s into the array, then appends the cached emissive-mesh proxies only while `numLights` is still below `MAX_LIGHTS` — emitters get the remainder, never a reserved share. The cache they come from holds at most one proxy per actor, built from the first material on it that has an emissive texture:</p>
+<div class="citation-chip"><code class="citation-code">break;  // one light per actor</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L484" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:484</a></div>
+<p>Shadowing is thinner than the data model suggests. `params.z` is documented as a shadow map *index*, but one shadow map is bound (set 0, binding 2, a single `sampler2D`) and the C++ side hands that index out once:</p>
+<div class="citation-chip"><code class="citation-code">int shadowCasterIndex = -1;  // Index of first shadow-casting light</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L259" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:259</a></div>
+<p>The eligibility test reads the raw `LightType` enum (Sphere = 0, Directional = 1, Spot = 2) and accepts 0 or 2, so an authored directional light never gets the shadow map — only a sphere (point) or a spot light does. Of those two only the spot light ends up with a projection, because `calculateLightSpaceMatrix` switches on the *remapped* type the same loop just wrote into `position.w`, where Sphere has become 1:</p>
+<div class="citation-chip"><code class="citation-code">int lightType = static_cast&lt;int&gt;(light.position.w);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L175" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:175</a></div>
+<p>1 matches neither its directional branch nor its spot branch, so a sphere light falls out the bottom and receives `glm::mat4(1.0f)`:</p>
+<div class="citation-chip"><code class="citation-code">// Point lights don&#x27;t use a single matrix (need cube maps)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/buffer_setup.cpp#L248" target="_blank" rel="noopener">ohao/gpu/vulkan/buffer_setup.cpp:248</a></div>
+<p>`shadow_pcf.glsl` then reads raw world position as clip space. After the `* 0.5 + 0.5` the bounds test passes only where world $x$ and $y$ lie in $[-1, 1]$ and world $z$ in $[0, 1]$: every fragment outside a 2 × 2 × 1 box at the origin returns unshadowed. The fallback sun synthesized for a scene with no lights is the one directional light that receives the map, and — type 0 in `position.w` — the one whose matrix is actually built.</p>
+<p>`forward.frag` is the only file in the tree that calls `calculateShadowForLightIndex`; the deferred path uses CSM or an RT shadow mask. The kernel is a fixed 5×5 PCF tap with a slope-scaled bias, `shadowBias * tan(acos(N·L))` clamped to 0.01.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The shadow helper takes a light *index*, not a `Light`, and reaches into the UBO by the global name `lighting` for each field. The obvious alternative — pass the 128-byte `Light` by value — was rejected for a reason recorded at the function:  {{cite shaders/includes/shadow/shadow_pcf.glsl &quot;CRITICAL: Pass light INDEX, not Light struct, to avoid GLSL struct copy corruption!&quot;}}  The cost is the coupling it creates. The header reads `lighting` at global scope on seven lines and declares it on none, so it only compiles inside a translation unit that has already declared that UBO — which is why `forward.frag` declares the block first and includes second. Swap the two lines and `glslc` stops with `&#x27;lighting&#x27; : undeclared identifier`, reported from inside the header rather than from the file that broke it. The instance name is part of the interface, and the header says so itself:  {{cite shaders/includes/shadow/shadow_pcf.glsl &quot;Caller must define LightUBO named &#x27;lighting&#x27; before including this file!&quot;}}  Rename `lighting` in `forward.frag` and a file you did not touch stops compiling. The block name `LightUBO` beside it is inert: member access goes through the instance, so the header never spells it outside that comment.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-falloff-that-is-not-inverse-square">The falloff that is not inverse square</h2></div>
 <div class="prose reveal">
-<p>8-light-limit forward path for smoke tests and simple scenes.</p>
+<p>Point and spot lights here attenuate through `attenuationSmooth`, whose only call sites outside its own header are in `forward.frag` — the header&#x27;s `attenuationSpot` and `attenuationPoint` wrappers have no callers at all:</p>
+<div class="citation-chip"><code class="citation-code">float attenuation = 1.0 / (1.0 + (distance * distance) / (range * range));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L52" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:52</a></div>
+<p>With $d$ the fragment-to-light distance and $r$ the light&#x27;s range (packed into `direction.w`), the full factor is</p>
+<div class="math-block">$$
+a(d) = \frac{1}{1 + (d/r)^2}\;\Big[\operatorname{sat}\!\big(1 - d/r\big)\Big]^2
+$$</div>
+<p>The trailing squared term exists because the first factor alone is $1/2$ at $d = r$: a light cut off at its range would leave a visible disc edge. Squaring the clamped linear ramp drives both the value and its first derivative to zero at $d = r$, so the light fades out instead of popping.</p>
+<p>Note that $a$ depends only on the ratio $d/r$. It is not inverse-square — at $d = 0$ it is exactly 1 for every light regardless of range — so `range` is not merely a culling distance, it is a second brightness control: widening a light&#x27;s range brightens every point already inside it.</p>
+<p>The deferred pipeline made the opposite call for the same `LightData`:</p>
+<div class="citation-chip"><code class="citation-code">float invSq = 1.0 / max(d2, 0.01);  // inverse-square (physical)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L95" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:95</a></div>
+<p>Genuine $1/d^2$ with a squared quartic window. Same scene, same light components, and the two raster paths disagree on falloff in shape, not just by a constant. Unlike the push-constant drift, this gap would survive a fix to the push block.</p>
+</div>
+<div class="section-rule"><h2 id="tangent-space-without-a-tangent">Tangent space without a tangent</h2></div>
+<div class="prose reveal">
+<p>`forward.vert` declares all eight vertex attributes the pipeline binds — including the `vec4` tangent with handedness in `w` — and forwards none past position, color, normal and UV0. The fragment shader rebuilds a basis from screen-space derivatives instead:</p>
+<div class="citation-chip"><code class="citation-code">vec3 T = normalize(dPdx * dUVdy.y - dPdy * dUVdx.y);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L167" target="_blank" rel="noopener">shaders/core/forward.frag:167</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 B = normalize(dPdy * dUVdx.x - dPdx * dUVdy.x);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L168" target="_blank" rel="noopener">shaders/core/forward.frag:168</a></div>
+<p>Expand those against the chain rule. With $J$ the screen-to-UV Jacobian, $\partial P/\partial x$ and $\partial P/\partial y$ are linear combinations of $\partial P/\partial u$ and $\partial P/\partial v$ with $J$&#x27;s entries as coefficients; substituting them into the two lines above cancels the cross terms and leaves</p>
+<div class="math-block">$$
+\mathbf{T}_{\text{raw}} = \det J \;\frac{\partial P}{\partial u},
+\qquad
+\mathbf{B}_{\text{raw}} = \det J \;\frac{\partial P}{\partial v}
+$$</div>
+<p>— the two surface tangents, each carrying the *same* factor $\det J$. `normalize` discards the magnitude but not the sign, and $\det J$ is negative exactly when the UV parameter frame and the screen-space derivative frame have opposite orientation, which for a given facing is exactly the mirrored island. Both axes flip together there. The frame&#x27;s determinant survives the double flip, since $(-\mathbf{T}) \times (-\mathbf{B}) = \mathbf{T} \times \mathbf{B}$, so `mat3(T, B, normal)` still has the handedness the mesh asked for — but the in-plane part of the perturbation, $x\mathbf{T} + y\mathbf{B}$, comes out rotated by 180°. Mirrored islands do not come out right; they come out with their tangent-space detail pointing backwards.</p>
+<p>That is one of three uncorrected costs. The frame is also constant across a triangle for planar UVs, losing the smooth interpolation the attribute would have given; and `T` and `B` are never orthogonalised against the interpolated normal, so on UV-skewed triangles the matrix handed to `mat3(T, B, normal)` is not orthonormal.</p>
+<p>`gbuffer.frag`, on the same geometry, reaches those two expressions verbatim — but only as a fallback for a degenerate attribute. Its first choice is the vertex tangent, Gram-Schmidted against the normal, with handedness taken from the authored `w`:</p>
+<div class="citation-chip"><code class="citation-code">T = normalize(fragTangent.xyz - N * dot(N, fragTangent.xyz));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L80" target="_blank" rel="noopener">shaders/core/gbuffer.frag:80</a></div>
+<div class="citation-chip"><code class="citation-code">B = normalize(cross(N, T)) * fragTangent.w;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L81" target="_blank" rel="noopener">shaders/core/gbuffer.frag:81</a></div>
+<p>None of this is what the current build puts on screen. The branch is entered on</p>
+<div class="citation-chip"><code class="citation-code">uint normalIdx = floatBitsToUint(material.normalTexIdx);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L156" target="_blank" rel="noopener">shaders/core/forward.frag:156</a></div>
+<p>and `material.normalTexIdx` is `viewProj[1].w`. Reinterpreting any normalized float&#x27;s bits gives an index of at least 8 million, against an array whose descriptor count defaults to</p>
+<div class="citation-chip"><code class="citation-code">uint32_t m_maxTextures{4096};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/bindless_texture_manager.hpp#L193" target="_blank" rel="noopener">ohao/gpu/vulkan/bindless_texture_manager.hpp:193</a></div>
+<p>So the comparison above is between two pieces of code, not two images.</p>
+</div>
+<div class="section-rule"><h2 id="display-encoding-has-to-happen-inside-the-fragment-shader">Display encoding has to happen inside the fragment shader</h2></div>
+<div class="prose reveal">
+<p>There is no post chain here — no bloom, no TAA, no exposure pass — and the color attachment is unsigned normalized, not sRGB, so the hardware encodes nothing on write:</p>
+<div class="citation-chip"><code class="citation-code">colorAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/framebuffer.cpp#L7" target="_blank" rel="noopener">ohao/gpu/vulkan/framebuffer.cpp:7</a></div>
+<p>`forward.frag` therefore ends by tonemapping with the Narkowicz ACES fit and applying a gamma curve itself:</p>
+<div class="citation-chip"><code class="citation-code">color = linearToSRGBFast(color);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L206" target="_blank" rel="noopener">shaders/core/forward.frag:206</a></div>
+<p>The ACES fit clamps to $[0,1]$, so highlights are hard clipped inside the shading pass and the readback buffer is already display-referred — nothing downstream can recover them. And the encode is the gamma-2.2 approximation,</p>
+<div class="citation-chip"><code class="citation-code">return pow(linear, vec3(1.0 / 2.2));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/color.glsl#L71" target="_blank" rel="noopener">shaders/includes/common/color.glsl:71</a></div>
+<p>not the piecewise sRGB transfer function the same header also provides, whose shadow segment is a straight line of slope 12.92 below linear 0.0031308:</p>
+<div class="citation-chip"><code class="citation-code">return linear * 12.92;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/color.glsl#L40" target="_blank" rel="noopener">shaders/includes/common/color.glsl:40</a></div>
+<p>The error runs the opposite way from what &quot;fast gamma&quot; suggests. The two curves cross at linear $\approx 0.125$, and *below* the crossing the approximation returns the higher code value: linear 0.001 encodes as 0.043 against a true 0.013, the gap peaking near 0.034 — 8.5 codes at 8 bits — around linear 0.002. Near-black comes out lifted, not crushed. Above the crossing the approximation is the darker of the two, by at most 0.006. Acceptable in a fallback viewport; wrong for anything compared against the offline tracer.</p>
+</div>
+<div class="section-rule"><h2 id="the-branch-that-is-never-compiled">The branch that is never compiled</h2></div>
+<div class="prose reveal">
+<p>`forward.frag` carries a complete Blinn-Phong alternative behind `USE_PBR`, with its own include of `blinn_phong.glsl`. The flag defends itself:</p>
+<div class="citation-chip"><code class="citation-code">#define USE_PBR 1  // Enable PBR by default</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L17" target="_blank" rel="noopener">shaders/core/forward.frag:17</a></div>
+<p>and nothing overrides it, because the shader build passes no preprocessor definitions at all:</p>
+<div class="citation-chip"><code class="citation-code">COMMAND ${GLSLC} --target-env=vulkan1.3 -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/includes ${SHADER} -o ${SPIRV}</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L46" target="_blank" rel="noopener">shaders/CMakeLists.txt:46</a></div>
+<p>Every shader goes through that one invocation — two `-I` paths, no `-D` — and the standalone `compile_shaders.sh` adds none either, so the `#else` branch and `blinn_phong.glsl` never reach SPIR-V. Never compiled is not the same as uncompilable: adding `-DUSE_PBR=0` to that exact command line builds `forward.frag` and its Blinn-Phong include without a diagnostic. The branch is not rotten, just unreachable.</p>
+<p>Worth knowing before deleting it: `blinn_phong.glsl` carries its own copy of the `attenuationSmooth` falloff under a different name,</p>
+<div class="citation-chip"><code class="citation-code">float calculateAttenuation(float distance, float range) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/blinn_phong.glsl#L15" target="_blank" rel="noopener">shaders/includes/lighting/blinn_phong.glsl:15</a></div>
+<p>its edge ramp spelled `clamp(..., 0.0, 1.0)` where the other header calls `saturate`, which `math.glsl` defines as that clamp. The arithmetic is identical; the names are not, so the two headers can be included in one translation unit without a redefinition. The duplication is a maintenance cost, not a merge blocker — and deleting the branch takes one of the two copies of the falloff with it.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`forward.frag` must declare the `LightUBO` named `lighting` **before** including `shadow_pcf.glsl`, which resolves that name at global scope without declaring it; `types.glsl` must precede both, since the UBO body uses `Light` and `MAX_LIGHTS`.</li>
+<li>`MAX_LIGHTS` is 8 in `types.glsl` and must match `LightUniformBuffer` in `renderer.hpp`. Emissive mesh proxies consume slots from the same eight.</li>
+<li>Both GLSL blocks describe 96 bytes that stop matching the 240-byte `ObjectPushConstants` at byte 64. Every material parameter and bindless index here is undefined until both are rewritten; the vertex transform is unaffected because it reads the camera UBO.</li>
+<li>The attachment is `R8G8B8A8_UNORM` with no post pass, so `forward.frag` owns tonemapping and transfer-function encoding. Remove either line and linear values ship into an 8-bit buffer.</li>
+<li>At most one light per frame carries a non-negative `params.z`, against a single `sampler2D` at set 0, binding 2. Treat `shadowMapIndex` as a boolean until a shadow atlas exists.</li>
+<li>The caster test switches on the `LightType` enum while `calculateLightSpaceMatrix` switches on the remapped type in `position.w`. A sphere light passes the first and misses both branches of the second, so it holds the shadow slot with an identity matrix. Change one encoding without the other and shadows move between &quot;wrong light&quot; and &quot;no projection&quot;.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/forward.vert</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/forward.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/types.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/buffer_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/lighting/light_attenuation.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/bindless_texture_manager.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/framebuffer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/color.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/lighting/blinn_phong.glsl</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

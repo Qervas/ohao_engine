@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 250" class="unit-diagram" role="img" aria-label="Timeline of seven render calls over a three-slot staging ring. Each call reads the staging slot it is about to overwrite, whose contents were written three calls earlier, so the pixel buffer lags the GPU by three frames.">
+  <defs>
+    <marker id="rp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="250" fill="#0f1419"/>
+
+  <text x="34" y="26" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">
+    render() call k — staging ring is 3 deep
+  </text>
+
+  <!-- read arcs: call k reads the slot last written at call k-3 -->
+  <g fill="none" stroke="#c4784a" stroke-width="1.4" marker-end="url(#rp-arrow)">
+    <path d="M 72 108 C 72 56, 360 56, 360 108"/>
+    <path d="M 168 108 C 168 62, 456 62, 456 108"/>
+    <path d="M 264 108 C 264 68, 552 68, 552 108"/>
+    <path d="M 360 108 C 360 74, 648 74, 648 108"/>
+  </g>
+  <text x="360" y="52" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#c4784a">
+    read: m_pixelBuffer &#8592; staging[k mod 3], written at call k&#8722;3
+  </text>
+
+  <!-- frame boxes -->
+  <g font-family="IBM Plex Mono,monospace" font-size="12">
+    <g>
+      <rect x="34" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="72" y="127" text-anchor="middle" fill="#e8e2d6">k=0</text>
+      <text x="72" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 0</text>
+    </g>
+    <g>
+      <rect x="130" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="168" y="127" text-anchor="middle" fill="#e8e2d6">k=1</text>
+      <text x="168" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 1</text>
+    </g>
+    <g>
+      <rect x="226" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="264" y="127" text-anchor="middle" fill="#e8e2d6">k=2</text>
+      <text x="264" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 2</text>
+    </g>
+    <g>
+      <rect x="322" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="360" y="127" text-anchor="middle" fill="#e8e2d6">k=3</text>
+      <text x="360" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 0</text>
+    </g>
+    <g>
+      <rect x="418" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="456" y="127" text-anchor="middle" fill="#e8e2d6">k=4</text>
+      <text x="456" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 1</text>
+    </g>
+    <g>
+      <rect x="514" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="552" y="127" text-anchor="middle" fill="#e8e2d6">k=5</text>
+      <text x="552" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 2</text>
+    </g>
+    <g>
+      <rect x="610" y="108" width="76" height="46" rx="3" fill="#1a222c" stroke="#3d4a58"/>
+      <text x="648" y="127" text-anchor="middle" fill="#e8e2d6">k=6</text>
+      <text x="648" y="144" text-anchor="middle" font-size="10.5" fill="#c4a574">slot 0</text>
+    </g>
+  </g>
+
+  <!-- write annotation -->
+  <text x="34" y="176" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#6e685c">
+    write: vkCmdCopyImageToBuffer(output image &#8594; staging[k mod 3]), fence signalled at end of call k
+  </text>
+
+  <line x1="34" y1="192" x2="686" y2="192" stroke="#3d4a58" stroke-width="1"/>
+
+  <text x="34" y="212" font-family="DM Sans,sans-serif" font-size="12" fill="#e8e2d6">
+    A driver wanting N accumulated samples calls render() N+3 times:
+  </text>
+  <text x="34" y="232" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#7dba8a">
+    last copy happens at k = N+2 and delivers the image produced at k = N&#8722;1 &#8212; exactly N samples.
+  </text>
+</svg>

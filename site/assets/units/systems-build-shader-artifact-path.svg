@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 372" class="unit-diagram" role="img" aria-label="Path a shader takes from source to the directory the runtime searches: glslc flattens shaders/rt/pt_raygen.rgen into build/shaders/rt_pt_raygen.rgen.spv, only when the shaders target is asked for by name; a renderer_test post-build step is the only rule that copies that directory to build/bin/shaders; the SPV loader tries bin/shaders relative to the working directory first and only falls back to build/shaders when that misses.">
+  <defs>
+    <marker id="sbArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d4a58"/>
+    </marker>
+    <marker id="sbArrowHot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="372" fill="#0f1419"/>
+
+  <text x="24" y="26" font-family="DM Sans,sans-serif" font-size="14" fill="#e8e2d6">One shader, from source tree to the path the C++ opens</text>
+
+  <!-- producer column -->
+  <text x="24" y="56" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">PRODUCE</text>
+
+  <rect x="24" y="66" width="286" height="34" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="38" y="87" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">shaders/rt/pt_raygen.rgen</text>
+
+  <line x1="167" y1="100" x2="167" y2="126" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#sbArrow)"/>
+  <text x="178" y="118" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">glslc --target-env=vulkan1.3</text>
+
+  <rect x="24" y="130" width="286" height="52" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="38" y="150" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">flatten: &quot;/&quot; &#8594; &quot;_&quot;, append .spv</text>
+  <text x="38" y="170" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">rt_pt_raygen.rgen.spv</text>
+
+  <line x1="167" y1="182" x2="167" y2="212" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#sbArrow)"/>
+  <text x="178" y="203" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">only via --target shaders</text>
+
+  <rect x="24" y="216" width="286" height="34" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+  <text x="38" y="237" font-family="IBM Plex Mono,monospace" font-size="12" fill="#7dba8a">build/shaders/</text>
+
+  <line x1="167" y1="250" x2="167" y2="284" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#sbArrow)"/>
+  <text x="178" y="270" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">renderer_test POST_BUILD</text>
+  <text x="178" y="284" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">copy_directory (only writer)</text>
+
+  <rect x="24" y="288" width="286" height="34" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="38" y="309" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">build/bin/shaders/</text>
+
+  <!-- consumer column -->
+  <text x="396" y="56" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">CONSUME — readFile() search order, CWD-relative</text>
+
+  <rect x="396" y="66" width="300" height="46" rx="4" fill="#1a222c" stroke="#c4784a"/>
+  <text x="410" y="85" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">1  bin/shaders/rt_pt_raygen.rgen.spv</text>
+  <text x="410" y="103" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">wins whenever a bin/shaders/ exists in the CWD</text>
+
+  <rect x="396" y="122" width="300" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="410" y="141" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">2  build/shaders/rt_pt_raygen.rgen.spv</text>
+  <text x="410" y="159" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">the fallback the docs rely on</text>
+
+  <rect x="396" y="178" width="300" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="410" y="197" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">3  build/Release/bin/shaders/...</text>
+  <text x="410" y="215" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">MSVC multi-config layout</text>
+
+  <!-- link from producer dirs into the search list -->
+  <path d="M 310 233 C 350 233 356 145 392 145" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#sbArrowHot)"/>
+  <path d="M 310 305 C 356 305 360 89 392 89" fill="none" stroke="#3d4a58" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#sbArrow)"/>
+
+  <rect x="396" y="248" width="300" height="74" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="410" y="268" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">Consequence</text>
+  <text x="410" y="288" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">A plain `cmake --build build` writes no .spv at all.</text>
+  <text x="410" y="304" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">Entry 2 makes `./build/cornell_box` work — unless a</text>
+  <text x="410" y="320" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">stale bin/shaders/ under the CWD answers first.</text>
+
+  <text x="24" y="352" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">Names and search order read from shaders/CMakeLists.txt, tests/renderer/CMakeLists.txt and path_tracer_pipeline.cpp.</text>
+</svg>

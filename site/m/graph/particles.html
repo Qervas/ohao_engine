@@ -33,32 +33,113 @@
         <p>CPU/GPU particle orchestration.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#one-pool-two-dispatches-one-indirect-draw">One pool, two dispatches, one indirect draw</a></li><li><a href="#the-allocator-that-only-counts-up">The allocator that only counts up</a></li><li><a href="#uniform-in-angle-is-not-uniform-in-solid-angle">Uniform in angle is not uniform in solid angle</a></li><li><a href="#what-the-presets-ask-for-and-what-the-gpu-does">What the presets ask for, and what the GPU does</a></li><li><a href="#the-instance-count-arrives-the-instance-index-does-not">The instance count arrives, the instance index does not</a></li><li><a href="#additive-depth-tested-never-depth-written">Additive, depth-tested, never depth-written</a></li><li><a href="#the-pass-draws-into-an-image-nobody-reads">The pass draws into an image nobody reads</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="one-pool-two-dispatches-one-indirect-draw">One pool, two dispatches, one indirect draw</h2></div>
 <div class="prose reveal">
-<p>Particle system orchestration (CPU/GPU).</p>
+<p>Sparks and smoke are the one class of geometry the CPU must not touch per-item: the count changes every frame and they die faster than a readback round-trip. OHAO answers with a fixed device-local pool — 65,536 records of four `vec4`s, 4 MiB, allocated once and never resized. Position carries current age in `.w`, velocity carries total lifetime in `.w`, then RGBA colour, then a params vector of size, rotation, type and an alive flag.</p>
+<div class="citation-chip"><code class="citation-code">VkDeviceSize particleSize = sizeof(GPUParticle) * m_maxParticles;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L102" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:102</a></div>
+<p>Two four-word buffers ride alongside — a counter block and a `VkDrawIndirectCommand` — both host-visible and coherent, so the CPU seeds them without a staging copy. A frame records one `emit` dispatch per queued emitter (64 threads per group, one per requested particle), a compute→compute barrier, then one `update` dispatch that sweeps the *entire* pool regardless of how many particles are alive:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t groupCount = (m_maxParticles + 255) / 256;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L504" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:504</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The alternative is the textbook alive-list/dead-list pair driven by `vkCmdDispatchIndirect`, where the update dispatch is sized from a GPU-resident count. That costs a compaction pass, an extra barrier, and makes the dispatch depend on device memory. OHAO pays a flat 65,536-lane sweep of mostly-early-out threads instead. A device-resident count does not disappear — `update` still builds `instanceCount` atomically and the draw reads it back through a `DRAW_INDIRECT` barrier — but only the *draw* waits on it, never a dispatch, so there is no compaction pass. The trade stops being right an order of magnitude up.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-allocator-that-only-counts-up">The allocator that only counts up</h2></div>
 <div class="prose reveal">
-<p>particle_system ties compute emit/update to draw.</p>
+<p>Emission allocates by bump. Each thread atomically increments `aliveCount` and treats the old value as its slot; the shader&#x27;s comment says &quot;find a dead particle slot&quot; but there is no free list to search.</p>
+<div class="citation-chip"><code class="citation-code">uint slot = atomicAdd(aliveCount, 1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_emit.comp#L58" target="_blank" rel="noopener">shaders/particles/particle_emit.comp:58</a></div>
+<p>An out-of-range thread gives its slot back by adding `-1u` and returns; nothing else ever lowers the counter. `update` marks expired particles dead and increments `deadCount`, which no shader and no C++ line reads. The counter block is written exactly once, at buffer creation — the only per-frame reset is the indirect command.</p>
+<p>`aliveCount` is therefore not a population but a monotone high-water mark of every particle ever emitted, and dead slots are never reclaimed. After 65,536 cumulative emissions — 512 explosions at 128 each — the bounds check fails for every emit thread and the system stops spawning for the life of the process. That is a data-structure gap, not a tuning one: recycling needs a free list or a compaction pass, and the three-buffer layout has nowhere to put one.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="uniform-in-angle-is-not-uniform-in-solid-angle">Uniform in angle is not uniform in solid angle</h2></div>
 <div class="prose reveal">
-<p>Effects without mesh component spam.</p>
+<p>Emission direction is a cone sample around the configured axis. The shader draws uniform variates $\xi_1,\xi_2$, uses the first for an azimuth, and feeds the second *directly* to the polar angle:</p>
+<div class="citation-chip"><code class="citation-code">float phi = r2 * spread;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_emit.comp#L76" target="_blank" rel="noopener">shaders/particles/particle_emit.comp:76</a></div>
+<p>then tilts the axis by that angle against an orthonormal in-plane pair:</p>
+<div class="citation-chip"><code class="citation-code">vec3 randomDir = dir * cos(phi) + (right * cos(theta) + up * sin(theta)) * sin(phi);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_emit.comp#L84" target="_blank" rel="noopener">shaders/particles/particle_emit.comp:84</a></div>
+<p>with $\theta = 2\pi\xi_1$, $\phi = \xi_2\phi_{\max}$, and $\phi_{\max}$ = `ParticleEmitterConfig::spreadAngle` in radians. The rotation is exact: $\mathbf{d}\cos\phi + (\mathbf{r}\cos\theta + \mathbf{u}\sin\theta)\sin\phi$ tilts $\phi$ off the axis $\mathbf{d}$. The density is not. A solid-angle element is $d\omega = \sin\phi\,d\phi\,d\theta$, so uniform $\phi$ gives a directional density</p>
+<div class="math-block">$$
+p(\omega) = \frac{p(\phi)}{2\pi\sin\phi} = \frac{1}{2\pi\,\phi_{\max}\,\sin\phi}
+$$</div>
+<p>which diverges as $\phi \to 0$ and again as $\phi \to \pi$. Uniform coverage of the cone instead requires inverting the cosine,</p>
+<div class="math-block">$$
+\cos\phi = 1 - \xi_2\,\bigl(1 - \cos\phi_{\max}\bigr)
+$$</div>
+<p>For a narrow cone the bias is invisible — muzzle flash&#x27;s $\phi_{\max} = 0.3$ rad just gets a hot core. The preset that suffers asks for a full sphere:</p>
+<div class="citation-chip"><code class="citation-code">config.spreadAngle = 3.14159f; // full sphere</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L588" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:588</a></div>
+<p>At $\phi_{\max} = \pi$ the $1/\sin\phi$ weighting piles particles onto both poles of the $+Y$ emission axis and starves the equator, so a &quot;spherical&quot; burst reads as a vertical dumbbell. The fix is the one line above.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="what-the-presets-ask-for-and-what-the-gpu-does">What the presets ask for, and what the GPU does</h2></div>
 <div class="prose reveal">
-<p>particle_system.hpp: defines `enum class ParticleType`.</p>
-<p>particle_system.hpp: defines `struct ParticleEmitterConfig`.</p>
-<p>particle_system.hpp: defines `class ParticleSystem`.</p>
-<p>particle_system.cpp: defines `struct GPUParticle`.</p>
+<p>The preset table is authored with real intent: muzzle flash gets zero gravity and drag 5.0 so it stops dead in the air, smoke gets gravity −0.5 for buoyancy, water splash −6.0 under the comment &quot;arcs up then falls&quot;. None of it reaches a shader. `update()` pushes two literals:</p>
+<div class="citation-chip"><code class="citation-code">pc.gravity = 9.81f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L495" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:495</a></div>
+<p>One of those presets would also miss its comment even if the value did arrive. The integrator *subtracts* the pushed gravity from `velocity.y`, so a negative `gravity` is a constant upward acceleration held for the particle&#x27;s whole life:</p>
+<div class="citation-chip"><code class="citation-code">p.velocity.y -= update.gravity * update.deltaTime;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_update.comp#L64" target="_blank" rel="noopener">shaders/particles/particle_update.comp:64</a></div>
+<p>Smoke&#x27;s −0.5 reads as the intended buoyancy. Water splash&#x27;s −6.0 against drag 0.5 accelerates droplets upward for their entire lifetime, toward a positive terminal velocity — the inverse of the arc its comment describes, not a tuning error.</p>
+<div class="citation-chip"><code class="citation-code">config.gravity     = -6.0f;   // arcs up then falls</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L637" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:637</a></div>
+<p>Every particle therefore falls at 9.81 with drag 0.1 — a structural consequence of the single global update dispatch, where one push-constant block covers all 65,536 particles and per-emitter forces have nowhere to live. The particle *type* is stored in `params.z` precisely so the update shader could branch on it, and the update shader never reads it. `colorEnd` and `endSize` share that fate: packed into the emit push constants, read by nothing, so the colour ramp is a hardcoded alpha fade and the size ramp a hardcoded shrink.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/graph-particles-dataflow.svg" alt="Which stage writes and which stage reads each field, read statically out of particle_system.cpp and the four shaders in shaders/particles/ — conceptual, not a captured GPU trace. Amber rows are written every frame and read by nobody." loading="lazy" /><figcaption>Which stage writes and which stage reads each field, read statically out of particle_system.cpp and the four shaders in shaders/particles/ — conceptual, not a captured GPU trace. Amber rows are written every frame and read by nobody.</figcaption></figure>
+<p>That shrink has a defect of its own. It names its local `startSize` but reads the *current* size back out of `params.x` and rescales it in place:</p>
+<div class="citation-chip"><code class="citation-code">p.params.x = startSize * (1.0 - lifeRatio * 0.5);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_update.comp#L77" target="_blank" rel="noopener">shaders/particles/particle_update.comp:77</a></div>
+<p>so the reduction compounds geometrically across frames instead of interpolating from the emitted size, and the result is frame-rate dependent — the same particle simulated at 120 fps ends up dramatically smaller than at 60 fps.</p>
+<p>Every emit queued in a frame is also handed the same `m_totalTime`, and the emit shader seeds its hash from `(time, index)` alone.</p>
+<div class="citation-chip"><code class="citation-code">m_particleSystem-&gt;emit(cmd, m_pendingEmits.front(), m_totalTime);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L575" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:575</a></div>
+<p>Two effects spawned on one frame with equal particle counts therefore get identical random directions, speeds and lifetimes.</p>
+</div>
+<div class="section-rule"><h2 id="the-instance-count-arrives-the-instance-index-does-not">The instance count arrives, the instance index does not</h2></div>
+<div class="prose reveal">
+<p>`update` finishes by counting survivors straight into the draw command, one atomic per alive lane:</p>
+<div class="citation-chip"><code class="citation-code">atomicAdd(instanceCount, 1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_update.comp#L82" target="_blank" rel="noopener">shaders/particles/particle_update.comp:82</a></div>
+<p>and the CPU pre-seeds that same struct each frame with a fixed six-vertex quad and a zero instance count:</p>
+<div class="citation-chip"><code class="citation-code">indirect[0] = 6; // vertexCount (6 vertices per billboard quad)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L481" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:481</a></div>
+<p>No vertex buffer is bound at all — the corners are a `const vec2[6]` in the vertex shader, expanded into a world-space quad by the two camera basis vectors pushed as constants. So the GPU is told: six vertices, N instances. The vertex shader then derives its particle from the *vertex* index:</p>
+<div class="citation-chip"><code class="citation-code">uint particleIndex = gl_VertexIndex / 6;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/particles/particle_render.vert#L39" target="_blank" rel="noopener">shaders/particles/particle_render.vert:39</a></div>
+<p>Under that draw `gl_VertexIndex` never leaves `[0, 6)`, so `particleIndex` is zero for every instance, and `gl_InstanceIndex` does not appear anywhere in `shaders/particles/`. The shader is written for the non-instanced form — a draw of 6·N vertices, where the divide-and-modulo split and the dead-particle early-out (which clips its quad to a degenerate point) both make sense — while the C++ issues the instanced form. The alive count is computed correctly and then never used to select a particle.</p>
+</div>
+<div class="section-rule"><h2 id="additive-depth-tested-never-depth-written">Additive, depth-tested, never depth-written</h2></div>
+<div class="prose reveal">
+<p>All seven particle types share one blend state: source alpha in, destination `ONE`.</p>
+<div class="citation-chip"><code class="citation-code">blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; // Additive</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L360" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:360</a></div>
+<p>Depth is tested against the GBuffer so particles are occluded by solid geometry, but never written, so they never occlude each other.</p>
+<div class="citation-chip"><code class="citation-code">depthStencil.depthWriteEnable = VK_FALSE; // Particles don&#x27;t write depth</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/particles/particle_system.cpp#L353" target="_blank" rel="noopener">ohao/render/particles/particle_system.cpp:353</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Additive compositing is commutative in RGB, so the colour is identical for any draw order and the engine never sorts billboards. The alpha channel is not: `srcAlphaBlendFactor` is `ONE` against `dstAlphaBlendFactor` `ZERO`, which replaces destination alpha with whichever fragment landed last.  {{cite ohao/render/particles/particle_system.cpp &quot;blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;&quot;}}  The rejected alternative — a per-frame depth sort of the pool, or an order-independent transparency scheme — means a GPU sort or extra targets for a subsystem that mostly draws sparks. The price is that nothing can darken: the SMOKE preset&#x27;s grey *adds* grey light to the HDR buffer rather than occluding what is behind it, so a smoke plume brightens the scene. Real smoke needs a second pipeline with `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA` and a sort.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-pass-draws-into-an-image-nobody-reads">The pass draws into an image nobody reads</h2></div>
+<div class="prose reveal">
+<p>Particles are stage 4.7, after lighting, SSS, SSR and sky, before post-processing. Their framebuffer&#x27;s colour attachment is the lighting pass&#x27;s output view:</p>
+<div class="citation-chip"><code class="citation-code">VkImageView hdrView = m_lightingPass-&gt;getOutputView();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L1029" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:1029</a></div>
+<p>That is not the view post-processing samples. The one call to `setHDRInputWithImage` prefers the SSS pass&#x27;s own output whenever an SSS pass exists, falling back to the lighting view only when it does not:</p>
+<div class="citation-chip"><code class="citation-code">m_sssPass-&gt;getOutputView() : m_lightingPass-&gt;getOutputView();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L621" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:621</a></div>
+<p>And it always exists. `SSSPass` is constructed unconditionally and reset only if `initialize()` fails, and a successful `initialize()` has already allocated its own 1920×1080 output image, so `getOutputView()` is never null. The SSS blur runs at stage 4.5 — two stages *before* the particle pass — reading the lighting image and writing its result into its own allocation. Everything downstream, bloom and tonemapping included, works from that earlier snapshot. So the billboards land in an image nothing downstream reads. This is the second, larger reason nothing appears on screen — the first being the vertex indexing above.</p>
+<p>The render pass itself loads both attachments rather than clearing them, and declares the colour attachment&#x27;s initial *and* final layouts as `SHADER_READ_ONLY_OPTIMAL` rather than `COLOR_ATTACHMENT_OPTIMAL`, matching what the lighting pass left behind.</p>
+<div class="citation-chip"><code class="citation-code">colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L972" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:972</a></div>
+<p>The depth attachment does not get the same care. It declares `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` at both ends:</p>
+<div class="citation-chip"><code class="citation-code">depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L987" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:987</a></div>
+<p>while the GBuffer pass leaves depth in `DEPTH_STENCIL_READ_ONLY_OPTIMAL`, which is also what the render graph declares for it.</p>
+<div class="citation-chip"><code class="citation-code">attachments[4].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L520" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:520</a></div>
+<p>The framebuffer holds the lighting output view and the GBuffer depth view directly, so it is rebuilt on every resize. Failure is handled unevenly. Only a failed `ParticleSystem::initialize` nulls the system; a failed render pass, framebuffer or render pipeline logs and leaves it alive.</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;DeferredRenderer: Particle render pass/framebuffer failed (non-fatal)&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L118" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:118</a></div>
+<p>In that state `emit` and `update` keep dispatching every frame — burning the compute and the monotone `aliveCount` budget — while `render()` early-outs on the null pipeline. Nothing is ever drawn, and nothing says so after the one startup line.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The pool is a bump allocator that never recycles, and the render path counts survivors correctly but indexes only particle zero. Until the index is wired to `gl_InstanceIndex` (or the draw de-instanced) the system draws one billboard N times; until slots are reclaimed it is a one-shot 65,536-particle budget for the process.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`update()` must be recorded after every `emit()` in the same frame: it is the only writer of `instanceCount` and it zeroes the indirect command from the host at record time, so a later emit contributes nothing to that frame&#x27;s draw.</li>
+<li>The indirect buffer is a single host-visible allocation rewritten through `vkMapMemory` during command recording, not by a GPU transfer — and the deferred path already runs three frames in flight, waiting only on frame *N*−3 before it records. Nothing synchronizes that host write against the two earlier submissions, which may still be reading the same buffer for their `vkCmdDrawIndirect`. The hazard is live today, not one that adding frames-in-flight would introduce; fixing it needs per-frame indirect buffers.</li>
+<li>The framebuffer aliases `DeferredLightingPass::getOutputView()` and `GBufferPass::getDepthView()`; recreating either pass invalidates it, and the resize path must rebuild it or the render pass binds a destroyed view.</li>
+<li>`emit` push constants total 112 bytes and `render` 96 — both inside the 128-byte floor Vulkan guarantees for `maxPushConstantsSize`. The emit block has exactly one `vec4` of headroom on a minimum-spec device; a second crosses it.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/particles/particle_system.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/particles/particle_system.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/particles/particle_emit.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/particles/particle_update.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/particles/particle_render.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/particles/particle_system.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

@@ -33,31 +33,92 @@
         <p>Optional async compute path.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#there-is-no-second-queue-to-be-asynchronous-against">There is no second queue to be asynchronous against</a></li><li><a href="#why-a-monotone-counter-beats-a-fence-per-task">Why a monotone counter beats a fence per task</a></li><li><a href="#the-feature-bit-the-renderer-never-asks-for">The feature bit the renderer never asks for</a></li><li><a href="#the-recycler-that-only-failure-ever-feeds">The recycler that only failure ever feeds</a></li><li><a href="#locking-that-is-right-for-exactly-one-submitting-thread">Locking that is right for exactly one submitting thread</a></li><li><a href="#the-barriers-assume-the-queue-is-not-really-separate">The barriers assume the queue is not really separate</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="there-is-no-second-queue-to-be-asynchronous-against">There is no second queue to be asynchronous against</h2></div>
 <div class="prose reveal">
-<p>Optional async compute queue path.</p>
+<p>Async compute earns its name from hardware: a GPU exposes queue families that consume command buffers concurrently, so a compute workload can occupy shader cores a raster pass leaves idle. OHAO&#x27;s device asks for exactly one queue, from the first graphics-capable family it finds:</p>
+<div class="citation-chip"><code class="citation-code">.queueCount = 1,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L124" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:124</a></div>
+<p>`AsyncComputeQueue::initialize` takes a family index and a queue index and fetches whatever handle they name — it does not search for a compute-only family itself:</p>
+<div class="citation-chip"><code class="citation-code">vkGetDeviceQueue(m_device, computeQueueFamily, computeQueueIndex, &amp;m_computeQueue);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L18" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:18</a></div>
+<p>The only code in the tree that constructs one is `tests/renderer/renderer_pipeline_tests.cpp`, and it passes the graphics family, with the reason in the comment:</p>
+<div class="citation-chip"><code class="citation-code">g_context-&gt;graphicsQueueFamily,  // Use graphics queue if no dedicated compute</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/renderer_pipeline_tests.cpp#L727" target="_blank" rel="noopener">tests/renderer/renderer_pipeline_tests.cpp:727</a></div>
+<p>That file is in no build target: `tests/renderer/CMakeLists.txt` declares `renderer_test`, `env_cdf_test`, `sobol_test` and `denoise_parse_test`, and names no fifth source. It could not compile if it were wired in, either — five of its includes name headers that are not in the tree at all.</p>
+<div class="citation-chip"><code class="citation-code">#include &quot;render/deferred/ssgi_pass.hpp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/renderer_pipeline_tests.cpp#L32" target="_blank" rel="noopener">tests/renderer/renderer_pipeline_tests.cpp:32</a></div>
+<p>So this is a submission harness that the source glob compiles into `ohao_renderer` and that has never executed — no frame path uses it and no test runs it. The compute work that does reach a frame — SSAO, SSR, subsurface scattering, the particle update, the à-trous and NRD denoise chains, DLSS-RR where it is compiled in — is recorded inline into the command buffer the frame is already recording and separated from the raster and ray-tracing work by pipeline barriers, not by a queue. What is worth reading here is the sync design, and the specific things that gate promoting it.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="why-a-monotone-counter-beats-a-fence-per-task">Why a monotone counter beats a fence per task</h2></div>
 <div class="prose reveal">
-<p>async_compute_queue.hpp for overlapping work.</p>
+<p>Vulkan&#x27;s classic completion primitive is the binary fence: one `VkFence` per submit, signalled once, reset by hand before reuse. N tasks in flight means a pool of N fences, a reset pass, and an ownership rule for the fence of a task nobody remembers. `AsyncComputeQueue` replaces that with a single timeline semaphore — a 64-bit device-side counter that only increases. Each submit claims the next value under the task mutex and asks the queue to signal it when the command buffer retires:</p>
+<div class="citation-chip"><code class="citation-code">task.signalValue = ++m_timelineSemaphore.currentValue;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L176" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:176</a></div>
+<p>Completion is then one non-blocking host query and one integer compare, with no reset and no per-task object:</p>
+<div class="citation-chip"><code class="citation-code">return semValue &gt;= it-&gt;second.signalValue;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L239" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:239</a></div>
+<p>`&gt;=` rather than `==` is what makes the scheme tolerant of gaps. A timeline signal only has to be strictly greater than the current value, not consecutive, and the counter is advanced *before* `vkQueueSubmit` runs — so a submit that fails burns the value it claimed, and the next successful task signals straight past it with no bookkeeping.</p>
+<p>The quieter property is load-bearing: because every task goes to the same `VkQueue`, signal operations retire in submission order, which makes the one counter a total order over tasks. Split these tasks across two real queues and a low-numbered task could still be executing when a high-numbered one signals — at which point `semValue &gt;= signalValue` reports the earlier task complete while its writes are still in flight. The single shared semaphore is correct precisely because the queue is single.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The standing alternative is a fence pool plus binary semaphores: fences for host polling, binary semaphores for queue-to-queue ordering, two lifetimes to manage. One timeline object does host polling, host waiting and cross-queue waiting, and a wait may be submitted for a value that has not been signalled yet — exactly what `submitTaskWithWait` needs to express &quot;run after the graphics queue reaches point X&quot;. No comment or commit message records this as a weighed decision, so read it as a property of the code rather than a documented one. What the code does show is the cost: every wait it builds is pinned to `VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`, so the API cannot express a wait that should block a transfer instead.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-feature-bit-the-renderer-never-asks-for">The feature bit the renderer never asks for</h2></div>
 <div class="prose reveal">
-<p>Headroom for culling/particles off the graphics queue.</p>
+<p>Timeline semaphores are core in Vulkan 1.2, but core does not mean enabled — `timelineSemaphore` is an opt-in feature bit. The renderer&#x27;s device fills a `VkPhysicalDeviceVulkan12Features` with buffer-device-address and the descriptor indexing bits the bindless path needs, and never sets it:</p>
+<div class="citation-chip"><code class="citation-code">VkPhysicalDeviceVulkan12Features features12{};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L193" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:193</a></div>
+<p>The one place in the tree that sets the bit is the same unbuilt pipeline-test file, in a device it constructs for itself alongside `VK_KHR_timeline_semaphore`:</p>
+<div class="citation-chip"><code class="citation-code">timelineFeatures.timelineSemaphore = VK_TRUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/renderer_pipeline_tests.cpp#L203" target="_blank" rel="noopener">tests/renderer/renderer_pipeline_tests.cpp:203</a></div>
+<p>Since nothing compiles that file, `createTimelineSemaphore()` has never run at all — not on an opted-in device, not on any other. Constructing an `AsyncComputeQueue` on `VulkanRenderer`&#x27;s device as it stands would create a timeline semaphore on a device that never enabled the feature — a validation error that many drivers service anyway, which is the worst failure mode to inherit. Adopting this class is a device-creation change first and a scheduling change second.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-recycler-that-only-failure-ever-feeds">The recycler that only failure ever feeds</h2></div>
 <div class="prose reveal">
-<p>async_compute_queue.hpp: defines `class GpuAllocator`.</p>
-<p>async_compute_queue.hpp: defines `enum class AsyncTaskStatus`.</p>
-<p>async_compute_queue.hpp: defines `struct AsyncTaskHandle`.</p>
+<p>`allocateCommandBuffer` pops a buffer off a free list and resets it, allocating a new primary from the pool only when the list is empty. `freeCommandBuffer` pushes one back, capped:</p>
+<div class="citation-chip"><code class="citation-code">if (m_freeCommandBuffers.size() &lt; MAX_COMMAND_BUFFERS) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L125" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:125</a></div>
+<p>That cap is never reached, because completing tasks never feed the list. `freeCommandBuffer` has exactly three call sites, all error paths inside `submitTaskWithWait`: begin failed, end failed, submit failed. On the success path the handle is dropped — `AsyncComputeTask` has no `VkCommandBuffer` member to hold it, despite the comment at the point where the task is filed:</p>
+<div class="citation-chip"><code class="citation-code">// Store task info (with command buffer for later cleanup)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L213" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:213</a></div>
+<p>So every *successful* submit allocates a fresh primary command buffer, released only when `cleanup()` destroys the pool; `MAX_COMMAND_BUFFERS = 16` bounds the free list, not the pool. `m_taskMap` has the same shape: entries are inserted and never erased — `processCompletedTasks` patches a finished task&#x27;s status in the map and erases only from `m_activeTasks` — so every task ever submitted keeps both of its `std::function`s alive, including the record closure, which is copied into the task *after* the recording has happened and is never invoked again:</p>
+<div class="citation-chip"><code class="citation-code">task.recordCommands = recordCommands;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L173" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:173</a></div>
+<p>Nothing has ever submitted a task, so nothing has ever paid for this. One task per frame would leak a command buffer and a retained closure per frame until the queue dies.</p>
+</div>
+<div class="section-rule"><h2 id="locking-that-is-right-for-exactly-one-submitting-thread">Locking that is right for exactly one submitting thread</h2></div>
+<div class="prose reveal">
+<p>`m_taskMutex` is held across the whole of `submitTaskWithWait`, `isTaskComplete` and `processCompletedTasks`. None of the class&#x27;s six `const` accessors takes it, and not by accident: the mutex is not `mutable`, so a `const` method physically cannot. Four of the six are harmless: two read `std::atomic` counters, two read a semaphore handle that only `initialize` and `cleanup` write. The other two read state that submits mutate — `getTaskSignalValue` walks `m_taskMap`:</p>
+<div class="citation-chip"><code class="citation-code">uint64_t AsyncComputeQueue::getTaskSignalValue(AsyncTaskHandle handle) const {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L299" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:299</a></div>
+<p>`waitForTask` calls that before it waits, so a wait racing a submit reads an `std::map` mid-insert. The other is `getCurrentSemaphoreValue`, which reads a plain `uint64_t` that submits increment under the lock — while `m_pendingTaskCount` and `m_completedTaskCount`, which nothing depends on for correctness, are the members that did get `std::atomic`.</p>
+<p>Completion callbacks then fire *while* the lock is held:</p>
+<div class="citation-chip"><code class="citation-code">it-&gt;onComplete();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L283" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:283</a></div>
+<p>so an `onComplete` that chains a follow-up task self-deadlocks on a non-recursive `std::mutex`. And `waitIdle` drains with `vkQueueWaitIdle`, which stalls the whole queue rather than waiting for this object&#x27;s tasks — on today&#x27;s device that queue is the graphics queue, so destroying an async queue would stall the renderer:</p>
+<div class="citation-chip"><code class="citation-code">vkQueueWaitIdle(m_computeQueue);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L259" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:259</a></div>
+</div>
+<div class="section-rule"><h2 id="the-barriers-assume-the-queue-is-not-really-separate">The barriers assume the queue is not really separate</h2></div>
+<div class="prose reveal">
+<p>`AsyncComputeHelper` supplies three barrier helpers. Two of them are image barriers — `computeToGraphicsBarrier` and its mirror `graphicsToComputeBarrier` — and both set `srcQueueFamilyIndex` and `dstQueueFamilyIndex` to `VK_QUEUE_FAMILY_IGNORED`, explicitly *no* queue-family ownership transfer:</p>
+<div class="citation-chip"><code class="citation-code">void AsyncComputeHelper::computeToGraphicsBarrier(VkCommandBuffer cmd,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L334" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:334</a></div>
+<p>The third, `computeBarrier`, cannot express a transfer even in principle: it builds a `VkMemoryBarrier`, a global barrier whose struct carries no queue-family fields at all.</p>
+<div class="citation-chip"><code class="citation-code">VkMemoryBarrier barrier{};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/async/async_compute_queue.cpp#L318" target="_blank" rel="noopener">ohao/render/async/async_compute_queue.cpp:318</a></div>
+<p>Every image and buffer in the engine is created with exclusive sharing, the GBuffer attachments included:</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L419" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:419</a></div>
+<p>Under exclusive sharing, a resource written on one family and read on another needs a release barrier submitted on the source queue and a matching acquire on the destination, both naming real family indices. One `vkCmdPipelineBarrier` with ignored families cannot express that. The helpers are correct for exactly one configuration — a single family, where &quot;async&quot; would mean a second submission stream rather than a second engine — and would need rewriting as release/acquire pairs the day a real compute family is used.</p>
+<p>Nothing in the tree calls them, and no single shipping pattern matches them. Three passes do end on the COMPUTE→FRAGMENT transition the image helper encodes; SSAO gets there through `RenderPassBase::transitionImage`, the shared deferred helper that fills in the same ignored families, so the call site names only stages:</p>
+<div class="citation-chip"><code class="citation-code">VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssao_pass.cpp#L128" target="_blank" rel="noopener">ohao/render/deferred/ssao_pass.cpp:128</a></div>
+<p>SSR and SSS build the `VkImageMemoryBarrier` inline instead, SSS widening the destination to `COMPUTE | FRAGMENT` because one helper closes both of its blur passes — the horizontal one, whose output the vertical pass reads in COMPUTE, and the vertical, whose output leaves for post-processing. The rest of the compute work ends elsewhere: the particle update publishes to `VERTEX_SHADER | DRAW_INDIRECT` so the indirect draw can read what it wrote, the à-trous passes chain COMPUTE→COMPUTE, and `nrd_compose.cpp` and `dlss_rr.cpp` contain no `vkCmdPipelineBarrier` at all.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Read this as a sync design, not a shipped frame path. Its timeline scheme is sound *because* there is one queue; three things gate promoting it — the device must enable `timelineSemaphore`, the success path must return command buffers to the free list, and the barrier helpers must become release/acquire pairs naming real family indices.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`AsyncComputeQueue` has no caller at all — the one file that constructs it is in no build target. Real frame compute in OHAO is recorded inline into the frame command buffer on the single graphics queue.</li>
+<li>The device must enable `timelineSemaphore` before an instance is created against it. `VulkanRenderer`&#x27;s device does not.</li>
+<li>All tasks must go to one `VkQueue`: the shared counter plus `semValue &gt;= signalValue` misreports completion as soon as tasks are spread across queues that retire out of order.</li>
+<li>An `onComplete` callback must not call back into the queue — it runs under the non-recursive `m_taskMutex`.</li>
+<li>`getTaskSignalValue` and `getCurrentSemaphoreValue` do not lock, so the class is safe only with a single submitting thread.</li>
+<li>A successful submit never returns its command buffer to the free list, so pool usage grows with total submissions until `cleanup()`.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/async/async_compute_queue.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/async/async_compute_queue.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/renderer/renderer_pipeline_tests.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/ssao_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/async/async_compute_queue.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

@@ -269,7 +269,7 @@ its `VkDeviceMemory` are function locals nothing destroys, so switching environm
 runtime keeps the previous one alive.
 
 {{cite ohao/gpu/vulkan/light_upload.cpp "imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;"}}
-{{cite ohao/gpu/vulkan/light_upload.cpp "VkImage envImage;"}}
+{{cite ohao/gpu/vulkan/light_upload.cpp "VkImage envImage = VK_NULL_HANDLE;"}}
 
 ## Contracts
 

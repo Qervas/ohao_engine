@@ -223,13 +223,18 @@ call, so the durable count is one memory object per texture. Vulkan caps live
 allocations at `maxMemoryAllocationCount`, so filling a 4096-slot array is a
 memory-object problem before it is a VRAM problem.
 
-{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "vkQueueWaitIdle(m_graphicsQueue);"}}
+There are two such paths, and they are near-duplicates of each other: the initial
+upload and the in-place update carry their own copies of the same staging, submit,
+wait and teardown sequence. Both end in `vkQueueWaitIdle(m_graphicsQueue)` — the
+lines are textually identical, which is why a change to one is easy to forget in
+the other.
 
-The staging path also takes the *first* `HOST_VISIBLE` memory type without requiring
-`HOST_COHERENT`, and never calls `vkFlushMappedMemoryRanges`. On desktop discrete
+{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "bool BindlessTextureManager::createTextureImage(std::span<const uint8_t> data, uint32_t width, uint32_t height,"}}
+{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "bool BindlessTextureManager::updateTextureFromMemory(BindlessTextureHandle handle,"}}
+
+Both copies also take the *first* `HOST_VISIBLE` memory type without requiring
+`HOST_COHERENT`, and neither calls `vkFlushMappedMemoryRanges`. On desktop discrete
 GPUs that type is coherent in practice, so it works; it is not portable by spec.
-
-{{cite ohao/gpu/vulkan/bindless_texture_manager.cpp "(memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))"}}
 
 ## What the path tracer uses instead
 

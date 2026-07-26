@@ -130,7 +130,7 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &amp;ew, &amp;eh, &amp;ec, 4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L310" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:310</a></div>
 <p>Two details survive that fix. The image is `R32G32B32A32_SFLOAT` — 16 bytes per texel, so a 4096×2048 panorama is 128 MB resident plus an equal host staging buffer — created directly beneath a comment claiming RGBA16F. And only the image *view* is retained; the `VkImage` and its `VkDeviceMemory` are function locals nothing destroys, so switching environments at runtime keeps the previous one alive.</p>
 <div class="citation-chip"><code class="citation-code">imgInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L317" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:317</a></div>
-<div class="citation-chip"><code class="citation-code">VkImage envImage;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L326" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:326</a></div>
+<div class="citation-chip"><code class="citation-code">VkImage envImage = VK_NULL_HANDLE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L326" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:326</a></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">

@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 424" class="unit-diagram" role="img" aria-label="Per-texture image layout and pipeline stage timeline across the six render-graph passes of the deferred frame — CSM, GBuffer, SSAO, RTShadow, RTGI, DeferredLighting — marking which emitted barriers carry a real dependency, which are redundant, and which are sourced from UNDEFINED or cover only one array layer.">
+  <rect x="0" y="0" width="720" height="424" fill="#0f1419"/>
+
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574">
+    <text x="8" y="18">graph pass order (identity — the order addPass / addComputePass was called)</text>
+  </g>
+
+  <!-- pass column headers -->
+  <g>
+    <rect x="122" y="26" width="96" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="221" y="26" width="96" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="320" y="26" width="96" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="419" y="26" width="96" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="518" y="26" width="96" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <rect x="617" y="26" width="96" height="30" fill="#1a222c" stroke="#3d4a58"/>
+    <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6" text-anchor="middle">
+      <text x="170" y="40">CSM</text>
+      <text x="269" y="40">GBuffer</text>
+      <text x="368" y="40">SSAO</text>
+      <text x="467" y="40">RTShadow</text>
+      <text x="566" y="40">RTGI</text>
+      <text x="665" y="40" font-size="9">DeferredLighting</text>
+    </g>
+    <g font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c" text-anchor="middle">
+      <text x="170" y="51">graphics</text>
+      <text x="269" y="51">graphics</text>
+      <text x="368" y="51">compute</text>
+      <text x="467" y="51">compute</text>
+      <text x="566" y="51">compute</text>
+      <text x="665" y="51">graphics</text>
+    </g>
+  </g>
+
+  <!-- ============ ROW 1: csm_shadow (y0 = 66) ============ -->
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574" text-anchor="end">
+    <text x="114" y="84">csm_shadow</text>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c" text-anchor="end">
+    <text x="114" y="96">D32_SFLOAT</text>
+    <text x="114" y="107">4 array layers</text>
+  </g>
+  <rect x="122" y="66" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="221" y="66" width="393" height="52" fill="#0f1419" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <rect x="617" y="66" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <g text-anchor="middle" font-family="IBM Plex Mono,monospace">
+    <text x="170" y="79" font-size="8" fill="#e8e2d6">depth write</text>
+    <text x="170" y="91" font-size="8" fill="#6e685c">UNDEF&#8594;DS_ATT</text>
+    <text x="170" y="102" font-size="7" fill="#6e685c">TOP&#8594;FRAG_TESTS</text>
+    <text x="170" y="113" font-size="7" fill="#6e685c">first use</text>
+    <text x="417" y="96" font-size="8" fill="#6e685c">no graph access</text>
+    <text x="665" y="79" font-size="8" fill="#e8e2d6">read (frag)</text>
+    <text x="665" y="91" font-size="8" fill="#7dba8a">DS_ATT&#8594;SHADER_RO</text>
+    <text x="665" y="102" font-size="7" fill="#7dba8a">FRAG_TESTS&#8594;FRAGMENT</text>
+    <text x="665" y="113" font-size="7" fill="#c4784a">layer 0 of 4 only</text>
+  </g>
+
+  <!-- ============ ROW 2: gbuffer_normal (y0 = 126) ============ -->
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574" text-anchor="end">
+    <text x="114" y="144">gbuffer_normal</text>
+  </g>
+  <g font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c" text-anchor="end">
+    <text x="114" y="156">imported, not owned</text>
+  </g>
+  <rect x="122" y="126" width="96" height="52" fill="#0f1419" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <rect x="221" y="126" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="320" y="126" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="419" y="126" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="518" y="126" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="617" y="126" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <g text-anchor="middle" font-family="IBM Plex Mono,monospace">
+    <text x="170" y="156" font-size="8" fill="#6e685c">no graph access</text>
+
+    <text x="269" y="139" font-size="8" fill="#e8e2d6">color write</text>
+    <text x="269" y="151" font-size="8" fill="#6e685c">UNDEF&#8594;SHADER_RO</text>
+    <text x="269" y="162" font-size="7" fill="#6e685c">TOP&#8594;COLOR_OUT</text>
+    <text x="269" y="173" font-size="7" fill="#6e685c">first use</text>
+
+    <text x="368" y="139" font-size="8" fill="#e8e2d6">read (comp)</text>
+    <text x="368" y="151" font-size="8" fill="#7dba8a">no layout change</text>
+    <text x="368" y="162" font-size="7" fill="#7dba8a">COLOR_OUT&#8594;COMPUTE</text>
+    <text x="368" y="173" font-size="7" fill="#7dba8a">the real RAW edge</text>
+
+    <text x="467" y="139" font-size="8" fill="#e8e2d6">read (comp)</text>
+    <text x="467" y="151" font-size="8" fill="#c4784a">UNDEF&#8594;SHADER_RO</text>
+    <text x="467" y="162" font-size="7" fill="#c4784a">TOP&#8594;COMPUTE</text>
+    <text x="467" y="173" font-size="7" fill="#c4784a">read-after-read</text>
+
+    <text x="566" y="139" font-size="8" fill="#e8e2d6">read (comp)</text>
+    <text x="566" y="151" font-size="8" fill="#c4784a">UNDEF&#8594;SHADER_RO</text>
+    <text x="566" y="162" font-size="7" fill="#c4784a">TOP&#8594;COMPUTE</text>
+    <text x="566" y="173" font-size="7" fill="#c4784a">read-after-read</text>
+
+    <text x="665" y="139" font-size="8" fill="#e8e2d6">read (frag)</text>
+    <text x="665" y="151" font-size="8" fill="#c4784a">UNDEF&#8594;SHADER_RO</text>
+    <text x="665" y="162" font-size="7" fill="#c4784a">TOP&#8594;FRAGMENT</text>
+    <text x="665" y="173" font-size="7" fill="#c4784a">read-after-read</text>
+  </g>
+
+  <!-- ============ ROW 3: gbuffer_albedo (y0 = 186) ============ -->
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574" text-anchor="end">
+    <text x="114" y="204">gbuffer_albedo</text>
+  </g>
+  <rect x="122" y="186" width="96" height="52" fill="#0f1419" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <rect x="221" y="186" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="320" y="186" width="195" height="52" fill="#0f1419" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <rect x="518" y="186" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="617" y="186" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <g text-anchor="middle" font-family="IBM Plex Mono,monospace">
+    <text x="170" y="216" font-size="8" fill="#6e685c">no graph access</text>
+
+    <text x="269" y="199" font-size="8" fill="#e8e2d6">color write</text>
+    <text x="269" y="211" font-size="8" fill="#6e685c">UNDEF&#8594;SHADER_RO</text>
+    <text x="269" y="222" font-size="7" fill="#6e685c">TOP&#8594;COLOR_OUT</text>
+    <text x="269" y="233" font-size="7" fill="#6e685c">first use</text>
+
+    <text x="417" y="216" font-size="8" fill="#6e685c">no graph access</text>
+
+    <text x="566" y="199" font-size="8" fill="#e8e2d6">read (comp)</text>
+    <text x="566" y="211" font-size="8" fill="#7dba8a">no layout change</text>
+    <text x="566" y="222" font-size="7" fill="#7dba8a">COLOR_OUT&#8594;COMPUTE</text>
+    <text x="566" y="233" font-size="7" fill="#7dba8a">the real RAW edge</text>
+
+    <text x="665" y="199" font-size="8" fill="#e8e2d6">read (frag)</text>
+    <text x="665" y="211" font-size="8" fill="#c4784a">UNDEF&#8594;SHADER_RO</text>
+    <text x="665" y="222" font-size="7" fill="#c4784a">TOP&#8594;FRAGMENT</text>
+    <text x="665" y="233" font-size="7" fill="#c4784a">read-after-read</text>
+  </g>
+
+  <!-- ============ ROW 4: gbuffer_depth (y0 = 246) ============ -->
+  <g font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4a574" text-anchor="end">
+    <text x="114" y="264">gbuffer_depth</text>
+  </g>
+  <rect x="122" y="246" width="96" height="52" fill="#0f1419" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <rect x="221" y="246" width="96" height="52" fill="#1a222c" stroke="#3d4a58"/>
+  <rect x="320" y="246" width="393" height="52" fill="#0f1419" stroke="#3d4a58" stroke-dasharray="3 3"/>
+  <g text-anchor="middle" font-family="IBM Plex Mono,monospace">
+    <text x="170" y="276" font-size="8" fill="#6e685c">no graph access</text>
+
+    <text x="269" y="259" font-size="8" fill="#e8e2d6">depth write</text>
+    <text x="269" y="271" font-size="8" fill="#6e685c">UNDEF&#8594;DS_READ_ONLY</text>
+    <text x="269" y="282" font-size="7" fill="#6e685c">TOP&#8594;FRAG_TESTS</text>
+    <text x="269" y="293" font-size="7" fill="#6e685c">first use</text>
+
+    <text x="516" y="276" font-size="8" fill="#6e685c">declared by no later pass</text>
+  </g>
+
+  <!-- abbreviations -->
+  <g font-family="IBM Plex Mono,monospace" font-size="8" fill="#6e685c">
+    <text x="8" y="316">SHADER_RO = SHADER_READ_ONLY_OPTIMAL   DS_ATT = DEPTH_STENCIL_ATTACHMENT_OPTIMAL   DS_READ_ONLY = DEPTH_STENCIL_READ_ONLY_OPTIMAL</text>
+    <text x="8" y="328">TOP = TOP_OF_PIPE   FRAG_TESTS = EARLY|LATE_FRAGMENT_TESTS   COLOR_OUT = COLOR_ATTACHMENT_OUTPUT   COMPUTE / FRAGMENT = shader stages</text>
+  </g>
+
+  <!-- legend -->
+  <line x1="8" y1="342" x2="712" y2="342" stroke="#3d4a58"/>
+  <g font-family="DM Sans,sans-serif" font-size="10" fill="#e8e2d6">
+    <rect x="14" y="352" width="10" height="10" fill="#7dba8a"/>
+    <text x="32" y="361">barrier that carries a real execution/memory dependency</text>
+    <rect x="14" y="370" width="10" height="10" fill="#6e685c"/>
+    <text x="32" y="379">barrier the pass's own VkRenderPass would have made anyway (initialLayout = UNDEFINED)</text>
+    <rect x="14" y="388" width="10" height="10" fill="#c4784a"/>
+    <text x="32" y="397">sourced from UNDEFINED because the predecessor was a read, or covering 1 array layer of 4 — the unsound cases</text>
+  </g>
+</svg>

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 268" class="unit-diagram" role="img" aria-label="Image layout timeline for the RT GI output and history images across one render call, showing the trace, the copy, and the resize hazard">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="24" y="24" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">IMAGE LAYOUTS ACROSS ONE RTGITechnique::render() CALL</text>
+
+<!-- command strip -->
+<text x="195" y="48" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">frame start</text>
+<text x="325" y="48" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">vkCmdTraceRaysKHR</text>
+<text x="472" y="48" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">vkCmdCopyImage</text>
+<text x="622" y="48" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">deferred lighting</text>
+
+<!-- barrier separators -->
+<line x1="250" y1="54" x2="250" y2="166" stroke="#3d4a58" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="400" y1="54" x2="400" y2="166" stroke="#3d4a58" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="545" y1="54" x2="545" y2="166" stroke="#3d4a58" stroke-width="1" stroke-dasharray="3 3"/>
+
+<!-- lane labels -->
+<text x="24" y="84" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">giOutput</text>
+<text x="24" y="98" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">RGBA16F</text>
+<text x="24" y="140" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">giHistory</text>
+<text x="24" y="154" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">RGBA16F</text>
+
+<!-- giOutput lane -->
+<rect x="110" y="66" width="140" height="30" fill="#1a222c" stroke="#3d4a58"/>
+<text x="180" y="85" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">UNDEFINED</text>
+<rect x="250" y="66" width="150" height="30" fill="#1a222c" stroke="#7dba8a"/>
+<text x="325" y="85" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">GENERAL (rgen writes)</text>
+<rect x="400" y="66" width="145" height="30" fill="#1a222c" stroke="#3d4a58"/>
+<text x="472" y="85" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">TRANSFER_SRC</text>
+<rect x="545" y="66" width="150" height="30" fill="#1a222c" stroke="#3d4a58"/>
+<text x="620" y="85" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">SHADER_READ_ONLY</text>
+
+<!-- giHistory lane -->
+<rect x="110" y="126" width="140" height="30" fill="#1a222c" stroke="#c4784a"/>
+<text x="180" y="145" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">TRANSFER_DST *</text>
+<rect x="250" y="126" width="150" height="30" fill="#1a222c" stroke="#7dba8a"/>
+<text x="325" y="145" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">SHADER_READ (sampled)</text>
+<rect x="400" y="126" width="295" height="30" fill="#1a222c" stroke="#3d4a58"/>
+<text x="547" y="145" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="9" text-anchor="middle">TRANSFER_DST (becomes next frame's history)</text>
+
+<!-- copy arrow -->
+<path d="M472 98 L472 122" stroke="#c4784a" stroke-width="1.5" fill="none"/>
+<path d="M472 126 l-4 -6 l8 0 z" fill="#c4784a"/>
+<text x="482" y="116" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="10">full-res copy</text>
+
+<!-- footnotes -->
+<text x="24" y="196" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">* asserted as oldLayout whenever the technique's own m_frameIndex &gt; 0.</text>
+<text x="24" y="214" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">resize() recreates giHistory (layout UNDEFINED, old handles leaked) but never resets m_frameIndex,</text>
+<text x="24" y="230" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">so the first post-resize barrier claims a layout the image is not in.</text>
+<text x="24" y="254" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">Conceptual — transcribed from the barrier sequence in rt_gi_technique.cpp::render(). Not a capture.</text>
+</svg>

@@ -33,34 +33,132 @@
         <p>IBL, attenuation, light types, phase, blinn_phong.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#what-the-include-graph-actually-says">What the include graph actually says</a></li><li><a href="#the-falloff-forward-frag-asks-for">The falloff forward.frag asks for</a></li><li><a href="#the-falloff-the-deferred-pipeline-evaluates">The falloff the deferred pipeline evaluates</a></li><li><a href="#three-reasons-ibl-glsl-cannot-simply-be-included">Three reasons ibl.glsl cannot simply be included</a></li><li><a href="#the-ibl-that-was-built-twice-and-wired-zero-times">The IBL that was built twice and wired zero times</a></li><li><a href="#phase-functions-with-no-medium">Phase functions with no medium</a></li><li><a href="#blinn-phong-glsl-and-the-scar-it-documents">blinn_phong.glsl and the scar it documents</a></li><li><a href="#light-types-glsl-the-abstraction-that-lost">light_types.glsl: the abstraction that lost</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="what-the-include-graph-actually-says">What the include graph actually says</h2></div>
 <div class="prose reveal">
-<p>IBL, attenuation, light types, phase, blinn_phong helpers.</p>
+<p>Five headers sit in `shaders/includes/lighting/`, and every `#include` of that directory in the whole tree amounts to four lines: `forward.frag` pulls `light_attenuation.glsl` in its PBR branch and `blinn_phong.glsl` in the legacy branch, and `cloud.comp` and `volumetric_scatter.comp` — both under `shaders/_disabled/` — pull `phase.glsl`. `ibl.glsl` and `light_types.glsl` appear in no `#include` anywhere.</p>
+<div class="citation-chip"><code class="citation-code">#include &quot;includes/lighting/light_attenuation.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L71" target="_blank" rel="noopener">shaders/core/forward.frag:71</a></div>
+<p>That would be a boring page if an unused file implied unused math. It does not: `deferred_lighting.frag`, the shader that actually runs, re-derives the spot-cone ramp, the light-direction and ambient helpers, and the whole split-sum IBL block inline — the same algebra, none of it included from here. The one thing it does *not* re-derive is the distance law the forward shader adopted.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Treat this directory as a proposal, not an implementation. The only shader that includes any of it is `forward.frag`, whose pipeline no shipped binary ever binds. Everything that ships is in `deferred_lighting.frag`, which copied some of this math verbatim and rejected the rest. The interesting failures are where the copy and the original disagree.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-falloff-forward-frag-asks-for">The falloff forward.frag asks for</h2></div>
 <div class="prose reveal">
-<p>ibl.glsl samples prefiltered specular + irradiance + BRDF LUT.</p>
+<p>`attenuationSmooth` — commented in the header as &quot;current OHAO default&quot; — is one of exactly two functions in `light_attenuation.glsl` that anything in the tree calls; `attenuationSpotCone` is the other, and every call site is in `forward.frag`&#x27;s PBR branch:</p>
+<div class="math-block">$$
+a_{\text{fwd}}(d) \;=\; \frac{1}{1 + d^{2}/r^{2}}\;\Big(\mathrm{clamp}\big(1 - \tfrac{d}{r},\,0,\,1\big)\Big)^{2}
+$$</div>
+<p>$d$ is the surface-to-light distance and $r$ is the light&#x27;s range, which travels in the `w` channel of the packed direction vector. The first factor is an inverse-square-*shaped* core that stays finite at $d=0$, where it equals exactly 1. The second is a squared edge ramp, so both the value and its first derivative vanish at $d = r$: a light leaving its range fades out instead of popping.</p>
+<div class="citation-chip"><code class="citation-code">float attenuation = 1.0 / (1.0 + (distance * distance) / (range * range));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L52" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:52</a></div>
+<p>Point and spot lights both take it; directional lights skip attenuation entirely, and spots multiply in a plain linear cone ramp between the inner and outer cosines — the header&#x27;s smoothstepped `attenuationSpotConeSmooth` variant has no callers.</p>
+<div class="citation-chip"><code class="citation-code">attenuation *= attenuationSpotCone(cosTheta, innerCone, outerCone);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L110" target="_blank" rel="noopener">shaders/core/forward.frag:110</a></div>
+<p>The price of that bounded shape is that $r$ scales brightness everywhere, not just near the cutoff. Both factors rise monotonically with $r$ at fixed $d$, so widening a light&#x27;s range *brightens* it at every distance: at $d = 5$, taking $r$ from 10 to 20 moves the factor from $0.8 \times 0.25 = 0.200$ to $0.941 \times 0.5625 = 0.529$. Range is not a cutoff knob here; it is a second intensity knob.</p>
+<p>Nothing runs this. `forward.frag`&#x27;s pipeline is created on every renderer init, but the two `vkCmdBindPipeline` calls that take it sit on the fall-through `m_renderMode == RenderMode::Forward` path, and the CLI mode resolver every example shares can return only `Deferred`, `RTRealtime` or `RTOffline`.</p>
+<div class="citation-chip"><code class="citation-code">vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L315" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:315</a></div>
+<div class="citation-chip"><code class="citation-code">if (opts.useDeferred) return RenderMode::Deferred;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_cli.hpp#L84" target="_blank" rel="noopener">examples/example_cli.hpp:84</a></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-falloff-the-deferred-pipeline-evaluates">The falloff the deferred pipeline evaluates</h2></div>
 <div class="prose reveal">
-<p>Deferred and hybrid share light math with CPU packs.</p>
+<p>`deferred_lighting.frag` does not include the header. It declares its own `calculateAttenuation`, and picks a different law — Karis-style windowed inverse-square:</p>
+<div class="math-block">$$
+a_{\text{def}}(d) \;=\; \frac{1}{\max(d^{2},\,0.01)}\;\Big(\mathrm{clamp}\big(1 - (d/r)^{4},\,0,\,1\big)\Big)^{2}
+$$</div>
+<p>Same symbols. This one is correct in the far field and clamps the $1/d^{2}$ singularity at 100 rather than removing it, with a quartic window that reaches zero at $d = r$ while staying near 1 over most of the light&#x27;s useful volume.</p>
+<div class="citation-chip"><code class="citation-code">float windowing = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L96" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:96</a></div>
+<p>The header already contains the near-match — `attenuationUE4` — with zero callers. It also differs from the deferred version in a way that changes units: it normalises distance by range *before* squaring, so its core is dimensionless and bounded by 1.</p>
+<div class="citation-chip"><code class="citation-code">float d = distance / range;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/light_attenuation.glsl#L38" target="_blank" rel="noopener">shaders/includes/lighting/light_attenuation.glsl:38</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/shaders-includes-lighting-falloff.svg" alt="Conceptual, not measured: the three laws evaluated directly from the formulas in light_attenuation.glsl and deferred_lighting.frag, each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range." loading="lazy" /><figcaption>Conceptual, not measured: the three laws evaluated directly from the formulas in light_attenuation.glsl and deferred_lighting.frag, each normalised to 1 at d = 0.05·range so the shapes can be compared on one axis. Log vertical scale; curves are clipped where they fall below 1e-3, though all three reach exactly zero at d = range.</figcaption></figure>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Two raster pipelines, one `LightData`, two incompatible falloff laws. The forward law is dimensionless and peaks at 1; the deferred law carries 1/length² units and peaks at 100. They are not related by any constant — the ratio between them varies with both distance and range — so a light intensity tuned in Deferred mode is simply wrong in Forward mode. The obvious fix — one shared include — sits directly above `attenuationSmooth` in `light_attenuation.glsl`, unused, because adopting a physical law means re-authoring every intensity that was tuned against the bounded one.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="three-reasons-ibl-glsl-cannot-simply-be-included">Three reasons ibl.glsl cannot simply be included</h2></div>
 <div class="prose reveal">
-<p>ibl.glsl samples prefiltered specular + irradiance + BRDF LUT for deferred and hybrid.</p>
-<p>light_types.glsl mirrors CPU LightData / GPULight packing conventions.</p>
-<p>phase.glsl for volume/cloud scattering lobes.</p>
+<p>`ibl.glsl` declares `PI` and `MAX_REFLECTION_LOD` as `const float`s. `math.glsl` defines the first as an object-like macro and pulls in `constants.glsl`, which defines the second the same way. `deferred_lighting.frag` reaches `math.glsl` transitively through `brdf_ggx.glsl` → `brdf_common.glsl`; `forward.frag` includes it directly, two lines before it includes `brdf_ggx.glsl`.</p>
+<div class="citation-chip"><code class="citation-code">const float PI = 3.14159265359;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/ibl.glsl#L7" target="_blank" rel="noopener">shaders/includes/lighting/ibl.glsl:7</a></div>
+<div class="citation-chip"><code class="citation-code">#define PI          3.14159265359</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/math.glsl#L17" target="_blank" rel="noopener">shaders/includes/common/math.glsl:17</a></div>
+<div class="citation-chip"><code class="citation-code">#define MAX_REFLECTION_LOD 4.0</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/constants.glsl#L63" target="_blank" rel="noopener">shaders/includes/common/constants.glsl:63</a></div>
+<p>Include `math.glsl` first and the macro rewrites the declaration into `const float 3.14159265359 = 3.14159265359;` — a syntax error, not a redefinition warning. Guard `PI` and `glslc` reports the identical error one line down, at `MAX_REFLECTION_LOD`. The failure is order-dependent: put `ibl.glsl` first and both `const float`s are parsed before either macro exists, and the pair compiles clean. `phase.glsl` sidesteps the question entirely by guarding its own `PI`, which is why it composes in either order.</p>
+<div class="citation-chip"><code class="citation-code">const float MAX_REFLECTION_LOD = 4.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/ibl.glsl#L8" target="_blank" rel="noopener">shaders/includes/lighting/ibl.glsl:8</a></div>
+<div class="citation-chip"><code class="citation-code">#ifndef PI</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/phase.glsl#L10" target="_blank" rel="noopener">shaders/includes/lighting/phase.glsl:10</a></div>
+<p>Guarding both constants still is not enough. `fresnelSchlickRoughness` has a full body in `ibl.glsl` and another — same formula, `saturate` for `clamp` — in `brdf_common.glsl`, and GLSL has no weak-symbol rule: `glslc` rejects whichever definition it sees second, in either include order. Both raster shaders reach `brdf_common.glsl` through `brdf_ggx.glsl`, so this one cannot be ordered around. Adopting `ibl.glsl` means deleting its Fresnel and taking the BRDF library&#x27;s.</p>
+<div class="citation-chip"><code class="citation-code">vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/ibl.glsl#L11" target="_blank" rel="noopener">shaders/includes/lighting/ibl.glsl:11</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_common.glsl#L27" target="_blank" rel="noopener">shaders/includes/brdf/brdf_common.glsl:27</a></div>
+</div>
+<div class="section-rule"><h2 id="the-ibl-that-was-built-twice-and-wired-zero-times">The IBL that was built twice and wired zero times</h2></div>
+<div class="prose reveal">
+<p>`ibl.glsl` is a complete split-sum evaluator — Fresnel-with-roughness, irradiance cubemap fetch, prefiltered specular fetch, BRDF LUT lookup — with a matching C++ half in `IBLProcessor`, which turns an equirectangular HDR into a cubemap, prefilters it across five mip levels spanning roughness 0 to 1 in quarter steps, and integrates the LUT.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t PREFILTER_MIP_LEVELS = 5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/ibl/ibl_processor.hpp#L44" target="_blank" rel="noopener">ohao/render/ibl/ibl_processor.hpp:44</a></div>
+<p>Neither half runs. `calculateIBL` is in no shader, and `IBLProcessor` is compiled into `ohao_renderer` by the source glob but never constructed — its only mention outside its own translation unit is an `#include` in `render_module.hpp`, itself included by nothing.</p>
+<p>What ships is the same split-sum algebra, written inline in `deferred_lighting.frag` and fed from the 2D equirect environment map with a mip level as roughness proxy instead of a prefiltered cubemap:</p>
+<div class="citation-chip"><code class="citation-code">float lod = roughness * 9.0; // assuming 10 mip levels for 1024x512</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L281" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:281</a></div>
+<p>The BRDF LUT it samples is, in practice, the pass&#x27;s 1×1 fallback image. `DeferredLightingPass::setIBLTextures` exists and `DeferredRenderer` forwards to it, but nothing calls the outer setter, so `m_brdfLUTView` stays null and binding 9 resolves to the dummy view:</p>
+<div class="citation-chip"><code class="citation-code">imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L353" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:353</a></div>
+<p>That dummy is a 1×1 RGBA8 image created with `VK_IMAGE_USAGE_SAMPLED_BIT` and nothing else — it has no transfer usage, so no upload is even permitted — and it receives one layout transition and no writes. Its texel is Vulkan-undefined, not guaranteed zero.</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L775" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:775</a></div>
+<p>So the shader&#x27;s &quot;no real LUT bound&quot; branch is not defensive paranoia about a hypothetical: it is the only thing standing between the deferred metals and whatever that allocation happens to contain. It fires when the sampled pair sums below `1e-4` and substitutes an analytic `vec2(max(1-roughness, 0.04), roughness*0.25)`. Whether the engine&#x27;s environment-specular response today is that analytic curve or an undefined texel is not something the code decides.</p>
+<div class="citation-chip"><code class="citation-code">brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L296" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:296</a></div>
+</div>
+<div class="section-rule"><h2 id="phase-functions-with-no-medium">Phase functions with no medium</h2></div>
+<div class="prose reveal">
+<p>`phase.glsl` is the one header here that nothing has copied: grepping for its distinguishing constants (`1.55*g - 0.55*g³`, `3/(16π)`) finds nothing outside this file, and no sky or fog pass inlines a lobe. It is also the only header here with a caller outside `forward.frag` — a single `henyeyGreenstein` in `volumetric_scatter.comp`, under `shaders/_disabled/`; `cloud.comp` includes the header and calls nothing from it.</p>
+<div class="math-block">$$
+p_{\mathrm{HG}}(\cos\theta,\,g) \;=\; \frac{1-g^{2}}{4\pi\,\big(1 + g^{2} - 2g\cos\theta\big)^{3/2}}
+$$</div>
+<p>$\theta$ is the angle between view and light directions and $g \in [-1,1]$ is the asymmetry — positive forward-scattering, negative back. The implementation floors the base of the $3/2$ power at $10^{-4}$: as $g \to 1$ with $\cos\theta \to 1$ the denominator collapses to zero, and without the floor the lobe returns `inf` or, at $g = 1$ exactly, a $0/0$ `NaN`.</p>
+<div class="citation-chip"><code class="citation-code">return (1.0 - g2) / (4.0 * PI * pow(max(1.0 + g2 - 2.0 * g * cosTheta, 0.0001), 1.5));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/phase.glsl#L21" target="_blank" rel="noopener">shaders/includes/lighting/phase.glsl:21</a></div>
+<p>There is a trap in the word &quot;disabled&quot;, and a second trap behind it. The shader CMake globs recursively with no exclusion, so both consumers land on the `shaders` target&#x27;s dependency list and a syntax error in either breaks `cmake --build build --target shaders`. But that target is declared without `ALL`, and nothing in the tree calls `add_dependencies` on it, so `shaders/all` in the generated build system has no prerequisites: a plain `cmake --build build` compiles no shaders at all. The disabled files only bite whoever asks for shaders by name.</p>
+<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
+<div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L54" target="_blank" rel="noopener">shaders/CMakeLists.txt:54</a></div>
+<p>The C++ side reads like the symmetric fix and is not one: the render library&#x27;s glob carries a `/_disabled/` exclusion, but no `_disabled` directory exists anywhere under `ohao/`, so the filter matches zero files.</p>
+<div class="citation-chip"><code class="citation-code">list(FILTER RENDERER_SOURCES EXCLUDE REGEX &quot;/_disabled/&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/CMakeLists.txt#L12" target="_blank" rel="noopener">ohao/render/CMakeLists.txt:12</a></div>
+</div>
+<div class="section-rule"><h2 id="blinn-phong-glsl-and-the-scar-it-documents">blinn_phong.glsl and the scar it documents</h2></div>
+<div class="prose reveal">
+<p>This header sits behind the `#else` of a feature flag that defaults on, and `glslc` is invoked with no `-D` arguments anywhere in the build, so the branch never compiles.</p>
+<div class="citation-chip"><code class="citation-code">#define USE_PBR 1  // Enable PBR by default</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/forward.frag#L17" target="_blank" rel="noopener">shaders/core/forward.frag:17</a></div>
+<div class="citation-chip"><code class="citation-code">COMMAND ${GLSLC} --target-env=vulkan1.3 -I${CMAKE_CURRENT_SOURCE_DIR} -I${CMAKE_CURRENT_SOURCE_DIR}/includes ${SHADER} -o ${SPIRV}</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L46" target="_blank" rel="noopener">shaders/CMakeLists.txt:46</a></div>
+<p>Its `calculateAttenuation` is a line-for-line copy of `attenuationSmooth` with `clamp(x, 0.0, 1.0)` substituted for `saturate` — the file includes nothing, so it cannot reach the helper in `math.glsl`. The comment above its entry point is worth more than the code beneath it:</p>
+<div class="citation-chip"><code class="citation-code">// CRITICAL: Pass light INDEX, not Light struct, to avoid GLSL struct copy corruption!</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/lighting/blinn_phong.glsl#L24" target="_blank" rel="noopener">shaders/includes/lighting/blinn_phong.glsl:24</a></div>
+<p>The PBR branch obeys it — `getLightParams` takes an `int lightIndex` and indexes the UBO directly — while `deferred_lighting.frag` copies `Light` out of its buffer freely, so whatever produced the original corruption was not universal.</p>
+</div>
+<div class="section-rule"><h2 id="light-types-glsl-the-abstraction-that-lost">light_types.glsl: the abstraction that lost</h2></div>
+<div class="prose reveal">
+<p>`LightParams`, `ShadowParams`, `getLightDirection`, `getLightDistance`, `calculateAmbient`, `lightCastsShadow` — none of these are referenced anywhere in `shaders/` or `ohao/`. The C++ `getLightDirection` that grep turns up is an unrelated `DeferredRenderer` accessor. The bodies still run, though: `deferred_lighting.frag` branches on light type to pick `normalize(-direction)` or `normalize(lightPos - fragPos)` exactly as `getLightDirection` does, and builds its ambient term from the same intensity·AO·albedo product.</p>
+<div class="citation-chip"><code class="citation-code">vec3 ambient = vec3(lighting.ambientIntensity) * albedo * ao;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L259" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:259</a></div>
+<p>The packing it documents is real, and is the contract both raster pipelines depend on: type, range, intensity and shadow-map index ride in the `w` and `params` channels of four `vec4`s, followed by a 64-byte light-space matrix — 128 bytes per light, `std140`-compatible by construction.</p>
+<div class="citation-chip"><code class="citation-code">alignas(16) glm::vec4 params;        // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L80" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:80</a></div>
+<div class="citation-chip"><code class="citation-code">vec4 params;            // x = innerCone, y = outerCone, z = shadowMapIndex (-1=none), w = unused</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/types.glsl#L23" target="_blank" rel="noopener">shaders/includes/common/types.glsl:23</a></div>
+<p>It also re-declares the light-type enum under an `#ifndef`, commented as relying on the preprocessor &quot;using the first definition&quot;. Values match `types.glsl` exactly so nothing breaks, but that rule is not real — identical redefinition is legal in any order, a differing one is a diagnostic — so do not lean on the comment when adding a fourth light type.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`light_attenuation.glsl` and `blinn_phong.glsl` hold two copies of the same smooth falloff. Editing one without the other desynchronises the forward PBR branch from the legacy one — and nothing catches it, because the legacy branch is not compiled until someone builds with `USE_PBR=0`.</li>
+<li>Forward and deferred point-light attenuation are different functions with different units, so intensities are not portable between `RenderMode::Forward` and `RenderMode::Deferred`. No shipped binary selects Forward: the forward pipeline is created on every init and never bound, so the header&#x27;s law is compiled into SPIR-V but executed by nothing.</li>
+<li>Two independent things block `ibl.glsl` from any shader that reaches `brdf_common.glsl`. Guarding its `const float PI` and `const float MAX_REFLECTION_LOD` fixes only the order-dependent parse errors; the duplicate `fresnelSchlickRoughness` body fails in either order and has to be deleted.</li>
+<li>Nothing calls `setIBLTextures`, so binding 9 resolves to a 1×1 image that is never written and cannot be. The deferred environment-specular term therefore rests on a `&lt; 1e-4` guard over undefined memory. Wiring `IBLProcessor` in would change every metal — a re-lighting job, not a bug fix.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/includes/lighting/ibl.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/forward.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/lighting/light_attenuation.glsl</code><span class="desc"></span></div>
-        <div class="row"><code>shaders/includes/lighting/light_types.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/example_cli.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/lighting/ibl.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/math.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/constants.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/lighting/phase.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/brdf/brdf_common.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/ibl/ibl_processor.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/lighting/blinn_phong.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/types.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/lighting/light_types.glsl</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

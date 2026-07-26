@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 330" class="unit-diagram" role="img" aria-label="Map of Scene's five pieces of state and which code in the tree reads each one">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="24" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">SCENE STATE  →  WHO READS IT</text>
+
+<rect x="24" y="44" width="268" height="248" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+<text x="38" y="66" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">class Scene</text>
+
+<!-- row 1 -->
+<text x="38" y="96" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">actors</text>
+<text x="38" y="110" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">unordered_map&lt;uint64,Actor::Ptr&gt;</text>
+<line x1="292" y1="98" x2="392" y2="98" stroke="#7dba8a" stroke-width="1.6"/>
+<polygon points="392,94 402,98 392,102" fill="#7dba8a"/>
+<text x="408" y="84" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">scene_upload · rt_build · light_upload</text>
+<text x="408" y="100" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">buffer_setup · gbuffer_pass · csm_pass</text>
+<text x="408" y="116" fill="#7dba8a" font-family="DM Sans,sans-serif" font-size="12">deferred_renderer · examples/ · tests/</text>
+
+<!-- row 2 -->
+<text x="38" y="146" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">actorsByName</text>
+<text x="38" y="160" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">unordered_map&lt;string,Actor::Ptr&gt;</text>
+<line x1="292" y1="148" x2="392" y2="148" stroke="#c4784a" stroke-width="1.6"/>
+<polygon points="392,144 402,148 392,152" fill="#c4784a"/>
+<text x="408" y="144" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">findActor(name) · removeActor(name)</text>
+<text x="408" y="160" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">findActorsByName · getObjectsByName (uncalled)</text>
+
+<!-- row 3 -->
+<text x="38" y="196" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">meshComponents</text>
+<text x="38" y="210" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">maintained by add/remove hooks</text>
+<line x1="292" y1="198" x2="392" y2="198" stroke="#3d4a58" stroke-width="1.6" stroke-dasharray="4 4"/>
+<text x="408" y="202" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">no reader in the tree</text>
+
+<!-- row 4 -->
+<text x="38" y="236" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">physicsComponents</text>
+<text x="38" y="250" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="9">maintained by add/remove hooks</text>
+<line x1="292" y1="238" x2="392" y2="238" stroke="#3d4a58" stroke-width="1.6" stroke-dasharray="4 4"/>
+<text x="408" y="234" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">Scene::updatePhysics → VulkanRenderer::</text>
+<text x="408" y="250" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">updatePhysics (itself uncalled)</text>
+
+<!-- row 5 -->
+<text x="38" y="278" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">needsBufferUpdate</text>
+<line x1="292" y1="274" x2="392" y2="274" stroke="#3d4a58" stroke-width="1.6" stroke-dasharray="4 4"/>
+<text x="408" y="278" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">no reader in the tree</text>
+
+<text x="24" y="318" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual. Readership established by grepping ohao/, examples/, tests/ for each accessor — not a measurement.</text>
+</svg>

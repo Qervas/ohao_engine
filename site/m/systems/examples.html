@@ -33,36 +33,117 @@
         <p>cornell_box, model_viewer, env_demo, interactive, turntable.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-scene-is-a-main">A scene is a `main()`</a></li><li><a href="#the-3-in-every-render-loop">The `+ 3` in every render loop</a></li><li><a href="#where-the-formula-actually-holds">Where the formula actually holds</a></li><li><a href="#what-the-shared-flag-parser-will-not-tell-you">What the shared flag parser will not tell you</a></li><li><a href="#env-demo-imports-the-parser-then-ignores-it">env_demo imports the parser, then ignores it</a></li><li><a href="#the-orbit-reset-and-what-breaks-if-you-tighten-the-loop">The orbit reset, and what breaks if you tighten the loop</a></li><li><a href="#one-model-n-actors">One model, N actors</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-scene-is-a-main">A scene is a `main()`</h2></div>
 <div class="prose reveal">
-<p>Example map: cornell_box, model_viewer, env_demo, interactive, turntable share example_cli.hpp flags.</p>
+<p>OHAO has no scene file format. There is no loader that turns a `.scene` into actors, and nothing under `ohao/scene/` deserialises anything but a mesh asset. A scene exists only as the C++ that constructs it — `createActor`, then a `MeshComponent`, a `MaterialComponent`, a `LightComponent`.</p>
+<p>`examples/` builds five non-interactive binaries, plus the GLFW `interactive` viewer when GLFW is found. Four of the five are half scene description, half harness. `cornell_box` writes its walls as raw `Vertex` quads and stacks twelve coloured sphere lights in the box as a many-light stress case. `model_viewer` builds a bedroom — bed, headboard, nightstand — around whatever model you pass, sized from the model&#x27;s own bounds by `SceneFramer`. `turntable` picks its room from a mode string and orbits. `env_demo` drops a 50 m procedural ground quad under the model so it stops floating in void.</p>
+<p>Everything below — the `+ 3` loop, the shared argv parser, the destruction order — describes these four inline drivers.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-3-in-every-render-loop">The `+ 3` in every render loop</h2></div>
 <div class="prose reveal">
-<p>interactive is full dogfood (WASD, mode switch, --denoise=dlssrr).</p>
+<p>Every inline driver&#x27;s RT path renders `samples + 3` frames, never `samples`. It looks like superstition. It is exact — in one denoise mode out of five.</p>
+<div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 10 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/cornell_box.cpp#L164" target="_blank" rel="noopener">examples/cornell_box.cpp:164</a></div>
+<p>The reason is the frame ring. `renderRTPipeline` opens by waiting on the fence of the slot it is about to reuse and `memcpy`-ing that slot&#x27;s mapped staging buffer into the host pixel buffer — so what lands on the CPU is the image submitted three `render()` calls ago, not the one about to be recorded.</p>
+<div class="citation-chip"><code class="citation-code">// Read back previous frame&#x27;s pixels</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L138" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:138</a></div>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L19" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:19</a></div>
+<p>What accumulates is not the push-constant sample index. `pc.params.z` carries `m_sampleIndex`, which seeds the sampler and nothing else. The accumulation weight is `pc.control.y`, holding `m_historyFrameCount`, and the running sample count lives in the alpha channel of the accumulation image, incremented by the raygen itself. The two counters advance together at the bottom of every dispatch, which is why the distinction stays invisible until something resets one of them.</p>
+<div class="citation-chip"><code class="citation-code">imageStore(accumBuffer, pixel, vec4(acc, count));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L1186" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:1186</a></div>
+<p>Take `DenoiseMode::None` for the moment. Call $k$ (zero-based) leaves an image carrying $k+1$ accumulated samples; the copy performed at the top of call $k$ carries call $k-3$&#x27;s. Let $N$ be the number of `render()` calls, $F$ the ring depth, and $s_{\text{host}}$ the sample count of the image sitting in the host buffer when the loop exits:</p>
+<div class="math-block">$$
+s_{\text{host}}(N) \;=\; \big((N-1)-F\big) + 1 \;=\; N - F, \qquad F = 3
+$$</div>
+<p>Set $N = \text{spp} + 3$ and $s_{\text{host}}$ is exactly the spp the user asked for. The deferred branch takes the same readback path — it accumulates nothing, but it lags identically — so `cornell_box`&#x27;s ten deferred frames save the seventh and `model_viewer`&#x27;s thirty save the twenty-seventh. Both ignore the spp argument entirely.</p>
+<div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 30 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L334" target="_blank" rel="noopener">examples/model_viewer.cpp:334</a></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="where-the-formula-actually-holds">Where the formula actually holds</h2></div>
 <div class="prose reveal">
-<p>Thin drivers over one API — golden and demo paths stay aligned.</p>
+<p>`DenoiseMode` has five values — `None`, `OIDN`, `NRD`, `Atrous`, `DLSSRR` — and $s_{\text{host}} = N - 3$ needs two things at once: the host image must come from the lagged staging ring, *and* the raygen must be accumulating. Only `None` gives you both.</p>
+<p>`getPixels()` returns the lagged buffer for `None`, `Atrous` and `DLSSRR`. `OIDN` and `NRD` abandon it and issue their own readback — a command buffer submitted and waited on inside the getter, which therefore observes every queued frame. OIDN&#x27;s readback takes the accumulation image itself, whose RGB is the running mean of every sample so far.</p>
+<div class="citation-chip"><code class="citation-code">if (!self-&gt;readbackHDRBuffers(beautyRGBA, albedoRGBA, normalRGBA, rw, rh)) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L738" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:738</a></div>
+<p>Accumulation splits the set along a different seam. `Atrous` and `DLSSRR` are flagged `wants_fresh_sample`: the host forces `pc.control.y = 0` every frame, the raygen takes its no-history branch, and the accumulation image is stored with `count = 1.0` forever. Those denoisers own temporal accumulation themselves, so handing them a converged image would double-filter it.</p>
+<div class="citation-chip"><code class="citation-code">static constexpr bool wants_fresh_sample =</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_meta.hpp#L128" target="_blank" rel="noopener">ohao/render/rt/rt_meta.hpp:128</a></div>
+<div class="citation-chip"><code class="citation-code">pc.control.y = freshSample ? 0u : m_historyFrameCount;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L712" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:712</a></div>
+<div class="citation-chip"><code class="citation-code">if (historyFrameCount == 0u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L1146" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:1146</a></div>
+<p>The four non-`None` modes therefore miss in two directions. Under `Atrous` or `DLSSRR` the saved PNG is 1 spp no matter what number you typed. Under `OIDN` the fresh readback sees all $N$ submissions, so a `samples + 3` loop hands OIDN a `samples + 3`-sample beauty — three more than requested, not fewer. `NRD` returns its own GPU-tonemapped composite, for which the ring lag is irrelevant in either direction.</p>
+<p>The overshoot is the shipped default, not a corner case: the offline RT profile sets `DenoiseMode::OIDN`, and no driver overrides it without `--denoise=`.</p>
+<div class="citation-chip"><code class="citation-code">.denoiseMode = DenoiseMode::OIDN,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L60" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:60</a></div>
+<p>So the `+ 3` is load-bearing in exactly one configuration and merely wasteful in the rest. A driver that looped `samples` times would still be correct-looking under the default and three samples short under `--denoise=none` — a bug that surfaces only when you switch the denoiser off to check something.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="what-the-shared-flag-parser-will-not-tell-you">What the shared flag parser will not tell you</h2></div>
 <div class="prose reveal">
-<p>example_cli.hpp shared flags: model, env, mode, denoise, spp.</p>
-<p>interactive: WASD camera + mode switch + --denoise=dlssrr.</p>
-<p>cornell_box / turntable feed golden and showcase pipelines.</p>
-<p>Research-only CLIs under examples/ are out of the public monograph scope.</p>
+<p>`parseRenderFlags` takes the trailing argv slice — from index 3 in `cornell_box`, 4 in `model_viewer`, 5 in `turntable` — and matches tokens order-independently. Unrecognised tokens fall off the end of the `if`/`else if` chain with no diagnostic, so a typo&#x27;d `--denosie=none` renders happily with the default denoiser.</p>
+<p>`deferred` and `rt_realtime` are stored in different fields, and `resolveMode` resolves the conflict by precedence rather than by order: `deferred` wins no matter where it appears.</p>
+<div class="citation-chip"><code class="citation-code">if (opts.useDeferred) return RenderMode::Deferred;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_cli.hpp#L84" target="_blank" rel="noopener">examples/example_cli.hpp:84</a></div>
+<p>The sample-count parser swallows anything `atoi` cannot turn into a positive integer and returns the default, so `cornell_box out.png 0` quietly renders 1024 spp; it is also reused as a general positive-integer parser — `turntable` parses its orbit frame count with it.</p>
+<div class="citation-chip"><code class="citation-code">return v &gt; 0 ? v : fallback;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/example_cli.hpp#L66" target="_blank" rel="noopener">examples/example_cli.hpp:66</a></div>
+<p>Nothing in the shared parser reports an unrecognised token, so a typo degrades silently to the default rather than failing the run.</p>
+</div>
+<div class="section-rule"><h2 id="env-demo-imports-the-parser-then-ignores-it">env_demo imports the parser, then ignores it</h2></div>
+<div class="prose reveal">
+<p>`env_demo` carries `using`-declarations for all five shared helpers and calls two of them. From `argv[5]` onward it runs its own parser.</p>
+<div class="citation-chip"><code class="citation-code">for (int i = 5; i &lt; argc; i++) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L90" target="_blank" rel="noopener">examples/env_demo.cpp:90</a></div>
+<p>The trade is deliberate: it drops `deferred`, `video` and `outdoor`, re-implements `flip` under a different spelling, and buys twelve `--dump-*` AOV taps, `--seq=K` consecutive-frame capture, `--lighting=`, `--ground=`, `--aniso=`, `--sss=` and `--crop=face`. The re-implementation is not quite a copy: the shared `flip` rotates the mesh actors 180° about Y after framing, whatever the up-axis; `env_demo`&#x27;s `--flip` folds the same 180° into the initial rotation and only in the Y-up branch.</p>
+<div class="citation-chip"><code class="citation-code">glm::quat(glm::radians(glm::vec3(0, flipModel ? 180.0f : 0.0f, 0))));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L286" target="_blank" rel="noopener">examples/env_demo.cpp:286</a></div>
+<p>That makes it the NRD/guide-buffer debugging instrument rather than a demo. It is the only place the ViewZ, roughness, diffuse/specular radiance, hit-distance and NRD-composed images become PNGs. Motion vectors it does not own: the GLFW `interactive` viewer dumps `renders/mv_interactive.png` on the `M` key, through a second, independently written copy of the same decoder.</p>
+<div class="citation-chip"><code class="citation-code">std::cout &lt;&lt; &quot;MV dumped: renders/mv_interactive.png&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L498" target="_blank" rel="noopener">examples/interactive.cpp:498</a></div>
+<p>The surprise is the default. Lighting mode defaults to `Studio`, and studio mode skips loading the HDR that `argv[2]` mandates:</p>
+<div class="citation-chip"><code class="citation-code">if (lightingMode != LightingMode::Studio &amp;&amp; lightingMode != LightingMode::Cinema) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L238" target="_blank" rel="noopener">examples/env_demo.cpp:238</a></div>
+<p>So `env_demo model.glb env.hdr out.png 256` renders four neutral sphere lights against a black background and never opens the `.hdr`. Only `--lighting=hdr-only` and `--lighting=none` load it.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The note attached to the skip says the environment at full strength overwhelmed the three-point rig and tinted surfaces with the env&#x27;s own colour — &quot;the pink-ground problem in 4.H v1-v6&quot;. The choice made instead was to model a closed studio: explicit lights, black background, which is what product photography actually is. The cost is a mandatory argument that the default mode ignores.  The tree records a second, incompatible fix for the same symptom 130 lines further down. The v8 lighting note blames the *warm key*, not the environment, and fixes the pink ground by moving all four studio lights to D65 neutral white. Both fixes shipped; nothing reconciles them. The env explanation is the rationale attached to the skip, not a settled root cause.  {{cite examples/env_demo.cpp &quot;// v8: D65 neutral white lights&quot;}}</p></div>
+<p>One more artefact of that instrument role: `readbackMotionVector` hands back raw `RG16F` halves while `readbackRoughnessAOV` decodes in the helper, so `env_demo` carries a hand-written IEEE-754 half-to-float — denormal renormalisation loop included — used by nothing but the motion-vector PNG.</p>
+<div class="citation-chip"><code class="citation-code">while ((mant &amp; 0x400) == 0) { mant &lt;&lt;= 1; exp--; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/env_demo.cpp#L159" target="_blank" rel="noopener">examples/env_demo.cpp:159</a></div>
+</div>
+<div class="section-rule"><h2 id="the-orbit-reset-and-what-breaks-if-you-tighten-the-loop">The orbit reset, and what breaks if you tighten the loop</h2></div>
+<div class="prose reveal">
+<p>`turntable` moves the camera to the next orbit position, resets accumulation, renders `spp + 3` frames, writes the PNG, repeats.</p>
+<div class="citation-chip"><code class="citation-code">renderer.resetAccumulation();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L219" target="_blank" rel="noopener">examples/turntable.cpp:219</a></div>
+<p>The reset must sit after the camera move and before the inner loop, or the accumulation buffer keeps radiance from the previous viewpoint. But the reset clears the path tracer&#x27;s sample index and history — it does not touch the staging ring. The first three copies of orbit position $f$ still deliver the tail of position $f-1$. That is why the `+ 3` cannot be trimmed here either: at `spp` iterations the written PNG would be three samples short under `--denoise=none`, and for `spp` of 3 or less it would be the *previous* camera position&#x27;s image — a turntable visibly lagging its own orbit, produced entirely by the driver.</p>
+<p>Of the three drivers that can resolve to `Deferred`, `turntable` is the only one whose loop does not special-case it. It renders `spp + 3` frames per position whatever `resolveMode` returned, and its banner prints `RTOffline` for any mode that is not `RTRealtime` — including `Deferred`.</p>
+<div class="citation-chip"><code class="citation-code">&lt;&lt; (rtMode == RenderMode::RTRealtime ? &quot;RTRealtime&quot; : &quot;RTOffline&quot;) &lt;&lt; &quot;\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L72" target="_blank" rel="noopener">examples/turntable.cpp:72</a></div>
+</div>
+<div class="section-rule"><h2 id="one-model-n-actors">One model, N actors</h2></div>
+<div class="prose reveal">
+<p>`model_viewer` splits a multi-material model into one actor per material. The regroup rebuilds geometry per triangle: three fresh vertices pushed for every triangle, indices numbered consecutively. The sub-model comes out fully unwelded — `vertexCount = 3 × triangleCount` — so a shared vertex is re-emitted once per incident triangle, which on a closed manifold is its valence, about six.</p>
+<div class="citation-chip"><code class="citation-code">subModel-&gt;vertices.push_back(model-&gt;vertices[oldIdx]);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L210" target="_blank" rel="noopener">examples/model_viewer.cpp:210</a></div>
+<p>Worth knowing before copying that pattern: neither of the two render paths `model_viewer` can actually select still requires the split. The RT material table already carries per-triangle material IDs, offset per model, and the GBuffer pass already subdivides each actor&#x27;s index range into per-material draw ranges.</p>
+<div class="citation-chip"><code class="citation-code">drawRanges = buildMaterialDrawRanges(*model, bufferInfo);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L263" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:263</a></div>
+<p>The path that genuinely takes one material per actor is the forward/legacy rasteriser, which reads a single `MaterialComponent` and pushes it as one push constant per draw.</p>
+<div class="citation-chip"><code class="citation-code">auto materialComp = actor-&gt;getComponent&lt;MaterialComponent&gt;();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L228" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:228</a></div>
+<p>`render()` reaches that path when the RT guard fails — no RT pipeline for the mode, no RT renderer, or no acceleration structure — and the deferred guard fails as well. That second guard tests the renderer&#x27;s existence, not just the mode, so it is `m_deferredRenderer` that decides, not `RenderMode::Deferred` alone.</p>
+<div class="citation-chip"><code class="citation-code">if (m_renderMode == RenderMode::Deferred &amp;&amp; m_deferredRenderer) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L387" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:387</a></div>
+<p>The reachable case is a device without ray-tracing support: `setRenderMode` refuses the switch, the mode stays `Forward`, and an `rt_offline` request silently renders through the legacy rasteriser. So the split is insurance for the no-RT fallback, paid for in vertex count and BLAS entries on every run.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The frame you last rendered is not the frame you saved. Both the RT and the deferred readback copy the staging buffer of the slot they are about to reuse, so the host image trails by `MAX_FRAMES_IN_FLIGHT` calls. Every `+ 3` in the inline drivers is that constant — and it converts spp into an exact sample count only under `--denoise=none`, because every other mode either bypasses the lagged buffer or refuses to accumulate into it.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Under `--denoise=none`, `render()` must be called `spp + MAX_FRAMES_IN_FLIGHT` times to land `spp` accumulated samples in the host buffer. The same loop hands OIDN `spp + 3` samples and `Atrous`/`DLSSRR` exactly 1. If the ring depth ever changes, every driver&#x27;s `+ 3` is wrong and only `--denoise=none` output will show it.</li>
+<li>Camera move → `resetAccumulation()` → render. Reversing the last two mixes viewpoints in the accumulation buffer; skipping the reset entirely does the same.</li>
+<li>The `Scene` must be destroyed before the `VulkanRenderer`. All four inline drivers declare the renderer first and the scene second, so reverse-order destruction of locals gets it right; `cornell_box` and `model_viewer` also call `scene.reset()` explicitly. Swapping those two declarations tears down Vulkan resources still referenced by actors.</li>
+<li>`deferred` overrides `rt_realtime`/`rt_offline` regardless of argument order in the three non-interactive drivers that use the shared parser. What follows from that is per-driver: `cornell_box` and `model_viewer` then ignore the spp argument for a fixed 10 and 30 frames, `turntable` keeps rendering `spp + 3` per orbit position, and `env_demo` has no `deferred` token at all.</li>
+<li>An unknown trailing flag is silently ignored by `parseRenderFlags` and by `env_demo`&#x27;s own parser — typos degrade to defaults rather than failing the run.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>examples/cornell_box.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
         <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/example_cli.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/env_demo.cpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/turntable.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>examples/example_cli.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

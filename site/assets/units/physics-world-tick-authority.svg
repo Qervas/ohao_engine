@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" class="unit-diagram" role="img" aria-label="Data flow of one fixed physics tick between the CPU RigidBody mirror and the Jolt backend, in five phases: create pending bodies, apply registry forces, push kinematic transforms and accumulated forces, step the solver, pull results back.">
+  <defs>
+    <marker id="pwArrowDown" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+    <marker id="pwArrowUp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7dba8a"/>
+    </marker>
+    <marker id="pwArrowSelf" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6e685c"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="320" fill="#0f1419"/>
+
+  <text x="20" y="26" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="14">One fixed tick: stepFixed(h), h = 1/60 s</text>
+
+  <!-- CPU mirror lane -->
+  <rect x="20" y="44" width="680" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="32" y="71" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12">RigidBody + ForceRegistry &#8212; CPU mirror</text>
+
+  <!-- Backend lane -->
+  <rect x="20" y="232" width="680" height="44" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="32" y="259" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12">Jolt backend &#8212; authoritative solver</text>
+
+  <!-- phase 1: create -->
+  <line x1="80" y1="90" x2="80" y2="228" stroke="#c4784a" stroke-width="1.6" marker-end="url(#pwArrowDown)"/>
+  <text x="88" y="118" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">1 createBody</text>
+  <text x="88" y="134" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">only if a shape</text>
+  <text x="88" y="147" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">exists; transform</text>
+  <text x="88" y="160" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">re-read first</text>
+
+  <!-- phase 2: registry forces (stays in CPU lane) -->
+  <path d="M 236 44 C 214 16 274 16 252 44" fill="none" stroke="#6e685c" stroke-width="1.4" marker-end="url(#pwArrowSelf)"/>
+  <text x="222" y="118" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">2 registry F</text>
+  <text x="222" y="134" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">wind, buoyancy,</text>
+  <text x="222" y="147" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">springs, volumes</text>
+  <text x="222" y="160" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">&#8594; accumulator</text>
+
+  <!-- phase 3: push down -->
+  <line x1="390" y1="90" x2="390" y2="228" stroke="#c4784a" stroke-width="1.6" marker-end="url(#pwArrowDown)"/>
+  <text x="398" y="118" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">3 push</text>
+  <text x="398" y="134" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">kinematic pos/rot</text>
+  <text x="398" y="147" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">F, &#964; if |F|&#178; &gt; 1e-4</text>
+
+  <!-- phase 4: solve (stays in backend lane) -->
+  <path d="M 524 276 C 502 304 562 304 540 276" fill="none" stroke="#6e685c" stroke-width="1.4" marker-end="url(#pwArrowSelf)"/>
+  <text x="502" y="118" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">4 step(h)</text>
+  <text x="502" y="134" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">broad + narrow</text>
+  <text x="502" y="147" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">phase + solve</text>
+
+  <!-- phase 5: pull up -->
+  <line x1="640" y1="228" x2="640" y2="90" stroke="#7dba8a" stroke-width="1.6" marker-end="url(#pwArrowUp)"/>
+  <text x="560" y="180" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="11">5 pull (dynamic)</text>
+  <text x="560" y="196" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">pos, rot, v, &#969; overwrite</text>
+  <text x="560" y="209" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">the mirror; frozen axes</text>
+  <text x="560" y="222" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">zeroed and written back</text>
+
+  <!-- legend -->
+  <line x1="20" y1="300" x2="44" y2="300" stroke="#c4784a" stroke-width="1.6"/>
+  <text x="52" y="304" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">CPU is authoritative</text>
+  <line x1="190" y1="300" x2="214" y2="300" stroke="#7dba8a" stroke-width="1.6"/>
+  <text x="222" y="304" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">backend is authoritative</text>
+  <text x="400" y="304" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">No arrow returns a dynamic body&#8217;s position downward.</text>
+</svg>

@@ -33,33 +33,114 @@
         <p>init → SBT → render visibility from GBuffer.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-one-term-the-gbuffer-cannot-hold">The one term the GBuffer cannot hold</a></li><li><a href="#what-the-estimator-actually-computes">What the estimator actually computes</a></li><li><a href="#a-ray-tracing-pipeline-whose-hit-shader-never-runs">A ray tracing pipeline whose hit shader never runs</a></li><li><a href="#two-penumbra-samplers-one-of-them-unreachable">Two penumbra samplers, one of them unreachable</a></li><li><a href="#one-mask-applied-to-every-light">One mask, applied to every light</a></li><li><a href="#sharp-edges">Sharp edges</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-one-term-the-gbuffer-cannot-hold">The one term the GBuffer cannot hold</h2></div>
 <div class="prose reveal">
-<p>RT shadow technique: visibility rays from GBuffer toward lights into a mask for deferred lighting.</p>
+<p>A deferred GBuffer stores everything the lighting equation needs at a point — position, normal, albedo, roughness, metallic — except the one quantity that is not a property of the point at all. Visibility depends on the whole scene along a ray. Cascade shadow maps answer it by re-rasterising depth from the light, at a pass per cascade and the cost of projective aliasing, cascade seams and a bias nobody gets right. `RTShadowTechnique` asks the TLAS instead: no light-space projection, no cascade split, no depth-map resolution to alias against. It has a bias of its own and it cannot see an alpha mask — both below.</p>
+<p>The result is one screen-resolution channel, `R8_UNORM`, 0 = shadowed, 1 = lit,</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.format = VK_FORMAT_R8_UNORM;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_shadow_technique.cpp#L103" target="_blank" rel="noopener">ohao/render/rt/rt_shadow_technique.cpp:103</a></div>
+<p>which the deferred lighting fragment shader samples at binding 14 and multiplies into the BRDF result.</p>
+<div class="citation-chip"><code class="citation-code">shadow = texture(rtShadowMask, inTexCoord).r;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L249" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:249</a></div>
+<p>Binding the mask is also what switches the pipeline — though not at the line that looks like it does. `setRTShadowMask` raises flag bit 5 and clears the CSM bit, but neither write ever reaches the GPU: `execute` zeroes the whole flag word and rebuilds it from the bound views every frame, before pushing it.</p>
+<div class="citation-chip"><code class="citation-code">m_params.flags = 0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L163" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:163</a></div>
+<p>In that rebuild the RT bit and the CSM bit are the two arms of a single if/else keyed on whether an RT shadow view is bound at all, so the two shadow systems are mutually exclusive by construction rather than by convention.</p>
+<div class="citation-chip"><code class="citation-code">else if (m_shadowMapView != VK_NULL_HANDLE)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L172" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:172</a></div>
+<p>The fragment shader repeats the structure, branching on bit 5 first and reaching CSM only through the `else`.</p>
+<div class="citation-chip"><code class="citation-code">} else if ((pc.flags &amp; 4u) != 0u &amp;&amp; lightType == 0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L250" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:250</a></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="what-the-estimator-actually-computes">What the estimator actually computes</h2></div>
 <div class="prose reveal">
-<p>rt_shadow_technique + rt_shadow.rgen/rmiss/rahit.</p>
+<p>Direct lighting from an area source is</p>
+<div class="math-block">$$
+L_o(x,\omega_o) = \int_{\Omega_\ell} f_r(x,\omega_o,\omega)\, L_i(\omega)\, V(x,\omega)\, (\mathbf{n}\!\cdot\!\omega)\, d\omega
+$$</div>
+<p>where $\Omega_\ell$ is the solid angle the light subtends at the shading point $x$, $f_r$ is the BRDF, $L_i$ the incident radiance, $\mathbf{n}$ the shading normal, and $V \in \{0,1\}$ the binary visibility along $\omega$. A one-channel mask cannot represent that integral. What this pair of passes evaluates is the separable approximation</p>
+<div class="math-block">$$
+L_o \approx \bar V(x)\; f_r(x,\omega_o,\bar\omega)\, L_i(\bar\omega)\,(\mathbf{n}\!\cdot\!\bar\omega),
+\qquad \bar V(x)=\frac{1}{N}\sum_{s=1}^{N} V(x,\omega_s)
+$$</div>
+<p>where $\bar\omega$ is the direction to the light *centre*. The raygen shader produces $\bar V$ by averaging $N$ traced samples into the mask:</p>
+<div class="citation-chip"><code class="citation-code">visibility /= float(sampleCount);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L110" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:110</a></div>
+<p>and the lighting pass multiplies that single number by a BRDF evaluated only at $\bar\omega$. Factoring $V$ out is exact wherever it is constant across the light — everywhere but the penumbra; inside one, the error is the covariance between visibility and the cosine-weighted BRDF over the source, the term a path tracer keeps and this one discards.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="a-ray-tracing-pipeline-whose-hit-shader-never-runs">A ray tracing pipeline whose hit shader never runs</h2></div>
 <div class="prose reveal">
-<p>Soft RT shadows without full path tracing cost.</p>
+<p>Three shader groups are compiled: raygen, miss, and a triangle hit group whose only member is an any-hit shader — `closestHitShader` is `VK_SHADER_UNUSED_KHR` in all three, and max recursion depth is one, since a visibility ray spawns nothing.</p>
+<div class="citation-chip"><code class="citation-code">pipelineInfo.maxPipelineRayRecursionDepth = 1;  // shadow rays don&#x27;t recurse</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_shadow_technique.cpp#L297" target="_blank" rel="noopener">ohao/render/rt/rt_shadow_technique.cpp:297</a></div>
+<p>The interesting part is the flag combination the raygen traces with: terminate-on-first-hit, force-opaque, and skip-closest-hit together.</p>
+<div class="citation-chip"><code class="citation-code">uint rayFlags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L65" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:65</a></div>
+<p>`gl_RayFlagsOpaqueEXT` forces every intersection to be treated as opaque, and opaque intersections do not invoke any-hit shaders. The any-hit stage in group 2 therefore never executes — and does not need to. The payload is set to `0.0` immediately before `traceRayEXT`, the miss shader is the only stage that can raise it, and a hit leaves the pre-set value alone.</p>
+<div class="citation-chip"><code class="citation-code">shadowPayload = 1.0;  // no occlusion = fully lit</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rmiss#L9" target="_blank" rel="noopener">shaders/rt/rt_shadow.rmiss:9</a></div>
+<p>The occlusion answer is delivered by a shader that did not run. `terminateRayEXT` in the `.rahit` is unreachable under the current flags; it becomes live the moment someone drops `gl_RayFlagsOpaqueEXT` for alpha-cutout foliage, which is presumably why it is compiled in at all.</p>
+<div class="citation-chip"><code class="citation-code">terminateRayEXT;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rahit#L11" target="_blank" rel="noopener">shaders/rt/rt_shadow.rahit:11</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The rejected alternative is a closest-hit shader reporting hit distance — the channel an NRD-style denoiser wants for sizing its spatial filter. What gives it up is `gl_RayFlagsTerminateOnFirstHitEXT`: traversal may stop at the first intersection it finds rather than continue until the nearest one is proven. The empty `closestHitShader` slots in all three groups follow from that flag — they are its consequence, not the reason for it. The price: this mask carries no distance signal, so its softness must come entirely from ray count.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="two-penumbra-samplers-one-of-them-unreachable">Two penumbra samplers, one of them unreachable</h2></div>
 <div class="prose reveal">
-<p>Trace visibility rays from GBuffer world positions toward lights.</p>
-<p>Output shadow mask sampled in deferred lighting — soft RT shadows without full PT.</p>
+<p>Softness comes from jittering the sample target, and the shader has two geometries for it. A directional light gets a tangent basis around the light direction and an offset inside a disk of angular radius `lightRadius`, with $\sqrt{r_1}$ making samples uniform in disk area — a small-angle construction, since the offset is the angle rather than its tangent:</p>
+<div class="citation-chip"><code class="citation-code">float angle = lightRadius * sqrt(r1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L80" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:80</a></div>
+<p>For a point light it instead displaces the light *position* to a uniformly distributed point on a sphere of radius `lightRadius`:</p>
+<div class="citation-chip"><code class="citation-code">float phi = acos(1.0 - 2.0 * r2);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L89" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:89</a></div>
+<p>Because $\cos\varphi = 1 - 2r_2$ is uniform on $[-1,1]$, this is a correct uniform-area sampler of the sphere *surface* — with a consequence worth naming. By Archimedes&#x27; hat-box theorem a uniform distribution on a sphere projects to a uniform distribution on any single axis, so an occluder edge sweeping across the source yields a **linear** visibility ramp, not the circular-segment S-curve a genuinely disk-shaped source produces. The difference shows at the two ends of the penumbra, where the true profile approaches full light and full shadow tangentially and the linear one arrives with a crease.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/hybrid-shadow-technique-penumbra.svg" alt="Penumbra visibility for a straight occluder edge swept across the light. All three curves are analytic: the exact disk-light profile, the ramp implied by the sphere-surface sampler in rt_shadow.rgen, and that ramp quantised at sampleCount = 8. Conceptual, not a captured render." loading="lazy" /><figcaption>Penumbra visibility for a straight occluder edge swept across the light. All three curves are analytic: the exact disk-light profile, the ramp implied by the sphere-surface sampler in rt_shadow.rgen, and that ramp quantised at sampleCount = 8. Conceptual, not a captured render.</figcaption></figure>
+<p>At the shipping sample count the quantisation matters more than the profile: eight rays admit nine distinct visibility levels. The randomness is a value hash of the pixel coordinate offset by fixed per-sample constants, with no frame index anywhere in the push constants, so the noise is frozen in screen space and never decorrelates on its own.</p>
+<p>The directional branch is never taken in the shipping engine — the only caller hardcodes a point light.</p>
+<div class="citation-chip"><code class="citation-code">si.lightType = 1;  // point light</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L399" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:399</a></div>
+</div>
+<div class="section-rule"><h2 id="one-mask-applied-to-every-light">One mask, applied to every light</h2></div>
+<div class="prose reveal">
+<p>The hardcoding goes further than the light type. `DeferredRenderer` fills `ShadowInput` with a fixed light position of (0, 4.5, 0) — the Cornell-box key light — irrespective of the scene&#x27;s light SSBO,</p>
+<div class="citation-chip"><code class="citation-code">si.lightPosition = glm::vec3(0, 4.5f, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L401" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:401</a></div>
+<p>then asks for eight rays at a 0.5-unit source radius.</p>
+<div class="citation-chip"><code class="citation-code">m_rtShadow-&gt;setLightRadius(0.5f);   // soft shadow — 0.5 unit light radius</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L404" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:404</a></div>
+<div class="citation-chip"><code class="citation-code">m_rtShadow-&gt;setSampleCount(8);       // 8 rays per pixel for penumbra</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L405" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:405</a></div>
+<p>`deferred_lighting.frag` then applies the mask *inside* its per-light loop. Every light in the scene is shadowed by the visibility of that one hardcoded point light, and because the RT branch pre-empts CSM rather than coexisting with it, a directional sun that previously had cascades gets it too. Enabling RT shadows is an improvement only for a scene whose key light matches the hardcoded one. The gap is in the wiring, not the algorithm: `ShadowInput` already carries direction, position, type and range per invocation, and the technique reads all four into its push constants.</p>
+</div>
+<div class="section-rule"><h2 id="sharp-edges">Sharp edges</h2></div>
+<div class="prose reveal">
+<p>The ray origin is pushed a flat 0.05 world units along the shading normal, with `tmin` = 0.001 behind that:</p>
+<div class="citation-chip"><code class="citation-code">vec3 origin = worldPos + N * 0.05;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L58" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:58</a></div>
+<p>The offset is absolute, not scaled by depth or texel footprint: too large for centimetre-scale detail, where contact shadows detach into the ray-traced form of peter-panning, and too small for a kilometre-scale scene.</p>
+<p>Sky pixels are detected by testing the GBuffer position for exact zero *and* zero alpha:</p>
+<div class="citation-chip"><code class="citation-code">if (worldPos == vec3(0.0) &amp;&amp; posSample.a == 0.0) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L48" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:48</a></div>
+<p>The alpha being tested is not a coverage bit — GBuffer0 packs metallic there:</p>
+<div class="citation-chip"><code class="citation-code">outGBuffer0 = vec4(fragWorldPos, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L113" target="_blank" rel="noopener">shaders/core/gbuffer.frag:113</a></div>
+<p>The test works only because that attachment clears to (0,0,0,0); a non-metallic surface passing exactly through the world origin is classified as sky and written fully lit.</p>
+<p>Samples whose jittered direction falls below the horizon are skipped and counted as zero visibility:</p>
+<div class="citation-chip"><code class="citation-code">if (dot(N, L) &lt;= 0.0) continue;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_shadow.rgen#L100" target="_blank" rel="noopener">shaders/rt/rt_shadow.rgen:100</a></div>
+<p>Inside the integral that would cost nothing — those directions carry zero cosine weight anyway. But a skipped sample still divides by `sampleCount`, so what reaches the mask is a binary horizon *indicator* averaged over the jitter, and the lighting pass multiplies it into a BRDF that already applies exactly one $\mathbf{n}\cdot\bar\omega$, at the unjittered centre direction.</p>
+<div class="citation-chip"><code class="citation-code">return (diffuse + specular) * lightColor * NdotL;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/brdf/brdf_ggx.glsl#L169" target="_blank" rel="noopener">shaders/includes/brdf/brdf_ggx.glsl:169</a></div>
+<p>The product is indicator × cosine: a step-shaped second falloff riding on the cosine, darkening a band near the terminator by an amount no BRDF term accounts for.</p>
+<p>Finally the ray mask. The raygen traces with `0x01`, commented &quot;static geometry only&quot;, but every TLAS instance is currently built with `MASK_STATIC_ONLY`, which is `0xFF`:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t instanceMask = rt::MASK_STATIC_ONLY;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L866" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:866</a></div>
+<p>so the filter passes everything, and the companion `MASK_ANIMATED = 0x00` has no users at all since skeletal geometry left the RT path. The masking machinery is a live hook for a distinction the tree no longer draws.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>This is a boolean visibility average, not a shadow with radiance in it. Everything the technique gets right — hardness, contact, penumbra width — is decided by where the N sample targets are placed; everything it gets wrong, at the terminator and across multiple lights, follows from that single scalar being pulled out of an integral it does not commute with.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`RTShadowTechnique::resize()` exists and satisfies the `ShadowTechniqueLike` concept, but `DeferredRenderer::onResize` never calls it — it resizes `m_rtGI` and not `m_rtShadow`. After a window resize the mask keeps its init extent while `vkCmdTraceRaysKHR` dispatches at the new one, so stores past the old extent are discarded and the lighting pass samples a mask that no longer registers with the screen.</li>
+<li>`render()` creates a `VkSampler` for its two GBuffer reads and destroys it at the end of the same function, before the command buffer it recorded has executed. Vulkan requires that sampler to outlive every submitted command referencing it.</li>
+<li>One descriptor set, rewritten by `vkUpdateDescriptorSets` during recording: safe only if the previous frame&#x27;s submission using it has already completed.</li>
+<li>The pre-trace transition uses `oldLayout = VK_IMAGE_LAYOUT_UNDEFINED` with `srcStageMask = TOP_OF_PIPE`. Discarding the contents is fine — every pixel is written unconditionally each dispatch — but that barrier does not wait on last frame&#x27;s fragment-shader reads of the same image.</li>
+<li>`setRTShadowMask` and the `updateDescriptorSets` that follows it must both run before `m_renderGraph.execute`. The setter only stores `m_rtShadowView` — the flag bit the fragment shader branches on is derived from that member inside `execute`, and the write that puts the mask at binding 14 is the separate call. Move the pair after `execute` and the lighting pass records with bit 5 clear and the dummy view still bound.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/rt/rt_shadow_technique.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/rt_shadow_technique.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/rt_shadow.rgen</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/rt_shadow.rmiss</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/rt_shadow.rahit</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/brdf/brdf_ggx.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_shadow_technique.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

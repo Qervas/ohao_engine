@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 366" class="unit-diagram" role="img" aria-label="Three-tier funnel: twelve compute shaders are compiled by the shader target, five create a Vulkan pipeline, and only ssao can be dispatched on a clean clone.">
+  <rect x="0" y="0" width="720" height="366" fill="#0f1419"/>
+
+  <text x="16" y="26" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Reach of shaders/compute/ — from build output to a frame</text>
+
+  <!-- Tier 1 -->
+  <rect x="16" y="42" width="688" height="96" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="28" y="62" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">1 · compiled by the CMake glob (only on --target shaders)</text>
+  <text x="690" y="62" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">12</text>
+  <text x="28" y="84" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">brdf_lut   prefilter_envmap   equirect_to_cubemap   ssao   dlss_tonemap</text>
+  <text x="28" y="104" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">hiz_generate   light_culling   gpu_cull   skinning</text>
+  <text x="28" y="124" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">composite   dof_composite   denoise_atrous</text>
+
+  <path d="M360 138 L360 158" stroke="#3d4a58" stroke-width="1.5"/>
+  <path d="M355 152 L360 160 L365 152 Z" fill="#3d4a58"/>
+  <text x="374" y="154" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">7 have no .spv string anywhere in ohao/</text>
+
+  <!-- Tier 2 -->
+  <rect x="16" y="164" width="688" height="70" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="28" y="184" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">2 · reaches vkCreateComputePipelines</text>
+  <text x="690" y="184" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">5</text>
+  <text x="28" y="206" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">ssao</text>
+  <text x="28" y="224" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a">brdf_lut   prefilter_envmap   equirect_to_cubemap    (inside IBLProcessor)      dlss_tonemap</text>
+
+  <path d="M360 234 L360 266" stroke="#3d4a58" stroke-width="1.5"/>
+  <path d="M355 260 L360 268 L365 260 Z" fill="#3d4a58"/>
+  <text x="374" y="248" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">IBLProcessor is never constructed</text>
+  <text x="374" y="263" font-family="DM Sans,sans-serif" font-size="11" fill="#c4784a">dlss_tonemap needs vendored external/DLSS/ (gitignored)</text>
+
+  <!-- Tier 3 -->
+  <rect x="16" y="276" width="688" height="62" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+  <text x="28" y="296" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a">3 · dispatchable in a clean-clone frame</text>
+  <text x="690" y="296" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a">1</text>
+  <text x="28" y="318" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">ssao  (deferred render graph, opt-in, default off)</text>
+  <text x="28" y="333" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">conceptual — tiers derived by grep, not by GPU capture</text>
+</svg>

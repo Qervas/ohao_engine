@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 268" class="unit-diagram" role="img" aria-label="Timeline showing that EventBus::unsubscribe can return while a handler copied by an earlier publish is still pending invocation">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="24" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">SNAPSHOT DISPATCH — WHY unsubscribe() IS NOT A CANCEL BARRIER</text>
+
+<!-- dispatch window shading -->
+<rect x="266" y="44" width="200" height="168" fill="#c4784a" opacity="0.10"/>
+<line x1="266" y1="44" x2="266" y2="212" stroke="#c4784a" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="466" y1="44" x2="466" y2="212" stroke="#c4784a" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="272" y="58" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">lock is free; snapshot already taken</text>
+
+<!-- lane labels -->
+<text x="20" y="98" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">thread A</text>
+<text x="20" y="178" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">thread B</text>
+<line x1="88" y1="90" x2="700" y2="90" stroke="#3d4a58" stroke-width="1"/>
+<line x1="88" y1="170" x2="700" y2="170" stroke="#3d4a58" stroke-width="1"/>
+
+<!-- thread A: publish snapshot -->
+<rect x="96" y="70" width="168" height="40" rx="3" fill="#1a222c" stroke="#7dba8a" stroke-width="1.4"/>
+<text x="106" y="86" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">publish(): lock held</text>
+<text x="106" y="101" fill="#8a8490" font-family="DM Sans,sans-serif" font-size="11">copy handlers out of the map</text>
+
+<!-- thread A: handler invocation -->
+<rect x="472" y="70" width="196" height="40" rx="3" fill="#1a222c" stroke="#c4784a" stroke-width="1.4"/>
+<text x="482" y="86" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">handler(event) invoked</text>
+<text x="482" y="101" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="11">captures may already be dead</text>
+
+<!-- thread B: unsubscribe -->
+<rect x="292" y="150" width="176" height="40" rx="3" fill="#1a222c" stroke="#3d4a58" stroke-width="1.4"/>
+<text x="302" y="166" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">unsubscribe(id) / ~Scoped</text>
+<text x="302" y="181" fill="#8a8490" font-family="DM Sans,sans-serif" font-size="11">erases entry, returns</text>
+
+<!-- causality note -->
+<path d="M 468 170 L 560 170 L 560 114" fill="none" stroke="#6e685c" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="566" y="140" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">too late</text>
+
+<!-- time axis -->
+<line x1="88" y1="212" x2="700" y2="212" stroke="#3d4a58" stroke-width="1"/>
+<path d="M 700 212 l -7 -3.5 l 0 7 z" fill="#3d4a58"/>
+<text x="88" y="228" fill="#8a8490" font-family="DM Sans,sans-serif" font-size="11">time →</text>
+
+<text x="24" y="256" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual interleaving permitted by event_bus.cpp — not a measured trace. The shipped tests are single-threaded.</text>
+</svg>

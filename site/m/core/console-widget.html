@@ -33,31 +33,71 @@
         <p>In-engine console / log surface for debug tooling.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-widget-that-is-not-a-widget">The widget that is not a widget</a></li><li><a href="#from-macro-to-ostream">From macro to ostream</a></li><li><a href="#wired-but-never-exercised">Wired but never exercised</a></li><li><a href="#four-logging-conventions-in-one-engine">Four logging conventions in one engine</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-widget-that-is-not-a-widget">The widget that is not a widget</h2></div>
 <div class="prose reveal">
-<p>Optional in-engine console / log surface for debug tooling. Not on the hot render path.</p>
+<p>Nothing here draws — no ring buffer, no scrollback, no UI. The name is a fossil: OHAO shipped a full ImGui editor early on and deliberately deleted it, and the class kept the label.</p>
+<div class="citation-chip"><code class="citation-code">In early development, OHAO included a full ImGui-based editor UI. This was **intentionally removed** to:</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/docs/architecture/README.md#L9" target="_blank" rel="noopener">docs/architecture/README.md:9</a></div>
+<p>What survives is a process-wide, mutex-guarded facade over `std::cout` and `std::cerr` plus one unused redirect hook, reached through a Meyers singleton:</p>
+<div class="citation-chip"><code class="citation-code">static ConsoleWidget instance;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.hpp#L81" target="_blank" rel="noopener">ohao/core/console_widget.hpp:81</a></div>
+<p>`get()` is defined in the class body, so it is implicitly inline and the ODR collapses the function-local static to one object per *program* — not one per build. `ohao_core` is an archive linked separately into each example and test executable, so each process gets its own logger, mutex and callback slot.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="from-macro-to-ostream">From macro to ostream</h2></div>
 <div class="prose reveal">
-<p>ConsoleWidget buffers log lines and presents a simple UI surface for tools/examples.</p>
-<p>Stays in core so gpu/ remains free of UI dependencies.</p>
+<p>Call sites never touch the class. A macro fetches the singleton and passes the call site&#x27;s `std::source_location` explicitly:</p>
+<div class="citation-chip"><code class="citation-code">#define OHAO_LOG(msg) \</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.hpp#L94" target="_blank" rel="noopener">ohao/core/console_widget.hpp:94</a></div>
+<p>`log`, `logWarning`, `logError` and `logDebug` are one-line forwarders into a private `emit`, which takes the lock and writes tag, message and newline in one critical section, so two threads cannot shred each other&#x27;s lines:</p>
+<div class="citation-chip"><code class="citation-code">os &lt;&lt; &#x27;[&#x27; &lt;&lt; logLevelName(level) &lt;&lt; &quot;] &quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.cpp#L53" target="_blank" rel="noopener">ohao/core/console_widget.cpp:53</a></div>
+<p>It serialises facade calls against each other only; the hundreds of raw `std::cout`/`std::cerr` writes elsewhere under `ohao/` can still cut a formatted line in half.</p>
+<p>Level routing is one ternary — only `Error` reaches stderr:</p>
+<div class="citation-chip"><code class="citation-code">return level == LogLevel::Error ? std::cerr : std::cout;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.cpp#L9" target="_blank" rel="noopener">ohao/core/console_widget.cpp:9</a></div>
+<p>The taxonomy leaks the other way too: seven of the eleven facade calls in `profile_manager.cpp` spell the severity into the message and hand it to the Info-level macro,</p>
+<div class="citation-chip"><code class="citation-code">OHAO_LOG(&quot;Error: Profile &#x27;&quot; + key + &quot;&#x27; already exists&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/profile_manager.cpp#L17" target="_blank" rel="noopener">ohao/physics/world/profile_manager.cpp:17</a></div>
+<p>shipping `[INFO] Error: Profile &#x27;…&#x27; already exists` on stdout.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="wired-but-never-exercised">Wired but never exercised</h2></div>
 <div class="prose reveal">
-<p>Debuggability without dragging ImGui or similar into every library target.</p>
+<p>All 69 call sites materialise a `source_location` and thread it through the forwarder into `emit`, which discards it: the flag that would print it initialises off,</p>
+<div class="citation-chip"><code class="citation-code">bool m_includeLocation{false};  // off by default to preserve existing log format</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.hpp#L90" target="_blank" rel="noopener">ohao/core/console_widget.hpp:90</a></div>
+<p>contradicting the declaration comment one screen above.</p>
+<div class="citation-chip"><code class="citation-code">/// When true (default), prefix messages with file:line from source_location.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.hpp#L68" target="_blank" rel="noopener">ohao/core/console_widget.hpp:68</a></div>
+<p>Trust the initialiser — `setIncludeLocation` has zero callers. Turning it on is one line, with one exception: the templated `operator&lt;&lt;` calls `log(ss.str())` on the *default* argument, and a default `source_location::current()` is evaluated at that call, inside the header, so stream-style logging would report `console_widget.hpp`, never the caller.</p>
+<p>The other dormant path is a `std::function&lt;void(LogLevel, std::string_view)&gt;` redirect. When set, `emit` hands the message over and returns before any stream write:</p>
+<div class="citation-chip"><code class="citation-code">m_logCallback(level, message);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.cpp#L48" target="_blank" rel="noopener">ohao/core/console_widget.cpp:48</a></div>
+<p>No tag, no newline — the sink owns formatting. `loc` is not in the callback type, so a sink can never show file:line whatever `setIncludeLocation` says; worse, the callback runs while `emit` still holds `m_mutex`, a non-recursive `std::mutex`, so a sink that logs, or that reinstalls itself via `setLogCallback`, deadlocks on its first message. `setLogCallback`, `clearLogCallback`, `logAt` and `operator&lt;&lt;` have no callers anywhere: the reachable surface of this class is the five macros.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="four-logging-conventions-in-one-engine">Four logging conventions in one engine</h2></div>
 <div class="prose reveal">
-<p>Optional UI-facing log sink used by tools and examples; not on the hot render path.</p>
-<p>Keeps console I/O out of gpu/ so core stays Vulkan-free.</p>
+<p>Ten `.cpp` files log through the facade, 69 call sites, all in `physics/` and `scene/`. The renderer does not participate: under `ohao/`, 56 files write `std::cout` directly (346 lines) and 51 write `std::cerr` directly (287 lines), while `audio/` uses `fprintf`. Those raw writes do separate severity — Vulkan device setup puts its failure on stderr and its success on stdout five lines later, just without the facade:</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[OHAO] Failed to create logical device with RT extensions&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L248" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:248</a></div>
+<p>So a callback installed here would capture `physics/`&#x27;s facade traffic, under a third of `scene/`&#x27;s log output (30 facade calls against 78 raw lines), and nothing from Vulkan or the path tracer. The header also includes `core/concepts.hpp` for a `to_underlying` it never calls, costing every logging TU a `&lt;concepts&gt;`/`&lt;ranges&gt;`/`&lt;span&gt;` pull-in.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The whole logging strategy is this file: no third-party logger, no sink registry, no compile-time level filter — and `ohao_core` declares no link dependencies at all, so physics and scene need nothing beyond libstdc++ to log:  {{cite ohao/core/CMakeLists.txt &quot;add_library(ohao_core STATIC&quot;}}  spdlog or fmt would buy level filtering and compiled-out debug lines for a link dependency in the engine&#x27;s lowest layer, inherited by every target. The missing filter costs nothing yet: `OHAO_LOG_DEBUG` is unconditional in release as in debug, but the tree holds exactly one use of it — inside `ForceDebugger::logBodyForceBreakdown`, which nothing calls.  {{cite ohao/physics/debug/force_debugger.cpp &quot;OHAO_LOG_DEBUG(log.str());&quot;}}</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Everything here that looks like infrastructure — location capture, the callback redirect, the stream operator — is wired but never exercised. Shipping behaviour is `[LEVEL] message` on stdout, stderr only for `Error`, with the severity sometimes spelled into the message instead of the level.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`emit` holds `m_mutex` across the callback invocation. A callback that logs, or</li>
+</ul>
+<p>that calls `setLogCallback`, deadlocks — `std::mutex` is not recursive.</p>
+<ul>
+<li>`&lt;iostream&gt;` is included by the header, not the implementation, which declares</li>
+</ul>
+<p>only `&lt;ostream&gt;`. `std::cout`/`std::cerr` reach `emit` transitively, so tidying the header&#x27;s include list breaks the build.</p>
+<ul>
+<li>Only `LogLevel::Error` goes to stderr; `Warning` and `Debug` stay on stdout. A</li>
+</ul>
+<p>`2&gt;errors.log` triage does not lose them, it just never shows them.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
+        <div class="row"><code>docs/architecture/README.md</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/console_widget.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/console_widget.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/world/profile_manager.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

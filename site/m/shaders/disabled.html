@@ -33,27 +33,100 @@
         <p>shaders/_disabled holds retired experiments — not in active build.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-directory-that-nothing-excludes">The directory that nothing excludes</a></li><li><a href="#the-accident-is-doing-real-work">The accident is doing real work</a></li><li><a href="#what-a-green-build-does-not-prove">What a green build does not prove</a></li><li><a href="#the-archive-holds-four-live-headers-hostage">The archive holds four live headers hostage</a></li><li><a href="#sometimes-the-archived-version-is-the-better-one">Sometimes the archived version is the better one</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-directory-that-nothing-excludes">The directory that nothing excludes</h2></div>
 <div class="prose reveal">
-<p>shaders/_disabled archives retired experiments — not in the active build.</p>
+<p>`shaders/_disabled/` and its C++ twin were created by the same commit — 851092d (2026-03-20), the refactor that rewrote the renderer around ray tracing and cut `src/renderer/passes/` from 34 pass `.cpp` files to 11. Thirty-five shader files were `git mv`&#x27;d out of `compute/`, `water/`, `terrain/`, `foliage/` and `decal/` into `shaders/_disabled/`; 48 pass sources and headers were `git mv`&#x27;d into `src/renderer/passes/_disabled/` in the same breath. Neither archive lost a file that day.</p>
+<p>The two halves then diverged. The C++ archive travelled intact through three renames and was deleted twenty days later, in e8eb9d1 (2026-04-09). The shader archive is still here. What survives in the working tree is a shaders-only fossil: no `WaterPass`, `TerrainPass`, `FoliagePass`, `DecalPass` or cloud pass class exists anywhere under `ohao/`, and the nearest thing to a survivor is a comment telling you to initialise one of them first.</p>
+<div class="citation-chip"><code class="citation-code">// Must be called after CloudPass is initialized and after each resize.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/sky_pass.hpp#L39" target="_blank" rel="noopener">ohao/render/deferred/sky_pass.hpp:39</a></div>
+<p>The C++ build still carries the line that switched the archive off: a `list(FILTER ...)` applied to a recursive source glob.</p>
+<div class="citation-chip"><code class="citation-code">list(FILTER RENDERER_SOURCES EXCLUDE REGEX &quot;/_disabled/&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/CMakeLists.txt#L12" target="_blank" rel="noopener">ohao/render/CMakeLists.txt:12</a></div>
+<p>That line matches nothing today — `find ohao -type d -name _disabled` comes back empty. It is the last vestige of the C++ archive, not a maintained convention. The shader build never had an equivalent. It globs recursively from the `shaders/` root and stops there:</p>
+<div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
+<p>So the 35 archived shaders enter the build graph alongside the 56 live ones. The glob runs at *configure* time, and carries no `CONFIGURE_DEPENDS`; the per-shader `add_custom_command` runs at *build* time and only when its `.spv` is older than its inputs. Configuring compiles nothing — a clean `cmake --build build --target shaders` compiles all 91, an incremental one compiles whatever went stale.</p>
+<p>In this tree the archive is 296 KB of the 1.16 MB of SPIR-V the shader target currently produces. (`build/shaders/` holds 96 `.spv` for those 91 sources; the five extras — 490 KB, led by three path-tracer raygen modules — have no source file under `shaders/` any more and are never rebuilt.) Nothing loads the archive: every `loadShaderModule` / `readFile` call site in `ohao/` names a live module, and no `_disabled_*.spv` string appears anywhere in the C++ tree. The reason it cannot be loaded *by accident* is the flat output naming — the relative path is underscore-joined into the SPIR-V filename, so everything from the archive is namespaced behind a `_disabled_` prefix that no loader ever spells:</p>
+<div class="citation-chip"><code class="citation-code">string(REPLACE &quot;/&quot; &quot;_&quot; SHADER_FLAT_NAME ${SHADER_REL})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L42" target="_blank" rel="noopener">shaders/CMakeLists.txt:42</a></div>
+<p>That is also why the archived `ssr.comp` and the live `postprocess/ssr.comp` — the only basename collision between the two halves of the tree — do not overwrite each other&#x27;s output.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-accident-is-doing-real-work">The accident is doing real work</h2></div>
 <div class="prose reveal">
-<p>Do not reference from CMake targets.</p>
+<p>Compiling dead code sounds like pure waste, and the obvious cleanup is a `list(FILTER ...)` line in `shaders/CMakeLists.txt`. Before doing that, notice what the current setup buys. Because the archive is in the build graph, every archived shader is *compile-gated*: four months after the strip, all 35 still compile clean under `glslc --target-env=vulkan1.3 -Ishaders -Ishaders/includes` against the current include tree — not because anyone maintained them, but because nobody was allowed to break them.</p>
+<p>The gate is not uniform, though, and it matters which grade a given module gets. Nine of the 35 `#include` anything at all. Seven of those nine pull only headers the dependency list tracks, so breaking one turns the build red on the next *incremental* compile; `common/encoding.glsl` is the sharpest, shared by four archived modules and five live ones.</p>
+<div class="citation-chip"><code class="citation-code">#include &quot;includes/common/encoding.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/ssr.comp#L7" target="_blank" rel="noopener">shaders/_disabled/ssr.comp:7</a></div>
+<div class="citation-chip"><code class="citation-code">#include &quot;includes/common/encoding.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L8" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:8</a></div>
+<p>The other 26 archived shaders `#include` nothing, so for them the gate fires only on a clean build or a toolchain change — real, but slower. And the two remaining, `terrain.frag` and `terrain_gen.comp`, get neither: their only `#include` is `includes/noise.glsl`, which the dependency glob misses entirely (see below), so editing `noise.glsl` leaves both `.spv` files valid and the build green.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Excluding the archive from the glob would drop 35 of the 91 `glslc` invocations a clean shader build performs. It would also remove the only thing keeping the archive syntactically alive. The engine currently pays a small, bounded cost for a compile gate it did not know it was buying. Removing that gate should be a decision, not a tidy-up.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="what-a-green-build-does-not-prove">What a green build does not prove</h2></div>
 <div class="prose reveal">
-<p>Keep history without shipping broken paths.</p>
+<p>`glslc` compiles each module in isolation. It checks GLSL syntax, types and `#include` resolution. It does not check that a descriptor set layout exists, that a push-constant block fits `maxPushConstantsSize`, that two shaders in the same chain agree on a constant, or that a value a shader *declares* as a push constant actually reaches the code that consumes it. The archive&#x27;s most substantial asset — a four-stage Tessendorf FFT ocean under `water/waves/` — carries one defect of each of the last two kinds.</p>
+<p>The chain is textbook: `spectrum_init.comp` draws a Phillips-weighted Gaussian field $h_0(\mathbf{k})$ once per wind change, `spectrum_hkt.comp` animates it in the frequency domain each frame, `fft_butterfly.comp` runs a 2-D inverse FFT as two 1-D passes, and `fft_normal.comp` differentiates the result into a normal and a foam mask. The per-frame step is the Hermitian-symmetric height field</p>
+<div class="math-block">$$
+h(\mathbf{k},t) = h_0(\mathbf{k})\,e^{\,i\omega t} + h_0^{*}(-\mathbf{k})\,e^{-i\omega t},
+\qquad \omega(\mathbf{k}) = \sqrt{g\,\lVert\mathbf{k}\rVert}
+$$</div>
+<p>where $\mathbf{k}$ is the 2-D wave vector on the $N\times N$ frequency grid, $h_0^{*}(-\mathbf{k})$ is the conjugate partner packed into `.ba` by `spectrum_init` (which is what makes the inverse transform real-valued), $\omega$ is the deep-water linear dispersion relation, and $g$ is gravity.</p>
+<p>That last symbol is the first defect. `spectrum_init` treats gravity as a push-constant, because the Phillips length scale $L = \lVert w \rVert^2 / g$ needs it:</p>
+<div class="citation-chip"><code class="citation-code">float L  = windLen * windLen / pc.gravity;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/water/waves/spectrum_init.comp#L57" target="_blank" rel="noopener">shaders/_disabled/water/waves/spectrum_init.comp:57</a></div>
+<p>`spectrum_hkt`, one dispatch later in the same chain, hard-codes it as a file-scope constant:</p>
+<div class="citation-chip"><code class="citation-code">float omega = sqrt(g * kLen);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/water/waves/spectrum_hkt.comp#L37" target="_blank" rel="noopener">shaders/_disabled/water/waves/spectrum_hkt.comp:37</a></div>
+<p>Any host that passed a non-9.81 gravity would get a spectrum and a dispersion relation describing different planets. The second defect is in the butterfly pass: `N` is a push-constant, but the bit-reversal permutation and the stage count are both frozen at 256, matching the fixed `local_size_x = 256` and the 4 KB shared array:</p>
+<div class="citation-chip"><code class="citation-code">// Bit-reversal for log2(256) = 8 bits</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/water/waves/fft_butterfly.comp#L29" target="_blank" rel="noopener">shaders/_disabled/water/waves/fft_butterfly.comp:29</a></div>
+<p>`pc.N` reaches only the final $1/N$ normalisation. A resolution other than 256 would produce a silently wrong transform, not a validation error.</p>
+<p>Neither defect was ever exercised, because the only host this chain ever had pinned both values. `FFTOceanSim` declared `static constexpr uint32_t N = 256;` with the comment &quot;must be power-of-2, ≤ local_size_x&quot;, and pushed a literal `9.81f` into its `SpectrumInitPC`, from the day it landed to the day it was deleted. So these are not latent rot nobody noticed — they were host-side contract, of the kind `glslc` cannot see and the working tree no longer states anywhere. The shader survived the strip; the invariant did not.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="the-archive-holds-four-live-headers-hostage">The archive holds four live headers hostage</h2></div>
 <div class="prose reveal">
-<p>Do not document as shipping features.</p>
+<p>`shaders/includes/` is the live tree, but ten of its 32 `.glsl` headers have no live consumer. Four of the ten are the archive&#x27;s hostages — their only `#include` sites are inside `_disabled/`: `noise.glsl` (terrain), `lighting/phase.glsl` (cloud and volumetric scattering), `cloud/cloud_density.glsl`, and `water/gerstner.glsl`.</p>
+<div class="citation-chip"><code class="citation-code">#include &quot;../includes/noise.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/terrain/terrain_gen.comp#L4" target="_blank" rel="noopener">shaders/_disabled/terrain/terrain_gen.comp:4</a></div>
+<div class="citation-chip"><code class="citation-code">#include &quot;water/gerstner.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/water/water.vert#L26" target="_blank" rel="noopener">shaders/_disabled/water/water.vert:26</a></div>
+<p>The other six are dead outright, with zero `#include` sites anywhere in `shaders/`, live or archived: `lighting/ibl.glsl`, `lighting/light_types.glsl`, `material/advanced_brdf.glsl`, `material/material_sampling.glsl`, `shadow/shadow_csm.glsl` and `shadow/shadow_types.glsl`. Delete the archive and its four hostages join that group in the same instant — which means a future &quot;remove unused shader includes&quot; sweep and a future &quot;remove the archive&quot; commit have to be ordered, or the second one invalidates the first one&#x27;s premise.</p>
+<p>There is a sharper edge underneath. The include dependency list is a separate glob, and every shader&#x27;s compile command depends on *all* of it, so touching any header the list contains invalidates all 91 modules — the 35 archived ones included:</p>
+<div class="citation-chip"><code class="citation-code">DEPENDS ${SHADER} ${SHADER_INCLUDES} ${CMAKE_BINARY_DIR}/shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L47" target="_blank" rel="noopener">shaders/CMakeLists.txt:47</a></div>
+<p>The list is not all of `includes/`, though. It is written with a `**` segment that CMake does not treat as &quot;zero or more directories&quot;:</p>
+<div class="citation-chip"><code class="citation-code">&quot;${CMAKE_CURRENT_SOURCE_DIR}/includes/**/*.glsl&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L32" target="_blank" rel="noopener">shaders/CMakeLists.txt:32</a></div>
+<p>It matches 30 of the 32 `.glsl` files under `includes/`. The two it misses are the ones sitting directly in `includes/` rather than a subdirectory — `noise.glsl`, whose only consumers are archived, and `pbr_unpack.glsl`, which is very much live and `#include`d by all three path-tracer raygen shaders. Editing either triggers no rebuild at all.</p>
+</div>
+<div class="section-rule"><h2 id="sometimes-the-archived-version-is-the-better-one">Sometimes the archived version is the better one</h2></div>
+<div class="prose reveal">
+<p>The word &quot;disabled&quot; invites the reading that this is worse code. For screen-space reflections it is the opposite. The live `SSRPass` loads the 103-line `postprocess/ssr.comp`:</p>
+<div class="citation-chip"><code class="citation-code">VkShaderModule shader = loadShaderModule(&quot;postprocess_ssr.comp.spv&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssr_pass.cpp#L122" target="_blank" rel="noopener">ohao/render/deferred/ssr_pass.cpp:122</a></div>
+<p>which marches a fixed number of uniform steps along the reflection ray:</p>
+<div class="citation-chip"><code class="citation-code">int maxSteps = 64;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/ssr.comp#L59" target="_blank" rel="noopener">shaders/postprocess/ssr.comp:59</a></div>
+<p>The archived `_disabled/ssr.comp` is 205 lines and does hierarchical Hi-Z traversal — descend a mip on a potential hit, ascend one on a miss:</p>
+<div class="citation-chip"><code class="citation-code">float sampleHiZ(vec2 uv, int mipLevel) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/_disabled/ssr.comp#L45" target="_blank" rel="noopener">shaders/_disabled/ssr.comp:45</a></div>
+<p>The corresponding pyramid generator, `shaders/compute/hiz_generate.comp`, is still in the *live* tree and has zero C++ consumers — no `hiz` symbol appears anywhere under `ohao/`. So the engine builds a Hi-Z generator nothing runs, for a traversal only the archive implements, while shipping the linear fallback.</p>
+<p>A second residue points the same way: device creation still requests `tessellationShader`, though the only tessellation stages left in the tree are `_disabled/terrain/terrain.tesc` and `.tese`.</p>
+<div class="citation-chip"><code class="citation-code">deviceFeatures2.features.tessellationShader = VK_TRUE;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L229" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:229</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`_disabled` marks *unbound*, not *unbuilt*. These 35 modules sit in the shader build graph and are bound by no pipeline in `ohao/` — so what a green build certifies about them is syntax and `#include` resolution, and nothing else. Where a host once existed it exists only in git history; the current tree holds no descriptor layout, pipeline or push-constant struct for any of them.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Adding an exclusion filter to `shaders/CMakeLists.txt` silently removes the compile gate that has kept all 35 archived shaders building. Do it deliberately, or accept that the archive rots from that commit onward.</li>
+<li>Removing the archive strips the last consumer of `includes/noise.glsl`, `includes/lighting/phase.glsl`, `includes/cloud/cloud_density.glsl` and `includes/water/gerstner.glsl`. Order archive removal *before* any &quot;delete unused includes&quot; sweep.</li>
+<li>Fixing the `includes/**/*.glsl` glob to cover top-level headers is a live-tree correctness fix, not an archive one: `pbr_unpack.glsl` is currently outside shader dependency tracking and is included by all three raygen shaders.</li>
+<li>No descriptor layout, pipeline or push-constant struct for any archived shader exists in the current tree — but the hosts are not gone, only untracked. The 48 pass files archived by 851092d (23 `.cpp`, 25 `.hpp`), `waves/fft_ocean_sim.cpp` among them, are recoverable with `git show 851092d:src/renderer/passes/_disabled/…`. Reviving the FFT ocean is a `git show`, not a re-derivation from `layout(...)` declarations, and the recovered host already pins the `N = 256` and `g = 9.81` the chain requires.</li>
+<li>Every behavioural statement on this page is read from the working tree or from git history, and none of it is a runtime measurement. This page makes no claim about whether the archived modules ever executed on a GPU: their hosts shipped in this repo — `FFTOceanSim` landed in 7355243 (2026-03-02) and dispatched all four `water/waves/` shaders — until e8eb9d1 deleted them.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
+        <div class="row"><code>ohao/render/deferred/sky_pass.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/ssr.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/water/waves/spectrum_init.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/water/waves/spectrum_hkt.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/water/waves/fft_butterfly.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/terrain/terrain_gen.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/_disabled/water/water.vert</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/ssr_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/ssr.comp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/_disabled</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

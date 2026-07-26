@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" class="unit-diagram" role="img" aria-label="Layout of the 64-byte particle record: four vec4 lanes, showing which shader stage writes or reads each channel and which channels are never read.">
+  <rect x="0" y="0" width="720" height="340" fill="#0f1419"/>
+
+  <text x="12" y="24" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="14">struct Particle — 64 bytes, 65536 slots, one SSBO</text>
+  <text x="12" y="42" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">E = written by particle_emit.comp   U = read+written by particle_update.comp   V = read by particle_render.vert</text>
+
+  <!-- column headers -->
+  <text x="200" y="72" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12" text-anchor="middle">.x</text>
+  <text x="345" y="72" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12" text-anchor="middle">.y</text>
+  <text x="490" y="72" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12" text-anchor="middle">.z</text>
+  <text x="635" y="72" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="12" text-anchor="middle">.w</text>
+
+  <!-- row 1: position -->
+  <text x="12" y="105" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">position</text>
+  <text x="12" y="120" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">+0</text>
+  <rect x="130" y="84" width="425" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="342" y="102" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">world position</text>
+  <text x="342" y="117" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E spawn · U integrate · V billboard centre</text>
+  <rect x="565" y="84" width="140" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="635" y="102" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">age (seconds)</text>
+  <text x="635" y="117" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E = 0 · U += dt</text>
+
+  <!-- row 2: velocity -->
+  <text x="12" y="155" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">velocity</text>
+  <text x="12" y="170" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">+16</text>
+  <rect x="130" y="134" width="425" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="342" y="152" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">velocity (m/s)</text>
+  <text x="342" y="167" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E cone sample · U gravity + drag</text>
+  <rect x="565" y="134" width="140" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="635" y="152" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">maxLifetime</text>
+  <text x="635" y="167" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E only · U compares</text>
+
+  <!-- row 3: color -->
+  <text x="12" y="205" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">color</text>
+  <text x="12" y="220" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">+32</text>
+  <rect x="130" y="184" width="425" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="342" y="202" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">rgb — colorStart, constant for the whole life</text>
+  <text x="342" y="217" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle"><tspan fill="#7dba8a">E spawn · V fragment tint</tspan><tspan fill="#c4784a"> · colorEnd never sampled</tspan></text>
+  <rect x="565" y="184" width="140" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="635" y="202" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">alpha</text>
+  <text x="635" y="217" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">U = 1 − age/maxLife · V</text>
+
+  <!-- row 4: params -->
+  <text x="12" y="255" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="12">params</text>
+  <text x="12" y="270" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">+48</text>
+  <rect x="130" y="234" width="140" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="200" y="252" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">size</text>
+  <text x="200" y="267" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E · U shrink · V</text>
+  <rect x="275" y="234" width="140" height="40" fill="#1a222c" stroke="#6e685c" stroke-dasharray="4 3"/>
+  <text x="345" y="252" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">rotation</text>
+  <text x="345" y="267" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E writes 0 · never read</text>
+  <rect x="420" y="234" width="140" height="40" fill="#1a222c" stroke="#6e685c" stroke-dasharray="4 3"/>
+  <text x="490" y="252" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">type</text>
+  <text x="490" y="267" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E writes · never read</text>
+  <rect x="565" y="234" width="140" height="40" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="635" y="252" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12" text-anchor="middle">alive flag</text>
+  <text x="635" y="267" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10" text-anchor="middle">E = 1 · U kills · V gates</text>
+
+  <line x1="130" y1="292" x2="705" y2="292" stroke="#3d4a58"/>
+  <text x="130" y="312" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="12">Overloaded lanes: age lives in position.w, its limit in velocity.w —</text>
+  <text x="130" y="328" fill="#c4a574" font-family="DM Sans,sans-serif" font-size="12">the expiry test straddles two vec4s, and the struct is redeclared in all three shaders.</text>
+</svg>

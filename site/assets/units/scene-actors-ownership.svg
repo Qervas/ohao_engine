@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 352" class="unit-diagram" role="img" aria-label="Ownership map of the actor graph. Scene owns actors through two shared-pointer maps and holds raw pointers to mesh and physics components. Actor owns its components through a vector and a type-index map. The parent and children pointers and the inherited SceneObject transform are declared but never populated. The renderer keys GPU geometry by the actor ObjectID.">
+  <rect x="0" y="0" width="720" height="352" fill="#0f1419"/>
+
+  <text x="20" y="26" font-family="DM Sans,sans-serif" font-size="13" fill="#e8e2d6">Who owns an actor, and which declared edges are never formed</text>
+
+  <!-- Scene panel -->
+  <rect x="20" y="46" width="212" height="152" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="32" y="66" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">Scene</text>
+  <text x="32" y="90" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">actors: id &#8594; shared_ptr&lt;Actor&gt;</text>
+  <text x="32" y="108" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">actorsByName: name &#8594; shared_ptr</text>
+  <line x1="32" y1="120" x2="220" y2="120" stroke="#3d4a58"/>
+  <text x="32" y="140" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4784a">meshComponents: MeshComponent*</text>
+  <text x="32" y="158" font-family="IBM Plex Mono,monospace" font-size="10" fill="#c4784a">physicsComponents: PhysicsComp*</text>
+  <text x="32" y="180" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">flat registries &#8212; non-owning, kept by component hooks</text>
+
+  <!-- Actor panel -->
+  <rect x="282" y="46" width="212" height="182" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="294" y="66" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">Actor : SceneObject</text>
+  <text x="294" y="90" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">objectID (atomic, per-run)</text>
+  <text x="294" y="108" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">components: vector&lt;shared_ptr&gt;</text>
+  <text x="294" y="126" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">componentsByType: type_index &#8594;</text>
+  <line x1="294" y1="140" x2="482" y2="140" stroke="#3d4a58"/>
+  <text x="294" y="160" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">parent / children : Actor*</text>
+  <text x="294" y="178" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">SceneObject::transform</text>
+  <text x="294" y="196" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6e685c">guid : string</text>
+  <text x="294" y="216" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">declared, never written by any caller</text>
+
+  <!-- Renderer panel -->
+  <rect x="544" y="46" width="158" height="96" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="556" y="66" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">VulkanRenderer</text>
+  <text x="556" y="90" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">m_meshBufferMap:</text>
+  <text x="556" y="106" font-family="IBM Plex Mono,monospace" font-size="10" fill="#e8e2d6">ObjectID &#8594; MeshBufferInfo</text>
+  <text x="556" y="128" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">GPU geometry join</text>
+
+  <!-- owning edge Scene -> Actor -->
+  <line x1="232" y1="98" x2="282" y2="98" stroke="#7dba8a" stroke-width="1.6"/>
+  <polygon points="282,98 274,94.5 274,101.5" fill="#7dba8a"/>
+  <text x="238" y="90" font-family="IBM Plex Mono,monospace" font-size="9" fill="#7dba8a">owns</text>
+
+  <!-- raw edge registries <- components -->
+  <path d="M 294 118 L 250 118 L 250 145" fill="none" stroke="#c4784a" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <polygon points="250,150 246.5,142 253.5,142" fill="#c4784a"/>
+  <text x="196" y="200" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4784a">onComponentAdded</text>
+
+  <!-- id -> renderer key -->
+  <line x1="494" y1="92" x2="544" y2="92" stroke="#c4a574" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <polygon points="544,92 536,88.5 536,95.5" fill="#c4a574"/>
+  <text x="498" y="84" font-family="IBM Plex Mono,monospace" font-size="9" fill="#c4a574">keys</text>
+
+  <!-- inert self edge -->
+  <path d="M 494 162 C 528 162 528 196 494 196" fill="none" stroke="#6e685c" stroke-width="1.4" stroke-dasharray="3 4"/>
+  <text x="536" y="172" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6e685c">Actor::setParent</text>
+  <text x="536" y="186" font-family="IBM Plex Mono,monospace" font-size="9" fill="#6e685c">no outside caller</text>
+
+  <!-- legend -->
+  <line x1="20" y1="262" x2="700" y2="262" stroke="#3d4a58"/>
+  <line x1="24" y1="288" x2="56" y2="288" stroke="#7dba8a" stroke-width="1.6"/>
+  <text x="64" y="292" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">owning shared_ptr</text>
+  <line x1="200" y1="288" x2="232" y2="288" stroke="#c4784a" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <text x="240" y="292" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">non-owning raw pointer, live</text>
+  <line x1="440" y1="288" x2="472" y2="288" stroke="#6e685c" stroke-width="1.4" stroke-dasharray="3 4"/>
+  <text x="480" y="292" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">declared but never populated</text>
+
+  <text x="24" y="320" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">Both Scene maps own each actor, and rootNode is a third owning handle; createActor callers hold transient copies.</text>
+  <text x="24" y="336" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">The parent/children pointers stay null &#8212; no caller ever forms the hierarchy.</text>
+</svg>

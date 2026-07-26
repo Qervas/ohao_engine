@@ -33,53 +33,94 @@
         <p>Thread-safe pub/sub with typed subscribe helpers.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-finished-facility-with-no-engine-callers">A finished facility with no engine callers</a></li><li><a href="#dispatch-happens-outside-the-lock">Dispatch happens outside the lock</a></li><li><a href="#the-window-unsubscribe-cannot-close">The window unsubscribe cannot close</a></li><li><a href="#identifiers-that-are-never-recycled">Identifiers that are never recycled</a></li><li><a href="#string-view-at-the-door-std-string-in-the-map">string_view at the door, std::string in the map</a></li><li><a href="#the-typed-layer-and-its-two-failure-modes">The typed layer, and its two failure modes</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-finished-facility-with-no-engine-callers">A finished facility with no engine callers</h2></div>
 <div class="prose reveal">
-<p>Thread-safe publish/subscribe bus for decoupling systems (physics contacts, UI, tools) without hard module links.</p>
+<p>Start with the fact a reader will find in thirty seconds of grepping, because it reframes everything else: no renderer, scene, physics or example translation unit in this tree publishes or subscribes. The header is pulled in exactly once outside its own `.cpp`, by the `core.hpp` umbrella:</p>
+<div class="citation-chip"><code class="citation-code">#include &quot;core/event_bus.hpp&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/core.hpp#L14" target="_blank" rel="noopener">ohao/core/core.hpp:14</a></div>
+<p>and the only file that includes `core.hpp` is the engine test binary. So the bus is complete, unit-tested, and unadopted.</p>
+<p>The engine did not go without cross-module notification; it solved the problem twice, narrower, in the places that needed it. Jolt contact callbacks push into a mutex-guarded vector that `step()` drains and hands to a *single* `IContactListener*`:</p>
+<div class="citation-chip"><code class="citation-code">case ContactEvent::Type::BEGIN:   m_userContactListener-&gt;onContactBegin(event); break;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L495" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:495</a></div>
+<p>and log fan-out is one `std::function`, settable and clearable, not a list:</p>
+<div class="citation-chip"><code class="citation-code">using LogCallback = std::function&lt;void(LogLevel, std::string_view)&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.hpp#L42" target="_blank" rel="noopener">ohao/core/console_widget.hpp:42</a></div>
+<p>Both are single-consumer, statically typed, and free of string keys — which is also a fair summary of what those subsystems actually needed. The bus is the generalisation nobody has yet had to reach for. What follows is what it commits you to when someone does.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="dispatch-happens-outside-the-lock">Dispatch happens outside the lock</h2></div>
 <div class="prose reveal">
-<p>subscribe(eventType, handler) → SubscriptionId; unsubscribe by id.</p>
-<p>subscribeTyped&lt;T&gt; wraps any_cast and skips bad casts.</p>
-<p>ScopedSubscription is move-only RAII unsubscribe.</p>
-<p>EventBus::instance() is a process-wide convenience; inject a bus in tests.</p>
-<ul>
-<li>subscribe(eventType, handler) → SubscriptionId</li>
-<li>subscribeTyped&lt;T&gt; skips bad any_casts</li>
-<li>publish / publishTyped</li>
-<li>ScopedSubscription RAII unsubscribe</li>
-</ul>
+<p>`publish` never calls a handler while holding the mutex. It takes the lock, finds the bucket, and copies every `std::function` into a local vector:</p>
+<div class="citation-chip"><code class="citation-code">handlers.push_back(sub.handler);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.cpp#L41" target="_blank" rel="noopener">ohao/core/event_bus.cpp:41</a></div>
+<p>Then the lock is released, the `Event` is constructed, and the copies are invoked:</p>
+<div class="citation-chip"><code class="citation-code">for (const auto&amp; handler : handlers) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.cpp#L49" target="_blank" rel="noopener">ohao/core/event_bus.cpp:49</a></div>
+<p>The unknown-key case returns before any of that, so publishing to a type nobody listens for never constructs an `Event`:</p>
+<div class="citation-chip"><code class="citation-code">if (it == m_subscribers.end()) return;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.cpp#L38" target="_blank" rel="noopener">ohao/core/event_bus.cpp:38</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Holding the lock across dispatch is the obvious implementation and it is a trap twice over. `m_mutex` is a plain `std::mutex`, so a handler that calls `subscribe`, `unsubscribe` or `publish` — the ordinary shape of an event graph — would self-deadlock on re-entry. Swapping in `std::recursive_mutex` fixes the deadlock and leaves the worse bug: a handler that subscribes to the type it is being dispatched for would `push_back` into the very vector being iterated, invalidating the iterator mid-loop. Copying the handler list buys re-entrancy and iterator stability at the price of N `std::function` copies per publish, some of which heap-allocate when the captures exceed the small-object buffer.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-window-unsubscribe-cannot-close">The window unsubscribe cannot close</h2></div>
 <div class="prose reveal">
-<p>Physics and audio should not #include each other; events carry typed payloads across boundaries.</p>
+<p>The same snapshot creates the one hazard on this page. Once the lock is dropped, the pending handler list is a private copy that nothing can revoke. `unsubscribe` only touches the map, so it can acquire the lock, erase the entry, and return while a handler copied microseconds earlier has not yet run.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/core-event-bus-dispatch-window.svg" alt="Conceptual interleaving that event_bus.cpp permits: unsubscribe() completes inside the window between the snapshot and the invocation. Not a measured trace — the shipped tests are single-threaded." loading="lazy" /><figcaption>Conceptual interleaving that event_bus.cpp permits: unsubscribe() completes inside the window between the snapshot and the invocation. Not a measured trace — the shipped tests are single-threaded.</figcaption></figure>
+<p>`ScopedSubscription` inherits this exactly. Its destructor forwards to `reset()`, whose only effect on the bus is one `unsubscribe` call, guarded on the handle still owning a bus and a live ID:</p>
+<div class="citation-chip"><code class="citation-code">if (m_bus &amp;&amp; m_id != kInvalidSubscriptionId) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L119" target="_blank" rel="noopener">ohao/core/event_bus.hpp:119</a></div>
+<p>so RAII gives scope-bound *registration*, not scope-bound *execution*. The usual handler — a lambda capturing `this` or a local by reference — therefore dangles if the owning object is destroyed on one thread while another is mid-`publish`. Every shipped test drives the bus from a single thread, so this path has never run in anger.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`unsubscribe` guarantees no *future* dispatch will include you. It does not join an in-flight one. A bus that is genuinely published from a worker thread needs either handlers that own their state or a barrier this class does not provide.</p></div>
+</div>
+<div class="section-rule"><h2 id="identifiers-that-are-never-recycled">Identifiers that are never recycled</h2></div>
+<div class="prose reveal">
+<p>IDs come from a monotonically increasing 64-bit counter starting at one, with zero reserved as the null value:</p>
+<div class="citation-chip"><code class="citation-code">SubscriptionId m_nextId = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L87" target="_blank" rel="noopener">ohao/core/event_bus.hpp:87</a></div>
+<div class="citation-chip"><code class="citation-code">inline constexpr SubscriptionId kInvalidSubscriptionId = 0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L43" target="_blank" rel="noopener">ohao/core/event_bus.hpp:43</a></div>
+<p>No free list, no slot reuse, no generation counter needed — a stale ID is inert forever rather than aliasing whoever landed in a recycled slot. Double `unsubscribe` and unsubscribing after `clear()` are silent no-ops for this reason. Destroying a moved-from `ScopedSubscription` is a no-op for an unrelated one: the move null-checks out entirely, because it exchanges the source&#x27;s ID for `kInvalidSubscriptionId` and its bus pointer for null, and `reset()` requires both:</p>
+<div class="citation-chip"><code class="citation-code">, m_id(std::exchange(other.m_id, kInvalidSubscriptionId)) {}</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L107" target="_blank" rel="noopener">ohao/core/event_bus.hpp:107</a></div>
+<p>so `unsubscribe` is never reached, under any ID scheme.</p>
+<p>The cost is paid at removal. An ID does not record which event type it belongs to, so `unsubscribe` walks every bucket in the map and runs `erase_if` on each vector, with no early exit once the match is found:</p>
+<div class="citation-chip"><code class="citation-code">std::erase_if(subs, [id](const Subscription&amp; s) { return s.id == id; });</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.cpp#L27" target="_blank" rel="noopener">ohao/core/event_bus.cpp:27</a></div>
+<p>Removal is therefore linear in *total* subscriptions, not in the subscribers of one type. Tearing down a scene full of `ScopedSubscription` members is quadratic. Making it a single-bucket erase means `unsubscribe` must be handed the key, not a hash — `std::unordered_map` has no erase-by-hash — so either every handle grows by the `std::string` itself (32 bytes in libstdc++) or type names get interned to an index and the map becomes a vector. Neither is free, and both change the `unsubscribe` signature.</p>
+</div>
+<div class="section-rule"><h2 id="string-view-at-the-door-std-string-in-the-map">string_view at the door, std::string in the map</h2></div>
+<div class="prose reveal">
+<p>The API takes `std::string_view`, but the container is keyed on `std::string` with the default hash — which is not transparent, so no `string_view` lookup is possible:</p>
+<div class="citation-chip"><code class="citation-code">std::unordered_map&lt;std::string, std::vector&lt;Subscription&gt;&gt; m_subscribers;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L86" target="_blank" rel="noopener">ohao/core/event_bus.hpp:86</a></div>
+<p>`publish` consequently materialises the key before it knows whether anyone is listening:</p>
+<div class="citation-chip"><code class="citation-code">const std::string key(eventType);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.cpp#L33" target="_blank" rel="noopener">ohao/core/event_bus.cpp:33</a></div>
+<p>That string is then copied again into `Event::type` for delivery. libstdc++ keeps up to 15 characters inside the string object, so every event type the tests actually subscribe to — `actor.selected` is the longest, at 14 — stays off the heap through both copies. The ordering bites on the dead-key path instead, where the key is built before the lookup that would reject it, and the suite&#x27;s one publish to a type nobody listens for is 19 characters:</p>
+<div class="citation-chip"><code class="citation-code">EventBus::instance().publish(&quot;no.subscribers.here&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L93" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:93</a></div>
+<p>That call allocates, takes the lock, misses, and frees on the way out. A transparent hash and equality pair would remove the lookup copy without touching a call site.</p>
+</div>
+<div class="section-rule"><h2 id="the-typed-layer-and-its-two-failure-modes">The typed layer, and its two failure modes</h2></div>
+<div class="prose reveal">
+<p>A type mismatch on this bus fails in one of two opposite ways, depending on which half of the API you use, and the quiet half is the half nobody calls.</p>
+<p>`subscribeTyped&lt;T&gt;` wraps the untyped handler in a lambda that pointer-casts the `std::any` and drops the event when the cast fails:</p>
+<div class="citation-chip"><code class="citation-code">if (const T* p = e.try_cast&lt;T&gt;()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L59" target="_blank" rel="noopener">ohao/core/event_bus.hpp:59</a></div>
+<p>`std::any` matches on exact `type_info` identity — no conversions, no derived-to-base — so an `int` publisher and an `unsigned` subscriber would produce silence with no diagnostic anywhere. *Would*, because `subscribeTyped` has zero callers anywhere, including the tests: even the test named for typed publish subscribes untyped and does its own `holds&lt;T&gt;` check:</p>
+<div class="citation-chip"><code class="citation-code">auto sub = make_scoped_subscription(bus, &quot;core.test&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L579" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:579</a></div>
+<p>What the shipped handlers actually do is the loud thing. The string-payload test casts by value, so a mismatch throws `std::bad_any_cast` out of the handler:</p>
+<div class="citation-chip"><code class="citation-code">received = std::any_cast&lt;std::string&gt;(e.data);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L128" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:128</a></div>
+<p>`publish` has no `catch`, so that exception unwinds into the publisher — after the lock is already released, which at least leaves the mutex intact, but the remaining handlers in the snapshot never run. The payload hazard that would trigger it is real for both entry points: `publishTyped` deduces `T` from its argument and `std::any`&#x27;s constructor decays it, so a string literal arrives as `const char*`; the untyped `publish` decays the same way through its `std::any` parameter. Constructing the payload explicitly at the call site is what keeps this test&#x27;s cast from throwing:</p>
+<div class="citation-chip"><code class="citation-code">EventBus::instance().publish(&quot;actor.selected&quot;, std::string(&quot;MyActor&quot;));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L130" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:130</a></div>
+<p>One more thing worth knowing before editing the header: the typed constraint names `std::invocable` while the include list omits `&lt;concepts&gt;`:</p>
+<div class="citation-chip"><code class="citation-code">requires std::invocable&lt;F&amp;, const T&amp;&gt;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/event_bus.hpp#L56" target="_blank" rel="noopener">ohao/core/event_bus.hpp:56</a></div>
+<p>It compiles because several headers it does include — `&lt;string_view&gt;`, `&lt;functional&gt;`, `&lt;vector&gt;` — pull `&lt;concepts&gt;` in transitively under libstdc++. That is the whole explanation; the template never being instantiated forces nothing, since a concept-id in a *requires*-clause is looked up when the template is defined. Strip the transitive include and the header fails to parse, callers or no callers.</p>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>string_view keys at API; owned strings in map</li>
-<li>ScopedSubscription moves only</li>
-</ul>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>event_bus.hpp: defines `class EventBus`.</p>
-<p>event_bus.hpp: defines `struct Subscription`.</p>
-<p>event_bus.hpp: defines `class ScopedSubscription`.</p>
-<p>Thread-safe publish/subscribe bus.</p>
-<p>Art notes: - Event type keys are string_view at the API; owned std::string in the map.</p>
-<ul>
-<li>ScopedSubscription is move-only RAII unsubscribe.</li>
-<li>publishTyped/subscribeTyped reduce std::any boilerplate for known T.</li>
+<li>`unsubscribe` returning does not mean your handler has stopped running. Anything capturing `this` by reference must outlive in-flight publishes, or be driven from one thread only.</li>
+<li>Handlers for a type fire in subscription order (vector `push_back`, snapshot preserves it). Nothing in the header promises this, so relying on it pins an implementation detail.</li>
+<li>`clear()` is global to the bus and un-scoped. On the `instance()` singleton, one subsystem clearing kills every other subsystem&#x27;s subscriptions. The test suite brackets its EventBus block with a `clear()` at each end purely to isolate that block from the rest of the binary; inside it, every test unsubscribes its own IDs, except the one that deliberately drops an ID to prove `clear()` reclaims it.</li>
+<li>`subscriptionCount()` is exact at the moment the lock is held and stale the instant it returns. It is a diagnostic, not a synchronisation primitive.</li>
+<li>`subscribe` is `[[nodiscard]]`: dropping the returned ID leaks a subscription that only `clear()` can remove.</li>
 </ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/core/event_bus.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/core.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/backend/jolt/jolt_backend.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/console_widget.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/event_bus.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/core/event_bus.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/engine/engine_tests.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

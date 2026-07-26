@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 346" class="unit-diagram" role="img" aria-label="Diagram of the RigidBody mirror boundary: TransformComponent, RigidBody and the Jolt body, with arrows showing which fields cross in each direction and a list of fields dropped at the crossing.">
+  <rect x="0" y="0" width="720" height="330" fill="#0f1419"/>
+
+  <!-- Panel A: Transform -->
+  <rect x="16" y="66" width="150" height="86" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="91" y="92" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#e8e2d6">TransformComponent</text>
+  <text x="91" y="112" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">position, rotation</text>
+  <text x="91" y="130" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">(what the renderer reads)</text>
+
+  <!-- Panel B: RigidBody -->
+  <rect x="252" y="42" width="196" height="134" rx="4" fill="#1a222c" stroke="#c4a574"/>
+  <text x="350" y="66" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">RigidBody</text>
+  <text x="350" y="83" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">engine-side mirror record</text>
+  <line x1="266" y1="93" x2="434" y2="93" stroke="#3d4a58"/>
+  <text x="350" y="110" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">transform, velocities, mass</text>
+  <text x="350" y="127" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">material, damping, gravity</text>
+  <text x="350" y="144" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">CollisionShape, force accums</text>
+  <text x="350" y="163" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10.5" fill="#6e685c">integrate() present, never called</text>
+
+  <!-- Panel C: Jolt -->
+  <rect x="534" y="66" width="170" height="86" rx="4" fill="#1a222c" stroke="#7dba8a"/>
+  <text x="619" y="92" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12" fill="#7dba8a">JPH::Body</text>
+  <text x="619" y="112" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">solver + broadphase</text>
+  <text x="619" y="130" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">authority for DYNAMIC</text>
+
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+    <marker id="ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7dba8a"/>
+    </marker>
+  </defs>
+
+  <!-- A -> B -->
+  <path d="M 166 90 L 246 76" stroke="#c4784a" fill="none" marker-end="url(#ah)"/>
+  <text x="206" y="36" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#c4a574">updateRigidBody</text>
+  <text x="206" y="48" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#c4a574">FromTransform()</text>
+  <text x="206" y="62" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9.5" fill="#6e685c">create + KINEMATIC</text>
+
+  <!-- B -> A -->
+  <path d="M 246 148 L 166 132" stroke="#c4784a" fill="none" marker-end="url(#ah)"/>
+  <text x="206" y="172" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#c4a574">updateTransform</text>
+  <text x="206" y="184" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#c4a574">Component()</text>
+  <text x="206" y="198" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9.5" fill="#6e685c">every step</text>
+
+  <!-- B -> C -->
+  <path d="M 454 76 L 528 90" stroke="#7dba8a" fill="none" marker-end="url(#ahg)"/>
+  <text x="491" y="36" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#7dba8a">buildCreationInfo()</text>
+  <text x="491" y="50" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9.5" fill="#6e685c">once, at body create</text>
+  <text x="491" y="62" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9.5" fill="#6e685c">+ forces each step</text>
+
+  <!-- C -> B -->
+  <path d="M 528 132 L 454 148" stroke="#7dba8a" fill="none" marker-end="url(#ahg)"/>
+  <text x="491" y="172" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#7dba8a">syncBodiesFromBackend()</text>
+  <text x="491" y="186" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9.5" fill="#6e685c">pos, rot, lin/ang velocity</text>
+  <text x="491" y="198" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="9.5" fill="#6e685c">DYNAMIC only</text>
+
+  <!-- Dropped box -->
+  <rect x="252" y="222" width="452" height="109" rx="4" fill="#1a222c" stroke="#c4784a" stroke-dasharray="4 3"/>
+  <text x="268" y="244" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4784a">dropped at the RigidBody &#8594; BodyCreationInfo crossing</text>
+  <text x="268" y="264" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">inertia tensor &#8212; no tensor field; Jolt derives its own from mass</text>
+  <text x="268" y="281" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">shape local transform &#8212; ShapeInfo has no offset field</text>
+  <text x="268" y="298" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">triangle-mesh geometry &#8212; rewritten to a box before send</text>
+  <text x="268" y="315" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">dynamic friction &#8212; one friction field, filled from static</text>
+
+  <line x1="350" y1="176" x2="350" y2="222" stroke="#3d4a58" stroke-dasharray="3 3"/>
+</svg>

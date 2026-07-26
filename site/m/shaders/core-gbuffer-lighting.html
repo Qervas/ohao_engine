@@ -33,32 +33,127 @@
         <p>gbuffer.vert/frag, deferred_lighting.frag MRT contract.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-decision-that-shapes-the-rest-position-lives-in-the-buffer">The decision that shapes the rest: position lives in the buffer</a></li><li><a href="#what-the-fragment-shader-packs">What the fragment shader packs</a></li><li><a href="#the-emissive-channel-that-forgets-its-colour">The emissive channel that forgets its colour</a></li><li><a href="#velocity-right-about-vulkan-wrong-about-objects">Velocity: right about Vulkan, wrong about objects</a></li><li><a href="#the-lighting-pass-edits-the-material-it-just-unpacked">The lighting pass edits the material it just unpacked</a></li><li><a href="#eight-lights-and-a-falloff-engineered-not-to-pop">Eight lights, and a falloff engineered not to pop</a></li><li><a href="#what-is-bound-and-what-is-actually-read">What is bound, and what is actually read</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="the-decision-that-shapes-the-rest-position-lives-in-the-buffer">The decision that shapes the rest: position lives in the buffer</h2></div>
 <div class="prose reveal">
-<p>Core raster pair: gbuffer.vert/frag MRT contract and deferred_lighting.frag.</p>
+<p>`gbuffer.frag` writes four colour attachments plus depth, and the first one settles the character of the whole pipeline: it stores the interpolated **world position**, verbatim, with metallic in alpha.</p>
+<div class="citation-chip"><code class="citation-code">outGBuffer0 = vec4(fragWorldPos, metallic);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L113" target="_blank" rel="noopener">shaders/core/gbuffer.frag:113</a></div>
+<p>The lighting pass reads it straight back and never touches the depth buffer.</p>
+<div class="citation-chip"><code class="citation-code">vec3 fragPos = gBuffer0Sample.rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L161" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:161</a></div>
+<p>That target is `R16G16B16A16_SFLOAT` — IEEE binary16, an 11-bit significand. In the binade $[2^e, 2^{e+1})$ the spacing between representable values is</p>
+<div class="math-block">$$
+\mathrm{ulp}(x) = 2^{\lfloor \log_2 |x| \rfloor - 10}
+$$</div>
+<p>where $x$ is a world coordinate in metres. At 10 m from the origin that is $2^{-7} \approx 7.8$ mm; at 100 m, 62.5 mm; at 1 km, half a metre; past 65504 m it becomes `inf`. That quantised position feeds the view vector, the distance in the inverse-square falloff, and the shadow-map lookup, so on a large outdoor scene the error is geometric rather than a banding artefact.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The alternative is to store nothing and recover position from depth via `invViewProj * vec4(ndc, depth, 1)`. Both ingredients are present and correct: the `D32_SFLOAT` depth image goes into descriptor binding 4 every frame, and `invViewProj` occupies the first 64 bytes of the lighting push-constant block. Neither is read — the shader declares no sampler at binding 4, and `invViewProj` appears exactly once in the file, in its own declaration.  {{cite shaders/core/deferred_lighting.frag &quot;    mat4 invViewProj;&quot;}}  Storing position buys simplicity — no matrix, no NDC bookkeeping, no near/far dependence — for 6 bytes per pixel plus the precision above. Other passes made the opposite call: `reconstruction.glsl` exists and `ssao.comp` uses it.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="what-the-fragment-shader-packs">What the fragment shader packs</h2></div>
 <div class="prose reveal">
-<p>Bindless nonuniformEXT; lighting reconstructs position from depth.</p>
+<p>Normals are octahedron-encoded to two channels and then remapped into $[0,1]$.</p>
+<div class="citation-chip"><code class="citation-code">vec2 encodedNormal = encodeNormalOctahedron(N) * 0.5 + 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L124" target="_blank" rel="noopener">shaders/core/gbuffer.frag:124</a></div>
+<p>That remap is a UNORM convention, left from when the target was `R10G10B10A2_UNORM` and could not hold negatives. The allocator&#x27;s comment still says `RGB10A2` and the shared header still calls itself the `A2R10G10B10` encoder, but the image is half-float now; the remap survives only because `decodeNormalOctahedron` undoes it symmetrically on the read side. That decoder lives in `includes/common/encoding.glsl` and is the one every consumer runs — `deferred_lighting.frag`, `ssao.comp`, `ssr.comp`, `rt_gi.rgen`, `rt_shadow.rgen`.</p>
+<div class="citation-chip"><code class="citation-code">vec2 f = encoded * 2.0 - 1.0;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/common/encoding.glsl#L16" target="_blank" rel="noopener">shaders/includes/common/encoding.glsl:16</a></div>
+<p>The header also carries an `encodeNormalOctahedron` with the same math as the one `gbuffer.frag` defines locally, and it has zero callers anywhere in `shaders/`: the only encode in the tree is the local one. Nothing structural forces that duplication — `gbuffer.frag` simply never enables `GL_GOOGLE_include_directive`, which `deferred_lighting.frag` and `forward.frag` both do one line into the file, in the same directory, under the same shader build. The pair that must stay in lockstep is `gbuffer.frag`&#x27;s encoder against the header&#x27;s *decoder*; the header&#x27;s encoder is dead weight.</p>
+<p>Bindless texture indices reach the shader by bit-copy rather than conversion:</p>
+<div class="citation-chip"><code class="citation-code">float f; memcpy(&amp;f, &amp;idx, sizeof(float)); return f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L257" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:257</a></div>
+<p>so `UINT32_MAX` arrives as a quiet NaN and is recovered with `floatBitsToUint`. Nothing does arithmetic on the lane, so the pattern survives intact — but the two &quot;no texture&quot; tests are not the same test. Albedo and normal compare against the sentinel; rough/metal and emissive compare against the array capacity.</p>
+<div class="citation-chip"><code class="citation-code">if (roughMetalTexIdx &lt; 4096u) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L101" target="_blank" rel="noopener">shaders/core/gbuffer.frag:101</a></div>
+<p>4096 is the descriptor count the renderer asks `BindlessTextureManager` for at init — the value that becomes the variable-length array&#x27;s `descriptorCount` — so the second form is strictly safer: it also rejects a stale but in-range-looking index that would otherwise read past the end of the array.</p>
+<div class="citation-chip"><code class="citation-code">if (!m_textureManager-&gt;initialize(m_device, m_physicalDevice, nullptr, 4096,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L134" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:134</a></div>
+<p>That sample is then read as ORM — R occlusion, G roughness, B metallic — though glTF defines only G and B, so an asset that packs nothing into R darkens by whatever sits there.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-emissive-channel-that-forgets-its-colour">The emissive channel that forgets its colour</h2></div>
 <div class="prose reveal">
-<p>These two shaders are the deferred product surface.</p>
+<p>There is no emissive attachment. Emission is collapsed to a single Rec. 709 luminance scalar and hidden in the alpha of the normal target:</p>
+<div class="citation-chip"><code class="citation-code">emissiveLuminance = dot(emissiveColor, vec3(0.2126, 0.7152, 0.0722)) * pc.emissiveParams.y;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L120" target="_blank" rel="noopener">shaders/core/gbuffer.frag:120</a></div>
+<p>and the lighting pass re-tints that scalar with the surface albedo:</p>
+<div class="citation-chip"><code class="citation-code">vec3 emissive = albedo * emissiveLuminance;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L311" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:311</a></div>
+<p>So an emitter can only glow in its own base colour — a blue LED on a white housing renders as a white glow of the right brightness. And it cannot glow *hard*: `pc.emissiveParams.y` is only ever 0.0 or exactly `1.0f` — no C++ path raises it — and the bindless textures it multiplies are 8-bit (`R8G8B8A8_SRGB`/`_UNORM`), so the luminance is bounded by 1.0. The half-float alpha has HDR headroom nothing in this pipeline can fill.</p>
+<div class="citation-chip"><code class="citation-code">emissiveStrength = glm::length(mat.emissive) &gt; 0.01f ? 1.0f : 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L324" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:324</a></div>
+<p>That line carries the sharper upstream limitation, though not by the route it looks like: it sits inside a branch already guarded on `mat.useEmissiveTexture &amp;&amp; !mat.emissiveTexture.empty()`, and the `findTexture` call above it can still miss, leaving strength 1.0 with `emissiveTexIdx` at `UINT32_MAX`. The shader gates on the *index*, not the strength, so a material with a nonzero emissive factor and no resolvable emissive map contributes nothing at all here.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="velocity-right-about-vulkan-wrong-about-objects">Velocity: right about Vulkan, wrong about objects</h2></div>
 <div class="prose reveal">
-<p>GBuffer MRT: albedo, normal, material, velocity (from current/prev clip pos), depth.</p>
-<p>Bindless texture indices via nonuniformEXT; 0xFFFFFFFF = missing map.</p>
-<p>deferred_lighting.frag: light loop + IBL + CSM + optional RT shadow/GI textures.</p>
+<p>The motion vector is the raw NDC difference, halved, with no vertical flip.</p>
+<div class="citation-chip"><code class="citation-code">outVelocity = (currentNDC - prevNDC) * 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L136" target="_blank" rel="noopener">shaders/core/gbuffer.frag:136</a></div>
+<p>Vulkan&#x27;s NDC y points down, the same direction as texture v, so $uv = 0.5\,ndc + 0.5$ in both axes and the halved difference *is* the UV delta `taa_resolve.frag` subtracts to find history. A GL-derived version needs a `y` negate here; this one must not.</p>
+<p>Two things it does not capture. The &quot;previous&quot; matrix pairs last frame&#x27;s view-projection with the **current** model matrix:</p>
+<div class="citation-chip"><code class="citation-code">const glm::mat4 prevMVP = m_prevViewProj * modelMatrix;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/gbuffer_pass.cpp#L271" target="_blank" rel="noopener">ohao/render/deferred/gbuffer_pass.cpp:271</a></div>
+<p>so only camera motion is encoded — a moving actor reprojects as though static and TAA smears it. And the current projection is Halton-jittered for TAA while the stored previous one is not:</p>
+<div class="citation-chip"><code class="citation-code">m_prevViewProj = m_proj * m_view;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L654" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:654</a></div>
+<p>so a static camera over a static scene still writes a non-zero velocity — that frame&#x27;s jitter offset, and nothing else. It is smaller than it sounds: the Halton offsets are bounded by half a pixel, divided by the render resolution, and halved again on the way from NDC to UV.</p>
+<div class="citation-chip"><code class="citation-code">return m_jitterSequence[sampleIndex] / glm::vec2(m_width, m_height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/taa_pass.cpp#L144" target="_blank" rel="noopener">ohao/render/deferred/taa_pass.cpp:144</a></div>
+<p>At 1080p that caps the velocity magnitude near $2.7 \times 10^{-4}$; with `motionScale` at 100 it is a `motionWeight` of at most 0.03, moving the history blend from 0.9 to about 0.89. Off the floor, and not by much.</p>
+<div class="citation-chip"><code class="citation-code">float motionWeight = clamp(velocityMag * params.motionScale, 0.0, 1.0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/postprocess/taa_resolve.frag#L145" target="_blank" rel="noopener">shaders/postprocess/taa_resolve.frag:145</a></div>
+</div>
+<div class="section-rule"><h2 id="the-lighting-pass-edits-the-material-it-just-unpacked">The lighting pass edits the material it just unpacked</h2></div>
+<div class="prose reveal">
+<p>Before any BRDF work, `deferred_lighting.frag` rewrites albedo, roughness and metallic in place through a weather stack — wetness, snow, mud, frost — each gated on its own push-constant scalar. Three of the four are keyed off `N.y`: wetness and mud through `clamp(N.y * 2, 0, 1)`, snow through a steeper `clamp((N.y - 0.3) / 0.7, 0, 1)`, so water pools and snow settles only on upward-facing surfaces.</p>
+<div class="citation-chip"><code class="citation-code">roughness  = mix(roughness, max(roughness * 0.15, 0.02), w);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L177" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:177</a></div>
+<p>Frost is the exception, and it reads as an oversight rather than a choice: its block computes no slope factor at all, so a nonzero `frostCover` lays its smooth pale-blue coating over every surface in the frame with no attenuation whatever — ceilings, undersides and vertical walls included.</p>
+<div class="citation-chip"><code class="citation-code">if (pc.frostCover &gt; 0.001) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L201" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:201</a></div>
+<p>This is a real authoring feature of the raster path with no counterpart in the RT shaders: the path tracer reads its material from the SSBO and never sees wetness or snow. Only after the stack runs is `initBRDFSurface` called, where the metallic slider gets its `smoothstep(0.35, 0.65)` sharpening.</p>
+</div>
+<div class="section-rule"><h2 id="eight-lights-and-a-falloff-engineered-not-to-pop">Eight lights, and a falloff engineered not to pop</h2></div>
+<div class="prose reveal">
+<p>The loop runs `min(pc.lightCount, MAX_LIGHTS)` times, and `MAX_LIGHTS` is 8, so the deferred path shades at most eight lights per pixel however many the scene holds. (The shader&#x27;s comment sources that constant from `offscreen_renderer.hpp`, a file that no longer exists; the matching C++ value now lives in `ohao/gpu/vulkan/renderer.hpp`.) Point and spot lights use a windowed inverse-square:</p>
+<div class="math-block">$$
+\mathrm{atten}(d) = \frac{\big[\mathrm{clamp}\!\left(1 - (d/r)^4,\ 0,\ 1\right)\big]^{2}}{\max(d^{2},\ 0.01)}
+$$</div>
+<p>with $d$ the distance from the shaded point to the light and $r$ the light&#x27;s range, packed in `direction.w`. The denominator is the physical term, floored so the gain saturates at $100\times$ rather than diverging as $d \to 0$. The numerator is the windowing factor, and it is *squared* on purpose: both the window and its first derivative vanish at $d = r$, making the whole attenuation $C^1$ there, so a light does not visibly snap off at its range boundary.</p>
+<div class="citation-chip"><code class="citation-code">return invSq * windowing * windowing;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L97" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:97</a></div>
+</div>
+<div class="section-rule"><h2 id="what-is-bound-and-what-is-actually-read">What is bound, and what is actually read</h2></div>
+<div class="prose reveal">
+<p>Shadowing resolves to one scalar per light iteration, and an RT mask, when present, wins outright over cascaded shadow maps — the CSM branch is `else if`, not an extra multiply. &quot;Per light&quot; flatters the RT path, though: the mask is sampled at `inTexCoord` with no dependence on the loop index, so when flag bit 5 is set every light in the scene is occluded by the same screen-space term.</p>
+<div class="citation-chip"><code class="citation-code">shadow = texture(rtShadowMask, inTexCoord).r;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L249" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:249</a></div>
+<p>CSM picks a cascade by positive view-space depth and takes a 3×3 PCF tap; it neither blends between cascades nor applies a normal-offset bias, though the cascade UBO carries `cascadeBlendWidth` and `normalBias` for exactly that, and `shadowStrength` and the lighting UBO&#x27;s `shadowBias` are equally inert. It also runs only for `lightType == 0`: point and spot lights cast no shadow here.</p>
+<p>Ambient is defensive because every input can legitimately be absent. IBL is gated not only on its flag but on the env map being larger than 1×1 — how the shader tells a real environment from the dummy image the descriptor writer substitutes when none is loaded:</p>
+<div class="citation-chip"><code class="citation-code">if ((pc.flags &amp; 1u) != 0u &amp;&amp; textureSize(envMap, 0).x &gt; 1) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L270" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:270</a></div>
+<p>That guard has history: the fallback used to be the GBuffer position texture, sampled as an environment, producing garbage specular everywhere.</p>
+<p>Inside the branch the defensiveness stops being defensive and becomes the pipeline. Bindings 7 and 8 (irradiance and prefiltered cubemaps) and binding 9 (the split-sum BRDF LUT) are all fed by a single setter, and that setter has zero callers repo-wide:</p>
+<div class="citation-chip"><code class="citation-code">m_lightingPass-&gt;setIBLTextures(irradiance, prefiltered, brdfLUT, iblSampler);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L761" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:761</a></div>
+<p>`IBLProcessor` — the class that would convolve the irradiance cube, prefilter the specular chain and integrate the LUT — is never instantiated either: the identifier appears nowhere outside its own header and source, and the only thing that pulls the file in at all is an `#include` line in the umbrella header `render/render_module.hpp`. So all three views stay `VK_NULL_HANDLE` and all three bindings are written every frame with the same 1×1 dummy image, which is layout-transitioned once and never uploaded to.</p>
+<div class="citation-chip"><code class="citation-code">imageInfos[8].imageView = m_brdfLUTView != VK_NULL_HANDLE ? m_brdfLUTView : fallbackView;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L353" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:353</a></div>
+<p>The shader declares no samplers for 7 and 8 at all, so those two are pure descriptor-layout ballast. Binding 9 it does declare — which makes the &quot;unpopulated BRDF LUT&quot; branch not a contingency but the only split-sum the deferred path ever evaluates:</p>
+<div class="citation-chip"><code class="citation-code">brdf = vec2(max(1.0 - roughness, 0.04), roughness * 0.25);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L296" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:296</a></div>
+<p>Nor is there prefiltering to fall back *from*. The env image the deferred pass receives is created with a single mip level and viewed with `levelCount = 1`:</p>
+<div class="citation-chip"><code class="citation-code">imgInfo.mipLevels = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L319" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:319</a></div>
+<p>and the sampler handed over beside it is a zero-initialised `VkSamplerCreateInfo` that never assigns `maxLod`, leaving it 0.0:</p>
+<div class="citation-chip"><code class="citation-code">vkCreateSampler(m_device, &amp;samplerInfo, nullptr, &amp;m_rtTextureSampler);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L640" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:640</a></div>
+<p>Both `textureLod` calls therefore clamp to mip 0 — and their third argument is an absolute LOD, not a bias. The `roughness * 9.0` specular tap and the fixed `9.0` irradiance tap read the same full-resolution equirect texels: env reflections are mirror-sharp at every roughness, and the diffuse &quot;irradiance&quot; is one texel of the raw HDR in the direction of `N`.</p>
+<div class="citation-chip"><code class="citation-code">vec3 irradiance = textureLod(envMap, nUV, 9.0).rgb;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/deferred_lighting.frag#L286" target="_blank" rel="noopener">shaders/core/deferred_lighting.frag:286</a></div>
+<p>Which leaves the third fallback — an `F0`-weighted ambient floor for `metallic &gt; 0.5` — as the thing standing between a dark metal and black when that single texel comes back dim.</p>
+<p>Screen-space AO is the mirror image of that gap. Here the C++ side really does the work — the render graph runs `executeSSAO`, hands the view to the lighting pass, and announces it via flag bit 1:</p>
+<div class="citation-chip"><code class="citation-code">if (m_ssaoView != VK_NULL_HANDLE) m_params.flags |= 2;       // SSAO</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_lighting_pass.cpp#L169" target="_blank" rel="noopener">ohao/render/deferred/deferred_lighting_pass.cpp:169</a></div>
+<p>but the shader declares no binding 10 and never tests `flags &amp; 2u`. The `ao` that reaches the BRDF comes entirely from the material occlusion channel in GBuffer2&#x27;s alpha. SSAO is currently computed and discarded.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>This GBuffer is not a compressed encoding of a surface but a lossy *re-authoring* of one: position quantised to half-float, emission reduced to a luminance the lighting pass re-tints with albedo, then albedo/roughness/metallic edited again for weather before the BRDF runs. The deferred image is not showing the material the path tracer receives.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Background is detected by exact float equality — `gBuffer0.rgb == vec3(0)` **and** `.a == 0`, matching the clear value. Geometry landing on the world origin with metallic exactly 0 is discarded as sky.</li>
+<li>`gbuffer.frag`&#x27;s local `encodeNormalOctahedron` and `encoding.glsl`&#x27;s `decodeNormalOctahedron` are the matched pair, as are the `* 0.5 + 0.5` on write and the `* 2.0 - 1.0` on read. Change either side without the other and every normal in the frame rotates. The header&#x27;s own `encodeNormalOctahedron` is not part of that contract — it has no callers, and editing it changes nothing.</li>
+<li>`LightingParams` (C++) and the GLSL push-constant block must stay byte-identical at 200 bytes, including the unread `invViewProj` and `screenSize` fields.</li>
+<li>The pipeline rasterises with `VK_CULL_MODE_NONE` and the shader has no `gl_FrontFacing` flip, so back faces store outward-pointing normals and shade dark. `gbuffer.vert` also transforms the tangent by the inverse-transpose normal matrix, correct only under uniform scale.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/common/encoding.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/taa_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/postprocess/taa_resolve.frag</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_lighting_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/core/gbuffer.vert</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

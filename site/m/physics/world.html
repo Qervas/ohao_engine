@@ -33,37 +33,139 @@
         <p>Config, state machine, step, body registry.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-mirror-not-a-solver">A mirror, not a solver</a></li><li><a href="#the-60-hz-that-no-setter-can-change">The 60 Hz that no setter can change</a></li><li><a href="#five-phases-and-why-the-order-is-load-bearing">Five phases, and why the order is load-bearing</a></li><li><a href="#where-a-dynamic-body-s-position-actually-lives">Where a dynamic body&#x27;s position actually lives</a></li><li><a href="#the-mesh-that-becomes-a-box">The mesh that becomes a box</a></li><li><a href="#profiles-are-snapshots-not-quality-presets">Profiles are snapshots, not quality presets</a></li><li><a href="#the-config-fields-nothing-reads">The config fields nothing reads</a></li><li><a href="#nothing-in-the-engine-presses-play">Nothing in the engine presses Play</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-mirror-not-a-solver">A mirror, not a solver</h2></div>
 <div class="prose reveal">
-<p>PhysicsWorld: config (gravity, dt, substeps, CCD), SimulationState machine, body registry, profiles.</p>
+<p>`PhysicsWorld` computes no dynamics. Every contact, constraint and integration step happens inside Jolt; the class owns a parallel CPU copy of each body (`dynamics::RigidBody`) and a per-tick protocol for reconciling the two. That buys a swappable backend — `createPhysicsBackend(&quot;jolt&quot;)` falls back to `NullPhysicsBackend` if Jolt refuses to initialise — and it costs a synchronisation contract, which is most of what this page is about. The rule for who wins when mirror and backend disagree is not uniform: it changes per body type, per quantity, and per phase of the tick.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-60-hz-that-no-setter-can-change">The 60 Hz that no setter can change</h2></div>
 <div class="prose reveal">
-<p>step(dt); sync transforms to components; ProfileManager presets.</p>
+<p>`step(dt)` is a fixed-timestep accumulator: variable frame time in, whole ticks of length $h$ out, remainder carried. With $A$ the carried remainder, $\Delta t$ the frame delta and $n$ the ticks executed,</p>
+<div class="math-block">$$
+n = \min\!\left(\left\lfloor \frac{A + \Delta t}{h} \right\rfloor,\ 4\right),
+\qquad h = \tfrac{1}{60}\ \mathrm{s}
+$$</div>
+<div class="math-block">$$
+A' = \begin{cases} A + \Delta t - n h, & n < 4 \\[2pt] 0, & n = 4 \end{cases}
+$$</div>
+<p>The cap of four guards against the spiral of death, where catch-up work lengthens the next frame. The second branch is the interesting half: when the cap binds, leftover time is **discarded**, not banked.</p>
+<div class="citation-chip"><code class="citation-code">if (stepsThisFrame &gt;= maxStepsPerFrame) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L149" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:149</a></div>
+<p>A world that cannot keep up therefore accrues no unpayable debt — it runs in slow motion, falling permanently behind wall clock past $4h \approx 66.7$ ms per frame. For an offline rig that is the right trade; in gameplay a hitch silently shortens the simulation.</p>
+<p>$h$ is a private member with an initialiser and no writer anywhere in the tree:</p>
+<div class="citation-chip"><code class="citation-code">float m_fixedTimestep{1.0f / 60.0f};  // 60 Hz physics</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.hpp#L320" target="_blank" rel="noopener">ohao/physics/world/physics_world.hpp:320</a></div>
+<p>`PhysicsWorldConfig::timeStep` is a different variable; its setter stores a value nothing reads back into the loop.</p>
+<div class="citation-chip"><code class="citation-code">void PhysicsWorld::setTimeStep(float timeStep) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L270" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:270</a></div>
+<p>`maxSubSteps` is the same shape — exported to the Python bindings, never consulted; `maxStepsPerFrame` is a local constant that happens to share its default of 4. The rate is 60 Hz, hard.</p>
+</div>
+<div class="section-rule"><h2 id="five-phases-and-why-the-order-is-load-bearing">Five phases, and why the order is load-bearing</h2></div>
+<div class="prose reveal">
+<figure class="unit-figure reveal"><img src="../../assets/units/physics-world-tick-authority.svg" alt="Conceptual: one fixed tick of stepFixed(). Arrow direction shows which side is authoritative for the quantities named. Drawn from the code, not measured." loading="lazy" /><figcaption>Conceptual: one fixed tick of stepFixed(). Arrow direction shows which side is authoritative for the quantities named. Drawn from the code, not measured.</figcaption></figure>
+<p>Phase 1 creates backend bodies for any `RigidBody` lacking one — deferred registration, because a body is usually constructed before its shape and final transform exist. A shapeless body is skipped every tick until it gets geometry, so a mis-authored component quietly fails to simulate rather than crashing.</p>
+<div class="citation-chip"><code class="citation-code">if (!body-&gt;getCollisionShape()) continue;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L479" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:479</a></div>
+<p>Just before creation the transform component is re-read into the mirror. The comment records the bug that put it there: callers set an actor&#x27;s position *after* `createActorWithComponents` returns, so a body registered at component-init time would otherwise be born at the origin and fall from there.</p>
+<div class="citation-chip"><code class="citation-code">comp-&gt;updateRigidBodyFromTransform();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L487" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:487</a></div>
+<p>Phase 2 runs the `ForceRegistry` — wind, buoyancy, springs, force volumes — into each body&#x27;s CPU accumulator. Phase 3 pushes that accumulator down as one `applyForce`/`applyTorque` pair, gated on squared magnitude, so any resultant below 0.01 N is dropped. Phase 4 is the Jolt step. Phase 5 pulls results back and clears the accumulators, so a persistent force must be re-applied every tick.</p>
+</div>
+<div class="section-rule"><h2 id="where-a-dynamic-body-s-position-actually-lives">Where a dynamic body&#x27;s position actually lives</h2></div>
+<div class="prose reveal">
+<p>For a kinematic body the mirror is authoritative and its transform is pushed down each tick:</p>
+<div class="citation-chip"><code class="citation-code">m_backend-&gt;setPosition(h, body-&gt;getPosition());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L306" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:306</a></div>
+<p>That is the only *post-creation* rigid-body position write in the tree — creation passes `info.position` once, and characters have their own `setCharacterPosition` — and it sits inside the kinematic branch. `RigidBody::setPosition` writes the mirror and stops:</p>
+<div class="citation-chip"><code class="citation-code">void setPosition(const glm::vec3&amp; position) { m_position = position; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/dynamics/rigid_body.hpp#L37" target="_blank" rel="noopener">ohao/physics/dynamics/rigid_body.hpp:37</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Teleporting a *dynamic* body from C++ does not move it. The write lands in the CPU mirror, Jolt never hears of it, and phase 5 of the next tick overwrites the mirror with the backend&#x27;s unchanged position. Relocating one after registration means leaving `RigidBody` behind entirely and calling `getBackend()-&gt;setPosition(handle, p)` — that write exists and reaches `JPH::BodyInterface::SetPosition`. What does not exist is any `RigidBody` or `PhysicsWorld` method that routes a dynamic body to it.</p></div>
+<div class="citation-chip"><code class="citation-code">m_physicsSystem-&gt;GetBodyInterface().SetPosition(id, toJoltR(pos), JPH::EActivation::DontActivate);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L620" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:620</a></div>
+<p>Axis locks are the same pattern — a correction applied to the result rather than a constraint given to the solver. After the step, frozen velocity components are zeroed and written back:</p>
+<div class="citation-chip"><code class="citation-code">if (fl &amp; 1) lv.x = 0.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L526" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:526</a></div>
+<p>The body still moves along a frozen axis *within* a tick; only the velocity is cancelled afterwards, so a hard impact displaces it by up to one step before the lock reasserts. Jolt&#x27;s native `AllowedDOFs` would prevent the excursion outright.</p>
+</div>
+<div class="section-rule"><h2 id="the-mesh-that-becomes-a-box">The mesh that becomes a box</h2></div>
+<div class="prose reveal">
+<p>`buildCreationInfo` translates engine collision shapes into backend `ShapeInfo`. Boxes, spheres, capsules and cylinders map faithfully. A `TRIANGLE_MESH` silently becomes a box with the mesh&#x27;s bounding half-extents:</p>
+<div class="citation-chip"><code class="citation-code">// For now, fall back to box</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L615" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:615</a></div>
+<p>That is not a backend limitation — the Jolt backend implements `ShapeInfo::Type::MESH` via `JPH::MeshShapeSettings`. The path from world to capability simply does not exist; the comment blames transient vertex data that `createBody` would have to copy.</p>
+<p>Planes degrade twice over. `buildCreationInfo` throws away `PlaneShape`&#x27;s normal and distance and writes a hardcoded $+y$:</p>
+<div class="citation-chip"><code class="citation-code">info.shape.planeNormal = glm::vec3(0, 1, 0);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L609" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:609</a></div>
+<p>It would not matter if it kept them, because `ShapeInfo::planeNormal` has no reader anywhere in the tree. `ShapeInfo::Type::PLANE` is turned into a finite 200 × 0.02 × 200 box — neither infinite nor arbitrarily orientable, which is the whole point of a plane:</p>
+<div class="citation-chip"><code class="citation-code">JPH::BoxShapeSettings settings(JPH::Vec3(100.0f, 0.01f, 100.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L1502" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:1502</a></div>
+<p>`buildCreationInfo` is also not the only translator. `PhysicsComponent::setCollisionShape` runs a second, divergent one — `collisionShapeToShapeInfo` — and pushes its result at the same backend through the public `getBackend()` handle:</p>
+<div class="citation-chip"><code class="citation-code">m_physicsWorld-&gt;getBackend()-&gt;setShape(m_rigidBody-&gt;getBackendHandle(), shapeInfo);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/components/physics_component.cpp#L275" target="_blank" rel="noopener">ohao/physics/components/physics_component.cpp:275</a></div>
+<p>That copy *does* forward a plane&#x27;s real normal and distance, which the backend then discards anyway; and it has no `TRIANGLE_MESH` case at all, so a mesh falls through `default:` to a fixed 0.5-half-extent unit cube rather than its own bounds. Two paths into one backend, disagreeing on both shapes that degrade.</p>
+<div class="citation-chip"><code class="citation-code">// Default to box for unsupported types</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/components/physics_component.cpp#L260" target="_blank" rel="noopener">ohao/physics/components/physics_component.cpp:260</a></div>
+<p>The one route to genuinely non-convex collision is the terrain heightfield, and it works because it bypasses `buildCreationInfo` and assembles its own `BodyCreationInfo`:</p>
+<div class="citation-chip"><code class="citation-code">shape.type                 = backend::ShapeInfo::Type::HEIGHTFIELD;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L923" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:923</a></div>
+<p>Heights are normalised to [0, 1] with the vertical scale passed separately, and the body sits at `(-worldSize/2, 0, -worldSize/2)` because a Jolt heightfield grows from its origin corner, not its centre. Its collision layer is a bug in transit: `BodyCreationInfo::layer` is a layer *index*, and the assignment writes a *mask*.</p>
+<div class="citation-chip"><code class="citation-code">info.layer         = static_cast&lt;uint16_t&gt;(1u &lt;&lt; 10);  // LAYER_TERRAIN = 10</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L937" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:937</a></div>
+<p>`CollisionLayer::TERRAIN` is the index 10, so the terrain ships as layer 1024, cast straight to `JPH::ObjectLayer`. 1024 is past `NUM_LAYERS = 16`, so the pair filter takes its unknown-layer escape hatch and terrain collides with everything — the `STATIC`↔`TERRAIN` and `TERRAIN`↔`TERRAIN` exclusions never fire — while `isNonMovingLayer(1024)` is false, filing a static heightfield under the MOVING broadphase layer.</p>
+<div class="citation-chip"><code class="citation-code">return true; // Fallback: unknown layers collide</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L153" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:153</a></div>
+<p>`updateTerrainFriction` then lerps one friction scalar through a fixed chain — dry 0.70 → wet 0.40 → snow 0.25 → frost 0.05. The chain is not purely sequential: the wet stage is weighted by `wetness * (1 - snowCover)`, so snow suppresses wetness instead of layering over it. Snow and frost do stack, and frost dominates whatever preceded it.</p>
+<div class="citation-chip"><code class="citation-code">friction = glm::mix(friction, 0.40f, wetness * (1.0f - snowCover));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L957" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:957</a></div>
+</div>
+<div class="section-rule"><h2 id="profiles-are-snapshots-not-quality-presets">Profiles are snapshots, not quality presets</h2></div>
+<div class="prose reveal">
+<p>Despite the name, `SimulationProfile` has nothing to do with quality or performance tuning. It is a state snapshot — position, orientation, both velocities, both accumulators and the sleep flag per body, keyed by body id — and `ProfileManager` holds a named set of them. The header&#x27;s own analogy is &quot;Git branches for physics&quot;. `reset()` restores the active profile if one exists, and otherwise merely zeroes velocities and forces.</p>
+<div class="citation-chip"><code class="citation-code">m_profileManager-&gt;restoreFromActive(m_rigidBodies);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L111" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:111</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>State snapshots were chosen over recording and replaying the input stream. Replay reproduces exactly only if the solver is deterministic across thread counts, which a multithreaded Jolt job system does not promise; a snapshot is reproducible by construction. The price is that it restores one instant, not a trajectory.</p></div>
+<p>The price is steeper than that. `restore` writes only through `RigidBody` setters, which never reach the backend for a dynamic body. Restoring a profile on a world whose bodies are already registered updates the visible transforms, and the first tick after resuming snaps everything back to wherever the solver left it — sound for a stopped world about to be rebuilt, not yet sound as a live checkpoint.</p>
+</div>
+<div class="section-rule"><h2 id="the-config-fields-nothing-reads">The config fields nothing reads</h2></div>
+<div class="prose reveal">
+<p>The Jolt backend consumes `gravity`, `enableMultithreading`, `workerThreads` and `maxBodies` (which also sizes body pairs and contact constraints); the world uses exactly one field, `initialBodyCapacity`, to reserve its body vector. The rest — `enableCCD`, `enableSleeping`, `maxConstraints`, `enableStatistics`, `enableProfiler`, `enableDebugVisualization`, plus `timeStep` and `maxSubSteps` — is declared and never acted on.</p>
+<p>`enableDebugVisualization` is the subtlest of those, because it is not inert: it gates a call to `updateDebugVisualization()` at the end of both `step()` and `stepOnce()`. That function has an empty body, and nothing anywhere writes the `m_debugViz` struct it would fill.</p>
+<div class="citation-chip"><code class="citation-code">void PhysicsWorld::updateDebugVisualization() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L328" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:328</a></div>
+<p>`enableCCD` misleads in the opposite direction. Continuous collision *is* shipped in the backend: `BodyCreationInfo::useCCD` selects `EMotionQuality::LinearCast` at creation, and `setCCDEnabled` flips motion quality at runtime. What is missing is the wiring — `buildCreationInfo` never sets `useCCD`, and no `PhysicsWorld` or `RigidBody` method reaches `setCCDEnabled` — so no body this world creates ever asks for it.</p>
+<div class="citation-chip"><code class="citation-code">bodySettings.mMotionQuality = JPH::EMotionQuality::LinearCast;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L542" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:542</a></div>
+<p>A second struct, `PhysicsSettings`, carries different defaults (240 Hz substep, CCD on, sleep thresholds) and is consumed by nothing, because the overload that appears to accept it is a compatibility template that discards its argument:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] bool initialize(const T&amp; /*unused_settings*/) { initialize(); return true; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.hpp#L112" target="_blank" rel="noopener">ohao/physics/world/physics_world.hpp:112</a></div>
+<p>`Scene`&#x27;s constructor is its only caller, immediately after constructing the world — which already ran `initialize()`:</p>
+<div class="citation-chip"><code class="citation-code">physicsWorld-&gt;initialize(settings);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L35" target="_blank" rel="noopener">ohao/scene/scene.cpp:35</a></div>
+<p>The re-entry guard tests for `STOPPED`, but `STOPPED` means both &quot;never initialised&quot; and &quot;initialised and idle&quot;, so the second call reruns everything: a fresh Jolt backend replaces the first, and `ProfileManager` and `ForceDebugger` become new instances. Harmless today — no bodies exist yet at that point — but on a populated world it would leave every `RigidBody` holding a handle into a destroyed Jolt system.</p>
+<p>Gravity collides the same way. The backend applies it itself:</p>
+<div class="citation-chip"><code class="citation-code">m_physicsSystem-&gt;SetGravity(toJolt(config.gravity));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L334" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:334</a></div>
+<p>while `setupEarthEnvironment()` registers a `GravityForce` generator adding $m\mathbf{g}$ to the accumulator, which phase 3 pushes down on top:</p>
+<div class="citation-chip"><code class="citation-code">glm::vec3 force = m_gravity * mass;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/gravity_force.cpp#L17" target="_blank" rel="noopener">ohao/physics/forces/gravity_force.cpp:17</a></div>
+<p>The presets predate the backend: &quot;Earth&quot; doubles gravity, and &quot;Space&quot; — which registers nothing — does not produce zero-g, because clearing the registry cannot cancel a value held inside Jolt.</p>
+</div>
+<div class="section-rule"><h2 id="nothing-in-the-engine-presses-play">Nothing in the engine presses Play</h2></div>
+<div class="prose reveal">
+<p>`step()` returns immediately unless the state is exactly `RUNNING`. `resume()` only lifts `PAUSED` and `pause()` only leaves `RUNNING`, so the sole route out of `STOPPED` is `setSimulationState` — which no call site in `ohao/` uses. `Scene::updatePhysics` would step the world:</p>
+<div class="citation-chip"><code class="citation-code">physicsWorld-&gt;stepSimulation(deltaTime);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L199" target="_blank" rel="noopener">ohao/scene/scene.cpp:199</a></div>
+<p>except that it never executes. Its only caller is `VulkanRenderer::updatePhysics`, and nothing calls *that* — no example, no render loop. This is unreached code sitting above the state check, not a per-frame tick that early-returns.</p>
+<div class="citation-chip"><code class="citation-code">m_scene-&gt;updatePhysics(deltaTime);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L372" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:372</a></div>
+<p>Two harnesses do drive the world, and neither arrives through `Scene`. The Python binding layer&#x27;s `start()` flips the state before the test suite pumps `world.step(1/60)`:</p>
+<div class="citation-chip"><code class="citation-code">world.setSimulationState(SimulationState::RUNNING);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/python/physics_bindings.cpp#L120" target="_blank" rel="noopener">tests/python/physics_bindings.cpp:120</a></div>
+<p>The C++ backend tests bypass the state machine outright, through `stepOnce()` — which inverts `step()`&#x27;s guard, returning early if the state *is* `RUNNING` and otherwise running one full `stepFixed(m_fixedTimestep)` from `STOPPED`:</p>
+<div class="citation-chip"><code class="citation-code">// Already running, don&#x27;t interfere</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L162" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:162</a></div>
+<div class="citation-chip"><code class="citation-code">// Step once so Jolt processes the impulse</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/physics/physics_backend_tests.cpp#L1366" target="_blank" rel="noopener">tests/physics/physics_backend_tests.cpp:1366</a></div>
+<p>So the heading is literal rather than figurative: the world simulates plenty under test, it simply never enters `RUNNING` outside the Python bindings. That is the honest scope of this unit today — a headless kernel exercised by the analytical-solution and invariant tests, wired into `Scene` but reached by no renderer example. `SimulationState::STEPPING` is never assigned anywhere, and the free function that counts it as live has no call site in `ohao/` at all; the member predicates are `isRunning()` and `isPaused()`, and neither knows about it.</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] constexpr bool isSimulating(SimulationState s) noexcept {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.hpp#L61" target="_blank" rel="noopener">ohao/physics/world/physics_world.hpp:61</a></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
 <ul>
-<li>construct</li>
-<li>add bodies/forces</li>
-<li>step</li>
-<li>sync transforms</li>
+<li>A `RigidBody` reaches the backend only once it has a collision shape; until then its velocity writes accumulate in the mirror, to be flushed at creation.</li>
+<li>For dynamic bodies the backend owns position, rotation and both velocities after every tick. Writing those through `RigidBody` setters is not a teleport.</li>
+<li>Force accumulators are cleared each tick, and any resultant below 0.01 N is dropped by the push threshold.</li>
+<li>`flushPendingBodies()` must run before constraint creation. An unflushed body yields `INVALID_BODY`, which makes `createConstraint` return `INVALID_CONSTRAINT` as `body1` — and, worse, is read as *fixed to world* as `body2`.</li>
+<li>One terrain heightfield per world: `addTerrainHeightfield` destroys the previous body before creating the new one. It files that body on object layer 1024 — a mask where an index belongs — so it sits outside the 16×16 matrix and none of the terrain collision exclusions apply to it.</li>
+<li>Changing a shape through `PhysicsComponent::setCollisionShape` takes a different translator than body creation does. The two agree on box, sphere, capsule and cylinder and disagree on mesh; both lose the plane.</li>
+<li>`initialize()` is not idempotent on a populated world — it rebuilds the backend while every `RigidBody` keeps its stale handle.</li>
+<li>`PhysicsWorldFactory`, `PhysicsManager` and `PhysicsProfiler` are declared in the header with no definitions anywhere in the tree. Using them, including the `PROFILE_PHYSICS` macro, is a link error, not a feature.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
-<div class="prose reveal">
-<p>One world per scene; profiles tune quality without code forks.</p>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>PhysicsWorldConfig: gravity, dt, substeps, sleeping, CCD, body caps.</p>
-<p>SimulationState: STOPPED | RUNNING | PAUSED | STEPPING.</p>
-<p>ProfileManager + SimulationProfile tune quality/perf presets.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/physics/world/physics_world.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/world/physics_world.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/world/physics_world.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/dynamics/rigid_body.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/backend/jolt/jolt_backend.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/components/physics_component.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/scene.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/gravity_force.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/python/physics_bindings.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/physics/physics_backend_tests.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/world/physics_settings.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/world/profile_manager.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/world/profile_manager.cpp</code><span class="desc"></span></div>

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" class="unit-diagram" role="img" aria-label="Matrix of asset-loader entry points, parsers, and which post-processing steps each route applies">
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="24" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.5">WHICH POST-PROCESSING EACH LOAD ROUTE APPLIES</text>
+
+<!-- column headers -->
+<line x1="24" y1="52" x2="696" y2="52" stroke="#3d4a58" stroke-width="1"/>
+<text x="24"  y="70" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">ENTRY POINT / EXT</text>
+<text x="212" y="70" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">PARSER</text>
+<text x="352" y="70" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">FlipUVs</text>
+<text x="438" y="70" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">JoinIdent</text>
+<text x="528" y="70" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">normalFix</text>
+<text x="624" y="70" fill="#8a8490" font-family="IBM Plex Mono,monospace" font-size="10">avgColor</text>
+<line x1="24" y1="80" x2="696" y2="80" stroke="#3d4a58" stroke-width="1"/>
+
+<!-- row 1 -->
+<rect x="24" y="90" width="672" height="34" fill="#1a222c"/>
+<text x="34"  y="112" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">ModelLoader::load  .obj</text>
+<text x="212" y="112" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">native OBJ</text>
+<text x="368" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+<text x="462" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+<text x="556" y="112" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="648" y="112" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+
+<!-- row 2 -->
+<text x="34"  y="152" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">ModelLoader::load  .fbx</text>
+<text x="212" y="152" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">ufbx → Assimp</text>
+<text x="366" y="152" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="460" y="152" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="556" y="152" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="648" y="152" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+
+<!-- row 3 -->
+<rect x="24" y="170" width="672" height="34" fill="#1a222c"/>
+<text x="34"  y="192" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">ModelLoader::load  .glb/.gltf</text>
+<text x="212" y="192" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11">Assimp</text>
+<text x="366" y="192" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="460" y="192" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="556" y="192" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+<text x="648" y="192" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+
+<!-- row 4 -->
+<text x="34"  y="232" fill="#e8e2d6" font-family="DM Sans,sans-serif" font-size="12">env_demo / turntable  .glb</text>
+<text x="212" y="232" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="11">tinygltf</text>
+<text x="368" y="232" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+<text x="462" y="232" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+<text x="558" y="232" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="13">—</text>
+<text x="646" y="232" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="13">yes</text>
+
+<line x1="24" y1="250" x2="696" y2="250" stroke="#3d4a58" stroke-width="1"/>
+<text x="24" y="270" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">normalFix = repairMeshNormals(); avgColor = base color replaced by the albedo texture's mean texel.</text>
+<text x="24" y="288" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual: read from the branches in model_loader.cpp / model_gltf.cpp. Not measured.</text>
+</svg>

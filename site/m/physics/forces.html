@@ -33,47 +33,140 @@
         <p>Registry, gravity, spring, drag, volumes, fields, presets.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#a-stage-not-a-solver">A stage, not a solver</a></li><li><a href="#priority-is-a-sort-with-no-keys">Priority is a sort with no keys</a></li><li><a href="#the-pair-force-half-step">The pair-force half-step</a></li><li><a href="#two-damping-signs-both-correct">Two damping signs, both correct</a></li><li><a href="#buoyancy-invents-a-volume-and-it-is-the-wrong-one">Buoyancy invents a volume, and it is the wrong one</a></li><li><a href="#noise-whose-clock-runs-on-the-population">Noise whose clock runs on the population</a></li><li><a href="#the-preset-that-doubles-gravity">The preset that doubles gravity</a></li><li><a href="#what-the-shipping-path-actually-uses">What the shipping path actually uses</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="a-stage-not-a-solver">A stage, not a solver</h2></div>
 <div class="prose reveal">
-<p>Force generators: gravity, spring, drag, volumes, fields, presets, registry.</p>
+<p>Everything under `ohao/physics/forces/` runs inside one narrow window of the fixed step: after the engine gathers its body list, before Jolt integrates anything. `PhysicsWorld::stepFixed` invokes the registry as step 2 of five.</p>
+<div class="citation-chip"><code class="citation-code">// 2. Apply custom forces from force registry (gameplay forces, wind, etc.)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L289" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:289</a></div>
+<p>No generator ever touches Jolt — there is not a single Jolt symbol in the directory. They write into a per-body accumulator on the engine-side `RigidBody` mirror, and step 3 flushes it to the backend as one force at the centre of mass:</p>
+<div class="citation-chip"><code class="citation-code">m_backend-&gt;applyForce(h, force, glm::vec3(0.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L313" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:313</a></div>
+<p>The zero offset does not discard the lever arm. No generator calls `RigidBody::applyForceAtWorldPoint` directly; the one route out of this directory is the `ForceUtils` wrapper, taken three times in `spring_force.cpp` and nowhere else:</p>
+<div class="citation-chip"><code class="citation-code">body-&gt;applyForceAtWorldPoint(force, worldPos);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_generator.cpp#L38" target="_blank" rel="noopener">ohao/physics/forces/force_generator.cpp:38</a></div>
+<p>What it forwards to subtracts the body centre and files the remainder in a separate torque accumulator, which leaves through its own backend call:</p>
+<div class="citation-chip"><code class="citation-code">void RigidBody::applyForceAtWorldPoint(const glm::vec3&amp; force, const glm::vec3&amp; worldPoint) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/dynamics/rigid_body.cpp#L219" target="_blank" rel="noopener">ohao/physics/dynamics/rigid_body.cpp:219</a></div>
+<p>Two consequences follow. Generators read body state pulled out of Jolt at the end of the *previous* step, and their output enters Jolt as an opaque external force — the solver never learns that a spring is a spring, so stiff springs fail exactly where explicit integration says they should. And the flush has a deadband: the accumulated force is dropped unless its squared magnitude exceeds 1e-4, and the torque channel carries the identical test.</p>
+<div class="citation-chip"><code class="citation-code">if (glm::length2(force) &gt; 0.0001f) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L312" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:312</a></div>
+<div class="citation-chip"><code class="citation-code">if (glm::length2(torque) &gt; 0.0001f) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L316" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:316</a></div>
+<p>That 0.01 N floor gates the per-body *sum*, not any one generator: `getAccumulatedForce` is read once, after every registration has contributed, so a weak force disappears only when everything the registry put on that body totals under the threshold. And it is a low floor. `SurfaceTensionForce` defaults to a coefficient of 0.072 over a 1 m influence radius, and even acting alone its linear taper $0.072\,(1 - d/R)$ stays above 0.01 out to $d/R = 0.861$ — only the last 14% of its range, where the force has nearly vanished anyway, lands in the deadband. That coefficient is annotated N/m in the header, a tension per unit length, and then used as newtons: no contact length appears anywhere in the expression. Accumulators are zeroed during read-back, which is what makes them per-step rather than persistent.</p>
+<div class="citation-chip"><code class="citation-code">// Clear local force accumulators</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L544" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:544</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The cheaper design lets each generator call `m_backend-&gt;applyForce` directly: one less copy of the body list, one less step of staleness. OHAO accumulates on the mirror so that force code compiles against `RigidBody` and nothing else, and so the lever-arm-to-torque arithmetic is written once in engine code rather than re-derived behind every implementation of `IPhysicsBackend`.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="priority-is-a-sort-with-no-keys">Priority is a sort with no keys</h2></div>
 <div class="prose reveal">
-<p>ForceRegistry maps generators→bodies each step; force_system_example.hpp is a usage sketch.</p>
+<p>Each registration carries a generator, a name, and a target set. Application walks a lazily-rebuilt vector sorted by descending generator priority.</p>
+<div class="citation-chip"><code class="citation-code">return a-&gt;generator-&gt;getPriority() &gt; b-&gt;generator-&gt;getPriority();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_registry.cpp#L208" target="_blank" rel="noopener">ohao/physics/forces/force_registry.cpp:208</a></div>
+<p>The key is constant. `m_priority` initialises to 0 on the base class and no engine code ever calls `setPriority` — the sole call site in the repository is a unit test.</p>
+<div class="citation-chip"><code class="citation-code">int m_priority = 0; // Default priority</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_generator.hpp#L62" target="_blank" rel="noopener">ohao/physics/forces/force_generator.hpp:62</a></div>
+<p>With every key equal the comparator never returns true, and `std::sort` is not stable, so the sequence it emits is whatever the `unordered_map` walk and the sort implementation happen to produce. That costs less than it sounds: every generator adds into the same accumulator and no generator reads it back, so ordering cannot change *what* any one force computes. It can still move the low bits of the sum, because float addition is not associative — and the registry gives you no lever to pin that order down, which is the opposite of the scheduling control the name suggests.</p>
+<p>Targeting has an inversion that catches people: an empty target set means &quot;affect every body&quot;, not &quot;affect none&quot;.</p>
+<div class="citation-chip"><code class="citation-code">// If no specific targets, affect all bodies</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_registry.cpp#L215" target="_blank" rel="noopener">ohao/physics/forces/force_registry.cpp:215</a></div>
+<p>That is what makes `PhysicsWorld::setWind` global — it registers with no body list.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-pair-force-half-step">The pair-force half-step</h2></div>
 <div class="prose reveal">
-<p>Gameplay forces without rewriting the integrator.</p>
+<p>Dispatch is a `dynamic_cast` chain: global force, then single-body, then pair, then a generic fallback. The pair branch is where the abstraction gives way.</p>
+<div class="citation-chip"><code class="citation-code">// For pair forces, apply to bodyA (the force should handle both bodies internally)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_registry.cpp#L276" target="_blank" rel="noopener">ohao/physics/forces/force_registry.cpp:276</a></div>
+<p>The comment assumes the generator applies both halves internally. `SpringForce` does not — it branches on *which* body it was handed and pushes exactly one:</p>
+<div class="citation-chip"><code class="citation-code">ForceUtils::applyForceAtWorldPosition(m_bodyA, force, posA);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/spring_force.cpp#L49" target="_blank" rel="noopener">ohao/physics/forces/spring_force.cpp:49</a></div>
+<p>Since the registry only ever hands it `bodyA`, the `bodyB` branch is unreachable through the shipping path. Body B never receives the equal-and-opposite half, so a registry-driven spring is a one-sided tether: A is drawn toward B, B feels nothing, and linear momentum appears out of nothing every step. `BungeeSpringForce`, `AngularSpringForce` and `MagneticForce` have the same shape. The unit tests miss it because they call `applyForce` with each body by hand, reaching a `bodyB` branch the registry never reaches.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The registry hands a generator exactly one body per call. A force that must move two bodies has to push both inside that single call; branching on which body was passed is only correct if the caller iterates both, and the pair branch does not.</p></div>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="two-damping-signs-both-correct">Two damping signs, both correct</h2></div>
 <div class="prose reveal">
-<p>ForceRegistry maps generators → bodies each step.</p>
-<p>Volumes/fields for wind, attractors; presets for common setups.</p>
-<p>force_system_example.hpp is a documented usage sketch, not a binary.</p>
+<p>`SpringForce` and `AnchorSpringForce` build the same Hooke-plus-damper magnitude and combine the terms with *opposite* signs. Both are right; the difference is a change of reference, not a bug.</p>
+<p>Write $\hat u$ for the unit vector from the body receiving the force toward the far end, $L$ for the distance between attachment points, $L_0$ for the rest length (`m_restLength`), $k$ for stiffness (`m_springConstant`), $c$ for damping (`m_damping`), and $\mathbf v_{\text{far}}$, $\mathbf v_{\text{near}}$ for the world velocities of the two attachment points, each already including its $\boldsymbol\omega \times \mathbf r$ term:</p>
+<div class="math-block">$$
+f = k\,(L - L_0) \;+\; c\,\big[(\mathbf v_{\text{far}} - \mathbf v_{\text{near}})\cdot\hat u\big], \qquad \mathbf F = f\,\hat u
+$$</div>
+<p>The bracket is $\dot L$, the rate at which the spring lengthens; adding $c\dot L$ to the pull makes the force oppose stretching, which is what a damper does. `SpringForce` has two moving ends, forms $\mathbf v_B - \mathbf v_A$ directly, and adds:</p>
+<div class="citation-chip"><code class="citation-code">float totalForceMagnitude = springForceMagnitude + dampingForceMagnitude;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/spring_force.cpp#L44" target="_blank" rel="noopener">ohao/physics/forces/spring_force.cpp:44</a></div>
+<p>`AnchorSpringForce` has a fixed far end, so $\mathbf v_{\text{far}} = \mathbf 0$ and the bracket collapses to $-\,\mathbf v_{\text{near}}\cdot\hat u$. The code forms the positive dot product against the body&#x27;s own velocity and therefore subtracts:</p>
+<div class="citation-chip"><code class="citation-code">float totalForceMagnitude = springForceMagnitude - dampingForceMagnitude;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/spring_force.cpp#L103" target="_blank" rel="noopener">ohao/physics/forces/spring_force.cpp:103</a></div>
+<p>&quot;Fixing&quot; that minus to match its sibling converts the damper into an energy source.</p>
+</div>
+<div class="section-rule"><h2 id="buoyancy-invents-a-volume-and-it-is-the-wrong-one">Buoyancy invents a volume, and it is the wrong one</h2></div>
+<div class="prose reveal">
+<p>`BuoyancyForce` needs a displaced volume. It holds the body, and `RigidBody::getCollisionShape()` is public, but it never asks — the comment directly above the line concedes that a real implementation would use the actual collision shape. Instead it fabricates a sphere from mass alone, taking the radius as the cube root of the mass.</p>
+<div class="citation-chip"><code class="citation-code">float approximateRadius = std::pow(body-&gt;getMass(), 1.0f / 3.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/environmental_force.cpp#L60" target="_blank" rel="noopener">ohao/physics/forces/environmental_force.cpp:60</a></div>
+<p>That line pins the body&#x27;s density, because volume and mass are now locked together. With $m$ the mass in kg, $r = m^{1/3}$ the fabricated radius, $\rho_f$ the fluid density and $g$ gravity, Archimedes&#x27; $F_b = \rho_f V g$ against the weight $W = mg$ gives</p>
+<div class="math-block">$$
+\rho_{\text{body}} = \frac{m}{\tfrac{4}{3}\pi m} = \frac{3}{4\pi} \approx 0.24\ \mathrm{kg\,m^{-3}}, \qquad \frac{F_b}{W} = \frac{4\pi}{3}\,\rho_f \approx 4.19\,\rho_f
+$$</div>
+<p>Every body is lighter than air, whatever its real size. The parameter is usable only as an arbitrary gain: neutral buoyancy sits at $\rho_f \approx 0.24$, not at the body&#x27;s actual density.</p>
+<p>That ratio is the fully-displaced case, and the ramp reaches it slowly. The submerged fraction is the *centre&#x27;s* depth over one diameter, so a sphere floating exactly half in the water displaces nothing, a sphere whose centre is one radius down counts as half displaced, and the full $4.19\,\rho_f$ arrives only a whole diameter below the surface.</p>
+<div class="citation-chip"><code class="citation-code">float submersionFraction = std::min(1.0f, submersionDepth / (2.0f * approximateRadius));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/environmental_force.cpp#L63" target="_blank" rel="noopener">ohao/physics/forces/environmental_force.cpp:63</a></div>
+<p>At the default `m_fluidDensity` of 1000 — the value the header labels as water and `PhysicsWorld::setWater` forwards verbatim — that is roughly 2100 times body weight for a body sunk one radius and roughly 4200 for one sunk a full diameter.</p>
+</div>
+<div class="section-rule"><h2 id="noise-whose-clock-runs-on-the-population">Noise whose clock runs on the population</h2></div>
+<div class="prose reveal">
+<p>`WindForce` and `TurbulenceForce` each advance an internal clock at the top of `applyForce`.</p>
+<div class="citation-chip"><code class="citation-code">m_time += deltaTime;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/environmental_force.cpp#L75" target="_blank" rel="noopener">ohao/physics/forces/environmental_force.cpp:75</a></div>
+<p>`applyForce` runs once per affected body, so with $N$ eligible bodies the gust clock advances $N\,\Delta t$ per step: spawn ten more crates and the wind gusts ten times faster. `TurbulenceForce` carries the identical line.</p>
+<div class="citation-chip"><code class="citation-code">m_time += deltaTime;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/field_force.cpp#L152" target="_blank" rel="noopener">ohao/physics/forces/field_force.cpp:152</a></div>
+<p>The two generators do not share a noise function; each carries its own, and they differ. `TurbulenceForce::noise3D` hashes integer lattice coordinates and folds the result into $[-1, 1]$ — no gradient, no interpolation, whatever the &quot;Perlin-like&quot; label on the function above it suggests. The comment inside the body, which calls it hash-based, is the accurate one.</p>
+<div class="citation-chip"><code class="citation-code">return (float)(hash % 2000) / 1000.0f - 1.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/field_force.cpp#L176" target="_blank" rel="noopener">ohao/physics/forces/field_force.cpp:176</a></div>
+<p>It takes the cell index by truncation rather than `floor`, so the cell straddling the origin is two units wide while every other cell is one:</p>
+<div class="citation-chip"><code class="citation-code">int xi = (int)x;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/field_force.cpp#L168" target="_blank" rel="noopener">ohao/physics/forces/field_force.cpp:168</a></div>
+<p>Either way the field is piecewise constant: inside a cell the &quot;turbulence&quot; is exactly constant, and crossing a boundary steps the force discontinuously. It is sampled at world position offset by time, so those cells are one world unit across.</p>
+<p>`WindForce::noise` is a near-copy — the same three multiply-and-xor constants, minus the seed term — with two differences that change the field. It floors instead of truncating, and the position it receives has already been scaled by 0.1, which makes its cells ten world units wide: a crate must travel 10 m to meet a different gust. It also reads only x and y, never z, so the turbulence vector is constant along the world Z axis.</p>
+<div class="citation-chip"><code class="citation-code">float turbulenceX = noise(bodyPos.x * 0.1f, bodyPos.y * 0.1f, m_time * m_turbulenceFrequency);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/environmental_force.cpp#L83" target="_blank" rel="noopener">ohao/physics/forces/environmental_force.cpp:83</a></div>
+</div>
+<div class="section-rule"><h2 id="the-preset-that-doubles-gravity">The preset that doubles gravity</h2></div>
+<div class="prose reveal">
+<p>`ForcePresets::setupEarthEnvironment` registers a −9.81 m/s² `GravityForce` across the whole body list, plus an air-drag generator.</p>
+<div class="citation-chip"><code class="citation-code">void ForcePresets::setupEarthEnvironment(ForceRegistry&amp; registry, const std::vector&lt;dynamics::RigidBody*&gt;&amp; bodies) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_presets.cpp#L7" target="_blank" rel="noopener">ohao/physics/forces/force_presets.cpp:7</a></div>
+<p>Jolt already has the same vector: `PhysicsWorldConfig` defaults gravity to (0, −9.81, 0) and the backend installs it at initialisation.</p>
+<div class="citation-chip"><code class="citation-code">m_physicsSystem-&gt;SetGravity(toJolt(config.gravity));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/backend/jolt/jolt_backend.cpp#L334" target="_blank" rel="noopener">ohao/physics/backend/jolt/jolt_backend.cpp:334</a></div>
+<p>`PhysicsWorld::setupEarthEnvironment` clears the registry first but never zeroes the backend&#x27;s gravity, so every body it reaches falls at 2 g. Which bodies those are follows from the targeting rule above: the preset registers against a snapshot of the body list taken at the call, so anything created afterwards keeps 1 g — unless the world was empty when it ran, in which case the empty target set makes the registration global and present and future bodies alike get the double. Its only callers are in `physics/examples/force_system_example.hpp`, which no translation unit includes, which is why the doubling has gone unnoticed; the fix is `setGravity(vec3(0))` before installing a registry gravity, not a weaker generator.</p>
+<p>The drag half carries a smaller trap. `ForceFactory::createAirDrag` reads like it takes a drag coefficient; the argument lands in `FluidDragForce`&#x27;s *third* slot, the cross-section area, while the coefficient stays hard-wired at a sphere&#x27;s 0.47.</p>
+<div class="citation-chip"><code class="citation-code">return std::make_unique&lt;FluidDragForce&gt;(1.2f, 0.47f, coefficient); // Air properties</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/forces.hpp#L67" target="_blank" rel="noopener">ohao/physics/forces/forces.hpp:67</a></div>
+</div>
+<div class="section-rule"><h2 id="what-the-shipping-path-actually-uses">What the shipping path actually uses</h2></div>
+<div class="prose reveal">
+<p>`PhysicsWorld` fronts a handful of these with named convenience calls: `setWind` (`WindForce`), `setWater` (`BuoyancyForce`), `createSpring` / `createAnchorSpring`, and `createForceVolumeBox` / `Sphere`. A force volume applies its vector without scaling by mass, so unlike gravity it accelerates a heavy crate less than a light one — the point of a jump pad, a surprise in a wind tunnel.</p>
+<div class="citation-chip"><code class="citation-code">body-&gt;applyForce(m_force);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_volume.cpp#L22" target="_blank" rel="noopener">ohao/physics/forces/force_volume.cpp:22</a></div>
+<p>Those wrappers are a convenience, not the boundary. `registerForce` and `getForceRegistry` are both public, so any generator here can be installed without one; and the four `setup*` presets route into `force_presets.cpp`, a compiled translation unit that makes eight `ForceFactory` calls of its own.</p>
+<div class="citation-chip"><code class="citation-code">auto waterDrag = ForceFactory::createWaterDrag(2.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/forces/force_presets.cpp#L31" target="_blank" rel="noopener">ohao/physics/forces/force_presets.cpp:31</a></div>
+<p>What is genuinely unreached is narrower than &quot;the rest&quot;. `AngularSpringForce` appears nowhere outside its own two files. `ExplosionForce` is constructed only by `ForceFactory::createExplosion`, whose sole caller is the example header that no translation unit includes — and the same header is the only caller of the four `setup*` entry points. `PhysicsWorld::applyRadialImpulse` is the nearest thing to a second explosion path, with its own linear / quadratic / constant falloff and impulses pushed straight at the backend, bypassing the registry; but its one caller in the tree is a backend test, so by the standard applied above it is exposed rather than shipping.</p>
+<div class="citation-chip"><code class="citation-code">float factor = (falloff == 1) ? t * t : (falloff == 2) ? 1.0f : t;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L723" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:723</a></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>`applyForces` must run before the accumulator flush inside the same `stepFixed`; read-back zeroes the accumulators, so a generator invoked after the flush fails silently.</li>
+<li>An empty target list means *every* body, not none — a &quot;targeted&quot; registration whose body vector happens to be empty becomes global.</li>
+<li>Pair forces receive only `bodyA`. A two-body force must apply both halves inside that one call or it manufactures momentum.</li>
+<li>Registry gravity is additive on top of the backend&#x27;s world gravity. Zero one of the two.</li>
+<li>The flush gates the per-body *sum*, not the individual generator: a body whose whole registry force totals 0.01 N or less (squared magnitude ≤ 1e-4) sends nothing to the backend that step, and the torque accumulator carries the same test.</li>
+<li>Priority sorts on a key nothing ever sets, and the sort is not stable. Do not rely on the order generators run in.</li>
+<li>`BuoyancyForce`&#x27;s fluid density is a gain, not a physical density; the mass-derived volume fixes body density at ≈ 0.24 kg/m³.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/physics/forces/force_registry.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/force_registry.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/forces.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/force_generator.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/world/physics_world.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/force_generator.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/dynamics/rigid_body.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/force_registry.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/force_generator.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/spring_force.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/environmental_force.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/field_force.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/force_presets.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/backend/jolt/jolt_backend.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/forces.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/force_volume.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/forces/force_registry.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/gravity_force.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/gravity_force.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/spring_force.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/spring_force.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/drag_force.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/drag_force.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/force_volume.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/force_volume.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/field_force.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/field_force.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/forces/environmental_force.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/environmental_force.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/physics/forces/force_presets.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/examples/force_system_example.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

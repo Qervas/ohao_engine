@@ -33,30 +33,112 @@
         <p>Shared RT visibility utilities.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#eight-bits-between-a-ray-and-a-triangle">Eight bits between a ray and a triangle</a></li><li><a href="#the-asymmetry-that-never-got-built">The asymmetry that never got built</a></li><li><a href="#four-copies-of-one-constant">Four copies of one constant</a></li><li><a href="#when-the-shader-stops-trusting-the-hardware">When the shader stops trusting the hardware</a></li><li><a href="#four-interfaces-two-implementations">Four interfaces, two implementations</a></li><li><a href="#the-runtime-swap-that-is-not-wired">The runtime swap that is not wired</a></li><li><a href="#the-write-that-must-precede-the-graph">The write that must precede the graph</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="eight-bits-between-a-ray-and-a-triangle">Eight bits between a ray and a triangle</h2></div>
 <div class="prose reveal">
-<p>Shared RenderTechnique pattern and visibility helpers for hybrid passes.</p>
+<p>Every TLAS instance in Vulkan carries an 8-bit `mask`, and every `traceRayEXT` call carries an 8-bit cull mask. When the two share no set bit the traverser drops the instance before any intersection test — no BLAS descent, no any-hit invocation, no shader cost. `rt_visibility.hpp` is the twenty-two lines that name those bits for OHAO, and it opens by stating the rule it is built on:</p>
+<div class="citation-chip"><code class="citation-code">// Vulkan rule: ray intersects instance if (ray_mask &amp; instance_mask) != 0.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_visibility.hpp#L7" target="_blank" rel="noopener">ohao/render/rt/rt_visibility.hpp:7</a></div>
+<p>Writing that as a predicate makes the rest of this page checkable. Let $m_i$ be the instance mask that ends up in `VkAccelerationStructureInstanceKHR::mask`, and $m_r$ the cull mask passed as the third argument of `traceRayEXT`:</p>
+<div class="math-block">$$
+\text{visible}(r,\,i) \iff (m_r \wedge m_i) \neq 0
+$$</div>
+<p>with $\wedge$ the bitwise AND over eight bits. The scheme the header sketches gives bit 0 the meaning &quot;GI and shadow rays may see this,&quot; reserving bits 1–7 for ray classes that do not exist yet (reflection, AO). A ray that wants only rigid geometry passes $m_r = \texttt{0x01}$; geometry it must not see clears bit 0.</p>
+<p>Only the ray-mask half is hybrid-specific. Every `traceRayEXT` in `pt_raygen.rgen`, `pt_raygen_offline.rgen` and `pt_raygen_realtime.rgen` passes `0xFF`, so the path tracers never cull by mask; `rt_shadow.rgen` and `rt_gi.rgen` are the only rays in the tree that pass anything else. The instance-mask half is *shared*: one TLAS builder stamps the mask into every instance, and the same `RTAccelerationStructure` object is handed to the deferred renderer and to the path tracer.</p>
+<div class="citation-chip"><code class="citation-code">rtRenderer-&gt;render(cmd, m_rtAccel.get(), ptView, ptProj,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L166" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:166</a></div>
+<p>A bad instance mask is therefore not contained to the hybrid passes.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-asymmetry-that-never-got-built">The asymmetry that never got built</h2></div>
 <div class="prose reveal">
-<p>init / resize / render / cleanup lifecycle.</p>
+<p>Read the five constants and the scheme collapses. Static geometry is `0xFF`, animated geometry is `0x00`:</p>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t MASK_ANIMATED       = 0x00;  // TEST: completely invisible to ALL rays</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_visibility.hpp#L16" target="_blank" rel="noopener">ohao/render/rt/rt_visibility.hpp:16</a></div>
+<p>`0x00` does not mean &quot;invisible to GI rays.&quot; Under the predicate above it fails against *every* $m_r$, including the `0xFF` of the path tracer&#x27;s primary trace — so in the *path-traced* image an instance carrying it is a hole in the frame, not a missing bounce. The deferred frame survives it, because there primary visibility is rasterized by the GBuffer pass and the RT techniques are compute passes layered over that GBuffer; a `0x00` instance would still rasterize and merely lose its RT shadow and GI contribution. The `TEST:` prefix is the author flagging it as a diagnostic value. The production value would be something like `0xFE`: visible to camera rays, culled by anything that passes `0x01`.</p>
+<p>None of that bites today, because nothing ever assigns it. Exactly one mask reaches a TLAS instance, applied uniformly to every actor in the build loop:</p>
+<div class="citation-chip"><code class="citation-code">uint32_t instanceMask = rt::MASK_STATIC_ONLY;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L866" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:866</a></div>
+<p>and `MASK_STATIC_ONLY` is itself `0xFF`, bit-identical to `MASK_VISIBLE_ALL`. The reason sits a few lines above the instance loop: the skinned-geometry path that motivated the split was removed from the RT builder, so every BLAS in the tree is rigid.</p>
+<div class="citation-chip"><code class="citation-code">// Skeletal animation removed — all meshes are static.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L853" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:853</a></div>
+<p>Consequently $\texttt{0x01} \wedge \texttt{0xFF} = \texttt{0x01} \neq 0$ for every instance in every scene the engine can currently build: the shadow and GI rays that carefully pass `RAY_MASK_STATIC` cull nothing. The mechanism is wired end to end and correct; it is idle because the geometry class it excludes no longer exists.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`MASK_STATIC_ONLY` and `MASK_VISIBLE_ALL` are the same number. Reintroducing animated RT geometry means *changing `MASK_STATIC_ONLY`* to a value with the animated bit cleared — not merely starting to write `MASK_ANIMATED`. Add the new instance class alone and the cull still passes everything.</p></div>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="four-copies-of-one-constant">Four copies of one constant</h2></div>
 <div class="prose reveal">
-<p>Uniform lifecycle keeps DeferredRenderer orchestration simple.</p>
+<p>The header is C++; the cull mask is consumed in GLSL. There is a mirror file that promises to keep the two in step:</p>
+<div class="citation-chip"><code class="citation-code">// RT visibility masks — must match ohao/render/rt/rt_visibility.hpp</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/includes/rt_masks.glsl#L1" target="_blank" rel="noopener">shaders/rt/includes/rt_masks.glsl:1</a></div>
+<p>No shader includes it. `rt_gi.rgen` and `rt_shadow.rgen` each pull exactly one header, `includes/common/encoding.glsl`, and nothing else in `shaders/` names `rt_masks.glsl` at all. Both consumers instead hard-code the literal and point at the C++ header in a comment — the GI raygen:</p>
+<div class="citation-chip"><code class="citation-code">uint rayMask = 0x01; // RT_RAY_MASK_STATIC (see rt_visibility.hpp)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_gi.rgen#L84" target="_blank" rel="noopener">shaders/rt/rt_gi.rgen:84</a></div>
+<p>and the shadow raygen, inline in the trace call. So `0x01` is written down in four places — the C++ `RAY_MASK_STATIC`, the uncompiled `RT_RAY_MASK_STATIC` macro, and one literal in each raygen — with no compiler or build step linking them, and the one file whose whole job is to prevent drift is dead. The C++ side is barely better off: `render_dispatch.cpp` includes `rt_visibility.hpp` and references no symbol from it — `rt_build.cpp` is the only real user.</p>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="when-the-shader-stops-trusting-the-hardware">When the shader stops trusting the hardware</h2></div>
 <div class="prose reveal">
-<p>RenderTechnique base pattern: init / resize / render / cleanup for hybrid RT passes.</p>
-<p>rt_visibility helpers for common ray flags and miss shaders.</p>
+<p>The most interesting line in this unit is a shader that refuses to believe the cull mask works at all. `rt_gi.rchit` re-implements the visibility test in software, on the grounds that the hardware ignored it:</p>
+<div class="citation-chip"><code class="citation-code">// Workaround for RTX 5070 driver bug: traceRayEXT cull mask is ignored.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/rt_gi.rchit#L18" target="_blank" rel="noopener">shaders/rt/rt_gi.rchit:18</a></div>
+<p>The fallback smuggles the static/animated bit through the alpha channel of the per-instance material SSBO (set 0, binding 6): the closest-hit shader reads `materials[gl_InstanceID].a`, and if it is below 0.5 it writes the miss sentinel `vec4(0,0,0,-1)` and returns, so the raygen&#x27;s `giPayload.a &gt;= 0.0` test treats the hit as empty space. This is a per-hit shader cost paid to emulate a zero-cost traversal reject — the trade you take when the free version is untrustworthy.</p>
+<p>It is also inert. `RTGITechnique::setMaterialAlbedos` takes the flag vector as a defaulted parameter:</p>
+<div class="citation-chip"><code class="citation-code">const std::vector&lt;float&gt;&amp; flags = {});</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_gi_technique.hpp#L33" target="_blank" rel="noopener">ohao/render/rt/rt_gi_technique.hpp:33</a></div>
+<p>and the single call site omits it:</p>
+<div class="citation-chip"><code class="citation-code">if (gi) gi-&gt;setMaterialAlbedos(materialAlbedos);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L914" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:914</a></div>
+<p>so every alpha is written as 1.0, and slots beyond the instance count keep the buffer&#x27;s `vec4(0.8, 0.8, 0.8, 1.0)` initialiser. `isStatic &lt; 0.5` is never true. Two independent culling mechanisms, both correctly built, both currently no-ops — because the thing they cull was deleted upstream. Neither is dead code in the &quot;delete it&quot; sense; both are the load-bearing half of a feature waiting for its other half.</p>
+</div>
+<div class="section-rule"><h2 id="four-interfaces-two-implementations">Four interfaces, two implementations</h2></div>
+<div class="prose reveal">
+<p>`render_technique.hpp` is the other half of this unit: a pluggable-technique contract for the hybrid passes. Each feature gets an `Input` struct of GBuffer views, camera matrices and a nullable `RTAccelerationStructure*`, an `Output` struct of one image plus its view, and a uniform lifecycle — `init / resize / render / getOutput / destroy`, plus `getName()` and `needsRT()` for introspection. Four interfaces are declared: shadows, GI, reflections, AO.</p>
+<p>Two have implementations. `RTShadowTechnique` and `RTGITechnique` are the only classes in the tree deriving from any of them; `IReflectionTechnique` and `IAOTechnique` have zero implementers. The screen-space features that would fit those two slots do exist, but on a different base — `SSRPass` and `SSAOPass` both derive from `RenderPassBase`, the base the rest of the deferred pipeline uses, and from none of the four interfaces:</p>
+<div class="citation-chip"><code class="citation-code">class SSAOPass : public RenderPassBase {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/ssao_pass.hpp#L8" target="_blank" rel="noopener">ohao/render/deferred/ssao_pass.hpp:8</a></div>
+<p>The `Output` doc comments have drifted too — `ShadowOutput::shadowMask` is annotated &quot;R8 or R16F&quot; —</p>
+<div class="citation-chip"><code class="citation-code">VkImage shadowMask;            // R8 or R16F — 0=shadowed, 1=lit</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/render_technique.hpp#L49" target="_blank" rel="noopener">ohao/render/rt/render_technique.hpp:49</a></div>
+<p>— while the implementation commits to a single format, `VK_FORMAT_R8_UNORM`, and `GIOutput::indirectLight` is documented RGB16F but allocated RGBA16F.</p>
+<div class="citation-chip"><code class="citation-code">imageInfo.format = VK_FORMAT_R8_UNORM;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_shadow_technique.cpp#L103" target="_blank" rel="noopener">ohao/render/rt/rt_shadow_technique.cpp:103</a></div>
+</div>
+<div class="section-rule"><h2 id="the-runtime-swap-that-is-not-wired">The runtime swap that is not wired</h2></div>
+<div class="prose reveal">
+<p>The header&#x27;s premise is polymorphic substitution, stated in its own example:</p>
+<div class="citation-chip"><code class="citation-code">// Swap at runtime: renderer.setShadowTechnique(std::make_unique&lt;RTShadows&gt;());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/render_technique.hpp#L13" target="_blank" rel="noopener">ohao/render/rt/render_technique.hpp:13</a></div>
+<p>No such setter exists anywhere in the tree. `DeferredRenderer` owns the techniques by *concrete* type, not by interface pointer:</p>
+<div class="citation-chip"><code class="citation-code">std::unique_ptr&lt;RTShadowTechnique&gt; m_rtShadow;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L137" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:137</a></div>
+<p>and `getName()` / `needsRT()` are overridden but never called. The virtual dispatch is therefore paid for and unused: the vtable exists, the indirection happens, and the pointer is always the same derived type. What actually varies at runtime is coarser — `init()` returning false makes the renderer drop the technique and fall back to CSM shadows, a boolean choice, not a technique swap.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>`rt_meta.hpp` hedges this by writing the same surface down a second time, as a C++20 concept:  {{cite ohao/render/rt/rt_meta.hpp &quot;concept ShadowTechniqueLike = requires(T t, VkCommandBuffer cmd, const ShadowInput&amp; in,&quot;}}  The assertion that binds concept to implementation cannot live in `rt_meta.hpp` — the include edge runs the other way, `rt_shadow_technique.hpp` and `rt_gi_technique.hpp` both include it — so each derived header asserts against itself, one line below the class it just closed:  {{cite ohao/render/rt/rt_shadow_technique.hpp &quot;static_assert(ShadowTechniqueLike&lt;RTShadowTechnique&gt;);&quot;}}  So the shape is checked structurally as well as virtually, and that is the escape hatch: once the virtual bases go, `template&lt;ShadowTechniqueLike T&gt;` keeps the same guarantee with no vtable. The rejected alternative — deleting the interfaces outright — throws away the documented shape that both implementations and the fallback logic already agree on.  The two variable templates the concepts also constrain carry none of that weight:  {{cite ohao/render/rt/rt_meta.hpp &quot;inline constexpr bool kIsShadowTechnique = true;&quot;}}  A constrained variable template is only checked when instantiated, and neither `kIsShadowTechnique` nor `kIsGITechnique` is instantiated anywhere in the tree. The `static_assert`s are the whole of the enforcement.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-write-that-must-precede-the-graph">The write that must precede the graph</h2></div>
+<div class="prose reveal">
+<p>The RT techniques record into the render graph as compute passes, but their outputs are handed to the deferred lighting pass by CPU-side descriptor writes that are *not* graph edges. That creates a real ordering constraint, flagged in the source:</p>
+<div class="citation-chip"><code class="citation-code">// Pre-bind RT shadow mask to lighting pass descriptors (must happen before execute)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L494" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:494</a></div>
+<p>`getOutput()` → `setRTShadowMask()` → `updateDescriptorSets()` run unconditionally, every frame, a few lines above `m_renderGraph.compile()` and `execute()`. Move the block below `execute()` and the lighting pass samples the previous frame&#x27;s view. Being unconditional also makes it self-healing: any image the technique reallocates is re-bound on the next frame.</p>
+<p>The resize path carries the opposite defect, and it is live. `DeferredRenderer::onResize` forwards the new extent to the GI technique:</p>
+<div class="citation-chip"><code class="citation-code">if (m_rtGI) m_rtGI-&gt;resize(width, height);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.cpp#L664" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.cpp:664</a></div>
+<p>and never to the shadow technique, though `RTShadowTechnique::resize` is implemented — destroy view, image and memory, reallocate at the new extent:</p>
+<div class="citation-chip"><code class="citation-code">void RTShadowTechnique::resize(uint32_t width, uint32_t height) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_shadow_technique.cpp#L531" target="_blank" rel="noopener">ohao/render/rt/rt_shadow_technique.cpp:531</a></div>
+<p>Nothing calls it. The shadow mask keeps its `init()` extent while the dispatch that fills it takes its grid from `ShadowInput`, which the renderer sets from the new `m_width`/`m_height`:</p>
+<div class="citation-chip"><code class="citation-code">input.width, input.height, 1);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_shadow_technique.cpp#L512" target="_blank" rel="noopener">ohao/render/rt/rt_shadow_technique.cpp:512</a></div>
+<p>Grow the window and the trace launches more threads than the image has texels; the out-of-range `imageStore`s are discarded, and the lighting pass samples an old-extent mask with normalized coordinates, stretched over the whole frame. The re-bind keeps the handle valid — it cannot fix the resolution.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Instance mask and ray mask must be non-disjoint or the instance is invisible: `(m_r &amp; m_i) != 0`. `MASK_ANIMATED = 0x00` is disjoint with *everything*, including the `0xFF` the path tracer&#x27;s primary trace passes, so it removes geometry from the path-traced image outright — a debugging value, not the production animated mask.</li>
+<li>Instance masks are written once, by the shared TLAS builder, into the one `RTAccelerationStructure` both the deferred renderer and the path tracer consume. A mask change is not scoped to the hybrid passes.</li>
+<li>`MASK_STATIC_ONLY` is `0xFF` today, so `RAY_MASK_STATIC` culls nothing. Any future animated-geometry class must clear a bit in the *static* mask, not just define a new one.</li>
+<li>`0x01` exists as the C++ `RAY_MASK_STATIC`, as the uncompiled `RT_RAY_MASK_STATIC` macro in `rt_masks.glsl`, and as a hard-coded literal in each of `rt_gi.rgen` and `rt_shadow.rgen` — four sites. Changing the header does not change the shaders.</li>
+<li>The `rt_gi.rchit` alpha-channel cull only activates if `setMaterialAlbedos` is called *with* the flags vector. The one caller omits it, so the branch is currently unreachable.</li>
+<li>Technique outputs must be re-bound into the lighting pass descriptors before `renderGraph.execute()`; the graph does not track this dependency. The re-bind is unconditional per frame, so it survives reallocation — but only reallocation that actually happens.</li>
+<li>`DeferredRenderer::onResize` must forward the new extent to every RT technique it owns. It forwards to `m_rtGI` and not to `m_rtShadow`, so the shadow mask stays at its `init()` extent while the dispatch grid follows the window.</li>
+<li>`init()` failure is non-fatal by design — the renderer resets the `unique_ptr` and continues on the CSM path, so a null `m_rtShadow` is a valid steady state, not an error.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/rt/rt_visibility.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/includes/rt_masks.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_gi.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/rt_gi.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_gi_technique.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/ssao_pass.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/render_technique.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_shadow_technique.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

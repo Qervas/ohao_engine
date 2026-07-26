@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" class="unit-diagram" role="img" aria-label="Diagram: of the seven fields stored on a PhysicsMaterial, static friction and restitution are copied straight into BodyCreationInfo and reach the Jolt body; density reaches it only indirectly, through RigidBody::setMass and info.mass, which Jolt installs as a mass-properties override for dynamic bodies; dynamic friction, roughness and both combine modes are never read.">
+  <rect x="0" y="0" width="720" height="400" fill="#0f1419"/>
+
+  <!-- column headings -->
+  <text x="24" y="26" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">PhysicsMaterial</text>
+  <text x="300" y="26" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">BodyCreationInfo</text>
+  <text x="524" y="26" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c4a574">JPH::Body</text>
+
+  <!-- authored fields panel -->
+  <rect x="20" y="38" width="216" height="196" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="34" y="62" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">staticFriction  0.6</text>
+  <text x="34" y="88" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">restitution     0.3</text>
+  <text x="34" y="114" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">density        1000</text>
+  <text x="34" y="146" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">dynamicFriction 0.4</text>
+  <text x="34" y="170" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">roughness       0.5</text>
+  <text x="34" y="194" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">restitutionCombine</text>
+  <text x="34" y="216" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6e685c">frictionCombine</text>
+
+  <!-- dead-field bracket -->
+  <path d="M 226 134 L 236 134 L 236 224 L 226 224" fill="none" stroke="#6e685c" stroke-width="1"/>
+  <text x="242" y="176" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">no</text>
+  <text x="242" y="190" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">reader</text>
+
+  <!-- creation info panel: the two fields copied verbatim -->
+  <rect x="296" y="38" width="170" height="80" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="310" y="62" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">friction</text>
+  <text x="310" y="88" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">restitution</text>
+
+  <!-- jolt body panel -->
+  <rect x="516" y="38" width="184" height="80" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="530" y="62" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">mFriction</text>
+  <text x="530" y="88" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">mRestitution</text>
+
+  <!-- arrows: static friction / restitution copied verbatim -->
+  <path d="M 200 58 L 290 58" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#ar)"/>
+  <path d="M 200 84 L 290 84" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#ar)"/>
+  <path d="M 470 58 L 510 58" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#ar)"/>
+  <path d="M 470 84 L 510 84" fill="none" stroke="#c4784a" stroke-width="1.5" marker-end="url(#ar)"/>
+
+  <!-- combine box -->
+  <rect x="296" y="140" width="404" height="90" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="310" y="164" font-family="IBM Plex Mono,monospace" font-size="11" fill="#c4a574">contact combine — owned by Jolt, not OHAO</text>
+  <text x="310" y="188" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">mu_ab = sqrt(mu_a * mu_b)</text>
+  <text x="310" y="210" font-family="IBM Plex Mono,monospace" font-size="11" fill="#e8e2d6">e_ab  = max(e_a, e_b)</text>
+  <path d="M 608 124 L 608 134" fill="none" stroke="#3d4a58" stroke-width="1.5" marker-end="url(#as)"/>
+
+  <text x="296" y="252" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">CombineMode never participates: OHAO installs no combine callback.</text>
+
+  <!-- density: the indirect route, laundered through mass -->
+  <path d="M 168 110 L 200 110 L 200 274" fill="none" stroke="#7dba8a" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <rect x="20" y="282" width="252" height="64" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="34" y="304" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a">RigidBody::setMass</text>
+  <text x="34" y="322" font-family="DM Sans,sans-serif" font-size="11" fill="#c4c0b6">AABB volume x density,</text>
+  <text x="34" y="338" font-family="DM Sans,sans-serif" font-size="11" fill="#c4c0b6">on STATIC to DYNAMIC only</text>
+
+  <rect x="296" y="290" width="170" height="34" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="310" y="312" font-family="IBM Plex Mono,monospace" font-size="11" fill="#7dba8a">mass</text>
+
+  <rect x="516" y="282" width="184" height="48" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="530" y="302" font-family="IBM Plex Mono,monospace" font-size="10" fill="#7dba8a">mMassPropertiesOverride</text>
+  <text x="530" y="318" font-family="IBM Plex Mono,monospace" font-size="10" fill="#7dba8a">  .mMass  (DYNAMIC only)</text>
+
+  <path d="M 276 307 L 290 307" fill="none" stroke="#7dba8a" stroke-width="1.5" marker-end="url(#ag)"/>
+  <path d="M 470 307 L 510 307" fill="none" stroke="#7dba8a" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <text x="20" y="370" font-family="DM Sans,sans-serif" font-size="11" fill="#6e685c">Green: density never crosses as itself — only the mass it produced.</text>
+
+  <defs>
+    <marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#c4784a"/>
+    </marker>
+    <marker id="ag" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#7dba8a"/>
+    </marker>
+    <marker id="as" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="#3d4a58"/>
+    </marker>
+  </defs>
+</svg>

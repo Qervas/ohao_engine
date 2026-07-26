@@ -33,34 +33,102 @@
         <p>Auto-frame bounds for turntable/model viewer.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#fitting-the-model-to-the-room-not-the-room-to-the-model">Fitting the model to the room, not the room to the model</a></li><li><a href="#guessing-which-way-is-up-from-a-bounding-box">Guessing which way is up from a bounding box</a></li><li><a href="#the-camera-solve-has-one-free-number">The camera solve has one free number</a></li><li><a href="#why-three-of-the-four-light-radii-are-argued-for">Why three of the four light radii are argued for</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="fitting-the-model-to-the-room-not-the-room-to-the-model">Fitting the model to the room, not the room to the model</h2></div>
 <div class="prose reveal">
-<p>Auto-frame scene bounds for turntable/model viewer.</p>
+<p>An asset arrives with no unit convention: a scanned head is 180 millimetres tall, a CAD part 0.4 metres, a game character 1.8, and the vertex data declares none of it. Everything downstream that is tuned in absolute world units breaks under that variance, and in a path tracer almost everything is — inverse-square falloff, shadow-ray epsilons, sphere-light radii.</p>
+<p>`SceneFramer` inverts the usual framing problem. It does not move a camera until the model fits; it fixes a room of half-size 15 world units — unconditionally, despite a call-site comment claiming the room adapts — and rescales the model into it:</p>
+<div class="citation-chip"><code class="citation-code">float S = 15.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L36" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:36</a></div>
+<div class="citation-chip"><code class="citation-code">result.modelScale = (S * 1.2f) / std::max(maxExtent, 0.001f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L41" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:41</a></div>
+<p>The divisor is the *largest* of the three AABB extents, not the height, so a chess board or a crouching figure is bounded by its widest axis instead of overflowing sideways. The result: whatever came in, its longest dimension leaves as 18 units — 60% of the room&#x27;s 30-unit span.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The alternative is to keep the model at native scale and move the camera and lights out to meet it. That fails on the light rig: the four studio lights below carry intensities in the 150–800 range chosen for distances of order S, and irradiance falls as 1/d². Re-fitting a millimetre asset would need every intensity rescaled by d² and every sphere radius shrunk too — a 1.2-unit lamp near a 0.18-unit model is a lamp the model stands inside. Normalising the geometry is one multiply; normalising the lighting model is a per-asset tuning session. The cost is that the framer owns the model transform: nothing can render an asset at its authored scale through this path.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="guessing-which-way-is-up-from-a-bounding-box">Guessing which way is up from a bounding box</h2></div>
 <div class="prose reveal">
-<p>scene_framer computes distance/FOV from AABB.</p>
+<p>Nothing in a raw vertex buffer says which axis is up, so the framer infers it from the box&#x27;s aspect: if the Y extent is at least the Z extent, treat the model as Y-up.</p>
+<div class="citation-chip"><code class="citation-code">bool isYUp = forceYUp || (extent.y &gt;= extent.z);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L28" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:28</a></div>
+<p>Y-up models get the identity rotation. Z-up models get ±90° about X, and the sign is decided by a second inference — whether the model&#x27;s Z range reaches above zero:</p>
+<div class="citation-chip"><code class="citation-code">posZIsUp = (bmax.z &gt; 0.01f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L57" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:57</a></div>
+<p>A DCC export whose Z span is entirely negative has its head at negative Z, so it needs +90° — which maps z → −y, lifting −Z to +Y — rather than the −90° a standard +Z-up model needs. The two Z-up branches mirror each other exactly, because the rotations do: −90° about X sends (x, y, z) to (x, z, −y), so the feet come from `bmin.z` and the depth re-centring term is `+center.y * scale`; +90° sends it to (x, −z, y), so the feet come from `bmax.z` and the same term is negated.</p>
+<div class="citation-chip"><code class="citation-code">result.modelPosition = {-center.x * scale, -S + feetOffset, center.y * scale};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L63" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:63</a></div>
+<div class="citation-chip"><code class="citation-code">result.modelPosition = {-center.x * scale, -S + feetOffset, -center.y * scale};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L67" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:67</a></div>
+<p>All three branches land the model identically — feet on the floor at y = −S, AABB centre on x = 0 and z = 0 — which is the invariant the camera solve leans on.</p>
+<p>The heuristic&#x27;s failure mode is exact and easy to hit: a Y-up model that is deeper than it is tall — a car, a ground plane, a sofa — reads as Z-up and gets tipped onto its face. The header declares an escape hatch for the one format where the answer is known a priori, since the glTF specification mandates Y-up:</p>
+<div class="citation-chip"><code class="citation-code">bool forceYUp = false);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.hpp#L45" target="_blank" rel="noopener">ohao/render/camera/scene_framer.hpp:45</a></div>
+<p>No caller in the tree passes it. Both call sites use the default, and `env_demo` re-implements the same `extent.y &gt;= extent.z` test inline without any override at all. The parameter is dead; the heuristic it guards is not.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-camera-solve-has-one-free-number">The camera solve has one free number</h2></div>
 <div class="prose reveal">
-<p>Demos should open on a well-framed model without manual tuning.</p>
+<p>Exactly one quantity in the camera solve is derived from the model: its mid-height. The rest of `cameraPosition` is literal — x = 0, z = 1.7 room half-sizes — as are the 45° FOV and both rotation angles.</p>
+<div class="citation-chip"><code class="citation-code">float modelHeight = isYUp ? extent.y : extent.z;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L31" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:31</a></div>
+<div class="citation-chip"><code class="citation-code">result.cameraPosition = {0, modelCenterY, S * 1.7f};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L75" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:75</a></div>
+<p>`modelHeight` is the extent along the *up* axis, so after the rotation above it is the world-space height, and the camera sits half of it above the floor at y = −S — exactly where the model&#x27;s own AABB centre landed. The fixed orientation is therefore not a shortcut with a failure mode but the look-at solution written out: `setRotation(0, −90)` points down −Z, and every model&#x27;s centre is already on x = 0, z = 0 at the camera&#x27;s own height, so that axis passes through it whatever came in.</p>
+<div class="citation-chip"><code class="citation-code">camera.setRotation(0.0f, -90.0f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L118" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:118</a></div>
+<p>The 45° FOV is vertical, since it reaches the projection through `glm::perspective`, whose first argument is a vertical field of view:</p>
+<div class="citation-chip"><code class="citation-code">projectionMatrix = glm::perspective(glm::radians(fov), aspectRatio, nearPlane, farPlane);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L44" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:44</a></div>
+<p>That makes the resulting frame fill computable in closed form. With $h$ the model&#x27;s world-space height after scaling, $d$ the camera-to-model distance and $\theta$ the vertical FOV, the fraction of frame height the model covers is</p>
+<div class="math-block">$$
+\text{fill} \;=\; \frac{h}{2\,d\,\tan(\theta/2)} \;=\; \frac{1.2\,S}{2\,(1.7\,S)\tan 22.5^\circ} \;\approx\; 0.85
+$$</div>
+<p>The room half-size $S$ cancels — the framing is scale-free, and the only thing the value 15 actually decides is the unit system in which the light rig is tuned. Two assumptions are buried in that 0.85: that the model&#x27;s longest axis is its up axis, so $h = 1.2\,S$; and that its silhouette is planar at the model centre, so $d = 1.7\,S$ across all of it. A model as deep as it is tall breaks the second — 18 units of depth centred on z = 0 puts the near face at $d = 16.5$, where 18 units of height subtend $18/(2 \cdot 16.5 \tan 22.5^\circ) \approx 1.32$ of the frame and overflow it. The framer normalises the largest extent, not the projected one.</p>
+<p>The 1.7 also puts the camera at z = 25.5, *outside* the room&#x27;s z = +S = 15 wall. `model_viewer` accommodates that by not building a front wall at all:</p>
+<div class="citation-chip"><code class="citation-code">// No front wall — camera renders from outside looking in</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L165" target="_blank" rel="noopener">examples/model_viewer.cpp:165</a></div>
+<p>`interactive` does not. Its indoor path builds a sealed box, front wall included, and then seeds its camera straight from `frame.cameraPosition`, so that wall starts out between the camera and the model:</p>
+<div class="citation-chip"><code class="citation-code">addQuad(&quot;Front&quot;,  {S+E,-S-E,S},{-S-E,-S-E,S},{-S-E,S+E,S},{S+E,S+E,S},     {0,0,-1}, wallColor, 0.9f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L281" target="_blank" rel="noopener">examples/interactive.cpp:281</a></div>
+<div class="citation-chip"><code class="citation-code">g_cam.position = frame.cameraPosition;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L207" target="_blank" rel="noopener">examples/interactive.cpp:207</a></div>
+<p>`applyCamera` has exactly one caller, `model_viewer`. `interactive` skips it and builds its own look-at, from the camera position toward `modelPosition` — the model&#x27;s transform origin, not its AABB centre. The yaw comes out at the same −90°, since both points sit on x = 0; the pitch does not, unless the asset&#x27;s local origin happens to lie at its own mid-height.</p>
+<div class="citation-chip"><code class="citation-code">g_cam.yaw = glm::degrees(std::atan2(look.z, look.x));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/interactive.cpp#L213" target="_blank" rel="noopener">examples/interactive.cpp:213</a></div>
+<figure class="unit-figure reveal"><img src="../../assets/units/camera-scene-framer-room-elevation.svg" alt="Elevation through the Y–Z plane, drawn to scale from the constants in scene_framer.cpp: the room as model_viewer builds it (front wall omitted), scaled model, the camera at z = 1.7S, and the light spheres at true radius. Conceptual diagram, not a captured render." loading="lazy" /><figcaption>Elevation through the Y–Z plane, drawn to scale from the constants in scene_framer.cpp: the room as model_viewer builds it (front wall omitted), scaled model, the camera at z = 1.7S, and the light spheres at true radius. Conceptual diagram, not a captured render.</figcaption></figure>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
+<div class="section-rule"><h2 id="why-three-of-the-four-light-radii-are-argued-for">Why three of the four light radii are argued for</h2></div>
 <div class="prose reveal">
-<p>scene_framer.hpp: defines `class Scene`.</p>
-<p>scene_framer.hpp: defines `class Camera`.</p>
-<p>scene_framer.hpp: defines `struct Vertex`.</p>
-<p>SceneFramer — auto-frame any model with correct camera, lights, and room size.</p>
-<p>Analyzes model AABB, scales to fit, and positions camera + lights automatically.</p>
-<p>Works for ANY model size (mm, cm, m, arbitrary units).</p>
+<p>The four-light studio rig is emitted as sphere lights with radii of 1.2, 1.5, 1.0 and 1.2. Three of the four carry a comment doing the arithmetic against the wall they face — a 1.2-radius sphere at y = 0.85 S sits at 12.75 with its top at 13.95, clear of the ceiling at 15.</p>
+<div class="citation-chip"><code class="citation-code">{&quot;CeilingLight&quot;, {0.0f, S * 0.85f, 2.0f}, {1.0f, 0.92f, 0.82f}, 800.0f, 1.2f},</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L89" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:89</a></div>
+<p>The fourth is asserted rather than derived. `BedsideLamp` gets no arithmetic and names no wall — only a parenthetical that it is already interior:</p>
+<div class="citation-chip"><code class="citation-code">// Bedside lamp — warm point light on the nightstand (already interior).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/scene_framer.cpp#L93" target="_blank" rel="noopener">ohao/render/camera/scene_framer.cpp:93</a></div>
+<p>It does clear the walls, and it fails on the furniture. Both callers build the same nightstand, its top face at $y = -S + 1.5 \cdot 0.25\,S = -9.375$ over $z \in [-15,-12]$; the lamp sits at $y = -S + 6 = -9$ with radius 1.0, so the sphere&#x27;s lower cap is 0.625 units inside the solid it is meant to light — the exact configuration the other three comments exist to rule out.</p>
+<div class="citation-chip"><code class="citation-code">addBox(&quot;Nightstand&quot;, {nsX, -S, -S}, {nsX + 3.0f, -S + bedH * 1.5f, -S + 3.0f}, nsColor, 0.45f);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L187" target="_blank" rel="noopener">examples/model_viewer.cpp:187</a></div>
+<p>Those radii travel intact: the light component&#x27;s radius becomes the RT light record&#x27;s `dirAndParam.w`, which the raygen reads as the sphere radius.</p>
+<div class="citation-chip"><code class="citation-code">float dirParam = lc-&gt;getRadius();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L165" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:165</a></div>
+<p>The reason the clearances matter is visible in the next-event estimator — and *which* estimator depends on the profile. `RenderMode::RTOffline` selects `RTOfflineRenderer`, whose `PathTracer` is constructed with the offline raygen SPV, so the shader below is `pt_raygen_offline.rgen`; the `pt_raygen.rgen` named as the `PathTracerShaderSet` default is overridden by both profile renderers and never dispatched.</p>
+<div class="citation-chip"><code class="citation-code">&quot;bin/shaders/rt_pt_raygen_offline.rgen.spv&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_profile_renderer.hpp#L220" target="_blank" rel="noopener">ohao/render/rt/rt_profile_renderer.hpp:220</a></div>
+<p>For a sphere light that raygen samples a point uniformly on the surface, converts the uniform-area pdf to solid angle in a term it calls `weight`, and multiplies by the emitted radiance `Le`. The block occurs three times, once per path stage — bounce 0, then once inside each of the Stage-B specular and Stage-C diffuse bounce loops — and it computes:</p>
+<div class="math-block">$$
+L_e = \frac{I\,c}{4\pi r^{2}}, \qquad w = \frac{\cos\theta_\ell \cdot 4\pi r^{2}}{d^{2}} \quad\Longrightarrow\quad L_e\,w = \frac{I\,c\,\cos\theta_\ell}{d^{2}}
+$$</div>
+<p>Here $I$ is the authored intensity, $c$ the colour, $r$ the sphere radius, $\theta_\ell$ the angle at the sampled point between its outward normal and the direction back to the shading point, and $d$ the distance between them. The two $4\pi r^2$ factors cancel exactly — which is the fact the framer&#x27;s comment relies on. Brightness is radius-independent, so a radius can be shrunk to clear a wall without changing exposure; only shadow and highlight sharpness change. Averaged over uniform samples on the whole sphere $\mathbb{E}[\max(\cos\theta_\ell,0)] = 1/4$, so a distant receiver sees irradiance $I/(4d^2)$.</p>
+<p>What does not cancel is $1/d^2$. `weight` divides by the squared distance to the *sampled point* with no epsilon floor, and the bounce-0 shading line folds it in along with a light-count factor that undoes the uniform light pick:</p>
+<div class="citation-chip"><code class="citation-code">vec3 directContribution = Le * (diff * nlDiff + spec * NdotL) * weight * float(lightBuf.lightCount);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L481" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:481</a></div>
+<p>The diffuse half of that line is scaled by `nlDiff` — a per-channel, subsurface-wrapped replacement for the scalar `NdotL` the specular half still uses. The header comment claiming this file is a verbatim copy of `pt_raygen.rgen` is stale; the two have diverged at exactly this line.</p>
+<div class="citation-chip"><code class="citation-code">// Currently a verbatim copy of pt_raygen.rgen (kept as a separate entry point so</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_offline.rgen#L8" target="_blank" rel="noopener">shaders/rt/pt_raygen_offline.rgen:8</a></div>
+<p>If a light sphere pokes through a wall, the wall texels inside it draw samples at $d \to 0$ and the contribution diverges. The offline profile has no clamp to catch it: `kOfflineRTSettings` leaves `enableFireflyClamp` false, so the push-constant flag is never set and the luminance-clamp branch guarding every one of those shading lines is compiled in but never entered.</p>
+<div class="citation-chip"><code class="citation-code">.enableFireflyClamp = false,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L57" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:57</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>The light radii are geometry, not aesthetics. With the clamp off on the offline profile, the only defence against an unbounded NEE sample is keeping every light sphere strictly inside the surfaces it can illuminate — and *which* surfaces those are is per-caller: ceiling, floor and side walls exist in both, the z = +S wall only in `interactive`. Moving a light &quot;a bit closer to the ceiling&quot; is a rendering bug, not a lighting tweak.</p></div>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
+<ul>
+<li>Light positions are not multiples of `S`. `CeilingLight` carries an absolute z = 2, `WindowLight` an absolute y = 3 and z = 5, and `BedsideLamp` is affine throughout (`S*0.55`, `-S + 6`, `-S + 2`). Only the single wall-facing coordinate of the three commented lights — `S*0.85`, `S*0.8`, `S*0.85` — is a plain multiple, and all four radii are absolute constants. So the clearances hold only while `0.85 S + 1.2 &lt; S`, i.e. `S &gt; 8`; shrinking the room without shrinking the radii pushes `CeilingLight` through the ceiling in both callers and `FrontFill` through the z = +S wall in `interactive`, the only caller that builds that wall.</li>
+<li>`cameraPosition` is outside the room: z = 1.7 S = 25.5 against walls at ±S. A caller must either omit the +Z wall, as `model_viewer` does, or move the camera. `interactive` does neither on its indoor path.</li>
+<li>Callers must apply all three of `modelScale`, `modelRotation` and `modelPosition`. Scale without rotation lays Z-up assets on their side; skipping position leaves them floating instead of standing on the floor.</li>
+<li>`FrameResult::valid()` only checks that three scalars are positive, has no callers, and returns true for degenerate input: a model that loads with zero vertices leaves the AABB at its ±FLT_MAX sentinels, giving a scale of 18000 and a non-finite position.</li>
+<li>Only `model_viewer` and `interactive` call this. `turntable`, `cornell_box` and `env_demo` do not — `env_demo` carries its own inlined copy of the up-axis test with a different target size, so a fix here does not reach it.</li>
+<li>On the failure path there are no lights at all. A hand-built `FrameResult` leaves the `lights` vector empty and `applyLights` silently adds nothing.</li>
+</ul>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>ohao/render/camera/scene_framer.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/camera/scene_framer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/camera/scene_framer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/camera/camera.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_profile_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_raygen_offline.rgen</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

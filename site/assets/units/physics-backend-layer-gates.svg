@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 322" class="unit-diagram" role="img" aria-label="Three collision filter gates in the Jolt backend, and the path an out-of-range object layer takes when it passes every gate unfiltered">
+<rect width="100%" height="100%" fill="#0f1419"/>
+
+<text x="30" y="26" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="11" letter-spacing="1.4">COLLISION FILTERING — 16 OBJECT LAYERS, 2 BROADPHASE TREES, 3 GATES</text>
+<text x="30" y="48" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="12">object layer is an index in 0..15, carried as uint16 on every body</text>
+
+<!-- gate 1 -->
+<rect x="30" y="62" width="196" height="112" rx="3" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+<text x="44" y="83" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">GATE 1  broadphase map</text>
+<text x="44" y="104" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">isNonMovingLayer()</text>
+<text x="44" y="124" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10">STATIC(1), TERRAIN(10)</text>
+<text x="56" y="138" fill="#7dba8a" font-family="IBM Plex Mono,monospace" font-size="10">-&gt; NON_MOVING tree</text>
+<text x="44" y="156" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">every other layer</text>
+<text x="56" y="169" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">-&gt; MOVING tree</text>
+
+<!-- gate 2 -->
+<rect x="256" y="62" width="196" height="112" rx="3" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+<text x="270" y="83" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">GATE 2  object vs tree</text>
+<text x="270" y="104" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">non-moving layer:</text>
+<text x="282" y="118" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">MOVING tree only</text>
+<text x="270" y="140" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">moving layer:</text>
+<text x="282" y="154" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">both trees</text>
+
+<!-- gate 3 -->
+<rect x="482" y="62" width="208" height="112" rx="3" fill="#1a222c" stroke="#3d4a58" stroke-width="1"/>
+<text x="496" y="83" fill="#c4a574" font-family="IBM Plex Mono,monospace" font-size="10">GATE 3  16x16 pair matrix</text>
+<text x="496" y="104" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">symmetric, seeded off:</text>
+<text x="496" y="122" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">STATIC/STATIC</text>
+<text x="496" y="136" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">STATIC|TERRAIN/TERRAIN</text>
+<text x="496" y="150" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">TRIGGER/STATIC,TERRAIN,TRIGGER</text>
+<text x="496" y="164" fill="#e8e2d6" font-family="IBM Plex Mono,monospace" font-size="10">DEBRIS/DEBRIS, /TRIGGER</text>
+
+<!-- flow arrows -->
+<line x1="226" y1="118" x2="252" y2="118" stroke="#3d4a58" stroke-width="1.5"/>
+<polygon points="256,118 248,114 248,122" fill="#3d4a58"/>
+<line x1="452" y1="118" x2="478" y2="118" stroke="#3d4a58" stroke-width="1.5"/>
+<polygon points="482,118 474,114 474,122" fill="#3d4a58"/>
+
+<!-- bypass lane -->
+<rect x="30" y="210" width="660" height="76" rx="3" fill="#1a222c" stroke="#c4784a" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="44" y="231" fill="#c4784a" font-family="IBM Plex Mono,monospace" font-size="10">OUT-OF-RANGE LAYER  (createBody does not clamp; layer 1u&lt;&lt;10 = 1024 reaches Jolt as ObjectLayer 1024)</text>
+<text x="44" y="252" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">gate 1 does not see it as non-moving &#183; gate 2 takes its &#8220;moving collides with everything&#8221; branch</text>
+<text x="44" y="271" fill="#c4784a" font-family="DM Sans,sans-serif" font-size="12">gate 3 and every ray mask range-check first and return true &#183; nothing can filter this body</text>
+
+<!-- bypass arrows up into each gate -->
+<line x1="128" y1="210" x2="128" y2="182" stroke="#c4784a" stroke-width="1" stroke-dasharray="3 3"/>
+<polygon points="128,174 124,182 132,182" fill="#c4784a"/>
+<line x1="354" y1="210" x2="354" y2="182" stroke="#c4784a" stroke-width="1" stroke-dasharray="3 3"/>
+<polygon points="354,174 350,182 358,182" fill="#c4784a"/>
+<line x1="586" y1="210" x2="586" y2="182" stroke="#c4784a" stroke-width="1" stroke-dasharray="3 3"/>
+<polygon points="586,174 582,182 590,182" fill="#c4784a"/>
+
+<text x="30" y="192" fill="#6e685c" font-family="DM Sans,sans-serif" font-size="11">a body must clear all three gates before the narrow phase ever runs</text>
+
+<text x="30" y="308" fill="#6e685c" font-family="IBM Plex Mono,monospace" font-size="10">Conceptual: gate structure read from jolt_backend.cpp, not a measured broadphase profile.</text>
+</svg>

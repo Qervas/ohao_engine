@@ -33,54 +33,101 @@
         <p>CLI/example → Scene → VulkanRenderer::initialize → setScene → render → pixels.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#one-sequence-in-an-order-that-matters">One sequence, in an order that matters</a></li><li><a href="#why-the-scene-is-uploaded-twice">Why the scene is uploaded twice</a></li><li><a href="#three-deep-and-the-3-in-every-driver">Three deep, and the +3 in every driver</a></li><li><a href="#three-different-exits-from-the-gpu">Three different exits from the GPU</a></li><li><a href="#the-settings-reset-that-eats-your-overrides">The settings reset that eats your overrides</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="one-sequence-in-an-order-that-matters">One sequence, in an order that matters</h2></div>
 <div class="prose reveal">
-<p>The request path is the single mental model for every OHAO binary: a thin driver builds a Scene, hands it to VulkanRenderer, chooses a RenderMode, and either presents a swapchain or reads pixels.</p>
-<p>Examples (interactive, cornell_box, turntable, model_viewer) share this path; they differ only in scene construction and CLI flags.</p>
+<p>OHAO has no editor host. The rendering examples — `cornell_box`, `model_viewer`, `env_demo`, `turntable`, the interactive viewer — are thin `main()`s over one sequence: construct a `VulkanRenderer` at a fixed output size, bring up the device, build a `Scene` out of plain CPU components, hand the scene over, choose a `RenderMode`, then loop `render()` and read the pixels back. `cornell_box` is the shortest complete instance of it, and it shows the one convention that surprises people reading the CLI: the output resolution is a compile-time constant in the driver, never an argument — 1920×1080 in `cornell_box`, `model_viewer` and `env_demo`, 1280×720 in `turntable` and the interactive viewer.</p>
+<div class="citation-chip"><code class="citation-code">const uint32_t W = 1920, H = 1080;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/cornell_box.cpp#L73" target="_blank" rel="noopener">examples/cornell_box.cpp:73</a></div>
+<p>Scene construction touches no Vulkan at all — walls, spheres, and twelve sphere lights are built as `MeshComponent` / `MaterialComponent` / `LightComponent` on actors, with the renderer already alive but not yet aware of them. `setScene()` is where CPU scene data crosses into GPU memory in every shipped driver, and the crossing is conditional:</p>
+<div class="citation-chip"><code class="citation-code">if (m_initialized &amp;&amp; m_scene) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L365" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:365</a></div>
+<p>Invert the first two calls — build the scene and `setScene()` it before `initialize()` — and nothing complains. The pointer is stored, the upload is skipped, and `initialize()` never retries it, so `m_vertexBuffer` stays null. `renderDeferred` hands geometry to the deferred passes only when that handle is live, and the GBuffer pass has nothing to bind without it:</p>
+<div class="citation-chip"><code class="citation-code">if (m_vertexBuffer != VK_NULL_HANDLE &amp;&amp; m_indexBuffer != VK_NULL_HANDLE) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L52" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:52</a></div>
+<p>The rest of the pass chain runs anyway, and the Preetham sky pass is on by default, so what lands is an empty sky-lit frame — not black, and not an error either.</p>
+<div class="citation-chip"><code class="citation-code">bool      m_skyEnabled{true};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/deferred_renderer.hpp#L176" target="_blank" rel="noopener">ohao/render/deferred/deferred_renderer.hpp:176</a></div>
+<p>The RT modes survive the same mistake by accident, for a reason that deserves its own movement.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="why-the-scene-is-uploaded-twice">Why the scene is uploaded twice</h2></div>
 <div class="prose reveal">
-<p>Parse CLI (model path, HDR env, --mode, --denoise, spp).</p>
-<p>Construct Scene; loaders fill Mesh/Material/Light components without touching Vulkan.</p>
-<p>VulkanRenderer(w,h).initialize() creates instance, device, queues, frame ring, bindless pool.</p>
-<p>setScene uploads geometry and materials, then buildBLASTLAS when RT is needed.</p>
-<p>setRenderMode selects Forward, Deferred, RTRealtime, or RTOffline; ensureRTRenderer lazily constructs PathTracer.</p>
-<p>render() records and submits; getPixels copies staging after fence wait for offline/goldens.</p>
-<ul>
-<li>Parse CLI (model, env, mode, denoise)</li>
-<li>Build Scene + load assets into components</li>
-<li>VulkanRenderer(w,h).initialize() cold start</li>
-<li>setScene → upload + BLAS/TLAS</li>
-<li>setRenderMode / ensureRTRenderer as needed</li>
-<li>render() loop or single shot; getPixels / present</li>
-</ul>
+<p>`setRenderMode()` is where ray tracing actually comes into existence. The renderer deliberately does *not* create a path tracer during `initialize()`:</p>
+<div class="citation-chip"><code class="citation-code">// Lazy-create realtime/offline PathTracers on setRenderMode(). Eager dual</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L206" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:206</a></div>
+<p>So at `setScene()` time — which in every shipped example precedes `setRenderMode()` — there is no `PathTracer` to bind anything to. The upload runs in full anyway: `buildAccelerationStructures()` copies vertex and index data into device-local RT buffers, extracts per-vertex normals and UVs, uploads per-triangle material IDs and the three-vec4-per-material colour table, builds the bindless texture array, uploads the light SSBO plus environment map, and builds BLAS and TLAS.</p>
+<div class="citation-chip"><code class="citation-code">createRTVertexIndexBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L377" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:377</a></div>
+<p>Every step that has something to hand the path tracer — material data, material buffers, bindless textures, the normal/UV/light buffers — does so through `forEachRTRenderer`, which walks two `unique_ptr` slots, and at that moment both are null, so all of it lands nowhere. The iterator is *almost* the only door. The only direct profile references across the three upload files sit in the environment-map path, which asks the offline tracer — never the realtime one — for its current bindless view and sampler lists so the env texture can take the next free slot:</p>
+<div class="citation-chip"><code class="citation-code">auto views = m_rtOfflineRenderer ? m_rtOfflineRenderer-&gt;getBindlessImageViews()</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L479" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:479</a></div>
+<p>`setBindlessTextures` assigns rather than appends, so in a realtime-only run that ternary reads an empty list, the env map lands at index 0, and the one-entry array goes back through `forEachRTRenderer` over the material textures `uploadRTTextureArray` installed moments earlier in the same call.</p>
+<p>The repair for the null-profile upload is explicit: after lazily constructing the profile, `ensureRTRenderer` marks the acceleration structures dirty and re-runs the entire upload — it is the second of `updateSceneBuffers()`&#x27;s callers, not a private back door.</p>
+<div class="citation-chip"><code class="citation-code">if (created &amp;&amp; m_scene &amp;&amp; m_initialized) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L438" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:438</a></div>
+<p>A default `cornell_box` run therefore builds its BLAS and TLAS twice and uploads its textures twice. Only the second pass is the one the tracer reads. Note the guard: the re-upload is conditional on a scene already existing, so a driver that selected its RT mode *before* `setScene()` would pay the cost once — the duplicate exists purely to rescue the scene-first order every example uses.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>The rejected alternative is eager construction: build both the realtime and the offline `PathTracer` in `initialize()` so `setScene()` binds them on the first pass. It lost on memory. Each profile owns a beauty image plus the full AOV set at output resolution — motion vectors, depth, roughness, split diffuse/specular radiance, albedo, normal-roughness — and the source states the hazard as a possibility, not a measurement: eager dual init *can* OOM at 4K. No shipped driver renders at 4K, so at the resolutions the examples actually hardcode the avoided cost is a projection, not observed history. OHAO still pays one redundant scene upload at startup rather than hold a second full-resolution path tracer that most runs never dispatch.</p></div>
+<p>Mode selection can also fail closed. If RT is unavailable, `setRenderMode` prints and returns *without* assigning `m_renderMode`, leaving the renderer in whatever mode it already had — which at startup is `Forward`.</p>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;Path tracing not available, staying in current mode&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L453" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:453</a></div>
+<p>No example ever asks for `Forward`: `resolveMode()` returns Deferred or one of the two RT modes. Forward is reachable only as the refusal state, and the examples print the mode they *requested*, not the one the renderer accepted, so a silent downgrade reads as success on stdout.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="three-deep-and-the-3-in-every-driver">Three deep, and the +3 in every driver</h2></div>
 <div class="prose reveal">
-<p>One API surface means tests, demos, and tools never fork renderer semantics. Lazy RT avoids dual 4K path-tracer OOM when you only needed deferred.</p>
+<p>The offline drivers all render more frames than the user asked for, by exactly three:</p>
+<div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 10 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/cornell_box.cpp#L164" target="_blank" rel="noopener">examples/cornell_box.cpp:164</a></div>
+<p>That constant is not a fudge factor. Frame resources are a ring of three, and the RT dispatch path reads pixels out of the same slot it is about to overwrite — after waiting on that slot&#x27;s fence, which is the fence signalled three calls ago.</p>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L19" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:19</a></div>
+<div class="citation-chip"><code class="citation-code">// Read back previous frame&#x27;s pixels</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L138" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:138</a></div>
+<p>So the CPU-visible pixel buffer always lags the GPU by the ring depth. With `samplesPerFrame` at its default of 1, one `render()` call adds one sample to the accumulator, and the last copy of a loop of `samples + 3` calls happens at `k = samples + 2`, delivering the image produced at `k = samples - 1` — the frame after which exactly `samples` samples have been integrated. The overshoot drains the pipeline and lands on the requested budget with nothing wasted.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/architecture-request-path-frame-ring.svg" alt="Conceptual timing of the three-slot staging ring and the resulting three-call readback lag; slot indices and the N+3 arithmetic follow from MAX_FRAMES_IN_FLIGHT and the copy-then-submit order in renderRTPipeline. Not a captured trace." loading="lazy" /><figcaption>Conceptual timing of the three-slot staging ring and the resulting three-call readback lag; slot indices and the N+3 arithmetic follow from MAX_FRAMES_IN_FLIGHT and the copy-then-submit order in renderRTPipeline. Not a captured trace.</figcaption></figure>
+<p>Deferred takes the other branch of that ternary and renders a fixed count that ignores the sample argument entirely — in raster mode the spp number on the command line does nothing. The constant is per-driver, not engine-wide: ten in `cornell_box`, thirty in `model_viewer`.</p>
+<div class="citation-chip"><code class="citation-code">const int frames = cli.useDeferred ? 30 : (samples + 3);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/model_viewer.cpp#L334" target="_blank" rel="noopener">examples/model_viewer.cpp:334</a></div>
+</div>
+<div class="section-rule"><h2 id="three-different-exits-from-the-gpu">Three different exits from the GPU</h2></div>
+<div class="prose reveal">
+<p>`getPixels()` has three exits behind one signature, and which one runs depends on the denoiser. `None`, `Atrous` and `DLSSRR` share the first: return the ring buffer described above. `None` does nothing to it; `Atrous` denoises the beauty image (`m_outputImage`) in place on the GPU, and the DLSSRR path, when it runs at all, tonemaps into that same image — so neither needs a readback of its own.</p>
+<div class="citation-chip"><code class="citation-code">if (m_denoiseMode == DenoiseMode::None || m_denoiseMode == DenoiseMode::Atrous ||</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L706" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:706</a></div>
+<p>NRD takes the second, and it touches neither the ring nor the accumulator: it copies the tracer&#x27;s RGBA8 tonemapped image — descriptor binding 30, already denoised and tonemapped on the GPU — straight into host memory behind a `vkQueueWaitIdle` on the graphics queue.</p>
+<div class="citation-chip"><code class="citation-code">VkImage srcImage = getNrdTonemappedAOVImage();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L1661" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:1661</a></div>
+<p>OIDN takes the third: a full `vkDeviceWaitIdle`, then three float readbacks — the accumulation image plus the albedo and normal AOVs — into host memory, where the CPU denoiser runs over them.</p>
+<div class="citation-chip"><code class="citation-code">bool ok = readbackImage(rtRenderer-&gt;getAccumImage(), beauty);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L622" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:622</a></div>
+<p>That third path matters because the offline profile denoises by default:</p>
+<div class="citation-chip"><code class="citation-code">.denoiseMode = DenoiseMode::OIDN,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/rt_settings.hpp#L60" target="_blank" rel="noopener">ohao/render/rt/rt_settings.hpp:60</a></div>
+<p>so a plain `cornell_box out.png 1024` writes a PNG denoised from an accumulator holding 1027 samples, not 1024 — the three drain frames are still real samples, and a readback that reads the accumulator directly sees them. The `+3` padding is what makes `--denoise=none` land on the exact budget; under the default it is three free samples on top of it. The result of either non-ring path is cached in a `mutable` buffer and invalidated at the end of every `render()`, so calling `getPixels()` twice per frame costs one denoise, not two. The call is declared `const` and is not: both non-ring branches `const_cast` away constness to allocate a command buffer, submit it, and block. The comment in the source is honest that this is only safe after `render()` returns on a single thread.</p>
+</div>
+<div class="section-rule"><h2 id="the-settings-reset-that-eats-your-overrides">The settings reset that eats your overrides</h2></div>
+<div class="prose reveal">
+<p>Once the loop starts, the renderer re-derives its RT settings from the pipeline object on every single frame:</p>
+<div class="citation-chip"><code class="citation-code">m_rtSettings = pipeline.getDefaultSettings();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L525" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:525</a></div>
+<p>An override a driver configured once does not survive even to its first dispatch. `renderRTPipeline` calls `prepareRTSceneForFrame` — the function that performs that reset — before it records the command buffer that dispatches the tracer:</p>
+<div class="citation-chip"><code class="citation-code">prepareRTSceneForFrame(pipeline, false);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L149" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:149</a></div>
+<p>Four values are explicitly re-injected around the reset — anisotropy strength and rotation, subsurface strength, and the interactive per-frame sample count:</p>
+<div class="citation-chip"><code class="citation-code">// so restore the user&#x27;s choice here (same pattern as aniso/SSS preservation).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L496" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:496</a></div>
+<p>The denoiser gets a different mechanism: `setDenoiseMode()` raises a sticky `m_denoiseModeOverridden` flag that blocks the per-frame resync, and the override is pushed down into the tracer&#x27;s own settings for exactly two modes, `Atrous` and `DLSSRR`.</p>
+<div class="citation-chip"><code class="citation-code">m_rtSettings.denoiseMode = m_denoiseMode;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L492" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:492</a></div>
+<p>`Atrous` needs it because the RT pipeline dispatches that denoiser itself, in place on the beauty image. `DLSSRR` rides the same branch, but the tree disagrees with itself about what it does: `path_tracer_render.cpp` holds a real NGX evaluate-and-tonemap block, compiled out unless the vendored NGX static library is present, while `getPixels` still carries a Phase-1 comment saying DLSSRR does not dispatch denoising at all.</p>
+<div class="citation-chip"><code class="citation-code">// Phase 1: DLSSRR does not yet dispatch denoising (foundation only) — the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L704" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:704</a></div>
+<p>OIDN is the one genuinely consumer-side mode — it runs on the CPU after readback. NRD is dispatched inside the RT pipeline like `Atrous`, but off a different gate: the tracer runs it whenever the denoiser initialized and the profile enables auxiliary AOVs, and never reads `denoiseMode` to decide, so pushing the override down would buy it nothing.</p>
+<div class="citation-chip"><code class="citation-code">if (m_nrdDenoiser &amp;&amp; m_renderSettings.enableAuxiliaryAOVs) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_render.cpp#L869" target="_blank" rel="noopener">ohao/render/rt/path_tracer_render.cpp:869</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Full scene uploads funnel through one routine — `updateSceneBuffers()` — reached from `setScene()`, from `ensureRTRenderer()`, and directly by callers that mutate a live scene, and there is one authority over RT behaviour (the active `IRTRenderPipeline`, reasserted every frame). Ordering mistakes around the upload fail *silently* — a skipped upload, a refused mode, a stale override — never with an error. When an OHAO driver renders an empty frame or ignores a flag, suspect call order before suspecting the shaders.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>Scene must not include vulkan.h</li>
-<li>initialize before setScene</li>
-<li>wait fence before staging readback</li>
-<li>TLAS instance order matches material rows after upload</li>
+<li>`initialize()` must precede `setScene()`. Reversed, the upload is skipped with no error; it is repaired only by a later `setRenderMode()` into an RT mode (via `ensureRTRenderer`) or by calling the public `updateSceneBuffers()` yourself.</li>
+<li>`setRenderMode()` may refuse. Read back `getRenderMode()` rather than trusting the value you passed; the examples do not, and print the requested mode.</li>
+<li>In the modes that return the ring buffer (None, Atrous, DLSSRR) the pixels trail the GPU by `MAX_FRAMES_IN_FLIGHT` calls. Reading them after fewer than four `render()` calls returns a staging slot that was never written.</li>
+<li>Any new per-run RT setting must be re-injected in `applyRTRenderSettings`, or the `getDefaultSettings()` reset inside `prepareRTSceneForFrame` silently reverts it before the next dispatch.</li>
+<li>The scene must be destroyed before the renderer. In `cornell_box` reverse declaration order already guarantees this — the `VulkanRenderer` is declared above the `unique_ptr&lt;Scene&gt;` — so the explicit `scene.reset()` before `return` is belt-and-braces, not the mechanism.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>The engine is a library: no editor host required.</p>
-<p>Examples are thin drivers over the same API surface.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/cornell_box.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/deferred_renderer.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/rt_settings.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_render.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/interactive.cpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

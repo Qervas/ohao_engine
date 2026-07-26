@@ -33,40 +33,110 @@
         <p>Contracts that break pixels silently if violated.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#notes">Notes</a></li></ol>
+        <ol><li><a href="#what-a-violation-actually-looks-like">What a violation actually looks like</a></li><li><a href="#the-compile-time-tier-stops-at-the-language-boundary">The compile-time tier stops at the language boundary</a></li><li><a href="#the-tier-that-does-cross-the-wall-is-off-by-default">The tier that does cross the wall is off by default</a></li><li><a href="#the-pixel-tier-is-real-coarse-and-currently-red">The pixel tier is real, coarse, and currently red</a></li><li><a href="#and-nothing-starts-any-of-them">And nothing starts any of them</a></li><li><a href="#what-the-unguarded-contracts-have-in-common">What the unguarded contracts have in common</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="what-a-violation-actually-looks-like">What a violation actually looks like</h2></div>
 <div class="prose reveal">
-<p>Cross-module invariants are product rules that break pixels silently if violated — not style preferences.</p>
-<p>They couple scene upload, hit shaders, denoisers, and the frame ring into one coherent system.</p>
+<p>Nothing here segfaults when two modules disagree. The index buffer still has entries at the offset you computed, the material row still parses as three `vec4`s, the descriptor set still binds, the frame still presents. You get a picture — the wrong one, off by an amount that reads as a lighting decision. The module chapters explain each mechanism in isolation; the question none of them can answer is the cross-cutting one: *what would have caught this?*</p>
+<p>Four things in the repository could, in principle. This page audits their reach.</p>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="the-compile-time-tier-stops-at-the-language-boundary">The compile-time tier stops at the language boundary</h2></div>
 <div class="prose reveal">
-<p>Documented in STATUS and chapter contracts; enforced by layout asserts, golden images, and careful descriptor writes.</p>
-<p>Upload path packs materials in the same order BLAS instances are built.</p>
-<p>NRD packing happens in raygen via nrd_frontend.glsl before REBLUR sees the image.</p>
+<p>`OHAO_ASSERT_GPU_LAYOUT(Type, Bytes)` is the engine&#x27;s one *named* structural contract primitive. It pairs a `GpuPod` requirement — trivially copyable **and** standard layout, so that `memcpy` into mapped device memory is defined and the first member is guaranteed to sit at offset 0 — with a `sizeof` check against a canonical constant.</p>
+<div class="citation-chip"><code class="citation-code">#Type &quot; must be trivially copyable standard-layout for GPU&quot;); \</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/concepts.hpp#L86" target="_blank" rel="noopener">ohao/core/concepts.hpp:86</a></div>
+<p>Five call sites carry the macro, covering `ObjectPushConstants` (240 bytes), `LightData` (128), `PTPushConstants` (256), `GPULight` (80) and `MeshBufferInfo` (16). The same contract is asserted five more times without it: each of the four push-constant structs of `NrdCinematicPost`, which compiles only with NRD enabled, gets a bare `static_assert` on its byte size,</p>
+<div class="citation-chip"><code class="citation-code">static_assert(sizeof(CompositePC) == 176, &quot;CompositePC must be 176B&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/nrd_cinematic.cpp#L84" target="_blank" rel="noopener">ohao/render/rt/denoise/nrd_cinematic.cpp:84</a></div>
+<p>and `PBRMaterialParams` gets a `% 16 == 0` alignment assert beside its `GpuPod` check. Ten host-side size or alignment assertions, then — and all ten are assertions about C++ types, evaluated by the C++ compiler. No build step reflects the compiled SPIR-V. Set against the surface they guard — the path tracer alone declares a thirty-six-entry descriptor set layout, and the buffers behind those entries are re-declared independently in the raygen, closest-hit, any-hit and miss stages —</p>
+<div class="citation-chip"><code class="citation-code">VkDescriptorSetLayoutBinding bindings[36] = {};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer_descriptors.cpp#L21" target="_blank" rel="noopener">ohao/render/rt/path_tracer_descriptors.cpp:21</a></div>
+<p>ten host-side checks are still a thin instrument. They catch *someone added a float to the struct*. They are blind to *someone reordered the GLSL block*, and blind by construction rather than by omission.</p>
+<p>`engine_tests` sits in the same tier and inherits the same ceiling: its GPU-layout case is a handful of `static_assert`s and constant comparisons over `layout_meta.hpp`, checking hand-computed answers and never touching a pipeline.</p>
 </div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
+<div class="section-rule"><h2 id="the-tier-that-does-cross-the-wall-is-off-by-default">The tier that does cross the wall is off by default</h2></div>
 <div class="prose reveal">
-<p>Silent pink, black frames, and OOM are worse than a loud assert. Invariants make failure modes diagnosable.</p>
+<p>The Vulkan validation layers are the only mechanism in the stack that reads both sides: they compare the pipeline layout against the SPIR-V interface, check descriptor types and counts, and enforce the structural rules of descriptor indexing. Instance creation requests `VK_LAYER_KHRONOS_validation` only when an environment variable is set.</p>
+<div class="citation-chip"><code class="citation-code">// Validation layers — enable with OHAO_VALIDATION=1 env var</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L28" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:28</a></div>
+<p>So the default for every example binary, every golden render and every session in the interactive viewer is a run with no cross-language checking at all. Turn it on and the backlog arrives at once: a single `OHAO_VALIDATION=1 ./build/cornell_box out.png 1` here emits 74 validation errors across 14 distinct VUIDs — image layouts incompatible with the usage flags they were created with, `vkCmdPipelineBarrier2` calls on a device that never enabled `synchronization2`, a descriptor set rewritten while a command buffer holding it is still pending, buffers outliving `vkDestroyDevice`.</p>
+<p>Two of those 14 are the failure class this page is about, and only the validation layer names either. The path tracer&#x27;s layout still flags binding 12 as the variable-count binding while bindings up to 35 are declared behind it, which Vulkan does not permit. And the cascade shadow pass creates a pipeline whose geometry stage reads a uniform block at set 0, binding 0,</p>
+<div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 0) uniform CascadeMatrices {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shadow/shadow_csm.geom#L14" target="_blank" rel="noopener">shaders/shadow/shadow_csm.geom:14</a></div>
+<p>that the pipeline layout never declares: `csm_pass.cpp` fills in a push-constant range and leaves `setLayoutCount` at its zero-initialised default, so the pass owns no descriptor set at all and never binds one.</p>
+<div class="citation-chip"><code class="citation-code">pipelineLayoutInfo.pushConstantRangeCount = 1;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/deferred/csm_pass.cpp#L435" target="_blank" rel="noopener">ohao/render/deferred/csm_pass.cpp:435</a></div>
+<p>`vkCreateGraphicsPipelines` reports it as `VUID-VkGraphicsPipelineCreateInfo-layout-07988` — SPIR-V uses a descriptor the host side does not know about, which is exactly the C++/GLSL disagreement no compile-time assert can reach. Both errors have survived precisely because nothing launches with validation on.</p>
+</div>
+<div class="section-rule"><h2 id="the-pixel-tier-is-real-coarse-and-currently-red">The pixel tier is real, coarse, and currently red</h2></div>
+<div class="prose reveal">
+<p>The golden corpus renders two scenes with the denoiser disabled, so what is pinned is raw deterministic beauty rather than a filter&#x27;s output:</p>
+<div class="citation-chip"><code class="citation-code">&quot;command&quot;: &quot;./build/cornell_box {out} 16 --denoise=none&quot;,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/golden/manifest.json#L6" target="_blank" rel="noopener">tests/golden/manifest.json:6</a></div>
+<p>and compares them after downscaling to 640 px wide,</p>
+<div class="citation-chip"><code class="citation-code">DOWNSCALE_WIDTH = 640          # compare at reduced res: averages the FP ghost away + tiny goldens</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/golden/render_golden.py#L35" target="_blank" rel="noopener">tests/golden/render_golden.py:35</a></div>
+<p>against two thresholds that must **both** hold: a per-channel maximum of 4 LSB and an allowance of 1 % differing pixels.</p>
+<div class="citation-chip"><code class="citation-code">return s is not None and s[&quot;max_abs&quot;] &lt;= max_abs_diff and s[&quot;diff_frac&quot;] &lt;= max_diff_frac</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/golden/render_golden.py#L73" target="_blank" rel="noopener">tests/golden/render_golden.py:73</a></div>
+<p>The conjunction is stricter than the 1 % headline suggests. `max_abs` is a single maximum over the whole frame, so a change that moves one compare-resolution channel by 5 LSB fails regardless of how little area it touches. Sparseness alone saves nothing; only a change that is simultaneously sub-threshold in magnitude *and* sparse gets through.</p>
+<p>Where the tier is genuinely coarse is resolution and coverage. The 1920→640 reduction is a bilinear resample, so a difference confined to a handful of full-resolution pixels is averaged against its neighbours before the maximum is taken. And the corpus is two scenes, both offline path traces into a closed box — nothing in it renders the deferred pipeline, a denoiser, or an HDR environment. The manifest&#x27;s own comment concedes the shape of that problem, asking that every fixed bug add a scene so it cannot silently regress.</p>
+<p>The 4-LSB tolerance is justified in the harness as absorbing a floating-point floor from non-associative GPU reduction order,</p>
+<div class="citation-chip"><code class="citation-code">DEFAULT_MAX_ABS_DIFF = 4       # per-channel LSB at compare-res; absorbs the FP floor with margin</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/golden/render_golden.py#L33" target="_blank" rel="noopener">tests/golden/render_golden.py:33</a></div>
+<p>which is the standard argument, and the floor the docstring quotes is stated for a 1920×1080 frame — before the downscale. At the resolution the harness actually compares at, the ghost does not show up here: `--selftest`, which renders each scene twice and diffs the two renders against each other, reports `max_abs=0 diff_px=0` on both. Two consecutive renders are bit-identical at 640 px.</p>
+<p>Which makes the state of the corpus unambiguous: it is red. One run here fails both scenes, and not marginally — `cornell_box` at `max_abs=32` against a limit of 4 with 65 % of compare-resolution pixels differing, `metal_rough_spheres` at `max_abs=158` with 93 % differing. The selftest rules out nondeterminism, so this is real drift. The goldens were last regenerated when the C++20 RT refactor landed; the engine has moved since, and no automation re-ran the check.</p>
+</div>
+<div class="section-rule"><h2 id="and-nothing-starts-any-of-them">And nothing starts any of them</h2></div>
+<div class="prose reveal">
+<p>The repository carries one CI workflow and it publishes this site. There is no build job, no `ctest` invocation, no golden run, no installed git hook. `engine_tests` and `render_golden.py` both still work — the second one just told us something true — and both run only when a person types the command.</p>
+<p>The audit closes on an honest total, one line per mechanism. The asserts are the only tier that fires by itself, on every compile, and they stop at the language boundary. `engine_tests` inherits that same ceiling *and* has to be launched. The validation layers are the only thing in the stack that reads both sides, and they are off unless an environment variable is set. The golden corpus is the only tier that judges a finished image, and it is coarse, manual, and failing.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/architecture-invariants-enforcement-reach.svg" alt="Conceptual: how far each of the four mechanisms reaches across the C++/SPIR-V boundary. Bar lengths are schematic; the tolerances and the opt-in flag are read from render_golden.py and device_setup.cpp, not measured." loading="lazy" /><figcaption>Conceptual: how far each of the four mechanisms reaches across the C++/SPIR-V boundary. Bar lengths are schematic; the tolerances and the opt-in flag are read from render_golden.py and device_setup.cpp, not measured.</figcaption></figure>
+</div>
+<div class="section-rule"><h2 id="what-the-unguarded-contracts-have-in-common">What the unguarded contracts have in common</h2></div>
+<div class="prose reveal">
+<p>Two shapes account for nearly all of them.</p>
+<p>**Positional joins.** No array on the ray-tracing path carries a key. Each TLAS instance&#x27;s custom index is a running triangle count accumulated by one traversal of the scene&#x27;s `unordered_map`,</p>
+<div class="citation-chip"><code class="citation-code">globalTriOffset += it2-&gt;second.indexCount / 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L900" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:900</a></div>
+<p>and the hit shaders recover a global triangle id by adding `gl_PrimitiveID` to it, then use that single number to index the shared index buffer and the per-triangle material table.</p>
+<div class="citation-chip"><code class="citation-code">uint globalTriID = gl_InstanceCustomIndexEXT + gl_PrimitiveID;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_closesthit.rchit#L48" target="_blank" rel="noopener">shaders/rt/pt_closesthit.rchit:48</a></div>
+<p>The join is correct only because several independent walks over that same map admit the same actors in the same order. Nothing downstream can detect a mismatch — there is no id to compare against.</p>
+<p>**Hand-copied constants.** The frame-ring depth is named once,</p>
+<div class="citation-chip"><code class="citation-code">constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.hpp#L19" target="_blank" rel="noopener">ohao/render/frame/frame_resources.hpp:19</a></div>
+<p>and then re-typed as a bare `+ 3` wherever a caller drives the render loop itself, because the pixel buffer it reads back is the frame submitted three renders ago:</p>
+<div class="citation-chip"><code class="citation-code">for (int s = 0; s &lt; spp + 3; s++)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L221" target="_blank" rel="noopener">examples/turntable.cpp:221</a></div>
+<p>Four offline examples spell it that way, and so does the inverse-rendering session inside the engine library, which is not an example program at all:</p>
+<div class="citation-chip"><code class="citation-code">const int frames = budget.spp + 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/render_session.hpp#L58" target="_blank" rel="noopener">ohao/inverse/render_session.hpp:58</a></div>
+<p>Change the named constant and five call sites quietly render the wrong sample count. The no-texture sentinel shows the same pattern with the polarity reversed: it *has* a canonical name,</p>
+<div class="citation-chip"><code class="citation-code">static constexpr uint32_t    kNoTexture = 0xFFFFFFFFu;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L39" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:39</a></div>
+<p>and no callers. Every producer re-types the value instead — `0xFFFFFFFFu` in the RT material upload, `UINT32_MAX` in the raster push-constant fill, the literal again in each shader that tests it. The value is load-bearing in a dozen places and spelled two ways; the named constant is decoration.</p>
+<p>Two ordering rules round out the set, and both are repaired in code rather than asserted. A path-tracer profile is created lazily, so a scene upload that ran before the profile existed has to be replayed into the new descriptor set:</p>
+<div class="citation-chip"><code class="citation-code">// forEachRTRenderer was a no-op then — re-upload so materials, textures,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L436" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:436</a></div>
+<p>and the light buffer&#x27;s 16-byte header is re-`memset` to `0xFF` on every upload, so the environment-map index has to be stamped back in even on the path where the HDR itself is not reloaded:</p>
+<div class="citation-chip"><code class="citation-code">// allocated light buffer (header is memset to 0xFF each upload).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/light_upload.cpp#L289" target="_blank" rel="noopener">ohao/gpu/vulkan/light_upload.cpp:289</a></div>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Positional arrays are the right call and should not be &quot;fixed&quot;. Giving each triangle a key — an actor id or material handle stored beside the index — buys a second SSBO fetch in the closest-hit shader, on the hottest path in the engine, to defend against a class of bug that a human catches the first time they look at the render. The rejected alternative is not free and its benefit is small. What the choice really costs is that the ordering contract now lives in prose instead of in a type; the cheap way to buy it back is a debug-only parallel array of actor ids compared once per upload, not a key column in the hot path.</p></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>Every invariant in this engine that spans the C++/GLSL boundary is enforced by a person reading two files. The compile-time asserts stop at the boundary, validation is opt-in, the golden corpus is coarse and currently failing, and no automation starts any of them. Read every cross-module claim on these pages as something to re-verify against the code, not as something the build guarantees.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>TLAS instance order == material row order</li>
-<li>Bindless 0xFFFFFFFF = no texture</li>
-<li>Frame ring: wait fence before staging readback</li>
-<li>NRD: YCoCg + norm hit-dist (not linear RGB)</li>
-<li>Lazy PathTracer profiles (no dual 4K OOM)</li>
-<li>Same PBR language for deferred and PT</li>
+<li>The geometry walk and the material-ID walk must admit the same actors in the same order. They currently do not use the same predicate: geometry upload requires `isVisible()`, the material-ID walk does not. One hidden mesh shifts every later instance&#x27;s material lookup, and no mechanism in the audit above can see it.</li>
+<li>`render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before the pixel buffer holds real content. Four examples and `ohao/inverse/render_session.hpp` encode this as a literal `+ 3`; changing the constant without changing all five silently changes sample counts.</li>
+<li>A lazily created RT profile owns no scene data until `updateSceneBuffers()` is replayed into it. `setScene()` and `updateSceneBuffers()` usually run before any `PathTracer` exists, and `forEachRTRenderer` iterates nothing when no profile is alive, so without the replay the new profile&#x27;s descriptors are never written at all.</li>
+<li>The light buffer&#x27;s header is rewritten on every upload, so the env-map index and intensity scale must be re-stamped even when the HDR is not reloaded — otherwise the environment silently disappears on the next scene change.</li>
+<li>Adding a descriptor binding numbered above 12 to the RT layout invalidates the variable-count flag on binding 12. Only the validation layer will tell you, and only if `OHAO_VALIDATION` is set in the environment.</li>
 </ul>
 </div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>These are product rules, not style preferences. Documented in STATUS and chapter contracts.</p>
-</div>
-
+      <div class="section-rule"><h2 id="sources">Source files</h2></div>
+      <div class="file-map reveal">
+        <div class="row"><code>ohao/core/concepts.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/denoise/nrd_cinematic.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/rt/path_tracer_descriptors.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/device_setup.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/shadow/shadow_csm.geom</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>tests/golden/manifest.json</code><span class="desc"></span></div>
+        <div class="row"><code>tests/golden/render_golden.py</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>examples/turntable.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/render_session.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
+      </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>
         <p>Parent hub for the full pipeline narrative; this page is the file-level design unit.

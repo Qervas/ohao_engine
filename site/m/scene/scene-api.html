@@ -33,41 +33,112 @@
         <p>createActor, lookup, tags, physics world ownership, serialize hooks.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#what">What</a></li><li><a href="#how">How</a></li><li><a href="#why">Why</a></li><li><a href="#notes">Notes</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#what-in-the-scene-actually-means">What &quot;in the scene&quot; actually means</a></li><li><a href="#registration-not-construction-is-what-connects-an-actor">Registration, not construction, is what connects an actor</a></li><li><a href="#the-hierarchy-that-never-registers-its-children">The hierarchy that never registers its children</a></li><li><a href="#two-maps-and-the-one-that-drifts">Two maps, and the one that drifts</a></li><li><a href="#change-tracking-with-no-consumer">Change tracking with no consumer</a></li><li><a href="#the-physics-world-you-always-get-and-never-step">The physics world you always get and never step</a></li><li><a href="#defaultscenefactory-and-the-scale-trap-it-documents">DefaultSceneFactory, and the scale trap it documents</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
-<div class="section-rule"><h2 id="what">What</h2></div>
+<div class="section-rule"><h2 id="what-in-the-scene-actually-means">What &quot;in the scene&quot; actually means</h2></div>
 <div class="prose reveal">
-<p>Scene owns actors, registries, optional PhysicsWorld, tags, and descriptor metadata for serialization hooks.</p>
+<p>Every pass that needs geometry begins at one accessor — the id-keyed actor map:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] const ActorMap&amp; getAllActors() const noexcept { return actors; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.hpp#L70" target="_blank" rel="noopener">ohao/scene/scene.hpp:70</a></div>
+<p>Vertex/index upload, RT BLAS and TLAS construction, light-buffer assembly, the GBuffer draw loop, CSM shadow culling and the deferred renderer&#x27;s brightest-light search each iterate that `unordered_map` themselves and interrogate every actor for the component they care about, rather than reading any pre-built list:</p>
+<div class="citation-chip"><code class="citation-code">if (meshComponent &amp;&amp; meshComponent-&gt;getModel() &amp;&amp; meshComponent-&gt;isVisible()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/scene_upload.cpp#L41" target="_blank" rel="noopener">ohao/gpu/vulkan/scene_upload.cpp:41</a></div>
+<p>So membership has exactly one operational definition: present as a value in `actors`. Not &quot;parented under the root&quot;, not &quot;listed in the mesh registry&quot;. `PickingSystem` iterates the same map, but `pickActor` and `pickAllActors` have no callers in `ohao/`, `examples/` or `tests/` — the class is reached only by the `render_module.hpp` umbrella include, so it is scaffolding, not a pass. The rest of this page is about what puts an actor in the map — and about the parts of the class that look load-bearing and are not.</p>
+<div class="why-callout reveal"><div class="why-label">Why</div><p>Scene *does* maintain a `meshComponents` vector for exactly this traversal, kept current by the add/remove hooks. No pass uses it. The passes are keyed by actor, not by component: `scene_upload` stores its `MeshBufferInfo` under `actor-&gt;getID()` and needs the actor&#x27;s transform anyway, so a bare `MeshComponent*` list would force an owner back-pointer walk per entry — the same hash lookup, with one more invariant to keep synchronized. The engine trades a per-actor `getComponent&lt;T&gt;()` probe for a registry that can never go stale because nobody trusts it.</p></div>
 </div>
-<div class="section-rule"><h2 id="how">How</h2></div>
+<div class="section-rule"><h2 id="registration-not-construction-is-what-connects-an-actor">Registration, not construction, is what connects an actor</h2></div>
 <div class="prose reveal">
-<p>createActor / createActorWithComponents / addActor / removeActor</p>
-<p>find by id, name, or tag; forEach helpers for non-hot iteration</p>
-<p>update(dt) walks actors then steps physics if present</p>
+<p>`createActor` funnels into `registerActor`, which does three things: insert into the id map, insert into the name map, and hand the actor a raw back-pointer to the scene.</p>
+<div class="citation-chip"><code class="citation-code">actor-&gt;setScene(this);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L391" target="_blank" rel="noopener">ohao/scene/scene.cpp:391</a></div>
+<p>The third is the load-bearing one. `Actor::onComponentAdded` forwards a component to the scene only while that back-pointer is non-null, and `Scene::onPhysicsComponentAdded` is the only place in the tree that hands a `PhysicsComponent` a non-null world:</p>
+<div class="citation-chip"><code class="citation-code">component-&gt;setPhysicsWorld(physicsWorld.get());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L183" target="_blank" rel="noopener">ohao/scene/scene.cpp:183</a></div>
+<p>The rigid body is created inside that setter, not by the hook&#x27;s follow-up `initialize()`. `Actor::addComponent` has already run `component-&gt;initialize()` for any active actor before `onComponentAdded` fires, so `m_initialized` is true by the time the world arrives and `setPhysicsWorld` calls `createRigidBody()` itself:</p>
+<div class="citation-chip"><code class="citation-code">if (m_physicsWorld &amp;&amp; m_initialized) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/components/physics_component.cpp#L361" target="_blank" rel="noopener">ohao/physics/components/physics_component.cpp:361</a></div>
+<p>The `component-&gt;initialize()` the hook issues two lines later reaches `createRigidBody`&#x27;s &quot;Rigid body already exists&quot; early return. World injection is uniquely the scene&#x27;s; initialization is not.</p>
+<p>Add-order does not matter, though nothing in the header says so. `Actor::setScene` calls `onAddedToScene`, which replays `onComponentAdded` over every component the actor already carries:</p>
+<div class="citation-chip"><code class="citation-code">onComponentAdded(component);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/actor/actor.cpp#L252" target="_blank" rel="noopener">ohao/scene/actor/actor.cpp:252</a></div>
+<p>So building a detached actor, calling `addComponent&lt;PhysicsComponent&gt;()`, and only then calling `scene-&gt;addActor(actor)` delivers the notification and creates the body normally — the replay is what makes it work. **What breaks is an actor that is never registered at all**: `scene` stays null, `onComponentAdded` returns without forwarding anything, and the component silently gets no world, no rigid body, and no diagnostic.</p>
+<p>The legacy `addObject` alias manufactures exactly that state from inside the class: it writes both maps by hand and never calls `setScene`, so an actor inserted that way renders — it is in `actors` — yet never delivers a single component notification.</p>
+<div class="citation-chip"><code class="citation-code">void addObject(std::string_view name, Actor::Ptr actor) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.hpp#L95" target="_blank" rel="noopener">ohao/scene/scene.hpp:95</a></div>
+<p>It has no callers. Leave it that way.</p>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`setScene` is the edge. The maps make an actor visible to the renderer; the back-pointer makes it visible to the scene&#x27;s own services. `registerActor` is the only entry path that does both — `addObject` writes the maps and skips the pointer.</p></div>
+</div>
+<div class="section-rule"><h2 id="the-hierarchy-that-never-registers-its-children">The hierarchy that never registers its children</h2></div>
+<div class="prose reveal">
+<p>`addActor` is recursive in intent and not in effect. `registerActorHierarchy` registers the actor, then walks `actor-&gt;getChildren()` — but the loop body opens with `actors.find(childPtr-&gt;getID())`, and the recursive call sits inside that hit, so it only descends into a child it can *already* find in the id map:</p>
+<div class="citation-chip"><code class="citation-code">for (auto* childPtr : actor-&gt;getChildren()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L412" target="_blank" rel="noopener">ohao/scene/scene.cpp:412</a></div>
+<p>A freshly parented child fails that lookup and is never inserted. The component half is unaffected, because `Actor::setScene` propagates down the child list on its own: the child&#x27;s mesh and physics components do reach the scene&#x27;s hooks. The child *actor* is what goes missing — absent from `getAllActors`, `findActor`, `actorCount`, and therefore never drawn, never in the BLAS, never in the light buffer.</p>
+<p>The asymmetry has never fired, because nothing outside `actor.cpp` calls `setParent` or `addChild`: every scene the engine ships is flat, one actor per mesh. The constructor&#x27;s own `&quot;World&quot;` root is the sole hierarchy artefact, and it is registered like any other actor — which is why `actorCount()` is 1 on a brand-new scene. `empty()` turns true again only once both maps are cleared: `removeAllActors()`, which `destroy()` and therefore the destructor both call, or removing the root itself.</p>
+<div class="citation-chip"><code class="citation-code">registerActor(rootNode);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L29" target="_blank" rel="noopener">ohao/scene/scene.cpp:29</a></div>
+</div>
+<div class="section-rule"><h2 id="two-maps-and-the-one-that-drifts">Two maps, and the one that drifts</h2></div>
+<div class="prose reveal">
+<p>The name index is a plain denormalized map:</p>
+<div class="citation-chip"><code class="citation-code">using ActorNameMap = std::unordered_map&lt;std::string, Actor::Ptr&gt;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.hpp#L47" target="_blank" rel="noopener">ohao/scene/scene.hpp:47</a></div>
+<p>It has no transparent hasher, so every `findActor(name)` and `removeActor(name)` materializes a `std::string` from the `string_view` to probe it. The `string_view` in the signatures is caller ergonomics, not an allocation-free lookup path.</p>
+<p>The sharper problem is that the key is a snapshot of the name taken at registration, and nothing tells the scene when a name changes — `setName` is a bare assignment on `SceneObject` with no callback:</p>
+<div class="citation-chip"><code class="citation-code">void setName(std::string_view n) { name = std::string(n); }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene_object.hpp#L24" target="_blank" rel="noopener">ohao/scene/scene_object.hpp:24</a></div>
+<p>A rename therefore desynchronizes the index, and removal compounds it: `unregisterActor` erases under the actor&#x27;s *current* name, which is no longer a key, so the old entry survives — a `shared_ptr` keeping a removed actor alive and still answering `findActor()` under its former name.</p>
+<div class="citation-chip"><code class="citation-code">actorsByName.erase(actor-&gt;getName());</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L397" target="_blank" rel="noopener">ohao/scene/scene.cpp:397</a></div>
+<p>Duplicate names collide the same way: the second registration overwrites the first, so one actor becomes unreachable by name while both keep rendering out of the id map, which tolerates duplicates by construction. Name uniquely at creation; do not rename a registered actor.</p>
+</div>
+<div class="section-rule"><h2 id="change-tracking-with-no-consumer">Change tracking with no consumer</h2></div>
+<div class="prose reveal">
+<p>The mesh hooks maintain their vector and raise `needsBufferUpdate`; `MeshComponent::setModel` raises it again through `onMeshComponentChanged`. Nothing reads the flag. `getMeshComponents()`, `getPhysicsComponents()`, `hasBufferUpdateNeeded()` and `markBuffersDirty()` have no callers outside the header, and `Scene::updateSceneBuffers()` only clears the flag and returns true:</p>
+<div class="citation-chip"><code class="citation-code">// GPU buffer updates are handled by VulkanRenderer::updateSceneBuffers()</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L381" target="_blank" rel="noopener">ohao/scene/scene.cpp:381</a></div>
+<p>The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test and each of `diff_fit`, `dense_map_fit`, `dense_orm_fit` and `dense_metal_fit` re-upload by hand immediately after `setScene`, and `ohao::diff::forwardStudioDeferred` re-uploads on *every* forward render, which is what puts a full scene upload inside `diff_fit`&#x27;s finite-difference gradient loop:</p>
+<div class="citation-chip"><code class="citation-code">(void)renderer.updateSceneBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/diff/diff_vk_forward.hpp#L66" target="_blank" rel="noopener">ohao/render/diff/diff_vk_forward.hpp:66</a></div>
+<p>Scene-side dirty tracking is bookkeeping that no consumer ever polls; if you add one, note that it cannot observe transform edits at all, only component add/remove/model-swap.</p>
+<figure class="unit-figure reveal"><img src="../../assets/units/scene-scene-api-registry-readers.svg" alt="Which of Scene&#x27;s five pieces of state anything actually reads. Conceptual map, established by grepping the tree for each accessor — not a measurement." loading="lazy" /><figcaption>Which of Scene&#x27;s five pieces of state anything actually reads. Conceptual map, established by grepping the tree for each accessor — not a measurement.</figcaption></figure>
+</div>
+<div class="section-rule"><h2 id="the-physics-world-you-always-get-and-never-step">The physics world you always get and never step</h2></div>
+<div class="prose reveal">
+<p>The constructor unconditionally builds a `PhysicsWorld`, fills a `PhysicsSettings` with gravity, and initializes it:</p>
+<div class="citation-chip"><code class="citation-code">physicsWorld-&gt;initialize(settings);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L35" target="_blank" rel="noopener">ohao/scene/scene.cpp:35</a></div>
+<p>Two things are true of that line that the call site does not suggest. The settings are discarded — the overload it resolves to is a backward-compatibility template that ignores its argument entirely and forwards to the no-arg `initialize()`:</p>
+<div class="citation-chip"><code class="citation-code">[[nodiscard]] bool initialize(const T&amp; /*unused_settings*/) { initialize(); return true; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.hpp#L112" target="_blank" rel="noopener">ohao/physics/world/physics_world.hpp:112</a></div>
+<p>And `PhysicsWorld`&#x27;s own constructor has already called `initialize()`, whose re-entry guard tests for a state that `initialize()` itself leaves set — so this is a second initialization, constructing a second Jolt backend and dropping the first. Behaviour is unchanged today only because `PhysicsWorldConfig` defaults to the same -9.81 m/s². A scene asking for different gravity would be silently ignored.</p>
+<p>The world is also never advanced. `Scene::updatePhysics` steps the world and ticks every registered physics component; its sole caller is a thin renderer forward:</p>
+<div class="citation-chip"><code class="citation-code">m_scene-&gt;updatePhysics(deltaTime);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L372" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:372</a></div>
+<p>which nothing in `examples/`, `tests/` or `ohao/` calls. Even reached, `PhysicsWorld::step` returns immediately unless the simulation state is `RUNNING`, and only the Python test bindings ever set it:</p>
+<div class="citation-chip"><code class="citation-code">return;  // No simulation when paused/stopped</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/physics/world/physics_world.cpp#L130" target="_blank" rel="noopener">ohao/physics/world/physics_world.cpp:130</a></div>
+<p>`Scene::update` — the actor tick — has no callers anywhere. For every shipping example the Scene is a static container: built once, uploaded once, rendered. `getPhysicsWorld()` never returns null, so code should not treat physics as optional, but it should not assume it is live either.</p>
+</div>
+<div class="section-rule"><h2 id="defaultscenefactory-and-the-scale-trap-it-documents">DefaultSceneFactory, and the scale trap it documents</h2></div>
+<div class="prose reveal">
+<p>The factory&#x27;s three entry points (`createBlenderLikeScene`, `createEmptyScene`, `createPhysicsTestScene`) have no callers in the tree, and unlike a dead *function* whose formula lives on inlined elsewhere, there is no second copy of these layouts: every example and both inverse-rendering builders construct `Scene` directly. They are editor-era scaffolding.</p>
+<p>What survives them is a hazard worth reading. `ComponentFactory` gives a `Platform` primitive 2.0 × 0.2 × 2.0 half-extents:</p>
+<div class="citation-chip"><code class="citation-code">physics-&gt;createBoxShape(glm::vec3(2.0f, 0.2f, 2.0f)); // width=4, height=0.4, depth=4</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/component/component_factory.cpp#L208" target="_blank" rel="noopener">ohao/scene/component/component_factory.cpp:208</a></div>
+<p>Setting the transform&#x27;s scale does not rescale that shape, so both `Platform` sites in the factory multiply the half-extents by the scale and call `createBoxShape` a second time by hand. The `Cube` is the one `setScale` that skips the rebuild, and only because its scale is identity — change that literal and the collision box stops matching the mesh:</p>
+<div class="citation-chip"><code class="citation-code">transform-&gt;setScale(glm::vec3(1.0f, 1.0f, 1.0f));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/default_scene_factory.cpp#L32" target="_blank" rel="noopener">ohao/scene/default_scene_factory.cpp:32</a></div>
+<p>Transform edits do not push to the body either, so every actor the factory repositions is followed by `updateRigidBodyFromTransform()`. The exceptions are the three light actors: `LightOnlyPack` gives them nothing but a `LightComponent`, so there is no body to sync.</p>
+<p>Anyone wiring physics through the Scene API inherits both of those manual steps.</p>
+</div>
+<div class="section-rule"><h2 id="contracts">Contracts</h2></div>
+<div class="prose reveal">
 <ul>
-<li>createActor / createActorWithComponents(primitive)</li>
-<li>addActor / removeActor</li>
-<li>update(dt) walks actors → components</li>
-<li>Physics world step if present</li>
+<li>`getAllActors()` is the only traversal the renderer performs. An actor absent from that map does not exist to any pass, whatever its parent or components say.</li>
+<li>Registration, not component order, is what wires an actor up. `Actor::setScene` replays `onComponentAdded` over components already attached, so `addComponent&lt;PhysicsComponent&gt;()` works either side of `addActor` — but an actor that is never registered has a null back-pointer, drops every notification, and never gets a world or a rigid body.</li>
+<li>Children of a registered actor are not themselves registered. Attach every renderable actor to the scene directly.</li>
+<li>Actor names are snapshotted at registration. Renaming a registered actor leaks a stale name-map entry that outlives removal; duplicate names silently shadow each other.</li>
+<li>`getPhysicsWorld()` is never null — the constructor always builds one — but nothing in the C++ path steps it, and the gravity passed at construction is discarded.</li>
+<li>`Scene::updateSceneBuffers()` does not touch the GPU. Call `VulkanRenderer::updateSceneBuffers()` after mutating the scene; nothing polls the scene&#x27;s dirty flag for you.</li>
 </ul>
-</div>
-<div class="section-rule"><h2 id="why">Why</h2></div>
-<div class="prose reveal">
-<p>One ownership root prevents dangling components and double physics worlds.</p>
-</div>
-<div class="section-rule"><h2 id="notes">Notes</h2></div>
-<div class="prose reveal">
-<p>Scene owns Actor maps (by id and name), mesh/physics registries, and optional PhysicsWorld.</p>
-<p>string_view at query boundaries; owned strings in maps. Tags via findActorsByTag.</p>
-<p>scene_module.hpp is the module umbrella include for consumers.</p>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/scene/scene.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/scene.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/scene/default_scene_factory.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/components/physics_component.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/actor/actor.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/scene_object.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/diff/diff_vk_forward.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/world/physics_world.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/physics/world/physics_world.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/component/component_factory.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/default_scene_factory.cpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/scene/default_scene_factory.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/scene_module.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

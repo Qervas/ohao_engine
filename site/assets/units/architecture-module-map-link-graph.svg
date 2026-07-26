@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 430" class="unit-diagram" role="img" aria-label="Dependency graph of the six OHAO static archives. Solid arrows are declared CMake target_link_libraries edges; dashed arrows are include-only edges with no matching link edge. Three cycles: gpu to render, scene to physics in both directions, and scene back up into gpu_vulkan. Third-party edges such as Jolt and miniaudio are not drawn.">
+  <rect x="0" y="0" width="720" height="430" fill="#0f1419"/>
+
+  <defs>
+    <marker id="mmDecl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7dba8a"/>
+    </marker>
+    <marker id="mmUndecl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c4784a"/>
+    </marker>
+  </defs>
+
+  <text x="24" y="30" font-family="DM Sans,sans-serif" font-size="15" fill="#e8e2d6">Declared link graph vs. actual include graph</text>
+
+  <!-- ohao_renderer -->
+  <rect x="150" y="52" width="210" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="255" y="74" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#e8e2d6">ohao_renderer</text>
+  <text x="255" y="89" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">deferred · rt · graph · camera · diff</text>
+
+  <!-- ohao_gpu_vulkan -->
+  <rect x="150" y="152" width="210" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="255" y="174" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#e8e2d6">ohao_gpu_vulkan</text>
+  <text x="255" y="189" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">device · upload · BLAS/TLAS · bindless</text>
+
+  <!-- ohao_scene -->
+  <rect x="150" y="252" width="210" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="255" y="274" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#e8e2d6">ohao_scene</text>
+  <text x="255" y="289" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">actors · components · loaders</text>
+
+  <!-- ohao_core -->
+  <rect x="150" y="352" width="210" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="255" y="374" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#e8e2d6">ohao_core</text>
+  <text x="255" y="389" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">concepts · GPU layout asserts · events</text>
+
+  <!-- ohao_physics -->
+  <rect x="440" y="252" width="170" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="525" y="274" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#e8e2d6">ohao_physics</text>
+  <text x="525" y="289" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">Jolt / null backend</text>
+
+  <!-- ohao_audio -->
+  <rect x="440" y="352" width="170" height="46" rx="4" fill="#1a222c" stroke="#3d4a58"/>
+  <text x="525" y="374" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#e8e2d6">ohao_audio</text>
+  <text x="525" y="389" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">miniaudio · no GPU edge</text>
+
+  <!-- ohao/inverse: header-only, no target -->
+  <rect x="440" y="52" width="170" height="46" rx="4" fill="#0f1419" stroke="#6e685c" stroke-dasharray="5 4"/>
+  <text x="525" y="74" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" fill="#c4a574">ohao/inverse</text>
+  <text x="525" y="89" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#6e685c">26 headers · no CMake target</text>
+
+  <!-- declared edges (solid, green) -->
+  <path d="M 255 98 L 255 148" stroke="#7dba8a" stroke-width="1.6" fill="none" marker-end="url(#mmDecl)"/>
+  <path d="M 255 198 L 255 248" stroke="#7dba8a" stroke-width="1.6" fill="none" marker-end="url(#mmDecl)"/>
+  <path d="M 255 298 L 255 348" stroke="#7dba8a" stroke-width="1.6" fill="none" marker-end="url(#mmDecl)"/>
+  <path d="M 440 375 L 364 375" stroke="#7dba8a" stroke-width="1.6" fill="none" marker-end="url(#mmDecl)"/>
+  <path d="M 525 298 L 525 334 L 330 334 L 330 348" stroke="#7dba8a" stroke-width="1.6" fill="none" marker-end="url(#mmDecl)"/>
+
+  <!-- undeclared include-only edges (dashed, accent) -->
+  <path d="M 150 165 L 110 165 L 110 65 L 146 65" stroke="#c4784a" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#mmUndecl)"/>
+  <text x="102" y="118" text-anchor="end" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a">22 #includes</text>
+  <text x="102" y="132" text-anchor="end" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a">no link edge</text>
+
+  <path d="M 440 266 L 364 266" stroke="#c4784a" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#mmUndecl)"/>
+  <path d="M 360 288 L 436 288" stroke="#c4784a" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#mmUndecl)"/>
+  <text x="400" y="240" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a">both ways,</text>
+  <text x="400" y="316" text-anchor="middle" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a">neither declared</text>
+
+  <path d="M 360 75 L 436 75" stroke="#c4784a" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#mmUndecl)"/>
+
+  <path d="M 150 285 L 122 285 L 122 185 L 146 185" stroke="#c4784a" stroke-width="1.6" fill="none" stroke-dasharray="6 4" marker-end="url(#mmUndecl)"/>
+  <text x="114" y="228" text-anchor="end" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a">Material::* calls</text>
+  <text x="114" y="242" text-anchor="end" font-family="DM Sans,sans-serif" font-size="10" fill="#c4784a">no link edge</text>
+
+  <!-- legend -->
+  <line x1="24" y1="410" x2="60" y2="410" stroke="#7dba8a" stroke-width="1.6" marker-end="url(#mmDecl)"/>
+  <text x="70" y="414" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">target_link_libraries edge</text>
+  <line x1="270" y1="410" x2="306" y2="410" stroke="#c4784a" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#mmUndecl)"/>
+  <text x="316" y="414" font-family="DM Sans,sans-serif" font-size="11" fill="#e8e2d6">#include edge with no link edge</text>
+</svg>
