@@ -537,12 +537,73 @@ a:hover { color: #fff; }
 .reveal.in { opacity: 1; transform: none; }
 
 .mobile-toc {
-  display: none; position: sticky; top: 0; z-index: 40;
+  display: none; position: sticky; top: 0; z-index: 100;
   background: color-mix(in srgb, var(--ink) 94%, transparent);
   backdrop-filter: blur(10px); border-bottom: 1px solid var(--rule-soft);
-  padding: 0.6rem var(--gutter); font-family: var(--font-sans); font-size: 0.72rem;
+  padding: 0; font-family: var(--font-sans); font-size: 0.72rem;
   color: var(--copper); letter-spacing: 0.1em; text-transform: uppercase;
 }
+.mobile-toc-btn {
+  display: flex; align-items: center; gap: 0.65rem;
+  width: 100%; border: 0; background: transparent; color: inherit;
+  font: inherit; letter-spacing: inherit; text-transform: inherit;
+  padding: 0.75rem var(--gutter); cursor: pointer; text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-toc-btn:hover,
+.mobile-toc-btn:focus-visible {
+  color: var(--ivory);
+  outline: none;
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
+}
+.mobile-toc-icon {
+  display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  width: 1.15rem; flex: 0 0 auto;
+}
+.mobile-toc-icon span {
+  display: block; height: 1.5px; width: 100%;
+  background: currentColor; border-radius: 1px;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+body.toc-open .mobile-toc-icon span:nth-child(1) {
+  transform: translateY(5.5px) rotate(45deg);
+}
+body.toc-open .mobile-toc-icon span:nth-child(2) { opacity: 0; }
+body.toc-open .mobile-toc-icon span:nth-child(3) {
+  transform: translateY(-5.5px) rotate(-45deg);
+}
+.mobile-toc-label { flex: 1 1 auto; min-width: 0; }
+.mobile-toc-hint {
+  flex: 0 0 auto;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  color: var(--ivory-mute);
+  text-transform: uppercase;
+}
+.toc-backdrop {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 110;
+  border: 0; padding: 0; margin: 0; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.toc-close {
+  display: none;
+  align-self: flex-end;
+  margin: 0 0 0.5rem auto;
+  border: 1px solid var(--rule-soft);
+  background: var(--paper);
+  color: var(--ivory-dim);
+  font-family: var(--font-sans);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.toc-close:hover { color: var(--ivory); border-color: var(--copper-dim); }
 
 /* ── Monograph density: contracts, algorithms, defs ── */
 .contract {
@@ -679,13 +740,58 @@ a:hover { color: #fff; }
 }
 
 @media (max-width: 920px) {
-  .toc { display: none; }
   .book { margin-left: 0; }
   .mobile-toc { display: block; }
+
+  /* Off-canvas chapter drawer (same TOC as desktop) */
+  .toc {
+    display: flex;
+    position: fixed;
+    top: 0; left: 0;
+    width: min(88vw, 300px);
+    height: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    z-index: 120;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
+    padding-top: 0.9rem;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .toc.is-open { transform: translateX(0); }
+  .toc-close { display: inline-flex; }
+  .toc-backdrop {
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  body.toc-open .toc-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  body.toc-open { overflow: hidden; touch-action: none; }
+
   .compare, .spread { grid-template-columns: 1fr; }
   .file-map .row { grid-template-columns: 1fr; gap: 0.2rem; }
   .pager { grid-template-columns: 1fr; }
   .pager .next { text-align: left; }
+}
+
+/* Safe area for notched phones */
+@supports (padding: max(0px)) {
+  @media (max-width: 920px) {
+    .mobile-toc-btn {
+      padding-left: max(var(--gutter), env(safe-area-inset-left));
+      padding-right: max(var(--gutter), env(safe-area-inset-right));
+    }
+    .toc {
+      padding-left: max(0.9rem, env(safe-area-inset-left));
+      padding-bottom: max(2rem, env(safe-area-inset-bottom));
+    }
+  }
 }
 
 /* ── Pedagogy: jargon, why, dual-pane, full-page plate ── */
