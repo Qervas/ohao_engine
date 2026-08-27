@@ -1,5 +1,6 @@
 #include "gpu_probe_context.hpp"
 
+#include "diff/wavefront/compute_pipeline.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 
 #include <array>
@@ -366,127 +367,34 @@ void GpuProbeContext::runImmediate(const std::function<void(VkCommandBuffer)>& f
 bool GpuProbeContext::dispatchStorageBufferCompute(const char* spvName, VkBuffer buffer,
                                                    const void* pushData, uint32_t pushSize,
                                                    uint32_t groupCountX) {
-    const std::vector<uint32_t> spv = loadSpv(spvName);
-    if (spv.empty()) return false;
-
-    VkShaderModuleCreateInfo moduleInfo{};
-    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    moduleInfo.codeSize = spv.size() * sizeof(uint32_t);
-    moduleInfo.pCode = spv.data();
-
-    VkShaderModule shaderModule = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(m_device, &moduleInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] vkCreateShaderModule failed\n");
+    // Task 1 (Stage 0b-2a): this function used to hand-roll the whole
+    // shader-module -> descriptor-set-layout -> pipeline-layout -> pipeline
+    // -> descriptor-pool -> descriptor-set sequence (52 such calls existed
+    // across this file before the extraction). It is now the first, and
+    // simplest, client of ohao::diff::ComputePipeline, which lifted that
+    // exact sequence -- including this function's reverse-order,
+    // every-early-return-cleans-up-what-it-made failure discipline -- into
+    // ohao/diff/wavefront/compute_pipeline.{hpp,cpp}.
+    ComputePipeline pipeline;
+    const VkDescriptorType bindingTypes[] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    if (!pipeline.build(m_device, spvName, bindingTypes, pushSize)) {
+        // build() already released anything it partially created.
         return false;
     }
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
-
-    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] vkCreateDescriptorSetLayout failed\n");
-        vkDestroyShaderModule(m_device, shaderModule, nullptr);
-        return false;
-    }
-
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushRange.offset = 0;
-    pushRange.size = pushSize;
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &setLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
-
-    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] vkCreatePipelineLayout failed\n");
-        vkDestroyDescriptorSetLayout(m_device, setLayout, nullptr);
-        vkDestroyShaderModule(m_device, shaderModule, nullptr);
-        return false;
-    }
-
-    VkPipelineShaderStageCreateInfo stageInfo{};
-    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stageInfo.module = shaderModule;
-    stageInfo.pName = "main";
-
-    VkComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.stage = stageInfo;
-    pipelineInfo.layout = pipelineLayout;
-
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    const bool pipelineOk =
-        vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) ==
-        VK_SUCCESS;
-    if (!pipelineOk) {
-        std::fprintf(stderr, "[GpuProbeContext] vkCreateComputePipelines failed\n");
-    }
-
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSize.descriptorCount = 1;
-
-    VkDescriptorPoolCreateInfo descPoolInfo{};
-    descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    descPoolInfo.maxSets = 1;
-    descPoolInfo.poolSizeCount = 1;
-    descPoolInfo.pPoolSizes = &poolSize;
-
-    VkDescriptorPool descPool = VK_NULL_HANDLE;
-    bool ok = pipelineOk;
-    if (ok) {
-        ok = vkCreateDescriptorPool(m_device, &descPoolInfo, nullptr, &descPool) == VK_SUCCESS;
-        if (!ok) std::fprintf(stderr, "[GpuProbeContext] vkCreateDescriptorPool failed\n");
-    }
-
-    VkDescriptorSet descSet = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetAllocateInfo descAllocInfo{};
-        descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        descAllocInfo.descriptorPool = descPool;
-        descAllocInfo.descriptorSetCount = 1;
-        descAllocInfo.pSetLayouts = &setLayout;
-        ok = vkAllocateDescriptorSets(m_device, &descAllocInfo, &descSet) == VK_SUCCESS;
-        if (!ok) std::fprintf(stderr, "[GpuProbeContext] vkAllocateDescriptorSets failed\n");
+    const VkBuffer buffers[] = {buffer};
+    bool ok = pipeline.bindBuffers(m_device, buffers);
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] dispatchStorageBufferCompute: bindBuffers failed\n");
     }
 
     if (ok) {
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = buffer;
-        bufferInfo.offset = 0;
-        bufferInfo.range = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = descSet;
-        write.dstBinding = 0;
-        write.descriptorCount = 1;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.pBufferInfo = &bufferInfo;
-        vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
-
-        const uint32_t groupCount = groupCountX;
-
         runImmediate([&](VkCommandBuffer cmd) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline());
+            VkDescriptorSet descSet = pipeline.descriptorSet();
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout(), 0, 1,
                                      &descSet, 0, nullptr);
-            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushSize,
+            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, pushSize,
                                 pushData);
             vkCmdDispatch(cmd, groupCountX, 1, 1);
 
@@ -504,11 +412,10 @@ bool GpuProbeContext::dispatchStorageBufferCompute(const char* spvName, VkBuffer
         });
     }
 
-    if (descPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, descPool, nullptr);
-    if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, pipeline, nullptr);
-    vkDestroyPipelineLayout(m_device, pipelineLayout, nullptr);
-    vkDestroyDescriptorSetLayout(m_device, setLayout, nullptr);
-    vkDestroyShaderModule(m_device, shaderModule, nullptr);
+    // Every path -- success or any failure above -- destroys the pipeline
+    // once, unconditionally, here; destroy() is idempotent so this is safe
+    // even though build() may already have partially cleaned up on failure.
+    pipeline.destroy(m_device);
 
     return ok;
 }

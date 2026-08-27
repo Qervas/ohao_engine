@@ -3,7 +3,9 @@
 //
 // Checks:
 //   1. GradientArena allocates, zeroes, and reads back.
-//   2. atomicAdd on a float SSBO accumulates correctly under contention.
+//   2. atomicAdd on a float SSBO accumulates correctly under contention;
+//      also exercises ohao::diff::ComputePipeline's build/bind/destroy
+//      lifecycle directly (Stage 0b-2a Task 1).
 //   3. rayQueryEXT visibility matches a closed-form plane intersection.
 //   4. A half-quad's hit/miss pattern pins the camera's Y orientation --
 //      check 3's distance formula is even in dy, so it can't catch a flipped
@@ -39,6 +41,7 @@
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/rng/diff_rng.hpp"
 #include "diff/param/param_registry.hpp"
+#include "diff/wavefront/compute_pipeline.hpp"
 #include "diff/wavefront/wavefront_buffers.hpp"
 
 #include <algorithm>
@@ -93,7 +96,45 @@ int main() {
     }
     std::printf("[diff_gpu_probe] OK: arena zero + readback\n");
 
-    // 2. float atomics under contention
+    // 2. float atomics under contention. Also exercises
+    // ohao::diff::ComputePipeline (Task 1, Stage 0b-2a) directly: build()
+    // for diff_atomic_probe.comp.spv, confirm pipeline()/layout()/
+    // descriptorSet() are all non-null, bind the arena buffer, then call
+    // destroy() twice to confirm the second call is a no-op. This does not
+    // get its own OK line -- dispatchStorageBufferCompute (used by
+    // runAtomicProbe just below) is now itself implemented on top of this
+    // same class, so the accumulation check below covers it end-to-end too;
+    // together the two keep this section at one printed OK line, matching
+    // the pre-refactor count.
+    {
+        ohao::diff::ComputePipeline pipelineSanity;
+        const VkDescriptorType bindingTypes[] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        if (!pipelineSanity.build(ctx.device(), "diff_atomic_probe.comp.spv", bindingTypes,
+                                  /*pushConstantSize=*/8)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: ComputePipeline::build\n");
+            return 1;
+        }
+        if (pipelineSanity.pipeline() == VK_NULL_HANDLE ||
+            pipelineSanity.layout() == VK_NULL_HANDLE ||
+            pipelineSanity.descriptorSet() == VK_NULL_HANDLE) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: ComputePipeline built a null handle\n");
+            return 1;
+        }
+        const VkBuffer buffersToBind[] = {arena.buffer()};
+        if (!pipelineSanity.bindBuffers(ctx.device(), buffersToBind)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: ComputePipeline::bindBuffers\n");
+            return 1;
+        }
+        pipelineSanity.destroy(ctx.device());
+        pipelineSanity.destroy(ctx.device());  // must be a no-op, not a double-free
+        if (pipelineSanity.pipeline() != VK_NULL_HANDLE ||
+            pipelineSanity.layout() != VK_NULL_HANDLE ||
+            pipelineSanity.descriptorSet() != VK_NULL_HANDLE) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: ComputePipeline::destroy left a handle live\n");
+            return 1;
+        }
+    }
+
     constexpr uint32_t kInvocations = 4096;
     if (!ctx.runAtomicProbe(arena, /*targetIndex=*/0, kInvocations)) {
         std::fprintf(stderr, "[diff_gpu_probe] FAIL: atomic probe dispatch\n");

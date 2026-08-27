@@ -52,6 +52,11 @@ public:
     void shutdown();
 
     [[nodiscard]] VkPhysicalDevice physicalDevice() const noexcept { return m_physicalDevice; }
+    // Exposed so callers (diff_gpu_probe.cpp's Task 1 ComputePipeline sanity
+    // check, and Task 4's further migration) can build ohao::diff library
+    // objects -- e.g. ComputePipeline -- directly against this context's
+    // device without every such object needing its own device-creation path.
+    [[nodiscard]] VkDevice device() const noexcept { return m_device; }
     [[nodiscard]] GpuAllocator& allocator() noexcept { return m_allocator; }
 
     /// Allocates a one-time-submit primary command buffer, records `fn`,
