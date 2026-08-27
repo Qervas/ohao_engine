@@ -110,7 +110,7 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">file(GLOB_RECURSE SHADER_SOURCES</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L9" target="_blank" rel="noopener">shaders/CMakeLists.txt:9</a></div>
 <div class="citation-chip"><code class="citation-code">add_custom_target(shaders</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L54" target="_blank" rel="noopener">shaders/CMakeLists.txt:54</a></div>
 <p>The C++ side reads like the symmetric fix and is not one: the render library&#x27;s glob carries a `/_disabled/` exclusion, but no `_disabled` directory exists anywhere under `ohao/`, so the filter matches zero files.</p>
-<div class="citation-chip"><code class="citation-code">list(FILTER RENDERER_SOURCES EXCLUDE REGEX &quot;/_disabled/&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/CMakeLists.txt#L12" target="_blank" rel="noopener">ohao/render/CMakeLists.txt:12</a></div>
+<div class="citation-chip"><code class="citation-code">list(FILTER RENDERER_SOURCES EXCLUDE REGEX &quot;/_disabled/&quot;)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/CMakeLists.txt#L17" target="_blank" rel="noopener">ohao/render/CMakeLists.txt:17</a></div>
 </div>
 <div class="section-rule"><h2 id="blinn-phong-glsl-and-the-scar-it-documents">blinn_phong.glsl and the scar it documents</h2></div>
 <div class="prose reveal">

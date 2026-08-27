@@ -39,20 +39,20 @@
 <div class="section-rule"><h2 id="the-promise-a-status-file-has-to-survive">The promise a status file has to survive</h2></div>
 <div class="prose reveal">
 <p>Every engine has a document that says what works, and almost all of them are written by the person who wrote the feature, on the day they wrote it, from the diff. OHAO&#x27;s `STATUS.md` names that failure mode and its countermeasure in its own header: the file is updated by rendering the examples and looking at the pixels, not by reading commit messages.</p>
-<div class="citation-chip"><code class="citation-code">&gt; Single source of truth for &quot;what actually works.&quot; Updated by running the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L3" target="_blank" rel="noopener">STATUS.md:3</a></div>
+<div class="citation-chip"><code class="citation-code">&gt; Single source of truth for &quot;what actually works.&quot; Updated by running the</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L3" target="_blank" rel="noopener">STATUS.md@223ff7f:3</a></div>
 <p>The way to test a promise like that is to look at what vocabulary the document has for failure. A status page that can only emit ✅ is not measuring anything. This one declares five states and spends four: ✅ on most rows, ⚠️ on two, 🗑️ on two, 🧪 on one.</p>
-<div class="citation-chip"><code class="citation-code">Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimental · 🗑️ removed</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L20" target="_blank" rel="noopener">STATUS.md:20</a></div>
+<div class="citation-chip"><code class="citation-code">Legend: ✅ works · ⚠️ works with caveats · ❌ broken · 🧪 experimental · 🗑️ removed</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L20" target="_blank" rel="noopener">STATUS.md@223ff7f:20</a></div>
 <p>Declared and used vocabulary diverge in both directions. ❌ never appears below the legend line — the strongest admission the document reserves for itself has never been cashed. And the turntable row emits a ✅ / ❓ pair, ❓ being an undeclared sixth state glossed only by the row&#x27;s own note that the interactive half needs a display.</p>
-<div class="citation-chip"><code class="citation-code">| **Turntable / interactive** | ✅ / ❓ | Turntable frames OK; interactive needs display |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L35" target="_blank" rel="noopener">STATUS.md:35</a></div>
+<div class="citation-chip"><code class="citation-code">| **Turntable / interactive** | ✅ / ❓ | Turntable frames OK; interactive needs display |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L35" target="_blank" rel="noopener">STATUS.md@223ff7f:35</a></div>
 <p>The 🗑️ row against the OptiX denoiser reports a completed removal, not a plan.</p>
-<div class="citation-chip"><code class="citation-code">| **Denoiser — OptiX** | 🗑️ | Removed; `optix` → OIDN fallback |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L32" target="_blank" rel="noopener">STATUS.md:32</a></div>
+<div class="citation-chip"><code class="citation-code">| **Denoiser — OptiX** | 🗑️ | Removed; `optix` → OIDN fallback |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L32" target="_blank" rel="noopener">STATUS.md@223ff7f:32</a></div>
 <p>Every OptiX source file is gone from the tree; what survives is one CLI branch that prints a demotion notice and falls through to OIDN. That row&#x27;s claim is literally the assertion in a unit test: `optix` and `OptiX` both parse to `DenoiseMode::OIDN`.</p>
 <div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[Denoise] --denoise=optix is no longer supported — falling back to OIDN\n&quot;;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/denoise/denoise_types.cpp#L24" target="_blank" rel="noopener">ohao/render/rt/denoise/denoise_types.cpp:24</a></div>
 <div class="citation-chip"><code class="citation-code">TEST(DenoiseTypes, OptixRemovedFallsBackToOidn) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/denoise_parse_test.cpp#L29" target="_blank" rel="noopener">tests/renderer/denoise_parse_test.cpp:29</a></div>
 <p>The subsurface-scattering row is sharper, because nothing external forced it: it marks OHAO&#x27;s own SSS 🧪 and calls it biased look-dev rather than a BSSRDF.</p>
-<div class="citation-chip"><code class="citation-code">| **SSS** | 🧪 | Biased look-dev hacks; not a true BSSRDF |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L37" target="_blank" rel="noopener">STATUS.md:37</a></div>
+<div class="citation-chip"><code class="citation-code">| **SSS** | 🧪 | Biased look-dev hacks; not a true BSSRDF |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L37" target="_blank" rel="noopener">STATUS.md@223ff7f:37</a></div>
 <p>The limitations list below the matrix restates that as an instruction — keep SSS out of ground-truth claims — voluntarily disqualifying a shipped feature from the offline-reference standing the rest of the engine rests on.</p>
-<div class="citation-chip"><code class="citation-code">2. **SSS** — biased; keep out of “offline ground truth” claims.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L59" target="_blank" rel="noopener">STATUS.md:59</a></div>
+<div class="citation-chip"><code class="citation-code">2. **SSS** — biased; keep out of “offline ground truth” claims.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L59" target="_blank" rel="noopener">STATUS.md@223ff7f:59</a></div>
 </div>
 <div class="section-rule"><h2 id="the-gate-that-makes-a-status-line-cost-something">The gate that makes a status line cost something</h2></div>
 <div class="prose reveal">
@@ -102,19 +102,19 @@ $$</div>
 <li>The corpus is still the two scenes it started with, against a manifest asking</li>
 </ul>
 <p>for one per fixed bug. The NRD YCoCg-packing bug and the deferred black-metal bug are both written up in `STATUS.md`; neither has a golden scene, so both can return silently.</p>
-<div class="citation-chip"><code class="citation-code">- **Root cause:** REBLUR expects **YCoCg + normalized hit-distance** (`NRD.hlsli` Pack/Unpack). We wrote linear RGB + raw world hit-dist.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L48" target="_blank" rel="noopener">STATUS.md:48</a></div>
-<div class="citation-chip"><code class="citation-code">### Deferred metals pure black (partial)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L51" target="_blank" rel="noopener">STATUS.md:51</a></div>
+<div class="citation-chip"><code class="citation-code">- **Root cause:** REBLUR expects **YCoCg + normalized hit-distance** (`NRD.hlsli` Pack/Unpack). We wrote linear RGB + raw world hit-dist.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L48" target="_blank" rel="noopener">STATUS.md@223ff7f:48</a></div>
+<div class="citation-chip"><code class="citation-code">### Deferred metals pure black (partial)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L51" target="_blank" rel="noopener">STATUS.md@223ff7f:51</a></div>
 <ul>
 <li>The gtest suites under `tests/` are not part of the gate. Most of them build by</li>
 </ul>
 <p>default, but nothing invokes them unprompted: the hook&#x27;s only command is the golden harness, and the repository&#x27;s single GitHub workflow publishes this site. They defend code — `parseDenoiseMode`, the environment CDF, the Sobol sequence — only when a human runs the binaries.</p>
-<div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L111" target="_blank" rel="noopener">CMakeLists.txt:111</a></div>
+<div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L115" target="_blank" rel="noopener">CMakeLists.txt:115</a></div>
 <div class="citation-chip"><code class="citation-code">python3 tests/golden/render_golden.py tests/golden/manifest.json</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/.githooks/pre-push#L20" target="_blank" rel="noopener">.githooks/pre-push:20</a></div>
 <ul>
 <li>`STATUS.md` lists the missing GPU-less cloud workflow as an open limitation</li>
 </ul>
 <p>rather than passing the pre-push hook off as CI.</p>
-<div class="citation-chip"><code class="citation-code">3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/STATUS.md#L60" target="_blank" rel="noopener">STATUS.md:60</a></div>
+<div class="citation-chip"><code class="citation-code">3. **Cloud CI** — still no GPU-less build/unit workflow (Phase 0 leftover).</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L60" target="_blank" rel="noopener">STATUS.md@223ff7f:60</a></div>
 </div>
 <div class="section-rule"><h2 id="two-bug-writeups-and-what-a-refactor-did-to-their-pointers">Two bug writeups, and what a refactor did to their pointers</h2></div>
 <div class="prose reveal">
@@ -124,9 +124,10 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">bool FrameResourceManager::resizeStagingBuffers(size_t newSize) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/frame/frame_resources.cpp#L269" target="_blank" rel="noopener">ohao/render/frame/frame_resources.cpp:269</a></div>
 <p>Bug 002 fared the same way. Its conclusion was that every pass touching shared uniform data must bind the *same* per-frame descriptor set, because mixing a per-frame set with the legacy one renders the shadow map with light matrix A and samples it with matrix B — the reported symptom was shadows rotated 90°. The parameterised signature that enforces it survives, still called from both the per-frame and the legacy path:</p>
 <div class="citation-chip"><code class="citation-code">renderShadowPass(cmd, frame.descriptorSet);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/render_dispatch.cpp#L281" target="_blank" rel="noopener">ohao/gpu/vulkan/render_dispatch.cpp:281</a></div>
-<p>So the archive&#x27;s invariants outlived the refactor and its pointers did not. That is the general shape of rot here, and it is not confined to the bug log: `CLAUDE.md` still documents a Skeletal Animation module with a file map, while `STATUS.md` marks skeletal animation 🗑️ and `ohao/animation/` does not exist.</p>
-<div class="citation-chip"><code class="citation-code">## Skeletal Animation (Module D)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CLAUDE.md#L143" target="_blank" rel="noopener">CLAUDE.md:143</a></div>
-<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`STATUS.md` is trustworthy in proportion to the gate behind it, not in proportion to its own confidence. Two of its fourteen matrix rows are covered by the golden gate — the repository&#x27;s only check wired to run unbidden, and then only in clones that installed the hook. One more, the removed OptiX backend, is asserted by a unit test nothing runs automatically. Of the eleven rows with no gate at all, six still read as a plain ✅. And the file does not say when a human last looked: its freshness marker is a list of milestones, not a date.  {{cite STATUS.md &quot;**Last verified:** after C++20&quot;}}  OHAO has a determinism contract on two frames and a disclosure habit everywhere else — and the disclosure habit is worth more than it sounds, precisely because it names what it cannot verify.</p></div>
+<p>So the archive&#x27;s invariants outlived the refactor and its pointers did not. That is the general shape of rot here, and it is not confined to the bug log: `STATUS.md` marks skeletal animation 🗑️ in one row and, four sections later, still reasons about the gap the removed subsystem would leave behind.</p>
+<div class="citation-chip"><code class="citation-code">| **Skeletal animation** | 🗑️ | Removed in renovation cleanup |</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L36" target="_blank" rel="noopener">STATUS.md@223ff7f:36</a></div>
+<div class="citation-chip"><code class="citation-code">4. **Skinned RT BLAS** — animation subsystem removed; gap is moot until reintroduced.</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/STATUS.md#L61" target="_blank" rel="noopener">STATUS.md@223ff7f:61</a></div>
+<div class="key-idea reveal"><div class="key-label">Key idea</div><p>`STATUS.md` is trustworthy in proportion to the gate behind it, not in proportion to its own confidence. Two of its fourteen matrix rows are covered by the golden gate — the repository&#x27;s only check wired to run unbidden, and then only in clones that installed the hook. One more, the removed OptiX backend, is asserted by a unit test nothing runs automatically. Of the eleven rows with no gate at all, six still read as a plain ✅. And the file does not say when a human last looked: its freshness marker is a list of milestones, not a date.  {{cite STATUS.md@223ff7f &quot;**Last verified:** after C++20&quot;}}  OHAO has a determinism contract on two frames and a disclosure habit everywhere else — and the disclosure habit is worth more than it sounds, precisely because it names what it cannot verify.</p></div>
 </div>
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
@@ -156,7 +157,7 @@ $$</div>
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>STATUS.md</code><span class="desc"></span></div>
+        <div class="row"><code>STATUS.md@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/render/rt/denoise/denoise_types.cpp</code><span class="desc"></span></div>
         <div class="row"><code>tests/renderer/denoise_parse_test.cpp</code><span class="desc"></span></div>
         <div class="row"><code>.githooks/pre-push</code><span class="desc"></span></div>
@@ -167,7 +168,6 @@ $$</div>
         <div class="row"><code>docs/bugs_solved/001_staging_buffer_resize.md</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/frame/frame_resources.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>CLAUDE.md</code><span class="desc"></span></div>
         <div class="row"><code>examples/model_viewer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>docs/bugs_solved</code><span class="desc"></span></div>
       </div>

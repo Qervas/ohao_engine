@@ -68,8 +68,8 @@ $$</div>
 <p>No assertion enforces it. The patch loop&#x27;s only precondition is that the buffer exists and the layer table is non-empty, so an inverted order would skip every real index in silence rather than crash:</p>
 <div class="citation-chip"><code class="citation-code">if (m_rtMatColorBuffer &amp;&amp; m_rtMatColorMemory &amp;&amp; !globalMatTexLayer.empty()) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L793" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:793</a></div>
 <p>The third visit is the inverse-rendering inner loop. `updateRTMaterialParams()` is called from inside `RenderSession::render()`, and one objective evaluation renders every fit view — three by default (`numViews{3}`, clamped to eight on the command line) — so the buffer is re-mapped once per view per loss sample, not once per evaluation:</p>
-<div class="citation-chip"><code class="citation-code">const bool matsOk = renderer.updateRTMaterialParams();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/render_session.hpp#L50" target="_blank" rel="noopener">ohao/inverse/render_session.hpp:50</a></div>
-<div class="citation-chip"><code class="citation-code">for (int v = 0; v &lt; nViews; ++v) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/staged_fit.hpp#L224" target="_blank" rel="noopener">ohao/inverse/staged_fit.hpp:224</a></div>
+<div class="citation-chip"><code class="citation-code">const bool matsOk = renderer.updateRTMaterialParams();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/render_session.hpp#L50" target="_blank" rel="noopener">ohao/inverse/render_session.hpp@223ff7f:50</a></div>
+<div class="citation-chip"><code class="citation-code">for (int v = 0; v &lt; nViews; ++v) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/staged_fit.hpp#L224" target="_blank" rel="noopener">ohao/inverse/staged_fit.hpp@223ff7f:224</a></div>
 <p>It pushes new albedo, roughness and metallic without rebuilding acceleration structures. Because the texture indices live in the same rows and exist nowhere on the CPU, that pass has to write component by component:</p>
 <div class="citation-chip"><code class="citation-code">matColors[matIdx * 3 + 1].x = mc2.w; // roughness packed in .w of materialColors</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/rt_build.cpp#L356" target="_blank" rel="noopener">ohao/gpu/vulkan/rt_build.cpp:356</a></div>
 <p>Replacing those scalar stores with whole-`vec4` assignments — the obvious tidy-up — would zero `.z` and `.w`, and bit pattern 0 is not the sentinel: it is texture index 0. Every material would start sampling whichever image landed on bindless layer 0 — wrong textures, not black.</p>
@@ -138,8 +138,8 @@ $$</div>
         <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/rt_build.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/render_session.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/staged_fit.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/render_session.hpp@223ff7f</code><span class="desc">path note</span></div>
+        <div class="row"><code>ohao/inverse/staged_fit.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/gpu_light.hpp</code><span class="desc"></span></div>

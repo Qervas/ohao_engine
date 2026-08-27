@@ -36,7 +36,7 @@ the class stands. VMA must be told at creation time that it may return memory
 usable with `vkGetBufferDeviceAddress`; the flag that says so is in the source and
 commented out.
 
-{{cite ohao/gpu/vulkan/gpu_allocator.cpp "// allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;"}}
+{{cite ohao/gpu/vulkan/gpu_allocator.cpp@223ff7f "// allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;"}}
 
 Every BLAS/TLAS build input and every scratch buffer is created with
 `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` and allocated with

@@ -55,7 +55,7 @@
 <div class="section-rule"><h2 id="the-tier-that-does-cross-the-wall-is-off-by-default">The tier that does cross the wall is off by default</h2></div>
 <div class="prose reveal">
 <p>The Vulkan validation layers are the only mechanism in the stack that reads both sides: they compare the pipeline layout against the SPIR-V interface, check descriptor types and counts, and enforce the structural rules of descriptor indexing. Instance creation requests `VK_LAYER_KHRONOS_validation` only when an environment variable is set.</p>
-<div class="citation-chip"><code class="citation-code">// Validation layers — enable with OHAO_VALIDATION=1 env var</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L28" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:28</a></div>
+<div class="citation-chip"><code class="citation-code">// Validation layers — enable with OHAO_VALIDATION=1 env var</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L26" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:26</a></div>
 <p>So the default for every example binary, every golden render and every session in the interactive viewer is a run with no cross-language checking at all. Turn it on and the backlog arrives at once: a single `OHAO_VALIDATION=1 ./build/cornell_box out.png 1` here emits 74 validation errors across 14 distinct VUIDs — image layouts incompatible with the usage flags they were created with, `vkCmdPipelineBarrier2` calls on a device that never enabled `synchronization2`, a descriptor set rewritten while a command buffer holding it is still pending, buffers outliving `vkDestroyDevice`.</p>
 <p>Two of those 14 are the failure class this page is about, and only the validation layer names either. The path tracer&#x27;s layout still flags binding 12 as the variable-count binding while bindings up to 35 are declared behind it, which Vulkan does not permit. And the cascade shadow pass creates a pipeline whose geometry stage reads a uniform block at set 0, binding 0,</p>
 <div class="citation-chip"><code class="citation-code">layout(set = 0, binding = 0) uniform CascadeMatrices {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/shadow/shadow_csm.geom#L14" target="_blank" rel="noopener">shaders/shadow/shadow_csm.geom:14</a></div>
@@ -97,7 +97,7 @@
 <p>and then re-typed as a bare `+ 3` wherever a caller drives the render loop itself, because the pixel buffer it reads back is the frame submitted three renders ago:</p>
 <div class="citation-chip"><code class="citation-code">for (int s = 0; s &lt; spp + 3; s++)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/turntable.cpp#L221" target="_blank" rel="noopener">examples/turntable.cpp:221</a></div>
 <p>Four offline examples spell it that way, and so does the inverse-rendering session inside the engine library, which is not an example program at all:</p>
-<div class="citation-chip"><code class="citation-code">const int frames = budget.spp + 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/render_session.hpp#L58" target="_blank" rel="noopener">ohao/inverse/render_session.hpp:58</a></div>
+<div class="citation-chip"><code class="citation-code">const int frames = budget.spp + 3;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/render_session.hpp#L58" target="_blank" rel="noopener">ohao/inverse/render_session.hpp@223ff7f:58</a></div>
 <p>Change the named constant and five call sites quietly render the wrong sample count. The no-texture sentinel shows the same pattern with the polarity reversed: it *has* a canonical name,</p>
 <div class="citation-chip"><code class="citation-code">static constexpr uint32_t    kNoTexture = 0xFFFFFFFFu;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/layout_meta.hpp#L39" target="_blank" rel="noopener">ohao/gpu/layout_meta.hpp:39</a></div>
 <p>and no callers. Every producer re-types the value instead — `0xFFFFFFFFu` in the RT material upload, `UINT32_MAX` in the raster push-constant fill, the literal again in each shader that tests it. The value is load-bearing in a dozen places and spelled two ways; the named constant is decoration.</p>
@@ -132,7 +132,7 @@
         <div class="row"><code>shaders/rt/pt_closesthit.rchit</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/frame/frame_resources.hpp</code><span class="desc"></span></div>
         <div class="row"><code>examples/turntable.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/render_session.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/render_session.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/gpu/layout_meta.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>

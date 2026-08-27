@@ -39,7 +39,7 @@
 <div class="section-rule"><h2 id="the-widget-that-is-not-a-widget">The widget that is not a widget</h2></div>
 <div class="prose reveal">
 <p>Nothing here draws — no ring buffer, no scrollback, no UI. The name is a fossil: OHAO shipped a full ImGui editor early on and deliberately deleted it, and the class kept the label.</p>
-<div class="citation-chip"><code class="citation-code">In early development, OHAO included a full ImGui-based editor UI. This was **intentionally removed** to:</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/docs/architecture/README.md#L9" target="_blank" rel="noopener">docs/architecture/README.md:9</a></div>
+<div class="citation-chip"><code class="citation-code">In early development, OHAO included a full ImGui-based editor UI. This was **intentionally removed** to:</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/docs/architecture/README.md#L9" target="_blank" rel="noopener">docs/architecture/README.md@223ff7f:9</a></div>
 <p>What survives is a process-wide, mutex-guarded facade over `std::cout` and `std::cerr` plus one unused redirect hook, reached through a Meyers singleton:</p>
 <div class="citation-chip"><code class="citation-code">static ConsoleWidget instance;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/core/console_widget.hpp#L81" target="_blank" rel="noopener">ohao/core/console_widget.hpp:81</a></div>
 <p>`get()` is defined in the class body, so it is implicitly inline and the ODR collapses the function-local static to one object per *program* — not one per build. `ohao_core` is an archive linked separately into each example and test executable, so each process gets its own logger, mutex and callback slot.</p>
@@ -71,7 +71,7 @@
 <div class="section-rule"><h2 id="four-logging-conventions-in-one-engine">Four logging conventions in one engine</h2></div>
 <div class="prose reveal">
 <p>Ten `.cpp` files log through the facade, 69 call sites, all in `physics/` and `scene/`. The renderer does not participate: under `ohao/`, 56 files write `std::cout` directly (346 lines) and 51 write `std::cerr` directly (287 lines), while `audio/` uses `fprintf`. Those raw writes do separate severity — Vulkan device setup puts its failure on stderr and its success on stdout five lines later, just without the facade:</p>
-<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[OHAO] Failed to create logical device with RT extensions&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L248" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:248</a></div>
+<div class="citation-chip"><code class="citation-code">std::cerr &lt;&lt; &quot;[OHAO] Failed to create logical device with RT extensions&quot; &lt;&lt; std::endl;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/device_setup.cpp#L325" target="_blank" rel="noopener">ohao/gpu/vulkan/device_setup.cpp:325</a></div>
 <p>So a callback installed here would capture `physics/`&#x27;s facade traffic, under a third of `scene/`&#x27;s log output (30 facade calls against 78 raw lines), and nothing from Vulkan or the path tracer. The header also includes `core/concepts.hpp` for a `to_underlying` it never calls, costing every logging TU a `&lt;concepts&gt;`/`&lt;ranges&gt;`/`&lt;span&gt;` pull-in.</p>
 <div class="why-callout reveal"><div class="why-label">Why</div><p>The whole logging strategy is this file: no third-party logger, no sink registry, no compile-time level filter — and `ohao_core` declares no link dependencies at all, so physics and scene need nothing beyond libstdc++ to log:  {{cite ohao/core/CMakeLists.txt &quot;add_library(ohao_core STATIC&quot;}}  spdlog or fmt would buy level filtering and compiled-out debug lines for a link dependency in the engine&#x27;s lowest layer, inherited by every target. The missing filter costs nothing yet: `OHAO_LOG_DEBUG` is unconditional in release as in debug, but the tree holds exactly one use of it — inside `ForceDebugger::logBodyForceBreakdown`, which nothing calls.  {{cite ohao/physics/debug/force_debugger.cpp &quot;OHAO_LOG_DEBUG(log.str());&quot;}}</p></div>
 <div class="key-idea reveal"><div class="key-label">Key idea</div><p>Everything here that looks like infrastructure — location capture, the callback redirect, the stream operator — is wired but never exercised. Shipping behaviour is `[LEVEL] message` on stdout, stderr only for `Error`, with the severity sometimes spelled into the message instead of the level.</p></div>
@@ -93,7 +93,7 @@
 </div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
-        <div class="row"><code>docs/architecture/README.md</code><span class="desc"></span></div>
+        <div class="row"><code>docs/architecture/README.md@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/core/console_widget.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/core/console_widget.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/world/profile_manager.cpp</code><span class="desc"></span></div>

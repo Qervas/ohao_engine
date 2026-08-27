@@ -110,7 +110,7 @@
 <p>and two live callers re-enter it with the instance list untouched. `ensureRTRenderer` re-uploads the same scene when a mode&#x27;s RT profile is created late:</p>
 <div class="citation-chip"><code class="citation-code">// forEachRTRenderer was a no-op then — re-upload so materials, textures,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.cpp#L436" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.cpp:436</a></div>
 <p>and the inverse-rendering forward pass re-uploads on every evaluation, when all that changed were albedo tiles on existing actors:</p>
-<div class="citation-chip"><code class="citation-code">(void)renderer.updateSceneBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/diff/diff_vk_forward.hpp#L66" target="_blank" rel="noopener">ohao/render/diff/diff_vk_forward.hpp:66</a></div>
+<div class="citation-chip"><code class="citation-code">(void)renderer.updateSceneBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_vk_forward.hpp#L66" target="_blank" rel="noopener">ohao/render/diff/diff_vk_forward.hpp@223ff7f:66</a></div>
 <p>Both are the same-instance-count case a refit exists to serve. It is unreachable only because the teardown nulls the handle first — an oversight, not a consequence of the lifecycle.</p>
 </div>
 <div class="section-rule"><h2 id="one-scratch-buffer-and-why-it-currently-works">One scratch buffer, and why it currently works</h2></div>
@@ -146,7 +146,7 @@
         <div class="row"><code>ohao/render/rt/path_tracer_pipeline.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_anyhit.rahit</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/diff/diff_vk_forward.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/diff/diff_vk_forward.hpp@223ff7f</code><span class="desc">path note</span></div>
       </div>
       <div class="aside ray reveal">
         <div class="aside-label">Navigate</div>

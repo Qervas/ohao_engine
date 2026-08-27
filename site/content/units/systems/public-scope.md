@@ -71,7 +71,7 @@ Under `examples/`, the helper function is called six times: five unconditionally
 and the viewer only inside a `find_package` guard, which is why a machine without
 GLFW builds five example binaries and not six.
 
-{{cite examples/CMakeLists.txt "if(glfw3_FOUND)"}}
+{{cite examples/CMakeLists.txt@223ff7f "if(glfw3_FOUND)"}}
 
 The examples chapter covers five of the six. The sixth is the research entry
 point: a 30-line translation unit whose `main` parses argv and returns the fit's

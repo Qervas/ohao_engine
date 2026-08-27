@@ -86,7 +86,7 @@
 <p>The mesh hooks maintain their vector and raise `needsBufferUpdate`; `MeshComponent::setModel` raises it again through `onMeshComponentChanged`. Nothing reads the flag. `getMeshComponents()`, `getPhysicsComponents()`, `hasBufferUpdateNeeded()` and `markBuffersDirty()` have no callers outside the header, and `Scene::updateSceneBuffers()` only clears the flag and returns true:</p>
 <div class="citation-chip"><code class="citation-code">// GPU buffer updates are handled by VulkanRenderer::updateSceneBuffers()</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/scene/scene.cpp#L381" target="_blank" rel="noopener">ohao/scene/scene.cpp:381</a></div>
 <p>The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test and each of `diff_fit`, `dense_map_fit`, `dense_orm_fit` and `dense_metal_fit` re-upload by hand immediately after `setScene`, and `ohao::diff::forwardStudioDeferred` re-uploads on *every* forward render, which is what puts a full scene upload inside `diff_fit`&#x27;s finite-difference gradient loop:</p>
-<div class="citation-chip"><code class="citation-code">(void)renderer.updateSceneBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/diff/diff_vk_forward.hpp#L66" target="_blank" rel="noopener">ohao/render/diff/diff_vk_forward.hpp:66</a></div>
+<div class="citation-chip"><code class="citation-code">(void)renderer.updateSceneBuffers();</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_vk_forward.hpp#L66" target="_blank" rel="noopener">ohao/render/diff/diff_vk_forward.hpp@223ff7f:66</a></div>
 <p>Scene-side dirty tracking is bookkeeping that no consumer ever polls; if you add one, note that it cannot observe transform edits at all, only component add/remove/model-swap.</p>
 <figure class="unit-figure reveal"><img src="../../assets/units/scene-scene-api-registry-readers.svg" alt="Which of Scene&#x27;s five pieces of state anything actually reads. Conceptual map, established by grepping the tree for each accessor — not a measurement." loading="lazy" /><figcaption>Which of Scene&#x27;s five pieces of state anything actually reads. Conceptual map, established by grepping the tree for each accessor — not a measurement.</figcaption></figure>
 </div>
@@ -132,7 +132,7 @@
         <div class="row"><code>ohao/physics/components/physics_component.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/actor/actor.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/scene/scene_object.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/diff/diff_vk_forward.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/diff/diff_vk_forward.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/physics/world/physics_world.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/physics/world/physics_world.cpp</code><span class="desc"></span></div>

@@ -215,7 +215,7 @@ Skip it and every fired one-shot stays in the map, attached to the endpoint,
 being mixed as silence. Which leads to the honest part: nothing in the engine
 calls it. `ohao_audio` is on the link line of every example —
 
-{{cite examples/CMakeLists.txt "ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core"}}
+{{cite examples/CMakeLists.txt@223ff7f "ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core"}}
 
 — but no example, renderer, or scene source references `AudioSystem` at all. The
 only code that drives the facade is its own test suite, which pins the handle

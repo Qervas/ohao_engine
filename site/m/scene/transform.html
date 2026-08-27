@@ -110,7 +110,7 @@ $$</div>
 <p>Only the camera is double-buffered, and the vertex shader reprojects the object&#x27;s *current* position through that product. An object&#x27;s own displacement therefore cancels out of the difference: what lands in the velocity buffer is camera parallax computed on a point the object has already left. Hold the camera still and the residual is just the TAA sub-pixel jitter, which the current frame&#x27;s projection carries and `m_prevViewProj` does not. Move it and the buffer reports a confident wrong vector rather than a conspicuous zero.</p>
 <div class="citation-chip"><code class="citation-code">outVelocity = (currentNDC - prevNDC) * 0.5;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/core/gbuffer.frag#L136" target="_blank" rel="noopener">shaders/core/gbuffer.frag:136</a></div>
 <p>Actor transforms do move in this tree. The inverse-rendering dataset exporter jitters three light actors&#x27; positions and re-yaws the hero between samples, and its caller has to throw away the entire GPU binding because of it:</p>
-<div class="citation-chip"><code class="citation-code">session.bound = false; // transforms changed — full rebind</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/export_dataset.hpp#L98" target="_blank" rel="noopener">ohao/inverse/export_dataset.hpp:98</a></div>
+<div class="citation-chip"><code class="citation-code">session.bound = false; // transforms changed — full rebind</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/export_dataset.hpp#L98" target="_blank" rel="noopener">ohao/inverse/export_dataset.hpp@223ff7f:98</a></div>
 <p>That is an edit *between* renders, though — each sample resets accumulation and runs its own frame batch at fixed transforms — and no shipping example moves an actor at all: all five set their transforms during scene build and thereafter only fly the camera. So the wrong velocity stays invisible until someone animates a transform, and the fix is in the transform system (store last frame&#x27;s world matrix per actor), not in the shader.</p>
 <div class="key-idea reveal"><div class="key-label">Key idea</div><p>The file this page is nominally about does not run. `TransformComponent` is the live implementation, it never composes a parent because nothing parents anything, and its T·R·S product is rebuilt only when a setter runs — which in every shipping example is once per actor at scene build, before the render loop opens. Per frame the transform system does no arithmetic at all: each consumer gets back a cached world matrix that is a copy of its local.</p></div>
 </div>
@@ -129,7 +129,7 @@ $$</div>
         <div class="row"><code>ohao/render/culling.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/gbuffer.frag</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/export_dataset.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/export_dataset.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/scene/transform.hpp</code><span class="desc"></span></div>
       </div>
       <div class="aside ray reveal">

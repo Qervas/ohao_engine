@@ -45,7 +45,7 @@ $$</div>
 <p>with $\psi$ yaw and $\theta$ pitch, both stored in degrees and converted per call by `glm::radians`.</p>
 <div class="citation-chip"><code class="citation-code">newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/camera/camera.cpp#L28" target="_blank" rel="noopener">ohao/render/camera/camera.cpp:28</a></div>
 <p>Measuring from +X means yaw = 0 looks down +X, not down −Z. Every camera in the tree that wants the conventional &quot;into the screen&quot; direction therefore carries a literal −90: the constructor&#x27;s own default, the renderer&#x27;s initial pose, `SceneFramer`, and the three `CameraView`s the inverse-rendering scene builder names `front`. It is a datum rather than a constant — the builder&#x27;s other shipped views are offsets from it (−110 and −70 in `buildCornell`, −48 and −128 in `buildStudio`), and domain randomisation draws yaw as a ±58° excursion around the same origin:</p>
-<div class="citation-chip"><code class="citation-code">const float yaw = -90.0f + n11() * 58.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/scene_builder.hpp#L783" target="_blank" rel="noopener">ohao/inverse/scene_builder.hpp:783</a></div>
+<div class="citation-chip"><code class="citation-code">const float yaw = -90.0f + n11() * 58.0f;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/scene_builder.hpp#L783" target="_blank" rel="noopener">ohao/inverse/scene_builder.hpp@223ff7f:783</a></div>
 <p>Right and up are re-orthogonalised from a fixed world up of (0, 1, 0), so roll is not representable at all.</p>
 </div>
 <div class="section-rule"><h2 id="why-pitch-stops-at-89-and-not-90">Why pitch stops at 89 and not 90</h2></div>
@@ -112,12 +112,12 @@ $$</div>
 <div class="section-rule"><h2 id="a-second-camera-model-with-the-opposite-yaw">A second camera model, with the opposite yaw</h2></div>
 <div class="prose reveal">
 <p>The differentiable renderer does not use this class. `DiffCamera` re-derives its own forward vector with a different convention:</p>
-<div class="citation-chip"><code class="citation-code">const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/diff/diff_camera.hpp#L24" target="_blank" rel="noopener">ohao/render/diff/diff_camera.hpp:24</a></div>
+<div class="citation-chip"><code class="citation-code">const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_camera.hpp#L24" target="_blank" rel="noopener">ohao/render/diff/diff_camera.hpp@223ff7f:24</a></div>
 <p>that is $\mathbf{f}&#x27; = (\sin\psi\cos\theta,\; \sin\theta,\; -\cos\psi\cos\theta)$. Matching it to `Camera`&#x27;s $(\cos\psi\cos\theta,\; \sin\theta,\; \sin\psi\cos\theta)$ requires $\sin\psi&#x27; = \cos\psi$ *and* $-\cos\psi&#x27; = \sin\psi$ simultaneously, whose only solution is $\psi&#x27; = \psi + 90°$. `DiffCamera` at yaw $\psi$ is `Camera` at yaw $\psi - 90°$: an exact quarter turn about world up.</p>
 <p>Nothing applies that offset. Both are driven from the same `CameraView` list and both read the same field — `InverseScene::applyCamera` hands `v.yawDeg` to `Camera::setRotation`,</p>
-<div class="citation-chip"><code class="citation-code">cam.setRotation(v.pitchDeg, v.yawDeg);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/inverse/scene_builder.hpp#L356" target="_blank" rel="noopener">ohao/inverse/scene_builder.hpp:356</a></div>
+<div class="citation-chip"><code class="citation-code">cam.setRotation(v.pitchDeg, v.yawDeg);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/inverse/scene_builder.hpp#L356" target="_blank" rel="noopener">ohao/inverse/scene_builder.hpp@223ff7f:356</a></div>
 <p>and `DiffSession::setupFromInverse` copies it across verbatim:</p>
-<div class="citation-chip"><code class="citation-code">c.yawDeg = v.yawDeg;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/diff/diff_session.hpp#L48" target="_blank" rel="noopener">ohao/render/diff/diff_session.hpp:48</a></div>
+<div class="citation-chip"><code class="citation-code">c.yawDeg = v.yawDeg;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_session.hpp#L48" target="_blank" rel="noopener">ohao/render/diff/diff_session.hpp@223ff7f:48</a></div>
 <p>With $\psi$ and $\theta$ shared, the two forwards satisfy</p>
 <div class="math-block">$$
 \mathbf{f}\cdot\mathbf{f}' = \sin^2\theta
@@ -147,7 +147,7 @@ $$</div>
       <div class="section-rule"><h2 id="sources">Source files</h2></div>
       <div class="file-map reveal">
         <div class="row"><code>ohao/render/camera/camera.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/inverse/scene_builder.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/inverse/scene_builder.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/deferred_renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/render_dispatch.cpp</code><span class="desc"></span></div>
@@ -155,8 +155,8 @@ $$</div>
         <div class="row"><code>ohao/render/camera/camera.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/gbuffer_pass.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/csm_pass.cpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/diff/diff_camera.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>ohao/render/diff/diff_session.hpp</code><span class="desc"></span></div>
+        <div class="row"><code>ohao/render/diff/diff_camera.hpp@223ff7f</code><span class="desc">path note</span></div>
+        <div class="row"><code>ohao/render/diff/diff_session.hpp@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>ohao/gpu/vulkan/scene_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/forward.frag</code><span class="desc"></span></div>
       </div>

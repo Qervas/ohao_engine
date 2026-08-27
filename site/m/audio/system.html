@@ -109,7 +109,7 @@ $$</div>
 <p>Finished one-shots are not freed when they end; they are freed when someone asks. `update()` is the only reaper, and its predicate is &quot;not looping and at end&quot;:</p>
 <div class="citation-chip"><code class="citation-code">&amp;&amp; ma_sound_at_end(instance.sound.get())) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/audio/audio_system.cpp#L289" target="_blank" rel="noopener">ohao/audio/audio_system.cpp:289</a></div>
 <p>Skip it and every fired one-shot stays in the map, attached to the endpoint, being mixed as silence. Which leads to the honest part: nothing in the engine calls it. `ohao_audio` is on the link line of every example —</p>
-<div class="citation-chip"><code class="citation-code">-Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/examples/CMakeLists.txt#L12" target="_blank" rel="noopener">examples/CMakeLists.txt:12</a></div>
+<div class="citation-chip"><code class="citation-code">-Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/examples/CMakeLists.txt#L12" target="_blank" rel="noopener">examples/CMakeLists.txt@223ff7f:12</a></div>
 <p>— but no example, renderer, or scene source references `AudioSystem` at all. The only code that drives the facade is its own test suite, which pins the handle contract — a missing file returns `INVALID_SOUND_HANDLE` rather than throwing — and skips every device-dependent case when `initialize()` fails, so machines with no audio device still pass:</p>
 <div class="citation-chip"><code class="citation-code">bool testPlayInvalidPath() {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/audio/audio_system_tests.cpp#L202" target="_blank" rel="noopener">tests/audio/audio_system_tests.cpp:202</a></div>
 <p>The suite does call `update()` and `setListenerPosition` — but never with a sound alive:</p>
@@ -138,7 +138,7 @@ $$</div>
         <div class="row"><code>ohao/audio/audio_system.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/audio/audio_system.hpp</code><span class="desc"></span></div>
         <div class="row"><code>external/cmake/miniaudio.cmake</code><span class="desc"></span></div>
-        <div class="row"><code>examples/CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>examples/CMakeLists.txt@223ff7f</code><span class="desc">path note</span></div>
         <div class="row"><code>tests/audio/audio_system_tests.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/audio/audio_module.hpp</code><span class="desc"></span></div>
       </div>

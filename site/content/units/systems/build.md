@@ -105,7 +105,7 @@ suites and the Python bindings; the only dependency switches are `OHAO_NRD` and
 `find_package(... REQUIRED)`, so a machine without OpenImageDenoise cannot configure
 the renderer at all:
 
-{{cite ohao/render/CMakeLists.txt "find_package(OpenImageDenoise REQUIRED)"}}
+{{cite ohao/render/CMakeLists.txt@223ff7f "find_package(OpenImageDenoise REQUIRED)"}}
 
 `glslc` is likewise `find_program` plus a fatal error, which means you cannot
 configure even a C++-only build without the Vulkan SDK's shader compiler on `PATH`:

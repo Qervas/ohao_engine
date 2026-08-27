@@ -120,20 +120,21 @@ The 1.7 also puts the camera at z = 25.5, *outside* the room's z = +S = 15 wall.
 
 {{cite examples/model_viewer.cpp "// No front wall"}}
 
-`interactive` does not. Its indoor path builds a sealed box, front wall included,
-and then seeds its camera straight from `frame.cameraPosition`, so that wall starts
-out between the camera and the model:
+`interactive` does not. Its indoor path builds a sealed box, front wall included:
 
 {{cite examples/interactive.cpp "{-S-E,-S-E,S},{-S-E,S+E,S}"}}
-{{cite examples/interactive.cpp "g_cam.position = frame.cameraPosition;"}}
 
-`applyCamera` has exactly one caller, `model_viewer`. `interactive` skips it and
-builds its own look-at, from the camera position toward `modelPosition` — the
-model's transform origin, not its AABB centre. The yaw comes out at the same −90°,
-since both points sit on x = 0; the pitch does not, unless the asset's local origin
-happens to lie at its own mid-height.
+and then declines the framer's camera altogether. `CameraState` is a fixed
+initialiser — yaw −90°, pitch 0, and a position chosen by hand to sit inside the
+room rather than at the framer's 1.7·S, as its own comment says:
 
-{{cite examples/interactive.cpp "g_cam.yaw = glm::degrees(std::atan2(look.z, look.x));"}}
+{{cite examples/interactive.cpp "glm::vec3 position = {0, 0, 12};"}}
+
+`applyCamera` has exactly one caller, `model_viewer`. `interactive` skips it, and
+the framer's camera position survives only as a dead store on the no-model
+fallback path — written once, never read:
+
+{{cite examples/interactive.cpp "frame.cameraPosition = {0, 0, 25};"}}
 
 {{figure camera-scene-framer-room-elevation "Elevation through the Y–Z plane, drawn to scale from the constants in scene_framer.cpp: the room as model_viewer builds it (front wall omitted), scaled model, the camera at z = 1.7S, and the light spheres at true radius. Conceptual diagram, not a captured render."}}
 
