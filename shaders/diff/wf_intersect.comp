@@ -26,6 +26,14 @@
 // workgroups (vkCmdDispatchIndirect with groupCountX == 0 dispatches no
 // invocations at all, so the canary never even executes the increment).
 //
+// Both the source count and the destination write are clamped to pc.capacity.
+// In the current probe this is unreachable -- WavefrontBuffers::zero resets
+// counter slots to 0 and srcCount never exceeds capacity -- but this shader
+// is parameterised (srcQueueBase/srcCountSlot/dstQueueBase/dstCountSlot) for
+// reuse across bounces (N->N+1, N+1->N+2, ...), and the queue buffer is
+// exactly 2*capacity uints. A caller that reuses a ring without re-zeroing
+// its counter would otherwise write past the end of that allocation.
+//
 // Binding scheme: state (0, declared by path_state.glsl), queues (1, both
 // rings back to back), counters (2), TLAS (3).
 
@@ -58,7 +66,8 @@ void main() {
     atomicAdd(counters.value[pc.canarySlot], 1u);
 
     const uint slot = gl_GlobalInvocationID.x;
-    if (slot >= counters.value[pc.srcCountSlot]) return;
+    const uint srcCount = min(counters.value[pc.srcCountSlot], pc.capacity);
+    if (slot >= srcCount) return;
 
     const uint pathIndex = queues.idx[pc.srcQueueBase + slot];
 
@@ -78,7 +87,13 @@ void main() {
     psSetHitT(pathIndex, pc.capacity, rayQueryGetIntersectionTEXT(rq, true));
 
     // Compaction: only survivors are written into the next queue, at an
-    // offset handed out by atomicAdd on the next queue's counter slot.
+    // offset handed out by atomicAdd on the next queue's counter slot. The
+    // counter itself is always incremented (so an overflow is visible/
+    // diagnosable via readbackCounter), but the write is skipped once the
+    // offset would land outside the destination ring's capacity-sized
+    // allocation.
     const uint dstSlot = atomicAdd(counters.value[pc.dstCountSlot], 1u);
-    queues.idx[pc.dstQueueBase + dstSlot] = pathIndex;
+    if (dstSlot < pc.capacity) {
+        queues.idx[pc.dstQueueBase + dstSlot] = pathIndex;
+    }
 }

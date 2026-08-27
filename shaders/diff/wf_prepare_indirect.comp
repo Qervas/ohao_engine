@@ -37,6 +37,11 @@ void main() {
     if (gl_GlobalInvocationID.x != 0u) return;
 
     const uint count = counters.value[pc.countSlot];
+    // count + 63u overflows uint32 for count > 0xFFFFFFC0 (~4.29 billion),
+    // which would wrap groupCountX to 0 and silently skip the bounce.
+    // Unreachable at any capacity this subsystem allocates in practice (a
+    // path-state arena that large would not fit in device memory), so this
+    // is a documented limit rather than a guarded one.
     const uint groupCountX = (count + 63u) / 64u;
 
     counters.value[pc.argsSlot + 0u] = groupCountX;

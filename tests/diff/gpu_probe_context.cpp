@@ -1535,6 +1535,25 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
             // HOST_READ or SHADER_READ. This is the barrier the task brief
             // calls out as easy to miss and invalid to omit; see
             // task-5-report.md for the proof it is load-bearing.
+            //
+            // dstAccessMask names INDIRECT_COMMAND_READ alone -- not also
+            // SHADER_READ/SHADER_WRITE for wf_intersect's own reads of
+            // counter slots kCurrentCountSlot/kCanarySlot and atomicAdd on
+            // kNextCountSlot. That is correct only because of an invariant
+            // this barrier does not itself enforce: kIndirectArgsSlot (2-4)
+            // is disjoint from kCurrentCountSlot (0), kNextCountSlot (1), and
+            // kCanarySlot (5) (see wavefront_buffers.hpp). wf_intersect's
+            // accesses to those other slots are ordered against
+            // wf_prepare_indirect's write by program order within this same
+            // command buffer plus the fact that vkCmdDispatchIndirect itself
+            // does not begin shader invocations until its indirect-buffer
+            // read completes -- they need no additional barrier here, but
+            // only because they touch different bytes of this buffer than
+            // wf_prepare_indirect wrote. Reusing WavefrontBuffers' reserved
+            // counter slots for anything that overlaps kIndirectArgsSlot
+            // would silently reintroduce a hazard this barrier does not
+            // cover, and -- per this task's barrier-removal proof --
+            // synchronization validation is not proven to catch it.
             VkBufferMemoryBarrier toIndirect{};
             toIndirect.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
             toIndirect.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

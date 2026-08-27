@@ -337,8 +337,9 @@ int main() {
     }
 
     // 7. Wavefront path-state/queue/counter buffers: build, zero, and confirm
-    //    every one of the 16 PathStateFields and both counter slots come
-    //    back zeroed at exactly the expected element count. This is the
+    //    every one of the PathStateFields (all kFieldCount of them, whatever
+    //    that count is today) and both counter slots come back zeroed at
+    //    exactly the expected element count. This is the
     //    substrate every bounce dispatch in the wavefront integrator reads
     //    and writes through -- state cannot live in registers across a
     //    dispatch boundary.
@@ -455,6 +456,11 @@ int main() {
         const std::vector<float> bounceField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Bounce);
         const std::vector<float> aliveField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Alive);
 
+        // Deliberately NOT all kFieldCount fields: wf_generate.comp does not
+        // write HitT (that is wf_intersect.comp's output, checked
+        // separately in check 12), so this list -- and the count printed
+        // below, which is derived from its size rather than kFieldCount --
+        // covers exactly what this stage actually produces.
         const std::vector<const std::vector<float>*> allFields = {
             &originX, &originY, &originZ, &dirX, &dirY, &dirZ,
             &throughputR, &throughputG, &throughputB,
@@ -585,10 +591,10 @@ int main() {
                 return 1;
             }
         }
-        std::printf("[diff_gpu_probe] OK: all %u PathStateFields round-trip across %u paths "
-                    "(origin, dir, throughput=1, radiance=0, pixelIndex, sampleIndex=0, bounce=0, "
-                    "alive=1)\n",
-                    ohao::diff::PathStateLayout::kFieldCount, kCapacity);
+        std::printf("[diff_gpu_probe] OK: all %zu wf_generate-written PathStateFields round-trip "
+                    "across %u paths (origin, dir, throughput=1, radiance=0, pixelIndex, "
+                    "sampleIndex=0, bounce=0, alive=1)\n",
+                    allFields.size(), kCapacity);
 
         // 10. Queue population.
         const std::uint32_t counter =
@@ -677,7 +683,19 @@ int main() {
             {ohao::diff::PathStateField::SampleIndex, "SampleIndex", true, 0.0f, 7013u},
             {ohao::diff::PathStateField::Bounce, "Bounce", true, 0.0f, 7014u},
             {ohao::diff::PathStateField::Alive, "Alive", true, 0.0f, 7015u},
+            {ohao::diff::PathStateField::HitT, "HitT", false, 1016.0f, 0u},
         };
+        // This array must cover every PathStateField or the "all %u
+        // PathStateFields" claim below is false -- exactly the coverage gap
+        // a fix round caught here once already (HitT was added to the enum
+        // in Task 5 but not to this array or to wf_layout_probe.comp until a
+        // review found the mismatch). A build-time check so a future field
+        // addition fails loudly here instead of silently narrowing what
+        // "all" means.
+        static_assert(sizeof(expects) / sizeof(expects[0]) ==
+                          ohao::diff::PathStateLayout::kFieldCount,
+                      "expects[] must have exactly kFieldCount entries -- add the new field's "
+                      "row here AND its psSet* write in wf_layout_probe.comp");
 
         for (const FieldExpect& e : expects) {
             const std::vector<float> values = wf.readbackField(ctx.allocator(), e.field);
@@ -782,6 +800,29 @@ int main() {
             wf.destroy(ctx.allocator());
             return 1;
         }
+
+        // The canary must equal exactly the number of invocations the
+        // indirect dispatch launched. kCapacity (3072) is an exact multiple
+        // of wf_intersect.comp's local_size_x=64, so
+        // groupCountX = kCapacity/64 with no rounding tail, and every
+        // invocation runs (queue ring 0 holds all kCapacity paths). A wrong
+        // kCanarySlot or a wrong push field would still leave check 13's
+        // "canary == 0 on an empty queue" true, so that check alone cannot
+        // catch this; asserting a specific *nonzero* expected value here is
+        // what turns the canary into a real differential rather than a check
+        // that only ever needs to prove absence.
+        const std::uint32_t canary =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kCanarySlot);
+        if (canary != kCapacity) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: canary = %u, expected exactly %u invocations "
+                         "(wrong kCanarySlot or push field would read 0 here and only be caught "
+                         "by this nonzero assertion, not check 13's empty-queue one)\n",
+                         canary, kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
         if (queue1.size() != kCapacity) {
             std::fprintf(stderr, "[diff_gpu_probe] FAIL: queue ring 1 readback size %zu, expected %u\n",
                          queue1.size(), kCapacity);
@@ -803,8 +844,27 @@ int main() {
                 return 1;
             }
         }
+        // The tail beyond what compaction actually wrote, [kExpectedSurvivors,
+        // kCapacity), must still read as wf.zero()'s initial fill (0) --
+        // never inspected until now. This is what would catch an off-by-one
+        // or unclamped-write class of bug (like Task 5's fix-round Important
+        // 2, a missing dstSlot < capacity guard) that stays invisible to the
+        // sorted-prefix check above, which only ever looks at
+        // [0, kExpectedSurvivors).
+        for (uint32_t i = kExpectedSurvivors; i < kCapacity; ++i) {
+            if (queue1[i] != 0u) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: queue ring 1 tail[%u] = %u, expected 0 "
+                             "(a write landed past the compacted prefix -- possible unclamped "
+                             "dstSlot)\n",
+                             i, queue1[i]);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+
         std::printf("[diff_gpu_probe] OK: wf_intersect compacted exactly %u survivors into queue "
-                    "ring 1 (indices 0..%u, no duplicates, no dead paths)\n",
+                    "ring 1 (indices 0..%u, no duplicates, no dead paths, tail untouched)\n",
                     kExpectedSurvivors, kExpectedSurvivors - 1);
 
         // Bonus correctness beyond the brief's minimum: every survivor's

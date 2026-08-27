@@ -9,9 +9,9 @@
 // {ThroughputR,G,B}, within {RadianceR,G,B}, or between SampleIndex and
 // Bounce would round-trip undetected there.
 //
-// Here every one of the 16 fields gets a distinct value: float fields get
+// Here every one of the 17 fields gets a distinct value: float fields get
 // 1000.0 + fieldIndex, integer fields get 7000 + fieldIndex, in the enum's
-// declared order (OriginX=0 .. Alive=15). These are written as PLAIN
+// declared order (OriginX=0 .. HitT=16). These are written as PLAIN
 // LITERALS, deliberately NOT derived from the PS_* constants -- if a value
 // were computed as `1000.0 + float(PS_THROUGHPUT_G)`, then swapping
 // PS_THROUGHPUT_G and PS_THROUGHPUT_B would move both the write's
@@ -51,4 +51,7 @@ void main() {
     psSetSampleIndex(i, pc.capacity, 7013u);
     psSetBounce(i, pc.capacity, 7014u);
     psSetAlive(i, pc.capacity, 7015u);
+
+    // Field 16 (float, Task 5): 1000+index.
+    psSetHitT(i, pc.capacity, 1016.0);
 }
