@@ -111,9 +111,24 @@ automatically from declared reads and writes. But running its only real consumer
 2026-08-28 reported **29 hazards** (10 WRITE_AFTER_WRITE, 10 READ_AFTER_WRITE,
 9 WRITE_AFTER_READ) plus ~300 other validation errors from unrelated pre-existing
 defects. Routing the integrator through it would mean a wrong gradient could be a
-graph hazard rather than bad math. `ohao/diff/` owns its barriers, with
-synchronization validation enabled in its own probe. Fixing the graph is separate
-work with its own value.
+graph hazard rather than bad math. `ohao/diff/` owns its barriers. Fixing the graph
+is separate work with its own value.
+
+**What actually guards those hand-written barriers (measured 2026-08-28).**
+Synchronization validation is enabled in the subsystem's probe, but it does *not*
+cover this code. Deliberately neutering the counter's
+`SHADER_WRITE -> INDIRECT_COMMAND_READ` barrier produces a real correctness failure
+-- the compacted survivor count collapses from 1536 to 0 -- and **zero** `SYNC-`
+diagnostics. A control removing a different barrier is equally unreported. The
+feature works in general on this machine (it found 29 hazards in the deferred path),
+so it appears to catch render-pass and attachment hazards but not compute
+storage-buffer or indirect-command-read ones on this SDK and driver.
+
+Therefore a clean `SYNC-` run is **not** evidence that a barrier is correct. The
+real guard is the probe's analytic checks: the missing barrier above was caught
+immediately by the exactly-1536-survivors assertion, which named the likely cause.
+Keep barriers reviewed by reading, and keep every stage covered by a check whose
+expected answer is known in closed form rather than measured.
 
 ### Reversibility
 
