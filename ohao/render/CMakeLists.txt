@@ -1,15 +1,21 @@
 # OHAO Render Library — rendering algorithms, passes, RT
 # GPU abstraction lives in gpu/vulkan/
 
-find_package(OpenImageDenoise REQUIRED)
+find_package(OpenImageDenoise QUIET)
+if(OpenImageDenoise_FOUND)
+    message(STATUS "OpenImageDenoise: found — OIDN denoise enabled")
+else()
+    message(STATUS "OpenImageDenoise: not found — renderer configures without OIDN")
+endif()
 
 file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
 )
 
-# Exclude disabled passes
+# Exclude disabled passes and the removed fake Diff-IR tree if any file remains.
 list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/_disabled/")
+list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/diff/")
 
 add_library(ohao_renderer ${RENDERER_SOURCES})
 
@@ -30,8 +36,11 @@ target_link_libraries(ohao_renderer PUBLIC
     glm
     VulkanMemoryAllocator
     ${Vulkan_LIBRARIES}
-    OpenImageDenoise
 )
+if(OpenImageDenoise_FOUND)
+    target_link_libraries(ohao_renderer PUBLIC OpenImageDenoise)
+    target_compile_definitions(ohao_renderer PRIVATE OHAO_OIDN_ENABLED)
+endif()
 
 # Conditional NRD support (Sub-plan 4.A). nrd_denoise.cpp is always in
 # RENDERER_SOURCES via the glob; its body is guarded by OHAO_NRD_ENABLED
