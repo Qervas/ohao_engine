@@ -43,6 +43,13 @@ int main() {
     ctx.runImmediate([&](VkCommandBuffer cmd) { arena.zero(cmd); });
     for (std::size_t b : {blockA, blockB}) {
         const std::vector<float> values = arena.readback(ctx.allocator(), b);
+        if (values.empty()) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: block %zu readback returned no data "
+                         "(this check would otherwise pass having verified nothing)\n",
+                         b);
+            return 1;
+        }
         for (std::size_t i = 0; i < values.size(); ++i) {
             if (values[i] != 0.0f) {
                 std::fprintf(stderr,
@@ -61,6 +68,14 @@ int main() {
         return 1;
     }
     const std::vector<float> after = arena.readback(ctx.allocator(), blockA);
+    if (after.size() < 2) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: block %zu readback returned %zu floats, expected "
+                     "at least 2 (a readback regression here would otherwise be undefined "
+                     "behaviour, not a caught failure)\n",
+                     blockA, after.size());
+        return 1;
+    }
     if (after[0] != static_cast<float>(kInvocations)) {
         std::fprintf(stderr,
                      "[diff_gpu_probe] FAIL: atomicAdd gave %f, expected %u "

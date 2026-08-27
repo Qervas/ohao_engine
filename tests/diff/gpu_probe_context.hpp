@@ -18,6 +18,22 @@ namespace ohao::diff {
 /// GpuAllocator, a command pool, and one compute-capable queue.
 class GpuProbeContext {
 public:
+    GpuProbeContext() = default;
+    // init() can return false after having already created the instance,
+    // messenger, device, and/or command pool -- shutdown() is idempotent and
+    // safely tears down whatever partial state exists, so running it from
+    // the destructor closes that leak even when a caller's `if (!ctx.init())
+    // return 1;` never reaches an explicit ctx.shutdown().
+    ~GpuProbeContext() { shutdown(); }
+
+    // Not copyable or movable: the compiler-generated versions would copy
+    // the raw Vulkan handles, leaving two objects that each believe they own
+    // (and will each destroy) the same instance/device/pool.
+    GpuProbeContext(const GpuProbeContext&) = delete;
+    GpuProbeContext& operator=(const GpuProbeContext&) = delete;
+    GpuProbeContext(GpuProbeContext&&) = delete;
+    GpuProbeContext& operator=(GpuProbeContext&&) = delete;
+
     [[nodiscard]] bool init();
     void shutdown();
 

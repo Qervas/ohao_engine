@@ -29,6 +29,28 @@ void GradientArena::zero(VkCommandBuffer cmd) const {
     if (!m_buffer.isValid()) return;
     vkCmdFillBuffer(cmd, m_buffer.buffer, 0,
                     static_cast<VkDeviceSize>(m_layout.totalBytes()), 0u);
+
+    // "One command, one barrier": the fill is a TRANSFER-stage write. Any
+    // compute work that scatters gradients into this buffer afterwards must
+    // not begin until the fill is visible, or (in Stage 1's per-iteration
+    // loop) iteration N's zero races iteration N-1's scatter and silently
+    // corrupts gradients -- no crash, just wrong numbers. Today this arena is
+    // only ever zeroed once before any compute submit (see diff_gpu_probe),
+    // so vkQueueWaitIdle between separate submits already provides ordering
+    // and this barrier is currently a no-op in practice. It becomes load
+    // bearing the moment zero() and a compute dispatch share a command buffer
+    // or queue timeline, which is exactly Stage 1's pattern.
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = m_buffer.buffer;
+    barrier.offset = 0;
+    barrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 1, &barrier, 0, nullptr);
 }
 
 std::vector<float> GradientArena::readback(GpuAllocator& allocator,
