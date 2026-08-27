@@ -80,7 +80,7 @@ void WavefrontStage::record(VkCommandBuffer cmd) const {
         [cmd](auto&& source) {
             using T = std::decay_t<decltype(source)>;
             if constexpr (std::is_same_v<T, Fixed>) {
-                vkCmdDispatch(cmd, source.groups, 1, 1);
+                vkCmdDispatch(cmd, source.groups, source.groupsY, source.groupsZ);
             } else {
                 static_assert(std::is_same_v<T, Indirect>);
                 vkCmdDispatchIndirect(cmd, source.buffer, source.offset);

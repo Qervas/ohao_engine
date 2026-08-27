@@ -343,36 +343,33 @@ void GpuProbeContext::runImmediate(const std::function<void(VkCommandBuffer)>& f
 bool GpuProbeContext::dispatchStorageBufferCompute(const char* spvName, VkBuffer buffer,
                                                    const void* pushData, uint32_t pushSize,
                                                    uint32_t groupCountX) {
-    // Task 1 (Stage 0b-2a): this function used to hand-roll the whole
-    // shader-module -> descriptor-set-layout -> pipeline-layout -> pipeline
-    // -> descriptor-pool -> descriptor-set sequence (52 such calls existed
-    // across this file before the extraction). It is now the first, and
-    // simplest, client of ohao::diff::ComputePipeline, which lifted that
-    // exact sequence -- including this function's reverse-order,
-    // every-early-return-cleans-up-what-it-made failure discipline -- into
-    // ohao/diff/wavefront/compute_pipeline.{hpp,cpp}.
-    ComputePipeline pipeline;
+    // Task 1 (Stage 0b-2a) lifted the hand-rolled shader-module ->
+    // descriptor-set-layout -> pipeline-layout -> pipeline -> descriptor-
+    // pool -> descriptor-set sequence (52 such calls existed across this
+    // file before the extraction) into ohao::diff::ComputePipeline. Task 4
+    // goes one step further: WavefrontStage wraps that same ComputePipeline
+    // plus the bind/push/dispatch sequence below, so this is now a client of
+    // the library's dispatchable-stage abstraction rather than assembling
+    // that sequence by hand from ComputePipeline's primitives itself.
+    WavefrontStage stage;
     const VkDescriptorType bindingTypes[] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    if (!pipeline.build(m_device, spvName, bindingTypes, pushSize)) {
+    if (!stage.build(m_device, spvName, bindingTypes, pushSize)) {
         // build() already released anything it partially created.
         return false;
     }
 
     const VkBuffer buffers[] = {buffer};
-    bool ok = pipeline.bindBuffers(m_device, buffers);
+    bool ok = stage.bindBuffers(m_device, buffers);
     if (!ok) {
         std::fprintf(stderr, "[GpuProbeContext] dispatchStorageBufferCompute: bindBuffers failed\n");
     }
 
     if (ok) {
+        stage.setPushConstants(pushData, pushSize);
+        stage.setGroupCount(WavefrontStage::Fixed{groupCountX});
+
         runImmediate([&](VkCommandBuffer cmd) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline());
-            VkDescriptorSet descSet = pipeline.descriptorSet();
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout(), 0, 1,
-                                     &descSet, 0, nullptr);
-            vkCmdPushConstants(cmd, pipeline.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, pushSize,
-                                pushData);
-            vkCmdDispatch(cmd, groupCountX, 1, 1);
+            stage.record(cmd);
 
             VkBufferMemoryBarrier barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -388,10 +385,10 @@ bool GpuProbeContext::dispatchStorageBufferCompute(const char* spvName, VkBuffer
         });
     }
 
-    // Every path -- success or any failure above -- destroys the pipeline
+    // Every path -- success or any failure above -- destroys the stage
     // once, unconditionally, here; destroy() is idempotent so this is safe
     // even though build() may already have partially cleaned up on failure.
-    pipeline.destroy(m_device);
+    stage.destroy(m_device);
 
     return ok;
 }
@@ -768,115 +765,25 @@ bool GpuProbeContext::runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint3
         return false;
     }
 
-    // --- Shader module ---
-    const std::vector<uint32_t> spv = loadSpv("diff_wf_generate.comp.spv");
-    if (spv.empty()) return false;
-
-    VkShaderModuleCreateInfo moduleInfo{};
-    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    moduleInfo.codeSize = spv.size() * sizeof(uint32_t);
-    moduleInfo.pCode = spv.data();
-
-    VkShaderModule shaderModule = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(m_device, &moduleInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: vkCreateShaderModule "
-                              "failed\n");
-        return false;
-    }
-
-    // --- Descriptor set layout: state (0), queues (1), counters (2) ---
-    VkDescriptorSetLayoutBinding bindings[3]{};
-    for (uint32_t i = 0; i < 3; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-
-    VkDescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 3;
-    layoutInfo.pBindings = bindings;
-
-    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
-                              "vkCreateDescriptorSetLayout failed\n");
-        vkDestroyShaderModule(m_device, shaderModule, nullptr);
-        return false;
-    }
-
-    VkPushConstantRange pushRange{};
-    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pushRange.offset = 0;
-    pushRange.size = sizeof(PushConstants);
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &setLayout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
-
-    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) !=
-        VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
-                              "vkCreatePipelineLayout failed\n");
-        vkDestroyDescriptorSetLayout(m_device, setLayout, nullptr);
-        vkDestroyShaderModule(m_device, shaderModule, nullptr);
-        return false;
-    }
-
-    VkPipelineShaderStageCreateInfo stageInfo{};
-    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stageInfo.module = shaderModule;
-    stageInfo.pName = "main";
-
-    VkComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipelineInfo.stage = stageInfo;
-    pipelineInfo.layout = pipelineLayout;
-
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    ok = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) ==
-         VK_SUCCESS;
+    // --- state (0), queue (1), counter (2), via the wavefront execution
+    // library (ComputePipeline/WavefrontStage) rather than a hand-rolled
+    // shader-module -> layout -> pipeline -> pool -> set sequence. ---
+    WavefrontStage generate;
+    const VkDescriptorType bindingTypes[3] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    ok = generate.build(m_device, "diff_wf_generate.comp.spv", bindingTypes, sizeof(PushConstants));
     if (!ok) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
-                              "vkCreateComputePipelines failed\n");
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: generate build\n");
+        return false;
     }
-
-    VkDescriptorPool descPool = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSize.descriptorCount = 3;
-
-        VkDescriptorPoolCreateInfo descPoolInfo{};
-        descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        descPoolInfo.maxSets = 1;
-        descPoolInfo.poolSizeCount = 1;
-        descPoolInfo.pPoolSizes = &poolSize;
-        ok = vkCreateDescriptorPool(m_device, &descPoolInfo, nullptr, &descPool) == VK_SUCCESS;
-        if (!ok) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
-                                  "vkCreateDescriptorPool failed\n");
-        }
-    }
-
-    VkDescriptorSet descSet = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetAllocateInfo descAllocInfo{};
-        descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        descAllocInfo.descriptorPool = descPool;
-        descAllocInfo.descriptorSetCount = 1;
-        descAllocInfo.pSetLayouts = &setLayout;
-        ok = vkAllocateDescriptorSets(m_device, &descAllocInfo, &descSet) == VK_SUCCESS;
-        if (!ok) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
-                                  "vkAllocateDescriptorSets failed\n");
-        }
+    const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                           buffers.counterBuffer()};
+    ok = generate.bindBuffers(m_device, stateQueueCounter);
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: bindBuffers failed\n");
+        generate.destroy(m_device);
+        return false;
     }
 
     // --- Readback buffer for queue 0 (host-visible, this function's own) ---
@@ -894,45 +801,6 @@ bool GpuProbeContext::runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint3
     }
 
     if (ok) {
-        VkDescriptorBufferInfo stateInfo{};
-        stateInfo.buffer = buffers.stateBuffer();
-        stateInfo.offset = 0;
-        stateInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo queueInfo{};
-        queueInfo.buffer = buffers.queueBuffer();
-        queueInfo.offset = 0;
-        queueInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo counterInfo{};
-        counterInfo.buffer = buffers.counterBuffer();
-        counterInfo.offset = 0;
-        counterInfo.range = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet writes[3]{};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = descSet;
-        writes[0].dstBinding = 0;
-        writes[0].descriptorCount = 1;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[0].pBufferInfo = &stateInfo;
-
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = descSet;
-        writes[1].dstBinding = 1;
-        writes[1].descriptorCount = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[1].pBufferInfo = &queueInfo;
-
-        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet = descSet;
-        writes[2].dstBinding = 2;
-        writes[2].descriptorCount = 1;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[2].pBufferInfo = &counterInfo;
-
-        vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
-
         PushConstants push{};
         push.origin[0] = camera.origin[0]; push.origin[1] = camera.origin[1]; push.origin[2] = camera.origin[2];
         push.forward[0] = camera.forward[0]; push.forward[1] = camera.forward[1]; push.forward[2] = camera.forward[2];
@@ -942,17 +810,19 @@ bool GpuProbeContext::runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint3
         push.height = height;
         push.tanHalfFov = camera.tanHalfFov;
         push.capacity = capacity;
+        generate.setPushConstants(&push, sizeof(push));
 
+        // Genuinely 2-D: wf_generate.comp is local_size(8,8), and this probe
+        // covers a width x height pixel grid, not just local_size_y rows of
+        // it -- so the 3-D-widened WavefrontStage::Fixed is used here (see
+        // wavefront_stage.hpp), unlike the fused-loop probe's 1-D
+        // Fixed{width/8} (which is restricted to height == 8).
         const uint32_t groupsX = (width + 7) / 8;
         const uint32_t groupsY = (height + 7) / 8;
+        generate.setGroupCount(WavefrontStage::Fixed{groupsX, groupsY, 1});
 
         runImmediate([&](VkCommandBuffer cmd) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
-                                    &descSet, 0, nullptr);
-            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                               &push);
-            vkCmdDispatch(cmd, groupsX, groupsY, 1);
+            generate.record(cmd);
 
             // The dispatch wrote (shader-write) the state and queue buffers
             // and read-modify-wrote (atomicAdd) the counter buffer. Two
@@ -1013,11 +883,7 @@ bool GpuProbeContext::runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint3
 
     // --- Cleanup ---
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
-    if (descPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, descPool, nullptr);
-    if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, pipeline, nullptr);
-    if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, pipelineLayout, nullptr);
-    if (setLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, setLayout, nullptr);
-    if (shaderModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, shaderModule, nullptr);
+    generate.destroy(m_device);
 
     return ok;
 }
@@ -1107,213 +973,41 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
         }
     }
 
-    // --- Shader modules ---
-    const std::vector<uint32_t> prepSpv = ok ? loadSpv("diff_wf_prepare_indirect.comp.spv")
-                                              : std::vector<uint32_t>{};
-    if (ok && prepSpv.empty()) ok = false;
-    const std::vector<uint32_t> intersectSpv = ok ? loadSpv("diff_wf_intersect.comp.spv")
-                                                   : std::vector<uint32_t>{};
-    if (ok && intersectSpv.empty()) ok = false;
+    // --- prepare_indirect (counter only) and intersect (state, queue,
+    // counter, AS), via the wavefront execution library rather than a
+    // hand-rolled shader-module -> layout -> pipeline -> pool -> set
+    // sequence for each. Reuses WavefrontLoop::PrepareIndirectPush/
+    // IntersectPush -- byte-identical to this function's former private
+    // PrepPush/IntersectPush -- rather than redeclaring them. ---
+    WavefrontStage prepareIndirect;
+    WavefrontStage intersect;
+    const VkDescriptorType counterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    const VkDescriptorType intersectBindingTypes[4] = {
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
 
-    VkShaderModule prepModule = VK_NULL_HANDLE;
-    VkShaderModule intersectModule = VK_NULL_HANDLE;
-    if (ok) {
-        VkShaderModuleCreateInfo mi{};
-        mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        mi.codeSize = prepSpv.size() * sizeof(uint32_t);
-        mi.pCode = prepSpv.data();
-        if (vkCreateShaderModule(m_device, &mi, nullptr, &prepModule) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: prepare_indirect "
-                                  "vkCreateShaderModule failed\n");
-            ok = false;
-        }
+    if (ok && !prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", counterOnly,
+                                     sizeof(WavefrontLoop::PrepareIndirectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: prepare_indirect "
+                              "build\n");
+        ok = false;
     }
-    if (ok) {
-        VkShaderModuleCreateInfo mi{};
-        mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        mi.codeSize = intersectSpv.size() * sizeof(uint32_t);
-        mi.pCode = intersectSpv.data();
-        if (vkCreateShaderModule(m_device, &mi, nullptr, &intersectModule) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: intersect "
-                                  "vkCreateShaderModule failed\n");
-            ok = false;
-        }
+    if (ok && !intersect.build(m_device, "diff_wf_intersect.comp.spv", intersectBindingTypes,
+                               sizeof(WavefrontLoop::IntersectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: intersect build\n");
+        ok = false;
     }
 
-    // --- prepare_indirect: descriptor set layout (counter buffer only) ---
-    VkDescriptorSetLayoutBinding prepBinding{};
-    prepBinding.binding = 0;
-    prepBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    prepBinding.descriptorCount = 1;
-    prepBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayout prepSetLayout = VK_NULL_HANDLE;
     if (ok) {
-        VkDescriptorSetLayoutCreateInfo li{};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 1;
-        li.pBindings = &prepBinding;
-        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &prepSetLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: prepare_indirect "
-                                  "vkCreateDescriptorSetLayout failed\n");
+        const VkBuffer counterOnlyBuf[1] = {buffers.counterBuffer()};
+        const VkBuffer intersectBuffers[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                              buffers.counterBuffer()};
+        if (!prepareIndirect.bindBuffers(m_device, counterOnlyBuf) ||
+            !intersect.bindBuffers(m_device, intersectBuffers) ||
+            !intersect.bindAccelerationStructure(m_device, 3, accel.getTLAS())) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontIntersectProbe: descriptor binding\n");
             ok = false;
-        }
-    }
-
-    struct PrepPush {
-        uint32_t countSlot;
-        uint32_t argsSlot;
-    };
-
-    VkPipelineLayout prepPipelineLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkPushConstantRange pr{};
-        pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pr.offset = 0;
-        pr.size = sizeof(PrepPush);
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount = 1;
-        pli.pSetLayouts = &prepSetLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges = &pr;
-        if (vkCreatePipelineLayout(m_device, &pli, nullptr, &prepPipelineLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: prepare_indirect "
-                                  "vkCreatePipelineLayout failed\n");
-            ok = false;
-        }
-    }
-
-    VkPipeline prepPipeline = VK_NULL_HANDLE;
-    if (ok) {
-        VkPipelineShaderStageCreateInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        si.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        si.module = prepModule;
-        si.pName = "main";
-        VkComputePipelineCreateInfo pi{};
-        pi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        pi.stage = si;
-        pi.layout = prepPipelineLayout;
-        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &prepPipeline) !=
-            VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: prepare_indirect "
-                                  "vkCreateComputePipelines failed\n");
-            ok = false;
-        }
-    }
-
-    // --- intersect: descriptor set layout (state, queue, counter, AS) ---
-    VkDescriptorSetLayoutBinding intersectBindings[4]{};
-    for (uint32_t i = 0; i < 3; ++i) {
-        intersectBindings[i].binding = i;
-        intersectBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        intersectBindings[i].descriptorCount = 1;
-        intersectBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-    intersectBindings[3].binding = 3;
-    intersectBindings[3].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    intersectBindings[3].descriptorCount = 1;
-    intersectBindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayout intersectSetLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetLayoutCreateInfo li{};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 4;
-        li.pBindings = intersectBindings;
-        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &intersectSetLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: intersect "
-                                  "vkCreateDescriptorSetLayout failed\n");
-            ok = false;
-        }
-    }
-
-    struct IntersectPush {
-        uint32_t capacity;
-        uint32_t srcQueueBase;
-        uint32_t srcCountSlot;
-        uint32_t dstQueueBase;
-        uint32_t dstCountSlot;
-        uint32_t canarySlot;
-    };
-
-    VkPipelineLayout intersectPipelineLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkPushConstantRange pr{};
-        pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pr.offset = 0;
-        pr.size = sizeof(IntersectPush);
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount = 1;
-        pli.pSetLayouts = &intersectSetLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges = &pr;
-        if (vkCreatePipelineLayout(m_device, &pli, nullptr, &intersectPipelineLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: intersect "
-                                  "vkCreatePipelineLayout failed\n");
-            ok = false;
-        }
-    }
-
-    VkPipeline intersectPipeline = VK_NULL_HANDLE;
-    if (ok) {
-        VkPipelineShaderStageCreateInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        si.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        si.module = intersectModule;
-        si.pName = "main";
-        VkComputePipelineCreateInfo pi{};
-        pi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        pi.stage = si;
-        pi.layout = intersectPipelineLayout;
-        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &intersectPipeline) !=
-            VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: intersect "
-                                  "vkCreateComputePipelines failed\n");
-            ok = false;
-        }
-    }
-
-    // --- Descriptor pool/sets ---
-    VkDescriptorPool descPool = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorPoolSize poolSizes[2]{};
-        poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSizes[0].descriptorCount = 4;  // 1 (prep counter) + 3 (intersect state/queue/counter)
-        poolSizes[1].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-        poolSizes[1].descriptorCount = 1;
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.maxSets = 2;
-        dpi.poolSizeCount = 2;
-        dpi.pPoolSizes = poolSizes;
-        if (vkCreateDescriptorPool(m_device, &dpi, nullptr, &descPool) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: "
-                                  "vkCreateDescriptorPool failed\n");
-            ok = false;
-        }
-    }
-
-    VkDescriptorSet prepSet = VK_NULL_HANDLE;
-    VkDescriptorSet intersectSet = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetLayout layouts[2] = {prepSetLayout, intersectSetLayout};
-        VkDescriptorSet sets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-        VkDescriptorSetAllocateInfo dai{};
-        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dai.descriptorPool = descPool;
-        dai.descriptorSetCount = 2;
-        dai.pSetLayouts = layouts;
-        if (vkAllocateDescriptorSets(m_device, &dai, sets) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: "
-                                  "vkAllocateDescriptorSets failed\n");
-            ok = false;
-        } else {
-            prepSet = sets[0];
-            intersectSet = sets[1];
         }
     }
 
@@ -1332,85 +1026,24 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
     }
 
     if (ok) {
-        VkDescriptorBufferInfo counterInfo{};
-        counterInfo.buffer = buffers.counterBuffer();
-        counterInfo.offset = 0;
-        counterInfo.range = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet prepWrite{};
-        prepWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        prepWrite.dstSet = prepSet;
-        prepWrite.dstBinding = 0;
-        prepWrite.descriptorCount = 1;
-        prepWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        prepWrite.pBufferInfo = &counterInfo;
-
-        VkDescriptorBufferInfo stateInfo{};
-        stateInfo.buffer = buffers.stateBuffer();
-        stateInfo.offset = 0;
-        stateInfo.range = VK_WHOLE_SIZE;
-        VkDescriptorBufferInfo queueInfo{};
-        queueInfo.buffer = buffers.queueBuffer();
-        queueInfo.offset = 0;
-        queueInfo.range = VK_WHOLE_SIZE;
-
-        VkAccelerationStructureKHR tlas = accel.getTLAS();
-        VkWriteDescriptorSetAccelerationStructureKHR asWrite{};
-        asWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-        asWrite.accelerationStructureCount = 1;
-        asWrite.pAccelerationStructures = &tlas;
-
-        VkWriteDescriptorSet intersectWrites[4]{};
-        intersectWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        intersectWrites[0].dstSet = intersectSet;
-        intersectWrites[0].dstBinding = 0;
-        intersectWrites[0].descriptorCount = 1;
-        intersectWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        intersectWrites[0].pBufferInfo = &stateInfo;
-
-        intersectWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        intersectWrites[1].dstSet = intersectSet;
-        intersectWrites[1].dstBinding = 1;
-        intersectWrites[1].descriptorCount = 1;
-        intersectWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        intersectWrites[1].pBufferInfo = &queueInfo;
-
-        intersectWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        intersectWrites[2].dstSet = intersectSet;
-        intersectWrites[2].dstBinding = 2;
-        intersectWrites[2].descriptorCount = 1;
-        intersectWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        intersectWrites[2].pBufferInfo = &counterInfo;
-
-        intersectWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        intersectWrites[3].pNext = &asWrite;
-        intersectWrites[3].dstSet = intersectSet;
-        intersectWrites[3].dstBinding = 3;
-        intersectWrites[3].descriptorCount = 1;
-        intersectWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-
-        vkUpdateDescriptorSets(m_device, 1, &prepWrite, 0, nullptr);
-        vkUpdateDescriptorSets(m_device, 4, intersectWrites, 0, nullptr);
-
-        const PrepPush prepPush{WavefrontBuffers::kCurrentCountSlot,
-                                WavefrontBuffers::kIndirectArgsSlot};
-        const IntersectPush intersectPush{capacity,
-                                          /*srcQueueBase=*/0u,
-                                          WavefrontBuffers::kCurrentCountSlot,
-                                          /*dstQueueBase=*/capacity,
-                                          WavefrontBuffers::kNextCountSlot,
-                                          WavefrontBuffers::kCanarySlot};
+        const WavefrontLoop::PrepareIndirectPush prepPush{WavefrontBuffers::kCurrentCountSlot,
+                                                           WavefrontBuffers::kIndirectArgsSlot};
+        const WavefrontLoop::IntersectPush intersectPush{capacity,
+                                                          /*srcQueueBase=*/0u,
+                                                          WavefrontBuffers::kCurrentCountSlot,
+                                                          /*dstQueueBase=*/capacity,
+                                                          WavefrontBuffers::kNextCountSlot,
+                                                          WavefrontBuffers::kCanarySlot};
+        prepareIndirect.setPushConstants(&prepPush, sizeof(prepPush));
+        prepareIndirect.setGroupCount(WavefrontStage::Fixed{1u});
+        intersect.setPushConstants(&intersectPush, sizeof(intersectPush));
         const VkDeviceSize indirectOffset =
             static_cast<VkDeviceSize>(WavefrontBuffers::kIndirectArgsSlot) * sizeof(uint32_t);
+        intersect.setGroupCount(WavefrontStage::Indirect{buffers.counterBuffer(), indirectOffset});
 
         runImmediate([&](VkCommandBuffer cmd) {
             // --- prepare_indirect: counter[countSlot] -> counter[argsSlot..+2] ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prepPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prepPipelineLayout, 0, 1,
-                                    &prepSet, 0, nullptr);
-            vkCmdPushConstants(cmd, prepPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(prepPush), &prepPush);
-            vkCmdDispatch(cmd, 1, 1, 1);
+            prepareIndirect.record(cmd);
 
             // The dispatch-args triple wf_prepare_indirect just wrote must be
             // visible to vkCmdDispatchIndirect's read of the SAME buffer
@@ -1456,12 +1089,7 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
             // visible on this queue, so no additional barrier is needed for
             // them here), compacts survivors into ring 1, sized by the
             // indirect args buffer just made visible above. ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, intersectPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, intersectPipelineLayout, 0,
-                                    1, &intersectSet, 0, nullptr);
-            vkCmdPushConstants(cmd, intersectPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(intersectPush), &intersectPush);
-            vkCmdDispatchIndirect(cmd, buffers.counterBuffer(), indirectOffset);
+            intersect.record(cmd);
 
             // intersect's writes (state Alive/HitT, queue ring 1, counter
             // slots next-count/canary) must become visible to what reads
@@ -1529,20 +1157,10 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
         }
     }
 
-    // --- Cleanup ---
+    // --- Cleanup, reverse order. ---
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
-    if (descPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, descPool, nullptr);
-    if (intersectPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, intersectPipeline, nullptr);
-    if (intersectPipelineLayout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(m_device, intersectPipelineLayout, nullptr);
-    if (intersectSetLayout != VK_NULL_HANDLE)
-        vkDestroyDescriptorSetLayout(m_device, intersectSetLayout, nullptr);
-    if (intersectModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, intersectModule, nullptr);
-    if (prepPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, prepPipeline, nullptr);
-    if (prepPipelineLayout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(m_device, prepPipelineLayout, nullptr);
-    if (prepSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, prepSetLayout, nullptr);
-    if (prepModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, prepModule, nullptr);
+    intersect.destroy(m_device);
+    prepareIndirect.destroy(m_device);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
     if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 
@@ -1566,207 +1184,30 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
         return false;
     }
 
-    // --- Shader modules ---
-    const std::vector<uint32_t> prepSpv = loadSpv("diff_wf_prepare_indirect.comp.spv");
-    if (prepSpv.empty()) return false;
-    const std::vector<uint32_t> scatterSpv = loadSpv("diff_wf_scatter.comp.spv");
-    if (scatterSpv.empty()) return false;
+    // --- prepare_indirect (counter only) and scatter (state, queue,
+    // counter, debug draws), via the wavefront execution library rather
+    // than a hand-rolled shader-module -> layout -> pipeline -> pool -> set
+    // sequence for each. Reuses WavefrontLoop::PrepareIndirectPush/
+    // ScatterPush -- byte-identical to this function's former private
+    // PrepPush/ScatterPush -- rather than redeclaring them. ---
+    WavefrontStage prepareIndirect;
+    WavefrontStage scatter;
+    const VkDescriptorType counterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    const VkDescriptorType scatterBindingTypes[4] = {
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
-    VkShaderModule prepModule = VK_NULL_HANDLE;
-    VkShaderModule scatterModule = VK_NULL_HANDLE;
-    {
-        VkShaderModuleCreateInfo mi{};
-        mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        mi.codeSize = prepSpv.size() * sizeof(uint32_t);
-        mi.pCode = prepSpv.data();
-        if (vkCreateShaderModule(m_device, &mi, nullptr, &prepModule) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: prepare_indirect "
-                                  "vkCreateShaderModule failed\n");
-            ok = false;
-        }
+    if (!prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", counterOnly,
+                               sizeof(WavefrontLoop::PrepareIndirectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: prepare_indirect "
+                              "build\n");
+        return false;
     }
-    if (ok) {
-        VkShaderModuleCreateInfo mi{};
-        mi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        mi.codeSize = scatterSpv.size() * sizeof(uint32_t);
-        mi.pCode = scatterSpv.data();
-        if (vkCreateShaderModule(m_device, &mi, nullptr, &scatterModule) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: scatter "
-                                  "vkCreateShaderModule failed\n");
-            ok = false;
-        }
-    }
-
-    // --- prepare_indirect: descriptor set layout (counter buffer only) ---
-    VkDescriptorSetLayoutBinding prepBinding{};
-    prepBinding.binding = 0;
-    prepBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    prepBinding.descriptorCount = 1;
-    prepBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-    VkDescriptorSetLayout prepSetLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetLayoutCreateInfo li{};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 1;
-        li.pBindings = &prepBinding;
-        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &prepSetLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: prepare_indirect "
-                                  "vkCreateDescriptorSetLayout failed\n");
-            ok = false;
-        }
-    }
-
-    struct PrepPush {
-        uint32_t countSlot;
-        uint32_t argsSlot;
-    };
-
-    VkPipelineLayout prepPipelineLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkPushConstantRange pr{};
-        pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pr.offset = 0;
-        pr.size = sizeof(PrepPush);
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount = 1;
-        pli.pSetLayouts = &prepSetLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges = &pr;
-        if (vkCreatePipelineLayout(m_device, &pli, nullptr, &prepPipelineLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: prepare_indirect "
-                                  "vkCreatePipelineLayout failed\n");
-            ok = false;
-        }
-    }
-
-    VkPipeline prepPipeline = VK_NULL_HANDLE;
-    if (ok) {
-        VkPipelineShaderStageCreateInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        si.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        si.module = prepModule;
-        si.pName = "main";
-        VkComputePipelineCreateInfo pi{};
-        pi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        pi.stage = si;
-        pi.layout = prepPipelineLayout;
-        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &prepPipeline) !=
-            VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: prepare_indirect "
-                                  "vkCreateComputePipelines failed\n");
-            ok = false;
-        }
-    }
-
-    // --- scatter: descriptor set layout (state, queue, counter, debug draws) ---
-    VkDescriptorSetLayoutBinding scatterBindings[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
-        scatterBindings[i].binding = i;
-        scatterBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        scatterBindings[i].descriptorCount = 1;
-        scatterBindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-
-    VkDescriptorSetLayout scatterSetLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetLayoutCreateInfo li{};
-        li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        li.bindingCount = 4;
-        li.pBindings = scatterBindings;
-        if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &scatterSetLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: scatter "
-                                  "vkCreateDescriptorSetLayout failed\n");
-            ok = false;
-        }
-    }
-
-    struct ScatterPush {
-        uint32_t capacity;
-        uint32_t srcQueueBase;
-        uint32_t srcCountSlot;
-        uint32_t dstQueueBase;
-        uint32_t dstCountSlot;
-        float albedo;
-        uint32_t iterationSeed;
-    };
-
-    VkPipelineLayout scatterPipelineLayout = VK_NULL_HANDLE;
-    if (ok) {
-        VkPushConstantRange pr{};
-        pr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pr.offset = 0;
-        pr.size = sizeof(ScatterPush);
-        VkPipelineLayoutCreateInfo pli{};
-        pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pli.setLayoutCount = 1;
-        pli.pSetLayouts = &scatterSetLayout;
-        pli.pushConstantRangeCount = 1;
-        pli.pPushConstantRanges = &pr;
-        if (vkCreatePipelineLayout(m_device, &pli, nullptr, &scatterPipelineLayout) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: scatter "
-                                  "vkCreatePipelineLayout failed\n");
-            ok = false;
-        }
-    }
-
-    VkPipeline scatterPipeline = VK_NULL_HANDLE;
-    if (ok) {
-        VkPipelineShaderStageCreateInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        si.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        si.module = scatterModule;
-        si.pName = "main";
-        VkComputePipelineCreateInfo pi{};
-        pi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        pi.stage = si;
-        pi.layout = scatterPipelineLayout;
-        if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pi, nullptr, &scatterPipeline) !=
-            VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: scatter "
-                                  "vkCreateComputePipelines failed\n");
-            ok = false;
-        }
-    }
-
-    // --- Descriptor pool/sets ---
-    VkDescriptorPool descPool = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSize.descriptorCount = 5;  // 1 (prep counter) + 4 (scatter state/queue/counter/debug)
-
-        VkDescriptorPoolCreateInfo dpi{};
-        dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        dpi.maxSets = 2;
-        dpi.poolSizeCount = 1;
-        dpi.pPoolSizes = &poolSize;
-        if (vkCreateDescriptorPool(m_device, &dpi, nullptr, &descPool) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: "
-                                  "vkCreateDescriptorPool failed\n");
-            ok = false;
-        }
-    }
-
-    VkDescriptorSet prepSet = VK_NULL_HANDLE;
-    VkDescriptorSet scatterSet = VK_NULL_HANDLE;
-    if (ok) {
-        VkDescriptorSetLayout layouts[2] = {prepSetLayout, scatterSetLayout};
-        VkDescriptorSet sets[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-        VkDescriptorSetAllocateInfo dai{};
-        dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        dai.descriptorPool = descPool;
-        dai.descriptorSetCount = 2;
-        dai.pSetLayouts = layouts;
-        if (vkAllocateDescriptorSets(m_device, &dai, sets) != VK_SUCCESS) {
-            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: "
-                                  "vkAllocateDescriptorSets failed\n");
-            ok = false;
-        } else {
-            prepSet = sets[0];
-            scatterSet = sets[1];
-        }
+    if (!scatter.build(m_device, "diff_wf_scatter.comp.spv", scatterBindingTypes,
+                       sizeof(WavefrontLoop::ScatterPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: scatter build\n");
+        prepareIndirect.destroy(m_device);
+        return false;
     }
 
     // --- Readback buffers, owned by this function: dst queue ring (via
@@ -1802,70 +1243,29 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     }
 
     if (ok) {
-        VkDescriptorBufferInfo counterInfo{};
-        counterInfo.buffer = buffers.counterBuffer();
-        counterInfo.offset = 0;
-        counterInfo.range = VK_WHOLE_SIZE;
+        const VkBuffer counterOnlyBuf[1] = {buffers.counterBuffer()};
+        const VkBuffer scatterBuffers[4] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                            buffers.counterBuffer(), debugDrawsBuffer.buffer};
+        if (!prepareIndirect.bindBuffers(m_device, counterOnlyBuf) ||
+            !scatter.bindBuffers(m_device, scatterBuffers)) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontScatterProbe: descriptor binding\n");
+            ok = false;
+        }
+    }
 
-        VkWriteDescriptorSet prepWrite{};
-        prepWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        prepWrite.dstSet = prepSet;
-        prepWrite.dstBinding = 0;
-        prepWrite.descriptorCount = 1;
-        prepWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        prepWrite.pBufferInfo = &counterInfo;
-
-        VkDescriptorBufferInfo stateInfo{};
-        stateInfo.buffer = buffers.stateBuffer();
-        stateInfo.offset = 0;
-        stateInfo.range = VK_WHOLE_SIZE;
-        VkDescriptorBufferInfo queueInfo{};
-        queueInfo.buffer = buffers.queueBuffer();
-        queueInfo.offset = 0;
-        queueInfo.range = VK_WHOLE_SIZE;
-        VkDescriptorBufferInfo debugInfo{};
-        debugInfo.buffer = debugDrawsBuffer.buffer;
-        debugInfo.offset = 0;
-        debugInfo.range = VK_WHOLE_SIZE;
-
-        VkWriteDescriptorSet scatterWrites[4]{};
-        scatterWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        scatterWrites[0].dstSet = scatterSet;
-        scatterWrites[0].dstBinding = 0;
-        scatterWrites[0].descriptorCount = 1;
-        scatterWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        scatterWrites[0].pBufferInfo = &stateInfo;
-
-        scatterWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        scatterWrites[1].dstSet = scatterSet;
-        scatterWrites[1].dstBinding = 1;
-        scatterWrites[1].descriptorCount = 1;
-        scatterWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        scatterWrites[1].pBufferInfo = &queueInfo;
-
-        scatterWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        scatterWrites[2].dstSet = scatterSet;
-        scatterWrites[2].dstBinding = 2;
-        scatterWrites[2].descriptorCount = 1;
-        scatterWrites[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        scatterWrites[2].pBufferInfo = &counterInfo;
-
-        scatterWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        scatterWrites[3].dstSet = scatterSet;
-        scatterWrites[3].dstBinding = 3;
-        scatterWrites[3].descriptorCount = 1;
-        scatterWrites[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        scatterWrites[3].pBufferInfo = &debugInfo;
-
-        vkUpdateDescriptorSets(m_device, 1, &prepWrite, 0, nullptr);
-        vkUpdateDescriptorSets(m_device, 4, scatterWrites, 0, nullptr);
-
-        const PrepPush prepPush{srcCountSlot, WavefrontBuffers::kIndirectArgsSlot};
-        const ScatterPush scatterPush{capacity,      srcQueueBase, srcCountSlot,
-                                      dstQueueBase,  dstCountSlot, albedo,
-                                      iterationSeed};
+    if (ok) {
+        const WavefrontLoop::PrepareIndirectPush prepPush{srcCountSlot,
+                                                           WavefrontBuffers::kIndirectArgsSlot};
+        const WavefrontLoop::ScatterPush scatterPush{capacity,      srcQueueBase, srcCountSlot,
+                                                      dstQueueBase,  dstCountSlot, albedo,
+                                                      iterationSeed};
+        prepareIndirect.setPushConstants(&prepPush, sizeof(prepPush));
+        prepareIndirect.setGroupCount(WavefrontStage::Fixed{1u});
+        scatter.setPushConstants(&scatterPush, sizeof(scatterPush));
         const VkDeviceSize indirectOffset =
             static_cast<VkDeviceSize>(WavefrontBuffers::kIndirectArgsSlot) * sizeof(uint32_t);
+        scatter.setGroupCount(WavefrontStage::Indirect{buffers.counterBuffer(), indirectOffset});
         const VkDeviceSize dstSlotOffset =
             static_cast<VkDeviceSize>(dstCountSlot) * sizeof(uint32_t);
 
@@ -1893,12 +1293,7 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                  &fillBarrier, 0, nullptr);
 
             // --- prepare_indirect: counter[srcCountSlot] -> counter[argsSlot..+2] ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prepPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prepPipelineLayout, 0, 1,
-                                    &prepSet, 0, nullptr);
-            vkCmdPushConstants(cmd, prepPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(prepPush), &prepPush);
-            vkCmdDispatch(cmd, 1, 1, 1);
+            prepareIndirect.record(cmd);
 
             // Same barrier task-5-report.md documents as load-bearing:
             // wf_prepare_indirect's write of the dispatch-args triple must be
@@ -1923,12 +1318,7 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             // that read here -- writes state in place and re-queues into
             // (dstQueueBase, dstCountSlot), sized by the indirect args
             // buffer just made visible above. ---
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scatterPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, scatterPipelineLayout, 0, 1,
-                                    &scatterSet, 0, nullptr);
-            vkCmdPushConstants(cmd, scatterPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(scatterPush), &scatterPush);
-            vkCmdDispatchIndirect(cmd, buffers.counterBuffer(), indirectOffset);
+            scatter.record(cmd);
 
             // scatter's writes (state origin/dir/throughput/bounce, queue
             // dst ring, counter dstCountSlot, DebugDraws) must become
@@ -2010,21 +1400,11 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
         }
     }
 
-    // --- Cleanup ---
+    // --- Cleanup, reverse order. ---
     if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
-    if (descPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, descPool, nullptr);
-    if (scatterPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, scatterPipeline, nullptr);
-    if (scatterPipelineLayout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(m_device, scatterPipelineLayout, nullptr);
-    if (scatterSetLayout != VK_NULL_HANDLE)
-        vkDestroyDescriptorSetLayout(m_device, scatterSetLayout, nullptr);
-    if (scatterModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, scatterModule, nullptr);
-    if (prepPipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, prepPipeline, nullptr);
-    if (prepPipelineLayout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(m_device, prepPipelineLayout, nullptr);
-    if (prepSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, prepSetLayout, nullptr);
-    if (prepModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, prepModule, nullptr);
+    scatter.destroy(m_device);
+    prepareIndirect.destroy(m_device);
 
     return ok;
 }

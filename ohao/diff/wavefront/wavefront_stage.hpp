@@ -42,8 +42,17 @@ class WavefrontStage {
 public:
     /// Dispatch a workgroup count known when record() is called (e.g.
     /// generate: fixed at width*height / 64 for the whole probe).
+    ///
+    /// Three components, not one: `wf_generate.comp` is `local_size(8,8)`,
+    /// so a genuinely 2-D pixel grid (width x height, not just a single row
+    /// of local_size_y pixels) needs a 2-D dispatch. `groupsY`/`groupsZ`
+    /// default to 1, so every existing `Fixed{n}` call site -- which meant
+    /// "dispatch (n,1,1)" -- keeps meaning exactly that; this is a strict
+    /// widening of the type, not a behaviour change for 1-D callers.
     struct Fixed {
         uint32_t groups{0};
+        uint32_t groupsY{1};
+        uint32_t groupsZ{1};
     };
 
     /// Dispatch a workgroup count computed on the GPU by a prior stage
