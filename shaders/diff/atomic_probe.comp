@@ -1,0 +1,23 @@
+#version 450
+#extension GL_EXT_shader_atomic_float : require
+
+// Proves shaderBufferFloat32AtomicAdd actually accumulates under contention.
+// Every invocation adds 1.0 to the SAME element, so a correct result is exactly
+// the invocation count. A non-atomic read-modify-write loses updates and lands
+// well below it.
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) buffer GradientArena {
+    float data[];
+} arena;
+
+layout(push_constant) uniform Push {
+    uint targetIndex;
+    uint invocationCount;
+} pc;
+
+void main() {
+    if (gl_GlobalInvocationID.x >= pc.invocationCount) return;
+    atomicAdd(arena.data[pc.targetIndex], 1.0);
+}
