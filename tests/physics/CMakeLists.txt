@@ -12,15 +12,14 @@ target_include_directories(physics_backend_tests PRIVATE
 )
 
 # ohao_physics transitively depends on component, actor, UI, scene libs
-target_link_libraries(physics_backend_tests PRIVATE
-    ohao_physics
-    ohao_scene
-    ohao_core
-    -Wl,--start-group
-    ohao_renderer
-    ${Vulkan_LIBRARIES}
-    glm
-)
+if(MSVC)
+    target_link_libraries(physics_backend_tests PRIVATE
+        ohao_physics ohao_scene ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
+else()
+    target_link_libraries(physics_backend_tests PRIVATE
+        ohao_physics ohao_scene ohao_core
+        -Wl,--start-group ohao_renderer ${Vulkan_LIBRARIES} glm)
+endif()
 
 # Link Jolt if available
 if(TARGET Jolt)

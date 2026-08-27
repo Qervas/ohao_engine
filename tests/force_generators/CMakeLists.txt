@@ -11,15 +11,14 @@ target_include_directories(force_generator_tests PRIVATE
 )
 
 # ohao_physics contains all force generator and rigid body implementations
-target_link_libraries(force_generator_tests PRIVATE
-    ohao_physics
-    ohao_scene
-    ohao_core
-    -Wl,--start-group
-    ohao_renderer
-    ${Vulkan_LIBRARIES}
-    glm
-)
+if(MSVC)
+    target_link_libraries(force_generator_tests PRIVATE
+        ohao_physics ohao_scene ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
+else()
+    target_link_libraries(force_generator_tests PRIVATE
+        ohao_physics ohao_scene ohao_core
+        -Wl,--start-group ohao_renderer ${Vulkan_LIBRARIES} glm)
+endif()
 
 if(TARGET Jolt)
     target_link_libraries(force_generator_tests PRIVATE Jolt)

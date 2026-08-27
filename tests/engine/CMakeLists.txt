@@ -12,15 +12,14 @@ target_include_directories(engine_tests PRIVATE
 
 target_compile_features(engine_tests PRIVATE cxx_std_20)
 
-target_link_libraries(engine_tests PRIVATE
-    ohao_scene
-    ohao_physics
-    ohao_core
-    -Wl,--start-group
-    ohao_renderer
-    ${Vulkan_LIBRARIES}
-    glm
-)
+if(MSVC)
+    target_link_libraries(engine_tests PRIVATE
+        ohao_scene ohao_physics ohao_core ohao_renderer ${Vulkan_LIBRARIES} glm)
+else()
+    target_link_libraries(engine_tests PRIVATE
+        ohao_scene ohao_physics ohao_core
+        -Wl,--start-group ohao_renderer ${Vulkan_LIBRARIES} glm)
+endif()
 
 if(TARGET Jolt)
     target_link_libraries(engine_tests PRIVATE Jolt)
