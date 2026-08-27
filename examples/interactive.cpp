@@ -9,6 +9,21 @@
 //   M     — dump motion vector AOV (encoded RGB: +X→red, +Y→green)
 //   ESC   — quit
 
+#if defined(_WIN32)
+// <GL/gl.h> on Windows is not self-contained: it uses APIENTRY and WINGDIAPI,
+// which come from <windows.h>. Including it first avoids 70+ C2144/C2086
+// errors under MSVC. The undefs drop wingdi.h macros that collide with engine
+// identifiers -- notably OPAQUE, which clashes with
+// MaterialData::AlphaMode::OPAQUE pulled in via material_component.hpp.
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#undef OPAQUE
+#undef TRANSPARENT
+#undef near
+#undef far
+#endif
+
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 
