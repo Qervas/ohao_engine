@@ -16,6 +16,7 @@
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/rng/diff_rng.hpp"
 #include "diff/param/param_registry.hpp"
+#include "diff/wavefront/wavefront_buffers.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -314,6 +315,66 @@ int main() {
         rngArena.destroy(ctx.allocator());
         std::printf("[diff_gpu_probe] OK: CPU and GLSL RNG agree bit-exactly over %u draws\n",
                     kDraws);
+    }
+
+    // 7. Wavefront path-state/queue/counter buffers: build, zero, and confirm
+    //    every one of the 16 PathStateFields and both counter slots come
+    //    back zeroed at exactly the expected element count. This is the
+    //    substrate every bounce dispatch in the wavefront integrator reads
+    //    and writes through -- state cannot live in registers across a
+    //    dispatch boundary.
+    {
+        constexpr std::uint32_t kCapacity = 4096;
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wavefront buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        for (std::uint32_t i = 0; i < ohao::diff::PathStateLayout::kFieldCount; ++i) {
+            const auto field = static_cast<ohao::diff::PathStateField>(i);
+            const std::vector<float> values = wf.readbackField(ctx.allocator(), field);
+            // Explicit size check (not just empty()) guards against a vacuous
+            // pass: a readback regression that silently truncated to a
+            // smaller-but-nonempty vector would otherwise loop over fewer
+            // elements than the field actually has and pass having verified
+            // less than it claims.
+            if (values.size() != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: field %u readback returned %zu elements, "
+                             "expected %u\n",
+                             i, values.size(), kCapacity);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            for (std::size_t e = 0; e < values.size(); ++e) {
+                if (values[e] != 0.0f) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: field %u element %zu = %f, expected 0\n",
+                                 i, e, values[e]);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+
+        for (std::uint32_t slot : {ohao::diff::WavefrontBuffers::kCurrentCountSlot,
+                                    ohao::diff::WavefrontBuffers::kNextCountSlot}) {
+            const std::uint32_t count = wf.readbackCounter(ctx.allocator(), slot);
+            if (count != 0) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: counter slot %u = %u, expected 0\n",
+                             slot, count);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+
+        wf.destroy(ctx.allocator());
+        std::printf("[diff_gpu_probe] OK: wavefront buffers zero across %u fields x %u paths "
+                    "and both counter slots\n",
+                    ohao::diff::PathStateLayout::kFieldCount, kCapacity);
     }
 
     arena.destroy(ctx.allocator());
