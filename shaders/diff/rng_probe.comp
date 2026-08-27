@@ -1,0 +1,34 @@
+#version 450
+
+// Compile guard and future parity harness for shaders/includes/diff/rng.glsl.
+//
+// The GLSL RNG is a matched pair with ohao/diff/rng/diff_rng.cpp: the CPU side is
+// unit-tested, this side is what actually runs. Nothing else includes rng.glsl yet,
+// so without this file the shader build cannot detect that the header is broken --
+// which is exactly how an uncompilable header reached the tree.
+//
+// Stage 0b extends this into the CPU-vs-GLSL bit-parity check the seed invariant needs.
+
+#include "diff/rng.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) buffer DrawsOut {
+    float v[];
+} draws;
+
+layout(push_constant) uniform Push {
+    uint pixelIndex;
+    uint sampleIndex;
+    uint iterationSeed;
+    uint drawCount;
+} pc;
+
+void main() {
+    if (gl_GlobalInvocationID.x != 0u) return;
+
+    DiffPathRng rng = diffRngForPath(pc.pixelIndex, pc.sampleIndex, pc.iterationSeed);
+    for (uint i = 0u; i < pc.drawCount; ++i) {
+        draws.v[i] = diffRngNext1D(rng);
+    }
+}

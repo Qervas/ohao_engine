@@ -4,8 +4,8 @@ namespace ohao::diff {
 namespace {
 
 // PCG hash. Mirrored verbatim in shaders/includes/diff/rng.glsl.
-std::uint32_t pcgHash(std::uint32_t input) noexcept {
-    std::uint32_t state = input * 747796405u + 2891336453u;
+std::uint32_t pcgHash(std::uint32_t bits) noexcept {
+    std::uint32_t state = bits * 747796405u + 2891336453u;
     std::uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
 }
