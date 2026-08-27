@@ -551,7 +551,11 @@ bool GpuProbeContext::runVisibilityProbe(float planeDistance, uint32_t width, ui
 
     // --- BLAS/TLAS ---
     RTAccelerationStructure accel;
-    if (ok && !accel.init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool)) {
+    // This context enables VK_KHR_ray_query but NOT VK_KHR_ray_tracing_pipeline,
+    // so the post-build barrier must name COMPUTE_SHADER only. Naming the
+    // ray-tracing stage without its extension is invalid usage.
+    if (ok && !accel.init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
         std::fprintf(stderr, "[GpuProbeContext] runVisibilityProbe: RTAccelerationStructure::init "
                               "failed (ray tracing not supported on this device)\n");
         ok = false;

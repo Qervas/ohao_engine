@@ -10,9 +10,11 @@ RTAccelerationStructure::~RTAccelerationStructure() {
 
 bool RTAccelerationStructure::init(VkDevice device, VkPhysicalDevice physicalDevice,
                                     VkQueue graphicsQueue, uint32_t queueFamily,
-                                    VkCommandPool commandPool) {
+                                    VkCommandPool commandPool,
+                                   VkPipelineStageFlags asConsumerStages) {
     m_device = device;
     m_physicalDevice = physicalDevice;
+    m_asConsumerStages = asConsumerStages;
     m_queue = graphicsQueue;
     m_queueFamily = queueFamily;
     m_commandPool = commandPool;
@@ -519,14 +521,16 @@ void RTAccelerationStructure::buildTLAS(VkCommandBuffer cmd) {
 
     vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRangeInfo);
 
-    // Memory barrier — TLAS must be ready before any ray trace dispatch
+    // Memory barrier — TLAS must be ready before anything reads it. The
+    // destination stages come from init(): a ray-query consumer runs in
+    // COMPUTE_SHADER, which a ray-tracing-pipeline-only mask never ordered.
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
     barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
     vkCmdPipelineBarrier(cmd,
                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-                         VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
+                         m_asConsumerStages,
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
 
     if (ownCmd) endSingleTimeCommands(cmd);

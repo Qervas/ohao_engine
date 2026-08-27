@@ -53,8 +53,18 @@ public:
 
     // Initialize — must be called before anything else.
     // Returns false if RT extensions are not available.
+    // asConsumerStages: the pipeline stages that will READ the acceleration
+    // structure, used as the destination mask of the post-build barrier. Only
+    // the caller knows this -- querying device features reports what the GPU
+    // supports, not what was enabled at vkCreateDevice, and naming a stage whose
+    // extension was not enabled is invalid usage. Default suits the engine, which
+    // enables both the RT pipeline and ray query. A ray-query-only context must
+    // pass VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT alone.
     [[nodiscard]] bool init(VkDevice device, VkPhysicalDevice physicalDevice,
-              VkQueue graphicsQueue, uint32_t queueFamily, VkCommandPool commandPool);
+              VkQueue graphicsQueue, uint32_t queueFamily, VkCommandPool commandPool,
+              VkPipelineStageFlags asConsumerStages =
+                  VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR |
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
     // Check if RT is supported on this device
     [[nodiscard]] bool isSupported() const noexcept { return m_supported; }
@@ -128,6 +138,9 @@ private:
     // RT properties
     VkPhysicalDeviceAccelerationStructureFeaturesKHR m_asFeatures{};
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtPipelineProperties{};
+
+    // Destination stage mask of the post-TLAS-build barrier; see init().
+    VkPipelineStageFlags m_asConsumerStages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
     // Function pointers (loaded dynamically)
     PFN_vkCreateAccelerationStructureKHR vkCreateAccelerationStructureKHR = nullptr;
