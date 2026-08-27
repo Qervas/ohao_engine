@@ -149,3 +149,10 @@ if(BUILD_ENGINE_TESTS)
     message(STATUS "Building engine subsystem tests")
     add_subdirectory(tests/engine)
 endif()
+
+# Differentiable renderer tests
+option(BUILD_DIFF_TESTS "Build differentiable renderer tests" ON)
+if(BUILD_DIFF_TESTS)
+    message(STATUS "Building differentiable renderer tests")
+    add_subdirectory(tests/diff)
+endif()

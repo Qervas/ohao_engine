@@ -4,9 +4,7 @@
 #include <windows.h>
 #include <vulkan/vulkan_win32.h>
 #endif
-#ifdef OHAO_DLSS_ENABLED
-#include <cstring>  // strcmp for DLSS extension dedup
-#endif
+#include <cstring>  // strcmp for DLSS dedup + diff-renderer extension probing
 
 namespace ohao {
 
@@ -187,6 +185,60 @@ bool VulkanRenderer::createLogicalDevice() {
     }
 #endif
 
+    // --- Differentiable renderer subsystem (Stage 0a): optional capabilities ---
+    // Probed inline rather than by calling ohao::diff::queryDeviceCaps():
+    // ohao_diff links PUBLIC against ohao_gpu_vulkan (this target), so calling
+    // into ohao_diff from here would create a target_link_libraries cycle
+    // (ohao_gpu_vulkan -> ohao_diff -> ohao_gpu_vulkan). This block duplicates
+    // the same extension+feature check as ohao::diff::queryDeviceCaps() in
+    // ohao/diff/device_caps.cpp -- keep the two in sync if either changes.
+    // A device lacking these still creates successfully; it simply cannot run
+    // the differentiable renderer.
+    bool diffRayQuerySupported = false;
+    bool diffBufferAtomicAddSupported = false;
+    {
+        uint32_t availCount = 0;
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, nullptr);
+        std::vector<VkExtensionProperties> avail(availCount);
+        vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &availCount, avail.data());
+        auto extSupported = [&](const char* n) {
+            for (const auto& e : avail) if (std::strcmp(e.extensionName, n) == 0) return true;
+            return false;
+        };
+        const bool rqExt = extSupported(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        const bool afExt = extSupported(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+
+        VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloatProbe{};
+        atomicFloatProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+
+        VkPhysicalDeviceRayQueryFeaturesKHR rayQueryProbe{};
+        rayQueryProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        rayQueryProbe.pNext = &atomicFloatProbe;
+
+        VkPhysicalDeviceFeatures2 probeFeatures2{};
+        probeFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        probeFeatures2.pNext = &rayQueryProbe;
+        vkGetPhysicalDeviceFeatures2(m_physicalDevice, &probeFeatures2);
+
+        diffRayQuerySupported = rqExt && (rayQueryProbe.rayQuery == VK_TRUE);
+        diffBufferAtomicAddSupported = afExt && (atomicFloatProbe.shaderBufferFloat32AtomicAdd == VK_TRUE);
+
+        if (diffRayQuerySupported) {
+            m_enabledDeviceExtensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            std::cout << "[diff] enabling device ext: " << VK_KHR_RAY_QUERY_EXTENSION_NAME << std::endl;
+        } else {
+            std::cerr << "[diff] device ext NOT supported by selected GPU (differentiable renderer will be unavailable): "
+                       << VK_KHR_RAY_QUERY_EXTENSION_NAME << std::endl;
+        }
+        if (diffBufferAtomicAddSupported) {
+            m_enabledDeviceExtensions.push_back(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+            std::cout << "[diff] enabling device ext: " << VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME << std::endl;
+        } else {
+            std::cerr << "[diff] device ext NOT supported by selected GPU (differentiable renderer will be unavailable): "
+                       << VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME << std::endl;
+        }
+    }
+
     const std::vector<const char*>& deviceExtensions = m_enabledDeviceExtensions;
 
     // Vulkan 1.2 features (buffer device address, descriptor indexing)
@@ -218,9 +270,34 @@ bool VulkanRenderer::createLogicalDevice() {
     rtFeatures.pNext = &asFeatures;
     rtFeatures.rayTracingPipeline = VK_TRUE;
 
+    // Inline ray tracing for the differentiable traversal. The forward and
+    // backward kernels must share one traversal source so their RNG consumption
+    // order is identical, which requires the whole path in a single function.
+    // Only linked into the pNext chain when diffRayQuerySupported (i.e. its
+    // extension is actually enabled above) -- a feature struct in the chain
+    // for an unenabled extension is invalid, regardless of the bit's value.
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{};
+    void* diffChainTail = &rtFeatures;
+    if (diffRayQuerySupported) {
+        rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+        rayQueryFeatures.pNext = diffChainTail;
+        rayQueryFeatures.rayQuery = VK_TRUE;
+        diffChainTail = &rayQueryFeatures;
+    }
+
+    // Gradient scatter. Buffer atomics only -- gradients are never image-backed.
+    // Same conditional-chain rule as above.
+    VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloatFeatures{};
+    if (diffBufferAtomicAddSupported) {
+        atomicFloatFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+        atomicFloatFeatures.pNext = diffChainTail;
+        atomicFloatFeatures.shaderBufferFloat32AtomicAdd = VK_TRUE;
+        diffChainTail = &atomicFloatFeatures;
+    }
+
     VkPhysicalDeviceFeatures2 deviceFeatures2{};
     deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    deviceFeatures2.pNext = &rtFeatures;
+    deviceFeatures2.pNext = diffChainTail;
     // Enable required device features (were previously in pEnabledFeatures)
     // Enable all features the renderer uses
     deviceFeatures2.features.samplerAnisotropy = VK_TRUE;
