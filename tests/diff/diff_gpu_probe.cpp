@@ -477,6 +477,8 @@ int main() {
             rngArena.destroy(ctx.allocator());
             return 1;
         }
+        std::printf("[diff_gpu_probe] OK: CPU PathRng drawCount matches expected count (%u)\n",
+                    kDraws);
         rngArena.destroy(ctx.allocator());
         std::printf("[diff_gpu_probe] OK: CPU and GLSL RNG agree bit-exactly over %u draws\n",
                     kDraws);

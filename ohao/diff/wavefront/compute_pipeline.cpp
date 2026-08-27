@@ -6,16 +6,13 @@
 #include <string>
 
 namespace ohao::diff {
-namespace {
 
-// Search a few candidate locations for the compiled SPV -- the exact
-// relative path depends on whether the calling binary is launched from the
-// repo root or from its own output directory. Duplicated (not shared) from
-// tests/diff/gpu_probe_context.cpp's identical helper: that copy still
-// backs the probe drivers this task does not migrate (runVisibilityProbe,
-// runWavefrontGenerateProbe, runWavefrontIntersectProbe,
-// runWavefrontScatterProbe -- Task 4), and this library must not depend on
-// anything under tests/.
+// Declared in compute_pipeline.hpp: shared by this file's build() and by
+// tests/diff/gpu_probe_context.cpp's probe drivers not yet migrated onto
+// ComputePipeline (Task 4). tests/diff links ohao_diff, so exposing this
+// from the library rather than keeping a byte-identical copy under tests/
+// is a plain de-duplication -- it does not make the library depend on
+// tests/.
 std::vector<uint32_t> loadSpv(const char* filename) {
     const std::vector<std::string> searchPaths = {
         std::string("bin/shaders/") + filename,
@@ -41,8 +38,6 @@ std::vector<uint32_t> loadSpv(const char* filename) {
     file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(fileSize));
     return buffer;
 }
-
-}  // namespace
 
 ComputePipeline::~ComputePipeline() {
     if (m_device != VK_NULL_HANDLE) destroy(m_device);

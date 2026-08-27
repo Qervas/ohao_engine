@@ -6,41 +6,15 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <string>
 #include <vector>
 
 namespace ohao::diff {
 namespace {
 
-// Search a few candidate locations for the compiled SPV -- the exact relative
-// path depends on whether the probe is launched from the repo root or from
-// its own output directory.
-std::vector<uint32_t> loadSpv(const char* filename) {
-    const std::vector<std::string> searchPaths = {
-        std::string("bin/shaders/") + filename,
-        std::string("build/Release/bin/shaders/") + filename,
-        std::string("build/Debug/bin/shaders/") + filename,
-        std::string("build/shaders/") + filename,
-        std::string("shaders/") + filename,
-    };
-
-    std::ifstream file;
-    for (const auto& p : searchPaths) {
-        file.open(p, std::ios::ate | std::ios::binary);
-        if (file.is_open()) break;
-    }
-    if (!file.is_open()) {
-        std::fprintf(stderr, "[GpuProbeContext] could not find shader SPV: %s\n", filename);
-        return {};
-    }
-
-    const size_t fileSize = static_cast<size_t>(file.tellg());
-    std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
-    file.seekg(0);
-    file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(fileSize));
-    return buffer;
-}
+// loadSpv (search a few candidate locations for the compiled SPV) now lives
+// in ohao::diff::loadSpv (compute_pipeline.hpp/.cpp) -- this file used to
+// keep a byte-identical private copy, which is called at every `loadSpv(...)`
+// site below via unqualified lookup into the enclosing ohao::diff namespace.
 
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,

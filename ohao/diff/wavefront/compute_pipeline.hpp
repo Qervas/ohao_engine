@@ -8,6 +8,21 @@
 
 namespace ohao::diff {
 
+/// Loads `filename`'s compiled SPIR-V, searching a few candidate locations
+/// (bin/shaders/, build/Release/bin/shaders/, build/Debug/bin/shaders/,
+/// build/shaders/, shaders/) since the exact relative path depends on
+/// whether the calling binary is launched from the repo root or from its
+/// own output directory. Returns an empty vector (and logs to stderr) if
+/// the file cannot be found or opened.
+///
+/// Shared by ComputePipeline::build() and tests/diff/gpu_probe_context.cpp
+/// (which still hand-rolls several pipelines of its own for probes not yet
+/// migrated onto ComputePipeline -- Task 4). tests/diff already links
+/// ohao_diff, so calling this instead of keeping a byte-identical private
+/// copy is a plain de-duplication, not a new library/tests dependency
+/// direction.
+[[nodiscard]] std::vector<uint32_t> loadSpv(const char* filename);
+
 /// RAII wrapper around the compute-pipeline creation sequence every
 /// wavefront stage repeats: SPIR-V module -> descriptor set layout ->
 /// pipeline layout -> pipeline -> descriptor pool -> descriptor set.
@@ -36,14 +51,12 @@ public:
     ComputePipeline(ComputePipeline&&) = delete;
     ComputePipeline& operator=(ComputePipeline&&) = delete;
 
-    /// Loads `spvName`'s compiled SPIR-V (searched via the same
-    /// candidate-path scheme tests/diff/gpu_probe_context.cpp's loadSpv
-    /// used -- moved into this class rather than left in the harness
-    /// because build() takes a name, not bytecode: every current and
-    /// future caller loads from the same compiled-shaders output
-    /// directory, so there is no case that needs bytecode handed in
-    /// directly, and duplicating a ~25-line path-search helper is cheaper
-    /// than plumbing bytecode through every call site).
+    /// Loads `spvName`'s compiled SPIR-V via the free ohao::diff::loadSpv()
+    /// above (also used directly by tests/diff/gpu_probe_context.cpp's
+    /// probes that don't go through ComputePipeline yet) -- build() takes a
+    /// name, not bytecode, because every current and future caller loads
+    /// from the same compiled-shaders output directory, so there is no case
+    /// that needs bytecode handed in directly.
     ///
     /// Builds a descriptor set layout with one binding per entry of
     /// `bindings` (binding index == span index -- see bindBuffers'
