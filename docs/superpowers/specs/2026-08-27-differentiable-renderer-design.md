@@ -130,6 +130,46 @@ immediately by the exactly-1536-survivors assertion, which named the likely caus
 Keep barriers reviewed by reading, and keep every stage covered by a check whose
 expected answer is known in closed form rather than measured.
 
+**Revised 2026-08-28, after the fused loop (Stage 0b-2a Task 3) measured this
+properly.** The claim above -- that the analytic checks are the real guard -- is
+true of the `INDIRECT_COMMAND_READ` barrier and **not** true in general. Measured
+on the fused bounce loop, with every compute-side memory barrier disabled at once
+(the post-generate barrier, the `COMPUTE -> TRANSFER` barrier before each counter
+fill, the `TRANSFER -> COMPUTE` barrier after it, and the post-dispatch
+`SHADER_WRITE -> SHADER_READ|SHADER_WRITE` barrier -- eight occurrences per
+four-bounce run):
+
+```
+run1 exit=0 ok=22 fail=0 sync=0
+run2 exit=0 ok=22 fail=0 sync=0
+run3 exit=0 ok=22 fail=0 sync=0
+```
+
+The contrast, removing only `COMPUTE_SHADER -> DRAW_INDIRECT /
+INDIRECT_COMMAND_READ` (first occurrence):
+
+```
+run1 exit=1 ok=19 sync=0 | FAIL: fused loop of 1 bounces left 0 live paths, expected all 512
+run2 exit=1 ok=19 sync=0 | (identical)
+```
+
+So on this driver the **only** barrier in the loop whose absence anything detects
+is `COMPUTE -> DRAW_INDIRECT`. The entire compute-to-compute and
+transfer-to-compute set is unguarded by the analytic checks *and* silent under
+synchronization validation. Nothing in this repository would notice its removal.
+
+Two consequences bind every later stage. First, **a green probe run is not
+evidence that a compute-side barrier is load-bearing, correct, or even present**
+-- do not delete one because tests still pass, which is the inference this
+measurement exists to forbid. Second, a barrier-removal experiment must remove
+something that is actually load-bearing: the first attempt here disabled one
+post-dispatch barrier and concluded it was unguarded, when the surrounding fill
+barriers still supplied both the execution dependency and the whole counter-buffer
+memory dependency. A `VkBufferMemoryBarrier` narrows the *memory* scope, never the
+*execution* scope, so removing one between two dispatches that other barriers
+already serialize proves nothing. Reading the barrier set remains the only real
+guard, which is why `WavefrontLoop` keeps all of them in one reviewable file.
+
 ### Reversibility
 
 The validation harness compares numbers against finite differences and closed-form scenes. It does
