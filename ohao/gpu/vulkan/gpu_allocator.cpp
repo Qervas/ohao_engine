@@ -56,6 +56,17 @@ bool GpuAllocator::initialize(VkInstance instance, VkPhysicalDevice physicalDevi
     // vkGetBufferDeviceAddress() call on such a buffer is validation-layer
     // invalid. First load-bearing user: RTAccelerationStructure's BLAS/TLAS
     // build inputs (Task 6, differentiable-renderer visibility probe).
+    //
+    // Caller contract: `device` must have been created with
+    // VkPhysicalDeviceVulkan12Features::bufferDeviceAddress = VK_TRUE (or the
+    // equivalent VK_KHR_buffer_device_address feature struct) -- this flag
+    // makes VMA tag *every* block allocation with
+    // VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT, which is only legal if the
+    // device actually enabled the feature. tests/renderer/renderer_pipeline_tests.cpp
+    // creates a device without that feature and calls initialize() with it;
+    // that file is not referenced by any CMakeLists.txt today so it is inert,
+    // but it becomes a live VUID break the moment someone wires it into the
+    // build.
     allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
     VkResult result = vmaCreateAllocator(&allocatorInfo, &m_allocator);

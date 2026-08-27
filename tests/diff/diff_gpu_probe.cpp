@@ -5,6 +5,9 @@
 //   1. GradientArena allocates, zeroes, and reads back.
 //   2. atomicAdd on a float SSBO accumulates correctly under contention.
 //   3. rayQueryEXT visibility matches a closed-form plane intersection.
+//   4. A half-quad's hit/miss pattern pins the camera's Y orientation --
+//      check 3's distance formula is even in dy, so it can't catch a flipped
+//      up-vector or NDC-Y sign on its own.
 
 #include "gpu_probe_context.hpp"
 
@@ -12,6 +15,7 @@
 #include "diff/grad/arena_layout.hpp"
 #include "diff/grad/gradient_arena.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -92,10 +96,18 @@ int main() {
                 kInvocations);
 
     // 3. Ray-query visibility against a plane whose intersections are analytic.
+    //
+    // kW != kH deliberately: a square resolution makes the closed form
+    // (even in both dx and dy, see check 4's comment) blind to a transposed
+    // pixel index, and leaves the ndcX*aspect term in the shader untested
+    // since aspect == 1 would hide a missing/backwards aspect multiply.
     constexpr uint32_t kW = 64;
-    constexpr uint32_t kH = 64;
+    constexpr uint32_t kH = 48;
     constexpr float kPlaneDistance = 2.0f;
     constexpr float kTanHalfFov = 0.2f;  // narrow, so every ray hits the quad
+    constexpr float kAspect = static_cast<float>(kW) / static_cast<float>(kH);
+    // Widened horizontal extent still lands inside the +-1 quad:
+    // kTanHalfFov * kAspect ~= 0.267, so max |x| at z=-2 is ~0.53.
 
     std::vector<float> hitsT;
     if (!ctx.runVisibilityProbe(kPlaneDistance, kW, kH, kTanHalfFov, hitsT)) {
@@ -110,7 +122,7 @@ int main() {
 
     // The centre pixel looks straight down -Z, so t is exactly the plane distance.
     const std::size_t centre = static_cast<std::size_t>(kH / 2) * kW + (kW / 2);
-    if (std::fabs(hitsT[centre] - kPlaneDistance) > 1e-3f) {
+    if (std::fabs(hitsT[centre] - kPlaneDistance) > 1e-4f) {
         std::fprintf(stderr,
                      "[diff_gpu_probe] FAIL: centre ray t = %f, expected %f\n",
                      hitsT[centre], kPlaneDistance);
@@ -118,6 +130,12 @@ int main() {
     }
 
     // Off-axis rays are longer by exactly 1/cos(theta), and every ray must hit.
+    // Tolerance is 1e-4: float32 at t~=2 supports ~1e-5, so this still leaves
+    // ~10x headroom over float noise while catching e.g. a dropped +0.5
+    // pixel-centre offset (worst-case error ~1.19e-3 at this FOV, comfortably
+    // above 1e-4). Do not widen this to make a failure pass -- report the
+    // actual max error and stop.
+    float maxAbsError = 0.0f;
     for (uint32_t y = 0; y < kH; ++y) {
         for (uint32_t x = 0; x < kW; ++x) {
             const std::size_t i = static_cast<std::size_t>(y) * kW + x;
@@ -129,19 +147,58 @@ int main() {
             }
             const float ndcX = 2.0f * (static_cast<float>(x) + 0.5f) / kW - 1.0f;
             const float ndcY = 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / kH;
-            const float dx = ndcX * kTanHalfFov;  // aspect is 1
+            const float dx = ndcX * kAspect * kTanHalfFov;
             const float dy = ndcY * kTanHalfFov;
             const float expected = kPlaneDistance * std::sqrt(1.0f + dx * dx + dy * dy);
-            if (std::fabs(hitsT[i] - expected) > 2e-3f) {
+            const float err = std::fabs(hitsT[i] - expected);
+            maxAbsError = std::max(maxAbsError, err);
+            if (err > 1e-4f) {
                 std::fprintf(stderr,
-                             "[diff_gpu_probe] FAIL: pixel (%u,%u) t = %f, closed form %f\n",
-                             x, y, hitsT[i], expected);
+                             "[diff_gpu_probe] FAIL: pixel (%u,%u) t = %f, closed form %f "
+                             "(|err| = %g)\n",
+                             x, y, hitsT[i], expected, err);
                 return 1;
             }
         }
     }
     std::printf("[diff_gpu_probe] OK: ray query matches closed-form plane intersection "
-                "over %u pixels\n", kW * kH);
+                "over %u pixels (max |err| = %g)\n", kW * kH, maxAbsError);
+
+    // 4. A half-quad (y in [0,1] only) makes the hit/miss pattern asymmetric
+    // in Y. The closed form sqrt(1+dx^2+dy^2) above is even in dy, so a
+    // flipped up-vector or a flipped NDC-Y sign is invisible to it -- every
+    // ray still lands at the "right" distance from *some* consistent-looking
+    // convention, even a backwards one. This check pins the actual convention
+    // Stage 0b's integrator inherits: ndcY > 0 for y < kH/2, i.e. the top
+    // half of the image must hit and the bottom half must miss.
+    std::vector<float> halfHits;
+    if (!ctx.runVisibilityProbe(kPlaneDistance, kW, kH, kTanHalfFov, halfHits,
+                                /*quadMinY=*/0.0f)) {
+        std::fprintf(stderr, "[diff_gpu_probe] FAIL: half-quad visibility probe dispatch\n");
+        return 1;
+    }
+    if (halfHits.size() != static_cast<std::size_t>(kW) * kH) {
+        std::fprintf(stderr, "[diff_gpu_probe] FAIL: half-quad hit buffer size %zu, expected %u\n",
+                     halfHits.size(), kW * kH);
+        return 1;
+    }
+    for (uint32_t y = 0; y < kH; ++y) {
+        const float ndcY = 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / static_cast<float>(kH);
+        const bool expectHit = (ndcY > 0.0f);
+        for (uint32_t x = 0; x < kW; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * kW + x;
+            const bool didHit = (halfHits[i] >= 0.0f);
+            if (didHit != expectHit) {
+                std::fprintf(stderr,
+                    "[diff_gpu_probe] FAIL: half-quad orientation at (%u,%u): expected %s, got %s "
+                    "(camera up-vector or NDC-Y sign is inverted)\n",
+                    x, y, expectHit ? "hit" : "miss", didHit ? "hit" : "miss");
+                return 1;
+            }
+        }
+    }
+    std::printf("[diff_gpu_probe] OK: half-quad pins camera Y orientation over %u pixels\n",
+                kW * kH);
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

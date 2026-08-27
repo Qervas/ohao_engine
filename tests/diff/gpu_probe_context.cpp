@@ -500,7 +500,8 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
 }
 
 bool GpuProbeContext::runVisibilityProbe(float planeDistance, uint32_t width, uint32_t height,
-                                         float tanHalfFov, std::vector<float>& outHits) {
+                                         float tanHalfFov, std::vector<float>& outHits,
+                                         float quadMinY) {
     // Push constants: must byte-match shaders/diff/visibility_probe.comp's Push
     // block exactly (80 bytes -- four vec3+pad quads plus a trailing quad of
     // width/height/tanHalfFov/pad).
@@ -523,13 +524,13 @@ bool GpuProbeContext::runVisibilityProbe(float planeDistance, uint32_t width, ui
 
     outHits.clear();
 
-    // --- Quad geometry: x,y in [-1,1] at z = -planeDistance ---
+    // --- Quad geometry: x in [-1,1], y in [quadMinY,1] at z = -planeDistance ---
     const float d = planeDistance;
     const std::array<float, 12> positions = {
-        -1.0f, -1.0f, -d,
-         1.0f, -1.0f, -d,
-         1.0f,  1.0f, -d,
-        -1.0f,  1.0f, -d,
+        -1.0f, quadMinY, -d,
+         1.0f, quadMinY, -d,
+         1.0f,  1.0f,    -d,
+        -1.0f,  1.0f,    -d,
     };
     const std::array<uint32_t, 6> indices = {0, 1, 2, 0, 2, 3};
 

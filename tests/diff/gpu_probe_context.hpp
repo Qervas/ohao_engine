@@ -52,11 +52,18 @@ public:
                                       uint32_t invocations);
 
     /// Builds a BLAS/TLAS for a single axis-aligned quad spanning
-    /// x,y in [-1,1] at z = -planeDistance, traces one ray per pixel from the
-    /// origin looking down -Z, and fills `outHits` with width*height distances.
+    /// x in [-1,1], y in [quadMinY,1] at z = -planeDistance, traces one ray
+    /// per pixel from the origin looking down -Z, and fills `outHits` with
+    /// width*height distances (-1.0 on miss). `quadMinY` defaults to -1.0
+    /// (a full-frustum-covering quad, so every ray hits); passing 0.0 makes
+    /// only the top half of the quad present, which turns hit/miss into an
+    /// orientation-sensitive signal -- see diff_gpu_probe.cpp's half-quad
+    /// check for why the plain distance check alone can't catch a flipped
+    /// camera convention.
     /// Returns false on any Vulkan error.
     [[nodiscard]] bool runVisibilityProbe(float planeDistance, uint32_t width, uint32_t height,
-                                          float tanHalfFov, std::vector<float>& outHits);
+                                          float tanHalfFov, std::vector<float>& outHits,
+                                          float quadMinY = -1.0f);
 
 private:
     VkInstance m_instance{VK_NULL_HANDLE};
