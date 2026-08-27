@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 #include "render/rt/sobol_generator.hpp"
 #include <cmath>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 using ohao::SobolGenerator;
 
@@ -103,7 +106,11 @@ TEST(Owen, MassDecorrelation) {
         uint32_t v = i * 0x9E3779B9u;  // any deterministic spread
         uint32_t a = owenScramble(v, 0x1u);
         uint32_t b = owenScramble(v, 0x2u);
+#if defined(_MSC_VER)
+        bitDiffTotal += static_cast<uint32_t>(__popcnt(a ^ b));
+#else
         bitDiffTotal += __builtin_popcount(a ^ b);
+#endif
     }
     // For a good hash-based scramble, expected bit differences ≈ 16 per sample,
     // i.e. 16000 total for 1000 samples. Allow wide band.

@@ -11,20 +11,17 @@ target_include_directories(renderer_test PRIVATE
     ${stb_SOURCE_DIR}
 )
 
-target_link_libraries(renderer_test PRIVATE
-    # Wrap in group to resolve circular deps between static libs (GCC)
-    -Wl,--start-group
-    ohao_renderer
-    ohao_gpu_vulkan
-    ohao_scene
-    ohao_physics
-    ohao_audio
-    ohao_core
-    -Wl,--end-group
-    ${Vulkan_LIBRARIES}
-    glm
-    VulkanMemoryAllocator
-)
+if(MSVC)
+    target_link_libraries(renderer_test PRIVATE
+        ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+else()
+    target_link_libraries(renderer_test PRIVATE
+        -Wl,--start-group
+        ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+        -Wl,--end-group
+        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
+endif()
 
 if(TARGET Jolt)
     target_link_libraries(renderer_test PRIVATE Jolt)
@@ -53,7 +50,10 @@ add_executable(env_cdf_test env_cdf_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/env_cdf.cpp
 )
 target_include_directories(env_cdf_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
-target_link_libraries(env_cdf_test PRIVATE gtest gtest_main pthread)
+target_link_libraries(env_cdf_test PRIVATE gtest gtest_main)
+if(UNIX)
+    target_link_libraries(env_cdf_test PRIVATE pthread)
+endif()
 include(GoogleTest)
 gtest_discover_tests(env_cdf_test)
 
@@ -63,7 +63,10 @@ add_executable(sobol_test sobol_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/owen_scramble.cpp
 )
 target_include_directories(sobol_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
-target_link_libraries(sobol_test PRIVATE gtest gtest_main pthread)
+target_link_libraries(sobol_test PRIVATE gtest gtest_main)
+if(UNIX)
+    target_link_libraries(sobol_test PRIVATE pthread)
+endif()
 include(GoogleTest)
 gtest_discover_tests(sobol_test)
 
@@ -72,6 +75,9 @@ add_executable(denoise_parse_test denoise_parse_test.cpp
     ${CMAKE_SOURCE_DIR}/ohao/render/rt/denoise/denoise_types.cpp
 )
 target_include_directories(denoise_parse_test PRIVATE ${CMAKE_SOURCE_DIR}/ohao)
-target_link_libraries(denoise_parse_test PRIVATE gtest gtest_main pthread)
+target_link_libraries(denoise_parse_test PRIVATE gtest gtest_main)
+if(UNIX)
+    target_link_libraries(denoise_parse_test PRIVATE pthread)
+endif()
 include(GoogleTest)
 gtest_discover_tests(denoise_parse_test)
