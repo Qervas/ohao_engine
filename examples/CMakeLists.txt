@@ -30,13 +30,8 @@ ohao_example(env_demo)
 ohao_example(turntable)
 
 
-# Interactive Viewer (requires GLFW)
-find_package(glfw3 QUIET)
-if(glfw3_FOUND)
-    ohao_example(interactive)
-    find_package(OpenGL REQUIRED)
-    target_link_libraries(interactive PRIVATE glfw OpenGL::GL)
-    message(STATUS "Interactive viewer enabled (GLFW found)")
-else()
-    message(STATUS "Interactive viewer disabled (GLFW not found)")
-endif()
+# Interactive Viewer. GLFW is built from source by external/cmake/glfw.cmake
+# so it matches the project's CRT; no find_package or prebuilt binary needed.
+ohao_example(interactive)
+find_package(OpenGL REQUIRED)
+target_link_libraries(interactive PRIVATE glfw OpenGL::GL)

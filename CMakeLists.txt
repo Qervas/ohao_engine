@@ -98,22 +98,6 @@ add_custom_target(copy_assets ALL
 )
 
 
-# GLFW from scoop: prefer MSVC 2026 (lib-vc2026), then older VC libs.
-if(WIN32)
-    set(_ohao_glfw_root "$ENV{USERPROFILE}/scoop/apps/glfw/current")
-    if(EXISTS "${_ohao_glfw_root}/include")
-        set(GLFW_INCLUDE_DIR "${_ohao_glfw_root}/include")
-    endif()
-    foreach(_ohao_glfw_vc IN ITEMS lib-vc2026 lib-vc2022 lib-vc2019 lib-vc2017)
-        if(EXISTS "${_ohao_glfw_root}/${_ohao_glfw_vc}/glfw3.lib")
-            set(GLFW_LIBRARY "${_ohao_glfw_root}/${_ohao_glfw_vc}/glfw3.lib")
-            message(STATUS "GLFW: ${GLFW_LIBRARY}")
-            break()
-        endif()
-    endforeach()
-    unset(_ohao_glfw_root)
-    unset(_ohao_glfw_vc)
-endif()
 
 add_subdirectory(external)
 add_subdirectory(shaders)
