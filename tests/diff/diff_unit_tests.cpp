@@ -1,6 +1,7 @@
 #include "diff/device_caps.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
+#include "diff/rng/diff_rng.hpp"
 
 #include <gtest/gtest.h>
 
@@ -257,4 +258,70 @@ TEST(DiffParamRegistry, RejectsEmptyNameAndZeroFloatCount) {
     // A rejected registration must consume nothing.
     EXPECT_EQ(reg.count(), 0u);
     EXPECT_EQ(reg.layout().blockCount(), 0u);
+}
+
+TEST(DiffPathRng, SameTupleProducesIdenticalStream) {
+    auto a = ohao::diff::PathRng::forPath(1234, 7, 99);
+    auto b = ohao::diff::PathRng::forPath(1234, 7, 99);
+
+    for (int i = 0; i < 32; ++i) {
+        EXPECT_FLOAT_EQ(a.next1D(), b.next1D()) << "divergence at draw " << i;
+    }
+}
+
+TEST(DiffPathRng, ReplayFromTupleReproducesTheStream) {
+    // This is the seed invariant that path replay backpropagation depends on:
+    // the backward pass reconstructs the RNG from the tuple alone and must
+    // walk the same path the forward pass walked.
+    auto forward = ohao::diff::PathRng::forPath(4096, 3, 12345);
+    std::vector<float> forwardDraws;
+    for (int i = 0; i < 16; ++i) forwardDraws.push_back(forward.next1D());
+
+    auto backward = ohao::diff::PathRng::forPath(4096, 3, 12345);
+    for (int i = 0; i < 16; ++i) {
+        EXPECT_FLOAT_EQ(backward.next1D(), forwardDraws[static_cast<std::size_t>(i)])
+            << "replay diverged at draw " << i;
+    }
+}
+
+TEST(DiffPathRng, DifferentPixelsDecorrelate) {
+    auto a = ohao::diff::PathRng::forPath(10, 0, 1);
+    auto b = ohao::diff::PathRng::forPath(11, 0, 1);
+
+    int identical = 0;
+    for (int i = 0; i < 16; ++i) {
+        if (a.next1D() == b.next1D()) ++identical;
+    }
+    EXPECT_LT(identical, 3) << "neighbouring pixels are producing correlated streams";
+}
+
+TEST(DiffPathRng, DifferentSeedsDecorrelate) {
+    auto a = ohao::diff::PathRng::forPath(10, 0, 1);
+    auto b = ohao::diff::PathRng::forPath(10, 0, 2);
+
+    int identical = 0;
+    for (int i = 0; i < 16; ++i) {
+        if (a.next1D() == b.next1D()) ++identical;
+    }
+    EXPECT_LT(identical, 3);
+}
+
+TEST(DiffPathRng, DrawsAreInUnitInterval) {
+    auto rng = ohao::diff::PathRng::forPath(777, 5, 42);
+    for (int i = 0; i < 4096; ++i) {
+        const float v = rng.next1D();
+        EXPECT_GE(v, 0.0f);
+        EXPECT_LT(v, 1.0f);
+    }
+}
+
+TEST(DiffPathRng, DrawCountTracksConsumption) {
+    // Forward and backward must consume the same number of draws. A mismatch
+    // here is the failure mode that silently corrupts every gradient, so the
+    // counter exists to be asserted on in later stages.
+    auto rng = ohao::diff::PathRng::forPath(1, 1, 1);
+    EXPECT_EQ(rng.drawCount(), 0u);
+    rng.next1D();
+    rng.next1D();
+    EXPECT_EQ(rng.drawCount(), 2u);
 }
