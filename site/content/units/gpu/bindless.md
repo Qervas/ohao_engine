@@ -168,7 +168,7 @@ source line. Exactly one caller defends against this by comparing the returned h
 against the known defaults, which is why `BindlessTextureHandle` bothers to default
 its `operator<=>`.
 
-{{cite ohao/render/diff/diff_map_bind.hpp "if (!handle.valid() || handle == tm->getDefaultWhiteTexture() ||"}}
+{{cite ohao/render/diff/diff_map_bind.hpp@223ff7f "if (!handle.valid() || handle == tm->getDefaultWhiteTexture() ||"}}
 
 ## The cost of `updateDescriptorSet`
 
@@ -183,8 +183,8 @@ re-uploads the ground-plane albedo map every call — unload the previous image,
 a loop over views and averaging passes, so it runs once per view per pass, several
 times per loss evaluation of an optimizer step.
 
-{{cite ohao/render/diff/diff_vk_forward.hpp "(void)bindGroundAlbedoMap(renderer, inv, s_map);"}}
-{{cite ohao/render/diff/diff_vk_forward.hpp "auto img = forwardStudioDeferred(renderer, inv, tileRgb, v, frames);"}}
+{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)bindGroundAlbedoMap(renderer, inv, s_map);"}}
+{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "auto img = forwardStudioDeferred(renderer, inv, tileRgb, v, frames);"}}
 
 The walk is the cheap half of that. After the first pass the `unloadTexture` in front
 of it issues a `vkDeviceWaitIdle` and the upload behind it ends in a

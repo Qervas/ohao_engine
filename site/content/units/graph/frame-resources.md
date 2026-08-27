@@ -23,7 +23,7 @@ Everything the ring sizes derives from `MAX_FRAMES_IN_FLIGHT` rather than a lite
 
 The depth leaks back out as a bare `3` wherever a driver flushes the readback lag before saving an image — five sites, none of which reads the constant. Four are the offline examples; the fifth is inside `ohao/`, in the inverse-rendering session.
 
-{{cite ohao/inverse/render_session.hpp "const int frames = budget.spp + 3;"}}
+{{cite ohao/inverse/render_session.hpp@223ff7f "const int frames = budget.spp + 3;"}}
 
 {{cite examples/model_viewer.cpp "const int frames = cli.useDeferred ? 30 : (samples + 3);"}}
 
@@ -139,7 +139,7 @@ The caller pairs that with `m_currentFrame = 0`, commented as avoiding a read fr
 
 What this path *does* add is an unguarded route to the `throw`. `resizeStagingBuffers` → `createStagingBuffers` → `createBuffer` → `findMemoryType` is the same chain `initialize()` walks, but `VulkanRenderer::resize` has exactly one caller in the tree — the inverse-rendering render session — and neither it nor anything between it and `main` installs a handler. The failure that returns `false` from `initialize()` calls `std::terminate` here.
 
-{{cite ohao/inverse/render_session.hpp "renderer.resize(budget.width, budget.height);"}}
+{{cite ohao/inverse/render_session.hpp@223ff7f "renderer.resize(budget.width, budget.height);"}}
 
 The uniform buffers and descriptor sets survive untouched, correctly: their sizes are resolution-independent, and the shadow-map image view baked into each set at init points at a fixed-size attachment that the framebuffer teardown leaves alone. That descriptor write is hardwired — bindings 0, 1 and 2, two uniform buffers and one combined sampler — regardless of the `VkDescriptorSetLayout` passed in, which is used only to allocate.
 

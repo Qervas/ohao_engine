@@ -26,7 +26,7 @@ datum rather than a constant — the builder's other shipped views are offsets f
 (−110 and −70 in `buildCornell`, −48 and −128 in `buildStudio`), and domain
 randomisation draws yaw as a ±58° excursion around the same origin:
 
-{{cite ohao/inverse/scene_builder.hpp "const float yaw = -90.0f + n11() * 58.0f;"}}
+{{cite ohao/inverse/scene_builder.hpp@223ff7f "const float yaw = -90.0f + n11() * 58.0f;"}}
 
 Right and up are re-orthogonalised from a fixed world up of (0, 1, 0), so roll is not
 representable at all.
@@ -200,7 +200,7 @@ frustum depth the projection cannot draw.
 The differentiable renderer does not use this class. `DiffCamera` re-derives its own
 forward vector with a different convention:
 
-{{cite ohao/render/diff/diff_camera.hpp "const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),"}}
+{{cite ohao/render/diff/diff_camera.hpp@223ff7f "const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),"}}
 
 that is $\mathbf{f}' = (\sin\psi\cos\theta,\; \sin\theta,\; -\cos\psi\cos\theta)$.
 Matching it to `Camera`'s $(\cos\psi\cos\theta,\; \sin\theta,\; \sin\psi\cos\theta)$
@@ -212,11 +212,11 @@ Nothing applies that offset. Both are driven from the same `CameraView` list and
 read the same field — `InverseScene::applyCamera` hands `v.yawDeg` to
 `Camera::setRotation`,
 
-{{cite ohao/inverse/scene_builder.hpp "cam.setRotation(v.pitchDeg, v.yawDeg);"}}
+{{cite ohao/inverse/scene_builder.hpp@223ff7f "cam.setRotation(v.pitchDeg, v.yawDeg);"}}
 
 and `DiffSession::setupFromInverse` copies it across verbatim:
 
-{{cite ohao/render/diff/diff_session.hpp "c.yawDeg = v.yawDeg;"}}
+{{cite ohao/render/diff/diff_session.hpp@223ff7f "c.yawDeg = v.yawDeg;"}}
 
 With $\psi$ and $\theta$ shared, the two forwards satisfy
 

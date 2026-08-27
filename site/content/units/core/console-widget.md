@@ -11,7 +11,7 @@ Nothing here draws — no ring buffer, no scrollback, no UI. The name is a fossi
 OHAO shipped a full ImGui editor early on and deliberately deleted it, and the
 class kept the label.
 
-{{cite docs/architecture/README.md "ImGui-based editor UI"}}
+{{cite docs/architecture/README.md@223ff7f "ImGui-based editor UI"}}
 
 What survives is a process-wide, mutex-guarded facade over `std::cout` and
 `std::cerr` plus one unused redirect hook, reached through a Meyers singleton:

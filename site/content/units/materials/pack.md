@@ -86,8 +86,8 @@ renders every fit view — three by default (`numViews{3}`, clamped to eight on 
 command line) — so the buffer is re-mapped once per view per loss sample, not
 once per evaluation:
 
-{{cite ohao/inverse/render_session.hpp "const bool matsOk = renderer.updateRTMaterialParams();"}}
-{{cite ohao/inverse/staged_fit.hpp "for (int v = 0; v < nViews; ++v) {"}}
+{{cite ohao/inverse/render_session.hpp@223ff7f "const bool matsOk = renderer.updateRTMaterialParams();"}}
+{{cite ohao/inverse/staged_fit.hpp@223ff7f "for (int v = 0; v < nViews; ++v) {"}}
 
 It pushes new albedo, roughness and metallic without rebuilding acceleration
 structures. Because the texture indices live in the same rows and exist nowhere

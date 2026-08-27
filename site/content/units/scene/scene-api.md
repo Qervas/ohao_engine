@@ -92,7 +92,7 @@ The mesh hooks maintain their vector and raise `needsBufferUpdate`; `MeshCompone
 
 The real upload is `VulkanRenderer::updateSceneBuffers()`. The renderer fires it on its own in exactly two places: from `setScene`, and again from `ensureRTRenderer` when an RT profile is created after the fact, because `setScene` frequently runs before any PathTracer exists. Every other invocation is written out at the call site — the smoke test and each of `diff_fit`, `dense_map_fit`, `dense_orm_fit` and `dense_metal_fit` re-upload by hand immediately after `setScene`, and `ohao::diff::forwardStudioDeferred` re-uploads on *every* forward render, which is what puts a full scene upload inside `diff_fit`'s finite-difference gradient loop:
 
-{{cite ohao/render/diff/diff_vk_forward.hpp "(void)renderer.updateSceneBuffers();"}}
+{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
 
 Scene-side dirty tracking is bookkeeping that no consumer ever polls; if you add one, note that it cannot observe transform edits at all, only component add/remove/model-swap.
 

@@ -202,28 +202,28 @@ render whose pixels feed the image loss — and therefore every finite-differenc
 gradient taken of that loss — is rendered with `DenoiseMode::None`, in the
 synthetic and the lab-capture branch alike.
 
-{{cite ohao/inverse/staged_fit.hpp "(!cfg.labBundle.empty()) ? DenoiseMode::None : DenoiseMode::None;"}}
+{{cite ohao/inverse/staged_fit.hpp@223ff7f "(!cfg.labBundle.empty()) ? DenoiseMode::None : DenoiseMode::None;"}}
 
 Presentation renders are a separate slot, and there the default is *on*:
 `showDenoise` starts at `DenoiseMode::OIDN`, and the CLI accepts only `none` or
 `oidn` for it.
 
-{{cite ohao/inverse/fit_config.hpp "DenoiseMode showDenoise{DenoiseMode::OIDN};"}}
-{{cite ohao/inverse/fit_config.hpp "a.cfg.showDenoise != DenoiseMode::None && a.cfg.showDenoise != DenoiseMode::OIDN"}}
+{{cite ohao/inverse/fit_config.hpp@223ff7f "DenoiseMode showDenoise{DenoiseMode::OIDN};"}}
+{{cite ohao/inverse/fit_config.hpp@223ff7f "a.cfg.showDenoise != DenoiseMode::None && a.cfg.showDenoise != DenoiseMode::OIDN"}}
 
 That default reaches past presentation. The SHOW RMSE, PSNR and SSIM a run prints
 as its headline result are computed on the recovered image rendered with
 `showDenoise`, against a synthetic target rendered through `showDenoise` too — so
 by default both sides of the comparison have been through the prior.
 
-{{cite ohao/inverse/fit_engine.hpp "labM.showRmse = rmseRGB(recoveredPrimary, tb.targetsShow[0]);"}}
-{{cite ohao/inverse/fit_targets.hpp "session.render(v, cfg.show, cfg.seed, cfg.showDenoise);"}}
+{{cite ohao/inverse/fit_engine.hpp@223ff7f "labM.showRmse = rmseRGB(recoveredPrimary, tb.targetsShow[0]);"}}
+{{cite ohao/inverse/fit_targets.hpp@223ff7f "session.render(v, cfg.show, cfg.seed, cfg.showDenoise);"}}
 
 Real-photo lab mode is the one configuration that forces the presentation
 denoiser off, and its holdout and relight evaluations render with `None` as well.
 
-{{cite ohao/inverse/fit_targets.hpp "cfg.showDenoise = DenoiseMode::None;"}}
-{{cite ohao/inverse/fit_lab_eval.hpp "constexpr DenoiseMode kLabEvalDenoise = DenoiseMode::None;"}}
+{{cite ohao/inverse/fit_targets.hpp@223ff7f "cfg.showDenoise = DenoiseMode::None;"}}
+{{cite ohao/inverse/fit_lab_eval.hpp@223ff7f "constexpr DenoiseMode kLabEvalDenoise = DenoiseMode::None;"}}
 
 :::key
 A neural denoiser is a strong, non-linear, spatially-correlated prior. It makes

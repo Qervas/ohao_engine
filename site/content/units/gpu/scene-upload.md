@@ -245,21 +245,21 @@ line in the file: re-decoding the HDR on every `updateSceneBuffers` leaked whole
 it crashed. The re-entrant caller that makes that matter is the differentiable-rendering
 forward pass: `forwardStudioDeferred` calls `updateSceneBuffers` on every single render.
 
-{{cite ohao/render/diff/diff_vk_forward.hpp "(void)renderer.updateSceneBuffers();"}}
+{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
 
 It compounds twice over: one loss evaluation renders `kAvg * nViews` times — 2, with the
 fit's `nViews = 2`, `kAvg = 1` — and one finite-difference coordinate probe is two loss
 evaluations. Probing a single tile channel is therefore four full teardown-and-rebuild cycles,
 and a sweep does that for every channel of every tile.
 
-{{cite ohao/inverse/diff_fit.hpp "const int nViews = 2;"}}
-{{cite ohao/inverse/diff_fit.hpp "const double Lp = lossAt(trialP);"}}
+{{cite ohao/inverse/diff_fit.hpp@223ff7f "const int nViews = 2;"}}
+{{cite ohao/inverse/diff_fit.hpp@223ff7f "const double Lp = lossAt(trialP);"}}
 
 The RT-side inverse loops avoid the cost deliberately: `RenderSession` re-uploads materials and
 light/env scale in place and reaches `updateSceneBuffers` only when one of those in-place
 updates fails.
 
-{{cite ohao/inverse/render_session.hpp "// Material + light/env-scale edits only — never rebuild BLAS / reload HDR."}}
+{{cite ohao/inverse/render_session.hpp@223ff7f "// Material + light/env-scale edits only — never rebuild BLAS / reload HDR."}}
 {{cite ohao/gpu/vulkan/light_upload.cpp "float* hdrPixels = stbi_loadf(m_envMapPath.c_str(), &ew, &eh, &ec, 4);"}}
 
 Two details survive that fix. The image is `R32G32B32A32_SFLOAT` — 16 bytes per texel, so a

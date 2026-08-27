@@ -33,8 +33,8 @@ MODULE = {
             'status',
             'Status discipline',
             'Evidence-based feature matrix protocol.',
-            files=['STATUS.md', 'docs/bugs_solved'],
-            design=['STATUS.md is the source of truth for what is proven vs experimental.', 'docs/bugs_solved archives root-cause writeups (NRD pack, OOM, etc.).'],
+            files=['STATUS.md@223ff7f', 'docs/bugs_solved'],
+            design=['STATUS.md was the source of truth for what is proven vs experimental; removed at 2bd0bac, cited here at 223ff7f.', 'docs/bugs_solved archives root-cause writeups (NRD pack, OOM, etc.).'],
         ),
         page(
             'public-scope',

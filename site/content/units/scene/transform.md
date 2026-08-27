@@ -225,7 +225,7 @@ Actor transforms do move in this tree. The inverse-rendering dataset exporter
 jitters three light actors' positions and re-yaws the hero between samples, and
 its caller has to throw away the entire GPU binding because of it:
 
-{{cite ohao/inverse/export_dataset.hpp "session.bound = false; // transforms changed — full rebind"}}
+{{cite ohao/inverse/export_dataset.hpp@223ff7f "session.bound = false; // transforms changed — full rebind"}}
 
 That is an edit *between* renders, though — each sample resets accumulation and
 runs its own frame batch at fixed transforms — and no shipping example moves an

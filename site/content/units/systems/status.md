@@ -13,14 +13,14 @@ diff. OHAO's `STATUS.md` names that failure mode and its countermeasure in its
 own header: the file is updated by rendering the examples and looking at the
 pixels, not by reading commit messages.
 
-{{cite STATUS.md "Updated by running the"}}
+{{cite STATUS.md@223ff7f "Updated by running the"}}
 
 The way to test a promise like that is to look at what vocabulary the document
 has for failure. A status page that can only emit ✅ is not measuring anything.
 This one declares five states and spends four: ✅ on most rows, ⚠️ on two, 🗑️ on
 two, 🧪 on one.
 
-{{cite STATUS.md "Legend: ✅ works · ⚠️ works with caveats"}}
+{{cite STATUS.md@223ff7f "Legend: ✅ works · ⚠️ works with caveats"}}
 
 Declared and used vocabulary diverge in both directions. ❌ never appears below
 the legend line — the strongest admission the document reserves for itself has
@@ -28,11 +28,11 @@ never been cashed. And the turntable row emits a ✅ / ❓ pair, ❓ being an
 undeclared sixth state glossed only by the row's own note that the interactive
 half needs a display.
 
-{{cite STATUS.md "| **Turntable / interactive** |"}}
+{{cite STATUS.md@223ff7f "| **Turntable / interactive** |"}}
 
 The 🗑️ row against the OptiX denoiser reports a completed removal, not a plan.
 
-{{cite STATUS.md "Removed; `optix`"}}
+{{cite STATUS.md@223ff7f "Removed; `optix`"}}
 
 Every OptiX source file is gone from the tree; what survives is one CLI branch
 that prints a demotion notice and falls through to OIDN. That row's claim is
@@ -46,13 +46,13 @@ literally the assertion in a unit test: `optix` and `OptiX` both parse to
 The subsurface-scattering row is sharper, because nothing external forced it: it
 marks OHAO's own SSS 🧪 and calls it biased look-dev rather than a BSSRDF.
 
-{{cite STATUS.md "Biased look-dev hacks; not a true BSSRDF"}}
+{{cite STATUS.md@223ff7f "Biased look-dev hacks; not a true BSSRDF"}}
 
 The limitations list below the matrix restates that as an instruction — keep SSS
 out of ground-truth claims — voluntarily disqualifying a shipped feature from
 the offline-reference standing the rest of the engine rests on.
 
-{{cite STATUS.md "keep out of"}}
+{{cite STATUS.md@223ff7f "keep out of"}}
 
 ## The gate that makes a status line cost something
 
@@ -157,8 +157,8 @@ a tolerance that is too tight from a renderer that genuinely regressed.
   for one per fixed bug. The NRD YCoCg-packing bug and the deferred black-metal
   bug are both written up in `STATUS.md`; neither has a golden scene, so both can
   return silently.
-  {{cite STATUS.md "REBLUR expects **YCoCg + normalized hit-distance**"}}
-  {{cite STATUS.md "Deferred metals pure black (partial)"}}
+  {{cite STATUS.md@223ff7f "REBLUR expects **YCoCg + normalized hit-distance**"}}
+  {{cite STATUS.md@223ff7f "Deferred metals pure black (partial)"}}
 - The gtest suites under `tests/` are not part of the gate. Most of them build by
   default, but nothing invokes them unprompted: the hook's only command is the
   golden harness, and the repository's single GitHub workflow publishes this
@@ -168,7 +168,7 @@ a tolerance that is too tight from a renderer that genuinely regressed.
   {{cite .githooks/pre-push "python3 tests/golden/render_golden.py"}}
 - `STATUS.md` lists the missing GPU-less cloud workflow as an open limitation
   rather than passing the pre-push hook off as CI.
-  {{cite STATUS.md "**Cloud CI** — still no GPU-less build/unit workflow"}}
+  {{cite STATUS.md@223ff7f "**Cloud CI** — still no GPU-less build/unit workflow"}}
 
 ## Two bug writeups, and what a refactor did to their pointers
 
@@ -197,10 +197,12 @@ per-frame and the legacy path:
 
 So the archive's invariants outlived the refactor and its pointers did not. That
 is the general shape of rot here, and it is not confined to the bug log:
-`CLAUDE.md` still documents a Skeletal Animation module with a file map, while
-`STATUS.md` marks skeletal animation 🗑️ and `ohao/animation/` does not exist.
+`STATUS.md` marks skeletal animation 🗑️ in one row and, four sections later,
+still reasons about the gap the removed subsystem would leave behind.
 
-{{cite CLAUDE.md "## Skeletal Animation (Module D)"}}
+{{cite STATUS.md@223ff7f "| **Skeletal animation** | 🗑️ | Removed in renovation cleanup |"}}
+
+{{cite STATUS.md@223ff7f "animation subsystem removed; gap is moot until reintroduced."}}
 
 :::key
 `STATUS.md` is trustworthy in proportion to the gate behind it, not in proportion
@@ -211,7 +213,7 @@ unit test nothing runs automatically. Of the eleven rows with no gate at all, si
 still read as a plain ✅. And the file does not say when a human last looked: its
 freshness marker is a list of milestones, not a date.
 
-{{cite STATUS.md "**Last verified:** after C++20"}}
+{{cite STATUS.md@223ff7f "**Last verified:** after C++20"}}
 
 OHAO has a determinism contract on two frames and a disclosure habit everywhere
 else — and the disclosure habit is worth more than it sounds, precisely because

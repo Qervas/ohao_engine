@@ -214,7 +214,7 @@ re-uploads the same scene when a mode's RT profile is created late:
 and the inverse-rendering forward pass re-uploads on every evaluation, when all that
 changed were albedo tiles on existing actors:
 
-{{cite ohao/render/diff/diff_vk_forward.hpp "(void)renderer.updateSceneBuffers();"}}
+{{cite ohao/render/diff/diff_vk_forward.hpp@223ff7f "(void)renderer.updateSceneBuffers();"}}
 
 Both are the same-instance-count case a refit exists to serve. It is unreachable
 only because the teardown nulls the handle first — an oversight, not a consequence

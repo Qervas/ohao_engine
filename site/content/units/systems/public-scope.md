@@ -106,7 +106,7 @@ So its one `.cpp` compiles on every build, and it is real Vulkan host code: it
 creates a command pool, an `R32G32B32A32_SFLOAT` image with a staging buffer, and
 walks `VkPhysicalDeviceMemoryProperties` to choose a memory type.
 
-{{cite ohao/render/diff/diff_pipeline.cpp "if (vkCreateCommandPool(device_, &pci, nullptr, &cmdPool_)"}}
+{{cite ohao/render/diff/diff_pipeline.cpp@223ff7f "if (vkCreateCommandPool(device_, &pci, nullptr, &cmdPool_)"}}
 
 None of it ever runs, and none of it ships. `ohao_renderer` is a static archive —
 
@@ -121,12 +121,12 @@ An archive member joins the link only when it resolves a symbol some other objec
 left undefined. Outside the two files that declare and define it, `DiffPipeline`
 has exactly one reference in the repository — a data member of `DiffSession`:
 
-{{cite ohao/render/diff/diff_session.hpp "DiffPipeline pipeline;"}}
+{{cite ohao/render/diff/diff_session.hpp@223ff7f "DiffPipeline pipeline;"}}
 
 and `DiffSession` is instantiated nowhere. The one file outside `diff/` that
 includes `diff_session.hpp` is a wrapper in the research tree —
 
-{{cite ohao/inverse/backend/diff_formation.hpp "render/diff/diff_session.hpp"}}
+{{cite ohao/inverse/backend/diff_formation.hpp@223ff7f "render/diff/diff_session.hpp"}}
 
 — and that wrapper is itself included by nothing. So `diff_pipeline.cpp.o` is an
 archive member no executable pulls in: `nm` finds `DiffPipeline::init` and its
@@ -145,7 +145,7 @@ Four of the eleven headers in the render library's `diff/` directory include
 headers from `ohao/inverse/` directly: `diff_forward.hpp`, `diff_map_bind.hpp`,
 `diff_vk_forward.hpp`, and `diff_session.hpp`.
 
-{{cite ohao/render/diff/diff_session.hpp "include "inverse/scene_builder.hpp""}}
+{{cite ohao/render/diff/diff_session.hpp@223ff7f "include "inverse/scene_builder.hpp""}}
 
 A fifth, the umbrella `diff_module.hpp`, reaches `ohao/inverse/` transitively by
 including two of them.

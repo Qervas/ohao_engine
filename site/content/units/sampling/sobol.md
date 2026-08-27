@@ -106,7 +106,7 @@ session sets a different render seed per view; replaying the arithmetic, a block
 starting at 1 or at 9973 is not a net at N = 16, 64 or 256.
 
 {{cite ohao/render/rt/path_tracer.cpp "m_sampleIndex = m_renderSeed;"}}
-{{cite ohao/inverse/render_session.hpp "setRenderSeed(seed + static_cast<uint32_t>(viewIndex) * 9973u)"}}
+{{cite ohao/inverse/render_session.hpp@223ff7f "setRenderSeed(seed + static_cast<uint32_t>(viewIndex) * 9973u)"}}
 :::
 
 {{figure sampling-sobol-pad0-scramble "Measured: the shader's arithmetic replayed offline for pad 0, dims 0-1, indices 0-15 at pixel (640,360). Left, unscrambled — index 0 sits on the origin. Right, after the Owen scramble — displaced, but still one point per cell of the 4x4 grid. Green marks the points that stay on the diagonal, a consequence of the shared per-pad seed. Not a captured render."}}

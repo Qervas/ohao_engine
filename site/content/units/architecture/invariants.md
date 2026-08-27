@@ -186,7 +186,7 @@ because the pixel buffer it reads back is the frame submitted three renders ago:
 Four offline examples spell it that way, and so does the inverse-rendering
 session inside the engine library, which is not an example program at all:
 
-{{cite ohao/inverse/render_session.hpp "const int frames = budget.spp + 3;"}}
+{{cite ohao/inverse/render_session.hpp@223ff7f "const int frames = budget.spp + 3;"}}
 
 Change the named constant and five call sites quietly render the wrong sample
 count. The no-texture sentinel shows the same pattern with the polarity
