@@ -1,5 +1,6 @@
 #include "diff/device_caps.hpp"
 #include "diff/grad/arena_layout.hpp"
+#include "diff/param/param_registry.hpp"
 
 #include <gtest/gtest.h>
 
@@ -138,4 +139,70 @@ TEST(DiffArenaLayout, OutOfRangeIndexReturnsInvalidBlock) {
 
     const ohao::diff::ArenaBlock valid = layout.block(0);
     EXPECT_NE(valid.sizeBytes, 0u);
+}
+
+TEST(DiffParamRegistry, RejectsEightBitSrgbTexture) {
+    ohao::diff::ParamRegistry reg;
+    const auto result = reg.registerTexture("albedo", {64, 64, 3}, VK_FORMAT_R8G8B8A8_SRGB);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.error.find("promoteToFloat"), std::string::npos)
+        << "the error must name the remedy, not just the problem; got: " << result.error;
+    EXPECT_EQ(reg.count(), 0u);
+}
+
+TEST(DiffParamRegistry, RejectsEightBitUnormTexture) {
+    ohao::diff::ParamRegistry reg;
+    const auto result = reg.registerTexture("albedo", {64, 64, 3}, VK_FORMAT_R8G8B8A8_UNORM);
+
+    EXPECT_FALSE(result.ok)
+        << "8-bit quantisation stalls Adam silently: any step below 1/255 rounds to nothing";
+    EXPECT_EQ(reg.count(), 0u);
+}
+
+TEST(DiffParamRegistry, AcceptsFloat32Texture) {
+    ohao::diff::ParamRegistry reg;
+    const auto result = reg.registerTexture("albedo", {64, 64, 3},
+                                            VK_FORMAT_R32G32B32A32_SFLOAT);
+
+    ASSERT_TRUE(result.ok) << result.error;
+    EXPECT_EQ(reg.count(), 1u);
+
+    const ohao::diff::DiffParam* p = reg.find("albedo");
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(p->kind, ohao::diff::ParamKind::Texture);
+    EXPECT_EQ(p->floatCount, 64u * 64u * 3u);
+}
+
+TEST(DiffParamRegistry, RejectsDuplicateName) {
+    ohao::diff::ParamRegistry reg;
+    ASSERT_TRUE(reg.registerTexture("albedo", {8, 8, 3}, VK_FORMAT_R32G32B32A32_SFLOAT).ok);
+
+    const auto dup = reg.registerTexture("albedo", {8, 8, 3}, VK_FORMAT_R32G32B32A32_SFLOAT);
+    EXPECT_FALSE(dup.ok);
+    EXPECT_EQ(reg.count(), 1u);
+}
+
+TEST(DiffParamRegistry, ScalarBlockIsNotATextureSpecialCase) {
+    // The registry's primitive is "floats with a gradient block". Neural weights,
+    // pose, and geometry all register this way -- textures merely add shape.
+    ohao::diff::ParamRegistry reg;
+    const auto result = reg.registerScalarBlock("ssao_params", 4);
+
+    ASSERT_TRUE(result.ok) << result.error;
+    const ohao::diff::DiffParam* p = reg.find("ssao_params");
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(p->kind, ohao::diff::ParamKind::ScalarBlock);
+    EXPECT_EQ(p->floatCount, 4u);
+}
+
+TEST(DiffParamRegistry, LayoutGrowsWithEachParam) {
+    ohao::diff::ParamRegistry reg;
+    EXPECT_EQ(reg.layout().blockCount(), 0u);
+
+    ASSERT_TRUE(reg.registerTexture("albedo", {8, 8, 3}, VK_FORMAT_R32G32B32A32_SFLOAT).ok);
+    ASSERT_TRUE(reg.registerScalarBlock("ssao_params", 4).ok);
+
+    EXPECT_EQ(reg.layout().blockCount(), 4u);
+    EXPECT_GT(reg.layout().totalBytes(), 0u);
 }
