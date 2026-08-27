@@ -25,7 +25,6 @@ ohao_example(cornell_box)
 ohao_example(model_viewer)
 ohao_example(env_demo)
 ohao_example(turntable)
-ohao_example(inverse_fit)
 
 # Interactive Viewer (requires GLFW)
 find_package(glfw3 QUIET)
