@@ -79,10 +79,26 @@ bool GpuProbeContext::init() {
 
     std::vector<const char*> instanceLayers;
     std::vector<const char*> instanceExtensions;
+
+    // Synchronization validation finds read-after-write and write-after-write
+    // hazards that plain validation does not. Enabled here deliberately before
+    // the wavefront stages exist: this subsystem hand-writes its barriers, and
+    // the engine's RenderGraph -- the alternative -- reports 29 such hazards.
+    const VkValidationFeatureEnableEXT enabledFeatures[] = {
+        VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+    };
+    VkValidationFeaturesEXT validationFeatures{};
+
     if (m_validationEnabled) {
         instanceLayers.push_back(kValidationLayerName);
         instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        instanceExtensions.push_back(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
         std::printf("[GpuProbeContext] validation layer enabled: %s\n", kValidationLayerName);
+
+        validationFeatures.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        validationFeatures.enabledValidationFeatureCount = 1;
+        validationFeatures.pEnabledValidationFeatures = enabledFeatures;
+        std::printf("[GpuProbeContext] synchronization validation enabled\n");
     } else {
         std::fprintf(stderr,
                      "[diff_gpu_probe] WARNING: validation layers unavailable -- GPU "
@@ -117,7 +133,10 @@ bool GpuProbeContext::init() {
     instanceInfo.ppEnabledLayerNames = instanceLayers.data();
     instanceInfo.enabledExtensionCount = static_cast<uint32_t>(instanceExtensions.size());
     instanceInfo.ppEnabledExtensionNames = instanceExtensions.data();
-    if (m_validationEnabled) instanceInfo.pNext = &debugCreateInfo;
+    if (m_validationEnabled) {
+        validationFeatures.pNext = &debugCreateInfo;
+        instanceInfo.pNext = &validationFeatures;
+    }
 
     if (vkCreateInstance(&instanceInfo, nullptr, &m_instance) != VK_SUCCESS) {
         std::fprintf(stderr, "[GpuProbeContext] vkCreateInstance failed\n");
@@ -461,7 +480,6 @@ bool GpuProbeContext::dispatchStorageBufferCompute(const char* spvName, VkBuffer
         write.pBufferInfo = &bufferInfo;
         vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 
-        const 
         const uint32_t groupCount = groupCountX;
 
         runImmediate([&](VkCommandBuffer cmd) {
