@@ -10,7 +10,6 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#define STB_IMAGE_STATIC
 #include "stb_image.h"
 
 #include <iostream>
