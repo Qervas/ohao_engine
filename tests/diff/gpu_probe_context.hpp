@@ -128,6 +128,39 @@ public:
     /// through `buffers.readbackField`.
     [[nodiscard]] bool runWavefrontLayoutProbe(WavefrontBuffers& buffers);
 
+    /// Runs the wavefront intersect stage end to end: shaders/diff/
+    /// wf_prepare_indirect.comp converts `buffers`' counter slot
+    /// kCurrentCountSlot into a {groupCountX,1,1} vkCmdDispatchIndirect
+    /// triple at counter slot kIndirectArgsSlot, then shaders/diff/
+    /// wf_intersect.comp is dispatched indirectly from that triple, tracing
+    /// queue ring 0 against a BLAS/TLAS built for a quad spanning
+    /// x in [-1,1], y in [quadMinY,1] at z=-planeDistance -- the same
+    /// half-quad geometry runVisibilityProbe/the half-quad orientation check
+    /// use. Survivors are compacted into queue ring 1 / counter slot
+    /// kNextCountSlot; every invocation that runs increments counter slot
+    /// kCanarySlot.
+    ///
+    /// `buffers` must already hold a populated queue ring 0 / counter slot
+    /// kCurrentCountSlot (e.g. from a prior, separately-submitted-and-waited
+    /// runWavefrontGenerateProbe call) -- this call does not populate path
+    /// state itself, and a counter slot 0 of exactly 0 is a valid input
+    /// (the empty-queue / zero-cost-dispatch case).
+    ///
+    /// Unlike every other probe here, wf_prepare_indirect.comp's dispatch,
+    /// the barrier ordering its writes before vkCmdDispatchIndirect reads
+    /// them, and wf_intersect.comp's indirect dispatch are all recorded on
+    /// ONE command buffer with no `vkQueueWaitIdle` between them -- that
+    /// full-device-idle wait is what silently hides a missing
+    /// SHADER_WRITE -> INDIRECT_COMMAND_READ barrier in every earlier probe.
+    ///
+    /// `outQueue1` receives a host-side copy of exactly queue ring 1's
+    /// `capacity`-element region (same reasoning as
+    /// runWavefrontGenerateProbe's outQueue0). Returns false on any Vulkan
+    /// error. Caller reads state fields and counters back through `buffers`
+    /// afterwards.
+    [[nodiscard]] bool runWavefrontIntersectProbe(WavefrontBuffers& buffers, float planeDistance,
+                                                  float quadMinY, std::vector<uint32_t>& outQueue1);
+
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,

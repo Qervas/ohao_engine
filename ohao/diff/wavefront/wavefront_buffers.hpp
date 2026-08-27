@@ -33,12 +33,20 @@ public:
     WavefrontBuffers& operator=(WavefrontBuffers&&) = delete;
 
     /// Number of uint slots reserved in the counter buffer. Slots 0 and 1
-    /// are the current/next queue live-path counts; the remainder is
-    /// reserved for a later task to write a {groupCountX, groupCountY,
-    /// groupCountZ} vkCmdDispatchIndirect triple without reallocating.
+    /// are the current/next queue live-path counts; slots 2-4 hold the
+    /// {groupCountX, groupCountY, groupCountZ} vkCmdDispatchIndirect triple
+    /// wf_prepare_indirect.comp writes (Task 5) -- VkDispatchIndirectCommand
+    /// is a plain uint32 {x,y,z} triple, so this offset is bound directly as
+    /// the indirect buffer with no separate copy. Slot 5 is a canary counter
+    /// wf_intersect.comp increments on every invocation that actually runs,
+    /// used to prove an indirect dispatch sized from a live-count of 0
+    /// launches zero workgroups. Slots 6-7 remain reserved for future
+    /// stages.
     static constexpr std::uint32_t kCounterSlotCount = 8;
     static constexpr std::uint32_t kCurrentCountSlot = 0;
     static constexpr std::uint32_t kNextCountSlot = 1;
+    static constexpr std::uint32_t kIndirectArgsSlot = 2;
+    static constexpr std::uint32_t kCanarySlot = 5;
 
     [[nodiscard]] bool build(GpuAllocator& allocator, std::uint32_t capacity);
     void destroy(GpuAllocator& allocator);

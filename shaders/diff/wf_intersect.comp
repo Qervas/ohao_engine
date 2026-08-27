@@ -1,0 +1,84 @@
+#version 460
+#extension GL_EXT_ray_query : require
+
+// Wavefront stage: intersect + compact.
+//
+// Consumes queue N (index base pc.srcQueueBase, live count held in counter
+// slot pc.srcCountSlot -- read from the SSBO, never from the CPU), traces
+// each live path against the TLAS with an inline ray query, writes the hit
+// distance into path state (PS_HIT_T) and sets Alive=0 on a miss. Survivors
+// are compacted into queue N+1 (pc.dstQueueBase) by atomicAdd on counter
+// slot pc.dstCountSlot: this is what makes a dead path free in the *next*
+// dispatch -- it is never written into the next queue, so a
+// wf_prepare_indirect.comp-derived dispatch over that queue never spends a
+// thread on it.
+//
+// gl_GlobalInvocationID.x indexes a SLOT in the source queue, not a path
+// index directly -- queues hold path indices, sparse relative to
+// pc.capacity once any compaction has happened. This dispatch is sized
+// indirectly (vkCmdDispatchIndirect from wf_prepare_indirect.comp's output),
+// so it launches ceil(count / 64) * 64 threads; the tail beyond the live
+// count returns early without touching path state or the destination queue.
+//
+// Every invocation that actually runs increments counters.value[canarySlot]
+// before that early-return guard -- this is the canary probe check 13 reads
+// to prove an indirect dispatch sized from a live-count of 0 launches zero
+// workgroups (vkCmdDispatchIndirect with groupCountX == 0 dispatches no
+// invocations at all, so the canary never even executes the increment).
+//
+// Binding scheme: state (0, declared by path_state.glsl), queues (1, both
+// rings back to back), counters (2), TLAS (3).
+
+#include "diff/path_state.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 1) buffer QueueBuffer {
+    uint idx[];
+} queues;
+
+layout(std430, binding = 2) buffer CounterBuffer {
+    uint value[];
+} counters;
+
+layout(binding = 3) uniform accelerationStructureEXT topLevelAS;
+
+layout(push_constant) uniform Push {
+    uint capacity;
+    uint srcQueueBase;
+    uint srcCountSlot;
+    uint dstQueueBase;
+    uint dstCountSlot;
+    uint canarySlot;
+} pc;
+
+void main() {
+    // Ran at all -- see probe check 13: with an indirect groupCountX of 0,
+    // this line never executes, so the canary stays exactly 0.
+    atomicAdd(counters.value[pc.canarySlot], 1u);
+
+    const uint slot = gl_GlobalInvocationID.x;
+    if (slot >= counters.value[pc.srcCountSlot]) return;
+
+    const uint pathIndex = queues.idx[pc.srcQueueBase + slot];
+
+    const vec3 origin = psGetOrigin(pathIndex, pc.capacity);
+    const vec3 dir = psGetDir(pathIndex, pc.capacity);
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.001, dir, 1000.0);
+    while (rayQueryProceedEXT(rq)) { }
+
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        psSetHitT(pathIndex, pc.capacity, -1.0);
+        psSetAlive(pathIndex, pc.capacity, 0u);
+        return;
+    }
+
+    psSetHitT(pathIndex, pc.capacity, rayQueryGetIntersectionTEXT(rq, true));
+
+    // Compaction: only survivors are written into the next queue, at an
+    // offset handed out by atomicAdd on the next queue's counter slot.
+    const uint dstSlot = atomicAdd(counters.value[pc.dstCountSlot], 1u);
+    queues.idx[pc.dstQueueBase + dstSlot] = pathIndex;
+}

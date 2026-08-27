@@ -18,6 +18,7 @@ enum class PathStateField : std::uint32_t {
     SampleIndex,   // bit-cast uint
     Bounce,        // bit-cast uint
     Alive,         // bit-cast uint, 0 or 1
+    HitT,          // intersect-stage output: hit distance, -1 on miss (Task 5)
     Count
 };
 

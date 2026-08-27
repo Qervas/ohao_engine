@@ -47,7 +47,8 @@ const uint PS_PIXEL_INDEX   = 12u;  // bit-cast uint
 const uint PS_SAMPLE_INDEX  = 13u;  // bit-cast uint
 const uint PS_BOUNCE        = 14u;  // bit-cast uint
 const uint PS_ALIVE         = 15u;  // bit-cast uint, 0 or 1
-const uint PS_FIELD_COUNT   = 16u;
+const uint PS_HIT_T         = 16u;  // intersect-stage output: hit distance, -1 on miss (Task 5)
+const uint PS_FIELD_COUNT   = 17u;
 
 // Every ArenaLayout block is aligned to 256 bytes == 64 floats.
 const uint PS_ALIGNMENT_FLOATS = 64u;
@@ -158,6 +159,14 @@ uint psGetAlive(uint pathIndex, uint capacity) {
 
 void psSetAlive(uint pathIndex, uint capacity, uint value) {
     psSetScalar(PS_ALIVE, pathIndex, capacity, uintBitsToFloat(value));
+}
+
+float psGetHitT(uint pathIndex, uint capacity) {
+    return psGetScalar(PS_HIT_T, pathIndex, capacity);
+}
+
+void psSetHitT(uint pathIndex, uint capacity, float value) {
+    psSetScalar(PS_HIT_T, pathIndex, capacity, value);
 }
 
 #endif  // OHAO_DIFF_PATH_STATE_GLSL

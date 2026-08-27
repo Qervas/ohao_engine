@@ -12,6 +12,12 @@
 //   8. wf_generate.comp's generated rays reproduce check 3's closed form.
 //   9. Every PathStateField wf_generate.comp writes round-trips exactly.
 //   10. wf_generate.comp's queue/counter population has no atomicAdd races.
+//   11. path_state_layout.hpp and path_state.glsl agree field-by-field.
+//   12. wf_intersect.comp compacts survivors of a known-fraction scene into
+//       queue ring 1 exactly (no duplicates, no dead paths), across an
+//       indirectly-sized dispatch prepared by wf_prepare_indirect.comp.
+//   13. An indirect dispatch sized from a live-count of 0 launches zero
+//       invocations -- dead paths are genuinely free.
 
 #include "gpu_probe_context.hpp"
 
@@ -704,6 +710,205 @@ int main() {
         std::printf("[diff_gpu_probe] OK: layout probe -- all %u PathStateFields hold their "
                     "distinct expected value at capacity=%u (non-multiple-of-64)\n",
                     ohao::diff::PathStateLayout::kFieldCount, kCapacity);
+    }
+
+    // 12. Wavefront intersect stage (shaders/diff/wf_intersect.comp) with
+    // compaction, driven through an indirect dispatch prepared by
+    // shaders/diff/wf_prepare_indirect.comp. This is the check that catches
+    // an atomicAdd compaction race: it works because, for this specific
+    // scene, the surviving set is knowable analytically rather than just
+    // measured.
+    //
+    // Reuses check 4's half-quad (quadMinY=0.0): only rays with ndcY > 0
+    // hit, i.e. pixel rows y < kH/2. Because pixelIndex = y*kW+x (row-major,
+    // same as wf_generate.comp), that set is exactly the contiguous range
+    // [0, kW*kH/2) = [0, 1536) -- so queue ring 1, sorted, must equal
+    // 0..1535 with nothing else, and counter slot kNextCountSlot must read
+    // exactly 1536.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 48;
+        constexpr uint32_t kCapacity = kW * kH;  // 3072
+        constexpr uint32_t kExpectedSurvivors = kCapacity / 2;  // 1536
+        constexpr float kPlaneDistance = 2.0f;
+        constexpr float kTanHalfFov = 0.2f;
+        constexpr float kAspect = static_cast<float>(kW) / static_cast<float>(kH);
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_intersect buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        // Populate queue ring 0 / counter slot 0 first, as its own fully
+        // queue-idle-separated submission (see runWavefrontGenerateProbe) --
+        // this is not the barrier under test, so it stays maximally safe.
+        ohao::diff::WavefrontGenerateCamera camera;
+        camera.tanHalfFov = kTanHalfFov;
+        std::vector<uint32_t> queue0;
+        if (!ctx.runWavefrontGenerateProbe(wf, kW, kH, camera, queue0)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_intersect setup: wf_generate dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // wf_prepare_indirect.comp + the indirectly-dispatched wf_intersect.comp,
+        // all on one command buffer with the SHADER_WRITE -> INDIRECT_COMMAND_READ
+        // barrier between them -- see gpu_probe_context.cpp's
+        // runWavefrontIntersectProbe for exactly which barriers this records.
+        std::vector<uint32_t> queue1;
+        if (!ctx.runWavefrontIntersectProbe(wf, kPlaneDistance, /*quadMinY=*/0.0f, queue1)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_intersect dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        const std::uint32_t nextCount =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kNextCountSlot);
+        if (nextCount != kExpectedSurvivors) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: queue ring 1 counter = %u, expected exactly %u "
+                         "(compaction race: lost or duplicated an atomicAdd offset)\n",
+                         nextCount, kExpectedSurvivors);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        if (queue1.size() != kCapacity) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: queue ring 1 readback size %zu, expected %u\n",
+                         queue1.size(), kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // The written prefix, sorted, must be exactly [0, kExpectedSurvivors)
+        // with no duplicates and nothing extra.
+        std::vector<uint32_t> survivors(queue1.begin(), queue1.begin() + kExpectedSurvivors);
+        std::sort(survivors.begin(), survivors.end());
+        for (uint32_t i = 0; i < kExpectedSurvivors; ++i) {
+            if (survivors[i] != i) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: queue ring 1 sorted[%u] = %u, expected %u "
+                             "(compaction race: duplicate or missing path index)\n",
+                             i, survivors[i], i);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: wf_intersect compacted exactly %u survivors into queue "
+                    "ring 1 (indices 0..%u, no duplicates, no dead paths)\n",
+                    kExpectedSurvivors, kExpectedSurvivors - 1);
+
+        // Bonus correctness beyond the brief's minimum: every survivor's
+        // Alive flag stayed 1 and HitT matches check 8's closed form; every
+        // dead path's Alive flag was cleared and HitT reads -1 (miss).
+        const std::vector<float> aliveField =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Alive);
+        const std::vector<float> hitTField =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::HitT);
+        if (aliveField.size() != kCapacity || hitTField.size() != kCapacity) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: wf_intersect Alive/HitT readback size mismatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        float maxAbsError = 0.0f;
+        for (uint32_t y = 0; y < kH; ++y) {
+            for (uint32_t x = 0; x < kW; ++x) {
+                const uint32_t i = y * kW + x;
+                uint32_t aliveBits = 0;
+                std::memcpy(&aliveBits, &aliveField[i], sizeof(aliveBits));
+                const bool expectAlive = i < kExpectedSurvivors;
+                if (static_cast<bool>(aliveBits) != expectAlive) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: path %u Alive = %u, expected %u\n",
+                                 i, aliveBits, expectAlive ? 1u : 0u);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+                if (expectAlive) {
+                    const float ndcX = 2.0f * (static_cast<float>(x) + 0.5f) / kW - 1.0f;
+                    const float ndcY = 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / kH;
+                    const float dx = ndcX * kAspect * kTanHalfFov;
+                    const float dy = ndcY * kTanHalfFov;
+                    const float expectedT = kPlaneDistance * std::sqrt(1.0f + dx * dx + dy * dy);
+                    const float err = std::fabs(hitTField[i] - expectedT);
+                    maxAbsError = std::max(maxAbsError, err);
+                    if (err > 1e-4f) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: path %u HitT = %f, closed form %f "
+                                     "(|err| = %g)\n",
+                                     i, hitTField[i], expectedT, err);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                } else if (hitTField[i] != -1.0f) {
+                    std::fprintf(stderr, "[diff_gpu_probe] FAIL: path %u (dead) HitT = %f, expected -1\n",
+                                 i, hitTField[i]);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: wf_intersect Alive/HitT match compaction membership and "
+                    "closed-form plane intersection (max |err| = %g)\n", maxAbsError);
+
+        wf.destroy(ctx.allocator());
+    }
+
+    // 13. Indirect dispatch of an empty queue costs nothing -- the property
+    // that makes a dead path genuinely free rather than just skipped-but-
+    // still-paid-for. Counter slot kCurrentCountSlot is left at 0 (no
+    // wf_generate call), so wf_prepare_indirect.comp computes
+    // groupCountX = (0+63)/64 = 0, and vkCmdDispatchIndirect with
+    // groupCountX == 0 launches zero workgroups -- wf_intersect.comp's very
+    // first instruction, an unconditional atomicAdd on a canary counter,
+    // never executes. A stage that merely early-returned per-invocation
+    // (rather than never launching) would still show this canary at 0, so
+    // the real claim under test is the dispatch cost, not just the output --
+    // this check is a necessary but not sufficient witness of that; it is
+    // the best a black-box GPU probe can observe without a timing query.
+    {
+        constexpr uint32_t kCapacity = 64;
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: empty-queue buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+        // Deliberately no wf_generate call: counter slot kCurrentCountSlot
+        // stays at 0 from wf.zero(), which is exactly the input under test.
+
+        std::vector<uint32_t> queue1;
+        if (!ctx.runWavefrontIntersectProbe(wf, /*planeDistance=*/2.0f, /*quadMinY=*/0.0f, queue1)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: empty-queue wf_intersect dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        const std::uint32_t canary =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kCanarySlot);
+        if (canary != 0) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: canary = %u, expected 0 -- an indirect dispatch "
+                         "sized from a live-count of 0 ran %u invocation(s)\n",
+                         canary, canary);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        const std::uint32_t nextCount =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kNextCountSlot);
+        if (nextCount != 0) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: next-queue counter = %u, expected 0\n",
+                         nextCount);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        std::printf("[diff_gpu_probe] OK: indirect dispatch from a live-count of 0 ran zero "
+                    "invocations (canary = 0, next-queue counter = 0)\n");
+
+        wf.destroy(ctx.allocator());
     }
 
     arena.destroy(ctx.allocator());
