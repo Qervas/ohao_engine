@@ -1,0 +1,71 @@
+#version 450
+
+// Wavefront stage: path generation. One path per pixel.
+//
+// Seeds origin/direction from the camera (the same construction
+// visibility_probe.comp uses, via camera_ray.glsl, so the two can never
+// drift), throughput (1,1,1), radiance (0,0,0), bounce 0, alive 1 -- then
+// pushes the path's index into queue 0 and bumps the live-count counter.
+//
+// Binding scheme, fixed for every wavefront stage (see path_state.glsl):
+//   binding 0 -- path state, std430 float SSBO (declared by path_state.glsl)
+//   binding 1 -- queues, std430 uint SSBO
+//   binding 2 -- counters, std430 uint SSBO
+
+#include "diff/path_state.glsl"
+#include "diff/camera_ray.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(std430, binding = 1) buffer QueueBuffer {
+    uint idx[];
+} queues;
+
+layout(std430, binding = 2) buffer CounterBuffer {
+    uint value[];
+} counters;
+
+// Matches WavefrontBuffers: queue 0 (the "current bounce" ring) starts at
+// element 0; queue 1 starts at `capacity`. This stage only ever populates
+// queue 0. Counter slot 0 is queue 0's live count (WavefrontBuffers::
+// kCurrentCountSlot).
+const uint kQueue0Base = 0u;
+const uint kQueue0CounterSlot = 0u;
+
+layout(push_constant) uniform Push {
+    vec3 origin;
+    float pad0;
+    vec3 forward;
+    float pad1;
+    vec3 right;
+    float pad2;
+    vec3 up;
+    float pad3;
+    uint width;
+    uint height;
+    float tanHalfFov;
+    uint capacity;
+} pc;
+
+void main() {
+    const uvec2 pix = gl_GlobalInvocationID.xy;
+    if (pix.x >= pc.width || pix.y >= pc.height) return;
+
+    const uint pixelIndex = pix.y * pc.width + pix.x;
+    if (pixelIndex >= pc.capacity) return;
+
+    const vec3 dir = diffCameraRayDir(pix, pc.width, pc.height, pc.forward, pc.right, pc.up,
+                                       pc.tanHalfFov);
+
+    psSetOrigin(pixelIndex, pc.capacity, pc.origin);
+    psSetDir(pixelIndex, pc.capacity, dir);
+    psSetThroughput(pixelIndex, pc.capacity, vec3(1.0));
+    psSetRadiance(pixelIndex, pc.capacity, vec3(0.0));
+    psSetPixelIndex(pixelIndex, pc.capacity, pixelIndex);
+    psSetSampleIndex(pixelIndex, pc.capacity, 0u);
+    psSetBounce(pixelIndex, pc.capacity, 0u);
+    psSetAlive(pixelIndex, pc.capacity, 1u);
+
+    const uint slot = atomicAdd(counters.value[kQueue0CounterSlot], 1u);
+    queues.idx[kQueue0Base + slot] = pixelIndex;
+}

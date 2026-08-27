@@ -5,8 +5,15 @@
 namespace ohao::diff {
 
 namespace {
-constexpr VkBufferUsageFlags kCommonUsage =
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+// TRANSFER_SRC (in addition to TRANSFER_DST for zero()'s vkCmdFillBuffer) so
+// any of these buffers can also be the source of a vkCmdCopyBuffer -- e.g.
+// GpuProbeContext::runWavefrontGenerateProbe copies queue 0 out into its own
+// host-visible buffer for readback, since this class exposes only a raw
+// VkBuffer for the queue, not the GpuBuffer wrapper GpuAllocator's
+// invalidate/map calls need.
+constexpr VkBufferUsageFlags kCommonUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 }  // namespace
 
 WavefrontBuffers::~WavefrontBuffers() {

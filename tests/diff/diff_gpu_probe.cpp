@@ -8,6 +8,10 @@
 //   4. A half-quad's hit/miss pattern pins the camera's Y orientation --
 //      check 3's distance formula is even in dy, so it can't catch a flipped
 //      up-vector or NDC-Y sign on its own.
+//   ...
+//   8. wf_generate.comp's generated rays reproduce check 3's closed form.
+//   9. Every PathStateField wf_generate.comp writes round-trips exactly.
+//   10. wf_generate.comp's queue/counter population has no atomicAdd races.
 
 #include "gpu_probe_context.hpp"
 
@@ -22,6 +26,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 int main() {
@@ -375,6 +380,234 @@ int main() {
         std::printf("[diff_gpu_probe] OK: wavefront buffers zero across %u fields x %u paths "
                     "and both counter slots\n",
                     ohao::diff::PathStateLayout::kFieldCount, kCapacity);
+    }
+
+    // 8-10. Wavefront generate stage (shaders/diff/wf_generate.comp): one
+    // dispatch, three checks against its output.
+    //   8.  Closed form: generated directions reproduce the same hit
+    //       distances check 3 validated analytically -- wf_generate.comp
+    //       builds rays through camera_ray.glsl, the same include
+    //       visibility_probe.comp uses, so this is what catches the two
+    //       drifting apart.
+    //   9.  Field round-trip: every PathStateField the shader wrote reads
+    //       back on the CPU as what was written -- proves path_state.glsl
+    //       and path_state_layout.hpp agree on the arena's byte layout, the
+    //       same failure mode rng.glsl had (compiled, never executed).
+    //   10. Queue population: the counter equals the pixel count exactly and
+    //       queue 0 contains each path index exactly once -- an atomicAdd
+    //       race would show up as duplicates or a short count.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 48;
+        constexpr uint32_t kCapacity = kW * kH;
+        constexpr float kPlaneDistance = 2.0f;
+        constexpr float kTanHalfFov = 0.2f;
+        constexpr float kAspect = static_cast<float>(kW) / static_cast<float>(kH);
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_generate buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        // Default camera: origin (0,0,0), forward (0,0,-1), right (1,0,0),
+        // up (0,1,0) -- the same convention checks 3/4's runVisibilityProbe
+        // calls use.
+        ohao::diff::WavefrontGenerateCamera camera;
+        camera.tanHalfFov = kTanHalfFov;
+
+        std::vector<uint32_t> queue0;
+        if (!ctx.runWavefrontGenerateProbe(wf, kW, kH, camera, queue0)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_generate dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        const std::vector<float> originX = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::OriginX);
+        const std::vector<float> originY = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::OriginY);
+        const std::vector<float> originZ = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::OriginZ);
+        const std::vector<float> dirX = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::DirX);
+        const std::vector<float> dirY = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::DirY);
+        const std::vector<float> dirZ = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::DirZ);
+        const std::vector<float> throughputR = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputR);
+        const std::vector<float> throughputG = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputG);
+        const std::vector<float> throughputB = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputB);
+        const std::vector<float> radianceR = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::RadianceR);
+        const std::vector<float> radianceG = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::RadianceG);
+        const std::vector<float> radianceB = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::RadianceB);
+        const std::vector<float> pixelIndexField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::PixelIndex);
+        const std::vector<float> sampleIndexField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::SampleIndex);
+        const std::vector<float> bounceField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Bounce);
+        const std::vector<float> aliveField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Alive);
+
+        const std::vector<const std::vector<float>*> allFields = {
+            &originX, &originY, &originZ, &dirX, &dirY, &dirZ,
+            &throughputR, &throughputG, &throughputB,
+            &radianceR, &radianceG, &radianceB,
+            &pixelIndexField, &sampleIndexField, &bounceField, &aliveField,
+        };
+        for (const auto* f : allFields) {
+            if (f->size() != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: wf_generate field readback size %zu, "
+                             "expected %u\n",
+                             f->size(), kCapacity);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+
+        // 8. Closed form.
+        float maxAbsError = 0.0f;
+        for (uint32_t y = 0; y < kH; ++y) {
+            for (uint32_t x = 0; x < kW; ++x) {
+                const uint32_t i = y * kW + x;
+                const float ndcX = 2.0f * (static_cast<float>(x) + 0.5f) / kW - 1.0f;
+                const float ndcY = 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / kH;
+                const float dx = ndcX * kAspect * kTanHalfFov;
+                const float dy = ndcY * kTanHalfFov;
+                const float expectedT = kPlaneDistance * std::sqrt(1.0f + dx * dx + dy * dy);
+
+                // origin=(0,0,0), plane at z=-planeDistance: t = -planeDistance / dir.z.
+                // dir.z < 0 is guaranteed at this FOV, same as check 3.
+                const float dz = dirZ[i];
+                if (dz >= 0.0f) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: pixel (%u,%u) generated dir.z = %f, "
+                                 "expected < 0\n",
+                                 x, y, dz);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+                const float actualT = -kPlaneDistance / dz;
+                const float err = std::fabs(actualT - expectedT);
+                maxAbsError = std::max(maxAbsError, err);
+                if (err > 1e-4f) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: pixel (%u,%u) generated-dir t = %f, "
+                                 "closed form %f (|err| = %g)\n",
+                                 x, y, actualT, expectedT, err);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: wf_generate directions reproduce closed-form plane "
+                    "intersection over %u pixels (max |err| = %g)\n",
+                    kCapacity, maxAbsError);
+
+        // 9. Field round-trip.
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            if (originX[i] != camera.origin[0] || originY[i] != camera.origin[1] ||
+                originZ[i] != camera.origin[2]) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u origin = (%f,%f,%f), expected "
+                             "(%f,%f,%f)\n",
+                             i, originX[i], originY[i], originZ[i], camera.origin[0],
+                             camera.origin[1], camera.origin[2]);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (throughputR[i] != 1.0f || throughputG[i] != 1.0f || throughputB[i] != 1.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u throughput = (%f,%f,%f), expected "
+                             "(1,1,1)\n",
+                             i, throughputR[i], throughputG[i], throughputB[i]);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (radianceR[i] != 0.0f || radianceG[i] != 0.0f || radianceB[i] != 0.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u radiance = (%f,%f,%f), expected "
+                             "(0,0,0)\n",
+                             i, radianceR[i], radianceG[i], radianceB[i]);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            uint32_t pixelIndexBits = 0, sampleIndexBits = 0, bounceBits = 0, aliveBits = 0;
+            std::memcpy(&pixelIndexBits, &pixelIndexField[i], sizeof(pixelIndexBits));
+            std::memcpy(&sampleIndexBits, &sampleIndexField[i], sizeof(sampleIndexBits));
+            std::memcpy(&bounceBits, &bounceField[i], sizeof(bounceBits));
+            std::memcpy(&aliveBits, &aliveField[i], sizeof(aliveBits));
+
+            if (pixelIndexBits != i) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: path %u pixelIndex = %u, expected %u\n",
+                             i, pixelIndexBits, i);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (sampleIndexBits != 0u) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: path %u sampleIndex = %u, expected 0\n",
+                             i, sampleIndexBits);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (bounceBits != 0u) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: path %u bounce = %u, expected 0\n", i,
+                             bounceBits);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (aliveBits != 1u) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: path %u alive = %u, expected 1\n", i,
+                             aliveBits);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // Dir's exact components were already validated via the
+            // closed-form distance check above; here just confirm it
+            // round-tripped as a finite, unit-length vector -- catches e.g.
+            // an offset error that silently aliased into the wrong field's
+            // block without disturbing the z-only distance check.
+            const float len2 = dirX[i] * dirX[i] + dirY[i] * dirY[i] + dirZ[i] * dirZ[i];
+            if (std::fabs(len2 - 1.0f) > 1e-3f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u dir not unit length: |dir|^2 = %f\n",
+                             i, len2);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: all %u PathStateFields round-trip across %u paths "
+                    "(origin, dir, throughput=1, radiance=0, pixelIndex, sampleIndex=0, bounce=0, "
+                    "alive=1)\n",
+                    ohao::diff::PathStateLayout::kFieldCount, kCapacity);
+
+        // 10. Queue population.
+        const std::uint32_t counter =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kCurrentCountSlot);
+        if (counter != kCapacity) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: queue 0 counter = %u, expected %u\n",
+                         counter, kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        if (queue0.size() != kCapacity) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: queue 0 readback size %zu, expected %u\n",
+                         queue0.size(), kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        std::vector<uint32_t> sorted = queue0;
+        std::sort(sorted.begin(), sorted.end());
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            if (sorted[i] != i) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: queue 0 sorted[%u] = %u, expected %u "
+                             "(atomicAdd race: duplicate or missing path index)\n",
+                             i, sorted[i], i);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: queue 0 counter = %u and contains each of %u path "
+                    "indices exactly once\n",
+                    counter, kCapacity);
+
+        wf.destroy(ctx.allocator());
     }
 
     arena.destroy(ctx.allocator());

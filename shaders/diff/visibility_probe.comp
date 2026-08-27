@@ -7,6 +7,8 @@
 //
 // Writes hit distance per pixel; -1.0 on miss.
 
+#include "diff/camera_ray.glsl"
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(std430, binding = 0) buffer HitBuffer {
@@ -36,14 +38,8 @@ void main() {
 
     const uint index = pix.y * pc.width + pix.x;
 
-    // Pixel centre in NDC, y down to match image row order.
-    const float ndcX = (2.0 * (float(pix.x) + 0.5) / float(pc.width) - 1.0);
-    const float ndcY = (1.0 - 2.0 * (float(pix.y) + 0.5) / float(pc.height));
-    const float aspect = float(pc.width) / float(pc.height);
-
-    const vec3 dir = normalize(pc.forward
-                             + pc.right * (ndcX * aspect * pc.tanHalfFov)
-                             + pc.up    * (ndcY * pc.tanHalfFov));
+    const vec3 dir = diffCameraRayDir(pix, pc.width, pc.height, pc.forward, pc.right, pc.up,
+                                       pc.tanHalfFov);
 
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF,

@@ -850,4 +850,293 @@ bool GpuProbeContext::runVisibilityProbe(float planeDistance, uint32_t width, ui
     return ok;
 }
 
+bool GpuProbeContext::runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint32_t width,
+                                                uint32_t height,
+                                                const WavefrontGenerateCamera& camera,
+                                                std::vector<uint32_t>& outQueue0) {
+    // Push constants: must byte-match shaders/diff/wf_generate.comp's Push
+    // block exactly (80 bytes -- same four vec3+pad quads as
+    // visibility_probe.comp's Push, with a trailing width/height/tanHalfFov/
+    // capacity quad in place of visibility_probe's width/height/tanHalfFov/pad).
+    struct PushConstants {
+        float origin[3];
+        float pad0;
+        float forward[3];
+        float pad1;
+        float right[3];
+        float pad2;
+        float up[3];
+        float pad3;
+        uint32_t width;
+        uint32_t height;
+        float tanHalfFov;
+        uint32_t capacity;
+    };
+    static_assert(sizeof(PushConstants) == 80,
+                 "PushConstants must match wf_generate.comp's Push block layout");
+
+    outQueue0.clear();
+
+    const uint32_t capacity = buffers.layout().capacity();
+    bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
+              buffers.queueBuffer() != VK_NULL_HANDLE && buffers.counterBuffer() != VK_NULL_HANDLE;
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: buffers not built\n");
+        return false;
+    }
+
+    // --- Shader module ---
+    const std::vector<uint32_t> spv = loadSpv("diff_wf_generate.comp.spv");
+    if (spv.empty()) return false;
+
+    VkShaderModuleCreateInfo moduleInfo{};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleInfo.codeSize = spv.size() * sizeof(uint32_t);
+    moduleInfo.pCode = spv.data();
+
+    VkShaderModule shaderModule = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(m_device, &moduleInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: vkCreateShaderModule "
+                              "failed\n");
+        return false;
+    }
+
+    // --- Descriptor set layout: state (0), queues (1), counters (2) ---
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    for (uint32_t i = 0; i < 3; ++i) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 3;
+    layoutInfo.pBindings = bindings;
+
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+    if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
+                              "vkCreateDescriptorSetLayout failed\n");
+        vkDestroyShaderModule(m_device, shaderModule, nullptr);
+        return false;
+    }
+
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(PushConstants);
+
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &setLayout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushRange;
+
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    if (vkCreatePipelineLayout(m_device, &pipelineLayoutInfo, nullptr, &pipelineLayout) !=
+        VK_SUCCESS) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
+                              "vkCreatePipelineLayout failed\n");
+        vkDestroyDescriptorSetLayout(m_device, setLayout, nullptr);
+        vkDestroyShaderModule(m_device, shaderModule, nullptr);
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo stageInfo{};
+    stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stageInfo.module = shaderModule;
+    stageInfo.pName = "main";
+
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage = stageInfo;
+    pipelineInfo.layout = pipelineLayout;
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    ok = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) ==
+         VK_SUCCESS;
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
+                              "vkCreateComputePipelines failed\n");
+    }
+
+    VkDescriptorPool descPool = VK_NULL_HANDLE;
+    if (ok) {
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        poolSize.descriptorCount = 3;
+
+        VkDescriptorPoolCreateInfo descPoolInfo{};
+        descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        descPoolInfo.maxSets = 1;
+        descPoolInfo.poolSizeCount = 1;
+        descPoolInfo.pPoolSizes = &poolSize;
+        ok = vkCreateDescriptorPool(m_device, &descPoolInfo, nullptr, &descPool) == VK_SUCCESS;
+        if (!ok) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
+                                  "vkCreateDescriptorPool failed\n");
+        }
+    }
+
+    VkDescriptorSet descSet = VK_NULL_HANDLE;
+    if (ok) {
+        VkDescriptorSetAllocateInfo descAllocInfo{};
+        descAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        descAllocInfo.descriptorPool = descPool;
+        descAllocInfo.descriptorSetCount = 1;
+        descAllocInfo.pSetLayouts = &setLayout;
+        ok = vkAllocateDescriptorSets(m_device, &descAllocInfo, &descSet) == VK_SUCCESS;
+        if (!ok) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: "
+                                  "vkAllocateDescriptorSets failed\n");
+        }
+    }
+
+    // --- Readback buffer for queue 0 (host-visible, this function's own) ---
+    GpuBuffer queueReadback;
+    const VkDeviceSize queue0Bytes = static_cast<VkDeviceSize>(capacity) * sizeof(uint32_t);
+    if (ok) {
+        queueReadback = m_allocator.createBuffer(queue0Bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                 AllocationUsage::GpuToCpu,
+                                                 /*persistentlyMapped=*/true);
+        if (!queueReadback.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: queue readback "
+                                  "buffer allocation failed\n");
+            ok = false;
+        }
+    }
+
+    if (ok) {
+        VkDescriptorBufferInfo stateInfo{};
+        stateInfo.buffer = buffers.stateBuffer();
+        stateInfo.offset = 0;
+        stateInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo queueInfo{};
+        queueInfo.buffer = buffers.queueBuffer();
+        queueInfo.offset = 0;
+        queueInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo counterInfo{};
+        counterInfo.buffer = buffers.counterBuffer();
+        counterInfo.offset = 0;
+        counterInfo.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet writes[3]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = descSet;
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[0].pBufferInfo = &stateInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = descSet;
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].pBufferInfo = &queueInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = descSet;
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[2].pBufferInfo = &counterInfo;
+
+        vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
+
+        PushConstants push{};
+        push.origin[0] = camera.origin[0]; push.origin[1] = camera.origin[1]; push.origin[2] = camera.origin[2];
+        push.forward[0] = camera.forward[0]; push.forward[1] = camera.forward[1]; push.forward[2] = camera.forward[2];
+        push.right[0] = camera.right[0]; push.right[1] = camera.right[1]; push.right[2] = camera.right[2];
+        push.up[0] = camera.up[0]; push.up[1] = camera.up[1]; push.up[2] = camera.up[2];
+        push.width = width;
+        push.height = height;
+        push.tanHalfFov = camera.tanHalfFov;
+        push.capacity = capacity;
+
+        const uint32_t groupsX = (width + 7) / 8;
+        const uint32_t groupsY = (height + 7) / 8;
+
+        runImmediate([&](VkCommandBuffer cmd) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
+                                    &descSet, 0, nullptr);
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
+                               &push);
+            vkCmdDispatch(cmd, groupsX, groupsY, 1);
+
+            // The dispatch wrote (shader-write) the state and queue buffers
+            // and read-modify-wrote (atomicAdd) the counter buffer. Two
+            // different consumers follow: the caller reads state/counter
+            // back through WavefrontBuffers' own persistently-mapped host
+            // pointers (needs HOST_READ), and this function copies queue 0
+            // out via vkCmdCopyBuffer (needs TRANSFER_READ) because
+            // WavefrontBuffers exposes only a raw VkBuffer for it. One
+            // barrier naming both destination stages/accesses covers both.
+            VkBufferMemoryBarrier postDispatch[3]{};
+            VkBuffer writtenBuffers[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                          buffers.counterBuffer()};
+            for (int i = 0; i < 3; ++i) {
+                postDispatch[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                postDispatch[i].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                postDispatch[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+                postDispatch[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                postDispatch[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                postDispatch[i].buffer = writtenBuffers[i];
+                postDispatch[i].offset = 0;
+                postDispatch[i].size = VK_WHOLE_SIZE;
+            }
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                 nullptr, 3, postDispatch, 0, nullptr);
+
+            // Copy queue 0 (the first `capacity` uints of the queue buffer)
+            // into this function's own host-visible buffer.
+            VkBufferCopy region{};
+            region.srcOffset = 0;
+            region.dstOffset = 0;
+            region.size = queue0Bytes;
+            vkCmdCopyBuffer(cmd, buffers.queueBuffer(), queueReadback.buffer, 1, &region);
+
+            VkBufferMemoryBarrier postCopy{};
+            postCopy.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            postCopy.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            postCopy.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            postCopy.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            postCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            postCopy.buffer = queueReadback.buffer;
+            postCopy.offset = 0;
+            postCopy.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+                                 0, nullptr, 1, &postCopy, 0, nullptr);
+        });
+
+        m_allocator.invalidateBuffer(queueReadback);
+        const auto* mapped = static_cast<const uint32_t*>(queueReadback.getMappedData());
+        if (mapped == nullptr) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGenerateProbe: queue readback "
+                                  "buffer not mapped, cannot read back\n");
+            ok = false;
+        } else {
+            outQueue0.assign(mapped, mapped + capacity);
+        }
+    }
+
+    // --- Cleanup ---
+    if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
+    if (descPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, descPool, nullptr);
+    if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(m_device, pipeline, nullptr);
+    if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(m_device, pipelineLayout, nullptr);
+    if (setLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, setLayout, nullptr);
+    if (shaderModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, shaderModule, nullptr);
+
+    return ok;
+}
+
 }  // namespace ohao::diff

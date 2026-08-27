@@ -1,6 +1,7 @@
 #pragma once
 
 #include "diff/grad/gradient_arena.hpp"
+#include "diff/wavefront/wavefront_buffers.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
 #include <vulkan/vulkan.h>
@@ -10,6 +11,18 @@
 #include <vector>
 
 namespace ohao::diff {
+
+/// Camera basis for runWavefrontGenerateProbe, byte-layout-matched to
+/// wf_generate.comp's Push block (see gpu_probe_context.cpp). Kept as plain
+/// float arrays rather than glm::vec3 so this header does not need to pull
+/// in glm just for a POD parameter block.
+struct WavefrontGenerateCamera {
+    float origin[3]{0.0f, 0.0f, 0.0f};
+    float forward[3]{0.0f, 0.0f, -1.0f};
+    float right[3]{1.0f, 0.0f, 0.0f};
+    float up[3]{0.0f, 1.0f, 0.0f};
+    float tanHalfFov{0.2f};
+};
 
 /// Headless Vulkan context for standalone GPU probe executables.
 ///
@@ -76,6 +89,27 @@ public:
     [[nodiscard]] bool runVisibilityProbe(float planeDistance, uint32_t width, uint32_t height,
                                           float tanHalfFov, std::vector<float>& outHits,
                                           float quadMinY = -1.0f);
+
+    /// Runs shaders/diff/wf_generate.comp over a `width` x `height` grid of
+    /// pixels (one path per pixel), writing origin/dir/throughput/radiance/
+    /// pixelIndex/sampleIndex/bounce/alive into `buffers`' state arena and
+    /// pushing each path index into queue 0. `buffers.layout().capacity()`
+    /// is what the shader derives every field's offset from -- see
+    /// path_state.glsl's header comment for why this is a single pushed
+    /// uint rather than 16 precomputed offsets.
+    ///
+    /// `outQueue0` receives a host-side copy of exactly queue 0's region
+    /// (capacity elements): WavefrontBuffers exposes only a raw VkBuffer for
+    /// the queue, not the GpuBuffer wrapper GpuAllocator::invalidateBuffer
+    /// needs, so this copies queue 0 out into a buffer this function owns
+    /// via vkCmdCopyBuffer before mapping and reading that copy.
+    ///
+    /// Returns false on any Vulkan error. Caller reads back state fields and
+    /// the counter directly through `buffers` afterwards.
+    [[nodiscard]] bool runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint32_t width,
+                                                 uint32_t height,
+                                                 const WavefrontGenerateCamera& camera,
+                                                 std::vector<uint32_t>& outQueue0);
 
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:
