@@ -610,6 +610,102 @@ int main() {
         wf.destroy(ctx.allocator());
     }
 
+    // 11. Layout-mapping probe (shaders/diff/wf_layout_probe.comp): proves
+    // PathStateField enum order and path_state.glsl's PS_* constants agree,
+    // field by field, in a way check 9 cannot. Check 9's values are
+    // genuinely degenerate (origin (0,0,0), throughput (1,1,1), radiance
+    // (0,0,0), sampleIndex and bounce both 0), so a transposition *within*
+    // {OriginX,Y,Z}, within {ThroughputR,G,B}, within {RadianceR,G,B}, or
+    // between SampleIndex and Bounce would round-trip there undetected.
+    // Here every field gets a distinct value (1000+fieldIndex for floats,
+    // 7000+fieldIndex for ints), so any permutation of the mapping mismatches
+    // somewhere. Capacity 1000 is deliberately not a multiple of 64, so the
+    // alignUp(capacity, 64) rounding path -- proven correct on paper for
+    // capacity=1000 during review -- is exercised by actual execution here,
+    // not just by the other checks' capacities (4096, all multiples of 64).
+    {
+        constexpr std::uint32_t kCapacity = 1000;
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: layout probe buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        if (!ctx.runWavefrontLayoutProbe(wf)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: layout probe dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        struct FieldExpect {
+            ohao::diff::PathStateField field;
+            const char* name;
+            bool isInt;
+            float expectedFloat;
+            uint32_t expectedBits;
+        };
+        const FieldExpect expects[] = {
+            {ohao::diff::PathStateField::OriginX, "OriginX", false, 1000.0f, 0u},
+            {ohao::diff::PathStateField::OriginY, "OriginY", false, 1001.0f, 0u},
+            {ohao::diff::PathStateField::OriginZ, "OriginZ", false, 1002.0f, 0u},
+            {ohao::diff::PathStateField::DirX, "DirX", false, 1003.0f, 0u},
+            {ohao::diff::PathStateField::DirY, "DirY", false, 1004.0f, 0u},
+            {ohao::diff::PathStateField::DirZ, "DirZ", false, 1005.0f, 0u},
+            {ohao::diff::PathStateField::ThroughputR, "ThroughputR", false, 1006.0f, 0u},
+            {ohao::diff::PathStateField::ThroughputG, "ThroughputG", false, 1007.0f, 0u},
+            {ohao::diff::PathStateField::ThroughputB, "ThroughputB", false, 1008.0f, 0u},
+            {ohao::diff::PathStateField::RadianceR, "RadianceR", false, 1009.0f, 0u},
+            {ohao::diff::PathStateField::RadianceG, "RadianceG", false, 1010.0f, 0u},
+            {ohao::diff::PathStateField::RadianceB, "RadianceB", false, 1011.0f, 0u},
+            {ohao::diff::PathStateField::PixelIndex, "PixelIndex", true, 0.0f, 7012u},
+            {ohao::diff::PathStateField::SampleIndex, "SampleIndex", true, 0.0f, 7013u},
+            {ohao::diff::PathStateField::Bounce, "Bounce", true, 0.0f, 7014u},
+            {ohao::diff::PathStateField::Alive, "Alive", true, 0.0f, 7015u},
+        };
+
+        for (const FieldExpect& e : expects) {
+            const std::vector<float> values = wf.readbackField(ctx.allocator(), e.field);
+            if (values.size() != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: layout probe field %s readback size %zu, "
+                             "expected %u\n",
+                             e.name, values.size(), kCapacity);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (e.isInt) {
+                uint32_t bits = 0;
+                std::memcpy(&bits, &values[0], sizeof(bits));
+                if (bits != e.expectedBits) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: layout probe field %s = %u, expected %u "
+                                 "(field->offset mapping disagrees between "
+                                 "path_state_layout.hpp and path_state.glsl)\n",
+                                 e.name, bits, e.expectedBits);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            } else {
+                if (values[0] != e.expectedFloat) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: layout probe field %s = %f, expected %f "
+                                 "(field->offset mapping disagrees between "
+                                 "path_state_layout.hpp and path_state.glsl)\n",
+                                 e.name, values[0], e.expectedFloat);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+
+        wf.destroy(ctx.allocator());
+        std::printf("[diff_gpu_probe] OK: layout probe -- all %u PathStateFields hold their "
+                    "distinct expected value at capacity=%u (non-multiple-of-64)\n",
+                    ohao::diff::PathStateLayout::kFieldCount, kCapacity);
+    }
+
     arena.destroy(ctx.allocator());
     ctx.shutdown();
     std::printf("[diff_gpu_probe] PASS\n");

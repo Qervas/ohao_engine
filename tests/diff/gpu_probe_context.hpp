@@ -111,6 +111,23 @@ public:
                                                  const WavefrontGenerateCamera& camera,
                                                  std::vector<uint32_t>& outQueue0);
 
+    /// Runs shaders/diff/wf_layout_probe.comp: a single invocation that
+    /// writes a distinct, non-degenerate value to every one of the 16
+    /// PathStateFields of path index 0 in `buffers`' state arena (float
+    /// fields get 1000+fieldIndex, integer fields get 7000+fieldIndex),
+    /// through the same psSet* accessors the real wavefront stages use.
+    ///
+    /// This exists because wf_generate.comp's round-trip check writes
+    /// genuinely degenerate values (throughput (1,1,1), radiance (0,0,0),
+    /// sampleIndex/bounce both 0), so a transposition *within* a group of
+    /// same-valued fields would round-trip undetected there. Every field
+    /// here has a unique value, so any permutation of the field->offset
+    /// mapping between path_state_layout.hpp and path_state.glsl is caught.
+    ///
+    /// Returns false on any Vulkan error. Caller reads state fields back
+    /// through `buffers.readbackField`.
+    [[nodiscard]] bool runWavefrontLayoutProbe(WavefrontBuffers& buffers);
+
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,

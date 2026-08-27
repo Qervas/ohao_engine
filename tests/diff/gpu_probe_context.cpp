@@ -1139,4 +1139,16 @@ bool GpuProbeContext::runWavefrontGenerateProbe(WavefrontBuffers& buffers, uint3
     return ok;
 }
 
+bool GpuProbeContext::runWavefrontLayoutProbe(WavefrontBuffers& buffers) {
+    struct PushConstants {
+        uint32_t capacity;
+    };
+    const PushConstants push{buffers.layout().capacity()};
+    // Single storage buffer (state, binding 0) + push constants + one
+    // invocation: exactly what dispatchStorageBufferCompute already does for
+    // runAtomicProbe/runRngParityProbe.
+    return dispatchStorageBufferCompute("diff_wf_layout_probe.comp.spv", buffers.stateBuffer(),
+                                        &push, sizeof(push), /*groupCountX=*/1u);
+}
+
 }  // namespace ohao::diff

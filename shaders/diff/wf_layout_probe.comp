@@ -1,0 +1,54 @@
+#version 450
+
+// Layout-mapping probe: proves ohao::diff::PathStateField's enum order and
+// shaders/includes/diff/path_state.glsl's PS_* constants agree, field by
+// field, in a way wf_generate.comp's round-trip check (diff_gpu_probe.cpp
+// check 9) cannot. wf_generate.comp writes genuinely degenerate values --
+// throughput (1,1,1), radiance (0,0,0), sampleIndex and bounce both 0 -- so
+// a transposition *within* {OriginX,OriginY,OriginZ}, within
+// {ThroughputR,G,B}, within {RadianceR,G,B}, or between SampleIndex and
+// Bounce would round-trip undetected there.
+//
+// Here every one of the 16 fields gets a distinct value: float fields get
+// 1000.0 + fieldIndex, integer fields get 7000 + fieldIndex, in the enum's
+// declared order (OriginX=0 .. Alive=15). These are written as PLAIN
+// LITERALS, deliberately NOT derived from the PS_* constants -- if a value
+// were computed as `1000.0 + float(PS_THROUGHPUT_G)`, then swapping
+// PS_THROUGHPUT_G and PS_THROUGHPUT_B would move both the write's
+// destination AND its payload together, landing the same bytes in the same
+// place and silently canceling out. Fixed literals mean a placement bug
+// changes which arena block a value lands in without changing the value
+// itself, which is what makes the mismatch visible on readback. Any
+// permutation of the field->offset mapping therefore produces a mismatch
+// somewhere. Written through the same psSet* accessors the real wavefront
+// stages use -- that is what makes this a genuine C++/GLSL agreement test
+// rather than GLSL checking itself.
+//
+// Single invocation, single path (index 0). Binding scheme matches every
+// other wavefront stage: state at binding 0, capacity pushed as one uint.
+
+#include "diff/path_state.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(push_constant) uniform Push {
+    uint capacity;
+} pc;
+
+void main() {
+    if (gl_GlobalInvocationID.x != 0u) return;
+
+    const uint i = 0u;  // single path
+
+    // Fields 0-11 (float, via bit-identical IEEE754 assignment): 1000+index.
+    psSetOrigin(i, pc.capacity, vec3(1000.0, 1001.0, 1002.0));       // OriginX, OriginY, OriginZ
+    psSetDir(i, pc.capacity, vec3(1003.0, 1004.0, 1005.0));          // DirX, DirY, DirZ
+    psSetThroughput(i, pc.capacity, vec3(1006.0, 1007.0, 1008.0));   // ThroughputR, G, B
+    psSetRadiance(i, pc.capacity, vec3(1009.0, 1010.0, 1011.0));     // RadianceR, G, B
+
+    // Fields 12-15 (bit-cast uint): 7000+index.
+    psSetPixelIndex(i, pc.capacity, 7012u);
+    psSetSampleIndex(i, pc.capacity, 7013u);
+    psSetBounce(i, pc.capacity, 7014u);
+    psSetAlive(i, pc.capacity, 7015u);
+}
