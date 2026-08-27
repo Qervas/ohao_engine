@@ -22,8 +22,11 @@ target_include_directories(diff_gpu_probe PRIVATE
     ${Vulkan_INCLUDE_DIRS}
 )
 target_compile_features(diff_gpu_probe PRIVATE cxx_std_20)
+# Task 6: runVisibilityProbe uses ohao::RTAccelerationStructure
+# (ohao/render/rt/rt_acceleration_structure.cpp), which lives in the
+# ohao_renderer target, not ohao_gpu_vulkan -- link it in.
 target_link_libraries(diff_gpu_probe PRIVATE
-    ohao_diff ohao_gpu_vulkan glm VulkanMemoryAllocator ${Vulkan_LIBRARIES})
+    ohao_diff ohao_gpu_vulkan ohao_renderer glm VulkanMemoryAllocator ${Vulkan_LIBRARIES})
 if(MSVC)
     target_link_options(diff_gpu_probe PRIVATE /FORCE:MULTIPLE)
 endif()

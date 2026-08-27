@@ -48,8 +48,15 @@ bool GpuAllocator::initialize(VkInstance instance, VkPhysicalDevice physicalDevi
     allocatorInfo.physicalDevice = physicalDevice;
     allocatorInfo.device = device;
 
-    // Enable buffer device address if available (for future raytracing support)
-    // allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    // Enable buffer device address support. Required so VMA tags memory
+    // allocated for VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT buffers with
+    // VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT (VUID-VkMemoryAllocateInfo-flags-03331).
+    // Without this flag VMA silently skips that allocate-flag (the assert
+    // guarding it compiles out in Release/NDEBUG builds), and any later
+    // vkGetBufferDeviceAddress() call on such a buffer is validation-layer
+    // invalid. First load-bearing user: RTAccelerationStructure's BLAS/TLAS
+    // build inputs (Task 6, differentiable-renderer visibility probe).
+    allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 
     VkResult result = vmaCreateAllocator(&allocatorInfo, &m_allocator);
     if (result != VK_SUCCESS) {

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace ohao::diff {
 
@@ -49,6 +50,13 @@ public:
     /// ceil(invocations / 64) groups. Returns false on any Vulkan error.
     [[nodiscard]] bool runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
                                       uint32_t invocations);
+
+    /// Builds a BLAS/TLAS for a single axis-aligned quad spanning
+    /// x,y in [-1,1] at z = -planeDistance, traces one ray per pixel from the
+    /// origin looking down -Z, and fills `outHits` with width*height distances.
+    /// Returns false on any Vulkan error.
+    [[nodiscard]] bool runVisibilityProbe(float planeDistance, uint32_t width, uint32_t height,
+                                          float tanHalfFov, std::vector<float>& outHits);
 
 private:
     VkInstance m_instance{VK_NULL_HANDLE};
