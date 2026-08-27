@@ -84,7 +84,7 @@ a destructor, and deleted copy/move (it holds raw Vulkan handles — the same re
 - [ ] **Step 2: Run it, confirm it fails** (header missing).
 - [ ] **Step 3: Implement**, lifting the existing sequence from `tests/diff/gpu_probe_context.cpp`'s `dispatchStorageBufferCompute` — that function is the reference; it already handles failure paths by destroying in reverse order. Preserve that discipline: every early return must release what it created.
 - [ ] **Step 4: Migrate `dispatchStorageBufferCompute` to use it.** The atomic probe must still report **exactly 4096** contended adds — that is the regression guard for this refactor.
-- [ ] **Step 5: Verify** — probe exits 0, all 17 OK lines. Commit.
+- [ ] **Step 5: Verify** — probe exits 0, every pre-existing check still passes, 0 validation errors. Report the `OK:` count you observe; it is a description, not a target. Commit.
 
 ---
 
@@ -155,7 +155,9 @@ for each bounce:
 
 Replace `runWavefrontGenerateProbe`, `runWavefrontIntersectProbe`, `runWavefrontScatterProbe` and `runWavefrontLayoutProbe`'s hand-rolled pipeline/descriptor/barrier code with `ComputePipeline`, `WavefrontStage` and `WavefrontLoop`.
 
-**The acceptance rule is that every existing check still passes, unchanged.** All 17 OK lines, same expected values, same exactness. A refactor that requires loosening an assertion is a refactor that changed behaviour.
+**The acceptance rule is that every existing check still passes, unchanged.** Every `OK:` line that existed before your change must still be there, with the same expected values and the same exactness. A refactor that requires loosening an assertion is a refactor that changed behaviour.
+
+**Do not treat any check COUNT as a target.** Earlier drafts of this plan pinned an exact number here; that number is now stale, and pinning it caused a real defect in Task 1, where an implementer folded a new check into an existing one specifically so the printed count would not change. Count the `OK:` lines before your change, count them after, and report both. The count going UP is expected and fine. The only failure is a check that disappeared, went silent, or got weaker.
 
 - [ ] **Step 1** Migrate one driver, verify its checks. **Step 2** Migrate the rest. **Step 3** Report the line-count delta for `tests/diff/` and `ohao/diff/` — the point of this stage is that the second grows and the first shrinks. **Step 4** Commit.
 
@@ -175,7 +177,7 @@ Make the `shaders` target own the copy once, and have the test targets depend on
 
 ## Exit criteria
 
-- [ ] `diff_gpu_probe` exits 0 with all 17 checks plus the fused-loop check, 0 validation errors.
+- [ ] `diff_gpu_probe` exits 0 with 0 validation errors, and every check that existed at the start of this stage still passes with its original expected values, plus the new fused-loop check. (No count is pinned here on purpose: the count was 17 when this plan was written and 19 after Task 1's fix round surfaced a previously silent check. It is a description, never a target.)
 - [ ] Throughput and RNG-parity assertions pass **with the bounce loop fused into one command buffer**, using the same exactness as before.
 - [ ] The barrier-removal proof (Task 3 Step 5) is recorded with its actual observed outcome.
 - [ ] `ohao/diff/` grew and `tests/diff/` shrank; report both numbers.
