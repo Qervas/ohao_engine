@@ -38,9 +38,54 @@ std::vector<uint32_t> loadSpv(const char* filename) {
     return buffer;
 }
 
+VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT /*type*/,
+    const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+    void* /*userData*/) {
+    if (severity & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
+                    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)) {
+        const char* label = (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+                                 ? "ERROR"
+                                 : "WARNING";
+        std::fprintf(stderr, "[validation][%s] %s\n", label,
+                     callbackData->pMessage ? callbackData->pMessage : "(no message)");
+    }
+    return VK_FALSE;
+}
+
 }  // namespace
 
 bool GpuProbeContext::init() {
+    // --- Instance layers: enable VK_LAYER_KHRONOS_validation best-effort ---
+    // This is the check that would have caught an invalid device extension
+    // combination automatically -- without it, the driver may silently
+    // tolerate requests that are not actually spec-valid.
+    uint32_t layerCount = 0;
+    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+    std::vector<VkLayerProperties> layers(layerCount);
+    vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
+
+    const char* kValidationLayerName = "VK_LAYER_KHRONOS_validation";
+    for (const auto& l : layers) {
+        if (std::strcmp(l.layerName, kValidationLayerName) == 0) {
+            m_validationEnabled = true;
+            break;
+        }
+    }
+
+    std::vector<const char*> instanceLayers;
+    std::vector<const char*> instanceExtensions;
+    if (m_validationEnabled) {
+        instanceLayers.push_back(kValidationLayerName);
+        instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        std::printf("[GpuProbeContext] validation layer enabled: %s\n", kValidationLayerName);
+    } else {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] WARNING: validation layers unavailable -- GPU "
+                     "correctness checks are weaker\n");
+    }
+
     // --- Instance ---
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -50,13 +95,49 @@ bool GpuProbeContext::init() {
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_3;
 
+    // Chain a debug messenger create-info onto the instance create-info so
+    // vkCreateInstance/vkDestroyInstance themselves are covered too, not just
+    // the window between vkCreateDebugUtilsMessengerEXT and teardown.
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    debugCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    debugCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                       VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    debugCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                   VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                   VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    debugCreateInfo.pfnUserCallback = debugCallback;
+
     VkInstanceCreateInfo instanceInfo{};
     instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceInfo.pApplicationInfo = &appInfo;
+    instanceInfo.enabledLayerCount = static_cast<uint32_t>(instanceLayers.size());
+    instanceInfo.ppEnabledLayerNames = instanceLayers.data();
+    instanceInfo.enabledExtensionCount = static_cast<uint32_t>(instanceExtensions.size());
+    instanceInfo.ppEnabledExtensionNames = instanceExtensions.data();
+    if (m_validationEnabled) instanceInfo.pNext = &debugCreateInfo;
 
     if (vkCreateInstance(&instanceInfo, nullptr, &m_instance) != VK_SUCCESS) {
         std::fprintf(stderr, "[GpuProbeContext] vkCreateInstance failed\n");
         return false;
+    }
+
+    // --- Install the persistent debug messenger (covers everything after
+    // instance creation: physical device queries, device creation, all
+    // subsequent GPU work) ---
+    if (m_validationEnabled) {
+        auto createFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(m_instance, "vkCreateDebugUtilsMessengerEXT"));
+        if (createFn) {
+            if (createFn(m_instance, &debugCreateInfo, nullptr, &m_debugMessenger) != VK_SUCCESS) {
+                std::fprintf(stderr,
+                             "[GpuProbeContext] vkCreateDebugUtilsMessengerEXT failed -- "
+                             "continuing without a persistent messenger\n");
+            }
+        } else {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] vkGetInstanceProcAddr could not resolve "
+                         "vkCreateDebugUtilsMessengerEXT\n");
+        }
     }
 
     // --- Physical device: prefer the first discrete GPU ---
@@ -107,25 +188,51 @@ bool GpuProbeContext::init() {
     // here -- this binary exists to fail loudly on hardware that cannot run
     // the subsystem, so it must not fall back to the conditional probing
     // device_setup.cpp uses for the engine proper.
+    //
+    // VK_KHR_ray_query requires VK_KHR_acceleration_structure, which itself
+    // requires VK_KHR_buffer_device_address, VK_KHR_deferred_host_operations,
+    // and (for the SPIR-V it consumes) VK_KHR_spirv_1_4 +
+    // VK_KHR_shader_float_controls. VK_EXT_descriptor_indexing is required by
+    // acceleration_structure's update-after-bind descriptor usage. Task 6
+    // builds a BLAS/TLAS against this exact context, so the whole chain is
+    // enabled now rather than left for a confusing failure later. See
+    // ohao/gpu/vulkan/device_setup.cpp lines ~129-152 for the engine's own
+    // (superset) list this mirrors.
     const char* deviceExtensions[] = {
         VK_KHR_RAY_QUERY_EXTENSION_NAME,
         VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+        VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+        VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
     };
 
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFloatFeatures{};
     atomicFloatFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
     atomicFloatFeatures.shaderBufferFloat32AtomicAdd = VK_TRUE;
 
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+    asFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    asFeatures.pNext = &atomicFloatFeatures;
+    asFeatures.accelerationStructure = VK_TRUE;
+
     VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{};
     rayQueryFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-    rayQueryFeatures.pNext = &atomicFloatFeatures;
+    rayQueryFeatures.pNext = &asFeatures;
     rayQueryFeatures.rayQuery = VK_TRUE;
 
-    // Needed for acceleration structures in Task 6 -- set it now.
+    // bufferDeviceAddress is required by acceleration structures; also needed
+    // directly for Task 6. descriptorIndexing is required by the validation
+    // layer whenever VK_EXT_descriptor_indexing is enabled alongside a
+    // VkPhysicalDeviceVulkan12Features struct (VUID-VkDeviceCreateInfo-
+    // ppEnabledExtensionNames-02833) -- device_setup.cpp sets this bit too.
     VkPhysicalDeviceVulkan12Features features12{};
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     features12.pNext = &rayQueryFeatures;
     features12.bufferDeviceAddress = VK_TRUE;
+    features12.descriptorIndexing = VK_TRUE;
 
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -149,8 +256,8 @@ bool GpuProbeContext::init() {
     deviceCreateInfo.pEnabledFeatures = nullptr;  // using pNext features2 chain instead
 
     if (vkCreateDevice(m_physicalDevice, &deviceCreateInfo, nullptr, &m_device) != VK_SUCCESS) {
-        std::fprintf(stderr, "[GpuProbeContext] vkCreateDevice failed (ray query / shader atomic "
-                              "float extensions likely unsupported)\n");
+        std::fprintf(stderr, "[GpuProbeContext] vkCreateDevice failed (ray query / acceleration "
+                              "structure / shader atomic float extensions likely unsupported)\n");
         return false;
     }
 
@@ -187,6 +294,12 @@ void GpuProbeContext::shutdown() {
     if (m_device != VK_NULL_HANDLE) {
         vkDestroyDevice(m_device, nullptr);
         m_device = VK_NULL_HANDLE;
+    }
+    if (m_debugMessenger != VK_NULL_HANDLE) {
+        auto destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(m_instance, "vkDestroyDebugUtilsMessengerEXT"));
+        if (destroyFn) destroyFn(m_instance, m_debugMessenger, nullptr);
+        m_debugMessenger = VK_NULL_HANDLE;
     }
     if (m_instance != VK_NULL_HANDLE) {
         vkDestroyInstance(m_instance, nullptr);

@@ -42,6 +42,12 @@ private:
     uint32_t m_queueFamily{0};
     VkCommandPool m_commandPool{VK_NULL_HANDLE};
     GpuAllocator m_allocator;
+
+    // Best-effort validation: present only when VK_LAYER_KHRONOS_validation is
+    // available on the host. See init()/shutdown() -- absence is a warning,
+    // never a failure.
+    VkDebugUtilsMessengerEXT m_debugMessenger{VK_NULL_HANDLE};
+    bool m_validationEnabled{false};
 };
 
 }  // namespace ohao::diff
