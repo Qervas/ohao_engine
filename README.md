@@ -273,7 +273,7 @@ OptiX is optional. If the SDK isn't found, the OptiX backend compiles as a no-op
 
 ### Acceleration structures
 
-`rt_acceleration_structure.cpp` handles BLAS/TLAS lifecycle. Animated meshes go through `animated_rt_manager.cpp` which skins on the GPU then rebuilds the BLAS, so RT GI and RT shadows stay correct under animation. The path tracer currently uses static BLAS for animated meshes (known gap, called out in `CLAUDE.md`).
+`rt_acceleration_structure.cpp` handles BLAS/TLAS lifecycle. Animated meshes go through `animated_rt_manager.cpp` which skins on the GPU then rebuilds the BLAS, so RT GI and RT shadows stay correct under animation. The path tracer currently uses static BLAS for animated meshes (known gap).
 
 ### Subsystem map
 
@@ -331,9 +331,9 @@ See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, go
 - **NRD** REBLUR + cinematic post is shippable for interactive quality (`--denoise=nrd`).
 - Pre-push **golden-image** regression (`tests/golden/`).
 - ReSTIR DI was tried and reverted (added more noise than it removed).
-- Remaining path-tracer gap: RT BLAS rebuild for skinned meshes (see `CLAUDE.md`).
+- Remaining path-tracer gap: RT BLAS rebuild for skinned meshes.
 
-Deeper docs: `docs/INDEX.md`, `docs/render.md`, `docs/architecture/`, `docs/bugs_solved/`, and `devlog/`.
+Deeper docs: `docs/render_pipelines.md`, `docs/bugs_solved/`, `devlog/`, and the monograph in `site/`.
 
 ## Known build gotchas
 
