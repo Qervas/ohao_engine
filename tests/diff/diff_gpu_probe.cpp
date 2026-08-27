@@ -851,10 +851,13 @@ int main() {
         }
         // The tail beyond what compaction actually wrote, [kExpectedSurvivors,
         // kCapacity), must still read as wf.zero()'s initial fill (0) --
-        // never inspected until now. This is what would catch an off-by-one
-        // or unclamped-write class of bug (like Task 5's fix-round Important
-        // 2, a missing dstSlot < capacity guard) that stays invisible to the
-        // sorted-prefix check above, which only ever looks at
+        // never inspected until now. This is a "nothing extra was written"
+        // sanity check, not a live exercise of the dstSlot < capacity guard
+        // itself: at kCapacity=3072 with kExpectedSurvivors bounding dstSlot
+        // well under capacity, that guard is provably unreachable in this
+        // configuration. It still catches an off-by-one that spills the
+        // compacted prefix past kExpectedSurvivors, a class the sorted-prefix
+        // check above cannot see since that check only ever looks at
         // [0, kExpectedSurvivors).
         for (uint32_t i = kExpectedSurvivors; i < kCapacity; ++i) {
             if (queue1[i] != 0u) {
@@ -1086,6 +1089,41 @@ int main() {
                 scatterOk = false;
                 break;
             }
+            // Inspect the re-queued ring itself, mirroring check 12's
+            // sorted-prefix inspection of wf_intersect's compaction output:
+            // survCount alone is a single scalar and cannot distinguish
+            // "every path re-queued exactly once" from "some path's slot
+            // got overwritten while another was dropped, but the atomicAdd
+            // count still landed on kCapacity by coincidence." This is
+            // precisely the ring GpuProbeContext::runWavefrontScatterProbe
+            // was already paying to copy back as outQueue -- it was going
+            // unread before this check existed, which is exactly the blind
+            // spot that let wf_scatter.comp ship without wf_intersect.comp's
+            // dstSlot < capacity guard (Important 1): a missing bounds guard
+            // changes what lands in this ring without necessarily changing
+            // the counter atomicAdd returns.
+            if (outQueue.size() != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: wf_scatter bounce %u re-queued ring readback "
+                             "size %zu, expected %u\n",
+                             b, outQueue.size(), kCapacity);
+                scatterOk = false;
+                break;
+            }
+            std::vector<uint32_t> sortedQueue = outQueue;
+            std::sort(sortedQueue.begin(), sortedQueue.end());
+            for (uint32_t i = 0; i < kCapacity; ++i) {
+                if (sortedQueue[i] != i) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: wf_scatter bounce %u re-queued ring "
+                                 "sorted[%u] = %u, expected %u (duplicate or dead path index -- "
+                                 "every survivor must appear exactly once)\n",
+                                 b, i, sortedQueue[i], i);
+                    scatterOk = false;
+                    break;
+                }
+            }
+            if (!scatterOk) break;
             if (outDraws.size() != static_cast<std::size_t>(kCapacity) * 3u) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: wf_scatter bounce %u debug-draws readback "
@@ -1102,6 +1140,10 @@ int main() {
             wf.destroy(ctx.allocator());
             return 1;
         }
+        std::printf("[diff_gpu_probe] OK: wf_scatter re-queued ring contains each of %u path "
+                    "indices exactly once at every one of %u bounces (no duplicates, no dead "
+                    "paths)\n",
+                    kCapacity, kBounces);
 
         // 14. Throughput decay -- exact, no tolerance. Hardcoded to the
         // literal 0.0625f rather than computed as kAlbedo^kBounces here: if

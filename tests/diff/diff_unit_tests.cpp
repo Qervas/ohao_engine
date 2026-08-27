@@ -370,23 +370,28 @@ TEST(DiffPathRng, ReplayMatchesGoldenSequence) {
 TEST(DiffPathStateLayout, EachFieldGetsItsOwnBlockSizedByComponentCount) {
     // SoA: one contiguous block per field, so a stage touching only throughput
     // reads a dense run rather than striding over whole path structs.
+    //
+    // Iterate 0..kFieldCount rather than hand-listing enumerators: a
+    // hand-enumerated array silently stops covering "every field" the
+    // moment a new one is added to the enum (this happened once already --
+    // HitT was added in Task 5 and this test kept testing the pre-HitT 16
+    // until a review caught it). Deriving the loop bound from kFieldCount
+    // means a future field addition is covered automatically, with no line
+    // here to remember to update.
     constexpr std::uint32_t kCapacity = 1024;
     ohao::diff::PathStateLayout layout(kCapacity);
 
     using F = ohao::diff::PathStateField;
-    const F fields[] = {F::OriginX, F::OriginY, F::OriginZ,
-                        F::DirX, F::DirY, F::DirZ,
-                        F::ThroughputR, F::ThroughputG, F::ThroughputB,
-                        F::RadianceR, F::RadianceG, F::RadianceB,
-                        F::PixelIndex, F::SampleIndex, F::Bounce, F::Alive};
 
     std::set<std::size_t> seen;
-    for (F f : fields) {
+    for (std::uint32_t i = 0; i < ohao::diff::PathStateLayout::kFieldCount; ++i) {
+        const F f = static_cast<F>(i);
         const std::size_t b = layout.block(f);
         ASSERT_NE(b, ohao::diff::ArenaLayout::kInvalidBlock);
         EXPECT_TRUE(seen.insert(b).second) << "two fields share a block";
         EXPECT_EQ(layout.arena().block(b).sizeBytes, kCapacity * sizeof(float));
     }
+    EXPECT_EQ(seen.size(), ohao::diff::PathStateLayout::kFieldCount);
     EXPECT_EQ(layout.capacity(), kCapacity);
 }
 

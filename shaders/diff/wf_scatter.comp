@@ -30,6 +30,15 @@
 // bit-exactly against ohao::diff::PathRng. See diff_gpu_probe.cpp's
 // per-bounce RNG-parity check.
 //
+// Both the source count and the destination write are clamped to pc.capacity,
+// mirroring wf_intersect.comp's compaction guard exactly. In the current
+// probe this is unreachable -- WavefrontBuffers::zero resets counter slots
+// to 0 and srcCount never exceeds capacity -- but this shader is
+// parameterised (srcQueueBase/srcCountSlot/dstQueueBase/dstCountSlot) for
+// reuse across bounces (N->N+1, N+1->N+2, ...), and the queue buffer is
+// exactly 2*capacity uints. A caller that reuses a ring without re-zeroing
+// its counter would otherwise write past the end of that allocation.
+//
 // Binding scheme: state (0, declared by path_state.glsl), queues (1),
 // counters (2), debug draws (3).
 
@@ -88,7 +97,8 @@ vec3 diffCosineHemisphere(vec3 normal, float u1, float u2) {
 
 void main() {
     const uint slot = gl_GlobalInvocationID.x;
-    if (slot >= counters.value[pc.srcCountSlot]) return;
+    const uint srcCount = min(counters.value[pc.srcCountSlot], pc.capacity);
+    if (slot >= srcCount) return;
 
     const uint pathIndex = queues.idx[pc.srcQueueBase + slot];
 
@@ -138,6 +148,12 @@ void main() {
 
     // 4. Re-queue into the next bounce's ring. Every invocation reaching
     // this point always re-queues (see file header) -- nothing is filtered.
+    // The counter itself is always incremented (so an overflow is visible/
+    // diagnosable via readbackCounter), but the write is skipped once the
+    // offset would land outside the destination ring's capacity-sized
+    // allocation.
     const uint dstSlot = atomicAdd(counters.value[pc.dstCountSlot], 1u);
-    queues.idx[pc.dstQueueBase + dstSlot] = pathIndex;
+    if (dstSlot < pc.capacity) {
+        queues.idx[pc.dstQueueBase + dstSlot] = pathIndex;
+    }
 }
