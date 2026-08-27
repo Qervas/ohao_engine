@@ -4,10 +4,20 @@
 
 namespace ohao::diff {
 
+GradientArena::~GradientArena() {
+    // Backstop only: normal teardown is the explicit destroy(allocator) call.
+    // This exists so early-return error paths (e.g. diff_gpu_probe.cpp) that
+    // never reach an explicit destroy() don't leak the buffer.
+    if (m_buffer.isValid() && m_allocator != nullptr) {
+        m_allocator->destroyBuffer(m_buffer);
+    }
+}
+
 bool GradientArena::build(GpuAllocator& allocator, const ArenaLayout& layout) {
     if (layout.totalBytes() == 0) return false;
 
     m_layout = layout;
+    m_allocator = &allocator;
     // CpuToGpu + persistently mapped keeps readback simple for the scaffolding
     // stage. Stage 1 can move this to GpuOnly with a staging copy once the
     // per-iteration cost matters.
@@ -23,9 +33,10 @@ bool GradientArena::build(GpuAllocator& allocator, const ArenaLayout& layout) {
 void GradientArena::destroy(GpuAllocator& allocator) {
     if (m_buffer.isValid()) allocator.destroyBuffer(m_buffer);
     m_layout = ArenaLayout{};
+    m_allocator = nullptr;
 }
 
-void GradientArena::zero(VkCommandBuffer cmd) const {
+void GradientArena::zero(VkCommandBuffer cmd) {
     if (!m_buffer.isValid()) return;
     vkCmdFillBuffer(cmd, m_buffer.buffer, 0,
                     static_cast<VkDeviceSize>(m_layout.totalBytes()), 0u);

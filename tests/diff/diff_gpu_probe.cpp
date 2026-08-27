@@ -14,6 +14,7 @@
 #include "diff/device_caps.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/grad/gradient_arena.hpp"
+#include "diff/param/param_registry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -199,6 +200,65 @@ int main() {
     }
     std::printf("[diff_gpu_probe] OK: half-quad pins camera Y orientation over %u pixels\n",
                 kW * kH);
+
+    // 4. The seam Stage 1 depends on most: a block index handed out by the registry
+    //    must resolve correctly against an arena built from that registry's layout.
+    //    Both hold ArenaLayout by value, so this proves the positional indices survive
+    //    the copy -- previously true only by inspection.
+    {
+        ohao::diff::ParamRegistry reg;
+        const auto reg1 = reg.registerTexture("albedo", {8, 8, 3}, VK_FORMAT_R32G32B32A32_SFLOAT);
+        const auto reg2 = reg.registerScalarBlock("ssao_params", 4);
+        if (!reg1.ok || !reg2.ok) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: registry setup: %s %s\n",
+                         reg1.error.c_str(), reg2.error.c_str());
+            return 1;
+        }
+
+        ohao::diff::GradientArena regArena;
+        if (!regArena.build(ctx.allocator(), reg.layout())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: arena build from registry layout\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { regArena.zero(cmd); });
+
+        const ohao::diff::DiffParam* albedo = reg.find("albedo");
+        const ohao::diff::DiffParam* ssao = reg.find("ssao_params");
+        if (albedo == nullptr || ssao == nullptr) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: registered params not found\n");
+            regArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        struct Expect { const char* name; std::size_t block; std::size_t floats; };
+        const Expect expects[] = {
+            {"albedo.grad",  albedo->gradBlock,  albedo->floatCount},
+            {"albedo.state", albedo->stateBlock, albedo->floatCount * 2u},
+            {"ssao.grad",    ssao->gradBlock,    ssao->floatCount},
+            {"ssao.state",   ssao->stateBlock,   ssao->floatCount * 2u},
+        };
+        for (const Expect& e : expects) {
+            const std::vector<float> block = regArena.readback(ctx.allocator(), e.block);
+            if (block.size() != e.floats) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: %s resolved to %zu floats, registry says %zu "
+                             "(registry/arena block indices disagree)\n",
+                             e.name, block.size(), e.floats);
+                regArena.destroy(ctx.allocator());
+                return 1;
+            }
+            for (float v : block) {
+                if (v != 0.0f) {
+                    std::fprintf(stderr, "[diff_gpu_probe] FAIL: %s not zeroed\n", e.name);
+                    regArena.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+        regArena.destroy(ctx.allocator());
+        std::printf("[diff_gpu_probe] OK: registry block indices resolve against arena "
+                    "(4 blocks, sizes match)\n");
+    }
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

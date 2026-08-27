@@ -22,8 +22,17 @@ struct ParamShape {
     std::uint32_t height{0};
     std::uint32_t channels{0};
 
+    /// Returns 0 if the product overflows uint32_t rather than wrapping --
+    /// an undersized block from a wrapped multiply is silent wrongness, the
+    /// exact failure class this subsystem exists to make impossible. A zero
+    /// floatCount is already rejected by addParam, so this turns an
+    /// overflowing shape into a clean rejection.
     [[nodiscard]] std::uint32_t floatCount() const noexcept {
-        return width * height * channels;
+        const std::uint64_t product = static_cast<std::uint64_t>(width) *
+                                      static_cast<std::uint64_t>(height) *
+                                      static_cast<std::uint64_t>(channels);
+        if (product > static_cast<std::uint64_t>(UINT32_MAX)) return 0;
+        return static_cast<std::uint32_t>(product);
     }
 };
 

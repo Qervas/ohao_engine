@@ -260,13 +260,15 @@ TEST(DiffParamRegistry, RejectsEmptyNameAndZeroFloatCount) {
     EXPECT_EQ(reg.layout().blockCount(), 0u);
 }
 
-TEST(DiffPathRng, SameTupleProducesIdenticalStream) {
-    auto a = ohao::diff::PathRng::forPath(1234, 7, 99);
-    auto b = ohao::diff::PathRng::forPath(1234, 7, 99);
-
-    for (int i = 0; i < 32; ++i) {
-        EXPECT_FLOAT_EQ(a.next1D(), b.next1D()) << "divergence at draw " << i;
-    }
+TEST(DiffParamRegistry, RejectsShapeThatOverflows32Bits) {
+    // An undersized block from a wrapped multiply is silent wrongness -- the exact
+    // failure class this subsystem exists to make impossible.
+    ohao::diff::ParamRegistry reg;
+    const auto result = reg.registerTexture("huge", {65536u, 65536u, 4u},
+                                            VK_FORMAT_R32G32B32A32_SFLOAT);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(reg.count(), 0u);
+    EXPECT_EQ(reg.layout().blockCount(), 0u);
 }
 
 TEST(DiffPathRng, ReplayFromTupleReproducesTheStream) {
