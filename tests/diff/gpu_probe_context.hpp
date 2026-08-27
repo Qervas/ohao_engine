@@ -214,13 +214,35 @@ public:
     /// bounce plus slack. wf_scatter.comp's placeholder BSDF samples a
     /// cosine hemisphere about a HARDCODED (0,0,1) normal and offsets the
     /// new origin along it, so every bounce direction has dir.z > 0 and
-    /// every path marches monotonically in +Z. A single quad -- the scene
-    /// every stage-by-stage probe uses -- would therefore be hit only at
-    /// bounce 0 and missed by every later bounce, killing every path and
-    /// making the 4-bounce throughput assertion vacuous. A staircase of
-    /// quads is what lets all `width*height` paths survive all `maxBounces`
-    /// bounces, which is what makes "throughput is exactly albedo^bounces
-    /// for every path" a real assertion.
+    /// every path marches monotonically in +Z (confirmed: wf_scatter.comp:138
+    /// hardcodes the normal, and abs(normal.z) == 1.0 fails
+    /// diffCosineHemisphere's < 0.999 test, so newDir.z > 0 always). A single
+    /// quad -- the scene every stage-by-stage probe uses -- would therefore
+    /// be hit only at bounce 0 and missed by every later bounce, killing
+    /// every path well before `maxBounces`.
+    ///
+    /// This does NOT make the throughput assertion (check 17 in
+    /// diff_gpu_probe.cpp) pass vacuously against a single quad, and it is
+    /// not check 16 (the survivor/compaction check) that would prevent that.
+    /// Check 17 iterates every one of `kCapacity` PathState entries, not the
+    /// survivor ring -- a dead path's Throughput field still holds whatever
+    /// an earlier bounce left in it (e.g. 0.5 after one bounce), so check 17
+    /// fails LOUDLY on a single-quad scene regardless of check 16. This was
+    /// proved by stubbing both of check 16's assertions and rebuilding: a
+    /// single-quad run still fails at check 17 with
+    /// "throughput = (0.5,0.5,0.5) after 4 bounces, expected exactly
+    /// (0.0625,0.0625,0.0625)". Non-vacuity comes from check 17's
+    /// quantification over the whole path-state array, not from check 16.
+    ///
+    /// The staircase scene is still necessary -- this probe genuinely cannot
+    /// pass without it, since without a scene every path can survive, there
+    /// is no way to reach the intended bit-exact 0.0625 outcome instead of a
+    /// loud failure. A staircase of quads is what lets all `width*height`
+    /// paths survive all `maxBounces` bounces, by construction (see the
+    /// `maxBounces` safety check in `runWavefrontFusedLoopProbe`'s .cpp,
+    /// tied to `kFusedLoopHalfExtent`/`kFusedLoopPlaneGap`/
+    /// `kFusedLoopPlaneCount`), which is what makes "throughput is exactly
+    /// albedo^bounces for every path" a real, non-vacuous assertion.
     ///
     /// `height` must be exactly 8 and `width` a multiple of 8:
     /// wf_generate.comp has local_size (8,8) and WavefrontStage's Fixed

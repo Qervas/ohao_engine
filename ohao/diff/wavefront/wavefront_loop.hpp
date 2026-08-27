@@ -35,18 +35,46 @@ namespace ohao::diff {
 /// `SYNC-` diagnostics. A clean validation run is not evidence that the
 /// barriers here are right.
 ///
-/// ### Known gap: the checks do not cover the inter-dispatch barrier
+/// ### Known gap: the checks do not cover the compute/transfer barrier set
 ///
-/// Task 3 measured this too, by deleting the single
-/// `SHADER_WRITE -> SHADER_READ|SHADER_WRITE` barrier between intersect and
-/// scatter and re-running the probe. NOTHING failed -- every analytic check
-/// still passed bit-exactly over six consecutive runs, and validation again
-/// emitted zero `SYNC-` messages. That barrier is required by the Vulkan
-/// spec and it is recorded below, but on this hardware nothing in this
-/// repository would notice if it went missing: the driver happens to
-/// serialise back-to-back compute dispatches on one queue regardless. Treat
-/// a green `diff_gpu_probe` as evidence about the *shaders*, never as
-/// evidence about the compute-to-compute barriers. See task-3-report.md.
+/// Task 3 first tried deleting a single barrier -- `SHADER_WRITE ->
+/// SHADER_READ|SHADER_WRITE` between intersect and scatter (barrier (7) in
+/// `recordCompactingStage`, skipped after intersect only). NOTHING failed.
+/// But that result is largely a no-op, not evidence the barrier is unneeded:
+/// skipping it leaves the *execution* dependency between the two dispatches
+/// fully intact, because the FOLLOWING compacting stage's own barriers (1)
+/// (`COMPUTE -> TRANSFER`) and (3) (`TRANSFER -> COMPUTE`), both present and
+/// forming a valid chain, still serialise them -- a `VkBufferMemoryBarrier`
+/// narrows the *memory* scope of a dependency, it never narrows the
+/// *execution* scope. It also leaves the whole counter-buffer memory
+/// dependency intact, since (1) and (3) match scope-for-scope. Only the
+/// state and queue buffers' visibility was actually removed by that one
+/// deletion.
+///
+/// The real measurement is the stronger one: disabling EVERY compute-side
+/// memory barrier in the loop -- the post-generate barrier (barrier A,
+/// `COMPUTE -> COMPUTE`, recorded right after `generate` in `record()`)
+/// plus (1), (3) and (7) inside
+/// `recordCompactingStage` (each recorded once per compacting dispatch, so
+/// eight times over in a 4-bounce run), leaving only the `vkCmdFillBuffer`
+/// calls and the `COMPUTE_SHADER -> DRAW_INDIRECT` barrier (5) standing --
+/// and re-running the probe. NOTHING failed there either, over three
+/// consecutive runs, all `exit=0`, `ok=22`, `sync=0`. The contrast: deleting
+/// barrier (5) alone (first occurrence only) fails immediately --
+/// `fused loop of 1 bounces left 0 live paths, expected all 512` -- so (5)
+/// IS covered.
+///
+/// So: **on this driver, the ONLY barrier in this loop whose absence these
+/// checks detect is (5), `COMPUTE_SHADER -> DRAW_INDIRECT` /
+/// `INDIRECT_COMMAND_READ`.** The entire compute-to-compute and
+/// transfer-to-compute barrier set -- barrier A, (1), (3) and (7) -- is
+/// unguarded by anything in this repository, and synchronization validation
+/// stays silent for all of it. Every one of those barriers is required by
+/// the Vulkan spec and is recorded below, but nothing here would notice if
+/// any of them went missing: the driver happens to serialise back-to-back
+/// compute/transfer work on one queue regardless. Treat a green
+/// `diff_gpu_probe` as evidence about the *shaders*, never as evidence about
+/// this barrier set. See task-3-report.md.
 ///
 /// ### The three ordering rules this loop is built on
 ///

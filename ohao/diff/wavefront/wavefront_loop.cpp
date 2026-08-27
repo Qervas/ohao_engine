@@ -148,22 +148,61 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
     // SHADER_WRITE because that next stage atomicAdds, and because a
     // read-only destination would not order the write-after-write on state.
     //
-    // KNOWN GAP -- MEASURED, NOT ASSUMED. This is the barrier Task 3's
-    // required proof deleted (skipped after intersect only, so that exactly
-    // one SHADER_WRITE -> SHADER_READ|SHADER_WRITE barrier between intersect
-    // and scatter was missing). Result: the probe still printed all 22 OK
-    // lines and PASS, over six consecutive runs, with zero SYNC- or other
-    // validation diagnostics. So neither the analytic checks (throughput ==
-    // 0.0625 bit-exact, per-bounce PathRng parity, one-of-each compaction
-    // ring) nor synchronization validation covers this barrier on this
-    // hardware -- the driver happens to serialise back-to-back compute
-    // dispatches on one queue anyway. It is kept because the Vulkan spec
-    // requires it, not because anything here would notice its absence. Do
-    // not conclude from a green test run that it can go. See
+    // KNOWN GAP -- MEASURED, NOT ASSUMED, AND BROADER THAN IT LOOKS. Task 3's
+    // required proof first deleted just this barrier (7) -- skipped after
+    // intersect only, so exactly one SHADER_WRITE -> SHADER_READ|SHADER_WRITE
+    // barrier between intersect and scatter was missing. NOTHING failed. But
+    // that experiment was largely a no-op: skipping (7) leaves the
+    // *execution* dependency between intersect and scatter fully intact,
+    // because the FOLLOWING recordCompactingStage's own barriers (1)
+    // (COMPUTE -> TRANSFER) and (3) (TRANSFER -> COMPUTE) still serialise the
+    // two dispatches -- a VkBufferMemoryBarrier narrows the *memory* scope of
+    // a dependency, never the *execution* scope. It also leaves the entire
+    // counter-buffer memory dependency intact, since (1) and (3) form a
+    // matching chain. Only the state and queue buffers' visibility was
+    // actually removed.
+    //
+    // The real measurement is the stronger one: disabling EVERY compute-side
+    // memory barrier in the loop -- the post-generate barrier (barrier A,
+    // COMPUTE -> COMPUTE, immediately after m_generate->record(cmd) in
+    // record() below), plus (1), (3) and this barrier (7), each
+    // recorded once per compacting dispatch (eight times over a 4-bounce
+    // run) -- leaving only the vkCmdFillBuffer calls and barrier (5),
+    // COMPUTE -> DRAW_INDIRECT, standing. Result: exit=0, ok=22, sync=0,
+    // three consecutive runs. The contrast -- deleting (5) ALONE, first
+    // occurrence only -- fails immediately: "fused loop of 1 bounces left 0
+    // live paths, expected all 512". So (5) is covered; barrier A, (1), (3)
+    // and (7) are not. Neither the analytic checks (throughput == 0.0625
+    // bit-exact, per-bounce PathRng parity, one-of-each compaction ring) nor
+    // synchronization validation covers any of this compute-to-compute /
+    // transfer-to-compute barrier set on this hardware -- the driver happens
+    // to serialise back-to-back compute/transfer work on one queue anyway.
+    // Every one of those barriers is kept because the Vulkan spec requires
+    // it, not because anything here would notice its absence. Do not
+    // conclude from a green test run that this barrier set can go. See
     // task-3-report.md.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                          kShaderReadWrite, allBuffers, 3);
+
+    // One WAR ordering in this function is spelled out nowhere else, so it
+    // is worth naming even though no barrier had to change for it: dispatch
+    // N's vkCmdDispatchIndirect reads counter slots kIndirectArgsSlot (2-4)
+    // in the DRAW_INDIRECT stage (see barrier (5) above), and the NEXT
+    // compacting dispatch's prepare_indirect (step (4), next call to this
+    // function) does a SHADER_WRITE to those SAME slots -- kIndirectArgsSlot
+    // is not ping-ponged, it is reused by every compacting stage. That WAR
+    // is ordered, but only transitively: this barrier's srcStageMask is
+    // COMPUTE_SHADER, and per the Vulkan spec a stage named in srcStageMask
+    // brings every logically-earlier stage OF THE SAME COMMAND into the
+    // first synchronization scope too. DRAW_INDIRECT is logically earlier
+    // than COMPUTE_SHADER for one dispatch, so dispatch N's indirect-args
+    // read is captured here even though this barrier never names
+    // DRAW_INDIRECT explicitly. From here the ordering continues by plain
+    // program order through (1) and (3) of the next recordCompactingStage
+    // call to prepare_indirect's write. This is valid Vulkan usage, just the
+    // one ordering in this file a reviewer could miss by reading srcStageMask
+    // literally instead of per the spec's logically-earlier-stages rule.
 }
 
 void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,

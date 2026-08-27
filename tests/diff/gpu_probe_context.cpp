@@ -2052,24 +2052,94 @@ constexpr uint32_t kFusedLoopPlaneCount = 8;
 /// returns (state >> 8) * 2^-24 and so cannot exceed 1 - 2^-24. Crossing a
 /// gap g at that angle costs t = g / 2^-12 = 4096*g and drifts the same
 /// distance sideways. With g = 0.05 that is t <= 205 (well inside tmax) and
-/// a lateral drift under 205 per bounce -- covered many times over by the
-/// half-extent below, even accumulated across every bounce. A larger gap
-/// would eventually push a grazing ray past tmax and silently kill it; a
-/// much smaller one would collide with wf_scatter.comp's 1e-4 origin offset.
+/// a lateral drift under 205 per SCATTERED bounce (every bounce after the
+/// first -- the first intersect traces the camera's own primary ray, which
+/// has a fixed, known direction, not the RNG's worst case).
+///
+/// That per-bounce figure is NOT "covered many times over" by the
+/// half-extent below once it accumulates: at this repo's own probe's 4
+/// bounces (3 scattered intersects), worst case is roughly
+/// 3 * 204.4 + a small primary-ray footprint =~ 615 units against a 1024
+/// half-extent -- about a 1.7x margin, not an "many times over" one. At 6
+/// bounces the worst case is already ~1022, i.e. AT the half-extent; at 7 it
+/// exceeds it. See kFusedLoopSceneSafeForBounces() below and the runtime guard in
+/// runWavefrontFusedLoopProbe that keeps a raised maxBounces from silently
+/// turning "every path survives" from a guarantee into a probability. A
+/// larger gap would eventually push a grazing ray past tmax and silently
+/// kill it; a much smaller one would collide with wf_scatter.comp's 1e-4
+/// origin offset.
 constexpr float kFusedLoopFirstPlaneZ = -2.0f;
 constexpr float kFusedLoopPlaneGap = 0.05f;
 
 /// Half-extent of each quad in x and y. Big enough that no path can drift
 /// off the side of the staircase (see the gap note above), which is what
 /// makes "every one of the capacity paths survives every bounce" a fact
-/// rather than a probability. The planes are exactly axis-aligned, so their
-/// plane equation is exact regardless of how large they are.
+/// rather than a probability -- PROVIDED maxBounces stays within what
+/// kFusedLoopSceneSafeForBounces() allows; see the runtime guard below. The
+/// planes are exactly axis-aligned, so their plane equation is exact
+/// regardless of how large they are.
 constexpr float kFusedLoopHalfExtent = 1024.0f;
 
 /// wf_generate.comp's local_size_y. WavefrontStage's Fixed group-count
 /// source dispatches (groupCountX, 1, 1), so a fixed dispatch of that shader
 /// covers exactly this many pixel rows -- see the height check below.
 constexpr uint32_t kFusedLoopGenerateLocalY = 8;
+
+/// The shallowest z-direction the RNG can produce, per the gap-note
+/// derivation above: dir.z = sqrt(1 - u1max) = sqrt(2^-24) = 2^-12.
+constexpr float kFusedLoopMinDirZ = 1.0f / 4096.0f;
+
+/// wf_scatter.comp's ray-origin epsilon offset along the normal, subtracted
+/// from the gap before computing worst-case crossing distance (matches the
+/// gap-note derivation: "a much smaller [gap] would collide with
+/// wf_scatter.comp's 1e-4 origin offset").
+constexpr float kFusedLoopScatterOriginOffset = 1e-4f;
+
+/// Generous, deliberately loose bound on how far the camera's own primary
+/// ray footprint (its origin/frustum spread across `width*height` pixels)
+/// can be from the staircase's centerline, added once to the worst-case
+/// scattered-bounce drift below. It is not derived as tightly as the
+/// per-bounce figure because the scattered-bounce term dominates for any
+/// maxBounces worth guarding.
+constexpr float kFusedLoopPrimarySpreadSlack = 2.0f;
+
+/// Worst-case total lateral drift (in scene units) a path can accumulate
+/// over `maxBounces` fused bounces, given the RNG's shallowest possible
+/// direction every time. A run of `maxBounces` bounces contains
+/// `maxBounces - 1` SCATTERED intersects (the first intersect traces the
+/// camera's own primary ray, not a scattered one), each of which can drift
+/// up to `(kFusedLoopPlaneGap - kFusedLoopScatterOriginOffset) /
+/// kFusedLoopMinDirZ` units sideways -- see the gap-note derivation above.
+///
+/// `maxBounces` is a runtime parameter of `runWavefrontFusedLoopProbe` (see
+/// its signature), not a value known at this translation unit's compile
+/// time, so this cannot be enforced with a `static_assert`: there is no
+/// compile-time-constant bounce count for a `static_assert` to check against
+/// here. It is `constexpr` so it folds to a compile-time constant at any
+/// call site that DOES pass a compile-time-constant `maxBounces` (as
+/// diff_gpu_probe.cpp's checks 16-18 do, with kBounces = 4), but the guard
+/// itself is evaluated at runtime in `runWavefrontFusedLoopProbe`, against
+/// whatever `maxBounces` the caller actually passed, so that raising it past
+/// what this scene can guarantee fails the probe loudly instead of quietly
+/// turning "all paths survive" from a fact into a flaky probability.
+constexpr float kFusedLoopWorstCaseDrift(uint32_t maxBounces) {
+    const uint32_t scatteredBounces = maxBounces > 0u ? maxBounces - 1u : 0u;
+    const float perBounceDrift =
+        (kFusedLoopPlaneGap - kFusedLoopScatterOriginOffset) / kFusedLoopMinDirZ;
+    return static_cast<float>(scatteredBounces) * perBounceDrift + kFusedLoopPrimarySpreadSlack;
+}
+
+/// True iff this staircase scene (kFusedLoopHalfExtent, kFusedLoopPlaneGap,
+/// kFusedLoopPlaneCount) can GUARANTEE -- not merely make likely -- that
+/// every path survives `maxBounces` fused bounces. Two independent
+/// necessary conditions: the worst-case lateral drift must stay inside the
+/// half-extent, and there must be enough planes for `maxBounces` bounces to
+/// each hit one (a run of `maxBounces` bounces uses planes
+/// 0 .. maxBounces - 1, so it needs at least `maxBounces` of them).
+constexpr bool kFusedLoopSceneSafeForBounces(uint32_t maxBounces) {
+    return kFusedLoopWorstCaseDrift(maxBounces) <= kFusedLoopHalfExtent &&
+           maxBounces <= kFusedLoopPlaneCount;
+}
 
 }  // namespace
 
@@ -2119,6 +2189,27 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                      "maxBounces > 0; got %ux%u, maxBounces %u\n",
                      kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalY, capacity, width, height,
                      maxBounces);
+        return false;
+    }
+    // This scene's "every path survives every bounce" guarantee is only a
+    // guarantee up to a bounce count the geometry was sized for -- see
+    // kFusedLoopWorstCaseDrift's doc comment. Fail loudly here, rather than
+    // silently letting a raised maxBounces turn check 16's hard `==
+    // kCapacity` equality (and the throughput/RNG checks built on top of it)
+    // from a certainty into something that merely happens to pass on this
+    // run. This is a runtime check, not a static_assert, because maxBounces
+    // is a runtime parameter of this function with no compile-time-constant
+    // value in this translation unit to assert against.
+    if (!kFusedLoopSceneSafeForBounces(maxBounces)) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontFusedLoopProbe: maxBounces=%u exceeds what "
+                     "the staircase scene can GUARANTEE to survive -- worst-case lateral drift is "
+                     "%.1f against a half-extent of %.1f (kFusedLoopHalfExtent), and/or maxBounces "
+                     "exceeds the %u available planes (kFusedLoopPlaneCount). Raise "
+                     "kFusedLoopHalfExtent/kFusedLoopPlaneCount to match, or lower maxBounces; do "
+                     "not proceed and rely on this run happening to pass\n",
+                     maxBounces, static_cast<double>(kFusedLoopWorstCaseDrift(maxBounces)),
+                     static_cast<double>(kFusedLoopHalfExtent), kFusedLoopPlaneCount);
         return false;
     }
 
