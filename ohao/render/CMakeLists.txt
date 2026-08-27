@@ -13,9 +13,8 @@ file(GLOB_RECURSE RENDERER_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
 )
 
-# Exclude disabled passes and the removed fake Diff-IR tree if any file remains.
+# Exclude disabled passes
 list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/_disabled/")
-list(FILTER RENDERER_SOURCES EXCLUDE REGEX "/diff/")
 
 add_library(ohao_renderer ${RENDERER_SOURCES})
 
