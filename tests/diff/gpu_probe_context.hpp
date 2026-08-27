@@ -51,6 +51,18 @@ public:
     [[nodiscard]] bool runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
                                       uint32_t invocations);
 
+    /// Runs shaders/diff/rng_probe.comp for one path and returns its first
+    /// `drawCount` RNG values. Compared bit-exactly against ohao::diff::PathRng,
+    /// this is what proves the GLSL mirror in shaders/includes/diff/rng.glsl
+    /// agrees with the CPU reference. Path replay backpropagation replays each
+    /// light path from its seed instead of storing a tape, so a single differing
+    /// bit means the backward pass walks a different path than the forward pass
+    /// and every gradient is silently wrong.
+    [[nodiscard]] bool runRngParityProbe(uint32_t pixelIndex, uint32_t sampleIndex,
+                                         uint32_t iterationSeed, uint32_t drawCount,
+                                         GradientArena& scratch, std::size_t blockIndex,
+                                         std::vector<float>& outDraws);
+
     /// Builds a BLAS/TLAS for a single axis-aligned quad spanning
     /// x in [-1,1], y in [quadMinY,1] at z = -planeDistance, traces one ray
     /// per pixel from the origin looking down -Z, and fills `outHits` with
@@ -66,6 +78,13 @@ public:
                                           float quadMinY = -1.0f);
 
 private:
+    /// Shared boilerplate for the single-storage-buffer compute probes:
+    /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,
+    /// barrier to host reads, wait. Every object is destroyed on every path.
+    [[nodiscard]] bool dispatchStorageBufferCompute(const char* spvName, VkBuffer buffer,
+                                                    const void* pushData, uint32_t pushSize,
+                                                    uint32_t groupCountX);
+
     VkInstance m_instance{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
     VkDevice m_device{VK_NULL_HANDLE};

@@ -344,14 +344,10 @@ void GpuProbeContext::runImmediate(const std::function<void(VkCommandBuffer)>& f
     vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
 }
 
-bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
-                                     uint32_t invocations) {
-    struct PushConstants {
-        uint32_t targetIndex;
-        uint32_t invocationCount;
-    };
-
-    const std::vector<uint32_t> spv = loadSpv("diff_atomic_probe.comp.spv");
+bool GpuProbeContext::dispatchStorageBufferCompute(const char* spvName, VkBuffer buffer,
+                                                   const void* pushData, uint32_t pushSize,
+                                                   uint32_t groupCountX) {
+    const std::vector<uint32_t> spv = loadSpv(spvName);
     if (spv.empty()) return false;
 
     VkShaderModuleCreateInfo moduleInfo{};
@@ -386,7 +382,7 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushRange.offset = 0;
-    pushRange.size = sizeof(PushConstants);
+    pushRange.size = pushSize;
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -452,7 +448,7 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
 
     if (ok) {
         VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = arena.buffer();
+        bufferInfo.buffer = buffer;
         bufferInfo.offset = 0;
         bufferInfo.range = VK_WHOLE_SIZE;
 
@@ -465,16 +461,16 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
         write.pBufferInfo = &bufferInfo;
         vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 
-        const PushConstants push{targetIndex, invocations};
-        const uint32_t groupCount = (invocations + 63) / 64;
+        const 
+        const uint32_t groupCount = groupCountX;
 
         runImmediate([&](VkCommandBuffer cmd) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1,
                                      &descSet, 0, nullptr);
-            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push),
-                                &push);
-            vkCmdDispatch(cmd, groupCount, 1, 1);
+            vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, pushSize,
+                                pushData);
+            vkCmdDispatch(cmd, groupCountX, 1, 1);
 
             VkBufferMemoryBarrier barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -482,7 +478,7 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
             barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.buffer = arena.buffer();
+            barrier.buffer = buffer;
             barrier.offset = 0;
             barrier.size = VK_WHOLE_SIZE;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
@@ -497,6 +493,35 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
     vkDestroyShaderModule(m_device, shaderModule, nullptr);
 
     return ok;
+}
+
+bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
+                                     uint32_t invocations) {
+    struct PushConstants {
+        uint32_t targetIndex;
+        uint32_t invocationCount;
+    } push{targetIndex, invocations};
+    return dispatchStorageBufferCompute("diff_atomic_probe.comp.spv", arena.buffer(),
+                                        &push, sizeof(push), (invocations + 63u) / 64u);
+}
+
+bool GpuProbeContext::runRngParityProbe(uint32_t pixelIndex, uint32_t sampleIndex,
+                                        uint32_t iterationSeed, uint32_t drawCount,
+                                        GradientArena& scratch, std::size_t blockIndex,
+                                        std::vector<float>& outDraws) {
+    struct PushConstants {
+        uint32_t pixelIndex;
+        uint32_t sampleIndex;
+        uint32_t iterationSeed;
+        uint32_t drawCount;
+    } push{pixelIndex, sampleIndex, iterationSeed, drawCount};
+    // rng_probe.comp writes from invocation 0 only, so one group suffices.
+    if (!dispatchStorageBufferCompute("diff_rng_probe.comp.spv", scratch.buffer(),
+                                      &push, sizeof(push), 1u)) {
+        return false;
+    }
+    outDraws = scratch.readback(allocator(), blockIndex);
+    return outDraws.size() >= drawCount;
 }
 
 bool GpuProbeContext::runVisibilityProbe(float planeDistance, uint32_t width, uint32_t height,

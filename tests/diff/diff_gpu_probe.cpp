@@ -14,6 +14,7 @@
 #include "diff/device_caps.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/grad/gradient_arena.hpp"
+#include "diff/rng/diff_rng.hpp"
 #include "diff/param/param_registry.hpp"
 
 #include <algorithm>
@@ -258,6 +259,61 @@ int main() {
         regArena.destroy(ctx.allocator());
         std::printf("[diff_gpu_probe] OK: registry block indices resolve against arena "
                     "(4 blocks, sizes match)\n");
+    }
+
+
+    // 6. CPU/GPU RNG parity -- the invariant path replay backpropagation rests on.
+    //    The backward pass stores no tape; it replays each light path from its seed.
+    //    If shaders/includes/diff/rng.glsl and ohao/diff/rng/diff_rng.cpp disagree by
+    //    a single bit, the replayed path is a DIFFERENT path and every gradient is
+    //    silently wrong -- no crash, no NaN. Until now the two were verified
+    //    identical only by reading them side by side.
+    {
+        constexpr uint32_t kDraws = 64;
+        constexpr uint32_t kPixel = 4096;
+        constexpr uint32_t kSample = 3;
+        constexpr uint32_t kSeed = 12345;
+
+        ohao::diff::ArenaLayout rngLayout;
+        const std::size_t drawBlock = rngLayout.add(kDraws);
+        ohao::diff::GradientArena rngArena;
+        if (!rngArena.build(ctx.allocator(), rngLayout)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: rng arena build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { rngArena.zero(cmd); });
+
+        std::vector<float> gpuDraws;
+        if (!ctx.runRngParityProbe(kPixel, kSample, kSeed, kDraws, rngArena, drawBlock, gpuDraws)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: rng parity dispatch\n");
+            rngArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        ohao::diff::PathRng cpuRng = ohao::diff::PathRng::forPath(kPixel, kSample, kSeed);
+        for (uint32_t i = 0; i < kDraws; ++i) {
+            const float cpu = cpuRng.next1D();
+            const float gpu = gpuDraws[i];
+            // Bit-exact on purpose: an epsilon here would defeat the entire check.
+            if (cpu != gpu) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: RNG diverges at draw %u: CPU %.9g, GPU %.9g\n"
+                             "  shaders/includes/diff/rng.glsl and ohao/diff/rng/diff_rng.cpp must\n"
+                             "  produce identical sequences -- path replay depends on it\n",
+                             i, static_cast<double>(cpu), static_cast<double>(gpu));
+                rngArena.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        if (cpuRng.drawCount() != kDraws) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: drawCount %u, expected %u\n",
+                         cpuRng.drawCount(), kDraws);
+            rngArena.destroy(ctx.allocator());
+            return 1;
+        }
+        rngArena.destroy(ctx.allocator());
+        std::printf("[diff_gpu_probe] OK: CPU and GLSL RNG agree bit-exactly over %u draws\n",
+                    kDraws);
     }
 
     arena.destroy(ctx.allocator());
