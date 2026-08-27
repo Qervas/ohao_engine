@@ -125,3 +125,17 @@ TEST(DiffArenaLayout, ZeroFloatBlockIsRejected) {
     EXPECT_EQ(layout.add(0), ohao::diff::ArenaLayout::kInvalidBlock);
     EXPECT_EQ(layout.blockCount(), 0u);
 }
+
+TEST(DiffArenaLayout, OutOfRangeIndexReturnsInvalidBlock) {
+    // sizeBytes == 0 is the invalid marker: add() rejects floatCount == 0, so no
+    // valid block can have zero size. A caller must not read offsetBytes without
+    // checking sizeBytes first -- offset 0 is a real location in the arena.
+    ohao::diff::ArenaLayout layout;
+    layout.add(8);
+
+    const ohao::diff::ArenaBlock oob = layout.block(99);
+    EXPECT_EQ(oob.sizeBytes, 0u);
+
+    const ohao::diff::ArenaBlock valid = layout.block(0);
+    EXPECT_NE(valid.sizeBytes, 0u);
+}

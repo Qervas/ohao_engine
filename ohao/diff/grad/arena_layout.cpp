@@ -1,5 +1,7 @@
 #include "diff/grad/arena_layout.hpp"
 
+#include <cassert>
+
 namespace ohao::diff {
 namespace {
 
@@ -22,6 +24,7 @@ std::size_t ArenaLayout::add(std::size_t floatCount) {
 }
 
 ArenaBlock ArenaLayout::block(std::size_t index) const {
+    assert(index < m_blocks.size() && "ArenaLayout::block: index out of range");
     if (index >= m_blocks.size()) return ArenaBlock{};
     return m_blocks[index];
 }

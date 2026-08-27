@@ -23,6 +23,10 @@ public:
     /// if floatCount is zero.
     std::size_t add(std::size_t floatCount);
 
+    /// Retrieve a block by index. Returns a block with sizeBytes == 0 if the index is
+    /// out of range. This is a reliable invalid marker: add() rejects floatCount == 0,
+    /// so no valid block can ever have zero size. Callers must check sizeBytes before
+    /// reading offsetBytes — offset 0 is a real location in the arena.
     [[nodiscard]] ArenaBlock block(std::size_t index) const;
     [[nodiscard]] std::size_t blockCount() const noexcept { return m_blocks.size(); }
     [[nodiscard]] std::size_t totalBytes() const noexcept { return m_cursorBytes; }
