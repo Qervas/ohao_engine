@@ -1,6 +1,8 @@
 #include "gpu_probe_context.hpp"
 
 #include "diff/wavefront/compute_pipeline.hpp"
+#include "diff/wavefront/wavefront_loop.hpp"
+#include "diff/wavefront/wavefront_stage.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
 
 #include <array>
@@ -2023,6 +2025,395 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
         vkDestroyPipelineLayout(m_device, prepPipelineLayout, nullptr);
     if (prepSetLayout != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(m_device, prepSetLayout, nullptr);
     if (prepModule != VK_NULL_HANDLE) vkDestroyShaderModule(m_device, prepModule, nullptr);
+
+    return ok;
+}
+
+// --- Fused-loop probe scene constants -------------------------------------
+//
+// wf_scatter.comp's placeholder BSDF samples a cosine hemisphere about a
+// HARDCODED (0,0,1) normal and offsets the new origin along that normal, so
+// every scattered ray has dir.z > 0 and every path marches monotonically in
+// +Z. One quad is therefore hit at bounce 0 and missed by every bounce after
+// it. A staircase of quads perpendicular to Z, entered from -Z, is what
+// keeps every path alive for the whole loop.
+namespace {
+
+/// One quad per bounce, plus slack so that a hit point landing slightly past
+/// its intended plane (float error in a near-grazing t) still finds another
+/// plane ahead of it instead of falling out of the scene.
+constexpr uint32_t kFusedLoopPlaneCount = 8;
+
+/// z of the nearest-to-the-camera plane, and the gap between planes.
+///
+/// The gap is the whole safety argument. wf_intersect.comp traces with
+/// tmax = 1000, and the shallowest direction the RNG can produce is
+/// dir.z = sqrt(1 - u1max) = sqrt(2^-24) = 2^-12, since diffRngNext1D
+/// returns (state >> 8) * 2^-24 and so cannot exceed 1 - 2^-24. Crossing a
+/// gap g at that angle costs t = g / 2^-12 = 4096*g and drifts the same
+/// distance sideways. With g = 0.05 that is t <= 205 (well inside tmax) and
+/// a lateral drift under 205 per bounce -- covered many times over by the
+/// half-extent below, even accumulated across every bounce. A larger gap
+/// would eventually push a grazing ray past tmax and silently kill it; a
+/// much smaller one would collide with wf_scatter.comp's 1e-4 origin offset.
+constexpr float kFusedLoopFirstPlaneZ = -2.0f;
+constexpr float kFusedLoopPlaneGap = 0.05f;
+
+/// Half-extent of each quad in x and y. Big enough that no path can drift
+/// off the side of the staircase (see the gap note above), which is what
+/// makes "every one of the capacity paths survives every bounce" a fact
+/// rather than a probability. The planes are exactly axis-aligned, so their
+/// plane equation is exact regardless of how large they are.
+constexpr float kFusedLoopHalfExtent = 1024.0f;
+
+/// wf_generate.comp's local_size_y. WavefrontStage's Fixed group-count
+/// source dispatches (groupCountX, 1, 1), so a fixed dispatch of that shader
+/// covers exactly this many pixel rows -- see the height check below.
+constexpr uint32_t kFusedLoopGenerateLocalY = 8;
+
+}  // namespace
+
+bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint32_t width,
+                                                 uint32_t height, uint32_t maxBounces, float albedo,
+                                                 uint32_t iterationSeed,
+                                                 std::vector<std::vector<float>>& outDrawsPerBounce,
+                                                 std::vector<uint32_t>& outLiveCountPerRun,
+                                                 std::vector<uint32_t>& outFinalQueue) {
+    // Push constants for wf_generate.comp -- byte-identical to
+    // runWavefrontGenerateProbe's (80 bytes, see that function's comment).
+    struct GeneratePush {
+        float origin[3];
+        float pad0;
+        float forward[3];
+        float pad1;
+        float right[3];
+        float pad2;
+        float up[3];
+        float pad3;
+        uint32_t width;
+        uint32_t height;
+        float tanHalfFov;
+        uint32_t capacity;
+    };
+    static_assert(sizeof(GeneratePush) == 80,
+                 "GeneratePush must match wf_generate.comp's Push block layout");
+
+    outDrawsPerBounce.clear();
+    outLiveCountPerRun.clear();
+    outFinalQueue.clear();
+
+    const uint32_t capacity = buffers.layout().capacity();
+    bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
+              buffers.queueBuffer() != VK_NULL_HANDLE && buffers.counterBuffer() != VK_NULL_HANDLE;
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: buffers not built\n");
+        return false;
+    }
+    if (height != kFusedLoopGenerateLocalY || width == 0u ||
+        (width % kFusedLoopGenerateLocalY) != 0u || width * height != capacity ||
+        maxBounces == 0u) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontFusedLoopProbe: requires height == %u "
+                     "(wf_generate.comp's local_size_y, since a Fixed group count dispatches "
+                     "1-D), width a non-zero multiple of %u, width*height == capacity (%u), and "
+                     "maxBounces > 0; got %ux%u, maxBounces %u\n",
+                     kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalY, capacity, width, height,
+                     maxBounces);
+        return false;
+    }
+
+    // --- Staircase geometry: kFusedLoopPlaneCount quads perpendicular to Z. ---
+    std::vector<float> positions;
+    std::vector<uint32_t> indices;
+    positions.reserve(static_cast<std::size_t>(kFusedLoopPlaneCount) * 12u);
+    indices.reserve(static_cast<std::size_t>(kFusedLoopPlaneCount) * 6u);
+    for (uint32_t p = 0; p < kFusedLoopPlaneCount; ++p) {
+        const float z = kFusedLoopFirstPlaneZ + kFusedLoopPlaneGap * static_cast<float>(p);
+        const float e = kFusedLoopHalfExtent;
+        const float quad[12] = {-e, -e, z, e, -e, z, e, e, z, -e, e, z};
+        positions.insert(positions.end(), std::begin(quad), std::end(quad));
+        const uint32_t base = p * 4u;
+        const uint32_t tris[6] = {base + 0u, base + 1u, base + 2u,
+                                  base + 0u, base + 2u, base + 3u};
+        indices.insert(indices.end(), std::begin(tris), std::end(tris));
+    }
+
+    GpuBuffer vertexBuffer = m_allocator.createBufferFromSpan<float>(
+        std::span<const float>(positions),
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+    GpuBuffer indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
+        std::span<const uint32_t>(indices),
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+    ok = vertexBuffer.isValid() && indexBuffer.isValid();
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: failed to create "
+                              "staircase vertex/index buffers\n");
+    }
+
+    RTAccelerationStructure accel;
+    if (ok && !accel.init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: "
+                              "RTAccelerationStructure::init failed\n");
+        ok = false;
+    }
+
+    BlasHandle blas = INVALID_BLAS;
+    if (ok) {
+        runImmediate([&](VkCommandBuffer cmd) {
+            blas = accel.createBLASFromPositions(vertexBuffer.buffer,
+                                                 static_cast<uint32_t>(positions.size() / 3),
+                                                 indexBuffer.buffer,
+                                                 static_cast<uint32_t>(indices.size()),
+                                                 /*indexByteOffset=*/0, cmd);
+        });
+        if (blas == INVALID_BLAS) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: "
+                                  "createBLASFromPositions failed\n");
+            ok = false;
+        }
+    }
+    if (ok) {
+        accel.clearInstances();
+        accel.addInstance(blas, glm::mat4(1.0f));
+        runImmediate([&](VkCommandBuffer cmd) { accel.buildTLAS(cmd); });
+        if (accel.getTLAS() == VK_NULL_HANDLE) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: buildTLAS produced "
+                                  "no TLAS\n");
+            ok = false;
+        }
+    }
+
+    // --- Buffers this function owns: the live queue ring readback (the queue
+    // is only exposed as a raw VkBuffer, so it has to be copied out) and
+    // wf_scatter.comp's probe-only DebugDraws sink (allocated here, never
+    // shared, so it is mapped directly). ---
+    GpuBuffer queueReadback;
+    const VkDeviceSize queueBytes = static_cast<VkDeviceSize>(capacity) * sizeof(uint32_t);
+    if (ok) {
+        queueReadback = m_allocator.createBuffer(queueBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                 AllocationUsage::GpuToCpu,
+                                                 /*persistentlyMapped=*/true);
+        if (!queueReadback.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: queue readback "
+                                  "buffer allocation failed\n");
+            ok = false;
+        }
+    }
+    GpuBuffer debugDrawsBuffer;
+    const VkDeviceSize debugDrawsBytes = static_cast<VkDeviceSize>(capacity) * 3u * sizeof(float);
+    if (ok) {
+        debugDrawsBuffer =
+            m_allocator.createBuffer(debugDrawsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     AllocationUsage::GpuToCpu, /*persistentlyMapped=*/true);
+        if (!debugDrawsBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: debug draws buffer "
+                                  "allocation failed\n");
+            ok = false;
+        }
+    }
+
+    // --- The four stages. Built exactly once each: ComputePipeline::build
+    // has no re-entrancy guard, so a second build() without an intervening
+    // destroy() would leak every Vulkan object the first one created. ---
+    WavefrontStage generate;
+    WavefrontStage prepareIndirect;
+    WavefrontStage intersect;
+    WavefrontStage scatter;
+
+    const VkDescriptorType kStateQueueCounter[3] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    const VkDescriptorType kCounterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    const VkDescriptorType kIntersectBindings[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
+    const VkDescriptorType kScatterBindings[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+
+    if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
+                              sizeof(GeneratePush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: generate build\n");
+        ok = false;
+    }
+    if (ok && !prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", kCounterOnly,
+                                     sizeof(WavefrontLoop::PrepareIndirectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: prepare_indirect "
+                              "build\n");
+        ok = false;
+    }
+    if (ok && !intersect.build(m_device, "diff_wf_intersect.comp.spv", kIntersectBindings,
+                               sizeof(WavefrontLoop::IntersectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: intersect build\n");
+        ok = false;
+    }
+    if (ok && !scatter.build(m_device, "diff_wf_scatter.comp.spv", kScatterBindings,
+                             sizeof(WavefrontLoop::ScatterPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: scatter build\n");
+        ok = false;
+    }
+
+    if (ok) {
+        const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                               buffers.counterBuffer()};
+        const VkBuffer counterOnly[1] = {buffers.counterBuffer()};
+        const VkBuffer scatterBuffers[4] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                            buffers.counterBuffer(), debugDrawsBuffer.buffer};
+        if (!generate.bindBuffers(m_device, stateQueueCounter) ||
+            !prepareIndirect.bindBuffers(m_device, counterOnly) ||
+            !intersect.bindBuffers(m_device, stateQueueCounter) ||
+            !intersect.bindAccelerationStructure(m_device, 3, accel.getTLAS()) ||
+            !scatter.bindBuffers(m_device, scatterBuffers)) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontFusedLoopProbe: descriptor binding\n");
+            ok = false;
+        }
+    }
+
+    if (ok) {
+        // Camera sits at -Z looking along +Z, i.e. INTO the staircase, so
+        // that the primary ray hits the nearest plane (kFusedLoopFirstPlaneZ)
+        // and every scattered +Z ray then walks up the remaining planes. A
+        // camera looking down -Z (runWavefrontGenerateProbe's default) would
+        // hit the LAST plane first and have nothing ahead of it.
+        GeneratePush genPush{};
+        genPush.origin[0] = 0.0f;
+        genPush.origin[1] = 0.0f;
+        genPush.origin[2] = -10.0f;
+        genPush.forward[0] = 0.0f;
+        genPush.forward[1] = 0.0f;
+        genPush.forward[2] = 1.0f;
+        genPush.right[0] = 1.0f;
+        genPush.right[1] = 0.0f;
+        genPush.right[2] = 0.0f;
+        genPush.up[0] = 0.0f;
+        genPush.up[1] = 1.0f;
+        genPush.up[2] = 0.0f;
+        genPush.width = width;
+        genPush.height = height;
+        genPush.tanHalfFov = 0.2f;
+        genPush.capacity = capacity;
+        generate.setPushConstants(&genPush, sizeof(genPush));
+        // 1-D fixed dispatch: (width/8) groups x local_size (8,8) covers
+        // exactly width x 8 pixels. See the height check above.
+        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalY});
+
+        WavefrontLoop loop;
+        loop.setConfig(WavefrontLoop::Config{albedo, iterationSeed});
+        loop.setGenerate(generate);
+        loop.setPrepareIndirect(prepareIndirect);
+        loop.setIntersect(intersect);
+        loop.setScatter(scatter);
+
+        outDrawsPerBounce.resize(maxBounces);
+        outLiveCountPerRun.resize(maxBounces);
+
+        for (uint32_t bounces = 1; ok && bounces <= maxBounces; ++bounces) {
+            const WavefrontLoop::Ring finalRing = WavefrontLoop::finalLiveRing(capacity, bounces);
+
+            runImmediate([&](VkCommandBuffer cmd) {
+                // Fresh state for every run: zero() ends with its own
+                // TRANSFER_WRITE -> SHADER_READ|SHADER_WRITE barrier, so
+                // generate's first read of the counter is ordered against it.
+                buffers.zero(cmd);
+
+                // THE fused loop -- one command buffer, no vkQueueWaitIdle
+                // anywhere inside it. Everything that orders the stages
+                // against each other is a barrier recorded by
+                // WavefrontLoop::record.
+                loop.record(cmd, buffers, bounces);
+
+                // Everything below is this probe's own readback plumbing,
+                // deliberately NOT part of WavefrontLoop::record (only the
+                // caller knows what consumes the loop's output).
+                VkBufferMemoryBarrier toHost[3]{};
+                const VkBuffer hostRead[3] = {buffers.stateBuffer(), buffers.counterBuffer(),
+                                              debugDrawsBuffer.buffer};
+                for (int i = 0; i < 3; ++i) {
+                    toHost[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                    toHost[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                    toHost[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                    toHost[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toHost[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toHost[i].buffer = hostRead[i];
+                    toHost[i].offset = 0;
+                    toHost[i].size = VK_WHOLE_SIZE;
+                }
+                VkBufferMemoryBarrier queueToTransfer{};
+                queueToTransfer.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                queueToTransfer.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                queueToTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                queueToTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                queueToTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                queueToTransfer.buffer = buffers.queueBuffer();
+                queueToTransfer.offset = 0;
+                queueToTransfer.size = VK_WHOLE_SIZE;
+
+                const VkBufferMemoryBarrier post[4] = {toHost[0], toHost[1], toHost[2],
+                                                       queueToTransfer};
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                     0, nullptr, 4, post, 0, nullptr);
+
+                VkBufferCopy region{};
+                region.srcOffset = static_cast<VkDeviceSize>(finalRing.queueBase) * sizeof(uint32_t);
+                region.dstOffset = 0;
+                region.size = queueBytes;
+                vkCmdCopyBuffer(cmd, buffers.queueBuffer(), queueReadback.buffer, 1, &region);
+
+                VkBufferMemoryBarrier postCopy{};
+                postCopy.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                postCopy.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                postCopy.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                postCopy.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                postCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                postCopy.buffer = queueReadback.buffer;
+                postCopy.offset = 0;
+                postCopy.size = VK_WHOLE_SIZE;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &postCopy, 0,
+                                     nullptr);
+            });
+
+            m_allocator.invalidateBuffer(debugDrawsBuffer);
+            const auto* mappedDebug = static_cast<const float*>(debugDrawsBuffer.getMappedData());
+            if (mappedDebug == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: debug draws "
+                                      "buffer not mapped, cannot read back\n");
+                ok = false;
+                break;
+            }
+            outDrawsPerBounce[bounces - 1].assign(
+                mappedDebug, mappedDebug + (static_cast<std::size_t>(capacity) * 3u));
+            outLiveCountPerRun[bounces - 1] =
+                buffers.readbackCounter(m_allocator, finalRing.countSlot);
+
+            m_allocator.invalidateBuffer(queueReadback);
+            const auto* mappedQueue = static_cast<const uint32_t*>(queueReadback.getMappedData());
+            if (mappedQueue == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: queue readback "
+                                      "buffer not mapped, cannot read back\n");
+                ok = false;
+                break;
+            }
+            outFinalQueue.assign(mappedQueue, mappedQueue + capacity);
+        }
+    }
+
+    // --- Cleanup, reverse order. ---
+    scatter.destroy(m_device);
+    intersect.destroy(m_device);
+    prepareIndirect.destroy(m_device);
+    generate.destroy(m_device);
+    if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
+    if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
+    if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
+    if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 
     return ok;
 }

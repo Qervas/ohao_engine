@@ -202,6 +202,56 @@ public:
                                                 std::vector<uint32_t>& outQueueDst,
                                                 std::vector<float>& outDebugDraws);
 
+    /// Runs the WHOLE wavefront bounce loop through ohao::diff::WavefrontLoop
+    /// -- generate, then prepare_indirect/intersect/prepare_indirect/scatter
+    /// once per bounce -- fused into ONE command buffer per run, with no
+    /// vkQueueWaitIdle anywhere inside it. This is the only probe here whose
+    /// stage ordering is the barriers' job rather than a full-device idle
+    /// wait's; see wavefront_loop.hpp for the ordering contract it exercises.
+    ///
+    /// Scene: `kFusedLoopPlaneCount` large, axis-aligned quads stacked along
+    /// +Z (see the anonymous-namespace constants in the .cpp), one per
+    /// bounce plus slack. wf_scatter.comp's placeholder BSDF samples a
+    /// cosine hemisphere about a HARDCODED (0,0,1) normal and offsets the
+    /// new origin along it, so every bounce direction has dir.z > 0 and
+    /// every path marches monotonically in +Z. A single quad -- the scene
+    /// every stage-by-stage probe uses -- would therefore be hit only at
+    /// bounce 0 and missed by every later bounce, killing every path and
+    /// making the 4-bounce throughput assertion vacuous. A staircase of
+    /// quads is what lets all `width*height` paths survive all `maxBounces`
+    /// bounces, which is what makes "throughput is exactly albedo^bounces
+    /// for every path" a real assertion.
+    ///
+    /// `height` must be exactly 8 and `width` a multiple of 8:
+    /// wf_generate.comp has local_size (8,8) and WavefrontStage's Fixed
+    /// group-count source dispatches 1-D (groupCountX,1,1), so a fixed
+    /// dispatch covers exactly 8 pixel rows.
+    ///
+    /// Runs the loop `maxBounces` times, with 1, 2, ... `maxBounces`
+    /// bounces, re-zeroing `buffers` at the top of each run. Every run is
+    /// itself fully fused; the only reason for more than one is
+    /// observability: wf_scatter.comp writes its (u1, u2, drawCount)
+    /// diagnostics at a fixed `pathIndex*3` offset, so within a single fused
+    /// run only the LAST bounce's draws survive in the buffer. Running with
+    /// b bounces therefore exposes bounce b-1's draws, and the set of runs
+    /// exposes every bounce's -- with no shader change and no weakening of
+    /// the per-bounce RNG-parity assertion.
+    ///
+    /// `outDrawsPerBounce[b]` receives the `capacity*3` DebugDraws floats
+    /// bounce b produced. `outLiveCountPerRun[b]` receives the live-path
+    /// count left after the run of b+1 bounces. `outFinalQueue` receives the
+    /// live ring's `capacity` elements after the FINAL (maxBounces) run, and
+    /// `buffers` is left holding that run's path state, so the caller reads
+    /// throughput back through `buffers.readbackField` afterwards.
+    ///
+    /// Returns false on any Vulkan error.
+    [[nodiscard]] bool runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint32_t width,
+                                                  uint32_t height, uint32_t maxBounces,
+                                                  float albedo, uint32_t iterationSeed,
+                                                  std::vector<std::vector<float>>& outDrawsPerBounce,
+                                                  std::vector<uint32_t>& outLiveCountPerRun,
+                                                  std::vector<uint32_t>& outFinalQueue);
+
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,

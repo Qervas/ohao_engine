@@ -36,6 +36,13 @@
 //       dispatches -- extends check 6's single-stream parity guarantee
 //       across dispatch boundaries, which is what path replay in Stage 1
 //       depends on.
+//   16-18. The SAME two analytic properties as checks 14-15, re-proved with
+//       the whole bounce loop fused into ONE command buffer through
+//       ohao::diff::WavefrontLoop -- no vkQueueWaitIdle between stages, so
+//       ordering is the barriers' job rather than a full-device idle wait's.
+//       16 also asserts every path survives every bounce and the live ring
+//       holds each path index exactly once, which is what keeps 17 from
+//       passing vacuously over an empty survivor set.
 
 #include "gpu_probe_context.hpp"
 
@@ -46,6 +53,7 @@
 #include "diff/param/param_registry.hpp"
 #include "diff/wavefront/compute_pipeline.hpp"
 #include "diff/wavefront/wavefront_buffers.hpp"
+#include "diff/wavefront/wavefront_loop.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
 
 #include <algorithm>
@@ -1382,6 +1390,228 @@ int main() {
         }
         std::printf("[diff_gpu_probe] OK: wf_scatter per-bounce RNG draws (values and drawCount) "
                     "match ohao::diff::PathRng exactly across %u dispatch boundaries for path %u\n",
+                    kBounces, kChosenPath);
+
+        wf.destroy(ctx.allocator());
+    }
+
+    // 16-18. THE FUSED BOUNCE LOOP (ohao::diff::WavefrontLoop, Stage 0b-2a
+    // Task 3). Everything above this point runs one wavefront stage per
+    // command-buffer submission, with a vkQueueWaitIdle between every stage.
+    // That idle wait is a full device barrier: it silently satisfies every
+    // ordering requirement the stages have on each other, which is why
+    // checks 12-15 can pass with barriers that would be wrong in a real
+    // integrator. This block removes it. generate, and then
+    // prepare_indirect/intersect/prepare_indirect/scatter once per bounce,
+    // are recorded into ONE command buffer, and ordering becomes the
+    // barriers' job for the first time (see wavefront_loop.hpp).
+    //
+    // The assertions are deliberately the SAME two analytic properties
+    // checks 14 and 15 already prove stage-by-stage -- throughput exactly
+    // albedo^bounces, and per-bounce RNG draws bit-identical to
+    // ohao::diff::PathRng -- not new, weaker ones. The whole point is to
+    // re-run a property that is already known to hold under the idle wait,
+    // against the same shaders, with only the synchronization changed.
+    //
+    // 16. Every path survives every bounce, and the live ring holds each
+    //     path index exactly once -- the compaction offsets are not
+    //     displaced. This is the check that catches a stale (unzeroed)
+    //     destination counter slot: an atomicAdd based on a non-zero
+    //     starting value hands out offsets past the end of the ring, whose
+    //     writes wf_scatter.comp's `dstSlot < capacity` guard then drops,
+    //     leaving holes.
+    // 17. Throughput after 4 fused bounces is exactly 0.0625.
+    // 18. Per-bounce RNG draws match ohao::diff::PathRng exactly.
+    {
+        // height MUST be 8: wf_generate.comp has local_size (8,8) and
+        // WavefrontStage's Fixed group-count source dispatches
+        // (groupCountX, 1, 1), so a fixed dispatch covers exactly 8 pixel
+        // rows. Checks 8-10 dispatch generate 2-D by hand and can pick any
+        // resolution; a stage recorded through WavefrontLoop cannot.
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;
+        constexpr uint32_t kCapacity = kW * kH;  // 512
+        constexpr float kAlbedo = 0.5f;
+        constexpr uint32_t kIterationSeed = 20260828u;
+        constexpr uint32_t kBounces = 4;
+        constexpr uint32_t kDrawsPerBounce = 2;  // must match wf_scatter.comp's kDrawsPerBounce
+        constexpr uint32_t kChosenPath = 333;    // arbitrary, < kCapacity
+        static_assert(kChosenPath < kCapacity, "kChosenPath must be a valid path index");
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: fused loop buffers build\n");
+            return 1;
+        }
+
+        std::vector<std::vector<float>> fusedDraws;
+        std::vector<uint32_t> fusedLiveCounts;
+        std::vector<uint32_t> fusedFinalQueue;
+        if (!ctx.runWavefrontFusedLoopProbe(wf, kW, kH, kBounces, kAlbedo, kIterationSeed,
+                                            fusedDraws, fusedLiveCounts, fusedFinalQueue)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: fused loop dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // 16. Survivors and compaction integrity.
+        //
+        // A live count of exactly kCapacity at every bounce depth is not a
+        // given: it is what the staircase scene (see
+        // runWavefrontFusedLoopProbe's doc comment) is built to guarantee,
+        // and asserting it is what stops the throughput check below from
+        // passing vacuously over an empty survivor set.
+        if (fusedLiveCounts.size() != kBounces) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: fused loop returned %zu live counts, expected "
+                         "%u\n",
+                         fusedLiveCounts.size(), kBounces);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        for (uint32_t b = 0; b < kBounces; ++b) {
+            if (fusedLiveCounts[b] != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: fused loop of %u bounces left %u live paths, "
+                             "expected all %u -- either a path fell out of the staircase scene, or "
+                             "a compaction counter slot was not zeroed before its atomicAdd\n",
+                             b + 1u, fusedLiveCounts[b], kCapacity);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        // Same sorted-prefix inspection check 12/14 apply to the
+        // stage-by-stage rings: the scalar count alone cannot distinguish
+        // "every path re-queued exactly once" from "one slot overwritten and
+        // another dropped, with the atomicAdd total landing on kCapacity
+        // anyway."
+        if (fusedFinalQueue.size() != kCapacity) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: fused loop final ring readback size %zu, expected "
+                         "%u\n",
+                         fusedFinalQueue.size(), kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        std::vector<uint32_t> sortedFused = fusedFinalQueue;
+        std::sort(sortedFused.begin(), sortedFused.end());
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            if (sortedFused[i] != i) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: fused loop final ring sorted[%u] = %u, "
+                             "expected %u (duplicate or missing path index -- compaction offsets "
+                             "are displaced)\n",
+                             i, sortedFused[i], i);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: fused loop kept all %u paths alive through %u bounces "
+                    "and its final ring holds each path index exactly once\n",
+                    kCapacity, kBounces);
+
+        // 17. Throughput decay -- exact, no tolerance. Hardcoded to the
+        // literal 0.0625f for the same reason check 14 hardcodes it:
+        // deriving it from kAlbedo would perturb both sides of the
+        // comparison identically and the check could never fail.
+        // 0.5*0.5*0.5*0.5 = 0.0625, arithmetic done by hand.
+        constexpr float expectedFusedThroughput = 0.0625f;
+
+        const std::vector<float> fusedR =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputR);
+        const std::vector<float> fusedG =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputG);
+        const std::vector<float> fusedB =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputB);
+        if (fusedR.size() != kCapacity || fusedG.size() != kCapacity ||
+            fusedB.size() != kCapacity) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: fused loop throughput readback size "
+                                  "mismatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            // Bit-exact on purpose -- p=0.5 keeps every intermediate product
+            // exactly representable in float32.
+            if (fusedR[i] != expectedFusedThroughput || fusedG[i] != expectedFusedThroughput ||
+                fusedB[i] != expectedFusedThroughput) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: fused loop path %u throughput = "
+                             "(%.9g,%.9g,%.9g) after %u bounces, expected exactly "
+                             "(%.9g,%.9g,%.9g) -- a bounce ran the wrong number of times, or "
+                             "Throughput did not survive a dispatch boundary inside the fused "
+                             "command buffer\n",
+                             i, static_cast<double>(fusedR[i]), static_cast<double>(fusedG[i]),
+                             static_cast<double>(fusedB[i]), kBounces,
+                             static_cast<double>(expectedFusedThroughput),
+                             static_cast<double>(expectedFusedThroughput),
+                             static_cast<double>(expectedFusedThroughput));
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: fused loop throughput decay after %u bounces is exactly "
+                    "%.9g (p=%.9g) for all %u paths\n",
+                    kBounces, static_cast<double>(expectedFusedThroughput),
+                    static_cast<double>(kAlbedo), kCapacity);
+
+        // 18. Per-bounce RNG parity, identical in form to check 15.
+        // fusedDraws[b] is what bounce b's scatter dispatch wrote; see
+        // runWavefrontFusedLoopProbe's doc comment for how each bounce's
+        // draws are observed despite wf_scatter.comp writing them at a fixed
+        // per-path offset.
+        if (fusedDraws.size() != kBounces) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: fused loop returned %zu draw sets, expected %u\n",
+                         fusedDraws.size(), kBounces);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        ohao::diff::PathRng fusedCpuRng =
+            ohao::diff::PathRng::forPath(kChosenPath, /*sampleIndex=*/0u, kIterationSeed);
+        for (uint32_t b = 0; b < kBounces; ++b) {
+            const float cpuU1 = fusedCpuRng.next1D();
+            const float cpuU2 = fusedCpuRng.next1D();
+            const std::uint32_t cpuDrawCount = fusedCpuRng.drawCount();
+
+            const std::vector<float>& gpuDraws = fusedDraws[b];
+            if (gpuDraws.size() != static_cast<std::size_t>(kCapacity) * 3u) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: fused loop bounce %u debug-draws size %zu, "
+                             "expected %zu\n",
+                             b, gpuDraws.size(), static_cast<std::size_t>(kCapacity) * 3u);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            const float gpuU1 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 0u];
+            const float gpuU2 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 1u];
+            std::uint32_t gpuDrawCount = 0;
+            std::memcpy(&gpuDrawCount, &gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 2u],
+                       sizeof(gpuDrawCount));
+
+            if (cpuU1 != gpuU1 || cpuU2 != gpuU2) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: fused loop path %u RNG diverges at bounce %u: "
+                             "CPU (%.9g,%.9g), GPU (%.9g,%.9g) -- the fused loop replayed a "
+                             "different random stream than ohao::diff::PathRng\n",
+                             kChosenPath, b, static_cast<double>(cpuU1), static_cast<double>(cpuU2),
+                             static_cast<double>(gpuU1), static_cast<double>(gpuU2));
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (cpuDrawCount != gpuDrawCount || cpuDrawCount != (b + 1) * kDrawsPerBounce) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: fused loop path %u drawCount at bounce %u: "
+                             "CPU %u, GPU %u, expected %u ((bounce+1)*%u) -- the Bounce field the "
+                             "fast-forward reads did not advance exactly once per fused bounce\n",
+                             kChosenPath, b, cpuDrawCount, gpuDrawCount,
+                             (b + 1) * kDrawsPerBounce, kDrawsPerBounce);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: fused loop per-bounce RNG draws (values and drawCount) "
+                    "match ohao::diff::PathRng exactly across %u fused bounces for path %u\n",
                     kBounces, kChosenPath);
 
         wf.destroy(ctx.allocator());
