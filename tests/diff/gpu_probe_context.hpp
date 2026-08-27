@@ -161,6 +161,42 @@ public:
     [[nodiscard]] bool runWavefrontIntersectProbe(WavefrontBuffers& buffers, float planeDistance,
                                                   float quadMinY, std::vector<uint32_t>& outQueue1);
 
+    /// Runs the wavefront scatter stage (shaders/diff/wf_scatter.comp) for
+    /// one bounce: wf_prepare_indirect.comp converts counter slot
+    /// `srcCountSlot` into a dispatch-indirect triple (same pattern as
+    /// runWavefrontIntersectProbe -- one command buffer, the
+    /// SHADER_WRITE -> INDIRECT_COMMAND_READ barrier between them), then
+    /// wf_scatter.comp is dispatched indirectly, reading queue ring
+    /// `srcQueueBase`/`srcCountSlot`, multiplying throughput by `albedo`,
+    /// sampling a new direction from a per-path RNG reconstructed from
+    /// (pixelIndex, sampleIndex, `iterationSeed`) and fast-forwarded by the
+    /// path's stored bounce count, and re-queuing every path (nothing
+    /// terminates in scatter yet) into `dstQueueBase`/`dstCountSlot`.
+    ///
+    /// Unlike wf_intersect, which this stage's checks only ever run
+    /// ring0->ring1 once, a multi-bounce loop must ping-pong the SAME two
+    /// physical rings across many scatter calls -- so `dstCountSlot` is
+    /// explicitly zeroed (vkCmdFillBuffer + a barrier ordering that fill
+    /// before the indirect dispatch's atomicAdd) at the start of this
+    /// method's own command buffer, every call, rather than assumed to
+    /// already be 0. Reusing a stale prior count as the atomicAdd base would
+    /// silently corrupt compaction offsets.
+    ///
+    /// `outQueueDst` receives a host-side copy of queue ring `dstQueueBase`'s
+    /// `capacity`-element region (same reasoning as
+    /// runWavefrontGenerateProbe's outQueue0). `outDebugDraws` receives a
+    /// host-side copy of the probe-only DebugDraws buffer (binding 3,
+    /// `capacity * 3` floats: per path index, (u1, u2,
+    /// uintBitsToFloat(rng.draws)) as computed by THIS dispatch) -- the only
+    /// way to verify RNG values a real GPU dispatch produced, bit-exactly,
+    /// against ohao::diff::PathRng. Returns false on any Vulkan error.
+    [[nodiscard]] bool runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32_t srcQueueBase,
+                                                uint32_t srcCountSlot, uint32_t dstQueueBase,
+                                                uint32_t dstCountSlot, float albedo,
+                                                uint32_t iterationSeed,
+                                                std::vector<uint32_t>& outQueueDst,
+                                                std::vector<float>& outDebugDraws);
+
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,

@@ -1,0 +1,143 @@
+#version 450
+
+// Wavefront stage: scatter. Applies a CONSTANT albedo -- there is no real
+// BSDF yet, that is Stage 0b-2 -- to every path in the source queue, samples
+// a new direction, advances the path to its hit point, increments its
+// bounce counter, and re-queues it into the next bounce's ring by atomicAdd,
+// mirroring wf_intersect.comp's compaction mechanism exactly (every
+// invocation here always re-queues -- nothing terminates in scatter yet;
+// Stage 0b-2's Russian roulette would add a condition right where
+// wf_intersect.comp's miss branch sits).
+//
+// RNG reconstruction is the entire point of this file (see task-6 brief).
+// A megakernel keeps a path's RNG state in a register across every bounce,
+// so draw order is preserved for free. This stage cannot: it is a separate
+// vkCmdDispatch every bounce, so nothing survives in registers across that
+// boundary. Every invocation therefore rebuilds its RNG from
+// (pixelIndex, sampleIndex, iterationSeed) via diffRngForPath and
+// fast-forwards it past every earlier bounce's draws
+// (bounce * kDrawsPerBounce, where `bounce` comes from path state's Bounce
+// field -- never from anything carried over) before drawing this bounce's
+// own two values. Get the fast-forward count wrong and the path replays a
+// DIFFERENT random sequence starting next bounce: a perfectly plausible
+// image now, silently wrong gradients when Stage 1's backward pass replays
+// it. No crash, no NaN.
+//
+// Binding 3 (DebugDraws) is a probe-only diagnostic sink, not part of the
+// production wavefront data model: it exists so a black-box GPU probe can
+// observe the exact (u1, u2, drawCountAfter) a REAL dispatch computed for
+// each path -- reading this file is not proof the GPU executed it
+// bit-exactly against ohao::diff::PathRng. See diff_gpu_probe.cpp's
+// per-bounce RNG-parity check.
+//
+// Binding scheme: state (0, declared by path_state.glsl), queues (1),
+// counters (2), debug draws (3).
+
+#include "diff/path_state.glsl"
+#include "diff/rng.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 1) buffer QueueBuffer {
+    uint idx[];
+} queues;
+
+layout(std430, binding = 2) buffer CounterBuffer {
+    uint value[];
+} counters;
+
+// Probe-only: 3 floats per PATH INDEX (u1, u2, drawCountAfter as
+// uintBitsToFloat(rng.draws)) -- indexed by pathIndex, not by queue slot.
+// See file header.
+layout(std430, binding = 3) buffer DebugDraws {
+    float v[];
+} debugDraws;
+
+layout(push_constant) uniform Push {
+    uint capacity;
+    uint srcQueueBase;
+    uint srcCountSlot;
+    uint dstQueueBase;
+    uint dstCountSlot;
+    float albedo;
+    uint iterationSeed;
+} pc;
+
+// Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
+// replaying ohao::diff::PathRng must agree on this exactly. Kept as a literal
+// constant (not derived from anything) so the CPU side can predict it without
+// querying the GPU for anything but the final draw values/count.
+const uint kDrawsPerBounce = 2u;
+
+// Placeholder BSDF sampling: cosine-weighted hemisphere about `normal` via
+// Malley's method. Stage 0b-2 replaces this with real Lambert/GGX importance
+// sampling; for Stage 0b-1 this exists only to prove the wavefront machinery
+// (state survival + RNG reconstruction) works, not to produce a correct image.
+vec3 diffCosineHemisphere(vec3 normal, float u1, float u2) {
+    const float r = sqrt(u1);
+    const float phi = 6.283185307179586 * u2;
+    const float x = r * cos(phi);
+    const float y = r * sin(phi);
+    const float z = sqrt(max(0.0, 1.0 - u1));
+
+    const vec3 up = (abs(normal.z) < 0.999) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    const vec3 tangent = normalize(cross(up, normal));
+    const vec3 bitangent = cross(normal, tangent);
+    return normalize(tangent * x + bitangent * y + normal * z);
+}
+
+void main() {
+    const uint slot = gl_GlobalInvocationID.x;
+    if (slot >= counters.value[pc.srcCountSlot]) return;
+
+    const uint pathIndex = queues.idx[pc.srcQueueBase + slot];
+
+    const uint pixelIndex = psGetPixelIndex(pathIndex, pc.capacity);
+    const uint sampleIndex = psGetSampleIndex(pathIndex, pc.capacity);
+    const uint bounce = psGetBounce(pathIndex, pc.capacity);
+
+    // Reconstruct from the tuple -- never from a register carried across a
+    // dispatch boundary -- then fast-forward past every earlier bounce's
+    // draws before taking this bounce's own two. This loop is the seed
+    // invariant made literal: it is what makes this dispatch produce the
+    // same stream a megakernel's register-resident RNG would have, despite
+    // running as an entirely separate command.
+    DiffPathRng rng = diffRngForPath(pixelIndex, sampleIndex, pc.iterationSeed);
+    for (uint i = 0u; i < bounce * kDrawsPerBounce; ++i) {
+        diffRngNext1D(rng);
+    }
+    const float u1 = diffRngNext1D(rng);
+    const float u2 = diffRngNext1D(rng);
+
+    debugDraws.v[pathIndex * 3u + 0u] = u1;
+    debugDraws.v[pathIndex * 3u + 1u] = u2;
+    debugDraws.v[pathIndex * 3u + 2u] = uintBitsToFloat(rng.draws);
+
+    // 1. Constant-albedo throughput decay.
+    const vec3 throughput = psGetThroughput(pathIndex, pc.capacity);
+    psSetThroughput(pathIndex, pc.capacity, throughput * pc.albedo);
+
+    // 2. Advance to the hit point and sample a new direction.
+    const vec3 origin = psGetOrigin(pathIndex, pc.capacity);
+    const vec3 dir = psGetDir(pathIndex, pc.capacity);
+    const float hitT = psGetHitT(pathIndex, pc.capacity);
+
+    // Placeholder normal: every probe scene this stage runs against is the
+    // single camera-facing quad, so (0,0,1) is correct for it. Stage 0b-2
+    // reads a real geometric normal out of the hit instead.
+    const vec3 normal = vec3(0.0, 0.0, 1.0);
+    const vec3 newDir = diffCosineHemisphere(normal, u1, u2);
+    const vec3 hitPoint = origin + dir * hitT;
+
+    psSetOrigin(pathIndex, pc.capacity, hitPoint + normal * 1e-4);
+    psSetDir(pathIndex, pc.capacity, newDir);
+
+    // 3. Bounce count, incremented -- this is what the next dispatch's
+    // fast-forward reads to know how many draws to skip.
+    psSetBounce(pathIndex, pc.capacity, bounce + 1u);
+
+    // 4. Re-queue into the next bounce's ring. Every invocation reaching
+    // this point always re-queues (see file header) -- nothing is filtered.
+    const uint dstSlot = atomicAdd(counters.value[pc.dstCountSlot], 1u);
+    queues.idx[pc.dstQueueBase + dstSlot] = pathIndex;
+}

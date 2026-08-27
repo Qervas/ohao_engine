@@ -18,6 +18,14 @@
 //       indirectly-sized dispatch prepared by wf_prepare_indirect.comp.
 //   13. An indirect dispatch sized from a live-count of 0 launches zero
 //       invocations -- dead paths are genuinely free.
+//   14. wf_scatter.comp's constant-albedo throughput decay is exact after 4
+//       bounces (p=0.5 -> 0.0625, compared bit-exact, no tolerance) --
+//       proves path state genuinely survives 4 separate dispatch boundaries.
+//   15. wf_scatter.comp's per-bounce RNG draws (values AND drawCount) match
+//       ohao::diff::PathRng's replay exactly, for every one of those 4
+//       dispatches -- extends check 6's single-stream parity guarantee
+//       across dispatch boundaries, which is what path replay in Stage 1
+//       depends on.
 
 #include "gpu_probe_context.hpp"
 
@@ -907,6 +915,221 @@ int main() {
         }
         std::printf("[diff_gpu_probe] OK: indirect dispatch from a live-count of 0 ran zero "
                     "invocations (canary = 0, next-queue counter = 0)\n");
+
+        wf.destroy(ctx.allocator());
+    }
+
+    // 14-15. Wavefront scatter stage (shaders/diff/wf_scatter.comp), run for
+    // 4 real bounces: generate -> intersect once (full quad, quadMinY=-1, so
+    // every ray hits and seeds every path into scatter) -> scatter x4,
+    // ping-ponging the SAME two physical queue rings (each scatter call
+    // zeroes its own destination counter slot first -- see
+    // GpuProbeContext::runWavefrontScatterProbe's doc comment for why that
+    // is load-bearing once a ring/slot pair is reused).
+    //
+    // Check 14 is the analytic throughput check: with albedo p=0.5 and every
+    // ray surviving every bounce, throughput after 4 bounces must be exactly
+    // p^4 = 0.0625, compared with ==, not a tolerance.
+    //
+    // Check 15 is the RNG-parity check: for one chosen path, the exact
+    // (u1, u2, drawCount) wf_scatter.comp computed at each of the 4 real,
+    // separate dispatches must match ohao::diff::PathRng::forPath(...)
+    // replayed the same number of draws on the CPU -- proving the GPU
+    // reconstructs the RNG from (pixelIndex, sampleIndex, bounce) correctly
+    // across a dispatch boundary, not just within a single dispatch (which
+    // check 6 already covers).
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 48;
+        constexpr uint32_t kCapacity = kW * kH;  // 3072
+        constexpr float kPlaneDistance = 2.0f;
+        constexpr float kTanHalfFov = 0.2f;
+        constexpr float kAlbedo = 0.5f;
+        constexpr uint32_t kIterationSeed = 20260828u;
+        constexpr uint32_t kBounces = 4;
+        constexpr uint32_t kDrawsPerBounce = 2;  // must match wf_scatter.comp's kDrawsPerBounce
+        constexpr uint32_t kChosenPath = 1234;   // arbitrary, < kCapacity
+        static_assert(kChosenPath < kCapacity, "kChosenPath must be a valid path index");
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_scatter buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        ohao::diff::WavefrontGenerateCamera camera;
+        camera.tanHalfFov = kTanHalfFov;
+        std::vector<uint32_t> queue0;
+        if (!ctx.runWavefrontGenerateProbe(wf, kW, kH, camera, queue0)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_scatter setup: wf_generate dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // Full quad (quadMinY=-1.0): every ray hits, so every one of
+        // kCapacity paths survives into scatter ring1/slot(kNextCountSlot).
+        std::vector<uint32_t> queue1;
+        if (!ctx.runWavefrontIntersectProbe(wf, kPlaneDistance, /*quadMinY=*/-1.0f, queue1)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_scatter setup: wf_intersect dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        const std::uint32_t seededCount =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kNextCountSlot);
+        if (seededCount != kCapacity) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: wf_scatter setup: %u of %u rays hit the full "
+                         "quad, expected all of them (quadMinY=-1 should guarantee every ray "
+                         "hits)\n",
+                         seededCount, kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // Ping-pong: scatter's first source is the ring/slot wf_intersect
+        // just filled (ring1/kNextCountSlot); its destination is the other
+        // ring (ring0/kCurrentCountSlot), which currently holds a stale
+        // pre-intersect count and gets zeroed by runWavefrontScatterProbe.
+        uint32_t srcQueueBase = kCapacity;  // ring 1
+        uint32_t srcCountSlot = ohao::diff::WavefrontBuffers::kNextCountSlot;
+        uint32_t dstQueueBase = 0;  // ring 0
+        uint32_t dstCountSlot = ohao::diff::WavefrontBuffers::kCurrentCountSlot;
+
+        std::vector<std::vector<float>> drawsPerBounce(kBounces);
+        bool scatterOk = true;
+        for (uint32_t b = 0; b < kBounces && scatterOk; ++b) {
+            std::vector<uint32_t> outQueue;
+            std::vector<float> outDraws;
+            if (!ctx.runWavefrontScatterProbe(wf, srcQueueBase, srcCountSlot, dstQueueBase,
+                                              dstCountSlot, kAlbedo, kIterationSeed, outQueue,
+                                              outDraws)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_scatter dispatch at bounce %u\n", b);
+                scatterOk = false;
+                break;
+            }
+            const std::uint32_t survCount = wf.readbackCounter(ctx.allocator(), dstCountSlot);
+            if (survCount != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: wf_scatter bounce %u re-queued %u paths, "
+                             "expected all %u (every invocation must re-queue -- nothing "
+                             "terminates in scatter yet)\n",
+                             b, survCount, kCapacity);
+                scatterOk = false;
+                break;
+            }
+            if (outDraws.size() != static_cast<std::size_t>(kCapacity) * 3u) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: wf_scatter bounce %u debug-draws readback "
+                             "size %zu, expected %zu\n",
+                             b, outDraws.size(), static_cast<std::size_t>(kCapacity) * 3u);
+                scatterOk = false;
+                break;
+            }
+            drawsPerBounce[b] = std::move(outDraws);
+            std::swap(srcQueueBase, dstQueueBase);
+            std::swap(srcCountSlot, dstCountSlot);
+        }
+        if (!scatterOk) {
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // 14. Throughput decay -- exact, no tolerance. Hardcoded to the
+        // literal 0.0625f rather than computed as kAlbedo^kBounces here: if
+        // this were derived from kAlbedo, perturbing kAlbedo alone (as
+        // task-6-report.md's required proof does) would perturb BOTH sides
+        // of the comparison identically and the check could never fail --
+        // exactly the kind of tautological check the brief warns about. The
+        // expected value must come from an independent source (arithmetic
+        // done by hand: 0.5*0.5*0.5*0.5 = 0.0625), not from the GLSL/CPU
+        // path currently under test.
+        constexpr float expectedThroughput = 0.0625f;
+
+        const std::vector<float> throughputR =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputR);
+        const std::vector<float> throughputG =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputG);
+        const std::vector<float> throughputB =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputB);
+        if (throughputR.size() != kCapacity || throughputG.size() != kCapacity ||
+            throughputB.size() != kCapacity) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: wf_scatter throughput readback size "
+                                  "mismatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            // Bit-exact on purpose -- p=0.5 keeps every intermediate product
+            // exactly representable in float32, so an epsilon here would
+            // defeat the entire point of the check.
+            if (throughputR[i] != expectedThroughput || throughputG[i] != expectedThroughput ||
+                throughputB[i] != expectedThroughput) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u throughput = (%.9g,%.9g,%.9g) after "
+                             "%u bounces, expected exactly (%.9g,%.9g,%.9g) -- path state did not "
+                             "survive every dispatch boundary intact\n",
+                             i, static_cast<double>(throughputR[i]), static_cast<double>(throughputG[i]),
+                             static_cast<double>(throughputB[i]), kBounces,
+                             static_cast<double>(expectedThroughput),
+                             static_cast<double>(expectedThroughput),
+                             static_cast<double>(expectedThroughput));
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: wf_scatter throughput decay after %u bounces is exactly "
+                    "%.9g (p=%.9g) for all %u paths\n",
+                    kBounces, static_cast<double>(expectedThroughput), static_cast<double>(kAlbedo),
+                    kCapacity);
+
+        // 15. Per-bounce RNG parity for one chosen path.
+        ohao::diff::PathRng cpuRng =
+            ohao::diff::PathRng::forPath(kChosenPath, /*sampleIndex=*/0u, kIterationSeed);
+        for (uint32_t b = 0; b < kBounces; ++b) {
+            const float cpuU1 = cpuRng.next1D();
+            const float cpuU2 = cpuRng.next1D();
+            const std::uint32_t cpuDrawCount = cpuRng.drawCount();
+
+            const std::vector<float>& gpuDraws = drawsPerBounce[b];
+            const float gpuU1 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 0u];
+            const float gpuU2 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 1u];
+            std::uint32_t gpuDrawCount = 0;
+            std::memcpy(&gpuDrawCount, &gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 2u],
+                       sizeof(gpuDrawCount));
+
+            if (cpuU1 != gpuU1 || cpuU2 != gpuU2) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u RNG diverges at bounce %u: CPU "
+                             "(%.9g,%.9g), GPU (%.9g,%.9g) -- wf_scatter.comp's reconstruction "
+                             "from (pixelIndex, sampleIndex, bounce) does not match "
+                             "ohao::diff::PathRng replayed the same number of draws\n",
+                             kChosenPath, b, static_cast<double>(cpuU1), static_cast<double>(cpuU2),
+                             static_cast<double>(gpuU1), static_cast<double>(gpuU2));
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (cpuDrawCount != gpuDrawCount) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u drawCount diverges at bounce %u: CPU "
+                             "%u, GPU %u (expected %u -- (bounce+1)*%u)\n",
+                             kChosenPath, b, cpuDrawCount, gpuDrawCount, (b + 1) * kDrawsPerBounce,
+                             kDrawsPerBounce);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (cpuDrawCount != (b + 1) * kDrawsPerBounce) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u drawCount at bounce %u = %u, expected "
+                             "%u\n",
+                             kChosenPath, b, cpuDrawCount, (b + 1) * kDrawsPerBounce);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf("[diff_gpu_probe] OK: wf_scatter per-bounce RNG draws (values and drawCount) "
+                    "match ohao::diff::PathRng exactly across %u dispatch boundaries for path %u\n",
+                    kBounces, kChosenPath);
 
         wf.destroy(ctx.allocator());
     }
