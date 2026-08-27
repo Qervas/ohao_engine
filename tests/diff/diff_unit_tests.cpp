@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <vector>
 
 namespace {
@@ -205,4 +206,55 @@ TEST(DiffParamRegistry, LayoutGrowsWithEachParam) {
 
     EXPECT_EQ(reg.layout().blockCount(), 4u);
     EXPECT_GT(reg.layout().totalBytes(), 0u);
+}
+
+TEST(DiffParamRegistry, GradAndStateBlocksHaveDistinctCorrectSizes) {
+    // Stage 1 routes every gradient scatter through these indices. If gradBlock and
+    // stateBlock were swapped, gradients would land in Adam's m/v storage silently.
+    // Pinning the SIZES (not just the count) makes that swap impossible to introduce.
+    ohao::diff::ParamRegistry reg;
+    constexpr std::uint32_t kFloats = 8u * 8u * 3u;
+
+    const auto result = reg.registerTexture("albedo", {8, 8, 3}, VK_FORMAT_R32G32B32A32_SFLOAT);
+    ASSERT_TRUE(result.ok) << result.error;
+
+    const ohao::diff::DiffParam* p = reg.find("albedo");
+    ASSERT_NE(p, nullptr);
+    ASSERT_EQ(p->floatCount, kFloats);
+    ASSERT_NE(p->gradBlock, p->stateBlock);
+
+    // Gradient block: one float per parameter value.
+    EXPECT_EQ(reg.layout().block(p->gradBlock).sizeBytes, kFloats * sizeof(float));
+    // Adam state block: m and v, so exactly twice the gradient block.
+    EXPECT_EQ(reg.layout().block(p->stateBlock).sizeBytes, kFloats * 2u * sizeof(float));
+}
+
+TEST(DiffParamRegistry, GetReturnsParamForValidIdAndNullForInvalid) {
+    ohao::diff::ParamRegistry reg;
+    const auto result = reg.registerScalarBlock("ssao_params", 4);
+    ASSERT_TRUE(result.ok) << result.error;
+
+    const ohao::diff::DiffParam* byId = reg.get(result.id);
+    ASSERT_NE(byId, nullptr);
+    EXPECT_EQ(byId->name, "ssao_params");
+
+    EXPECT_EQ(reg.get(ohao::diff::ParamId{}), nullptr);          // default-constructed sentinel
+    EXPECT_EQ(reg.get(ohao::diff::ParamId{9999u}), nullptr);     // out of range
+}
+
+TEST(DiffParamRegistry, FindReturnsNullForUnregisteredName) {
+    ohao::diff::ParamRegistry reg;
+    ASSERT_TRUE(reg.registerScalarBlock("present", 2).ok);
+    EXPECT_EQ(reg.find("absent"), nullptr);
+}
+
+TEST(DiffParamRegistry, RejectsEmptyNameAndZeroFloatCount) {
+    ohao::diff::ParamRegistry reg;
+
+    EXPECT_FALSE(reg.registerScalarBlock("", 4).ok);
+    EXPECT_FALSE(reg.registerScalarBlock("zero", 0).ok);
+
+    // A rejected registration must consume nothing.
+    EXPECT_EQ(reg.count(), 0u);
+    EXPECT_EQ(reg.layout().blockCount(), 0u);
 }
