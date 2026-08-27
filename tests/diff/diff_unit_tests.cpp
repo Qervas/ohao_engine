@@ -2,10 +2,12 @@
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
 #include "diff/rng/diff_rng.hpp"
+#include "diff/wavefront/path_state_layout.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <set>
 #include <vector>
 
 namespace {
@@ -326,4 +328,45 @@ TEST(DiffPathRng, DrawCountTracksConsumption) {
     rng.next1D();
     rng.next1D();
     EXPECT_EQ(rng.drawCount(), 2u);
+}
+
+TEST(DiffPathStateLayout, EachFieldGetsItsOwnBlockSizedByComponentCount) {
+    // SoA: one contiguous block per field, so a stage touching only throughput
+    // reads a dense run rather than striding over whole path structs.
+    constexpr std::uint32_t kCapacity = 1024;
+    ohao::diff::PathStateLayout layout(kCapacity);
+
+    using F = ohao::diff::PathStateField;
+    const F fields[] = {F::OriginX, F::OriginY, F::OriginZ,
+                        F::DirX, F::DirY, F::DirZ,
+                        F::ThroughputR, F::ThroughputG, F::ThroughputB,
+                        F::RadianceR, F::RadianceG, F::RadianceB,
+                        F::PixelIndex, F::SampleIndex, F::Bounce, F::Alive};
+
+    std::set<std::size_t> seen;
+    for (F f : fields) {
+        const std::size_t b = layout.block(f);
+        ASSERT_NE(b, ohao::diff::ArenaLayout::kInvalidBlock);
+        EXPECT_TRUE(seen.insert(b).second) << "two fields share a block";
+        EXPECT_EQ(layout.arena().block(b).sizeBytes, kCapacity * sizeof(float));
+    }
+    EXPECT_EQ(layout.capacity(), kCapacity);
+}
+
+TEST(DiffPathStateLayout, BlocksDoNotOverlap) {
+    ohao::diff::PathStateLayout layout(256);
+    const ohao::diff::ArenaLayout& a = layout.arena();
+    for (std::size_t i = 1; i < a.blockCount(); ++i) {
+        const auto prev = a.block(i - 1);
+        const auto cur = a.block(i);
+        EXPECT_GE(cur.offsetBytes, prev.offsetBytes + prev.sizeBytes);
+    }
+}
+
+TEST(DiffPathStateLayout, ZeroCapacityIsRejected) {
+    ohao::diff::PathStateLayout layout(0);
+    EXPECT_EQ(layout.capacity(), 0u);
+    EXPECT_EQ(layout.arena().blockCount(), 0u);
+    EXPECT_EQ(layout.block(ohao::diff::PathStateField::OriginX),
+              ohao::diff::ArenaLayout::kInvalidBlock);
 }
