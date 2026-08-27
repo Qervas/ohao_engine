@@ -1,0 +1,38 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-2026",
+      "displayName": "Windows MSVC 2026 (Visual Studio 18)",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "20",
+        "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-2026-release",
+      "configurePreset": "windows-msvc-2026",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-2026-debug",
+      "configurePreset": "windows-msvc-2026",
+      "configuration": "Debug"
+    }
+  ]
+}
