@@ -8,12 +8,15 @@ function(ohao_example name)
         ${Vulkan_INCLUDE_DIRS}
         ${stb_SOURCE_DIR})
     target_compile_features(${name} PRIVATE cxx_std_20)
-    target_link_libraries(${name} PRIVATE
-        -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
-        ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
     if(MSVC)
+        target_link_libraries(${name} PRIVATE
+            ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core
+            ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
         target_link_options(${name} PRIVATE /FORCE:MULTIPLE)
     else()
+        target_link_libraries(${name} PRIVATE
+            -Wl,--start-group ohao_renderer ohao_gpu_vulkan ohao_scene ohao_physics ohao_audio ohao_core -Wl,--end-group
+            ${Vulkan_LIBRARIES} glm VulkanMemoryAllocator)
         target_link_options(${name} PRIVATE -Wl,--allow-multiple-definition)
     endif()
     if(TARGET Jolt)
@@ -25,6 +28,7 @@ ohao_example(cornell_box)
 ohao_example(model_viewer)
 ohao_example(env_demo)
 ohao_example(turntable)
+
 
 # Interactive Viewer (requires GLFW)
 find_package(glfw3 QUIET)

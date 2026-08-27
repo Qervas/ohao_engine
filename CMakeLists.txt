@@ -7,10 +7,17 @@ if(NOT GIT_FOUND)
     set(GIT_EXECUTABLE "C:/Program Files/Git/cmd/git.exe")
 endif()
 
-# Add debug flags
-set(CMAKE_BUILD_TYPE Debug)
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+# Single-config generators only (Ninja/Make). VS 18 is multi-config — use --config.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug)
+endif()
+if(NOT MSVC)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
+endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(MSVC)
+    message(STATUS "MSVC ${MSVC_VERSION} toolset=${CMAKE_VS_PLATFORM_TOOLSET}")
+endif()
 
 # Use static CRT (/MT) for consistent linking
 if(MSVC)
@@ -91,9 +98,22 @@ add_custom_target(copy_assets ALL
 )
 
 
-# Set explicit GLFW paths
-set(GLFW_INCLUDE_DIR "$ENV{USERPROFILE}/scoop/apps/glfw/current/include")
-set(GLFW_LIBRARY "$ENV{USERPROFILE}/scoop/apps/glfw/current/lib-vc2022/glfw3.lib")
+# GLFW from scoop: prefer MSVC 2026 (lib-vc2026), then older VC libs.
+if(WIN32)
+    set(_ohao_glfw_root "$ENV{USERPROFILE}/scoop/apps/glfw/current")
+    if(EXISTS "${_ohao_glfw_root}/include")
+        set(GLFW_INCLUDE_DIR "${_ohao_glfw_root}/include")
+    endif()
+    foreach(_ohao_glfw_vc IN ITEMS lib-vc2026 lib-vc2022 lib-vc2019 lib-vc2017)
+        if(EXISTS "${_ohao_glfw_root}/${_ohao_glfw_vc}/glfw3.lib")
+            set(GLFW_LIBRARY "${_ohao_glfw_root}/${_ohao_glfw_vc}/glfw3.lib")
+            message(STATUS "GLFW: ${GLFW_LIBRARY}")
+            break()
+        endif()
+    endforeach()
+    unset(_ohao_glfw_root)
+    unset(_ohao_glfw_vc)
+endif()
 
 add_subdirectory(external)
 add_subdirectory(shaders)
@@ -156,3 +176,4 @@ if(BUILD_DIFF_TESTS)
     message(STATUS "Building differentiable renderer tests")
     add_subdirectory(tests/diff)
 endif()
+
