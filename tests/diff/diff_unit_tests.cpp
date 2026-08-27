@@ -1,4 +1,5 @@
 #include "diff/device_caps.hpp"
+#include "diff/grad/arena_layout.hpp"
 
 #include <gtest/gtest.h>
 
@@ -76,4 +77,51 @@ TEST(DiffDeviceCaps, SufficientRequiresBothFlags) {
 
     caps.rayQuery = true;
     EXPECT_TRUE(caps.sufficient());
+}
+
+TEST(DiffArenaLayout, EmptyLayoutIsZeroBytes) {
+    ohao::diff::ArenaLayout layout;
+    EXPECT_EQ(layout.blockCount(), 0u);
+    EXPECT_EQ(layout.totalBytes(), 0u);
+}
+
+TEST(DiffArenaLayout, SingleBlockStartsAtZeroAndPadsToAlignment) {
+    ohao::diff::ArenaLayout layout;
+    const std::size_t idx = layout.add(3);  // 3 floats = 12 bytes
+
+    EXPECT_EQ(idx, 0u);
+    EXPECT_EQ(layout.blockCount(), 1u);
+    EXPECT_EQ(layout.block(0).offsetBytes, 0u);
+    EXPECT_EQ(layout.block(0).sizeBytes, 12u);
+    EXPECT_EQ(layout.totalBytes(), ohao::diff::ArenaLayout::kAlignmentBytes);
+}
+
+TEST(DiffArenaLayout, SecondBlockIsAligned) {
+    ohao::diff::ArenaLayout layout;
+    layout.add(3);
+    const std::size_t idx = layout.add(64);  // 256 bytes
+
+    EXPECT_EQ(idx, 1u);
+    EXPECT_EQ(layout.block(1).offsetBytes, ohao::diff::ArenaLayout::kAlignmentBytes);
+    EXPECT_EQ(layout.block(1).sizeBytes, 256u);
+    EXPECT_EQ(layout.totalBytes(), ohao::diff::ArenaLayout::kAlignmentBytes + 256u);
+}
+
+TEST(DiffArenaLayout, BlocksNeverOverlap) {
+    ohao::diff::ArenaLayout layout;
+    for (std::size_t n : {1u, 7u, 100u, 4096u, 3u}) {
+        layout.add(n);
+    }
+    for (std::size_t i = 1; i < layout.blockCount(); ++i) {
+        const auto prev = layout.block(i - 1);
+        const auto cur = layout.block(i);
+        EXPECT_GE(cur.offsetBytes, prev.offsetBytes + prev.sizeBytes)
+            << "block " << i << " overlaps block " << (i - 1);
+    }
+}
+
+TEST(DiffArenaLayout, ZeroFloatBlockIsRejected) {
+    ohao::diff::ArenaLayout layout;
+    EXPECT_EQ(layout.add(0), ohao::diff::ArenaLayout::kInvalidBlock);
+    EXPECT_EQ(layout.blockCount(), 0u);
 }
