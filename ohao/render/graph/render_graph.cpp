@@ -839,7 +839,8 @@ bool RenderGraph::allocateTexture(TextureHandle handle) {
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = desc.format,
         .subresourceRange = {
-            .aspectMask = isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
+            .aspectMask = static_cast<VkImageAspectFlags>(
+                isDepth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT),
             .baseMipLevel = 0,
             .levelCount = desc.mipLevels,
             .baseArrayLayer = 0,

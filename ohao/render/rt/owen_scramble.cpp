@@ -7,11 +7,18 @@
 
 #include "render/rt/owen_scramble.hpp"
 
+#if defined(_MSC_VER)
+#include <stdlib.h>
+#define OHAO_BSWAP32(x) _byteswap_ulong(x)
+#else
+#define OHAO_BSWAP32(x) __builtin_bswap32(x)
+#endif
+
 namespace ohao {
 
 uint32_t owenScramble(uint32_t v, uint32_t seed) {
-    // Reverse bits (__builtin_bswap32 + nibble/pair swap)
-    v = __builtin_bswap32(v);
+    // Reverse bits (byte-swap + nibble/pair swap)
+    v = OHAO_BSWAP32(v);
     v = ((v & 0x0F0F0F0Fu) << 4) | ((v & 0xF0F0F0F0u) >> 4);
     v = ((v & 0x33333333u) << 2) | ((v & 0xCCCCCCCCu) >> 2);
     v = ((v & 0x55555555u) << 1) | ((v & 0xAAAAAAAAu) >> 1);
@@ -26,7 +33,7 @@ uint32_t owenScramble(uint32_t v, uint32_t seed) {
     v = ((v & 0x55555555u) << 1) | ((v & 0xAAAAAAAAu) >> 1);
     v = ((v & 0x33333333u) << 2) | ((v & 0xCCCCCCCCu) >> 2);
     v = ((v & 0x0F0F0F0Fu) << 4) | ((v & 0xF0F0F0F0u) >> 4);
-    v = __builtin_bswap32(v);
+    v = OHAO_BSWAP32(v);
     return v;
 }
 

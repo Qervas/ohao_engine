@@ -1,5 +1,7 @@
 #include "render/rt/denoise/oidn_denoise.hpp"
+#if defined(OHAO_OIDN_ENABLED)
 #include <OpenImageDenoise/oidn.hpp>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -8,6 +10,16 @@ namespace ohao {
 
 bool oidnDenoise(std::span<float> beauty, std::span<const float> albedo,
                  std::span<const float> normal, uint32_t width, uint32_t height, bool hdr) {
+#if !defined(OHAO_OIDN_ENABLED)
+    (void)beauty;
+    (void)albedo;
+    (void)normal;
+    (void)width;
+    (void)height;
+    (void)hdr;
+    std::cerr << "[OIDN] built without OpenImageDenoise — skipping\n";
+    return false;
+#else
     const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
     if (beauty.size() < pixelCount * 3u) {
         std::cerr << "[OIDN] beauty buffer too small\n";
@@ -38,6 +50,7 @@ bool oidnDenoise(std::span<float> beauty, std::span<const float> albedo,
 
     std::cout << "[OIDN] Denoised " << width << "x" << height << std::endl;
     return true;
+#endif
 }
 
 std::vector<float> rgba32fToFloat3(std::span<const float> rgba, uint32_t width, uint32_t height) {
