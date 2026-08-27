@@ -5,7 +5,10 @@
 //   1. GradientArena allocates, zeroes, and reads back.
 //   2. atomicAdd on a float SSBO accumulates correctly under contention;
 //      also exercises ohao::diff::ComputePipeline's build/bind/destroy
-//      lifecycle directly (Stage 0b-2a Task 1).
+//      lifecycle directly (Stage 0b-2a Task 1), then replays the same
+//      dispatch through ohao::diff::WavefrontStage::record() (Stage 0b-2a
+//      Task 2) into an independent arena block, proving record() actually
+//      drives bind/push/dispatch rather than silently no-op'ing.
 //   3. rayQueryEXT visibility matches a closed-form plane intersection.
 //   4. A half-quad's hit/miss pattern pins the camera's Y orientation --
 //      check 3's distance formula is even in dy, so it can't catch a flipped
@@ -43,6 +46,7 @@
 #include "diff/param/param_registry.hpp"
 #include "diff/wavefront/compute_pipeline.hpp"
 #include "diff/wavefront/wavefront_buffers.hpp"
+#include "diff/wavefront/wavefront_stage.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -67,6 +71,11 @@ int main() {
     ohao::diff::ArenaLayout layout;
     const std::size_t blockA = layout.add(16);
     const std::size_t blockB = layout.add(4);
+    // Reserved for the WavefrontStage check below (Stage 0b-2a Task 2) so it
+    // has its own independent target index rather than reusing blockA's,
+    // which check 2 has already mutated by the time this runs -- reusing it
+    // would make this check's result depend on execution order.
+    const std::size_t blockC = layout.add(16);
 
     ohao::diff::GradientArena arena;
     if (!arena.build(ctx.allocator(), layout)) {
@@ -162,6 +171,97 @@ int main() {
     }
     std::printf("[diff_gpu_probe] OK: atomicAdd accumulated %u contended adds exactly\n",
                 kInvocations);
+
+    // 2b. ohao::diff::WavefrontStage (Stage 0b-2a Task 2): drives the same
+    // atomic-probe canary as check 2, but through record() -- bind
+    // pipeline, bind descriptor set, push constants, vkCmdDispatch -- rather
+    // than a hand-rolled sequence. This is a real differential, not just a
+    // handle-non-null sanity check: if record() forgot to bind the
+    // descriptor set, pushed the wrong constants, or dispatched a Fixed
+    // group count of 0, the canary would land on something other than
+    // exactly kStageInvocations (most likely 0, since block C was zeroed
+    // alongside every other block in check 1 and nothing else writes to
+    // it), not silently pass.
+    constexpr uint32_t kStageInvocations = 2048;
+    {
+        ohao::diff::WavefrontStage stage;
+        const VkDescriptorType bindingTypes[] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        struct PushConstants {
+            uint32_t targetIndex;
+            uint32_t invocationCount;
+        };
+        if (!stage.build(ctx.device(), "diff_atomic_probe.comp.spv", bindingTypes,
+                         sizeof(PushConstants))) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: WavefrontStage::build\n");
+            return 1;
+        }
+        const VkBuffer buffersToBind[] = {arena.buffer()};
+        if (!stage.bindBuffers(ctx.device(), buffersToBind)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: WavefrontStage::bindBuffers\n");
+            return 1;
+        }
+
+        // Absolute float index of block C within the arena's single flat
+        // `data[]` array -- computed from the layout rather than hardcoded,
+        // since blockC's byte offset depends on blockA/blockB's sizes.
+        const ohao::diff::ArenaBlock blockCInfo = layout.block(blockC);
+        const uint32_t targetIndex = static_cast<uint32_t>(blockCInfo.offsetBytes / sizeof(float));
+
+        const PushConstants push{targetIndex, kStageInvocations};
+        stage.setPushConstants(&push, sizeof(push));
+        stage.setGroupCount(
+            ohao::diff::WavefrontStage::Fixed{(kStageInvocations + 63u) / 64u});
+
+        ctx.runImmediate([&](VkCommandBuffer cmd) {
+            stage.record(cmd);
+
+            // Same host-read barrier dispatchStorageBufferCompute records
+            // after its own dispatch (see compute_pipeline.cpp's reference
+            // sequence) -- WavefrontStage::record() deliberately does not
+            // add this itself (see its class comment), so the check adds it
+            // directly, exactly as WavefrontLoop will for each stage it
+            // sequences in Task 3.
+            VkBufferMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.buffer = arena.buffer();
+            barrier.offset = 0;
+            barrier.size = VK_WHOLE_SIZE;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &barrier, 0,
+                                 nullptr);
+        });
+        stage.destroy(ctx.device());
+
+        const std::vector<float> stageResult = arena.readback(ctx.allocator(), blockC);
+        if (stageResult.empty()) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: block %zu readback returned no data\n", blockC);
+            return 1;
+        }
+        if (stageResult[0] != static_cast<float>(kStageInvocations)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: WavefrontStage::record produced %f, expected "
+                         "%u contended adds (stage did not run, or ran the wrong invocation "
+                         "count)\n",
+                         stageResult[0], kStageInvocations);
+            return 1;
+        }
+        for (std::size_t i = 1; i < stageResult.size(); ++i) {
+            if (stageResult[i] != 0.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: WavefrontStage::record wrote outside its "
+                             "target index (block %zu element %zu = %f)\n",
+                             blockC, i, stageResult[i]);
+                return 1;
+            }
+        }
+    }
+    std::printf("[diff_gpu_probe] OK: WavefrontStage::record replays the atomic-probe canary -- "
+                "%u contended adds exactly through a Fixed dispatch\n", kStageInvocations);
 
     // 3. Ray-query visibility against a plane whose intersections are analytic.
     //
