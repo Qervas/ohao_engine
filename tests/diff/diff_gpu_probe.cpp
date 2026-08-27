@@ -20,7 +20,12 @@
 //       invocations -- dead paths are genuinely free.
 //   14. wf_scatter.comp's constant-albedo throughput decay is exact after 4
 //       bounces (p=0.5 -> 0.0625, compared bit-exact, no tolerance) --
-//       proves path state genuinely survives 4 separate dispatch boundaries.
+//       proves the Throughput and Bounce fields survive 4 separate dispatch
+//       boundaries intact. (Origin/Dir are written every bounce but not
+//       exercised by any assertion here -- intersect runs once, not per
+//       bounce, so positions after bounce 0 are geometrically meaningless
+//       scaffolding; Stage 0b-2 running intersect per bounce is what would
+//       make them worth checking.)
 //   15. wf_scatter.comp's per-bounce RNG draws (values AND drawCount) match
 //       ohao::diff::PathRng's replay exactly, for every one of those 4
 //       dispatches -- extends check 6's single-stream parity guarantee
@@ -989,7 +994,10 @@ int main() {
     //
     // Check 14 is the analytic throughput check: with albedo p=0.5 and every
     // ray surviving every bounce, throughput after 4 bounces must be exactly
-    // p^4 = 0.0625, compared with ==, not a tolerance.
+    // p^4 = 0.0625, compared with ==, not a tolerance. This proves Throughput
+    // and Bounce survive 4 dispatch boundaries -- it says nothing about
+    // Origin/Dir, which this loop's single intersect call leaves stale after
+    // bounce 0 (see the file header's note on check 14 for why).
     //
     // Check 15 is the RNG-parity check: for one chosen path, the exact
     // (u1, u2, drawCount) wf_scatter.comp computed at each of the 4 real,
@@ -1127,7 +1135,7 @@ int main() {
                 throughputB[i] != expectedThroughput) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: path %u throughput = (%.9g,%.9g,%.9g) after "
-                             "%u bounces, expected exactly (%.9g,%.9g,%.9g) -- path state did not "
+                             "%u bounces, expected exactly (%.9g,%.9g,%.9g) -- Throughput did not "
                              "survive every dispatch boundary intact\n",
                              i, static_cast<double>(throughputR[i]), static_cast<double>(throughputG[i]),
                              static_cast<double>(throughputB[i]), kBounces,

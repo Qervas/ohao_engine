@@ -330,6 +330,43 @@ TEST(DiffPathRng, DrawCountTracksConsumption) {
     EXPECT_EQ(rng.drawCount(), 2u);
 }
 
+TEST(DiffPathRng, ReplayMatchesGoldenSequence) {
+    // ReplayFromTupleReproducesTheStream above proves PathRng is
+    // self-consistent -- two independent PathRng instances built from the
+    // same tuple agree. It does NOT prove the sequence itself is correct or
+    // stable: shaders/includes/diff/rng.glsl and this class are declared
+    // mirrors ("change both or neither"), so diff_gpu_probe's check 6 and
+    // its per-bounce RNG-parity check (Task 6) only ever prove the CPU and
+    // GPU sides agree WITH EACH OTHER -- a coordinated edit to both files
+    // would keep every one of those checks green while silently changing
+    // the actual stream. Stage 1's path-replay backpropagation depends on
+    // the specific sequence, not merely on the two sides concurring, so
+    // this test anchors the CPU side to a fixed, independently-recorded
+    // sequence that nothing else in the codebase can also drift.
+    //
+    // GOLDEN VALUES: captured by running the current PathRng implementation
+    // once for forPath(pixelIndex=1234, sampleIndex=0, iterationSeed=20260828)
+    // -- the exact tuple diff_gpu_probe.cpp's wf_scatter RNG-parity check
+    // (kChosenPath=1234, kIterationSeed=20260828u) already replays. If the
+    // sampler is ever changed deliberately, THIS TEST IS SUPPOSED TO FAIL --
+    // update these literals (and diff_gpu_probe.cpp's check, and
+    // rng.glsl in lockstep) with intent, not by silently loosening the
+    // comparison.
+    constexpr float kGolden[8] = {
+        0.918804526f, 0.265892982f, 0.166186035f, 0.319334388f,
+        0.689956903f, 0.765392363f, 0.388430357f, 0.743075907f,
+    };
+
+    auto rng = ohao::diff::PathRng::forPath(1234, 0, 20260828u);
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_FLOAT_EQ(rng.next1D(), kGolden[static_cast<std::size_t>(i)])
+            << "PathRng's sequence drifted from its recorded golden value at draw " << i
+            << " -- if this is an intentional sampler change, update kGolden (and the GPU "
+               "mirror in rng.glsl, and diff_gpu_probe.cpp's RNG-parity check) together";
+    }
+    EXPECT_EQ(rng.drawCount(), 8u);
+}
+
 TEST(DiffPathStateLayout, EachFieldGetsItsOwnBlockSizedByComponentCount) {
     // SoA: one contiguous block per field, so a stage touching only throughput
     // reads a dense run rather than striding over whole path structs.
