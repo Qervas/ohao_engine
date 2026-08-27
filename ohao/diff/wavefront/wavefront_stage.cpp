@@ -9,6 +9,11 @@ namespace ohao::diff {
 bool WavefrontStage::build(VkDevice device, const char* spvName,
                            std::span<const VkDescriptorType> bindings,
                            uint32_t pushConstantSize) {
+    // Cleared unconditionally, not just on success: even a successful
+    // build() allocates a fresh descriptor set that has not been written
+    // yet, so any bound-ness from a previous build()/bind() cycle on this
+    // object no longer applies.
+    m_bound = false;
     return m_pipeline.build(device, spvName, bindings, pushConstantSize);
 }
 
@@ -16,15 +21,20 @@ void WavefrontStage::destroy(VkDevice device) {
     m_pipeline.destroy(device);
     m_pushConstants.clear();
     m_groupCount = Fixed{0};
+    m_bound = false;
 }
 
 bool WavefrontStage::bindBuffers(VkDevice device, std::span<const VkBuffer> buffers) {
-    return m_pipeline.bindBuffers(device, buffers);
+    const bool ok = m_pipeline.bindBuffers(device, buffers);
+    if (ok) m_bound = true;
+    return ok;
 }
 
 bool WavefrontStage::bindAccelerationStructure(VkDevice device, uint32_t binding,
                                                VkAccelerationStructureKHR accel) {
-    return m_pipeline.bindAccelerationStructure(device, binding, accel);
+    const bool ok = m_pipeline.bindAccelerationStructure(device, binding, accel);
+    if (ok) m_bound = true;
+    return ok;
 }
 
 void WavefrontStage::setPushConstants(const void* data, uint32_t size) {
@@ -40,9 +50,20 @@ void WavefrontStage::setGroupCount(GroupCountSource source) {
 
 void WavefrontStage::record(VkCommandBuffer cmd) const {
     assert(m_pipeline.pipeline() != VK_NULL_HANDLE && m_pipeline.layout() != VK_NULL_HANDLE &&
-          m_pipeline.descriptorSet() != VK_NULL_HANDLE &&
-          "WavefrontStage::record: build() must have succeeded, and destroy() must not have "
-          "been called since, before record() is called");
+          m_pipeline.descriptorSet() != VK_NULL_HANDLE && m_bound &&
+          "WavefrontStage::record: build() must have succeeded, destroy() must not have been "
+          "called since, and a bindBuffers()/bindAccelerationStructure() call must have "
+          "succeeded since that build(), before record() is called");
+
+    // Unconditional guard backing the assert above, same pattern as
+    // ArenaLayout::block() (arena_layout.cpp): the assert is a debug-time
+    // diagnostic, this early return is what actually makes an unbuilt,
+    // destroyed, or built-but-unbound stage's record() a safe no-op in a
+    // Release build (NDEBUG compiles the assert out, but not this check).
+    if (m_pipeline.pipeline() == VK_NULL_HANDLE || m_pipeline.layout() == VK_NULL_HANDLE ||
+       m_pipeline.descriptorSet() == VK_NULL_HANDLE || !m_bound) {
+        return;
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline.pipeline());
 

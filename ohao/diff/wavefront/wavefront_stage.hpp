@@ -112,24 +112,43 @@ public:
     /// never a barrier (see class comment).
     ///
     /// Precondition: the most recent build() on this object succeeded and
-    /// was not followed by destroy(). Calling record() on a stage that was
-    /// never built, or was destroyed, is a caller bug: this method returns
-    /// void rather than bool because every vkCmd* call it wraps is itself
-    /// void and fails only through validation layers or device loss, and a
-    /// bool return here would imply a caller could recover mid-command-
-    /// buffer, which Vulkan does not support once one invalid call has
-    /// been recorded into it. In a debug build the precondition is
-    /// enforced by `assert`; in a release build (this repo's test targets
-    /// build Release, which defines NDEBUG and compiles the assert out)
-    /// violating it instead calls vkCmdBindPipeline/vkCmdBindDescriptorSets
-    /// with VK_NULL_HANDLE, which is undefined by the Vulkan spec and may
-    /// or may not be caught by validation.
+    /// was not followed by destroy(), AND a bindBuffers()/
+    /// bindAccelerationStructure() call has succeeded since that build()
+    /// (see m_bound below -- build() allocates the descriptor set but does
+    /// not write it, so a built-but-never-bound stage has a non-null
+    /// descriptor set whose bindings were never populated by
+    /// vkUpdateDescriptorSets). Calling record() on a stage that was never
+    /// built, was destroyed, or was built but never bound, is a caller bug:
+    /// this method returns void rather than bool because every vkCmd* call
+    /// it wraps is itself void and fails only through validation layers or
+    /// device loss, and a bool return here would imply a caller could
+    /// recover mid-command-buffer, which Vulkan does not support once one
+    /// invalid call has been recorded into it. In every build (debug and
+    /// release) the precondition is enforced twice: first by `assert` (a
+    /// debug-time diagnostic that names the violated invariant; compiled
+    /// out under NDEBUG, which this repo's Release test targets define),
+    /// then unconditionally by an early return -- mirroring
+    /// ArenaLayout::block()'s "assert, then unconditional guard" pattern
+    /// (arena_layout.cpp) -- so a Release build that violates the
+    /// precondition gets a safe no-op instead of calling
+    /// vkCmdBindPipeline/vkCmdBindDescriptorSets with VK_NULL_HANDLE or
+    /// against an unwritten descriptor set, both of which are undefined by
+    /// the Vulkan spec and may or may not be caught by validation.
     void record(VkCommandBuffer cmd) const;
 
 private:
     ComputePipeline m_pipeline;
     std::vector<std::byte> m_pushConstants;
     GroupCountSource m_groupCount{Fixed{0}};
+
+    // Set true by a successful bindBuffers()/bindAccelerationStructure();
+    // cleared by destroy() and by build() (even a successful one -- a
+    // freshly (re)built stage's descriptor set is unwritten regardless of
+    // whether a previous build()/bind() cycle on this object had set this
+    // true). record() fails closed on this being false the same way it
+    // fails closed on a null pipeline/layout/descriptor-set handle -- see
+    // record()'s precondition doc above.
+    bool m_bound{false};
 };
 
 }  // namespace ohao::diff
