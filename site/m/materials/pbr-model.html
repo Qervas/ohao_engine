@@ -66,13 +66,13 @@ $$</div>
 <p>Indirect bounces in the offline path are *not* VNDF-importance-sampled — they use a cosine-weighted hemisphere sample narrowed by roughness, i.e. a roughness-widened reflection lobe:</p>
 <div class="citation-chip"><code class="citation-code">vec3 jitVec = cosineHemisphere(reflected, jitU) * roughness;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L519" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:519</a></div>
 <p>The realtime RT profile (`pt_raygen_realtime.rgen`, the `--denoise=nrd`/DLSS path) is the one that upgrades the indirect glossy bounce to Heitz-2018 sampling of the *visible* normal distribution:</p>
-<div class="citation-chip"><code class="citation-code">vec3 Hloc = sampleGGXVNDF(Vloc, alpha, alpha, u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L774" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:774</a></div>
+<div class="citation-chip"><code class="citation-code">vec3 Hloc = sampleGGXVNDF(Vloc, alpha, alpha, u);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L788" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:788</a></div>
 <p>With a VNDF sample the Monte-Carlo estimator weight `f·cosθ / pdf` collapses to a single height-correlated Smith ratio once Fresnel is factored out —</p>
 <div class="math-block">$$
 \frac{f\,\cos\theta_L}{p(\omega_L)} \;=\; F \cdot \frac{G_2(\omega_o,\omega_i)}{G_1(\omega_o)}
 $$</div>
 <p>— so that branch returns exactly `F · G2/G1` instead of forming D and the pdf separately:</p>
-<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L792" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:792</a></div>
+<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L806" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:806</a></div>
 <p>So VNDF sampling is a realtime-profile feature, not a property of the flagship offline tracer — a distinction worth keeping straight when reading the raygen family.</p>
 </div>
 <div class="section-rule"><h2 id="the-deferred-pipeline-s-specular">The deferred pipeline&#x27;s specular</h2></div>

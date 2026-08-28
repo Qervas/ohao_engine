@@ -206,20 +206,25 @@ that a name is unclaimed.
 
 ## Where the SPIR-V lands, and where the engine looks
 
-The shader target is a plain `add_custom_target` with no `ALL`, and nothing in the
-tree calls `add_dependencies` on it:
+The shader target is a plain `add_custom_target` with no `ALL`, so it is not a root
+of the default build in its own right:
 
 {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
 
-So `cmake --build build` — the "build all" invocation — produces no SPIR-V. The
-target has to be asked for by name. Meanwhile the `bin/shaders/` prefix the C++ paths
-name *first* is written by exactly one rule anywhere in the tree, and that rule writes
-it beside the test binary as `build/bin/shaders/`: a POST_BUILD step hanging off the
-`renderer_test` target.
+It is reached only because two test targets name it as a dependency, which is also
+what makes `cmake --build build` — the "build all" invocation — produce SPIR-V at
+all:
 
-{{cite tests/renderer/CMakeLists.txt "add_custom_command(TARGET renderer_test POST_BUILD"}}
+{{cite tests/renderer/CMakeLists.txt "add_dependencies(renderer_test shaders)"}}
 
-Configure with `-DBUILD_RENDERER_TESTS=OFF` and nothing populates it. What rescues the
+The `bin/shaders/` prefix the C++ paths name *first* is written by exactly one rule
+anywhere in the tree, and that rule now hangs off the `shaders` target itself rather
+than off a consumer — two consumers copying into one destination raced under `-j8`:
+
+{{cite shaders/CMakeLists.txt "COMMENT "Copying shader SPVs to runtime output directory""}}
+
+Configure with both `-DBUILD_RENDERER_TESTS=OFF` and `-DBUILD_DIFF_TESTS=OFF` and
+nothing asks for the target at all, so nothing populates it. What rescues the
 documented invocations is a three-entry search list inside the SPV loader. All three
 entries are relative paths resolved against the *working* directory, and the second is
 the CMake output tree:

@@ -101,15 +101,23 @@ The RT stack names its modules under `bin/shaders/`:
 {{cite ohao/render/rt/path_tracer.hpp "const char* raygenSpv{"bin/shaders/rt_pt_raygen.rgen.spv"};"}}
 
 `glslc` writes `build/shaders/`, so that prefix looks stale — but the build does
-still produce it. `renderer_test` mirrors the compiler's output directory into a
-`bin/shaders` beside its own executable,
+still produce it. The `shaders` target mirrors the compiler's output directory
+into a `bin/shaders` beside the executables,
 
-{{cite tests/renderer/CMakeLists.txt "-E make_directory "$<TARGET_FILE_DIR:renderer_test>/bin/shaders""}}
+{{cite shaders/CMakeLists.txt "-E make_directory "${OHAO_SHADER_RUNTIME_DIR}/bin/shaders""}}
 
 and because the runtime output directory is the binary directory itself, that
-destination is `build/bin/shaders/`:
+destination is `build/bin/shaders/` (or `build/<CONFIG>/bin/shaders/` under a
+multi-config generator):
 
 {{cite CMakeLists.txt "set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})"}}
+
+That copy used to be attached to each consuming test target. Two POST_BUILD
+`copy_directory` commands writing the same destination race under `-j8`, so the
+copy now happens once, in the `shaders` target, and the consumers only declare a
+dependency on it:
+
+{{cite tests/renderer/CMakeLists.txt "add_dependencies(renderer_test shaders)"}}
 
 `renderer_test` is configured by default, so an ordinary configure-and-build
 produces both trees:
@@ -257,8 +265,8 @@ file, and left the copy target pointing into it.
 
 ## Contracts
 
-- The `shaders` target is declared without `ALL` and nothing calls `add_dependencies` on it, so `cmake --build build` does **not** compile shaders. `--target shaders` is mandatory after any shader edit. {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
-- `renderer_test` mirrors `build/shaders/` into `build/bin/shaders/` as a POST_BUILD step with no dependency on the `shaders` target, so the mirror snapshots whatever SPIR-V existed at link time — including modules whose sources have since been deleted. Rebuild shaders without relinking the test and the two trees drift apart. {{cite tests/renderer/CMakeLists.txt "add_custom_command(TARGET renderer_test POST_BUILD"}}
+- The `shaders` target is declared without `ALL`, so it is not a root of the default build in its own right. It is now pulled in through `add_dependencies` from `renderer_test` and `diff_gpu_probe`, which means a plain `cmake --build build` does recompile shaders — but only for as long as one of those two targets is configured. `--target shaders` remains the only way to say it directly. {{cite shaders/CMakeLists.txt "add_custom_target(shaders"}}
+- The mirror from `build/shaders/` into `bin/shaders/` is owned by the `shaders` target itself, not by its consumers. Two consumers each attaching their own POST_BUILD `copy_directory` into that one destination raced under `-j8`; the single copy also closes the ordering gap where a consumer's mirror could snapshot SPIR-V from before the shaders were rebuilt. {{cite tests/diff/CMakeLists.txt "add_dependencies(diff_gpu_probe shaders)"}}
 - Nothing deletes stale outputs. A renamed or moved shader leaves its old `.spv` in `build/shaders/`, where the runtime's basename fallback will happily load it.
-- Every shader path in the engine is CWD-relative, and on a single-config build exactly two working directories resolve: the repository root (via the `build/shaders/` + basename rung) and `build/` (via the `bin/shaders/` literal, served by the `renderer_test` mirror). They are not equivalent for anything else — `model_viewer`'s hard-coded environment map exists only under the source tree, so that example still has to run from the root. {{cite examples/model_viewer.cpp "renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");"}}
+- Every shader path in the engine is CWD-relative, and on a single-config build exactly two working directories resolve: the repository root (via the `build/shaders/` + basename rung) and `build/` (via the `bin/shaders/` literal, served by the `shaders` target's mirror). They are not equivalent for anything else — `model_viewer`'s hard-coded environment map exists only under the source tree, so that example still has to run from the root. {{cite examples/model_viewer.cpp "renderer.setEnvironmentMap("assets/test_models/env_studio.hdr");"}}
 - Renaming a shader file, or moving it between directories, renames its SPIR-V and breaks every C++ load site that spells the flat name. The build reports success either way.

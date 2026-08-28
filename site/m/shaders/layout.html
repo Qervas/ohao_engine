@@ -67,10 +67,12 @@
 <p>Every path is relative to the process working directory. There is no `install()` rule for shaders anywhere in the project, no environment variable, no absolute path, and no `.spv` committed to the repository — the binaries only ever exist in a build tree.</p>
 <p>The RT stack names its modules under `bin/shaders/`:</p>
 <div class="citation-chip"><code class="citation-code">const char* raygenSpv{&quot;bin/shaders/rt_pt_raygen.rgen.spv&quot;};</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/path_tracer.hpp#L55" target="_blank" rel="noopener">ohao/render/rt/path_tracer.hpp:55</a></div>
-<p>`glslc` writes `build/shaders/`, so that prefix looks stale — but the build does still produce it. `renderer_test` mirrors the compiler&#x27;s output directory into a `bin/shaders` beside its own executable,</p>
-<div class="citation-chip"><code class="citation-code">COMMAND ${CMAKE_COMMAND} -E make_directory &quot;$&lt;TARGET_FILE_DIR:renderer_test&gt;/bin/shaders&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/CMakeLists.txt#L39" target="_blank" rel="noopener">tests/renderer/CMakeLists.txt:39</a></div>
-<p>and because the runtime output directory is the binary directory itself, that destination is `build/bin/shaders/`:</p>
+<p>`glslc` writes `build/shaders/`, so that prefix looks stale — but the build does still produce it. The `shaders` target mirrors the compiler&#x27;s output directory into a `bin/shaders` beside the executables,</p>
+<div class="citation-chip"><code class="citation-code">COMMAND ${CMAKE_COMMAND} -E make_directory &quot;${OHAO_SHADER_RUNTIME_DIR}/bin/shaders&quot;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/CMakeLists.txt#L81" target="_blank" rel="noopener">shaders/CMakeLists.txt:81</a></div>
+<p>and because the runtime output directory is the binary directory itself, that destination is `build/bin/shaders/` (or `build/&lt;CONFIG&gt;/bin/shaders/` under a multi-config generator):</p>
 <div class="citation-chip"><code class="citation-code">set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L41" target="_blank" rel="noopener">CMakeLists.txt:41</a></div>
+<p>That copy used to be attached to each consuming test target. Two POST_BUILD `copy_directory` commands writing the same destination race under `-j8`, so the copy now happens once, in the `shaders` target, and the consumers only declare a dependency on it:</p>
+<div class="citation-chip"><code class="citation-code">add_dependencies(renderer_test shaders)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/renderer/CMakeLists.txt#L44" target="_blank" rel="noopener">tests/renderer/CMakeLists.txt:44</a></div>
 <p>`renderer_test` is configured by default, so an ordinary configure-and-build produces both trees:</p>
 <div class="citation-chip"><code class="citation-code">option(BUILD_RENDERER_TESTS &quot;Build renderer pipeline tests&quot; ON)</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/CMakeLists.txt#L115" target="_blank" rel="noopener">CMakeLists.txt:115</a></div>
 <p>The loader&#x27;s first candidate is the literal string, unmodified; its second strips the directory and retries under `build/shaders/`:</p>
@@ -120,10 +122,10 @@
 <div class="section-rule"><h2 id="contracts">Contracts</h2></div>
 <div class="prose reveal">
 <ul>
-<li>The `shaders` target is declared without `ALL` and nothing calls `add_dependencies` on it, so `cmake --build build` does **not** compile shaders. `--target shaders` is mandatory after any shader edit. {{cite shaders/CMakeLists.txt &quot;add_custom_target(shaders&quot;}}</li>
-<li>`renderer_test` mirrors `build/shaders/` into `build/bin/shaders/` as a POST_BUILD step with no dependency on the `shaders` target, so the mirror snapshots whatever SPIR-V existed at link time — including modules whose sources have since been deleted. Rebuild shaders without relinking the test and the two trees drift apart. {{cite tests/renderer/CMakeLists.txt &quot;add_custom_command(TARGET renderer_test POST_BUILD&quot;}}</li>
+<li>The `shaders` target is declared without `ALL`, so it is not a root of the default build in its own right. It is now pulled in through `add_dependencies` from `renderer_test` and `diff_gpu_probe`, which means a plain `cmake --build build` does recompile shaders — but only for as long as one of those two targets is configured. `--target shaders` remains the only way to say it directly. {{cite shaders/CMakeLists.txt &quot;add_custom_target(shaders&quot;}}</li>
+<li>The mirror from `build/shaders/` into `bin/shaders/` is owned by the `shaders` target itself, not by its consumers. Two consumers each attaching their own POST_BUILD `copy_directory` into that one destination raced under `-j8`; the single copy also closes the ordering gap where a consumer&#x27;s mirror could snapshot SPIR-V from before the shaders were rebuilt. {{cite tests/diff/CMakeLists.txt &quot;add_dependencies(diff_gpu_probe shaders)&quot;}}</li>
 <li>Nothing deletes stale outputs. A renamed or moved shader leaves its old `.spv` in `build/shaders/`, where the runtime&#x27;s basename fallback will happily load it.</li>
-<li>Every shader path in the engine is CWD-relative, and on a single-config build exactly two working directories resolve: the repository root (via the `build/shaders/` + basename rung) and `build/` (via the `bin/shaders/` literal, served by the `renderer_test` mirror). They are not equivalent for anything else — `model_viewer`&#x27;s hard-coded environment map exists only under the source tree, so that example still has to run from the root. {{cite examples/model_viewer.cpp &quot;renderer.setEnvironmentMap(&quot;assets/test_models/env_studio.hdr&quot;);&quot;}}</li>
+<li>Every shader path in the engine is CWD-relative, and on a single-config build exactly two working directories resolve: the repository root (via the `build/shaders/` + basename rung) and `build/` (via the `bin/shaders/` literal, served by the `shaders` target&#x27;s mirror). They are not equivalent for anything else — `model_viewer`&#x27;s hard-coded environment map exists only under the source tree, so that example still has to run from the root. {{cite examples/model_viewer.cpp &quot;renderer.setEnvironmentMap(&quot;assets/test_models/env_studio.hdr&quot;);&quot;}}</li>
 <li>Renaming a shader file, or moving it between directories, renames its SPIR-V and breaks every C++ load site that spells the flat name. The build reports success either way.</li>
 </ul>
 </div>
@@ -135,8 +137,8 @@
         <div class="row"><code>shaders/core/forward.frag</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/denoise/atrous_denoise.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/path_tracer.hpp</code><span class="desc"></span></div>
-        <div class="row"><code>tests/renderer/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>CMakeLists.txt</code><span class="desc"></span></div>
+        <div class="row"><code>tests/renderer/CMakeLists.txt</code><span class="desc"></span></div>
         <div class="row"><code>ohao/gpu/vulkan/renderer.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/render_pass_base.hpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/deferred/render_pass_base.cpp</code><span class="desc"></span></div>

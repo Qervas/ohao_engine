@@ -100,12 +100,12 @@ $$</div>
 <li>**Glossy bounce, first one only.** The crude sampler — jitter the mirror</li>
 </ul>
 <p>direction by a roughness-scaled cosine vector — lives in all three files. Realtime replaces it at the bounce-1 fork alone, sampling the GGX distribution of visible normals (Heitz 2018), which collapses the estimator weight to Fresnel times a height-correlated Smith ratio. Its Stage B loop from bounce 2 on is byte-identical to the reference file&#x27;s: same jitter, same un-Fresnelled `mix(1, albedo, metallic)` throughput.</p>
-<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L792" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:792</a></div>
+<div class="citation-chip"><code class="citation-code">specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L806" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:806</a></div>
 <ul>
 <li>**Stage C.** In the realtime file the diffuse sub-path is no longer a plain</li>
 </ul>
 <p>bounce loop but a ReSTIR GI reservoir over the secondary vertex, with temporal and spatial reuse.</p>
-<div class="citation-chip"><code class="citation-code">giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1529" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1529</a></div>
+<div class="citation-chip"><code class="citation-code">giReservoirUpdate(giCurr, xs, ns, Lo, w_i, rSel);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen_realtime.rgen#L1547" target="_blank" rel="noopener">shaders/rt/pt_raygen_realtime.rgen:1547</a></div>
 <ul>
 <li>**Skin.** The offline file grew a second sharp GGX &quot;oil&quot; lobe and a</li>
 </ul>

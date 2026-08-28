@@ -53,16 +53,41 @@ estimator — and `ggx_aniso.glsl` spells the constraint out.
 
 {{cite shaders/includes/material/ggx_aniso.glsl "convention here (alpha = roughness^2) MATCHES"}}
 
-Five lines later the same comment block overreaches. `ggxDiso` — the D behind the
-realtime raygen's VNDF pdf — is introduced as "numerically identical" to
-`ggxD_anisoOrIso`'s isotropic branch. The α convention does match; the guard does
-not. The branch adds 10⁻⁴ to its denominator and `ggxDiso` adds 10⁻⁸, and by the
-quadrature below that factor of 10⁴ is the difference between retaining 2.7% and
-91% of the distribution's mass at roughness 0.1.
+Five lines later the same comment block used to overreach. `ggxDiso` — the D
+behind the realtime raygen's VNDF pdf — was introduced as "numerically identical"
+to `ggxD_anisoOrIso`'s isotropic branch. The α convention did match; the guard did
+not. The branch adds 10⁻⁴ to its denominator, `ggxDiso` added 10⁻⁸, and by the
+quadrature below that factor of 10⁴ was the difference between retaining 2.7% and
+91% of the distribution's mass at roughness 0.1. Both citations below are pinned
+to `9e2d0b4`, the last revision that carried those lines:
 
-{{cite shaders/includes/material/ggx_aniso.glsl "identical to ggxD_anisoOrIso's isotropic branch"}}
+{{cite shaders/includes/material/ggx_aniso.glsl@9e2d0b4 "identical to ggxD_anisoOrIso's isotropic branch"}}
 
-{{cite shaders/includes/material/ggx_aniso.glsl "return a2 / (3.14159265 * denom * denom + 1e-8);"}}
+{{cite shaders/includes/material/ggx_aniso.glsl@9e2d0b4 "return a2 / (3.14159265 * denom * denom + 1e-8);"}}
+
+`ggxDiso`'s 10⁻⁸ is gone. The guard is now a floor on **α** rather than a term
+added to the denominator: `max(α², 10⁻⁸)`, i.e. α ≥ 10⁻⁴, which is the roughness
+0.01 floor `pbr_unpack.glsl` already applies. Nothing is added to the denominator
+at all, so the function is exact Trowbridge-Reitz at whatever width it was handed
+and integrates to 1 at *every* roughness — the flat curve in the figure below.
+
+{{cite shaders/includes/material/ggx_aniso.glsl "float a2    = max(alpha * alpha, 1e-8);"}}
+
+{{cite shaders/includes/material/ggx_aniso.glsl "return a2 / (3.14159265 * denom * denom);"}}
+
+That widens the gap between the two functions rather than closing it, and the file
+now says so where a reader will hit it. It matters because the realtime raygen
+computes the *same* quantity — the specular BSDF sampler's VNDF pdf — on both
+sides of one MIS partition, and both sides must use the same D or the balance
+heuristic is evaluated with two different densities:
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "float Dpdf = ggxDiso(NdotH, roughness * roughness);"}}
+
+{{cite shaders/rt/pt_raygen_realtime.rgen "float pdfSpecMIS = smithG1GGX(NdotV, roughness * roughness) * Dpdf"}}
+
+The shaded value `spec` on that same branch still calls `ggxD_anisoOrIso`, because
+that is the D every existing reference render was made with. Only the density
+moved.
 
 ## The visibility term that is not a geometry term
 
@@ -135,32 +160,39 @@ is dimmer in the deferred preview than in the path-traced frame.
 
 ## The epsilon that eats the highlight
 
-Those twenty-four D expressions guard their denominator in four different ways,
-and only one of them is a floor. `distributionGGX` floors the finished denominator,
-`max(π·denom², EPSILON)`, with EPSILON defined as 10⁻⁶.
+Those twenty-four D expressions guard against a vanishing denominator in four
+different ways, and only two of them are floors. `distributionGGX` floors the
+finished denominator, `max(π·denom², EPSILON)`, with EPSILON defined as 10⁻⁶.
 
 {{cite shaders/includes/common/constants.glsl "#define EPSILON       1e-6"}}
 
 `ggxD_anisoOrIso`'s isotropic branch and all twenty inline raygen copies *add*
-10⁻⁴. `ggxDiso` adds 10⁻⁸. `D_ClearCoat` guards nothing at all — harmless only
-because nothing includes the file it sits in.
+10⁻⁴. `ggxDiso` adds nothing — it floors α upstream instead, which is the one
+arrangement that costs no mass. `D_ClearCoat` guards nothing at all — harmless
+only because nothing includes the file it sits in.
 
 {{cite shaders/includes/material/advanced_brdf.glsl "return a2 / (3.14159265 * denom * denom);"}}
 
 An additive term is not a floor — it never leaves the expression. At the lobe
 peak the true denominator is $\pi\,\text{roughness}^{8}$, which at the 0.04
 roughness floor is about 2 × 10⁻¹¹: roughly five orders of magnitude under
-`distributionGGX`'s floor, seven under the added 10⁻⁴, and not quite three under
-`ggxDiso`'s 10⁻⁸. The guard, not the GGX algebra, sets the height of the highlight.
+`distributionGGX`'s floor and seven under the added 10⁻⁴. For both guards that
+add, the guard rather than the GGX algebra sets the height of the highlight. A
+floor on α is a different kind of object: it substitutes a slightly wider — but
+still correctly normalised — lobe, so it moves *where* the energy sits without
+removing any.
 
-Numerical quadrature of the three shipped guards shows how far each truncation
-reaches. `distributionGGX` recovers full normalisation by roughness ≈ 0.16 and
-`ggxDiso` is within 1% of it by 0.14, but the +10⁻⁴ expression — the one on every
-NEE branch of every raygen — does not until roughness ≈ 0.4, and at roughness 0.2
-it retains only 37% of the distribution's mass (2.7% at roughness 0.1, 0.07% at
-the 0.04 floor).
+Numerical quadrature of the shipped guards shows how far each truncation reaches.
+`ggxDiso` integrates to 1.000 at every roughness in the table — it truncates
+nothing. `distributionGGX` recovers full normalisation by roughness ≈ 0.16, with
+0.9% of the mass surviving at the 0.04 floor. The +10⁻⁴ expression — the one on
+every NEE branch of every raygen — does not recover until roughness ≈ 0.4, and at
+roughness 0.2 it retains only 37% of the distribution's mass (2.7% at roughness
+0.1, 0.07% at the 0.04 floor). For scale, `ggxDiso` in its pre-`9e2d0b4` +10⁻⁸
+form sat between the two: 91% at roughness 0.1, within 1% of full by 0.14, and 7%
+at the 0.04 floor.
 
-{{figure materials-ggx-ndf-energy "Hemispherical integral of the three shipped isotropic D guards versus perceptual roughness — measured by numerical quadrature of the GLSL, not a captured render. Two of the three curves come from ggx_aniso.glsl, which ships both a 10⁻⁴ and a 10⁻⁸ guard. A correct NDF integrates to 1 everywhere; the missing mass is the peak of the specular lobe."}}
+{{figure materials-ggx-ndf-energy "Hemispherical integral of the shipped isotropic D guards versus perceptual roughness — measured by numerical quadrature of the GLSL, not a captured render. Two of the three come from ggx_aniso.glsl, which now pairs a 10⁻⁴ additive guard with an α floor that loses nothing; the dashed curve is the 10⁻⁸ additive guard ggxDiso carried until 9e2d0b4. A correct NDF integrates to 1 everywhere; the missing mass is the peak of the specular lobe."}}
 
 Where it bites matters as much as how much. Take the raygen `PathTracer` binds by
 default:
@@ -200,11 +232,14 @@ specular before any clamp logic runs.
 
 {{cite ohao/render/rt/rt_settings.hpp ".enableFireflyClamp = false,"}}
 
-There is no free repair. Flooring the denominator instead of adding to it — what
-`distributionGGX` already does — still loses 99.1% of the mass at the 0.04
-roughness floor, and even `ggxDiso`'s 10⁻⁸ leaves 93% missing there. Every option
-changes every existing smooth-material reference render, which is the real reason
-to touch this carefully rather than not at all.
+There is a free repair, and `ggxDiso` has taken it: floor **α** instead of
+guarding the denominator, and the expression stays exactly normalised at every
+roughness. What is not free is applying it here. Flooring the *denominator* — what
+`distributionGGX` does — still loses 99.1% of the mass at the 0.04 roughness
+floor, and the 10⁻⁸ `ggxDiso` used to add left 93% missing there. Any of these
+changes every existing smooth-material reference render, which is why
+`ggxD_anisoOrIso` keeps its 10⁻⁴: it is the D the offline raygen — and therefore
+the golden-image corpus — was baselined against.
 :::
 
 ## The anisotropic branch and the normalisation it drops
@@ -280,6 +315,7 @@ the top of this page is what that grep returns.
 - `geometrySmithCorrelated` returns a visibility term with $1/4(n\cdot\omega_o)(n\cdot\omega_i)$ folded in, so `evaluateSpecularBRDF` must return `D * V * F` with no denominator. Adding one divides twice.
 - Both stacks floor roughness at 0.04 before shading. Lowering that floor does not sharpen the highlight — it drives D further into its epsilon guard.
 - `ggxD_anisoOrIso`, `ggxDiso` and `smithG1GGX` must all keep α = roughness². Changing one without the others biases the MIS estimator silently.
-- The three *shipped* isotropic D guards — 10⁻⁶ floored, 10⁻⁴ added, 10⁻⁸ added — normalise at roughness 0.16, 0.4 and 0.14 respectively. They are not interchangeable, and editing one changes which existing renders it matches.
+- `ggxD_anisoOrIso` and `ggxDiso` are *not* the same D, and have not been since `9e2d0b4`. Anywhere one quantity is computed on both sides of a MIS weight, the same one must be called on both sides — `pt_raygen_realtime.rgen`'s env-IS `pdfSpecMIS` and its VNDF `specLastBsdfPdf` are exactly that pair, and both call `ggxDiso`.
+- The three *shipped* isotropic D guards — 10⁻⁶ floored on the denominator, 10⁻⁴ added to it, and an α floor that adds nothing — normalise at roughness 0.16, 0.4, and everywhere, respectively. They are not interchangeable, and editing one changes which existing renders it matches.
 - The anisotropic branch is not energy-matched to its own isotropic branch and is off by default. `--aniso=` renders are not radiometrically comparable to isotropic ones.
 - The deferred Fresnel clamps F90 to `1 - roughness`; the raygens do not. Rough dielectric silhouettes will not match between preview and offline render.
