@@ -89,6 +89,38 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // function at sharp roughness. That epsilon is deliberately left alone: it
 // is load-bearing for the pre-existing rendered references the RT pipeline
 // is compared against, and nothing in the wavefront integrator calls it.
+//
+// THE TWO ARE NOT INTERCHANGEABLE, AND ONE MIS PARTITION SPANS BOTH. The
+// `+ 0.0001` is far larger than the quantity it guards: at roughness 0.15
+// the true denominator at the lobe peak is 8.05e-7, so the epsilon
+// suppresses D by ~125x there. Integrated over the hemisphere that form
+// retains 37% of the distribution's mass at roughness 0.2 and 2.7% at 0.1,
+// against 100% for the alpha-floored form below (quadrature figures from
+// site/content/units/materials/ggx.md). Any place that computes the SAME
+// physical quantity on both sides of a MIS weight must therefore use the
+// SAME function on both sides, or the balance heuristic is evaluated with
+// two different densities and the estimator is silently biased.
+// pt_raygen_realtime.rgen is exactly such a case: its env-IS branch's
+// `Dpdf`/`pdfSpecMIS` and its VNDF sampler's `specLastBsdfPdf` are the two
+// sides of one balance heuristic, both are the specular BSDF sampler's VNDF
+// pdf, and both now call this function for it. `spec` (the shaded BSDF
+// value, not a density) still uses ggxD_anisoOrIso, because that is the
+// value the reference renders were made with.
+//
+// COVERAGE, stated plainly so a green test suite is not misread. In the RT
+// pipeline this function is reached only from pt_raygen_realtime.rgen (the
+// VNDF sampler's pdf, and -- as of this fix -- the env-IS branch's
+// `pdfSpecMIS`), and NOTHING in the C++ test suite executes it.
+// tests/renderer/renderer_test.cpp selects RenderMode::RTOffline, i.e.
+// pt_raygen_offline.rgen, which contains no ggxDiso call at all; that test
+// also asserts nothing about pixels (it writes a PNG and returns 0
+// unconditionally) and falls back silently when RT is unavailable. The golden-image corpus (tests/golden/manifest.json) also
+// renders RTOffline only. The only automated coverage of this function is
+// the wavefront differentiable path -- shaders/includes/diff/bsdf.glsl via
+// tests/diff/diff_gpu_probe.cpp's checks 20-23 -- which shares the formula
+// but not the raygen. A change here at roughness in [0.02, ~0.155] is
+// therefore exercised by nothing on the RT side: verify it by eye or with a
+// new test, never by a green renderer_test.
 float ggxDiso(float NdotH, float alpha) {
     float a2    = max(alpha * alpha, 1e-8);
     float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;

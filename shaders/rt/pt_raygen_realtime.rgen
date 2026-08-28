@@ -666,7 +666,18 @@ void main() {
                     float NdotH = max(dot(N, H), 0.001);
                     float NdotV = max(dot(N, V), 0.001);
                     float VdotH = max(dot(V, H), 0.001);
+                    // Two D terms on purpose. `D` (ggxD_anisoOrIso, with its
+                    // `+ 0.0001`) is the SHADED value, kept because every
+                    // existing RT reference render was made with it. `Dpdf`
+                    // (ggxDiso, floored on alpha instead) is the DENSITY, and
+                    // it must be the same function the BSDF-sampling side of
+                    // this MIS partition uses -- see the divergence paragraph
+                    // above ggxDiso in shaders/includes/material/ggx_aniso.glsl.
+                    // The two disagree by ~125x at roughness 0.15, so using
+                    // one for both sides of the balance heuristic is a silent
+                    // bias, not a rounding difference.
                     float D = ggxD_anisoOrIso(N, H, NdotH, roughness, pc.jitter.z, pc.jitter.w);
+                    float Dpdf = ggxDiso(NdotH, roughness * roughness);
                     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
                     float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
                     float G = (NdotL_env / (NdotL_env * (1.0 - k) + k))
@@ -685,7 +696,10 @@ void main() {
 #else
                     // Match the VNDF pdf the specular BSDF sampler now uses, so the
                     // env-IS ↔ BSDF-miss MIS partition stays consistent (unbiased).
-                    float pdfSpecMIS = smithG1GGX(NdotV, roughness * roughness) * D / (4.0 * NdotV + 1e-4);
+                    // That means ggxDiso here, the same D the sampler's own pdf
+                    // below uses -- NOT the `D` above, which carries
+                    // ggxD_anisoOrIso's `+ 0.0001`.
+                    float pdfSpecMIS = smithG1GGX(NdotV, roughness * roughness) * Dpdf / (4.0 * NdotV + 1e-4);
 #endif
                     float bsdfPdfAtEnv = mix(pdfDiffuseMIS, pdfSpecMIS, specProbMIS);
 
@@ -792,6 +806,10 @@ void main() {
                 specThroughput = F * smithG2overG1GGX(NdotV, NdotL, alpha);
 
                 // Exact VNDF pdf of the sampled direction, for env-miss MIS.
+                // This is the OTHER side of the same MIS partition the env-IS
+                // branch above computes `pdfSpecMIS` for; both must use
+                // ggxDiso, never ggxD_anisoOrIso. See the divergence paragraph
+                // above ggxDiso in shaders/includes/material/ggx_aniso.glsl.
                 float D  = ggxDiso(NdotH, alpha);
                 float G1V = smithG1GGX(NdotV, alpha);
                 specLastBsdfPdf = G1V * D / (4.0 * NdotV) + 1e-6;
