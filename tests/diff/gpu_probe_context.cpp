@@ -1386,7 +1386,8 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     }
 
     GpuBuffer debugDrawsBuffer;
-    const VkDeviceSize debugDrawsBytes = static_cast<VkDeviceSize>(capacity) * 3u * sizeof(float);
+    const VkDeviceSize debugDrawsBytes =
+        static_cast<VkDeviceSize>(capacity) * kDebugDrawFloats * sizeof(float);
     if (ok) {
         debugDrawsBuffer = m_allocator.createBuffer(debugDrawsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                                     AllocationUsage::GpuToCpu,
@@ -1403,7 +1404,8 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     // something valid bound there whether or not the caller asked to read it
     // back.
     GpuBuffer envSamplesBuffer;
-    const VkDeviceSize envSamplesBytes = static_cast<VkDeviceSize>(capacity) * 4u * sizeof(float);
+    const VkDeviceSize envSamplesBytes =
+        static_cast<VkDeviceSize>(capacity) * kEnvSampleFloats * sizeof(float);
     if (ok) {
         envSamplesBuffer = m_allocator.createBuffer(
             envSamplesBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuToCpu,
@@ -1618,7 +1620,9 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                   "not mapped, cannot read back\n");
             ok = false;
         } else {
-            outDebugDraws.assign(mappedDebug, mappedDebug + (static_cast<std::size_t>(capacity) * 3u));
+            outDebugDraws.assign(mappedDebug,
+                                 mappedDebug + (static_cast<std::size_t>(capacity) *
+                                                kDebugDrawFloats));
         }
 
         if (outEnvSamples != nullptr) {
@@ -1630,7 +1634,7 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                 ok = false;
             } else {
                 outEnvSamples->assign(mappedEnv,
-                                      mappedEnv + (static_cast<std::size_t>(capacity) * 4u));
+                                      mappedEnv + (static_cast<std::size_t>(capacity) * kEnvSampleFloats));
             }
         }
 
@@ -1792,6 +1796,17 @@ namespace {
 /// current resolution.
 constexpr uint32_t kFusedLoopGenerateLocalY = 8;
 
+/// wf_generate.comp's local_size_X, which is a DIFFERENT number from
+/// local_size_y even though both are 8 today. The two were one constant
+/// until a review pointed out that `kFusedLoopGenerateLocalY` was being used
+/// as the group-count divisor for the X axis (`width / ...`) as well as the
+/// height requirement -- so a change to local_size_x alone would have left
+/// the dispatch covering fewer pixel columns than the image has, silently,
+/// with the uncovered paths never generated and every downstream count
+/// quietly short. Split so that each axis's constant is used only for its
+/// own axis.
+constexpr uint32_t kFusedLoopGenerateLocalX = 8;
+
 /// Half-extent of the closed box the loop bounces inside. Small enough that
 /// its space diagonal is far inside wf_intersect.comp's tMax, large enough
 /// that the primary rays' spread is nowhere near degenerate. A power of two
@@ -1952,7 +1967,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
     // run at this resolution; widening the dispatch to cover a genuine
     // 64x48 image is a possible follow-up, not done in this change.
     if (height != kFusedLoopGenerateLocalY || width == 0u ||
-        (width % kFusedLoopGenerateLocalY) != 0u || width * height != capacity ||
+        (width % kFusedLoopGenerateLocalX) != 0u || width * height != capacity ||
         maxBounces == 0u) {
         std::fprintf(stderr,
                      "[GpuProbeContext] runWavefrontFusedLoopProbe: requires height == %u "
@@ -1960,7 +1975,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
                      "1-D, one row of pixels per group), width a non-zero multiple of %u, "
                      "width*height == capacity (%u), and maxBounces > 0; got %ux%u, "
                      "maxBounces %u\n",
-                     kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalY, capacity, width, height,
+                     kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalX, capacity, width, height,
                      maxBounces);
         return false;
     }
@@ -2118,7 +2133,8 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
         }
     }
     GpuBuffer debugDrawsBuffer;
-    const VkDeviceSize debugDrawsBytes = static_cast<VkDeviceSize>(capacity) * 3u * sizeof(float);
+    const VkDeviceSize debugDrawsBytes =
+        static_cast<VkDeviceSize>(capacity) * kDebugDrawFloats * sizeof(float);
     if (ok) {
         debugDrawsBuffer =
             m_allocator.createBuffer(debugDrawsBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -2142,7 +2158,8 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
     // stage-by-stage scatter probe, which can vary the seed per dispatch;
     // this sink exists for a different purpose (check 27).
     GpuBuffer envSamplesBuffer;
-    const VkDeviceSize envSamplesBytes = static_cast<VkDeviceSize>(capacity) * 4u * sizeof(float);
+    const VkDeviceSize envSamplesBytes =
+        static_cast<VkDeviceSize>(capacity) * kEnvSampleFloats * sizeof(float);
     if (ok) {
         envSamplesBuffer =
             m_allocator.createBuffer(envSamplesBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -2328,7 +2345,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
         // comment above -- this call site just doesn't use that), so this is
         // (width/8, 1, 1) groups x local_size (8,8), covering exactly
         // width x 8 pixels. See the height check above.
-        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalY});
+        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalX});
 
         WavefrontLoop loop;
         // Named rather than positional: Config grew material fields BETWEEN
@@ -2515,7 +2532,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
                 break;
             }
             outDrawsPerBounce[bounces - 1].assign(
-                mappedDebug, mappedDebug + (static_cast<std::size_t>(capacity) * 3u));
+                mappedDebug, mappedDebug + (static_cast<std::size_t>(capacity) * kDebugDrawFloats));
             outLiveCountPerRun[bounces - 1] =
                 buffers.readbackCounter(m_allocator, finalRing.countSlot);
 
@@ -2578,7 +2595,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
                 ok = false;
             } else {
                 outEnvSamples->assign(mappedEnv,
-                                      mappedEnv + (static_cast<std::size_t>(capacity) * 4u));
+                                      mappedEnv + (static_cast<std::size_t>(capacity) * kEnvSampleFloats));
             }
         }
 
@@ -2666,12 +2683,12 @@ bool GpuProbeContext::runWavefrontParityProbe(
     // the same reason: this probe's generate dispatch sets groupCountX only,
     // so one dispatch covers exactly one row of local_size_y = 8 pixels.
     if (height != kFusedLoopGenerateLocalY || width == 0u ||
-        (width % kFusedLoopGenerateLocalY) != 0u || width * height != capacity || bounces == 0u) {
+        (width % kFusedLoopGenerateLocalX) != 0u || width * height != capacity || bounces == 0u) {
         std::fprintf(stderr,
                      "[GpuProbeContext] runWavefrontParityProbe: requires height == %u, width a "
                      "non-zero multiple of %u, width*height == capacity (%u) and bounces > 0; "
                      "got %ux%u, bounces %u\n",
-                     kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalY, capacity, width, height,
+                     kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalX, capacity, width, height,
                      bounces);
         return false;
     }
@@ -2751,10 +2768,12 @@ bool GpuProbeContext::runWavefrontParityProbe(
     const uint32_t filmPixelCount = width * height;
     if (ok) {
         debugDrawsBuffer =
-            m_allocator.createBuffer(static_cast<VkDeviceSize>(capacity) * 3u * sizeof(float),
+            m_allocator.createBuffer(static_cast<VkDeviceSize>(capacity) * kDebugDrawFloats *
+                                         sizeof(float),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
         envSamplesBuffer =
-            m_allocator.createBuffer(static_cast<VkDeviceSize>(capacity) * 4u * sizeof(float),
+            m_allocator.createBuffer(static_cast<VkDeviceSize>(capacity) * kEnvSampleFloats *
+                                         sizeof(float),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
         neeSamplesBuffer = m_allocator.createBuffer(
             static_cast<VkDeviceSize>(capacity) * kNeeSampleFloats * sizeof(float),
@@ -2859,7 +2878,7 @@ bool GpuProbeContext::runWavefrontParityProbe(
         genPush.tanHalfFov = camera.tanHalfFov;
         genPush.capacity = capacity;
         generate.setPushConstants(&genPush, sizeof(genPush));
-        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalY});
+        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalX});
 
         WavefrontLoop loop;
         loop.setGenerate(generate);

@@ -92,6 +92,19 @@ layout(push_constant) uniform Push {
     uint canarySlot;
 } pc;
 
+// The trace tMax every path ray in this stage is initialised with. NAMED
+// rather than written as a bare literal inside rayQueryInitializeEXT,
+// because checks 33-34's CPU reference integrator transcribes this exact
+// number as its own escape threshold (kParityRayTMax): a ray that finds no
+// geometry within it "escaped" on BOTH sides, and the two sides only mean
+// the same thing while the two numbers agree. A bare literal has no name for
+// diff_gpu_probe.cpp's checkParityRefConstantsTie to search for, so changing
+// it would silently un-tie the reference from this shader; declared like
+// this, that check parses it out of this source and refuses to run the probe
+// if it has drifted. wf_scatter.comp's kShadowTMax is the same number for
+// shadow rays, and is tied by the same check.
+const float kTraceTMax = 1000.0;
+
 vec3 wfGeomVertex(uint vertexIndex) {
     return vec3(geomVertices.p[vertexIndex * 3u + 0u],
                 geomVertices.p[vertexIndex * 3u + 1u],
@@ -157,7 +170,8 @@ void main() {
     // enforced, not assumed: see the static_asserts next to the fused-loop
     // scene constants in gpu_probe_context.cpp and this file's own
     // scattered-ray argument above.
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.0, dir, 1000.0);
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.0, dir,
+                          kTraceTMax);
     while (rayQueryProceedEXT(rq)) { }
 
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {

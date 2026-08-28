@@ -610,7 +610,13 @@ void main() {
     }
 
     // --- The single NEE-sink write. Every slot is named here and in
-    // gpu_probe_context.hpp's NeeSampleSlot enum; they must not drift.
+    // gpu_probe_context.hpp's NeeSampleSlot enum, and the two are TIED, not
+    // merely asked not to drift: diff_gpu_probe.cpp's
+    // checkWfScatterSinkLayoutTie parses these statements out of this source
+    // and refuses to run the probe unless each offset carries the expression
+    // its enumerator documents. That is what catches a transposition of two
+    // same-arity slots, which leaves kNeeSampleFloats at 25 and would
+    // otherwise pass every check below silently.
     const uint nb = pathIndex * kNeeSampleFloats;
     neeSamples.v[nb +  0u] = neeTerm.unweighted.x;
     neeSamples.v[nb +  1u] = neeTerm.unweighted.y;

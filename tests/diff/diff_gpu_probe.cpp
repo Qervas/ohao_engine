@@ -13,7 +13,15 @@
 //   4. A half-quad's hit/miss pattern pins the camera's Y orientation --
 //      check 3's distance formula is even in dy, so it can't catch a flipped
 //      up-vector or NDC-Y sign on its own.
-//   ...
+//   5. A block index handed out by ohao::diff::ParamRegistry resolves
+//      correctly against a GradientArena built from that registry's layout --
+//      both hold ArenaLayout by value, so this is what proves the positional
+//      indices survive the copy.
+//   6. ohao::diff::PathRng and shaders/includes/diff/rng.glsl agree
+//      bit-exactly over a whole stream, values AND draw count -- the
+//      invariant path replay in Stage 1 rests on.
+//   7. WavefrontBuffers builds, and every PathStateField of every path index
+//      reads back zero afterwards.
 //   8. wf_generate.comp's generated rays reproduce check 3's closed form.
 //   9. Every PathStateField wf_generate.comp writes round-trips exactly.
 //   10. wf_generate.comp's queue/counter population has no atomicAdd races.
@@ -96,6 +104,33 @@
 //       wf.build()'s default UV-uniform CDF makes pdf = 1/(2 pi^2 sin(theta))
 //       exactly, so no CDF builder is needed to know what record() should
 //       have produced.
+//   28. THE SHADOW RAY EXISTS (Stage 0b-2b Task 4). Check 27's run is a
+//       CLOSED box entered from its centre, so every next-event shadow ray
+//       wf_scatter.comp traces is occluded and every direct-lighting
+//       contribution must be EXACTLY zero -- bit for bit, because the
+//       estimator multiplies by the visibility term rather than attenuating
+//       by it. A visibility term stuck at 1 is invisible to checks 29-31,
+//       which run unoccluded. Non-vacuity: the recovered environment
+//       radiance is asserted strictly positive on the same samples, so the
+//       zeros are the shadow ray's doing and not an absence of light.
+//   29. Next-event-only, BSDF-only and their MIS combination estimate ONE
+//       direct-lighting integral and agree, over 49152 i.i.d. paired
+//       samples, to a bound derived from the run's own standard errors at a
+//       fixed z -- with the one systematic term (the sampler's midpoint
+//       quadrature, kappa = sinc(pi/envH)) derived in closed form rather
+//       than fitted.
+//   30. The MIS partition, PER SAMPLE and exactly: at the light sample's
+//       direction and again at the BSDF sample's, the two balance-heuristic
+//       weights sum to 1 to a couple of ulp. Unbiasedness needs that
+//       pointwise, not on average.
+//   31. The three things nothing tested before Task 4: ScatterPush::
+//       envIntegral reaching the GPU intact (an absolute comparison against
+//       the environment image -- check 29 is blind to it, since a wrong
+//       integral rescales all three estimators together); env_sampling.glsl's
+//       pdfEnvMap, which had no caller under test anywhere in this
+//       repository; and the ROUTING claim, that next-event estimation
+//       consumes the very sample check 24 bins rather than drawing a second
+//       one.
 //   32. RADIANCE ACCUMULATION INTO THE FILM (Stage 0b-2b Task 5). After a
 //       FUSED multi-bounce run through WavefrontLoop::record, the
 //       caller-owned film buffer equals the sum of the per-bounce
@@ -107,6 +142,30 @@
 //       structure. Asserted to a derived gamma_{k+4} float32 bound, with
 //       explicit non-vacuity gates on how far a dropped bounce would move
 //       the film relative to that bound.
+//   33-34. THE STAGE GATE (Stage 0b-2b Task 6): the whole wavefront
+//       integrator -- fused loop, MIS direct lighting, throughput recursion,
+//       film -- against an INDEPENDENT CPU reference path tracer on a
+//       probe-owned scene. The reference shares no intersector, no basis, no
+//       RNG and no importance sampling with the GPU (it is
+//       cosine-hemisphere, no env sampling, no MIS); two different unbiased
+//       estimators of one integral agree only if both are unbiased. 33 is
+//       PER PIXEL at a family-wise-corrected z; 34 is POOLED on the image
+//       total, whose variance is taken ACROSS RUNS so it assumes nothing
+//       about inter-pixel independence, plus a CONVERGENCE assertion that
+//       rms(D) shrinks by the predicted factor of sqrt(1/4) -- which a fixed
+//       bias cannot satisfy. The pooled test also refuses to return a
+//       verdict at all if its own resolution is too coarse to have detected
+//       anything. Why the reference is not ohao::PathTracer, and exactly
+//       what the two sides share, is derived at the head of this file's
+//       anonymous namespace ("INDEPENDENT CPU REFERENCE INTEGRATOR").
+//
+// Five GLSL/C++ ties run BEFORE any Vulkan object exists, and refuse to run
+// the probe at all if they do not hold -- see checkNeeStrideTie,
+// checkWfScatterSinkLayoutTie, checkScatterPushSizeTie,
+// checkBsdfShaderConstantTies and checkParityRefConstantsTie in this file's
+// anonymous namespace. They print NOTE lines rather than OK lines: they are
+// preconditions of the checks above meaning anything, not checks in their
+// own right.
 
 #include "gpu_probe_context.hpp"
 
@@ -135,12 +194,15 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <cstdint>
 #include <random>
 #include <regex>
+#include <set>
 #include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -426,6 +488,56 @@ double oracleDistance(const OracleVec3& a, const OracleVec3& b) {
     return std::sqrt(oracleDot(d, d));
 }
 
+/// One direction binned back to an equirectangular texel, HOST-SIDE.
+///
+/// WHY THIS IS ONE FUNCTION (whole-branch review finding). This inversion --
+/// theta = acos(y), phi = atan2(z, x), floor(u*W)/floor(v*H) with the same
+/// clamps -- was hand-written FIVE times in this file: the parity
+/// reference's environment lookup and one copy each in checks 25, 27 and 31
+/// (twice, once per sampled direction). Checks 25, 27, 31 and 33/34 all rest
+/// on those five agreeing. env_sampling.glsl factored the SHADER's two
+/// copies into `envTexelPdfUV` on this same branch, for exactly this reason
+/// -- "a change to the binning cannot reach one of them and not the other" --
+/// and the host side got the opposite treatment in the same stage.
+///
+/// It stays INDEPENDENT of the shader: this is written from the forward map
+/// (equirectPixelToDir) inverted by hand, in double, and is an ORACLE for
+/// what the GPU produced. Single-sourcing it on the host does not make it
+/// share anything with the GPU; it makes the five host copies one.
+struct OracleEnvTexel {
+    /// Polar and azimuthal angle of the QUERY direction.
+    double theta{0.0};
+    double phi{0.0};
+    /// Texel-space coordinates: fx in [0, W], fy in [0, H]. A direction that
+    /// equirectPixelToDir emitted lands on a texel CENTRE, i.e. a half-
+    /// integer in both.
+    double fx{0.0};
+    double fy{0.0};
+    /// The texel those coordinates fall in, clamped into range.
+    int ix{0};
+    int iy{0};
+    /// Row-major index of that texel: iy * W + ix.
+    std::size_t index{0};
+    /// Chebyshev distance from the centre of that texel, in texel units.
+    /// Zero exactly when the direction is a texel centre.
+    double centreError{0.0};
+};
+
+OracleEnvTexel oracleEnvTexelOf(double dx, double dy, double dz, std::uint32_t envW,
+                                std::uint32_t envH) {
+    OracleEnvTexel out;
+    out.theta = std::acos(std::clamp(dy, -1.0, 1.0));
+    out.phi = std::atan2(dz, dx);
+    out.fx = (out.phi / (2.0 * kOraclePi) + 0.5) * static_cast<double>(envW);
+    out.fy = (out.theta / kOraclePi) * static_cast<double>(envH);
+    out.ix = std::clamp(static_cast<int>(std::floor(out.fx)), 0, static_cast<int>(envW) - 1);
+    out.iy = std::clamp(static_cast<int>(std::floor(out.fy)), 0, static_cast<int>(envH) - 1);
+    out.index = static_cast<std::size_t>(out.iy) * envW + static_cast<std::size_t>(out.ix);
+    out.centreError = std::max(std::abs(out.fx - (out.ix + 0.5)),
+                               std::abs(out.fy - (out.iy + 0.5)));
+    return out;
+}
+
 /// bsdf.glsl's DIFF_BSDF_MIN_COS. The shader treats a view or light cosine at
 /// or below this as grazing and refuses the specular math; this oracle
 /// rejects at 0, because the physics does. The two thresholds are therefore
@@ -433,6 +545,13 @@ double oracleDistance(const OracleVec3& a, const OracleVec3& b) {
 /// than a bug -- see the rejection branch below, which names it explicitly
 /// instead of letting it surface as a spurious failure.
 constexpr double kShaderGrazingCos = 1e-4;
+
+/// bsdf_probe.comp's output stride: floats per CASE in its binding-0 sink.
+/// At namespace scope (rather than local to check 20) so
+/// checkBsdfShaderConstantTies below has one host-side value to tie the
+/// shader's own `pc.outIndex * <N>u` against -- it was a `12` on each side of
+/// the GLSL/C++ boundary with only a trailing comment between them.
+constexpr std::uint32_t kBsdfProbeFloatsPerCase = 12;
 
 /// Relative difference that degrades gracefully to absolute near zero. f and
 /// pdf span many orders of magnitude across the case table (a sharp GGX
@@ -493,13 +612,20 @@ double oracleRelDiff(double reference, double measured) {
 //     independent implementation; nothing in oracleBsdfEval was transcribed
 //     from bsdf.glsl. See "WHAT THIS COSTS" below for what reusing it means
 //     for checks 33-34's own scope.
-//   * TWO CONSTANTS, transcribed from the shader: ParityRefScene::rayTMax
-//     (kParityRayTMax, 1000.0) from wf_intersect.comp's trace tMax and
-//     wf_scatter.comp's kShadowTMax, and ParityRefScene::surfaceOffset
-//     (kParitySurfaceOffset, 1e-4) from wf_scatter.comp's kSurfaceOffset and
-//     wf_intersect.comp:160. Tied to the shader source at runtime by
-//     checkParityRefConstantsTie, the same mechanism checkNeeStrideTie and
-//     checkScatterPushSizeTie use for the constants they cover.
+//   * TWO CONSTANTS, transcribed from the shaders. ParityRefScene::rayTMax
+//     (kParityRayTMax, 1000.0) mirrors TWO of them, one per kind of ray the
+//     reference traces: wf_intersect.comp's `kTraceTMax` for the primary and
+//     continuation trace, and wf_scatter.comp's `kShadowTMax` for the shadow
+//     ray. ParityRefScene::surfaceOffset (kParitySurfaceOffset, 1e-4)
+//     mirrors ONE, wf_scatter.comp's `kSurfaceOffset`, which that shader
+//     applies to both the shadow ray's origin and the continuation ray's;
+//     wf_intersect.comp has no offset of its own to mirror -- it traces with
+//     tMin = 0 and derives its safety from this shader's offset instead (see
+//     the derivation above its ray query), and the string `1e-4` appears
+//     nowhere in it. All three shader constants are tied to these two C++
+//     ones at runtime by checkParityRefConstantsTie, the same mechanism
+//     checkNeeStrideTie and checkScatterPushSizeTie use for the constants
+//     they cover.
 //   * THE ENVIRONMENT DIRECTION<->TEXEL CONVENTION (parityEnvRadiance above),
 //     the same inversion checks 25/27/31 pin the GPU's own recovered
 //     radiance against, texel by texel. It is not independently re-derived
@@ -638,23 +764,15 @@ OracleVec3 parityCosineSample(const OracleVec3& n, double u1, double u2) {
                                      oracleScale(n, z)));
 }
 
-/// The equirectangular environment, piecewise constant per texel. This is
-/// the SAME inversion check 25/27/31 use to name the texel a direction lands
-/// in (theta = acos(y), phi = atan2(z, x), row-major, texel centres), and
-/// check 31 is what pins the GPU's recovered radiance to this array texel by
-/// texel -- so this lookup is a validated host-side statement about the
-/// scene, not a copy of any shader.
+/// The equirectangular environment, piecewise constant per texel. Uses the
+/// SAME host-side inversion checks 25/27/31 use to name the texel a
+/// direction lands in -- literally the same function now, oracleEnvTexelOf,
+/// rather than a fifth transcription of it -- and check 31 is what pins the
+/// GPU's recovered radiance to this array texel by texel, so this lookup is a
+/// validated host-side statement about the scene, not a copy of any shader.
 double parityEnvRadiance(const OracleVec3& dir, const std::vector<double>& envLum, uint32_t envW,
                          uint32_t envH) {
-    const double theta = std::acos(std::clamp(dir.y, -1.0, 1.0));
-    const double phi = std::atan2(dir.z, dir.x);
-    const int ix = std::clamp(static_cast<int>(std::floor((phi / (2.0 * kOraclePi) + 0.5) *
-                                                          static_cast<double>(envW))),
-                              0, static_cast<int>(envW) - 1);
-    const int iy = std::clamp(
-        static_cast<int>(std::floor((theta / kOraclePi) * static_cast<double>(envH))), 0,
-        static_cast<int>(envH) - 1);
-    return envLum[static_cast<std::size_t>(iy) * envW + static_cast<std::size_t>(ix)];
+    return envLum[oracleEnvTexelOf(dir.x, dir.y, dir.z, envW, envH).index];
 }
 
 /// A [0,1) uniform from the reference's own generator.
@@ -662,18 +780,22 @@ double parityNextU(std::mt19937_64& rng) {
     return static_cast<double>(rng() >> 11) * (1.0 / 9007199254740992.0);
 }
 
-/// Mirrors wf_scatter.comp's kShadowTMax and kSurfaceOffset. Named here
-/// (rather than inlined into ParityRefScene's member initializers below) so
-/// checkParityRefConstantsTie has a single C++-side value to tie against the
-/// shader source at runtime -- the same enforcement checkNeeStrideTie gives
-/// ohao::diff::kNeeSampleFloats. One difference from that check: kNeeSample-
-/// Floats shares one NAME with the GLSL side, so a single regex search finds
-/// both ends of the tie. kShadowTMax and kSurfaceOffset do not share a name
-/// with kParityRayTMax/kParitySurfaceOffset, so checkParityRefConstantsTie
-/// names both ends explicitly (one regex per shader constant, matched
-/// against one C++ constant each) rather than searching for one shared
-/// identifier -- still a compiled, runtime-checked tie, just not a
-/// name-derived one.
+/// Mirror the shaders' ray constants: kParityRayTMax mirrors BOTH
+/// wf_intersect.comp's kTraceTMax (the path ray) and wf_scatter.comp's
+/// kShadowTMax (the shadow ray), which are the same number so that "this ray
+/// found geometry" means the same thing for both; kParitySurfaceOffset
+/// mirrors wf_scatter.comp's kSurfaceOffset. Named here (rather than inlined
+/// into ParityRefScene's member initializers below) so
+/// checkParityRefConstantsTie has a single C++-side value each to tie against
+/// the shader sources at runtime -- the same enforcement checkNeeStrideTie
+/// gives ohao::diff::kNeeSampleFloats. One difference from that check:
+/// kNeeSampleFloats shares one NAME with the GLSL side, so a single regex
+/// search finds both ends of the tie. The shader constants here do not share
+/// a name with kParityRayTMax/kParitySurfaceOffset, so
+/// checkParityRefConstantsTie names both ends explicitly (one regex per
+/// shader constant, matched against one C++ constant each) rather than
+/// searching for one shared identifier -- still a compiled, runtime-checked
+/// tie, just not a name-derived one.
 constexpr double kParityRayTMax = 1000.0;
 constexpr double kParitySurfaceOffset = 1e-4;
 
@@ -686,10 +808,10 @@ struct ParityRefScene {
     uint32_t envH{0};
     OracleMaterial material{};
     uint32_t bounces{0};
-    /// wf_intersect.comp's trace tMax and wf_scatter.comp's kShadowTMax --
+    /// wf_intersect.comp's kTraceTMax and wf_scatter.comp's kShadowTMax --
     /// the same 1000 in both stages, so "this ray found geometry" means the
-    /// same thing for a path ray and for a shadow ray. Tied to the shader
-    /// source at runtime by checkParityRefConstantsTie, via kParityRayTMax.
+    /// same thing for a path ray and for a shadow ray. BOTH are tied to this
+    /// value at runtime by checkParityRefConstantsTie, via kParityRayTMax.
     double rayTMax{kParityRayTMax};
     /// wf_scatter.comp's kSurfaceOffset, used for BOTH the shadow ray's
     /// origin and the continuation ray's, exactly as that shader derives
@@ -893,28 +1015,31 @@ void parityMomentsFromSums(double sum, double sumSq, std::size_t n, double& outM
 /// missing, so the one case this check exists to catch is the one raw
 /// scanning would miss.
 ///
-/// Shared by checkNeeStrideTie and checkScatterPushSizeTie below: both are
-/// GLSL/C++ ties against this same source file, and both need the same
-/// comment-stripping for the same reason (see the previous paragraph), so
-/// this is the one place that logic lives rather than two copies that could
-/// drift apart from each other.
-bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFoundPath) {
-    static const char* const kCandidates[] = {
-        "shaders/diff/wf_scatter.comp",
-        "../shaders/diff/wf_scatter.comp",
-        "../../shaders/diff/wf_scatter.comp",
-        "../../../shaders/diff/wf_scatter.comp",
-    };
+/// Shared by checkNeeStrideTie, checkScatterPushSizeTie and
+/// checkParityRefConstantsTie below: all are GLSL/C++ ties against a shader
+/// source, and all need the same comment-stripping for the same reason (see
+/// the previous paragraph), so this is the one place that logic lives rather
+/// than several copies that could drift apart from each other. The FILE is a
+/// parameter because the constants those checks tie do not all live in one
+/// shader -- wf_intersect.comp owns the path ray's tMax, wf_scatter.comp the
+/// shadow ray's -- and a loader hard-wired to one file is what let the
+/// second of those go untied.
+bool loadShaderSourceStripped(const char* relativePath, std::string& outStripped,
+                              std::string& outFoundPath) {
+    static const char* const kPrefixes[] = {"", "../", "../../", "../../../"};
     std::string text;
-    const char* found = nullptr;
-    for (const char* candidate : kCandidates) {
+    std::string found;
+    bool haveFound = false;
+    for (const char* prefix : kPrefixes) {
+        const std::string candidate = std::string(prefix) + relativePath;
         std::ifstream in(candidate, std::ios::binary);
         if (!in.is_open()) continue;
         text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         found = candidate;
+        haveFound = true;
         break;
     }
-    if (found == nullptr) return false;
+    if (!haveFound) return false;
     outFoundPath = found;
 
     // Strip GLSL comments before matching. GLSL has no string literals, so a
@@ -940,6 +1065,11 @@ bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFound
     }
     outStripped = std::move(stripped);
     return true;
+}
+
+/// The wf_scatter.comp case, named because three checks want it.
+bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFoundPath) {
+    return loadShaderSourceStripped("shaders/diff/wf_scatter.comp", outStripped, outFoundPath);
 }
 
 bool checkNeeStrideTie() {
@@ -982,6 +1112,250 @@ bool checkNeeStrideTie() {
     return true;
 }
 
+/// Collapses every run of whitespace in `text` to one space and trims the
+/// ends. Used to compare a GLSL right-hand side against an expected spelling
+/// without making the tie sensitive to reformatting.
+std::string squashWhitespace(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    bool pendingSpace = false;
+    for (const char c : text) {
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            pendingSpace = !out.empty();
+            continue;
+        }
+        if (pendingSpace) out.push_back(' ');
+        pendingSpace = false;
+        out.push_back(c);
+    }
+    return out;
+}
+
+/// One expected `neeSamples.v[nb + <offset>u] = <rhs>;` write.
+struct NeeSlotExpectation {
+    std::uint32_t offset;
+    const char* rhs;
+};
+
+/// Ties wf_scatter.comp's THREE probe-only sinks -- the binding-7 next-event
+/// record, the binding-3 debug-draw record and the binding-6 environment
+/// record -- to the host's picture of them, SLOT BY SLOT rather than only by
+/// stride.
+///
+/// WHY THIS EXISTS (review finding, whole-branch review of Stage 0b-2b).
+/// checkNeeStrideTie already ties the STRIDE, kNeeSampleFloats = 25. Nothing
+/// tied the 24 named OFFSETS, and those offsets are what checks 28, 29, 30,
+/// 31 and 32 index the readback by. wf_scatter.comp's own write block carried
+/// the comment "Every slot is named here and in gpu_probe_context.hpp's
+/// NeeSampleSlot enum; they must not drift" -- verbatim the situation
+/// checkNeeStrideTie's header argues a comment cannot hold. Concretely: a
+/// TRANSPOSITION of two same-arity slots keeps the stride at 25 and passes
+/// every existing check silently. Swap the x and y channels of
+/// kNeeSlotArrivalThroughput and check 32 compares all three against one
+/// shared expected value, so it cannot see it; swap kNeeSlotVisLight with
+/// kNeeSlotVisBsdf and check 28 requires both to be 0 anyway.
+///
+/// HOW IT TIES. Every slot's RIGHT-HAND SIDE is named here, next to the C++
+/// enumerator whose value indexes it. A transposition changes which
+/// expression lands at which offset, so it changes the RHS at both offsets
+/// and is rejected. The expectation table is keyed by the enumerators
+/// themselves (kNeeSlotBsdfDir + 1u, not the literal 17), so renumbering the
+/// C++ enum without moving the shader's write -- the other half of the same
+/// drift -- is rejected too.
+///
+/// WHAT IT DOES NOT TIE, stated so no one has to infer it:
+///   * The MEANING of an expression. This check knows `visBsdf` must land at
+///     kNeeSlotVisBsdf; it cannot know that wf_scatter.comp computed
+///     `visBsdf` from the BSDF sample's shadow ray rather than the light
+///     sample's. That is checks 28-31's job and they do it on a GPU run.
+///   * Anything about the FILM (binding 9). Its stride is 3 floats per pixel
+///     on both sides and is untied; check 32 measures the film's contents
+///     against a host reconstruction, which a wrong stride would break
+///     loudly rather than silently.
+///   * kDrawsPerBounce (5). Untied on purpose -- it is covered by
+///     MEASUREMENT instead: checks 15 and 18 compare the host's replayed
+///     PathRng draw count against the count the shader itself reports
+///     through kNeeSlotSurfaceBranch's sibling slot in the debug record, so
+///     a change to it fails those checks rather than passing quietly.
+bool checkWfScatterSinkLayoutTie() {
+    std::string stripped, found;
+    if (!loadWfScatterSourceStripped(stripped, found)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "candidate path, so its per-slot sink layout could not be tied to "
+                     "gpu_probe_context.hpp's NeeSampleSlot enum. An unchecked tie is not a held "
+                     "tie\n");
+        return false;
+    }
+
+    // --- The binding-7 next-event record, slot by slot. ---
+    const std::regex neeWrite(
+        R"(neeSamples\.v\[[ \t]*nb[ \t]*\+[ \t]*([0-9]+)u[ \t]*\][ \t]*=([^;]*);)");
+    std::map<std::uint32_t, std::string> writes;
+    for (auto it = std::sregex_iterator(stripped.begin(), stripped.end(), neeWrite);
+         it != std::sregex_iterator(); ++it) {
+        const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul((*it)[1].str()));
+        const std::string rhs = squashWhitespace((*it)[2].str());
+        if (!writes.emplace(offset, rhs).second) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s writes binding-7 slot %u more than once. The "
+                         "record is a single write block by construction; two writes to one slot "
+                         "mean the host's picture of which value lives where cannot be derived "
+                         "from the source at all\n",
+                         found.c_str(), offset);
+            return false;
+        }
+    }
+    if (writes.size() != ohao::diff::kNeeSampleFloats) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s has %zu `neeSamples.v[nb + <N>u] = ...;` writes "
+                     "but ohao::diff::kNeeSampleFloats is %u. Every slot must be written by "
+                     "exactly one statement this check can see -- an unwritten slot is read back "
+                     "as whatever the allocator handed over, and a slot written through a "
+                     "spelling this regex does not match is untied\n",
+                     found.c_str(), writes.size(), ohao::diff::kNeeSampleFloats);
+        return false;
+    }
+
+    // The enumerators, not the literals: this is the half of the tie that
+    // catches a C++-side renumbering.
+    const NeeSlotExpectation kExpected[] = {
+        {ohao::diff::kNeeSlotNeeUnweighted + 0u, "neeTerm.unweighted.x"},
+        {ohao::diff::kNeeSlotNeeUnweighted + 1u, "neeTerm.unweighted.y"},
+        {ohao::diff::kNeeSlotNeeUnweighted + 2u, "neeTerm.unweighted.z"},
+        {ohao::diff::kNeeSlotWEnvAtLight, "neeTerm.wOwn"},
+        {ohao::diff::kNeeSlotWBsdfAtLight, "neeTerm.wOther"},
+        {ohao::diff::kNeeSlotBsdfUnweighted + 0u, "bsdfTerm.unweighted.x"},
+        {ohao::diff::kNeeSlotBsdfUnweighted + 1u, "bsdfTerm.unweighted.y"},
+        {ohao::diff::kNeeSlotBsdfUnweighted + 2u, "bsdfTerm.unweighted.z"},
+        {ohao::diff::kNeeSlotWBsdfAtBsdf, "bsdfTerm.wOwn"},
+        {ohao::diff::kNeeSlotWEnvAtBsdf, "bsdfTerm.wOther"},
+        {ohao::diff::kNeeSlotEnvRadiance, "envRadiance"},
+        {ohao::diff::kNeeSlotPdfEnvAtBsdf, "pdfEnvAtBsdfDir"},
+        {ohao::diff::kNeeSlotPdfBsdfAtLight, "pdfBsdfAtEnvDir"},
+        {ohao::diff::kNeeSlotVisLight, "visEnv"},
+        {ohao::diff::kNeeSlotVisBsdf, "visBsdf"},
+        {ohao::diff::kNeeSlotSurfaceBranch, "surfaceBranch"},
+        {ohao::diff::kNeeSlotBsdfDir + 0u, "bsdfSampleDir.x"},
+        {ohao::diff::kNeeSlotBsdfDir + 1u, "bsdfSampleDir.y"},
+        {ohao::diff::kNeeSlotBsdfDir + 2u, "bsdfSampleDir.z"},
+        {ohao::diff::kNeeSlotPdfBsdfAtBsdf, "bsdfSamplePdf"},
+        {ohao::diff::kNeeSlotBsdfRadiance, "bsdfRadiance"},
+        {ohao::diff::kNeeSlotArrivalThroughput + 0u, "arrivalThroughput.x"},
+        {ohao::diff::kNeeSlotArrivalThroughput + 1u, "arrivalThroughput.y"},
+        {ohao::diff::kNeeSlotArrivalThroughput + 2u, "arrivalThroughput.z"},
+        {ohao::diff::kNeeSlotPixelIndex, "float(pixelIndex)"},
+    };
+    static_assert(sizeof(kExpected) / sizeof(kExpected[0]) == ohao::diff::kNeeSampleFloats,
+                  "the expectation table must name every slot of the record");
+
+    for (const NeeSlotExpectation& e : kExpected) {
+        const auto it = writes.find(e.offset);
+        if (it == writes.end()) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s never writes binding-7 slot %u, which "
+                         "gpu_probe_context.hpp's NeeSampleSlot enum says holds `%s`. Every check "
+                         "that reads that slot would be reading uninitialised memory\n",
+                         found.c_str(), e.offset, e.rhs);
+            return false;
+        }
+        if (it->second != e.rhs) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s writes `%s` into binding-7 slot %u, but "
+                         "gpu_probe_context.hpp's NeeSampleSlot enum places `%s` there. The "
+                         "stride still agrees, so nothing else in this probe would have noticed: "
+                         "checks 28-32 would keep reading well-formed floats out of the wrong "
+                         "slots\n",
+                         found.c_str(), it->second.c_str(), e.offset, e.rhs);
+            return false;
+        }
+    }
+
+    // --- The binding-3 debug-draw record and the binding-6 env record. ---
+    // Same shape, one stride and a fixed set of offsets each.
+    struct SinkTie {
+        const char* buffer;
+        const char* purpose;
+        std::uint32_t hostStride;
+        const char* hostConstant;
+    };
+    const SinkTie kSinks[] = {
+        {"debugDraws", "binding 3, the RNG debug record", ohao::diff::kDebugDrawFloats,
+         "ohao::diff::kDebugDrawFloats"},
+        {"envSamples", "binding 6, the environment-sample record", ohao::diff::kEnvSampleFloats,
+         "ohao::diff::kEnvSampleFloats"},
+    };
+    std::uint32_t debugStride = 0;
+    std::uint32_t envStride = 0;
+    for (const SinkTie& sink : kSinks) {
+        const std::regex write(std::string(sink.buffer) +
+                               R"(\.v\[[ \t]*pathIndex[ \t]*\*[ \t]*([0-9]+)u[ \t]*\+[ \t]*([0-9]+)u[ \t]*\][ \t]*=)");
+        std::uint32_t shaderStride = 0;
+        bool haveStride = false;
+        std::set<std::uint32_t> offsets;
+        for (auto it = std::sregex_iterator(stripped.begin(), stripped.end(), write);
+             it != std::sregex_iterator(); ++it) {
+            const std::uint32_t stride = static_cast<std::uint32_t>(std::stoul((*it)[1].str()));
+            const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul((*it)[2].str()));
+            if (haveStride && stride != shaderStride) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: %s strides `%s` (%s) by both %u and %u. One "
+                             "record cannot have two strides; the host reads it with one\n",
+                             found.c_str(), sink.buffer, sink.purpose, shaderStride, stride);
+                return false;
+            }
+            shaderStride = stride;
+            haveStride = true;
+            if (!offsets.insert(offset).second) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: %s writes `%s` (%s) offset %u more than "
+                             "once\n",
+                             found.c_str(), sink.buffer, sink.purpose, offset);
+                return false;
+            }
+        }
+        if (!haveStride) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s no longer writes `%s.v[pathIndex * <N>u + "
+                         "<K>u] = ...` in the spelling this check looks for (%s), so its stride "
+                         "cannot be tied to %s. Restore the spelling or update this check -- do "
+                         "not leave it untied\n",
+                         found.c_str(), sink.buffer, sink.purpose, sink.hostConstant);
+            return false;
+        }
+        if (shaderStride != sink.hostStride) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s strides `%s` (%s) by %u floats per path while "
+                         "%s says %u. The host sizes the buffer and strides the readback by its "
+                         "own number, so every record past path 0 would be read at the wrong "
+                         "offset\n",
+                         found.c_str(), sink.buffer, sink.purpose, shaderStride, sink.hostConstant,
+                         sink.hostStride);
+            return false;
+        }
+        if (offsets.size() != sink.hostStride || *offsets.begin() != 0u ||
+            *offsets.rbegin() != sink.hostStride - 1u) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s writes %zu distinct offsets into `%s` (%s) "
+                         "with a stride of %u. A record with an unwritten slot is read back as "
+                         "whatever the allocator handed over\n",
+                         found.c_str(), offsets.size(), sink.buffer, sink.purpose, sink.hostStride);
+            return false;
+        }
+        if (std::strcmp(sink.buffer, "debugDraws") == 0) debugStride = shaderStride;
+        else envStride = shaderStride;
+    }
+
+    std::printf("[diff_gpu_probe] NOTE: wf_scatter.comp's probe sinks tied slot by slot -- %s "
+                "writes all %u binding-7 slots at the offsets NeeSampleSlot names, each carrying "
+                "the expression that enumerator documents (so a transposition of two same-arity "
+                "slots, which leaves the stride at %u, is rejected); binding 3 strides %u and "
+                "binding 6 strides %u, matching kDebugDrawFloats and kEnvSampleFloats\n",
+                found.c_str(), ohao::diff::kNeeSampleFloats, ohao::diff::kNeeSampleFloats,
+                debugStride, envStride);
+    return true;
+}
+
 /// Ties wf_scatter.comp's `Push` block byte size to
 /// `ohao::diff::WavefrontLoop::ScatterPush`'s, the same way checkNeeStrideTie
 /// ties the NEE record stride: by parsing the SHADER SOURCE (comment-stripped
@@ -999,6 +1373,19 @@ bool checkNeeStrideTie() {
 /// literal, which would tie ScatterPush to a DOCUMENTED number but not to the
 /// shader itself -- it would not notice a field added to the GLSL block
 /// without a matching C++ change, only the reverse.
+///
+/// WHAT IT ACTUALLY COVERS, AND WHERE IT IS NOT STRONGER (review finding).
+/// This ties the field COUNT, and through it the byte size. It does NOT tie
+/// field IDENTITY, ORDER or TYPE: every field is a 4-byte scalar, so a
+/// reorder of two same-width fields, or a `uint` swapped for a `float` in
+/// place, keeps the block at 14 fields and 56 bytes and passes here. Both of
+/// those are real wrong-value pushes. So this check is stronger than a
+/// static_assert only in the COUNT dimension -- it notices a field the GLSL
+/// grew that C++ did not, which a static_assert against a literal cannot --
+/// and is no stronger in the others. It does fail closed in every other
+/// degradation path it can see: an unopenable source, a renamed Push block,
+/// a missing `} pc;`, and a non-scalar field (caught by the semicolon
+/// cross-check) are all hard failures rather than silent passes.
 ///
 /// HOW THE BYTE COUNT IS COMPUTED. Every field the Push block has ever had is
 /// a bare scalar `uint` or `float` -- no vec/mat/array member exists in it --
@@ -1078,22 +1465,150 @@ bool checkScatterPushSizeTie() {
     return true;
 }
 
+/// Ties the two remaining shader constants this probe transcribes by hand:
+/// bsdf_probe.comp's output stride (against kBsdfProbeFloatsPerCase, which
+/// check 20 strides its readback by) and bsdf.glsl's DIFF_BSDF_MIN_COS
+/// (against kShaderGrazingCos).
+///
+/// WHY THE SECOND ONE MATTERS MOST (review finding). kShaderGrazingCos is not
+/// used to ASSERT anything -- it is used to EXCUSE. Check 20's sampler-weight
+/// comparison skips a case whose cosine falls at or below it, on the stated
+/// grounds that the shader refuses the specular math there and the CPU oracle
+/// does not. If bsdf.glsl's floor rose and this constant did not, check 20
+/// would go on excusing rejections that were no longer explained by the
+/// documented disagreement -- an excuse widening silently is strictly worse
+/// than an assertion loosening silently, because nothing in the output would
+/// change. So it is tied to the source, like every other constant this probe
+/// mirrors.
+bool checkBsdfShaderConstantTies() {
+    std::string probeSrc, probePath;
+    if (!loadShaderSourceStripped("shaders/diff/bsdf_probe.comp", probeSrc, probePath)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/bsdf_probe.comp from any "
+                     "candidate path, so check 20's readback stride could not be tied to that "
+                     "shader's own output stride. An unchecked tie is not a held tie\n");
+        return false;
+    }
+    std::string bsdfSrc, bsdfPath;
+    if (!loadShaderSourceStripped("shaders/includes/diff/bsdf.glsl", bsdfSrc, bsdfPath)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/includes/diff/bsdf.glsl from "
+                     "any candidate path, so kShaderGrazingCos could not be tied to "
+                     "DIFF_BSDF_MIN_COS. An unchecked tie is not a held tie\n");
+        return false;
+    }
+
+    const std::regex strideDecl(
+        R"(const[ \t]+uint[ \t]+base[ \t]*=[ \t]*pc\.outIndex[ \t]*\*[ \t]*([0-9]+)u[ \t]*;)");
+    std::smatch mStride;
+    if (!std::regex_search(probeSrc, mStride, strideDecl)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s no longer computes its output base as `const uint "
+                     "base = pc.outIndex * <N>u;`, so check 20's readback stride cannot be tied "
+                     "to it. Restore the spelling or update this check -- do not leave the two "
+                     "untied\n",
+                     probePath.c_str());
+        return false;
+    }
+    const unsigned long shaderStride = std::stoul(mStride[1].str());
+    if (shaderStride != static_cast<unsigned long>(kBsdfProbeFloatsPerCase)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s writes %lu floats per case while check 20 strides "
+                     "its readback by %u. Every case past the first would be read at the wrong "
+                     "offset, and the BSDF comparison would be measuring the wrong floats\n",
+                     probePath.c_str(), shaderStride, kBsdfProbeFloatsPerCase);
+        return false;
+    }
+
+    const std::regex outWrite(
+        R"(outBuf\.v\[[ \t]*base[ \t]*\+[ \t]*([0-9]+)u[ \t]*\][ \t]*=)");
+    std::set<std::uint32_t> offsets;
+    for (auto it = std::sregex_iterator(probeSrc.begin(), probeSrc.end(), outWrite);
+         it != std::sregex_iterator(); ++it) {
+        offsets.insert(static_cast<std::uint32_t>(std::stoul((*it)[1].str())));
+    }
+    if (offsets.size() != kBsdfProbeFloatsPerCase || *offsets.begin() != 0u ||
+        *offsets.rbegin() != kBsdfProbeFloatsPerCase - 1u) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s writes %zu distinct offsets into its %u-float "
+                     "output record. A slot the shader never writes is read back by check 20 as "
+                     "whatever the arena happened to hold\n",
+                     probePath.c_str(), offsets.size(), kBsdfProbeFloatsPerCase);
+        return false;
+    }
+
+    const std::regex minCosDecl(
+        R"(const[ \t]+float[ \t]+DIFF_BSDF_MIN_COS[ \t]*=[ \t]*([0-9.eE+-]+)[ \t]*;)");
+    std::smatch mMinCos;
+    if (!std::regex_search(bsdfSrc, mMinCos, minCosDecl)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s no longer declares `const float DIFF_BSDF_MIN_COS "
+                     "= <N>;` on one line, so check 20's grazing-rejection excuse cannot be tied "
+                     "to the threshold it excuses. Restore the spelling or update this check\n",
+                     bsdfPath.c_str());
+        return false;
+    }
+    const double shaderMinCos = std::stod(mMinCos[1].str());
+    if (shaderMinCos != kShaderGrazingCos) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s declares DIFF_BSDF_MIN_COS = %.9g but this probe "
+                     "uses kShaderGrazingCos = %.9g to EXCUSE check 20's grazing rejections. With "
+                     "the two apart, check 20 would keep excusing shader rejections the "
+                     "documented disagreement no longer explains -- and would print nothing "
+                     "different while doing it\n",
+                     bsdfPath.c_str(), shaderMinCos, kShaderGrazingCos);
+        return false;
+    }
+
+    std::printf("[diff_gpu_probe] NOTE: BSDF shader constants tied -- %s writes %lu floats per "
+                "case at offsets 0..%u (check 20's stride is %u) and %s declares "
+                "DIFF_BSDF_MIN_COS = %.9g, matching kShaderGrazingCos, the constant check 20 uses "
+                "to excuse a grazing rejection\n",
+                probePath.c_str(), shaderStride, kBsdfProbeFloatsPerCase - 1u,
+                kBsdfProbeFloatsPerCase, bsdfPath.c_str(), shaderMinCos);
+    return true;
+}
+
 /// Ties kParityRayTMax and kParitySurfaceOffset -- the two constants
 /// checks 33-34's CPU reference (ParityRefScene) derives its rayTMax and
-/// surfaceOffset from -- to wf_scatter.comp's OWN kShadowTMax and
-/// kSurfaceOffset, by parsing the same comment-stripped source
-/// loadWfScatterSourceStripped already loads for checkNeeStrideTie and
-/// checkScatterPushSizeTie. Before this check existed, the pairing was a
-/// COMMENT naming the shader constants next to two C++ literals -- exactly
-/// the pattern this branch built checkNeeStrideTie and checkScatterPushSizeTie
-/// to replace, because a comment is not a tie. Severity was judged low
-/// (drift here fails LOUDLY: the reference becomes wrong and checks 33-34
-/// reject, rather than silently reading garbage the way a stride mismatch
-/// would), but the mechanism to check it exists and reusing it is cheap, so
-/// it is checked rather than left to a comment.
+/// surfaceOffset from -- to the SHADER constants they mirror, by parsing the
+/// comment-stripped sources loadShaderSourceStripped loads. Before this
+/// check existed, the pairing was a COMMENT naming the shader constants next
+/// to two C++ literals -- exactly the pattern this branch built
+/// checkNeeStrideTie and checkScatterPushSizeTie to replace, because a
+/// comment is not a tie. Severity was judged low (drift here fails LOUDLY:
+/// the reference becomes wrong and checks 33-34 reject, rather than silently
+/// reading garbage the way a stride mismatch would), but the mechanism to
+/// check it exists and reusing it is cheap, so it is checked rather than
+/// left to a comment.
+///
+/// WHAT IS COVERED, EXACTLY -- because an earlier version of this check
+/// covered less than its own message claimed (review finding). kParityRayTMax
+/// feeds TWO reference functions with two different shader counterparts:
+///
+///   * parityOccluded, the SHADOW ray, mirrors wf_scatter.comp's
+///     `kShadowTMax`;
+///   * parityTraceNearest, the PRIMARY and CONTINUATION trace, mirrors
+///     wf_intersect.comp's `kTraceTMax`.
+///
+/// Only the first was tied. wf_intersect.comp wrote its tMax as a bare
+/// literal inside the rayQueryInitializeEXT call, so there was no name to
+/// search for and nothing tied it: changing it alone would have left this
+/// check still printing "matching ... exactly" while the reference's escape
+/// semantics for PATH rays no longer matched the shader's. That literal is
+/// now `const float kTraceTMax` and is parsed here, so BOTH counterparts of
+/// kParityRayTMax are tied and both must equal it.
+///
+/// kParitySurfaceOffset has exactly ONE shader counterpart,
+/// wf_scatter.comp's `kSurfaceOffset` -- the reference applies it to both the
+/// shadow ray's origin and the continuation ray's because that shader derives
+/// both from that one constant. wf_intersect.comp contributes NOTHING to it:
+/// it deliberately traces with tMin = 0 and no offset of its own (see the
+/// derivation at the head of its ray query), and the string `1e-4` does not
+/// appear in that file at all.
 bool checkParityRefConstantsTie() {
-    std::string stripped, found;
-    if (!loadWfScatterSourceStripped(stripped, found)) {
+    std::string scatterSrc, scatterPath;
+    if (!loadWfScatterSourceStripped(scatterSrc, scatterPath)) {
         std::fprintf(stderr,
                      "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
                      "candidate path, so checks 33-34's CPU reference rayTMax/surfaceOffset could "
@@ -1101,38 +1616,65 @@ bool checkParityRefConstantsTie() {
                      "tie is not a held tie\n");
         return false;
     }
+    std::string intersectSrc, intersectPath;
+    if (!loadShaderSourceStripped("shaders/diff/wf_intersect.comp", intersectSrc, intersectPath)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_intersect.comp from "
+                     "any candidate path, so checks 33-34's CPU reference rayTMax could not be "
+                     "tied to the PATH ray's tMax (kTraceTMax). An unchecked tie is not a held "
+                     "tie\n");
+        return false;
+    }
 
-    const std::regex tMaxDecl(
+    const std::regex shadowTMaxDecl(
         R"(const[ \t]+float[ \t]+kShadowTMax[ \t]*=[ \t]*([0-9.eE+-]+)[ \t]*;)");
     const std::regex offsetDecl(
         R"(const[ \t]+float[ \t]+kSurfaceOffset[ \t]*=[ \t]*([0-9.eE+-]+)[ \t]*;)");
-    std::smatch mTMax, mOffset;
-    if (!std::regex_search(stripped, mTMax, tMaxDecl) ||
-        !std::regex_search(stripped, mOffset, offsetDecl)) {
+    const std::regex traceTMaxDecl(
+        R"(const[ \t]+float[ \t]+kTraceTMax[ \t]*=[ \t]*([0-9.eE+-]+)[ \t]*;)");
+    std::smatch mShadowTMax, mOffset, mTraceTMax;
+    if (!std::regex_search(scatterSrc, mShadowTMax, shadowTMaxDecl) ||
+        !std::regex_search(scatterSrc, mOffset, offsetDecl)) {
         std::fprintf(stderr,
                      "[diff_gpu_probe] FAIL: %s no longer declares `const float kShadowTMax = "
                      "<N>;` and `const float kSurfaceOffset = <N>;` on one line each, so checks "
                      "33-34's CPU reference constants cannot be tied to the shader's. Restore the "
                      "spelling or update this check -- do not leave the two constants untied\n",
-                     found.c_str());
+                     scatterPath.c_str());
         return false;
     }
-    const double shaderTMax = std::stod(mTMax[1].str());
-    const double shaderOffset = std::stod(mOffset[1].str());
-    if (shaderTMax != kParityRayTMax || shaderOffset != kParitySurfaceOffset) {
+    if (!std::regex_search(intersectSrc, mTraceTMax, traceTMaxDecl)) {
         std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: %s declares kShadowTMax = %.9g, kSurfaceOffset = "
-                     "%.9g, but checks 33-34's CPU reference uses kParityRayTMax = %.9g, "
-                     "kParitySurfaceOffset = %.9g. The reference's escape/occlusion semantics and "
+                     "[diff_gpu_probe] FAIL: %s no longer declares `const float kTraceTMax = "
+                     "<N>;` on one line, so the PATH ray's tMax cannot be tied to checks 33-34's "
+                     "kParityRayTMax. It was a bare literal inside rayQueryInitializeEXT once, "
+                     "and that is exactly the state this check exists to prevent returning to -- "
+                     "restore the name or update this check, do not leave it untied\n",
+                     intersectPath.c_str());
+        return false;
+    }
+    const double shaderShadowTMax = std::stod(mShadowTMax[1].str());
+    const double shaderOffset = std::stod(mOffset[1].str());
+    const double shaderTraceTMax = std::stod(mTraceTMax[1].str());
+    if (shaderShadowTMax != kParityRayTMax || shaderTraceTMax != kParityRayTMax ||
+        shaderOffset != kParitySurfaceOffset) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s declares kShadowTMax = %.9g and kSurfaceOffset = "
+                     "%.9g, %s declares kTraceTMax = %.9g, but checks 33-34's CPU reference uses "
+                     "kParityRayTMax = %.9g (for BOTH its shadow ray and its path ray) and "
+                     "kParitySurfaceOffset = %.9g. The reference's escape/occlusion semantics or "
                      "ray-offset epsilon no longer match the shader's, so a pass on checks 33-34 "
-                     "would not be evidence of parity with THIS shader\n",
-                     found.c_str(), shaderTMax, shaderOffset, kParityRayTMax, kParitySurfaceOffset);
+                     "would not be evidence of parity with THESE shaders\n",
+                     scatterPath.c_str(), shaderShadowTMax, shaderOffset, intersectPath.c_str(),
+                     shaderTraceTMax, kParityRayTMax, kParitySurfaceOffset);
         return false;
     }
     std::printf("[diff_gpu_probe] NOTE: checks 33-34's CPU reference constants tied -- %s declares "
-                "kShadowTMax = %.9g, kSurfaceOffset = %.9g, matching kParityRayTMax and "
-                "kParitySurfaceOffset exactly\n",
-                found.c_str(), shaderTMax, shaderOffset);
+                "kShadowTMax = %.9g (the reference's SHADOW ray) and kSurfaceOffset = %.9g, %s "
+                "declares kTraceTMax = %.9g (the reference's PRIMARY and CONTINUATION ray), all "
+                "matching kParityRayTMax = %.9g and kParitySurfaceOffset = %.9g exactly\n",
+                scatterPath.c_str(), shaderShadowTMax, shaderOffset, intersectPath.c_str(),
+                shaderTraceTMax, kParityRayTMax, kParitySurfaceOffset);
     return true;
 }
 
@@ -1146,9 +1688,18 @@ int main() {
     // reasoning, same failure mode (a silent wrong-field push), checked here
     // for the same "before anything downstream trusts it" reason.
     if (!checkScatterPushSizeTie()) return 1;
-    // checks 33-34's CPU reference constants tied to wf_scatter.comp's own
-    // kShadowTMax/kSurfaceOffset (review finding, Task 6 fix): same source
-    // file, same comment-stripping, checked here for the same reason.
+    // The per-SLOT layout of wf_scatter.comp's three probe sinks (whole-branch
+    // review finding): the stride tie above cannot see a transposition of two
+    // same-arity slots, and the 24 offsets are what checks 28-32 index by.
+    if (!checkWfScatterSinkLayoutTie()) return 1;
+    // bsdf_probe.comp's output stride and bsdf.glsl's DIFF_BSDF_MIN_COS -- the
+    // latter is what check 20 EXCUSES a grazing rejection with, so drift there
+    // widens an excuse silently.
+    if (!checkBsdfShaderConstantTies()) return 1;
+    // checks 33-34's CPU reference constants tied to wf_intersect.comp's
+    // kTraceTMax and wf_scatter.comp's own kShadowTMax/kSurfaceOffset (review
+    // findings, Task 6 fix): same comment-stripping, checked here for the same
+    // reason.
     if (!checkParityRefConstantsTie()) return 1;
 
     ohao::diff::GpuProbeContext ctx;
@@ -1179,14 +1730,25 @@ int main() {
     }
 
     // 1. zero + readback
+    //
+    // The guard below asserts the EXPECTED element count, not merely that
+    // something came back. `values.empty()` would let a readback that
+    // returned ONE zeroed float pass a loop that then verifies one element
+    // and calls the block zeroed -- the same weakness check 7 documents and
+    // closes in its own case (review finding). The expected counts are the
+    // sizes handed to ArenaLayout::add above, paired with their indices here
+    // so a future block cannot be added to one list and not the other.
     ctx.runImmediate([&](VkCommandBuffer cmd) { arena.zero(cmd); });
-    for (std::size_t b : {blockA, blockB}) {
+    const std::pair<std::size_t, std::size_t> kZeroChecked[] = {{blockA, 16}, {blockB, 4}};
+    for (const auto& [b, expectedCount] : kZeroChecked) {
         const std::vector<float> values = arena.readback(ctx.allocator(), b);
-        if (values.empty()) {
+        if (values.size() != expectedCount) {
             std::fprintf(stderr,
-                         "[diff_gpu_probe] FAIL: block %zu readback returned no data "
-                         "(this check would otherwise pass having verified nothing)\n",
-                         b);
+                         "[diff_gpu_probe] FAIL: block %zu readback returned %zu floats, expected "
+                         "%zu (the size it was added to the layout with). A short readback would "
+                         "otherwise let this check pass having verified only the elements that "
+                         "came back\n",
+                         b, values.size(), expectedCount);
             return 1;
         }
         for (std::size_t i = 0; i < values.size(); ++i) {
@@ -1253,11 +1815,12 @@ int main() {
         return 1;
     }
     const std::vector<float> after = arena.readback(ctx.allocator(), blockA);
-    if (after.size() < 2) {
+    if (after.size() != 16) {
         std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: block %zu readback returned %zu floats, expected "
-                     "at least 2 (a readback regression here would otherwise be undefined "
-                     "behaviour, not a caught failure)\n",
+                     "[diff_gpu_probe] FAIL: block %zu readback returned %zu floats, expected 16 "
+                     "(the size it was added to the layout with). A short readback would "
+                     "otherwise leave the out-of-target-index scan below covering fewer elements "
+                     "than the block has\n",
                      blockA, after.size());
         return 1;
     }
@@ -1268,9 +1831,17 @@ int main() {
                      after[0], kInvocations);
         return 1;
     }
-    if (after[1] != 0.0f) {
-        std::fprintf(stderr, "[diff_gpu_probe] FAIL: atomicAdd wrote outside target index\n");
-        return 1;
+    // Every element of the block, not just after[1] -- the message says
+    // "wrote outside target index" and now asserts it (review finding),
+    // matching what check 2b's twin loop already did over its own block.
+    for (std::size_t i = 1; i < after.size(); ++i) {
+        if (after[i] != 0.0f) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: atomicAdd wrote outside target index (block %zu "
+                         "element %zu = %f, expected 0)\n",
+                         blockA, i, after[i]);
+            return 1;
+        }
     }
     std::printf("[diff_gpu_probe] OK: atomicAdd accumulated %u contended adds exactly\n",
                 kInvocations);
@@ -1474,7 +2045,7 @@ int main() {
     std::printf("[diff_gpu_probe] OK: half-quad pins camera Y orientation over %u pixels\n",
                 kW * kH);
 
-    // 4. The seam Stage 1 depends on most: a block index handed out by the registry
+    // 5. The seam Stage 1 depends on most: a block index handed out by the registry
     //    must resolve correctly against an arena built from that registry's layout.
     //    Both hold ArenaLayout by value, so this proves the positional indices survive
     //    the copy -- previously true only by inspection.
@@ -2474,10 +3045,10 @@ int main() {
             const std::uint32_t cpuDrawCount = cpuRng.drawCount();
 
             const std::vector<float>& gpuDraws = drawsPerBounce[b];
-            const float gpuU1 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 0u];
-            const float gpuU2 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 1u];
+            const float gpuU1 = gpuDraws[static_cast<std::size_t>(kChosenPath) * ohao::diff::kDebugDrawFloats + 0u];
+            const float gpuU2 = gpuDraws[static_cast<std::size_t>(kChosenPath) * ohao::diff::kDebugDrawFloats + 1u];
             std::uint32_t gpuDrawCount = 0;
-            std::memcpy(&gpuDrawCount, &gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 2u],
+            std::memcpy(&gpuDrawCount, &gpuDraws[static_cast<std::size_t>(kChosenPath) * ohao::diff::kDebugDrawFloats + 2u],
                        sizeof(gpuDrawCount));
 
             if (cpuU1 != gpuU1 || cpuU2 != gpuU2) {
@@ -2730,10 +3301,10 @@ int main() {
                 wf.destroy(ctx.allocator());
                 return 1;
             }
-            const float gpuU1 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 0u];
-            const float gpuU2 = gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 1u];
+            const float gpuU1 = gpuDraws[static_cast<std::size_t>(kChosenPath) * ohao::diff::kDebugDrawFloats + 0u];
+            const float gpuU2 = gpuDraws[static_cast<std::size_t>(kChosenPath) * ohao::diff::kDebugDrawFloats + 1u];
             std::uint32_t gpuDrawCount = 0;
-            std::memcpy(&gpuDrawCount, &gpuDraws[static_cast<std::size_t>(kChosenPath) * 3u + 2u],
+            std::memcpy(&gpuDrawCount, &gpuDraws[static_cast<std::size_t>(kChosenPath) * ohao::diff::kDebugDrawFloats + 2u],
                        sizeof(gpuDrawCount));
 
             if (cpuU1 != gpuU1 || cpuU2 != gpuU2) {
@@ -3097,7 +3668,9 @@ int main() {
     // never reuses the GPU's own f/pdf outputs -- so (c) cannot agree by
     // construction either.
     {
-        constexpr uint32_t kFloatsPerCase = 12;  // must match bsdf_probe.comp's output layout
+        // Tied to bsdf_probe.comp's own `pc.outIndex * <N>u` at startup by
+        // checkBsdfShaderConstantTies -- not merely commented as matching it.
+        constexpr uint32_t kFloatsPerCase = kBsdfProbeFloatsPerCase;
 
         struct MaterialSpec {
             const char* name;
@@ -4347,20 +4920,20 @@ int main() {
                 wf.destroy(ctx.allocator());
                 return 1;
             }
-            if (envSamples.size() != static_cast<std::size_t>(kCapacity) * 4u) {
+            if (envSamples.size() != static_cast<std::size_t>(kCapacity) * ohao::diff::kEnvSampleFloats) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: env sampling dispatch %u returned %zu env "
                              "sample floats, expected %u\n",
-                             d, envSamples.size(), kCapacity * 4u);
+                             d, envSamples.size(), kCapacity * ohao::diff::kEnvSampleFloats);
                 wf.destroy(ctx.allocator());
                 return 1;
             }
 
             for (uint32_t i = 0; i < kCapacity; ++i) {
-                const double dx = envSamples[static_cast<std::size_t>(i) * 4u + 0u];
-                const double dy = envSamples[static_cast<std::size_t>(i) * 4u + 1u];
-                const double dz = envSamples[static_cast<std::size_t>(i) * 4u + 2u];
-                const float pdf = envSamples[static_cast<std::size_t>(i) * 4u + 3u];
+                const double dx = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 0u];
+                const double dy = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 1u];
+                const double dz = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 2u];
+                const float pdf = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 3u];
 
                 const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
                 if (!std::isfinite(len) || std::abs(len - 1.0) > 1e-4) {
@@ -4387,24 +4960,20 @@ int main() {
                 maxPdf = std::max(maxPdf, pdf);
 
                 // Invert equirectPixelToDir. This is the same inverse
-                // pdfEnvMap performs, written here from the forward map's
-                // definition rather than copied out of it.
-                const double theta = std::acos(std::clamp(dy, -1.0, 1.0));
-                const double phi = std::atan2(dz, dx);
-                const double uCoord = phi / (2.0 * kPi) + 0.5;
-                const double vCoord = theta / kPi;
-                const double fx = uCoord * static_cast<double>(kEnvW);
-                const double fy = vCoord * static_cast<double>(kEnvH);
-                const int ix = std::clamp(static_cast<int>(std::floor(fx)), 0,
-                                          static_cast<int>(kEnvW) - 1);
-                const int iy = std::clamp(static_cast<int>(std::floor(fy)), 0,
-                                          static_cast<int>(kEnvH) - 1);
+                // pdfEnvMap performs, written from the forward map's
+                // definition rather than copied out of it -- and written ONCE,
+                // in oracleEnvTexelOf, rather than here and again in checks
+                // 27, 31 and 33/34. All four rest on the binning agreeing.
+                const OracleEnvTexel texel = oracleEnvTexelOf(dx, dy, dz, kEnvW, kEnvH);
+                const double fx = texel.fx;
+                const double fy = texel.fy;
+                const int ix = texel.ix;
+                const int iy = texel.iy;
                 // A direction that is NOT a texel centre means the forward
                 // map and this inverse disagree, and every bin index below
                 // would then be meaningless -- so this is checked before the
                 // count is taken, not after.
-                const double centreError = std::max(std::abs(fx - (ix + 0.5)),
-                                                    std::abs(fy - (iy + 0.5)));
+                const double centreError = texel.centreError;
                 if (!(centreError <= kCentreSlack)) {
                     std::fprintf(stderr,
                                  "[diff_gpu_probe] FAIL: env sample (dispatch %u, path %u) "
@@ -4419,7 +4988,7 @@ int main() {
                 }
                 maxCentreError = std::max(maxCentreError, centreError);
 
-                const std::size_t k = static_cast<std::size_t>(iy) * kEnvW + static_cast<std::size_t>(ix);
+                const std::size_t k = texel.index;
                 binCount[k] += 1u;
                 if (texelSeen[k] == 0u) {
                     texelSeen[k] = 1u;
@@ -4711,21 +5280,21 @@ int main() {
         }
         wf.destroy(ctx.allocator());
 
-        if (envSamples.size() != static_cast<std::size_t>(kCapacity) * 4u) {
+        if (envSamples.size() != static_cast<std::size_t>(kCapacity) * ohao::diff::kEnvSampleFloats) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: check 27 env samples readback returned %zu "
                          "floats, expected %u\n",
-                         envSamples.size(), kCapacity * 4u);
+                         envSamples.size(), kCapacity * ohao::diff::kEnvSampleFloats);
             return 1;
         }
 
         double maxCentreError = 0.0;
         double maxPdfRelError = 0.0;
         for (uint32_t i = 0; i < kCapacity; ++i) {
-            const double dx = envSamples[static_cast<std::size_t>(i) * 4u + 0u];
-            const double dy = envSamples[static_cast<std::size_t>(i) * 4u + 1u];
-            const double dz = envSamples[static_cast<std::size_t>(i) * 4u + 2u];
-            const float pdf = envSamples[static_cast<std::size_t>(i) * 4u + 3u];
+            const double dx = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 0u];
+            const double dy = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 1u];
+            const double dz = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 2u];
+            const float pdf = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 3u];
 
             const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
             if (!std::isfinite(len) || std::abs(len - 1.0) > 1e-4) {
@@ -4744,19 +5313,15 @@ int main() {
                 return 1;
             }
 
-            // Invert equirectPixelToDir exactly as check 25 does.
-            const double theta = std::acos(std::clamp(dy, -1.0, 1.0));
-            const double phi = std::atan2(dz, dx);
-            const double uCoord = phi / (2.0 * kPi) + 0.5;
-            const double vCoord = theta / kPi;
-            const double fx = uCoord * static_cast<double>(kEnvW);
-            const double fy = vCoord * static_cast<double>(kEnvH);
-            const int ix =
-                std::clamp(static_cast<int>(std::floor(fx)), 0, static_cast<int>(kEnvW) - 1);
-            const int iy =
-                std::clamp(static_cast<int>(std::floor(fy)), 0, static_cast<int>(kEnvH) - 1);
-            const double centreError =
-                std::max(std::abs(fx - (ix + 0.5)), std::abs(fy - (iy + 0.5)));
+            // Invert equirectPixelToDir exactly as check 25 does -- through
+            // the same host-side function, so "exactly as" is enforced rather
+            // than asserted in a comment.
+            const OracleEnvTexel texel = oracleEnvTexelOf(dx, dy, dz, kEnvW, kEnvH);
+            const double fx = texel.fx;
+            const double fy = texel.fy;
+            const int ix = texel.ix;
+            const int iy = texel.iy;
+            const double centreError = texel.centreError;
             if (!(centreError <= kCentreSlack)) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: check 27 (WavefrontLoop::record's "
@@ -5251,13 +5816,13 @@ int main() {
         const float envIntegral = wf.envIntegral();
         wf.destroy(ctx.allocator());
 
-        if (envSamples.size() != static_cast<std::size_t>(kCapacity) * 4u ||
+        if (envSamples.size() != static_cast<std::size_t>(kCapacity) * ohao::diff::kEnvSampleFloats ||
             neeSamples.size() !=
                 static_cast<std::size_t>(kCapacity) * ohao::diff::kNeeSampleFloats) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: checks 29-31 readback returned %zu env floats "
                          "and %zu NEE floats, expected %u and %u\n",
-                         envSamples.size(), neeSamples.size(), kCapacity * 4u,
+                         envSamples.size(), neeSamples.size(), kCapacity * ohao::diff::kEnvSampleFloats,
                          kCapacity * ohao::diff::kNeeSampleFloats);
             return 1;
         }
@@ -5401,18 +5966,12 @@ int main() {
             }
 
             // --- 31. Ties back to what binding 6 recorded.
-            const double dx = envSamples[static_cast<std::size_t>(i) * 4u + 0u];
-            const double dy = envSamples[static_cast<std::size_t>(i) * 4u + 1u];
-            const double dz = envSamples[static_cast<std::size_t>(i) * 4u + 2u];
-            const double theta = std::acos(std::clamp(dy, -1.0, 1.0));
-            const double phi = std::atan2(dz, dx);
-            const int ix = std::clamp(
-                static_cast<int>(std::floor((phi / (2.0 * kPi) + 0.5) * kEnvW)), 0,
-                static_cast<int>(kEnvW) - 1);
-            const int iy = std::clamp(static_cast<int>(std::floor((theta / kPi) * kEnvH)), 0,
-                                      static_cast<int>(kEnvH) - 1);
-            const std::size_t texel =
-                static_cast<std::size_t>(iy) * kEnvW + static_cast<std::size_t>(ix);
+            const double dx = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 0u];
+            const double dy = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 1u];
+            const double dz = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 2u];
+            // Same host-side binning as checks 25/27 and the parity
+            // reference -- one function, not a fourth transcription.
+            const std::size_t texel = oracleEnvTexelOf(dx, dy, dz, kEnvW, kEnvH).index;
 
             const double envRadiance = neeSamples[nb + ohao::diff::kNeeSlotEnvRadiance];
             const double radRelError = std::abs(envRadiance / envLum[texel] - 1.0);
@@ -5437,7 +5996,7 @@ int main() {
             // planar floor). If next-event estimation had drawn its own
             // direction rather than consuming the one binding 6 records,
             // this would not match.
-            const double envPdf = envSamples[static_cast<std::size_t>(i) * 4u + 3u];
+            const double envPdf = envSamples[static_cast<std::size_t>(i) * ohao::diff::kEnvSampleFloats + 3u];
             const double expectedNee = (envPdf > 0.0)
                                            ? (static_cast<double>(kAlbedo) / kPi) *
                                                  std::max(0.0, dy) * envLum[texel] / envPdf
@@ -5455,10 +6014,10 @@ int main() {
             const double bx = neeSamples[nb + ohao::diff::kNeeSlotBsdfDir + 0u];
             const double by = neeSamples[nb + ohao::diff::kNeeSlotBsdfDir + 1u];
             const double bz = neeSamples[nb + ohao::diff::kNeeSlotBsdfDir + 2u];
-            const double bTheta = std::acos(std::clamp(by, -1.0, 1.0));
-            const double bPhi = std::atan2(bz, bx);
-            const double bu = (bPhi / (2.0 * kPi) + 0.5) * kEnvW;
-            const double bv = (bTheta / kPi) * kEnvH;
+            const OracleEnvTexel bTexelInfo = oracleEnvTexelOf(bx, by, bz, kEnvW, kEnvH);
+            const double bTheta = bTexelInfo.theta;
+            const double bu = bTexelInfo.fx;
+            const double bv = bTexelInfo.fy;
             // A direction landing within a thousandth of a texel of a
             // boundary may be binned into a different texel by the shader's
             // float32 arithmetic than by this double one, which would make
@@ -5472,12 +6031,8 @@ int main() {
                 ++pdfEnvAtBsdfSkipped;
                 continue;
             }
-            const int bix = std::clamp(static_cast<int>(std::floor(bu)), 0,
-                                       static_cast<int>(kEnvW) - 1);
-            const int biy = std::clamp(static_cast<int>(std::floor(bv)), 0,
-                                       static_cast<int>(kEnvH) - 1);
-            const std::size_t bTexel =
-                static_cast<std::size_t>(biy) * kEnvW + static_cast<std::size_t>(bix);
+            const int biy = bTexelInfo.iy;
+            const std::size_t bTexel = bTexelInfo.index;
             const double bThetaCentre = kPi * (static_cast<double>(biy) + 0.5) / kEnvH;
             const double bSinQuery = std::max(std::sin(bTheta), 1e-4);
             const double expectedPdfEnv =

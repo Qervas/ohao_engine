@@ -80,6 +80,21 @@ struct WavefrontScatterMaterial {
 /// two numbers disagree.
 inline constexpr std::uint32_t kNeeSampleFloats = 25;
 
+/// Floats per PATH INDEX in wf_scatter.comp's binding-3 debug-draw sink
+/// (`u1`, `u2`, and the RNG draw count bit-cast to float) and its binding-6
+/// environment-sample sink (a unit direction plus the density it was drawn
+/// with).
+///
+/// Named for the same reason kNeeSampleFloats is, and tied the same way:
+/// diff_gpu_probe.cpp's `checkWfScatterSinkLayoutTie()` parses the shader's
+/// own writes into those two buffers and refuses to run the probe unless the
+/// stride AND the set of written offsets match these numbers exactly. They
+/// were bare `3u`/`4u` literals on both sides of the boundary until then --
+/// the same untied shape kNeeSampleFloats was called out for, with the same
+/// silent-wrong-slot-read failure mode.
+inline constexpr std::uint32_t kDebugDrawFloats = 3;
+inline constexpr std::uint32_t kEnvSampleFloats = 4;
+
 /// Named offsets into one path's kNeeSampleFloats-float record. The order is
 /// wf_scatter.comp's single write block, in the order it writes them.
 ///
