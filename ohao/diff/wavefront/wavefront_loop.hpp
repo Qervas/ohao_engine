@@ -255,7 +255,12 @@ void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uin
 /// `VK_NULL_HANDLE` entries are skipped, so a caller may pass a fixed-size
 /// array with optional slots. Task 3's environment-sample sink (binding 6 of
 /// `wf_scatter.comp`, written at a fixed `pathIndex*4` offset every bounce)
-/// is the first of them and belongs here for exactly `debugDraws`' reason.
+/// is the first of them and belongs here for exactly `debugDraws`' reason;
+/// Task 4's next-event sink (binding 7, a fixed `pathIndex*20` offset every
+/// bounce) is the second, for the identical reason. Task 4 also gave
+/// `wf_scatter.comp` an acceleration structure at binding 8 for its shadow
+/// rays -- that one does NOT belong here, on the read-only rule above: no
+/// dispatch writes an acceleration structure.
 ///
 /// READ-ONLY buffers do NOT belong here. Task 3 also added the two
 /// environment CDF buffers at bindings 4 and 5, and they are deliberately

@@ -1239,10 +1239,13 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                                std::vector<uint32_t>& outQueueDst,
                                                std::vector<float>& outDebugDraws,
                                                const WavefrontScatterMaterial& material,
-                                               std::vector<float>* outEnvSamples) {
+                                               std::vector<float>* outEnvSamples,
+                                               const WavefrontShadowScene& shadowScene,
+                                               std::vector<float>* outNeeSamples) {
     outQueueDst.clear();
     outDebugDraws.clear();
     if (outEnvSamples != nullptr) outEnvSamples->clear();
+    if (outNeeSamples != nullptr) outNeeSamples->clear();
 
     const uint32_t capacity = buffers.layout().capacity();
     bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
@@ -1258,29 +1261,103 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     // sequence for each. Reuses WavefrontLoop::PrepareIndirectPush/
     // ScatterPush -- byte-identical to this function's former private
     // PrepPush/ScatterPush -- rather than redeclaring them. ---
+    // --- Occluders for the next-event estimator's shadow rays. An empty
+    // WavefrontShadowScene becomes ONE triangle a million units out: the
+    // acceleration-structure descriptor cannot be VK_NULL_HANDLE (this
+    // context does not enable nullDescriptor), and the shader's shadow rays
+    // stop at kShadowTMax = 1000, so geometry at 1e6 is reachable by nothing
+    // and "no occluders" is expressed as data rather than as a null handle.
+    // The triangle has real area, so the BLAS build has nothing to reject. ---
+    static constexpr float kUnreachable = 1.0e6f;
+    static const std::array<float, 9> kEmptySceneVertices = {
+        kUnreachable,        kUnreachable,        kUnreachable,
+        kUnreachable + 1.0f, kUnreachable,        kUnreachable,
+        kUnreachable,        kUnreachable + 1.0f, kUnreachable};
+    static const std::array<uint32_t, 3> kEmptySceneIndices = {0, 1, 2};
+    const std::span<const float> shadowPositions =
+        shadowScene.empty() ? std::span<const float>(kEmptySceneVertices) : shadowScene.positions;
+    const std::span<const uint32_t> shadowIndices =
+        shadowScene.empty() ? std::span<const uint32_t>(kEmptySceneIndices) : shadowScene.indices;
+
+    GpuBuffer shadowVertexBuffer = m_allocator.createBufferFromSpan<float>(
+        shadowPositions, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    GpuBuffer shadowIndexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
+        shadowIndices, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    RTAccelerationStructure shadowAccel;
+    if (!shadowVertexBuffer.isValid() || !shadowIndexBuffer.isValid()) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: shadow scene "
+                              "vertex/index buffer allocation failed\n");
+        ok = false;
+    }
+    if (ok && !shadowAccel.init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool,
+                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: "
+                              "RTAccelerationStructure::init failed\n");
+        ok = false;
+    }
+    if (ok) {
+        BlasHandle blas = INVALID_BLAS;
+        runImmediate([&](VkCommandBuffer cmd) {
+            blas = shadowAccel.createBLASFromPositions(
+                shadowVertexBuffer.buffer, static_cast<uint32_t>(shadowPositions.size() / 3),
+                shadowIndexBuffer.buffer, static_cast<uint32_t>(shadowIndices.size()),
+                /*indexByteOffset=*/0, cmd);
+        });
+        if (blas == INVALID_BLAS) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: shadow scene "
+                                  "createBLASFromPositions failed\n");
+            ok = false;
+        } else {
+            shadowAccel.clearInstances();
+            shadowAccel.addInstance(blas, glm::mat4(1.0f));
+            runImmediate([&](VkCommandBuffer cmd) { shadowAccel.buildTLAS(cmd); });
+            if (shadowAccel.getTLAS() == VK_NULL_HANDLE) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: shadow scene "
+                                      "buildTLAS produced no TLAS\n");
+                ok = false;
+            }
+        }
+    }
+    if (!ok) {
+        if (shadowIndexBuffer.isValid()) m_allocator.destroyBuffer(shadowIndexBuffer);
+        if (shadowVertexBuffer.isValid()) m_allocator.destroyBuffer(shadowVertexBuffer);
+        return false;
+    }
+
     WavefrontStage prepareIndirect;
     WavefrontStage scatter;
     const VkDescriptorType counterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
     // state, queues, counters, debug draws, env marginal CDF, env
-    // conditional CDF, env samples -- wf_scatter.comp's bindings 0..6 in
-    // order. The two env CDF buffers are read-only to the shader but are
-    // ordinary storage buffers as far as the descriptor set is concerned.
-    const VkDescriptorType scatterBindingTypes[7] = {
+    // conditional CDF, env samples, NEE samples, TLAS -- wf_scatter.comp's
+    // bindings 0..8 in order. The two env CDF buffers are read-only to the
+    // shader but are ordinary storage buffers as far as the descriptor set
+    // is concerned; the acceleration structure is last so bindBuffers can
+    // write all eight storage buffers as one contiguous prefix.
+    const VkDescriptorType scatterBindingTypes[9] = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
 
     if (!prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", counterOnly,
                                sizeof(WavefrontLoop::PrepareIndirectPush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: prepare_indirect "
                               "build\n");
+        m_allocator.destroyBuffer(shadowIndexBuffer);
+        m_allocator.destroyBuffer(shadowVertexBuffer);
         return false;
     }
     if (!scatter.build(m_device, "diff_wf_scatter.comp.spv", scatterBindingTypes,
                        sizeof(WavefrontLoop::ScatterPush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: scatter build\n");
         prepareIndirect.destroy(m_device);
+        m_allocator.destroyBuffer(shadowIndexBuffer);
+        m_allocator.destroyBuffer(shadowVertexBuffer);
         return false;
     }
 
@@ -1333,14 +1410,32 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
         }
     }
 
+    // wf_scatter.comp's next-event sink (binding 7): kNeeSampleFloats floats
+    // per path index. Allocated unconditionally for the same reason
+    // envSamplesBuffer is -- the descriptor set is not optional.
+    GpuBuffer neeSamplesBuffer;
+    const VkDeviceSize neeSamplesBytes =
+        static_cast<VkDeviceSize>(capacity) * kNeeSampleFloats * sizeof(float);
+    if (ok) {
+        neeSamplesBuffer = m_allocator.createBuffer(
+            neeSamplesBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuToCpu,
+            /*persistentlyMapped=*/true);
+        if (!neeSamplesBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: NEE samples buffer "
+                                  "allocation failed\n");
+            ok = false;
+        }
+    }
+
     if (ok) {
         const VkBuffer counterOnlyBuf[1] = {buffers.counterBuffer()};
-        const VkBuffer scatterBuffers[7] = {buffers.stateBuffer(),         buffers.queueBuffer(),
+        const VkBuffer scatterBuffers[8] = {buffers.stateBuffer(),         buffers.queueBuffer(),
                                             buffers.counterBuffer(),       debugDrawsBuffer.buffer,
                                             buffers.envMarginalBuffer(),   buffers.envConditionalBuffer(),
-                                            envSamplesBuffer.buffer};
+                                            envSamplesBuffer.buffer,       neeSamplesBuffer.buffer};
         if (!prepareIndirect.bindBuffers(m_device, counterOnlyBuf) ||
-            !scatter.bindBuffers(m_device, scatterBuffers)) {
+            !scatter.bindBuffers(m_device, scatterBuffers) ||
+            !scatter.bindAccelerationStructure(m_device, 8, shadowAccel.getTLAS())) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontScatterProbe: descriptor binding\n");
             ok = false;
@@ -1415,10 +1510,11 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             // function's own mapped buffer (HOST_READ), and the
             // vkCmdCopyBuffer below that pulls the dst queue ring out
             // (TRANSFER_READ).
-            VkBufferMemoryBarrier postScatter[4]{};
-            VkBuffer writtenBuffers[4] = {buffers.stateBuffer(), buffers.counterBuffer(),
-                                          debugDrawsBuffer.buffer, envSamplesBuffer.buffer};
-            for (int i = 0; i < 4; ++i) {
+            VkBufferMemoryBarrier postScatter[5]{};
+            VkBuffer writtenBuffers[5] = {buffers.stateBuffer(), buffers.counterBuffer(),
+                                          debugDrawsBuffer.buffer, envSamplesBuffer.buffer,
+                                          neeSamplesBuffer.buffer};
+            for (int i = 0; i < 5; ++i) {
                 postScatter[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
                 postScatter[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
                 postScatter[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -1438,11 +1534,12 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             queueToTransfer.offset = 0;
             queueToTransfer.size = VK_WHOLE_SIZE;
 
-            VkBufferMemoryBarrier postDispatch[5] = {postScatter[0], postScatter[1], postScatter[2],
-                                                     postScatter[3], queueToTransfer};
+            VkBufferMemoryBarrier postDispatch[6] = {postScatter[0], postScatter[1], postScatter[2],
+                                                     postScatter[3], postScatter[4],
+                                                     queueToTransfer};
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                 nullptr, 5, postDispatch, 0, nullptr);
+                                 nullptr, 6, postDispatch, 0, nullptr);
 
             // Copy the dst queue ring (elements [dstQueueBase,
             // dstQueueBase+capacity)) into this function's own host-visible
@@ -1498,14 +1595,31 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                       mappedEnv + (static_cast<std::size_t>(capacity) * 4u));
             }
         }
+
+        if (outNeeSamples != nullptr) {
+            m_allocator.invalidateBuffer(neeSamplesBuffer);
+            const auto* mappedNee = static_cast<const float*>(neeSamplesBuffer.getMappedData());
+            if (mappedNee == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: NEE samples "
+                                      "buffer not mapped, cannot read back\n");
+                ok = false;
+            } else {
+                outNeeSamples->assign(
+                    mappedNee,
+                    mappedNee + (static_cast<std::size_t>(capacity) * kNeeSampleFloats));
+            }
+        }
     }
 
     // --- Cleanup, reverse order. ---
+    if (neeSamplesBuffer.isValid()) m_allocator.destroyBuffer(neeSamplesBuffer);
     if (envSamplesBuffer.isValid()) m_allocator.destroyBuffer(envSamplesBuffer);
     if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
     scatter.destroy(m_device);
     prepareIndirect.destroy(m_device);
+    if (shadowIndexBuffer.isValid()) m_allocator.destroyBuffer(shadowIndexBuffer);
+    if (shadowVertexBuffer.isValid()) m_allocator.destroyBuffer(shadowVertexBuffer);
 
     return ok;
 }
@@ -1753,7 +1867,8 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                                                  std::vector<std::vector<float>>& outDrawsPerBounce,
                                                  std::vector<uint32_t>& outLiveCountPerRun,
                                                  std::vector<uint32_t>& outFinalQueue,
-                                                 std::vector<float>* outEnvSamples) {
+                                                 std::vector<float>* outEnvSamples,
+                                                 std::vector<float>* outNeeSamples) {
     // Push constants for wf_generate.comp -- byte-identical to
     // runWavefrontGenerateProbe's (80 bytes, see that function's comment).
     struct GeneratePush {
@@ -1776,6 +1891,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
     outDrawsPerBounce.clear();
     outLiveCountPerRun.clear();
     outFinalQueue.clear();
+    if (outNeeSamples != nullptr) outNeeSamples->clear();
 
     const uint32_t capacity = buffers.layout().capacity();
     bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
@@ -1925,6 +2041,24 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
             ok = false;
         }
     }
+    // wf_scatter.comp's next-event sink (binding 7). Written at a fixed
+    // pathIndex*kNeeSampleFloats offset by EVERY scatter dispatch in the
+    // fused run, so -- exactly like debugDrawsBuffer and envSamplesBuffer --
+    // it belongs in loopExtras below, and only the LAST bounce's write
+    // survives in it.
+    GpuBuffer neeSamplesBuffer;
+    const VkDeviceSize neeSamplesBytes =
+        static_cast<VkDeviceSize>(capacity) * kNeeSampleFloats * sizeof(float);
+    if (ok) {
+        neeSamplesBuffer =
+            m_allocator.createBuffer(neeSamplesBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     AllocationUsage::GpuToCpu, /*persistentlyMapped=*/true);
+        if (!neeSamplesBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: NEE samples buffer "
+                                  "allocation failed\n");
+            ok = false;
+        }
+    }
 
     // --- The four stages. Built exactly once each, because this probe has
     // no reason to rebuild one. ComputePipeline::build IS safe to call again
@@ -1952,14 +2086,20 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
     // state, queues, counters, debug draws, env marginal CDF, env
-    // conditional CDF, env samples -- wf_scatter.comp's bindings 0..6.
-    const VkDescriptorType kScatterBindings[7] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // conditional CDF, env samples, NEE samples, TLAS --
+    // wf_scatter.comp's bindings 0..8, the acceleration structure last so
+    // bindBuffers can write the eight storage buffers as one prefix. The
+    // TLAS is the SAME one intersect traces against: next-event estimation's
+    // shadow rays and the path's own rays must see one scene, not two.
+    const VkDescriptorType kScatterBindings[9] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
                               sizeof(GeneratePush))) {
@@ -1990,15 +2130,16 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
                                               buffers.counterBuffer(), vertexBuffer.buffer,
                                               indexBuffer.buffer};
-        const VkBuffer scatterBuffers[7] = {buffers.stateBuffer(),       buffers.queueBuffer(),
+        const VkBuffer scatterBuffers[8] = {buffers.stateBuffer(),       buffers.queueBuffer(),
                                             buffers.counterBuffer(),     debugDrawsBuffer.buffer,
                                             buffers.envMarginalBuffer(), buffers.envConditionalBuffer(),
-                                            envSamplesBuffer.buffer};
+                                            envSamplesBuffer.buffer,     neeSamplesBuffer.buffer};
         if (!generate.bindBuffers(m_device, stateQueueCounter) ||
             !prepareIndirect.bindBuffers(m_device, counterOnly) ||
             !intersect.bindBuffers(m_device, intersectBuffers) ||
             !intersect.bindAccelerationStructure(m_device, 5, accel.getTLAS()) ||
-            !scatter.bindBuffers(m_device, scatterBuffers)) {
+            !scatter.bindBuffers(m_device, scatterBuffers) ||
+            !scatter.bindAccelerationStructure(m_device, 8, accel.getTLAS())) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontFusedLoopProbe: descriptor binding\n");
             ok = false;
@@ -2090,16 +2231,38 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                 // buffers.envMarginalBuffer()/envConditionalBuffer() are NOT
                 // -- no dispatch writes them, and extraBarrierBuffers orders
                 // buffers the dispatches write.
-                const VkBuffer loopExtras[2] = {debugDrawsBuffer.buffer, envSamplesBuffer.buffer};
+                // neeSamplesBuffer joins them for the third time over: same
+                // fixed per-path offset, same overwrite between bounces of
+                // one command buffer, same absence of any barrier that would
+                // otherwise order it.
+                const VkBuffer loopExtras[3] = {debugDrawsBuffer.buffer, envSamplesBuffer.buffer,
+                                                neeSamplesBuffer.buffer};
                 loop.record(cmd, buffers, bounces, loopExtras);
 
                 // Everything below is this probe's own readback plumbing,
                 // deliberately NOT part of WavefrontLoop::record (only the
                 // caller knows what consumes the loop's output).
-                VkBufferMemoryBarrier toHost[3]{};
-                const VkBuffer hostRead[3] = {buffers.stateBuffer(), buffers.counterBuffer(),
-                                              debugDrawsBuffer.buffer};
-                for (int i = 0; i < 3; ++i) {
+                //
+                // EVERY buffer this function reads back through a mapped
+                // pointer has to be named here. envSamplesBuffer was missing
+                // from this list before Stage 0b-2b Task 4 even though the
+                // readback below invalidates and maps it: vmaInvalidate-
+                // Allocation only handles the CPU cache side, it is not a
+                // substitute for the GPU-side availability operation, and
+                // vkQueueWaitIdle alone does not make writes visible in the
+                // host domain per the Vulkan spec. Nothing detected it --
+                // synchronization validation has been MEASURED silent on
+                // this subsystem's hazards (wavefront_loop.hpp's class
+                // comment records disabling every compute-side barrier with
+                // zero SYNC- diagnostics) -- so a green run was never
+                // evidence either way. The sibling runWavefrontScatterProbe
+                // has always listed all of its readback targets; this one
+                // now does too, neeSamplesBuffer included.
+                VkBufferMemoryBarrier toHost[5]{};
+                const VkBuffer hostRead[5] = {buffers.stateBuffer(), buffers.counterBuffer(),
+                                              debugDrawsBuffer.buffer, envSamplesBuffer.buffer,
+                                              neeSamplesBuffer.buffer};
+                for (int i = 0; i < 5; ++i) {
                     toHost[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
                     toHost[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
                     toHost[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -2119,11 +2282,11 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                 queueToTransfer.offset = 0;
                 queueToTransfer.size = VK_WHOLE_SIZE;
 
-                const VkBufferMemoryBarrier post[4] = {toHost[0], toHost[1], toHost[2],
-                                                       queueToTransfer};
+                const VkBufferMemoryBarrier post[6] = {toHost[0], toHost[1], toHost[2],
+                                                       toHost[3], toHost[4], queueToTransfer};
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                                     0, nullptr, 4, post, 0, nullptr);
+                                     0, nullptr, 6, post, 0, nullptr);
 
                 VkBufferCopy region{};
                 region.srcOffset = static_cast<VkDeviceSize>(finalRing.queueBase) * sizeof(uint32_t);
@@ -2186,6 +2349,23 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                                       mappedEnv + (static_cast<std::size_t>(capacity) * 4u));
             }
         }
+
+        // outNeeSamples, when requested: binding 7 after the FINAL run. The
+        // scene is the closed box, so every shadow ray traced into it is
+        // occluded and every contribution here must be exactly zero.
+        if (ok && outNeeSamples != nullptr) {
+            m_allocator.invalidateBuffer(neeSamplesBuffer);
+            const auto* mappedNee = static_cast<const float*>(neeSamplesBuffer.getMappedData());
+            if (mappedNee == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: NEE samples "
+                                      "buffer not mapped, cannot read back\n");
+                ok = false;
+            } else {
+                outNeeSamples->assign(
+                    mappedNee,
+                    mappedNee + (static_cast<std::size_t>(capacity) * kNeeSampleFloats));
+            }
+        }
     }
 
     // --- Cleanup, reverse order. ---
@@ -2193,6 +2373,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
     intersect.destroy(m_device);
     prepareIndirect.destroy(m_device);
     generate.destroy(m_device);
+    if (neeSamplesBuffer.isValid()) m_allocator.destroyBuffer(neeSamplesBuffer);
     if (envSamplesBuffer.isValid()) m_allocator.destroyBuffer(envSamplesBuffer);
     if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);

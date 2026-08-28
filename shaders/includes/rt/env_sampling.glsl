@@ -21,7 +21,24 @@
 // is recovered from CDF differences, which are already normalised, and
 // pdfEnvMap does not take it at all. It is kept in the signature because
 // callers pass it and a next-event estimator needs it to convert the CDF's
-// density into radiance.
+// density into radiance. That consumer now exists:
+// shaders/includes/diff/nee.glsl inverts the relation below to recover grey
+// radiance as pdf * integral * 2*pi^2 / (W*H), and diff_gpu_probe.cpp check
+// 31 asserts the result against the environment image -- which is the first
+// thing anywhere to verify that a caller-supplied integral reaches the GPU
+// intact.
+//
+// pdfEnvMap IS NOT EXACTLY sampleEnvMap S DENSITY OFF A TEXEL CENTRE. Its
+// condDiff*margDiff already carries sin(theta) of the texel CENTRE (that is
+// how the CDF is weighted), and it then divides by sin(theta) of the QUERY
+// direction, so what it returns is the texel density scaled by
+// sin(theta_centre)/sin(theta_query). The factor is exactly 1 at a texel
+// centre -- which is the only place sampleEnvMap ever puts a sample, so the
+// two agree on the environment strategy s entire support and MIS weights
+// built from them still partition unity -- and can reach several elsewhere,
+// nearest the poles. diff_gpu_probe.cpp check 31 asserts that relation
+// rather than the convenient one; asserting the convenient one first is how
+// it was found.
 //
 // CDF CONVENTION, which the host-side builder must match exactly
 // (ohao/render/rt/env_cdf.cpp is the one this repository uses):

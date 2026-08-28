@@ -1,4 +1,5 @@
-#version 450
+#version 460
+#extension GL_EXT_ray_query : require
 
 // Wavefront stage: scatter. Evaluates and importance-samples the surface
 // BSDF (shaders/includes/diff/bsdf.glsl -- Lambert + single-scattering GGX),
@@ -57,22 +58,42 @@
 // texel-centre directions, solid-angle pdf) cannot drift -- and writes the
 // (direction, pdf) pair to a probe-only sink at binding 6.
 //
-// NOTHING IN THE PATH CONSUMES IT YET. The sample does not touch throughput,
-// origin, dir or radiance: next-event estimation and MIS are Task 4, and
-// weighting a light sample against a BSDF sample is exactly the step that
-// needs both densities, which is what this task exists to supply. Writing
-// the sample to an observable sink rather than folding it into the path is
-// deliberate -- it is what lets diff_gpu_probe.cpp bin a real dispatch's
-// directions and reject them against a host-built oracle with a chi-squared
-// test, instead of inferring the sampler's correctness from an image.
+// Writing that sample to an observable sink is what lets diff_gpu_probe.cpp
+// bin a real dispatch's directions and reject them against a host-built
+// oracle with a chi-squared test, instead of inferring the sampler's
+// correctness from an image. It still does not touch throughput, origin,
+// dir or radiance -- but it is no longer unconsumed; see the next paragraph.
+//
+// NEXT-EVENT ESTIMATION AND MIS (Stage 0b-2b Task 4) is what finally
+// CONSUMES that environment sample. The (direction, pdf) pair written to
+// binding 6 is not re-drawn and is not gated: the one sampleEnvMap call
+// above is the light sample next-event estimation uses, so the draw
+// diff_gpu_probe.cpp's chi-squared check bins IS the production draw, by
+// construction rather than by convention. (The alternative -- a separate
+// NEE draw beside an unconditional probe write -- would leave check 24
+// passing at the same statistic while measuring a vestigial sample nothing
+// used.) The estimator itself lives in shaders/includes/diff/nee.glsl as
+// ONE parameterised function serving BOTH strategies; see that file for why
+// it is one function and not the four copies pt_raygen.rgen carries.
+//
+// Both strategies need a shadow ray, so this stage now binds the same
+// acceleration structure wf_intersect.comp traces against (binding 8) and
+// issues an inline ray query -- the same GL_EXT_ray_query the sibling stage
+// already requires, no new device feature. Their per-sample results go to a
+// probe-only sink at binding 7; nothing is accumulated into path state
+// here, because Task 4's estimators are accumulated HOST-SIDE from that
+// readback. A host accumulator is an oracle INDEPENDENT of the GPU
+// accumulation path, which is what this stage's check discipline needs, and
+// it keeps the checks valid whatever Task 5 does to film accumulation.
 //
 // Binding scheme: state (0, declared by path_state.glsl), queues (1),
 // counters (2), debug draws (3), env marginal CDF (4), env conditional CDF
-// (5), env samples (6).
+// (5), env samples (6), NEE samples (7), TLAS (8).
 
 #include "diff/path_state.glsl"
 #include "diff/rng.glsl"
 #include "diff/bsdf.glsl"
+#include "diff/nee.glsl"
 #include "pbr_unpack.glsl"
 
 layout(local_size_x = 64) in;
@@ -122,12 +143,35 @@ layout(std430, binding = 5) readonly buffer EnvConditionalCDF {
 // (dirX, dirY, dirZ, pdf) as sampleEnvMap returned them for THIS dispatch.
 // Written unconditionally -- an environment sample is a property of the
 // environment, not of whether this path hit anything -- so a missed path
-// still produces one. Task 4's NEE is what will consume the pair inside the
-// shader; until then this sink is its only consumer, and it is what
-// diff_gpu_probe.cpp's chi-squared check bins.
+// still produces one. Task 4's next-event estimator consumes THIS pair:
+// there is exactly one sampleEnvMap call in this shader and its result is
+// both what is recorded here and what NEE uses, so the samples
+// diff_gpu_probe.cpp's chi-squared check bins are the production light
+// samples and cannot drift away from them.
 layout(std430, binding = 6) buffer EnvSamples {
     float v[];
 } envSamples;
+
+// Probe-only, like DebugDraws and EnvSamples: kNeeSampleFloats floats per
+// PATH INDEX recording what the two MIS strategies computed for THIS
+// dispatch. Written unconditionally (zeros on a miss, see the write below)
+// so the host never reads a stale bounce's values out of it.
+//
+// Both single-strategy estimators and both halves of each sample's MIS
+// partition are recorded, rather than just the combined estimator, because
+// the checks that matter are (a) BSDF-only and NEE-only converging to the
+// same integral -- three estimators, one truth, no shared expected value --
+// and (b) the two weights at ONE direction summing to exactly 1. Neither is
+// recoverable from a combined radiance value alone.
+layout(std430, binding = 7) buffer NeeSamples {
+    float v[];
+} neeSamples;
+
+// The SAME acceleration structure wf_intersect.comp traces against
+// (its binding 5, this stage's 8 -- the index is each stage's own choice).
+// Read-only: no dispatch writes an acceleration structure, so this is not
+// among the buffers WavefrontLoop::record must order against itself.
+layout(binding = 8) uniform accelerationStructureEXT topLevelAS;
 
 layout(push_constant) uniform Push {
     uint capacity;
@@ -187,6 +231,52 @@ layout(push_constant) uniform Push {
 // the same (u1, u2) they always did -- only the per-bounce stride moved.
 const uint kDrawsPerBounce = 5u;
 
+// Floats per PATH INDEX in the binding-7 sink. Must equal
+// ohao::diff::kNeeSampleFloats (tests/diff/gpu_probe_context.hpp), which is
+// what sizes the buffer and strides the readback; a mismatch is a silent
+// wrong-slot read, not a validation error, so the two constants name each
+// other.
+const uint kNeeSampleFloats = 20u;
+
+// How far a shadow ray may travel before the environment is considered
+// reached. The environment is at infinity, so this only has to exceed the
+// longest chord of any scene this stage is run against; 1000 is
+// wf_intersect.comp's own trace tMax, and using the same number keeps "this
+// ray found geometry" meaning the same thing in both stages.
+const float kShadowTMax = 1000.0;
+
+// Offset of the shadow ray's origin along the geometric normal. The SAME
+// 1e-4 the path-continuation offset below uses, and for the same reason: a
+// ray leaving a face must not re-hit the face it left. Deriving both from
+// one constant is what stops a future change to one of them from silently
+// desynchronising the visibility a light sample sees from the geometry the
+// next bounce sees.
+const float kSurfaceOffset = 1e-4;
+
+/// Unoccluded-ness of `dir` from `origin`: 1.0 if the ray reaches
+/// kShadowTMax without hitting anything, 0.0 otherwise.
+///
+/// The inline ray query is wf_intersect.comp's, minus the hit attributes:
+/// gl_RayFlagsTerminateOnFirstHitEXT because any hit at all settles the
+/// question, and gl_RayFlagsOpaqueEXT because nothing in this subsystem
+/// builds non-opaque geometry. tMin is 0 rather than a small epsilon --
+/// self-intersection is handled by offsetting the ORIGIN off the surface
+/// (kSurfaceOffset above), which is the same choice wf_intersect.comp makes
+/// and the reason both stages can be reasoned about the same way.
+///
+/// ONE function, two call sites (the light sample's direction and the BSDF
+/// sample's), for the reason nee.glsl's header gives at length.
+float diffShadowVisibility(vec3 origin, vec3 dir) {
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS,
+                          gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, origin,
+                          0.0, dir, kShadowTMax);
+    while (rayQueryProceedEXT(rq)) { }
+    return (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT)
+               ? 1.0
+               : 0.0;
+}
+
 void main() {
     const uint slot = gl_GlobalInvocationID.x;
     const uint srcCount = min(counters.value[pc.srcCountSlot], pc.capacity);
@@ -241,6 +331,25 @@ void main() {
     const vec3 origin = psGetOrigin(pathIndex, pc.capacity);
     const vec3 dir = psGetDir(pathIndex, pc.capacity);
     const float hitT = psGetHitT(pathIndex, pc.capacity);
+
+    // --- The two MIS strategies' per-sample record, declared HERE so that
+    // the single write at the end of this function covers the miss path too
+    // (all zeros, status 0). A sink written only on the hit path would keep
+    // whatever the previous dispatch left at this path's offset, and the
+    // host cannot tell a stale value from a fresh one.
+    DiffMisTerm neeTerm;
+    neeTerm.unweighted = vec3(0.0);
+    neeTerm.wOwn = 0.0;
+    neeTerm.wOther = 0.0;
+    DiffMisTerm bsdfTerm = neeTerm;
+    float envRadiance = 0.0;
+    float pdfEnvAtBsdfDir = 0.0;
+    float pdfBsdfAtEnvDir = 0.0;
+    float visEnv = 0.0;
+    float visBsdf = 0.0;
+    float surfaceBranch = 0.0;
+    vec3 bsdfSampleDir = vec3(0.0);
+    float bsdfSamplePdf = 0.0;
 
     // MISS GUARD. The stored Normal is UNDEFINED on a miss -- wf_intersect.comp
     // deliberately leaves PS_NORMAL_X/Y/Z untouched when HitT is -1, so they
@@ -311,9 +420,68 @@ void main() {
         // uDir would have produced keeps the ray inside the scene at zero
         // cost in extra random draws and, because the weight is already
         // exactly zero, introduces no bias.
+        //
+        // Captured BEFORE the substitution below: the direct-lighting
+        // estimator has to be evaluated at the direction the BSDF actually
+        // DREW and at the density it was drawn with, not at a replacement
+        // chosen for path continuation. When the sample was rejected both
+        // are zero, so the contribution is zero either way -- but making
+        // that hold by construction rather than by coincidence is what keeps
+        // the estimator's expectation equal to the integral.
+        const vec3 bsdfDir = newDir;
+        bsdfSampleDir = bsdfDir;
+        bsdfSamplePdf = pdf;
+
         if (pdf <= 0.0) {
             newDir = diffCosineHemisphere(normal, u1, u2);
         }
+
+        // --- NEXT-EVENT ESTIMATION AND MIS -----------------------------
+        //
+        // Both strategies estimate the SAME direct-lighting integral at this
+        // shading point, and both go through nee.glsl's ONE diffMisTerm.
+        // Neither touches path state: their results are recorded per sample
+        // and accumulated on the HOST (see the file header).
+        const vec3 hitPoint = origin + dir * hitT;
+        const vec3 shadowOrigin = hitPoint + normal * kSurfaceOffset;
+        surfaceBranch = 1.0;
+
+        // Strategy E -- next event. The light sample is `envDir`/`envPdf`
+        // drawn ABOVE, the very pair binding 6 records. Not re-drawn here.
+        vec3 fEnv;
+        diffBsdfEval(normal, V, envDir, vec3(pc.albedo), roughness, metallic, pc.specularWeight,
+                     fEnv, pdfBsdfAtEnvDir);
+        const float nDotLEnv = max(dot(normal, envDir), 0.0);
+        if (envPdf > 0.0 && nDotLEnv > 0.0) {
+            visEnv = diffShadowVisibility(shadowOrigin, envDir);
+        }
+        envRadiance = diffEnvRadianceFromPdf(envPdf, pc.envWidth, pc.envHeight, pc.envIntegral);
+        neeTerm = diffMisTerm(fEnv * nDotLEnv, vec3(envRadiance), visEnv, envPdf, pdfBsdfAtEnvDir);
+
+        // Strategy B -- BSDF sampling. pdfEnvMap is the other half of
+        // env_sampling.glsl's pair and, until this call, had no caller under
+        // test anywhere in this repository: check 24 deliberately writes its
+        // own inverse rather than using it. It is what makes the BSDF
+        // strategy's MIS weight the balance heuristic's actual partner
+        // density and not a guess.
+        //
+        // f*cos is reconstructed as weight*pdf rather than re-evaluated:
+        // diffBsdfSample already returns weight = f*cos/pdf, and multiplying
+        // it back is one instruction against a second full BSDF evaluation.
+        // The round trip is not bit-exact (the pure-Lambert fast path
+        // returns baseColor without ever dividing), but nothing exact rests
+        // on it -- the path's throughput still uses `weight` itself, so
+        // checks 14/17's bit-exact 0.0625 are untouched, and this quantity
+        // only feeds a Monte Carlo estimator.
+        if (pc.envWidth > 0u && pc.envHeight > 0u) {
+            pdfEnvAtBsdfDir = pdfEnvMap(bsdfDir, pc.envWidth, pc.envHeight);
+        }
+        if (pdf > 0.0) {
+            visBsdf = diffShadowVisibility(shadowOrigin, bsdfDir);
+        }
+        const float bsdfRadiance =
+            diffEnvRadianceFromPdf(pdfEnvAtBsdfDir, pc.envWidth, pc.envHeight, pc.envIntegral);
+        bsdfTerm = diffMisTerm(weight * pdf, vec3(bsdfRadiance), visBsdf, pdf, pdfEnvAtBsdfDir);
 
         // 1. Throughput decay by the BSDF estimator weight f*cos/pdf.
         const vec3 throughput = psGetThroughput(pathIndex, pc.capacity);
@@ -321,10 +489,41 @@ void main() {
 
         // 2. Advance to the hit point, offset along the geometric normal so
         //    the next trace cannot re-hit the face it just left.
-        const vec3 hitPoint = origin + dir * hitT;
-        psSetOrigin(pathIndex, pc.capacity, hitPoint + normal * 1e-4);
+        psSetOrigin(pathIndex, pc.capacity, hitPoint + normal * kSurfaceOffset);
         psSetDir(pathIndex, pc.capacity, newDir);
     }
+
+    // --- The single NEE-sink write. Every slot is named here and in
+    // gpu_probe_context.hpp's NeeSampleSlot enum; they must not drift.
+    const uint nb = pathIndex * kNeeSampleFloats;
+    neeSamples.v[nb +  0u] = neeTerm.unweighted.x;
+    neeSamples.v[nb +  1u] = neeTerm.unweighted.y;
+    neeSamples.v[nb +  2u] = neeTerm.unweighted.z;
+    neeSamples.v[nb +  3u] = neeTerm.wOwn;    // w_env at the light sample
+    neeSamples.v[nb +  4u] = neeTerm.wOther;  // w_bsdf at the SAME direction
+    neeSamples.v[nb +  5u] = bsdfTerm.unweighted.x;
+    neeSamples.v[nb +  6u] = bsdfTerm.unweighted.y;
+    neeSamples.v[nb +  7u] = bsdfTerm.unweighted.z;
+    neeSamples.v[nb +  8u] = bsdfTerm.wOwn;    // w_bsdf at the BSDF sample
+    neeSamples.v[nb +  9u] = bsdfTerm.wOther;  // w_env at the SAME direction
+    neeSamples.v[nb + 10u] = envRadiance;
+    neeSamples.v[nb + 11u] = pdfEnvAtBsdfDir;
+    neeSamples.v[nb + 12u] = pdfBsdfAtEnvDir;
+    neeSamples.v[nb + 13u] = visEnv;
+    neeSamples.v[nb + 14u] = visBsdf;
+    neeSamples.v[nb + 15u] = surfaceBranch;
+    // The BSDF sample's own direction and density. Recorded because
+    // pdfEnvMap's answer at slot 11 cannot be checked without the direction
+    // it was asked about: env_sampling.glsl's pdfEnvMap divides the texel's
+    // CDF mass by sin(theta) of the QUERY direction, while that mass
+    // already carries sin(theta) of the texel CENTRE, so what it returns is
+    // the texel density scaled by sin(theta_centre)/sin(theta_query) -- a
+    // factor of 1 exactly at a texel centre and up to several elsewhere.
+    // Nothing can verify that without knowing theta_query.
+    neeSamples.v[nb + 16u] = bsdfSampleDir.x;
+    neeSamples.v[nb + 17u] = bsdfSampleDir.y;
+    neeSamples.v[nb + 18u] = bsdfSampleDir.z;
+    neeSamples.v[nb + 19u] = bsdfSamplePdf;
 
     // 3. Bounce count, incremented -- this is what the next dispatch's
     // fast-forward reads to know how many draws to skip. Incremented on the

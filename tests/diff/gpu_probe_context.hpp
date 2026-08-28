@@ -68,6 +68,89 @@ struct WavefrontScatterMaterial {
     float specularWeight{0.0f};
 };
 
+/// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.
+/// Must equal that shader's `kNeeSampleFloats`; the two constants name each
+/// other, because a mismatch is a silent wrong-slot read rather than a
+/// validation error.
+inline constexpr std::uint32_t kNeeSampleFloats = 20;
+
+/// Named offsets into one path's kNeeSampleFloats-float record. The order is
+/// wf_scatter.comp's single write block, in the order it writes them.
+///
+/// The record deliberately carries BOTH single-strategy estimators and BOTH
+/// halves of each sample's MIS partition rather than one combined radiance:
+/// the two checks that matter -- next-event-only and BSDF-only converging to
+/// the same integral, and the two weights at ONE direction summing to
+/// exactly 1 -- are not recoverable from a combined value.
+enum NeeSampleSlot : std::uint32_t {
+    /// f*cos*L*V / p_env at the light sample: next-event estimation's own
+    /// unbiased estimator of the direct-lighting integral, NO MIS weight
+    /// applied. Three floats.
+    kNeeSlotNeeUnweighted = 0,
+    /// MIS weight for the ENVIRONMENT strategy at the light sample -- the
+    /// weight the combined estimator multiplies kNeeSlotNeeUnweighted by.
+    kNeeSlotWEnvAtLight = 3,
+    /// MIS weight the BSDF strategy would carry at that SAME direction.
+    /// kNeeSlotWEnvAtLight + this == 1 for every sample.
+    kNeeSlotWBsdfAtLight = 4,
+    /// f*cos*L*V / p_bsdf at the BSDF sample: the BSDF strategy's own
+    /// unbiased estimator of the same integral. Three floats.
+    kNeeSlotBsdfUnweighted = 5,
+    /// MIS weight for the BSDF strategy at the BSDF sample.
+    kNeeSlotWBsdfAtBsdf = 8,
+    /// MIS weight the environment strategy would carry at that SAME
+    /// direction. kNeeSlotWBsdfAtBsdf + this == 1 for every sample.
+    kNeeSlotWEnvAtBsdf = 9,
+    /// Grey environment radiance the shader recovered from the light
+    /// sample's density, ScatterPush::envIntegral and the map's dimensions
+    /// (shaders/includes/diff/nee.glsl's diffEnvRadianceFromPdf). This is
+    /// the ONLY observable that depends on envIntegral having reached the
+    /// GPU intact.
+    kNeeSlotEnvRadiance = 10,
+    /// env_sampling.glsl's pdfEnvMap evaluated at the BSDF sample's
+    /// direction -- the MIS partner density for the BSDF strategy, and
+    /// pdfEnvMap's first caller under test anywhere in this repository.
+    kNeeSlotPdfEnvAtBsdf = 11,
+    /// diffBsdfEval's pdf at the LIGHT sample's direction -- the MIS partner
+    /// density for the environment strategy.
+    kNeeSlotPdfBsdfAtLight = 12,
+    /// Shadow-ray results, 1 unoccluded / 0 occluded, at the light sample
+    /// and the BSDF sample respectively. 0 also when the direction was below
+    /// the horizon and no ray was traced.
+    kNeeSlotVisLight = 13,
+    kNeeSlotVisBsdf = 14,
+    /// 1 if this path took the surface branch (hit distance >= 0) in this
+    /// dispatch, 0 if it took the miss guard. Every other slot is 0 when
+    /// this is 0.
+    kNeeSlotSurfaceBranch = 15,
+    /// The BSDF sample's own direction (three floats) and the density it was
+    /// drawn with. Recorded because kNeeSlotPdfEnvAtBsdf cannot be checked
+    /// without the direction pdfEnvMap was asked about -- see
+    /// wf_scatter.comp's write block.
+    kNeeSlotBsdfDir = 16,
+    kNeeSlotPdfBsdfAtBsdf = 19,
+};
+
+/// Occluder geometry for the shadow rays wf_scatter.comp's next-event
+/// estimator traces. `positions` is 3 floats per vertex, `indices` 3 uints
+/// per triangle -- the same packing runWavefrontIntersectOnGeometry takes.
+///
+/// EMPTY MEANS "NO OCCLUDERS", not "no acceleration structure": a
+/// VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR binding cannot be
+/// VK_NULL_HANDLE without the nullDescriptor feature, which this context
+/// does not enable, so "nothing blocks the environment" has to be spelled as
+/// geometry no shadow ray can reach. runWavefrontScatterProbe substitutes a
+/// single triangle a million units away -- three orders of magnitude beyond
+/// the shader's own kShadowTMax of 1000 -- for an empty scene.
+struct WavefrontShadowScene {
+    std::span<const float> positions;
+    std::span<const uint32_t> indices;
+
+    [[nodiscard]] bool empty() const noexcept {
+        return positions.empty() || indices.empty();
+    }
+};
+
 /// Headless Vulkan context for standalone GPU probe executables.
 ///
 /// Owns a VkInstance, VkDevice (with the differentiable-renderer device
@@ -301,6 +384,19 @@ public:
     /// that have no interest in environment sampling are unchanged; the
     /// buffer is allocated, bound and written either way, because the
     /// descriptor set is not optional. Returns false on any Vulkan error.
+    ///
+    /// `shadowScene` is the occluder geometry the stage's next-event
+    /// estimator traces shadow rays against (binding 8). It defaults to
+    /// empty, which this function realises as unreachable geometry rather
+    /// than a null acceleration structure -- see WavefrontShadowScene. A
+    /// caller that wants the estimator's visibility term to mean anything
+    /// must pass the SAME geometry it traced the primary rays against.
+    ///
+    /// `outNeeSamples`, when non-null, receives binding 7: `capacity *
+    /// kNeeSampleFloats` floats per dispatch, indexed by path index and laid
+    /// out by NeeSampleSlot. Like outEnvSamples it is a pointer with a
+    /// nullptr default -- the buffer is allocated, bound and written either
+    /// way, because the descriptor set is not optional.
     [[nodiscard]] bool runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32_t srcQueueBase,
                                                 uint32_t srcCountSlot, uint32_t dstQueueBase,
                                                 uint32_t dstCountSlot, float albedo,
@@ -308,7 +404,30 @@ public:
                                                 std::vector<uint32_t>& outQueueDst,
                                                 std::vector<float>& outDebugDraws,
                                                 const WavefrontScatterMaterial& material = {},
-                                                std::vector<float>* outEnvSamples = nullptr);
+                                                std::vector<float>* outEnvSamples = nullptr,
+                                                const WavefrontShadowScene& shadowScene = {},
+                                                std::vector<float>* outNeeSamples = nullptr);
+
+    /// Runs wf_prepare_indirect.comp + an indirectly-dispatched
+    /// wf_intersect.comp over queue ring 0 against an ARBITRARY triangle
+    /// soup, compacting survivors into ring 1 and copying that ring out.
+    ///
+    /// `positions` is 3 floats per vertex and `indices` 3 uints per
+    /// triangle; BOTH are also bound to wf_intersect.comp as storage buffers
+    /// (bindings 3 and 4), which is how it recovers the hit triangle's
+    /// vertices to compute a geometric normal.
+    ///
+    /// runWavefrontIntersectProbe (a single quad) and
+    /// runWavefrontBoxIntersectProbe (a closed box) are the two named scenes
+    /// built on it. This entry point is public because a caller that needs
+    /// its OWN scene also needs to hand the same triangles to
+    /// runWavefrontScatterProbe's `shadowScene`, so that the primary rays
+    /// and the shadow rays see one geometry rather than two that happen to
+    /// agree.
+    [[nodiscard]] bool runWavefrontIntersectOnGeometry(WavefrontBuffers& buffers,
+                                                       std::span<const float> positions,
+                                                       std::span<const uint32_t> indices,
+                                                       std::vector<uint32_t>& outQueue1);
 
     /// Runs the WHOLE wavefront bounce loop through ohao::diff::WavefrontLoop
     /// -- generate, then prepare_indirect/intersect/prepare_indirect/scatter
@@ -406,32 +525,23 @@ public:
     /// unchanged; the buffer is allocated, bound and written either way.
     ///
     /// Returns false on any Vulkan error.
+    /// `outNeeSamples`, when non-null, receives binding 7 after the FINAL
+    /// run: `capacity * kNeeSampleFloats` floats laid out by NeeSampleSlot.
+    /// The scene is the CLOSED box, so every shadow ray this probe's
+    /// next-event estimator traces is occluded and every contribution in
+    /// that record must be exactly zero -- which is what makes it the check
+    /// that the shadow ray is traced at all, as opposed to a visibility term
+    /// silently stuck at 1.
     [[nodiscard]] bool runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint32_t width,
                                                   uint32_t height, uint32_t maxBounces,
                                                   float albedo, uint32_t iterationSeed,
                                                   std::vector<std::vector<float>>& outDrawsPerBounce,
                                                   std::vector<uint32_t>& outLiveCountPerRun,
                                                   std::vector<uint32_t>& outFinalQueue,
-                                                  std::vector<float>* outEnvSamples = nullptr);
+                                                  std::vector<float>* outEnvSamples = nullptr,
+                                                  std::vector<float>* outNeeSamples = nullptr);
 
 private:
-    /// The body both runWavefrontIntersectProbe and
-    /// runWavefrontBoxIntersectProbe share: build a BLAS/TLAS over the
-    /// caller's triangle soup, then run wf_prepare_indirect.comp +
-    /// an indirectly-dispatched wf_intersect.comp over queue ring 0,
-    /// compacting survivors into ring 1, and copy ring 1 out to the host.
-    /// Only the geometry differs between the two public entry points, so
-    /// only the geometry is a parameter.
-    ///
-    /// `positions` is 3 floats per vertex and `indices` 3 uints per
-    /// triangle; BOTH are also bound to wf_intersect.comp as storage
-    /// buffers (bindings 3 and 4), which is how it recovers the hit
-    /// triangle's vertices to compute a geometric normal.
-    [[nodiscard]] bool runWavefrontIntersectOnGeometry(WavefrontBuffers& buffers,
-                                                       std::span<const float> positions,
-                                                       std::span<const uint32_t> indices,
-                                                       std::vector<uint32_t>& outQueue1);
-
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,
     /// barrier to host reads, wait. Every object is destroyed on every path.

@@ -3976,9 +3976,12 @@ int main() {
         std::vector<uint32_t> liveCountPerRun;
         std::vector<uint32_t> finalQueue;
         std::vector<float> envSamples;
+        // The same run also produces check 28's evidence -- see below; one
+        // dispatch, two independent verdicts.
+        std::vector<float> neeSamples;
         if (!ctx.runWavefrontFusedLoopProbe(wf, kW, kH, kBounces, kAlbedo, kIterationSeed,
                                             drawsPerBounce, liveCountPerRun, finalQueue,
-                                            &envSamples)) {
+                                            &envSamples, &neeSamples)) {
             std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 27 fused loop dispatch\n");
             wf.destroy(ctx.allocator());
             return 1;
@@ -4071,6 +4074,783 @@ int main() {
                     "(tolerance %.3g)\n",
                     kCapacity, kEnvW, kEnvH, maxCentreError, kCentreSlack, maxPdfRelError,
                     kPdfRelTolerance);
+
+        // ------------------------------------------------------------------
+        // 28. The shadow ray is actually traced (Stage 0b-2b Task 4).
+        // ------------------------------------------------------------------
+        //
+        // Check 27's run is the CLOSED BOX, entered from its centre. A ray
+        // leaving any point strictly inside a closed convex body through any
+        // direction hits a face -- that is the same geometric fact the
+        // fused-loop survival theorem rests on -- so EVERY shadow ray
+        // wf_scatter.comp's next-event estimator traces here is occluded,
+        // and every direct-lighting contribution in the binding-7 record
+        // must be EXACTLY zero. Not "small": zero, bit for bit, because
+        // diffMisTerm multiplies by the visibility term rather than
+        // attenuating by it.
+        //
+        // This is the check that the shadow ray EXISTS. A visibility term
+        // stuck at 1 -- the shape a missing or mis-flagged ray query takes
+        // -- produces a perfectly plausible unoccluded estimate that checks
+        // 29-31 (which run in an unoccluded scene, where the right answer IS
+        // visibility 1) could never distinguish from the truth. The two
+        // scenes are complementary on purpose: one where the answer must be
+        // 1 everywhere and one where it must be 0 everywhere.
+        //
+        // NON-VACUITY. "All contributions are zero" is also what a zeroed
+        // buffer looks like. So the recovered environment radiance is
+        // asserted STRICTLY POSITIVE on the same samples: with radiance > 0,
+        // a nonzero BSDF and directions above the horizon, the visibility
+        // term is the only factor that can be zeroing the product. (The
+        // default UV-uniform CDF this check runs against has integral 1 and
+        // strictly positive density in every texel -- see
+        // wavefront_buffers.cpp's seeding -- so a zero radiance here would
+        // itself be a failure.)
+        if (neeSamples.size() !=
+            static_cast<std::size_t>(kCapacity) * ohao::diff::kNeeSampleFloats) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 28 NEE samples readback returned %zu "
+                         "floats, expected %u\n",
+                         neeSamples.size(),
+                         kCapacity * ohao::diff::kNeeSampleFloats);
+            return 1;
+        }
+        {
+            uint32_t litSamples = 0;
+            uint32_t surfaceSamples = 0;
+            double minEnvRadiance = std::numeric_limits<double>::infinity();
+            for (uint32_t i = 0; i < kCapacity; ++i) {
+                const std::size_t b =
+                    static_cast<std::size_t>(i) * ohao::diff::kNeeSampleFloats;
+                if (neeSamples[b + ohao::diff::kNeeSlotSurfaceBranch] == 0.0f) continue;
+                ++surfaceSamples;
+                const float visLight = neeSamples[b + ohao::diff::kNeeSlotVisLight];
+                const float visBsdf = neeSamples[b + ohao::diff::kNeeSlotVisBsdf];
+                if (visLight != 0.0f || visBsdf != 0.0f) ++litSamples;
+                minEnvRadiance = std::min(
+                    minEnvRadiance,
+                    static_cast<double>(neeSamples[b + ohao::diff::kNeeSlotEnvRadiance]));
+                for (uint32_t c = 0; c < 3u; ++c) {
+                    const float nee =
+                        neeSamples[b + ohao::diff::kNeeSlotNeeUnweighted + c];
+                    const float bsdf =
+                        neeSamples[b + ohao::diff::kNeeSlotBsdfUnweighted + c];
+                    if (nee != 0.0f || bsdf != 0.0f) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: check 28 -- path %u reported a "
+                                     "nonzero direct-lighting contribution (nee %.9g, bsdf %.9g, "
+                                     "channel %u) from INSIDE a closed box, where every shadow "
+                                     "ray must be occluded. Its visibility terms are %.9g and "
+                                     "%.9g\n",
+                                     i, static_cast<double>(nee), static_cast<double>(bsdf), c,
+                                     static_cast<double>(visLight),
+                                     static_cast<double>(visBsdf));
+                        return 1;
+                    }
+                }
+            }
+            if (surfaceSamples != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 28 -- only %u of %u paths took "
+                             "wf_scatter.comp's surface branch. Every ray from the centre of a "
+                             "closed box hits a face, so a miss here means the scene or the "
+                             "trace is not what this check assumes and the zero contributions "
+                             "below would be vacuous\n",
+                             surfaceSamples, kCapacity);
+                return 1;
+            }
+            if (litSamples != 0) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 28 -- %u of %u paths reported an "
+                             "UNOCCLUDED shadow ray from inside a closed box\n",
+                             litSamples, kCapacity);
+                return 1;
+            }
+            if (!(minEnvRadiance > 0.0)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 28 -- the least of the recovered "
+                             "environment radiances is %.9g. The zero contributions above would "
+                             "then be zero because there is no light, not because the shadow ray "
+                             "found geometry, and this check would prove nothing\n",
+                             minEnvRadiance);
+                return 1;
+            }
+            std::printf("[diff_gpu_probe] OK: check 28 -- every one of %u paths inside a CLOSED "
+                        "box reports visibility exactly 0 for both the light sample and the BSDF "
+                        "sample, and every direct-lighting contribution is exactly 0.0 (not "
+                        "merely small), while the recovered environment radiance is strictly "
+                        "positive (min %.6g) -- so the zeros are the shadow ray's doing and not "
+                        "an absence of light\n",
+                        kCapacity, minEnvRadiance);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 29-31. NEXT-EVENT ESTIMATION AND MIS (Stage 0b-2b Task 4).
+    // ------------------------------------------------------------------
+    //
+    // wf_scatter.comp now estimates the direct-lighting integral at each hit
+    // point TWICE, by two different sampling strategies, and combines them
+    // with the balance heuristic:
+    //
+    //   I = integral over the sphere of f(N,V,w) max(0, N.w) L(w) V(w) dw
+    //
+    //   strategy E ("next event"): w ~ p_E, the environment's
+    //       sin(theta)-weighted luminance (env_sampling.glsl's sampleEnvMap
+    //       -- the SAME call, on the SAME sample, that binding 6 records and
+    //       check 24 chi-squares; see the routing tie in check 31)
+    //   strategy B ("BSDF sampling"): w ~ p_B, diffBsdfSample's own mixture
+    //
+    // ------------------------------------------------------------------
+    // THE ORACLE: strategy agreement, not a re-implemented integrand
+    // ------------------------------------------------------------------
+    //
+    // Each strategy's single-sample estimator f*cos*L*V/p_own is unbiased
+    // for I on its own. So are their MIS combination and, separately, each
+    // half of it. Three estimators of one truth -- and the truth is never
+    // computed here. A host oracle that re-evaluated f, L and V would share
+    // whatever misconception the shader has about any of them; two
+    // independent SAMPLERS of the same integral share nothing but the
+    // integral itself.
+    //
+    // THE ONE THING THEIR EXPECTATIONS DO NOT SHARE, and it is derived, not
+    // waved away. env_sampling.glsl returns TEXEL CENTRES (checks 25/27
+    // pin that), so strategy E is a midpoint quadrature of the piecewise-
+    // constant environment, while strategy B draws continuously and
+    // integrates the same piecewise-constant map EXACTLY. Those two numbers
+    // are not equal, and pretending they were would be a bound that passes
+    // its own perturbation.
+    //
+    // The scene is chosen so the gap has a CLOSED FORM. The surface normal
+    // is +Y, the equirectangular pole, so the cosine factor is
+    // max(0, cos theta): a function of the ROW alone, with no azimuthal
+    // dependence, and (for even envH) a horizon that falls exactly on a row
+    // boundary rather than cutting through a row. Over one row
+    // [theta1, theta2] of width dtheta, with L constant on the row,
+    //
+    //   exact   = L dphi * integral of cos(theta) sin(theta) dtheta
+    //           = L dphi * cos(theta_c) sin(theta_c) sin(dtheta)
+    //   midpoint= L dphi * dtheta cos(theta_c) sin(theta_c)
+    //
+    // using cos(theta)sin(theta) = sin(2 theta)/2 and
+    // cos(2 theta_1) - cos(2 theta_2) = 2 sin(2 theta_c) sin(dtheta). Their
+    // ratio is sin(dtheta)/dtheta -- INDEPENDENT of the row, of L, and of
+    // the map's azimuthal structure -- so summing over every texel,
+    //
+    //   E[strategy B] = kappa * E[strategy E],   kappa = sinc(pi/envH).
+    //
+    // At envH = 64 that is 0.99959845, a 4.02e-4 relative offset. Nothing is
+    // fitted: kappa is a trigonometric identity, and it is the ONLY host
+    // input the agreement check takes.
+    //
+    // ------------------------------------------------------------------
+    // 29. The bound, derived
+    // ------------------------------------------------------------------
+    //
+    // Every path shades the same normal (+Y) with the same Lambertian BSDF
+    // (specularWeight 0, metallic 0 -- f = albedo/pi, independent of the
+    // view direction, so the per-pixel view variation does not make the
+    // samples non-identically-distributed) and the same unoccluded upper
+    // hemisphere. The N = 49152 per-path records are therefore i.i.d. draws
+    // of one scalar estimator each, and the comparisons are PAIRED per
+    // sample:
+    //
+    //   D1_i = Y_i - kappa X_i        E[D1] = 0 exactly
+    //   D2_i = Z_i - Y_i              E[D2] = delta   (below)
+    //   D3_i = Z_i - X_i              E[D3] = delta - (1-kappa) E[X]
+    //
+    // with X the next-event-only estimator, Y the BSDF-only one and Z their
+    // MIS combination. The bound on each is z * s_D / sqrt(N) using THAT
+    // difference's own sample standard deviation -- exact whatever the
+    // correlation between X_i and Y_i, which is why the comparison is
+    // paired rather than a difference of two independent means.
+    //
+    // delta is the MIS estimator's own share of the same midpoint-vs-exact
+    // gap: its next-event half is the same midpoint sum damped by
+    // w_E in [0,1], its BSDF half is exact, so
+    // delta = Mid[w_E g] - Exact[w_E g]. It is allowed for at
+    // (1 - kappa) * mean(X) -- the UNDAMPED gap, i.e. the same integral with
+    // w_E replaced by 1. Measured by numerical quadrature at four
+    // resolutions (envH = 8, 16, 32, 64) the true ratio delta/((1-kappa)A)
+    // is 0.70, 0.77, 0.80, 0.81 -- always below 1, so the allowance is
+    // conservative by about 20%. At envH = 64 the allowance is 4.02e-4
+    // relative, against a Monte Carlo standard error near 3e-3 relative:
+    // the systematic term is a tenth of the bound, not the bound.
+    //
+    // z = 6. The nominal two-sided Gaussian rate is 2e-9; the HONEST rate is
+    // Berry-Esseen's, and for this estimator's third absolute moment that
+    // bound is 2.7e-3 whatever z is, so z buys margin against the
+    // perturbation rather than against the tail. The empirical justification
+    // is the one that matters: over 60 independent replications of exactly
+    // these estimators at exactly this N, simulated on the host before any
+    // of this was written, the largest |D| observed was 2.5 standard errors
+    // -- comfortably under half the threshold -- while the Step 5
+    // perturbation (inverting ONE misBalanceHeuristic call's arguments)
+    // shifts D2 by 26 thresholds. The bound rejects the perturbation by a
+    // factor of 26 and admits the truth by a factor of 2.4.
+    //
+    // NON-VACUITY. All three estimators are asserted strictly positive, and
+    // the count of samples that contributed anything is printed. An
+    // unwritten (all-zero) sink would make all three agree perfectly at 0,
+    // which is exactly the failure mode a pure agreement check cannot see.
+    {
+        // 256x192 = 49152 paths, ONE scatter dispatch. Every path is an
+        // independent RNG stream (streams are keyed by pixel index), so the
+        // sample count comes from the image rather than from repeating
+        // dispatches -- which is also the configuration the integrator
+        // actually runs in.
+        constexpr uint32_t kW = 256;
+        constexpr uint32_t kH = 192;
+        constexpr uint32_t kCapacity = kW * kH;  // 49152
+        constexpr uint32_t kIterationSeed = 4040404u;
+        constexpr float kAlbedo = 1.0f;
+
+        // envH must be EVEN for the horizon to land on a row boundary (see
+        // the kappa derivation), and 64 is where the derived systematic
+        // offset drops an order of magnitude below the Monte Carlo error.
+        constexpr uint32_t kEnvW = 128;
+        constexpr uint32_t kEnvH = 64;
+        static_assert(kEnvH % 2u == 0u,
+                     "the closed-form midpoint/exact ratio needs the +Y horizon to fall on a "
+                     "row boundary, which requires an even envH");
+        constexpr uint32_t kEnvTexels = kEnvW * kEnvH;
+
+        // A floor at y = 0 seen from directly above. The camera basis is any
+        // orthonormal triple with forward = -Y; the footprint at this fov
+        // and height is under +/-0.6 in x and z, so a half-size of 2 leaves
+        // the quad's edges nowhere near a primary ray.
+        constexpr float kFloorY = 0.0f;
+        constexpr float kFloorHalfSize = 2.0f;
+        constexpr float kCameraHeight = 2.0f;
+        constexpr float kTanHalfFov = 0.2f;
+
+        constexpr double kPi = 3.14159265358979323846;
+        constexpr double kZ = 6.0;
+
+        // --- The environment. Strictly positive everywhere (so every
+        // returned density is positive and every recovered radiance is
+        // finite), asymmetric in both axes, brighter towards the +Y pole so
+        // that most of the environment's energy is in the hemisphere the
+        // floor can actually see, and with a bright block ALSO in that
+        // hemisphere so the two strategies genuinely disagree about where to
+        // put their samples. A block in the lower hemisphere would make
+        // next-event estimation spend most of its samples on directions the
+        // cosine kills, which weakens the check for no reason. ---
+        std::vector<float> envRgba(static_cast<std::size_t>(kEnvTexels) * 4u, 0.0f);
+        std::vector<double> envLum(kEnvTexels, 0.0);
+        constexpr double kBlockBoost = 8.0;
+        const uint32_t kBlockY0 = static_cast<uint32_t>(kEnvH * 0.15);
+        const uint32_t kBlockX0 = static_cast<uint32_t>(kEnvW * 0.60);
+        const uint32_t kBlockH = kEnvH / 8u;
+        const uint32_t kBlockW = kEnvW / 8u;
+        for (uint32_t y = 0; y < kEnvH; ++y) {
+            for (uint32_t x = 0; x < kEnvW; ++x) {
+                double L = 1.0 + 0.10 * (static_cast<double>(x) * 16.0 / kEnvW) +
+                           0.30 * (static_cast<double>(kEnvH - 1u - y) * 8.0 / kEnvH);
+                if (y >= kBlockY0 && y < kBlockY0 + kBlockH && x >= kBlockX0 &&
+                    x < kBlockX0 + kBlockW) {
+                    L += kBlockBoost;
+                }
+                const std::size_t k = static_cast<std::size_t>(y) * kEnvW + x;
+                envLum[k] = L;
+                envRgba[k * 4u + 0u] = static_cast<float>(L);
+                envRgba[k * 4u + 1u] = static_cast<float>(L);
+                envRgba[k * 4u + 2u] = static_cast<float>(L);
+                envRgba[k * 4u + 3u] = 1.0f;
+            }
+        }
+        static_assert(kBlockBoost > 1.0,
+                     "the bright block is what makes the two sampling densities disagree; "
+                     "without it MIS has nothing to combine");
+
+        ohao::EnvCDF envCdf;
+        envCdf.build(envRgba, static_cast<int>(kEnvW), static_cast<int>(kEnvH));
+        if (!envCdf.valid()) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: checks 29-31: EnvCDF::build produced no "
+                                  "CDF for a %ux%u strictly-positive environment\n",
+                         kEnvW, kEnvH);
+            return 1;
+        }
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity, kEnvW, kEnvH)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: checks 29-31 buffers build\n");
+            return 1;
+        }
+        if (!wf.uploadEnvironment(envCdf.marginalSpan(), envCdf.conditionalSpan(),
+                                  envCdf.integral())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: checks 29-31 env CDF upload rejected\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        ohao::diff::WavefrontGenerateCamera camera;
+        camera.origin[0] = 0.0f;
+        camera.origin[1] = kCameraHeight;
+        camera.origin[2] = 0.0f;
+        camera.forward[0] = 0.0f;
+        camera.forward[1] = -1.0f;
+        camera.forward[2] = 0.0f;
+        camera.right[0] = 1.0f;
+        camera.right[1] = 0.0f;
+        camera.right[2] = 0.0f;
+        camera.up[0] = 0.0f;
+        camera.up[1] = 0.0f;
+        camera.up[2] = -1.0f;
+        camera.tanHalfFov = kTanHalfFov;
+
+        std::vector<uint32_t> queue0;
+        if (!ctx.runWavefrontGenerateProbe(wf, kW, kH, camera, queue0)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: checks 29-31 setup: wf_generate\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // The floor, as ONE triangle soup handed to BOTH the primary trace
+        // and the shadow rays. Passing the same span to both is the point:
+        // a shadow ray tested against different geometry than the primary
+        // ray is a visibility term that means nothing.
+        const float e = kFloorHalfSize;
+        const std::array<float, 12> floorPositions = {
+            -e, kFloorY, -e,
+             e, kFloorY, -e,
+             e, kFloorY,  e,
+            -e, kFloorY,  e,
+        };
+        const std::array<uint32_t, 6> floorIndices = {0, 1, 2, 0, 2, 3};
+
+        std::vector<uint32_t> queue1;
+        if (!ctx.runWavefrontIntersectOnGeometry(wf, std::span<const float>(floorPositions),
+                                                 std::span<const uint32_t>(floorIndices),
+                                                 queue1)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: checks 29-31 setup: wf_intersect\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        ohao::diff::WavefrontShadowScene shadowScene;
+        shadowScene.positions = std::span<const float>(floorPositions);
+        shadowScene.indices = std::span<const uint32_t>(floorIndices);
+
+        std::vector<uint32_t> outQueue;
+        std::vector<float> outDraws;
+        std::vector<float> envSamples;
+        std::vector<float> neeSamples;
+        if (!ctx.runWavefrontScatterProbe(
+                wf, /*srcQueueBase=*/kCapacity,
+                ohao::diff::WavefrontBuffers::kNextCountSlot, /*dstQueueBase=*/0u,
+                ohao::diff::WavefrontBuffers::kCurrentCountSlot, kAlbedo, kIterationSeed, outQueue,
+                outDraws, /*material=*/{}, &envSamples, shadowScene, &neeSamples)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: checks 29-31 scatter dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        const float envIntegral = wf.envIntegral();
+        wf.destroy(ctx.allocator());
+
+        if (envSamples.size() != static_cast<std::size_t>(kCapacity) * 4u ||
+            neeSamples.size() !=
+                static_cast<std::size_t>(kCapacity) * ohao::diff::kNeeSampleFloats) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: checks 29-31 readback returned %zu env floats "
+                         "and %zu NEE floats, expected %u and %u\n",
+                         envSamples.size(), neeSamples.size(), kCapacity * 4u,
+                         kCapacity * ohao::diff::kNeeSampleFloats);
+            return 1;
+        }
+
+        // --- Host-side accumulation. Deliberately NOT the GPU's: Task 4's
+        // estimators are formed here from per-sample readback, which makes
+        // the accumulator an oracle independent of whatever Task 5 does to
+        // film accumulation, and keeps these verdicts valid across that
+        // change.
+        double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
+        double sumD1 = 0.0, sumD2 = 0.0, sumD3 = 0.0;
+        double sumD1Sq = 0.0, sumD2Sq = 0.0, sumD3Sq = 0.0;
+        double sumXSq = 0.0, sumYSq = 0.0, sumZSq = 0.0;
+        uint32_t contributing = 0;
+        uint32_t surfaceSamples = 0;
+        // 29's kappa: the closed-form midpoint/exact ratio derived above.
+        const double kappa = std::sin(kPi / kEnvH) / (kPi / kEnvH);
+
+        // 30's accumulators.
+        double worstPartitionError = 0.0;
+        uint32_t worstPartitionSample = 0;
+
+        // 31's accumulators.
+        double worstRadianceRelError = 0.0;
+        double worstPdfBsdfAbsError = 0.0;
+        double worstNeeTieRelError = 0.0;
+        double worstPdfEnvNormalisedError = 0.0;
+        double worstPdfEnvRelError = 0.0;
+        uint32_t pdfEnvAtBsdfRejected = 0;
+        uint32_t pdfEnvAtBsdfSkipped = 0;
+        double minPdfEnvAtBsdf = std::numeric_limits<double>::infinity();
+
+        // The host's own texel densities, computed from the luminance image
+        // and EnvCDF's integral and nothing the GPU produced:
+        //
+        //     p(x,y) = L(x,y) * W * H / (integral * 2 pi^2)
+        //
+        // WHAT pdfEnvMap ACTUALLY RETURNS, which is not that. Its texel mass
+        // condDiff*margDiff carries sin(theta) of the texel CENTRE (the CDF
+        // is built with that weight), and it then divides by sin(theta) of
+        // the QUERY direction. So
+        //
+        //     pdfEnvMap(w) = p(x,y) * sin(theta_centre) / sin(theta_w),
+        //
+        // equal to p only when w IS the texel centre -- which is exactly
+        // where sampleEnvMap puts every one of its samples, so the two agree
+        // on the environment strategy's entire support and the MIS weights
+        // still partition unity (check 30 measures that directly). Off a
+        // centre the factor can reach several: the smallest sin(theta_w) a
+        // cosine-weighted sample about +Y reaches in 49152 draws is around
+        // 0.005, against a first-row centre at sin(theta) = 0.0245.
+        //
+        // This check asserts the factor rather than ignoring it. Asserting
+        // p alone was tried first and rejected 1019 of 49152 samples, which
+        // is how the behaviour above was found; a check written to the
+        // convenient formula instead would have been the weaker one.
+        const double kTwoPiSq = 2.0 * kPi * kPi;
+        std::vector<double> hostTexelPdf(kEnvTexels, 0.0);
+        for (uint32_t k = 0; k < kEnvTexels; ++k) {
+            hostTexelPdf[k] = envLum[k] * static_cast<double>(kEnvW) *
+                              static_cast<double>(kEnvH) /
+                              (static_cast<double>(envIntegral) * kTwoPiSq);
+        }
+
+        // Float32 budget for the per-sample ties: the recovered radiance is
+        // two CDF differences (each up to 2^-23 absolute, ~7e-6 relative on
+        // the least likely texel here), a W*H product, a multiply by a
+        // float32 integral and a divide -- a few parts in 1e-5. Asserted at
+        // 1e-3, two orders of magnitude of slack, and the observed maxima
+        // are printed so a value creeping towards the bound is visible.
+        constexpr double kTieRelTolerance = 1e-3;
+        // The MIS partition is two float32 divisions by the same
+        // denominator; their sum is 1 to within a couple of ulp.
+        constexpr double kPartitionTolerance = 1e-6;
+
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            const std::size_t nb = static_cast<std::size_t>(i) * ohao::diff::kNeeSampleFloats;
+            if (neeSamples[nb + ohao::diff::kNeeSlotSurfaceBranch] == 0.0f) continue;
+            ++surfaceSamples;
+
+            const double X = neeSamples[nb + ohao::diff::kNeeSlotNeeUnweighted];
+            const double Y = neeSamples[nb + ohao::diff::kNeeSlotBsdfUnweighted];
+            const double wEnvAtLight = neeSamples[nb + ohao::diff::kNeeSlotWEnvAtLight];
+            const double wBsdfAtLight = neeSamples[nb + ohao::diff::kNeeSlotWBsdfAtLight];
+            const double wBsdfAtBsdf = neeSamples[nb + ohao::diff::kNeeSlotWBsdfAtBsdf];
+            const double wEnvAtBsdf = neeSamples[nb + ohao::diff::kNeeSlotWEnvAtBsdf];
+            const double Z = wEnvAtLight * X + wBsdfAtBsdf * Y;
+
+            if (!std::isfinite(X) || !std::isfinite(Y) || X < 0.0 || Y < 0.0) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 29 -- path %u reported a non-finite or "
+                             "negative estimator (nee %.9g, bsdf %.9g). A radiance estimator is a "
+                             "non-negative real; anything else is a division by a density the "
+                             "direction was not drawn from\n",
+                             i, X, Y);
+                return 1;
+            }
+            if (X > 0.0 || Y > 0.0) ++contributing;
+
+            sumX += X; sumY += Y; sumZ += Z;
+            sumXSq += X * X; sumYSq += Y * Y; sumZSq += Z * Z;
+            const double d1 = Y - kappa * X;
+            const double d2 = Z - Y;
+            const double d3 = Z - X;
+            sumD1 += d1; sumD2 += d2; sumD3 += d3;
+            sumD1Sq += d1 * d1; sumD2Sq += d2 * d2; sumD3Sq += d3 * d3;
+
+            // --- 30. Both MIS partitions, per sample.
+            const double e1 = std::abs(wEnvAtLight + wBsdfAtLight - 1.0);
+            const double e2 = std::abs(wBsdfAtBsdf + wEnvAtBsdf - 1.0);
+            if (std::max(e1, e2) > worstPartitionError) {
+                worstPartitionError = std::max(e1, e2);
+                worstPartitionSample = i;
+            }
+
+            // --- 31. Ties back to what binding 6 recorded.
+            const double dx = envSamples[static_cast<std::size_t>(i) * 4u + 0u];
+            const double dy = envSamples[static_cast<std::size_t>(i) * 4u + 1u];
+            const double dz = envSamples[static_cast<std::size_t>(i) * 4u + 2u];
+            const double theta = std::acos(std::clamp(dy, -1.0, 1.0));
+            const double phi = std::atan2(dz, dx);
+            const int ix = std::clamp(
+                static_cast<int>(std::floor((phi / (2.0 * kPi) + 0.5) * kEnvW)), 0,
+                static_cast<int>(kEnvW) - 1);
+            const int iy = std::clamp(static_cast<int>(std::floor((theta / kPi) * kEnvH)), 0,
+                                      static_cast<int>(kEnvH) - 1);
+            const std::size_t texel =
+                static_cast<std::size_t>(iy) * kEnvW + static_cast<std::size_t>(ix);
+
+            const double envRadiance = neeSamples[nb + ohao::diff::kNeeSlotEnvRadiance];
+            const double radRelError = std::abs(envRadiance / envLum[texel] - 1.0);
+            worstRadianceRelError = std::max(worstRadianceRelError, radRelError);
+
+            // The surface normal is +Y, so the density diffBsdfSample would
+            // have drawn the LIGHT sample's direction with is max(0, d.y)/pi
+            // -- computable from binding 6's direction and nothing else.
+            // diffBsdfEval reports 0 below its 1e-4 grazing floor; the
+            // coarsest row of this map sits at cos(theta) = 0.0245, two
+            // orders of magnitude above it, so that branch is unreachable
+            // here and the comparison is unconditional.
+            const double expectedPdfBsdf = std::max(0.0, dy) / kPi;
+            const double pdfBsdfAtLight = neeSamples[nb + ohao::diff::kNeeSlotPdfBsdfAtLight];
+            worstPdfBsdfAbsError =
+                std::max(worstPdfBsdfAbsError, std::abs(pdfBsdfAtLight - expectedPdfBsdf));
+
+            // And the estimator itself, recomputed from binding 6's
+            // (direction, pdf) pair: f = albedo/pi, cos = max(0, d.y),
+            // L = the map's own luminance at the texel that direction lands
+            // in, V = 1 (nothing occludes the upper hemisphere above a
+            // planar floor). If next-event estimation had drawn its own
+            // direction rather than consuming the one binding 6 records,
+            // this would not match.
+            const double envPdf = envSamples[static_cast<std::size_t>(i) * 4u + 3u];
+            const double expectedNee = (envPdf > 0.0)
+                                           ? (static_cast<double>(kAlbedo) / kPi) *
+                                                 std::max(0.0, dy) * envLum[texel] / envPdf
+                                           : 0.0;
+            if (expectedNee > 0.0) {
+                worstNeeTieRelError =
+                    std::max(worstNeeTieRelError, std::abs(X / expectedNee - 1.0));
+            } else if (X != 0.0) {
+                worstNeeTieRelError = std::max(worstNeeTieRelError, 1.0);
+            }
+
+            // --- pdfEnvMap, at the BSDF sample's own direction.
+            const double pdfEnvAtBsdf = neeSamples[nb + ohao::diff::kNeeSlotPdfEnvAtBsdf];
+            minPdfEnvAtBsdf = std::min(minPdfEnvAtBsdf, pdfEnvAtBsdf);
+            const double bx = neeSamples[nb + ohao::diff::kNeeSlotBsdfDir + 0u];
+            const double by = neeSamples[nb + ohao::diff::kNeeSlotBsdfDir + 1u];
+            const double bz = neeSamples[nb + ohao::diff::kNeeSlotBsdfDir + 2u];
+            const double bTheta = std::acos(std::clamp(by, -1.0, 1.0));
+            const double bPhi = std::atan2(bz, bx);
+            const double bu = (bPhi / (2.0 * kPi) + 0.5) * kEnvW;
+            const double bv = (bTheta / kPi) * kEnvH;
+            // A direction landing within a thousandth of a texel of a
+            // boundary may be binned into a different texel by the shader's
+            // float32 arithmetic than by this double one, which would make
+            // L (and therefore the expected density) come from the wrong
+            // texel. Those samples are counted and excluded rather than
+            // asserted; the count is reported so a scene that started
+            // producing many of them would be visible.
+            const double buFrac = std::abs(bu - std::floor(bu) - 0.5);
+            const double bvFrac = std::abs(bv - std::floor(bv) - 0.5);
+            if (buFrac > 0.5 - 1e-3 || bvFrac > 0.5 - 1e-3) {
+                ++pdfEnvAtBsdfSkipped;
+                continue;
+            }
+            const int bix = std::clamp(static_cast<int>(std::floor(bu)), 0,
+                                       static_cast<int>(kEnvW) - 1);
+            const int biy = std::clamp(static_cast<int>(std::floor(bv)), 0,
+                                       static_cast<int>(kEnvH) - 1);
+            const std::size_t bTexel =
+                static_cast<std::size_t>(biy) * kEnvW + static_cast<std::size_t>(bix);
+            const double bThetaCentre = kPi * (static_cast<double>(biy) + 0.5) / kEnvH;
+            const double bSinQuery = std::max(std::sin(bTheta), 1e-4);
+            const double expectedPdfEnv =
+                hostTexelPdf[bTexel] * std::sin(bThetaCentre) / bSinQuery;
+            const double pdfEnvRelError = std::abs(pdfEnvAtBsdf / expectedPdfEnv - 1.0);
+            worstPdfEnvRelError = std::max(worstPdfEnvRelError, pdfEnvRelError);
+
+            // TOLERANCE, derived from Vulkan's own precision guarantees
+            // rather than from what this machine happens to produce. The
+            // quantity divides by a float32 sin(acos(y)):
+            //
+            //  * sin() is guaranteed only to ABSOLUTE error 2^-11 inside
+            //    [-pi, pi] (Vulkan, Precision and Operation of SPIR-V
+            //    Instructions), so its RELATIVE error is 2^-11 / sin(theta)
+            //    -- unbounded as the direction approaches the pole, which is
+            //    why this term is per-sample and not a constant.
+            //  * acos is specified as inherited from atan2, 4096 ULP, so
+            //    theta carries relative error 4096 * 2^-24; sin's own
+            //    argument error contributes cos(theta) * theta * that,
+            //    again divided by sin(theta) to become relative.
+            //  * The two CDF differences contribute ~2e-5 relative (the
+            //    same float32 cancellation checks 25/26 budget), and the
+            //    remaining float32 products/divisions a few ulp.
+            //
+            // The bound is loose near the pole and tight (7e-4) at the
+            // sin(theta) ~ 0.7 where most cosine-weighted samples land. Both
+            // the worst raw relative error and the worst error as a FRACTION
+            // of its own sample's bound are printed, so hardware that beats
+            // the specification by orders of magnitude -- as it does -- is
+            // visible rather than hidden behind the guarantee.
+            const double allowed =
+                2.0e-5 + (4.8828125e-4 + std::cos(bTheta) * bTheta * 4096.0 * 5.9604645e-8) /
+                             bSinQuery;
+            worstPdfEnvNormalisedError =
+                std::max(worstPdfEnvNormalisedError, pdfEnvRelError / allowed);
+            if (!(pdfEnvRelError <= allowed)) ++pdfEnvAtBsdfRejected;
+        }
+
+        if (surfaceSamples != kCapacity) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: checks 29-31 -- only %u of %u paths took the "
+                         "surface branch. Every primary ray from a camera above the floor hits "
+                         "it, so the estimators below would be averaging over a set this check "
+                         "did not choose\n",
+                         surfaceSamples, kCapacity);
+            return 1;
+        }
+
+        const double n = static_cast<double>(kCapacity);
+        const double meanX = sumX / n;
+        const double meanY = sumY / n;
+        const double meanZ = sumZ / n;
+        auto stdErr = [n](double sum, double sumSq) {
+            const double mean = sum / n;
+            const double var = std::max(0.0, (sumSq - n * mean * mean) / (n - 1.0));
+            return std::sqrt(var / n);
+        };
+        const double seD1 = stdErr(sumD1, sumD1Sq);
+        const double seD2 = stdErr(sumD2, sumD2Sq);
+        const double seD3 = stdErr(sumD3, sumD3Sq);
+        const double meanD1 = sumD1 / n;
+        const double meanD2 = sumD2 / n;
+        const double meanD3 = sumD3 / n;
+        const double systematic = (1.0 - kappa) * meanX;
+
+        bool task4Failed = false;
+
+        // --- 29. Strategy agreement. ---
+        if (!(meanX > 0.0) || !(meanY > 0.0) || !(meanZ > 0.0) || contributing == 0) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 29 -- the three estimators average "
+                         "%.9g (next-event), %.9g (BSDF) and %.9g (MIS) over %u contributing "
+                         "samples. Three estimators that are all ZERO agree perfectly and prove "
+                         "nothing; this scene is an unoccluded floor under a strictly positive "
+                         "environment, so every one of them must be positive\n",
+                         meanX, meanY, meanZ, contributing);
+            task4Failed = true;
+        } else if (!(std::abs(meanD1) <= kZ * seD1) ||
+                   !(std::abs(meanD2) <= kZ * seD2 + systematic) ||
+                   !(std::abs(meanD3) <= kZ * seD3 + 2.0 * systematic)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 29 -- the three estimators of ONE "
+                         "direct-lighting integral do not agree. next-event %.6f, BSDF %.6f, MIS "
+                         "%.6f over %u samples.\n"
+                         "  D1 = bsdf - kappa*nee : %+.6f, bound %.6f (%.2f z, z = %.1f, se "
+                         "%.6f)\n"
+                         "  D2 = mis  - bsdf      : %+.6f, bound %.6f (se %.6f + systematic "
+                         "%.6f)\n"
+                         "  D3 = mis  - nee       : %+.6f, bound %.6f (se %.6f + 2*systematic)\n"
+                         "  kappa = sinc(pi/%u) = %.9f is the CLOSED-FORM midpoint/exact ratio "
+                         "between the two strategies' expectations, not a fitted correction\n",
+                         meanX, meanY, meanZ, kCapacity, meanD1, kZ * seD1,
+                         seD1 > 0.0 ? std::abs(meanD1) / seD1 : 0.0, kZ, seD1, meanD2,
+                         kZ * seD2 + systematic, seD2, systematic, meanD3,
+                         kZ * seD3 + 2.0 * systematic, seD3, kEnvH, kappa);
+            task4Failed = true;
+        } else {
+            std::printf("[diff_gpu_probe] OK: check 29 -- next-event-only (%.6f), BSDF-only "
+                        "(%.6f) and their MIS combination (%.6f) estimate ONE direct-lighting "
+                        "integral from %u samples and agree: |bsdf - kappa*nee| = %.6f at %.2f "
+                        "z (bound %.6f, z = %.1f), |mis - bsdf| = %.6f at %.2f z (bound %.6f, "
+                        "incl. derived systematic %.6f), |mis - nee| = %.6f at %.2f z (bound "
+                        "%.6f). kappa = sinc(pi/%u) = %.9f, the closed-form midpoint/exact ratio. "
+                        "%u of %u samples contributed\n",
+                        meanX, meanY, meanZ, kCapacity, std::abs(meanD1),
+                        seD1 > 0.0 ? std::abs(meanD1) / seD1 : 0.0, kZ * seD1, kZ,
+                        std::abs(meanD2), seD2 > 0.0 ? std::abs(meanD2) / seD2 : 0.0,
+                        kZ * seD2 + systematic, systematic, std::abs(meanD3),
+                        seD3 > 0.0 ? std::abs(meanD3) / seD3 : 0.0, kZ * seD3 + 2.0 * systematic,
+                        kEnvH, kappa, contributing, kCapacity);
+        }
+
+        // --- 30. The MIS partition, per sample. ---
+        //
+        // Exact and cheap where check 29 is statistical: at ONE direction
+        // the two strategies' balance-heuristic weights are p_A/(p_A+p_B)
+        // and p_B/(p_A+p_B), so they sum to 1 identically. This catches a
+        // whole class of weighting bug -- a swapped argument at one call
+        // site, a power heuristic on one side and a balance heuristic on the
+        // other, a weight formed against the wrong partner density -- that a
+        // convergence test can only ever see as extra noise, and it does so
+        // without any Monte Carlo at all.
+        if (!(worstPartitionError <= kPartitionTolerance)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 30 -- the two MIS weights at one sampled "
+                         "direction do not sum to 1: worst deviation %.3g at path %u (tolerance "
+                         "%.3g, which is a couple of ulp of two float32 divisions by the same "
+                         "denominator). The estimator is unbiased only if the weights partition "
+                         "unity POINTWISE\n",
+                         worstPartitionError, worstPartitionSample, kPartitionTolerance);
+            task4Failed = true;
+        } else {
+            std::printf("[diff_gpu_probe] OK: check 30 -- for all %u samples, BOTH MIS partitions "
+                        "sum to exactly 1 (w_env + w_bsdf at the light sample, and again at the "
+                        "BSDF sample): worst deviation %.3g, tolerance %.3g\n",
+                        kCapacity, worstPartitionError, kPartitionTolerance);
+        }
+
+        // --- 31. The three things nothing tested before this task. ---
+        //
+        // (a) envIntegral reaching the GPU intact. It is the entire scale of
+        //     the recovered radiance, and a wrong value rescales ALL THREE
+        //     estimators together -- so check 29 is blind to it by
+        //     construction, and only an absolute comparison against the
+        //     environment image can see it.
+        // (b) pdfEnvMap, which had no caller under test anywhere: check 24
+        //     deliberately writes its own inverse rather than calling it.
+        // (c) The ROUTING claim this task rests on -- that next-event
+        //     estimation consumes the very sample binding 6 records rather
+        //     than drawing its own. Both remaining ties are per-sample
+        //     identities against binding 6's (direction, pdf) pair, so they
+        //     hold only if the two are the same draw.
+        // A sample count this check would rather not lose: if boundary
+        // ambiguity ever excluded a large share, the pdfEnvMap verdict would
+        // quietly be about a shrinking subset.
+        constexpr double kMaxSkippedFraction = 0.02;
+        const double skippedFraction =
+            static_cast<double>(pdfEnvAtBsdfSkipped) / static_cast<double>(kCapacity);
+        if (!(worstRadianceRelError <= kTieRelTolerance) ||
+            !(worstPdfBsdfAbsError <= kTieRelTolerance) ||
+            !(worstNeeTieRelError <= kTieRelTolerance) || pdfEnvAtBsdfRejected != 0 ||
+            !(skippedFraction <= kMaxSkippedFraction)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 31 --\n"
+                         "  recovered radiance vs the environment image: worst relative error "
+                         "%.3g (tolerance %.3g). This is the ONLY observable that depends on "
+                         "ScatterPush::envIntegral, which nothing verified before this task.\n"
+                         "  diffBsdfEval's pdf at the LIGHT sample vs max(0, d.y)/pi computed "
+                         "from binding 6's direction: worst absolute error %.3g. A mismatch "
+                         "means next-event estimation is not using the direction binding 6 "
+                         "records.\n"
+                         "  next-event estimator vs f*cos*L/p recomputed from binding 6: worst "
+                         "relative error %.3g.\n"
+                         "  pdfEnvMap vs p(texel)*sin(theta_centre)/sin(theta_query): %u of %u "
+                         "samples outside their own derived bound (worst raw relative error "
+                         "%.3g, worst as a fraction of its bound %.3g, min returned %.6g); %u "
+                         "samples (%.3f%%) excluded as texel-boundary-ambiguous\n",
+                         worstRadianceRelError, kTieRelTolerance, worstPdfBsdfAbsError,
+                         worstNeeTieRelError, pdfEnvAtBsdfRejected, kCapacity,
+                         worstPdfEnvRelError, worstPdfEnvNormalisedError, minPdfEnvAtBsdf,
+                         pdfEnvAtBsdfSkipped, 100.0 * skippedFraction);
+            task4Failed = true;
+        } else {
+            std::printf("[diff_gpu_probe] OK: check 31 -- across %u samples: the radiance "
+                        "recovered from the density and ScatterPush::envIntegral matches the "
+                        "environment image to %.3g relative (tolerance %.3g -- envIntegral's "
+                        "first end-to-end check anywhere); the BSDF pdf at the light sample "
+                        "matches max(0,d.y)/pi from binding 6's OWN direction to %.3g absolute "
+                        "and the next-event estimator matches f*cos*L/p recomputed from binding "
+                        "6's (direction, pdf) to %.3g relative, so NEE consumes the sample check "
+                        "24 bins rather than a second draw; and pdfEnvMap (min %.6g) matches "
+                        "p(texel)*sin(theta_centre)/sin(theta_query) for every one of its first "
+                        "tested calls -- worst raw relative error %.3g, worst %.3g of its own "
+                        "Vulkan-precision-derived bound (%u samples, %.3f%%, excluded as "
+                        "texel-boundary-ambiguous)\n",
+                        kCapacity, worstRadianceRelError, kTieRelTolerance, worstPdfBsdfAbsError,
+                        worstNeeTieRelError, minPdfEnvAtBsdf, worstPdfEnvRelError,
+                        worstPdfEnvNormalisedError, pdfEnvAtBsdfSkipped, 100.0 * skippedFraction);
+        }
+
+        if (task4Failed) return 1;
     }
 
     arena.destroy(ctx.allocator());
