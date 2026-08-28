@@ -444,41 +444,6 @@ double oracleRelDiff(double reference, double measured) {
     return std::abs(measured - reference) / denom;
 }
 
-/// Bind ohao::diff::kNeeSampleFloats to wf_scatter.comp's OWN
-/// kNeeSampleFloats, at runtime, by reading the declaration out of the
-/// shader source.
-///
-/// WHY A RUNTIME CHECK AND NOT A static_assert. The two constants live on
-/// opposite sides of the GLSL/C++ boundary. GLSL has no static_assert; the
-/// value is folded into unnamed SPIR-V literals, so it cannot be reflected
-/// out of the compiled module under a name either; and there is no
-/// generated header in this build that both sides could include. What is
-/// left is the source text, which is authoritative because it is what the
-/// shader compiler consumed. A mismatch is a SILENT wrong-slot read -- the
-/// host would stride the readback by one number while the GPU wrote it with
-/// another, producing plausible-looking garbage rather than a validation
-/// error -- so this fails the whole probe rather than warning.
-///
-/// The search climbs parent directories looking for the SOURCE tree. Note
-/// this is NOT the same mechanism as ComputePipeline::loadSpv, which
-/// enumerates fixed sibling roots (bin/shaders/, build/Release/bin/shaders/)
-/// for compiled SPV BINARIES -- an earlier comment here claimed they matched
-/// and they do not. Not finding the source is itself a failure, because "the
-/// tie could not be checked" must not be allowed to read as "the tie holds".
-///
-/// The declaration is looked for in a COMMENT-STRIPPED copy of the source,
-/// not the raw text. Scanning raw text would match a commented-out
-/// declaration -- `// const uint kNeeSampleFloats = 21u;` -- and report a
-/// live, tied constant even if the real one had been renamed or deleted.
-/// Commenting a declaration out is precisely how such a constant goes
-/// missing, so the one case this check exists to catch is the one raw
-/// scanning would miss.
-///
-/// Shared by checkNeeStrideTie and checkScatterPushSizeTie below: both are
-/// GLSL/C++ ties against this same source file, and both need the same
-/// comment-stripping for the same reason (see the previous paragraph), so
-/// this is the one place that logic lives rather than two copies that could
-/// drift apart from each other.
 // ===========================================================================
 // INDEPENDENT CPU REFERENCE INTEGRATOR (Stage 0b-2b Task 6, checks 33-34)
 // ===========================================================================
@@ -494,10 +459,13 @@ double oracleRelDiff(double reference, double measured) {
 // context at all, and this is a REPLACEMENT reference, chosen and stated as
 // a design call rather than an omission. See the task report.
 //
-// WHAT MAKES IT AN ORACLE. Everything below is written from the definition
-// of the estimator, in double precision, and shares NO code, no constant and
-// no sampling machinery with the GPU integrator it is compared against:
+// WHAT MAKES IT AN ORACLE -- AND WHAT IS ACTUALLY SHARED, STATED PRECISELY.
+// "Oracle" here does not mean "shares nothing with the GPU side"; it means
+// every piece that IS shared is a piece some OTHER check has already
+// independently validated, so nothing this check's own verdict depends on is
+// taken on faith. What follows is exhaustive, not illustrative.
 //
+// INDEPENDENT (no code, no constant, no sampling machinery in common):
 //   * its own ray-triangle intersector (Moller & Trumbore, "Fast, Minimum
 //     Storage Ray/Triangle Intersection", JGT 2(1), 1997) instead of a BVH
 //     traversal;
@@ -515,14 +483,43 @@ double oracleRelDiff(double reference, double measured) {
 //   * its own RNG (std::mt19937_64, seeded per pixel) rather than
 //     ohao::diff::PathRng.
 //
-// The two sides share exactly three things, all of them INPUTS: the scene
-// triangles, the environment image, and the camera. That is what "the same
-// scene" means.
+// SHARED, AND WHY EACH ONE IS SAFE TO SHARE:
+//   * INPUTS -- the scene triangles, the environment image and the camera.
+//     Sharing the scene is what "the same scene" means; it is not sharing an
+//     algorithm.
+//   * THE BSDF, oracleBsdfEval above -- shared CODE, but not shared with the
+//     GPU. Check 20 already pins bsdf.glsl against this exact oracle,
+//     term by term, over its domain. Reusing it here reuses a validated
+//     independent implementation; nothing in oracleBsdfEval was transcribed
+//     from bsdf.glsl. See "WHAT THIS COSTS" below for what reusing it means
+//     for checks 33-34's own scope.
+//   * TWO CONSTANTS, transcribed from the shader: ParityRefScene::rayTMax
+//     (kParityRayTMax, 1000.0) from wf_intersect.comp's trace tMax and
+//     wf_scatter.comp's kShadowTMax, and ParityRefScene::surfaceOffset
+//     (kParitySurfaceOffset, 1e-4) from wf_scatter.comp's kSurfaceOffset and
+//     wf_intersect.comp:160. Tied to the shader source at runtime by
+//     checkParityRefConstantsTie, the same mechanism checkNeeStrideTie and
+//     checkScatterPushSizeTie use for the constants they cover.
+//   * THE ENVIRONMENT DIRECTION<->TEXEL CONVENTION (parityEnvRadiance above),
+//     the same inversion checks 25/27/31 pin the GPU's own recovered
+//     radiance against, texel by texel. It is not independently re-derived
+//     here; it is a validated host-side statement about the scene.
+//   * THE GEOMETRIC-NORMAL CONSTRUCTION AND FLIP (parityReferenceSample's
+//     `n = cross(e1,e2)` then oppose-the-ray), the same convention check 19
+//     pins wf_intersect.comp's recovered normal against.
 //
-// The BSDF f is oracleBsdfEval above -- the paper-derived CPU oracle check 20
-// already pins the GLSL against, term by term. Reusing it here is reusing a
-// validated independent implementation, not reusing the shader: nothing in
-// oracleBsdfEval was transcribed from bsdf.glsl.
+// WHAT THIS COSTS. Because checks 3/4/8, 19, 20 and 25/27/31 already
+// establish that the pieces above are correct independently of this check,
+// checks 33-34 are not testing them again -- in particular, since check 20
+// already establishes bsdf.glsl equivalent to oracleBsdfEval over its
+// domain, checks 33-34 do NOT test the BSDF; they test everything AROUND
+// it (the intersector, the visibility term, the MIS combination, the
+// throughput recursion, the film accumulation) under a BSDF both sides are
+// known to agree on. That is the right decomposition -- it isolates what
+// checks 33-34 alone can newly say -- but it makes them a CONDITIONAL gate,
+// conditional on checks 3/4/8, 19, 20 and 25/27/31 all still passing, not
+// the unconditional one a reader could mistake "own intersector, basis,
+// RNG..." for.
 //
 // WHAT QUANTITY IS COMPUTED, EXACTLY. wf_scatter.comp's film holds
 //
@@ -665,6 +662,21 @@ double parityNextU(std::mt19937_64& rng) {
     return static_cast<double>(rng() >> 11) * (1.0 / 9007199254740992.0);
 }
 
+/// Mirrors wf_scatter.comp's kShadowTMax and kSurfaceOffset. Named here
+/// (rather than inlined into ParityRefScene's member initializers below) so
+/// checkParityRefConstantsTie has a single C++-side value to tie against the
+/// shader source at runtime -- the same enforcement checkNeeStrideTie gives
+/// ohao::diff::kNeeSampleFloats. One difference from that check: kNeeSample-
+/// Floats shares one NAME with the GLSL side, so a single regex search finds
+/// both ends of the tie. kShadowTMax and kSurfaceOffset do not share a name
+/// with kParityRayTMax/kParitySurfaceOffset, so checkParityRefConstantsTie
+/// names both ends explicitly (one regex per shader constant, matched
+/// against one C++ constant each) rather than searching for one shared
+/// identifier -- still a compiled, runtime-checked tie, just not a
+/// name-derived one.
+constexpr double kParityRayTMax = 1000.0;
+constexpr double kParitySurfaceOffset = 1e-4;
+
 /// Everything the reference integrator needs about the scene, gathered so
 /// the sample function takes one argument instead of nine.
 struct ParityRefScene {
@@ -676,12 +688,14 @@ struct ParityRefScene {
     uint32_t bounces{0};
     /// wf_intersect.comp's trace tMax and wf_scatter.comp's kShadowTMax --
     /// the same 1000 in both stages, so "this ray found geometry" means the
-    /// same thing for a path ray and for a shadow ray.
-    double rayTMax{1000.0};
+    /// same thing for a path ray and for a shadow ray. Tied to the shader
+    /// source at runtime by checkParityRefConstantsTie, via kParityRayTMax.
+    double rayTMax{kParityRayTMax};
     /// wf_scatter.comp's kSurfaceOffset, used for BOTH the shadow ray's
     /// origin and the continuation ray's, exactly as that shader derives
-    /// both from one constant.
-    double surfaceOffset{1e-4};
+    /// both from one constant. Tied to the shader source at runtime by
+    /// checkParityRefConstantsTie, via kParitySurfaceOffset.
+    double surfaceOffset{kParitySurfaceOffset};
 };
 
 /// ONE independent sample of the film's value at one pixel: the truncated
@@ -820,6 +834,70 @@ void parityMoments(const double* values, std::size_t n, double& outMean, double&
     outVar = (n > 1) ? sq / static_cast<double>(n - 1) : 0.0;
 }
 
+/// The SAME statistic as parityMoments -- mean and unbiased sample variance
+/// (n-1) -- from a running (sum, sum-of-squares) PAIR instead of a stored
+/// array. This is what checks 33-34 use for the CPU reference's per-pixel
+/// moments: cpuSumFull/cpuSumSqFull accumulate across kCpuFull samples per
+/// pixel, per worker thread, without retaining each sample (retaining them
+/// would be kPixels * kCpuFull doubles held live for no purpose parityMoments
+/// could not already serve from two running totals), so there is no array
+/// here for parityMoments' two-pass form to read. The GPU side's moments (in
+/// the SAME loop, a few lines away) DO come from a stored array -- one film
+/// per seed already exists -- so it goes through parityMoments directly; the
+/// two forms differ because their INPUTS differ shape, not by choice.
+///
+/// The two forms are algebraically identical
+/// (sum((x-mean)^2) == sum(x^2) - n*mean^2) and differ only in
+/// floating-point ROUNDING: this one-pass identity can lose more of the
+/// mantissa to cancellation than the two-pass form when sum(x^2) and
+/// n*mean^2 are close. At this file's sample counts and value magnitudes
+/// (order 1, up to kCpuFull = 4096 samples) that cancellation costs roughly 6
+/// decimal digits of a double's ~16 -- immaterial against the check's own
+/// tolerances, so nothing here is actually lost; this is a documented
+/// difference, not an unexplained one.
+void parityMomentsFromSums(double sum, double sumSq, std::size_t n, double& outMean,
+                           double& outVar) {
+    outMean = sum / static_cast<double>(n);
+    outVar = (n > 1) ? std::max(0.0, (sumSq - static_cast<double>(n) * outMean * outMean) /
+                                          static_cast<double>(n - 1))
+                     : 0.0;
+}
+
+/// Bind ohao::diff::kNeeSampleFloats to wf_scatter.comp's OWN
+/// kNeeSampleFloats, at runtime, by reading the declaration out of the
+/// shader source.
+///
+/// WHY A RUNTIME CHECK AND NOT A static_assert. The two constants live on
+/// opposite sides of the GLSL/C++ boundary. GLSL has no static_assert; the
+/// value is folded into unnamed SPIR-V literals, so it cannot be reflected
+/// out of the compiled module under a name either; and there is no
+/// generated header in this build that both sides could include. What is
+/// left is the source text, which is authoritative because it is what the
+/// shader compiler consumed. A mismatch is a SILENT wrong-slot read -- the
+/// host would stride the readback by one number while the GPU wrote it with
+/// another, producing plausible-looking garbage rather than a validation
+/// error -- so this fails the whole probe rather than warning.
+///
+/// The search climbs parent directories looking for the SOURCE tree. Note
+/// this is NOT the same mechanism as ComputePipeline::loadSpv, which
+/// enumerates fixed sibling roots (bin/shaders/, build/Release/bin/shaders/)
+/// for compiled SPV BINARIES -- an earlier comment here claimed they matched
+/// and they do not. Not finding the source is itself a failure, because "the
+/// tie could not be checked" must not be allowed to read as "the tie holds".
+///
+/// The declaration is looked for in a COMMENT-STRIPPED copy of the source,
+/// not the raw text. Scanning raw text would match a commented-out
+/// declaration -- `// const uint kNeeSampleFloats = 21u;` -- and report a
+/// live, tied constant even if the real one had been renamed or deleted.
+/// Commenting a declaration out is precisely how such a constant goes
+/// missing, so the one case this check exists to catch is the one raw
+/// scanning would miss.
+///
+/// Shared by checkNeeStrideTie and checkScatterPushSizeTie below: both are
+/// GLSL/C++ ties against this same source file, and both need the same
+/// comment-stripping for the same reason (see the previous paragraph), so
+/// this is the one place that logic lives rather than two copies that could
+/// drift apart from each other.
 bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFoundPath) {
     static const char* const kCandidates[] = {
         "shaders/diff/wf_scatter.comp",
@@ -1000,6 +1078,64 @@ bool checkScatterPushSizeTie() {
     return true;
 }
 
+/// Ties kParityRayTMax and kParitySurfaceOffset -- the two constants
+/// checks 33-34's CPU reference (ParityRefScene) derives its rayTMax and
+/// surfaceOffset from -- to wf_scatter.comp's OWN kShadowTMax and
+/// kSurfaceOffset, by parsing the same comment-stripped source
+/// loadWfScatterSourceStripped already loads for checkNeeStrideTie and
+/// checkScatterPushSizeTie. Before this check existed, the pairing was a
+/// COMMENT naming the shader constants next to two C++ literals -- exactly
+/// the pattern this branch built checkNeeStrideTie and checkScatterPushSizeTie
+/// to replace, because a comment is not a tie. Severity was judged low
+/// (drift here fails LOUDLY: the reference becomes wrong and checks 33-34
+/// reject, rather than silently reading garbage the way a stride mismatch
+/// would), but the mechanism to check it exists and reusing it is cheap, so
+/// it is checked rather than left to a comment.
+bool checkParityRefConstantsTie() {
+    std::string stripped, found;
+    if (!loadWfScatterSourceStripped(stripped, found)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "candidate path, so checks 33-34's CPU reference rayTMax/surfaceOffset could "
+                     "not be tied to wf_scatter.comp's kShadowTMax/kSurfaceOffset. An unchecked "
+                     "tie is not a held tie\n");
+        return false;
+    }
+
+    const std::regex tMaxDecl(
+        R"(const[ \t]+float[ \t]+kShadowTMax[ \t]*=[ \t]*([0-9.eE+-]+)[ \t]*;)");
+    const std::regex offsetDecl(
+        R"(const[ \t]+float[ \t]+kSurfaceOffset[ \t]*=[ \t]*([0-9.eE+-]+)[ \t]*;)");
+    std::smatch mTMax, mOffset;
+    if (!std::regex_search(stripped, mTMax, tMaxDecl) ||
+        !std::regex_search(stripped, mOffset, offsetDecl)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s no longer declares `const float kShadowTMax = "
+                     "<N>;` and `const float kSurfaceOffset = <N>;` on one line each, so checks "
+                     "33-34's CPU reference constants cannot be tied to the shader's. Restore the "
+                     "spelling or update this check -- do not leave the two constants untied\n",
+                     found.c_str());
+        return false;
+    }
+    const double shaderTMax = std::stod(mTMax[1].str());
+    const double shaderOffset = std::stod(mOffset[1].str());
+    if (shaderTMax != kParityRayTMax || shaderOffset != kParitySurfaceOffset) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s declares kShadowTMax = %.9g, kSurfaceOffset = "
+                     "%.9g, but checks 33-34's CPU reference uses kParityRayTMax = %.9g, "
+                     "kParitySurfaceOffset = %.9g. The reference's escape/occlusion semantics and "
+                     "ray-offset epsilon no longer match the shader's, so a pass on checks 33-34 "
+                     "would not be evidence of parity with THIS shader\n",
+                     found.c_str(), shaderTMax, shaderOffset, kParityRayTMax, kParitySurfaceOffset);
+        return false;
+    }
+    std::printf("[diff_gpu_probe] NOTE: checks 33-34's CPU reference constants tied -- %s declares "
+                "kShadowTMax = %.9g, kSurfaceOffset = %.9g, matching kParityRayTMax and "
+                "kParitySurfaceOffset exactly\n",
+                found.c_str(), shaderTMax, shaderOffset);
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -1010,6 +1146,10 @@ int main() {
     // reasoning, same failure mode (a silent wrong-field push), checked here
     // for the same "before anything downstream trusts it" reason.
     if (!checkScatterPushSizeTie()) return 1;
+    // checks 33-34's CPU reference constants tied to wf_scatter.comp's own
+    // kShadowTMax/kSurfaceOffset (review finding, Task 6 fix): same source
+    // file, same comment-stripping, checked here for the same reason.
+    if (!checkParityRefConstantsTie()) return 1;
 
     ohao::diff::GpuProbeContext ctx;
     if (!ctx.init()) {
@@ -6105,7 +6245,8 @@ int main() {
     //   * PER PIXEL, kPixels comparisons, two-sided. A family-wise false
     //     rejection rate of 1e-3 needs 2*kPixels*Phi(-z) <= 1e-3, i.e.
     //     Phi(-z) <= 9.8e-7, i.e. z >= 4.76. kPerPixelZ = 5.0 (family-wise
-    //     ~5.7e-4 under normality). Normality is approximate at these
+    //     2*512*Phi(-5) = 2*512*2.8665e-7 ~= 2.94e-4 under normality; still
+    //     comfortably under the 1e-3 budget). Normality is approximate at these
     //     sample counts, which is why the pooled test below -- where the
     //     central limit theorem is on much firmer ground -- carries the
     //     sharp discrimination and this one carries the spatial coverage.
@@ -6375,9 +6516,21 @@ int main() {
                 }
             }
 
-            // --- The reference integrator. Pixel-parallel; each pixel's
-            // stream depends only on its own index, so the result does not
-            // depend on the thread count.
+            // --- The reference integrator. Pixel-parallel; each pixel's RNG
+            // stream depends only on its own index (see the `p`-only seed
+            // below), so EVERY PER-PIXEL RESULT -- cpuSumPrefix/Full,
+            // cpuSumSqPrefix/Full, and everything checks 33-34 derive from
+            // them (worstZ, sharpness, per-pixel resolution) -- is exactly
+            // thread-count-independent: which thread computes pixel p never
+            // changes p's own running sum. The ONE quantity that is not is
+            // cpuImageTotals[j] (the pooled statistic's CPU side, below):
+            // it is a sum of per-thread partial sums, so its low-order bits
+            // depend on how many threads split the reduction, i.e. on
+            // hardware_concurrency(). At this scale (an image total of
+            // order 361, threadCount <= 16) that is a ~1e-13 relative
+            // floating-point reordering effect -- roughly 5e-14 absolute --
+            // many orders below anything kPooledZ resolves, so it is
+            // immaterial to the verdict, but it is not exactly zero.
             ParityRefScene refScene;
             refScene.tris = refTris;
             refScene.envLum = &envLum;
@@ -6475,10 +6628,8 @@ int main() {
                     parityMoments(gpuPixel.data(), r, meanG, varG);
                     const double sumC = (which == 0) ? cpuSumPrefix[p] : cpuSumFull[p];
                     const double sumSqC = (which == 0) ? cpuSumSqPrefix[p] : cpuSumSqFull[p];
-                    const double meanC = sumC / static_cast<double>(m);
-                    const double varC =
-                        std::max(0.0, (sumSqC - static_cast<double>(m) * meanC * meanC) /
-                                          static_cast<double>(m - 1));
+                    double meanC = 0.0, varC = 0.0;
+                    parityMomentsFromSums(sumC, sumSqC, m, meanC, varC);
                     const double sigma = std::sqrt(varG / static_cast<double>(r) +
                                                    varC / static_cast<double>(m));
                     const double d = meanG - meanC;
