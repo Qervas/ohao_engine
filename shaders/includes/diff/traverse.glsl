@@ -318,9 +318,20 @@ layout(std430, binding = 9) buffer Film {
 // index, not a byte offset) and how many floats the whole arena holds
 // (`pc.gradArenaFloats`), and addresses element k of that parameter at
 // `gradAlbedoOffset + k`. For the one ScalarBlock parameter this task
-// differentiates, k is 0. Stage 1 Task 5's per-texel scatter is the same
-// arithmetic with k = (y*width + x)*channels + c -- the ordering
-// ParamShape::floatCount() already implies.
+// differentiates, k is 0, and the guard in the hook is written so that adding
+// a k stays a bounds check (see wf_scatter_replay.comp).
+//
+// THE ELEMENT ORDERING FOR k != 0 IS NOT YET ESTABLISHED, and an earlier
+// version of this comment said it was: it named
+// k = (y*width + x)*channels + c as "the ordering ParamShape::floatCount()
+// already implies". floatCount() is w*h*c -- a COUNT. A count implies no
+// ordering whatsoever; row-major, column-major and channel-planar all have
+// the same float count. Stage 1 Task 5 must ESTABLISH that convention (the
+// row-major, channel-interleaved k above is the expected one) and TIE it: the
+// host side that uploads a texture parameter and the shader side that
+// addresses element k have to be checked against each other by a probe check,
+// the way check 38 ties the block layout, or a transposed gradient image is a
+// defect nothing in this file would catch.
 //
 // BUFFER ATOMICS, NEVER IMAGE ATOMICS. Every write into this buffer is an
 // `atomicAdd` on a `float`, which is why the traversal requires
@@ -331,9 +342,22 @@ layout(std430, binding = 9) buffer Film {
 // tolerance -- unlike the film, which this subsystem keeps bit-reproducible
 // by running one sample per pixel per dispatch. That is not the same
 // property and this file does not claim it: the film hazard is avoided by
-// construction, the gradient's accumulation order genuinely is scheduler-
-// dependent, and the finite-difference gate's tolerance is derived with that
-// in it.
+// construction, and the gradient's accumulation order genuinely is scheduler-
+// dependent.
+//
+// WHAT THE FINITE-DIFFERENCE GATE'S TOLERANCE ACTUALLY IS, stated precisely
+// because an earlier version of this comment overclaimed it. The gate's bound
+// (diff_gpu_probe.cpp, check 37) is roundoffBound + truncationBound, and both
+// halves are derived from the FILM side alone -- the roundoff half from
+// eps = 2e-6, "a film value is a sum over bounces of a product of about six
+// float32 factors", and the truncation half from h and the objective's
+// curvature in theta. NO term of it accounts for this arena's accumulation
+// order. What is true, and is all that is claimed, is that the arena's
+// run-to-run variation is far INSIDE that tolerance -- measured at roughly
+// three orders of magnitude below it -- so the gate is not sensitive to it.
+// That is a measured margin, not a derived allowance, and a future change
+// that shrinks the tolerance or grows the arena's contention has to re-check
+// it rather than assume it was budgeted for.
 //
 // CALLER-OWNED, like the film, and written by every REPLAY scatter dispatch.
 // It therefore MUST be passed to WavefrontLoop::record's
@@ -496,9 +520,9 @@ const float kSurfaceOffset = 1e-4;
 // triple at which the spec's line could be evaluated.
 //
 // Expanding the spec's scatter line over the strategies this estimator
-// actually uses gives the line every consumer of this struct must use:
+// actually uses gives the DIRECT term:
 //
-//     dL/dtheta += dL * SUM_s [ w_s * (df_s/dtheta) * cos_s * L_s * V_s / p_s ]
+//     direct_b = dL * SUM_s [ w_s * (df_s/dtheta) * cos_s * L_s * V_s / p_s ]
 //
 //   s = E (next event)  : dir = envDir, cos_E = max(dot(normal, envDir), 0),
 //                         L_E = envRadiance, V_E = visEnv, p_E = envPdf,
@@ -509,9 +533,62 @@ const float kSurfaceOffset = 1e-4;
 //                         itself), L_B = bsdfRadiance, V_B = visBsdf,
 //                         p_B = pdf, w_B = wBsdf
 //
-// Every factor of that is a field below. `df_s/dtheta` is the only thing a
-// consumer still has to compute, and it is computed at
-// (normal, wo, dir_s, material) -- all fields too.
+// THAT TERM IS NOT THE WHOLE DERIVATIVE, AND THIS COMMENT SAID IT WAS FOR TWO
+// TASKS. It called `direct_b` "the line every consumer of this struct must
+// use"; a consumer that used only it computes HALF the second bounce's
+// derivative, and the finite-difference gate in diff_gpu_probe.cpp (check 37)
+// rejects exactly that at two and three bounces -- by 500x its own bound when
+// it was measured. The correction is below and this block, not a downstream
+// file, is where it lives: this struct is what both instantiations compile
+// and what the next task reads first.
+//
+// THE LINE EVERY CONSUMER OF THIS STRUCT MUST USE. The film the forward hook
+// accumulates is J = SUM_b T_b * Lr_b, so differentiating it gives BOTH a
+// term in dLr_b/dtheta (the direct term above) and a term in dT_b/dtheta --
+// the throughput arriving at bounce b is itself a function of theta, because
+// every earlier vertex multiplied it by a BSDF weight that depends on theta:
+//
+//     dJ/dtheta  =  SUM_b [ (dT_b/dtheta) * Lr_b  +  T_b * (dLr_b/dtheta) ]
+//
+// so at a vertex, with dL = T_b for a plain sum-of-film objective,
+//
+//     dL/dtheta += (dT_b/dtheta) * Lr
+//               +  dL * SUM_s [ w_s * (df_s/dtheta) * cos_s * L_s * V_s / p_s ]
+//     dL_next    =  dL * bsdfWeight
+//
+// The first term is NOT a small correction. With a pure Lambertian surface
+// T_b = albedo^b exactly, so dT_b/d(albedo) = (b/albedo) * T_b and the two
+// terms are the same order of magnitude; dropping it HALVES the second
+// bounce's contribution. `throughput`, `Lr` and `bounce` are all fields
+// below, which is what makes it computable here at all -- a reverse-mode PRB
+// formulation would instead fold it into the direct term by using the FULL
+// incident radiance along the continuation direction (the spec's L_i), which
+// this vertex does not have: it is the future of the path.
+//
+// THE TERM THAT IS ABSENT BECAUSE IT IS ZERO, NOT BECAUSE NOBODY WROTE IT
+// DOWN. Spec section 6.3 lists the MIS weights as differentiable, so the
+// direct term is in full
+//
+//     dL * SUM_s [ (dw_s/dtheta) * f_s * cos_s * L_s * V_s / p_s
+//                 + w_s * (df_s/dtheta) * cos_s * L_s * V_s / p_s ]
+//
+// and the (dw_s/dtheta) half is IDENTICALLY ZERO in the one configuration
+// Stage 1 Task 2 differentiates -- metallic == 0 and specularWeight == 0, for
+// theta = the base colour. There `pdf` is NdotL/pi and `pdfEnvMap` is the
+// environment's density: neither mentions the base colour, so `wEnv` and
+// `wBsdf` (balance heuristic over those two densities) are CONSTANTS of the
+// differentiation. It stops being zero the moment a pdf becomes
+// parameter-dependent -- roughness, or any theta that moves the lobe-
+// selection probability q -- and Task 3 must add it then. It is named here
+// so that its absence is a stated fact rather than an omission.
+//
+// Every factor of the two retained terms is a field below. `df_s/dtheta` is
+// the only thing a consumer still has to compute, and it is computed at
+// (normal, wo, dir_s, material) -- all fields too. The one implementation of
+// all of this is shaders/includes/diff/bsdf_adjoint.glsl, which carries the
+// derivation at length, the measurement that established the second term is
+// needed, and the material configuration it is exact for; this block is the
+// declaration those functions are written against.
 //
 // WHAT THIS STRUCT MUST NOT BE READ AS. `Lr` below is the MIS-COMBINED
 // REFLECTED DIRECT RADIANCE -- SUM_s w_s * f_s*cos_s*L_s*V_s/p_s. It already

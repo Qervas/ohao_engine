@@ -54,60 +54,50 @@
 // writes one float of the arena and `v.adjoint`. If it wrote anything else,
 // check 36 would be the thing that noticed -- one bounce later.
 //
-// THE RECURSION, FOR THIS INTEGRATOR. Spec section 6.1 writes the scatter
-// line for a single-strategy estimator. This integrator's direct-lighting
-// estimate is a TWO-STRATEGY MIS combination -- next event and BSDF sampling
-// -- so the scatter line is a sum over the strategies and each term carries
-// that strategy's own direction, density, radiance, visibility and weight:
+// THE RECURSION, FOR THIS INTEGRATOR. Stated in full in `DiffVertex`'s comment
+// in traverse.glsl, which is the AUTHORITY -- it is the declaration both
+// instantiations compile and the first thing a reader of this subsystem meets.
+// This is a pointer to it, and the two terms named here are named only so that
+// the three lines of the hook below can be read without leaving the file:
 //
-//     dL/dtheta += v.adjoint *
-//                  ( v.wEnv  * (df/dtheta at v.envDir)  * max(dot(v.normal, v.envDir), 0)
+//     dL/dtheta += (dT_b/dtheta) * v.Lr                      [throughput term]
+//               +  v.adjoint *
+//                  ( v.wEnv  * (df/dtheta at v.envDir) * max(dot(v.normal, v.envDir), 0)
 //                            * v.envRadiance  * v.visEnv  / v.envPdf
-//                  + v.wBsdf * (d(f*cos)/dtheta at v.bsdfDir)
-//                            * v.bsdfRadiance * v.visBsdf / v.pdf )
+//                  + v.wBsdf * (d(v.f)/dtheta at v.bsdfDir)
+//                            * v.bsdfRadiance * v.visBsdf / v.pdf )   [direct term]
 //     v.adjoint  =  v.adjoint * v.bsdfWeight
 //
-// (In the BSDF term the cosine is already folded into `v.f`, which is f*cos
-// at `v.bsdfDir`, so what that term needs is the derivative of `v.f` itself.)
+// (In the BSDF term the cosine is already folded into `v.f`, which is f*cos at
+// `v.bsdfDir`, so what that term needs is the derivative of `v.f` itself. A
+// (dw_s/dtheta) term also belongs to the direct sum and is identically zero
+// here, because at metallic 0 and specularWeight 0 neither density mentions
+// the base colour; traverse.glsl states it and says when Task 3 must add it.)
 //
-// AN EARLIER VERSION OF THIS FILE PRINTED THE SCATTER LINE AS
-// `v.adjoint * (df/dtheta) * v.Li / v.pdf`, which was wrong twice over:
-// `v.Li` (now `v.Lr`) is the MIS-combined REFLECTED direct radiance, so it
-// already contains f and has already been divided by the densities --
-// substituting it there double-counts f and squares the pdf -- and a single
-// (f, pdf) pair cannot stand for two strategies with two directions and two
-// densities anyway. No gradient existed when that line was written, so
-// nothing computed a wrong number; what it would have produced is a Task 3
-// that read as a bad df/dtheta derivation. The derivation and the field
-// names are in `DiffVertex`'s comment in traverse.glsl, which is the
-// authority; this is a pointer to it.
+// TWO EARLIER VERSIONS OF THIS RECURSION WERE WRONG, both in `DiffVertex`'s
+// comment, and both are recorded there rather than only here:
 //
-// The PROPAGATE line above needs no such correction and is exact as written:
-// `v.bsdfWeight` is bit-identically the value the traversal multiplied
-// throughput by.
+//   1. It was printed as `v.adjoint * (df/dtheta) * v.Li / v.pdf`, which is
+//      wrong twice over -- `v.Li` (now `v.Lr`) is the MIS-combined REFLECTED
+//      direct radiance, so it already contains f and has already been divided
+//      by the densities, and a single (f, pdf) pair cannot stand for two
+//      strategies with two directions and two densities anyway.
+//   2. Corrected to the two-strategy DIRECT term, it was then labelled "the
+//      line every consumer of this struct must use" -- and it is only half the
+//      derivative of J from two bounces on. The finite-difference gate MEASURED
+//      that: it accepts the direct term alone at one bounce and rejects it at
+//      two and three, by roughly 500x its own bound.
 //
-// AND THE SCATTER LINE, EVEN CORRECTED, IS NOT THE WHOLE DERIVATIVE ONCE THE
-// LOOP RUNS MORE THAN ONE BOUNCE. That was found by MEASUREMENT, not by
-// re-reading: the finite-difference gate accepts it at one bounce and rejects
-// it at two and three. The film is SUM_b T_b * Lr_b, so
+// Both statements now carry both terms. The PROPAGATE line never needed a
+// correction and is exact as written: `v.bsdfWeight` is bit-identically the
+// value the traversal multiplied throughput by.
 //
-//     dJ/dtheta = SUM_b [ (dT_b/dtheta) * Lr_b  +  T_b * (dLr_b/dtheta) ]
-//
-// and the scatter line above is the second half only. The first half is not a
-// correction term: with a pure Lambertian surface T_b = albedo^b exactly, so
-// dropping it HALVES the second bounce's contribution. A reverse-mode PRB
-// formulation folds it into the scatter line by using the full INCIDENT
-// radiance along the continuation direction rather than the environment
-// radiance along it -- which this vertex does not have, it being the future of
-// the path. shaders/includes/diff/bsdf_adjoint.glsl adds it as an explicit
-// second term with the closed form for dT_b/dtheta, and carries the whole
-// derivation.
-//
-// Every factor of both lines is a field of `DiffVertex` (see traverse.glsl).
-// It was NOT true of the per-strategy factors for one task -- they were
-// added, as FIELDS, which is the whole point of a signature whose only
-// growth direction is a new field: the hook's parameter list and both call
-// sites are untouched by that change, exactly as claimed.
+// Every factor of both scatter terms is a field of `DiffVertex`. That was NOT
+// true of the per-strategy factors for one task, nor of `throughput` and
+// `bounce` before that -- they were added, as FIELDS, which is the whole point
+// of a signature whose only growth direction is a new field: the hook's
+// parameter list and both call sites are untouched by every one of those
+// changes, exactly as claimed.
 //
 // NOTE THAT THIS STAGE STILL WRITES PATH STATE AND STILL RE-QUEUES. That is
 // not an oversight and it is not "the forward pass again": it is what walking
@@ -153,11 +143,11 @@
 //      own. That identity is specific to THIS objective; a weighted image loss
 //      breaks it at the first vertex, and this line is the one place that
 //      changes. See bsdf_adjoint.glsl's header.
-//   2. The scatter. `diffVertexDirectAlbedoScatter` is DiffVertex's recursion
-//      verbatim -- the sum over the two MIS strategies -- and
-//      `diffVertexThroughputAlbedoTerm` is the (dT/dtheta)*Lr term that
-//      recursion does not contain and that the finite-difference gate
-//      MEASURED to be necessary from two bounces on.
+//   2. The scatter -- BOTH of DiffVertex's scatter terms, added.
+//      `diffVertexDirectAlbedoScatter` is the direct term, the sum over the
+//      two MIS strategies; `diffVertexThroughputAlbedoTerm` is the
+//      (dT/dtheta)*Lr term, which the finite-difference gate MEASURED to be
+//      necessary from two bounces on. Either one alone is not the gradient.
 //   3. `v.adjoint = v.adjoint * v.bsdfWeight` is the propagate line, written
 //      where the signature says the propagated adjoint goes. It is NOT read
 //      again: the traversal discards `v` at the return and the next bounce's
@@ -168,11 +158,36 @@
 //
 // THE ARENA WRITE. One `atomicAdd` on one float, guarded on the arena being
 // configured (`gradArenaFloats` 0 means "no arena", which is what every other
-// probe in this repository binds) and on the offset being inside it. Many
-// paths at many vertices land on the same float with no ordering between them,
-// so this accumulation is NOT bit-reproducible the way the film is -- the
-// film's hazard is avoided by construction (one sample per pixel per
-// dispatch), this one is real and the gate's tolerance is derived with it in.
+// probe in this repository binds) and on the ADDRESSED ELEMENT being inside
+// it. Many paths at many vertices land on the same float with no ordering
+// between them, so this accumulation is NOT bit-reproducible the way the film
+// is -- the film's hazard is avoided by construction (one sample per pixel per
+// dispatch), this one is real. The gate's tolerance does not have a term for
+// it: that tolerance is roundoffBound + truncationBound and both are derived
+// from the FILM side alone. What holds, and is all that is claimed, is that
+// the arena's measured run-to-run variation sits about three orders of
+// magnitude below the tolerance, so the gate is not sensitive to it. See the
+// arena's declaration in traverse.glsl.
+//
+// THE BOUNDS GUARD IS WRITTEN FOR A `k` IT DOES NOT YET HAVE. The element
+// written is `pc.gradAlbedoOffset + kGradElement`, and `kGradElement` is 0 for
+// the one ScalarBlock this task differentiates. Checking only that the BASE is
+// in range would be a complete guard for k = 0 and would stop being a bounds
+// check at all the moment Task 5 computes a per-texel k -- so the test below
+// is written as `k < gradArenaFloats - gradAlbedoOffset` after establishing
+// `gradAlbedoOffset < gradArenaFloats`, which bounds base + k without ever
+// forming a sum that could wrap a uint. Adding a real k to it is then safe by
+// construction rather than by re-derivation.
+//
+// THE PIXEL GUARD MIRRORS THE FORWARD HOOK'S, and is here for symmetry rather
+// than for arithmetic. The forward hook writes the film only for
+// `v.pixelIndex < pc.filmPixelCount`; today `width*height == capacity ==
+// filmPixelCount` is enforced by the probe that runs this, so every path
+// passes both guards and the guard changes no number. If those ever diverge,
+// an unguarded gradient hook would sum over a DIFFERENT path set than the film
+// the finite-difference gate compares it against -- a disagreement with no
+// symptom other than a gradient that is slightly wrong. Guarding on the same
+// condition means the two sides cannot come apart silently.
 //
 // The three channels are summed here rather than scattered separately because
 // J sums them: the pushed albedo is ONE grey scalar feeding all three, so its
@@ -186,8 +201,22 @@ void diffVertexHook(inout DiffVertex v) {
 
     v.adjoint = v.adjoint * v.bsdfWeight;
 
-    if (pc.gradArenaFloats > 0u && pc.gradAlbedoOffset < pc.gradArenaFloats) {
-        atomicAdd(grad.v[pc.gradAlbedoOffset],
+    // Element 0 of the parameter's gradient block. Task 5's per-texel scatter
+    // replaces this constant with (y*width + x)*channels + c and changes
+    // NOTHING else below: the guard is already written to bound base + k.
+    const uint kGradElement = 0u;
+
+    const bool arenaConfigured = pc.gradArenaFloats > 0u;
+    const bool baseInRange = pc.gradAlbedoOffset < pc.gradArenaFloats;
+    // Subtraction, not addition: `base + k` could wrap a uint and compare
+    // small. `gradArenaFloats - gradAlbedoOffset` cannot, given baseInRange.
+    const bool elementInRange =
+        baseInRange && kGradElement < (pc.gradArenaFloats - pc.gradAlbedoOffset);
+    // The same path set the forward hook's film write covers.
+    const bool pixelInFilm = pc.filmPixelCount > 0u && v.pixelIndex < pc.filmPixelCount;
+
+    if (arenaConfigured && elementInRange && pixelInFilm) {
+        atomicAdd(grad.v[pc.gradAlbedoOffset + kGradElement],
                   contribution.x + contribution.y + contribution.z);
     }
 }

@@ -45,12 +45,20 @@ void GradientArena::zero(VkCommandBuffer cmd) {
     // compute work that scatters gradients into this buffer afterwards must
     // not begin until the fill is visible, or (in Stage 1's per-iteration
     // loop) iteration N's zero races iteration N-1's scatter and silently
-    // corrupts gradients -- no crash, just wrong numbers. Today this arena is
-    // only ever zeroed once before any compute submit (see diff_gpu_probe),
-    // so vkQueueWaitIdle between separate submits already provides ordering
-    // and this barrier is currently a no-op in practice. It becomes load
-    // bearing the moment zero() and a compute dispatch share a command buffer
-    // or queue timeline, which is exactly Stage 1's pattern.
+    // corrupts gradients -- no crash, just wrong numbers.
+    //
+    // THIS BARRIER IS LOAD BEARING AS OF STAGE 1 TASK 2. It was a no-op in
+    // practice for exactly as long as the arena was only ever zeroed in its
+    // own submit, with vkQueueWaitIdle between submits supplying the ordering
+    // -- and an earlier version of this comment said so, together with the
+    // prediction that it would stop being true "the moment zero() and a
+    // compute dispatch share a command buffer or queue timeline". That is now
+    // the case: GpuProbeContext::runWavefrontGradientProbe records zero() and
+    // the whole wavefront loop into ONE command buffer, so nothing but this
+    // barrier orders the fill against the replay scatter's atomicAdds.
+    // Deleting it would still compile and would still pass validation; what it
+    // would produce is a gradient intermittently short by whatever the first
+    // dispatch accumulated before the fill landed on top of it.
     VkBufferMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -78,6 +86,24 @@ std::vector<float> GradientArena::readback(GpuAllocator& allocator,
 
     out.resize(block.sizeBytes / sizeof(float));
     std::memcpy(out.data(), base + block.offsetBytes, block.sizeBytes);
+    return out;
+}
+
+std::vector<float> GradientArena::readbackAll(GpuAllocator& allocator) {
+    std::vector<float> out;
+    if (!m_buffer.isValid()) return out;
+
+    const std::size_t bytes = m_layout.totalBytes();
+    if (bytes == 0) return out;
+
+    allocator.invalidateBuffer(m_buffer);
+    const auto* base = static_cast<const std::byte*>(m_buffer.getMappedData());
+    if (base == nullptr) return out;
+
+    // totalBytes() is a whole number of 256-byte alignment units and every
+    // block is a whole number of float32s, so this division is exact.
+    out.resize(bytes / sizeof(float));
+    std::memcpy(out.data(), base, out.size() * sizeof(float));
     return out;
 }
 

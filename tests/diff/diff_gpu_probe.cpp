@@ -8903,18 +8903,35 @@ int main() {
         // them and no atomicAdd named them.
         //
         // WHAT THIS CATCHES THAT THE GATE ABOVE DOES NOT. A scatter into the
-        // wrong block is not necessarily visible to check 37: if the offset
-        // were wrong by a whole block the gate would read zero from the
-        // albedo block and fail -- but an offset wrong by an amount that
-        // happens to land inside the albedo block's 256-byte alignment
-        // padding, or a stray second write, leaves the gate's number intact
-        // and corrupts a neighbouring parameter. That is exactly the failure
-        // Task 5's per-texel scatter can make at scale, and this is the
-        // cheapest statement of "the arena is addressed, not sprayed".
+        // wrong element is not necessarily visible to check 37: if the offset
+        // were wrong by a whole block the gate would read zero from the albedo
+        // block and fail -- but an offset wrong by an amount that lands
+        // somewhere else in the arena, or a stray second write, leaves the
+        // gate's number intact and corrupts something the gate never reads.
+        // That is exactly the failure Task 5's per-texel scatter can make at
+        // scale, and this is the cheapest statement of "the arena is
+        // addressed, not sprayed".
+        //
+        // IT READS THE WHOLE ARENA, NOT THE OTHER BLOCKS. For one task this
+        // check read back the three unwritten BLOCKS -- five floats of a
+        // 256-float arena -- while its own rationale named the 256-byte
+        // alignment PADDING as the place a wrong offset would land. The
+        // padding was not examined at all, so the rationale claimed a failure
+        // the check could not catch. The fix is to make the check deliver:
+        // every float of the arena is read and every one of them except the
+        // single element the scatter is addressed at must be exactly zero.
+        // That covers the three null blocks as before AND the 251 padding
+        // floats between and after them, which is where a mis-computed
+        // per-texel k is likeliest to land.
         //
         // It also states the block layout Task 5 must fit: ONE float per
         // ScalarBlock element at gradAlbedoOffset + k, blocks in registration
         // order, gradient block before state block, 256-byte aligned.
+        //
+        // The two named-block spans are kept as a SEPARATE statement so the
+        // failure text can say WHICH parameter was corrupted when the stray
+        // write lands in a block rather than in padding -- a bare arena index
+        // would not.
         struct NullBlock {
             const char* name;
             std::size_t index;
@@ -8926,51 +8943,91 @@ int main() {
             {"unused_scalar's Adam m/v state", unusedParam->stateBlock,
              unusedParam->floatCount * 2u},
         };
+
+        const std::vector<float> wholeArena = gradArena.readbackAll(ctx.allocator());
+        if (wholeArena.size() != static_cast<std::size_t>(kGradArenaFloats)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 38 -- the whole-arena readback returned "
+                         "%zu floats, expected %u. A null test over the wrong number of floats "
+                         "is not a null test\n",
+                         wholeArena.size(), kGradArenaFloats);
+            wf.destroy(ctx.allocator());
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // Which arena float belongs to which named block, for the failure
+        // text only. Anything not covered here is alignment padding.
+        auto describeArenaFloat = [&](std::size_t f) -> std::string {
+            for (const NullBlock& nb : nullBlocks) {
+                const ohao::diff::ArenaBlock b = gradReg.layout().block(nb.index);
+                const std::size_t first = b.offsetBytes / sizeof(float);
+                const std::size_t count = b.sizeBytes / sizeof(float);
+                if (f >= first && f < first + count) {
+                    return std::string(nb.name) + ", element " + std::to_string(f - first) +
+                           " of arena block " + std::to_string(nb.index);
+                }
+            }
+            return "256-byte alignment padding owned by no block";
+        };
+
         std::size_t nullFloatsChecked = 0;
-        for (const NullBlock& nb : nullBlocks) {
-            const std::vector<float> values = gradArena.readback(ctx.allocator(), nb.index);
-            if (values.size() != nb.expectedFloats) {
-                std::fprintf(stderr,
-                             "[diff_gpu_probe] FAIL: check 38 -- block %zu (%s) read back %zu "
-                             "floats, expected %zu. A null test over the wrong number of floats "
-                             "is not a null test\n",
-                             nb.index, nb.name, values.size(), nb.expectedFloats);
+        for (std::size_t f = 0; f < wholeArena.size(); ++f) {
+            if (f == static_cast<std::size_t>(kGradAlbedoOffset)) continue;  // the one written
+            ++nullFloatsChecked;
+            if (wholeArena[f] != 0.0f) {
+                std::fprintf(
+                    stderr,
+                    "[diff_gpu_probe] FAIL: check 38 -- arena float %zu (%s) is %.9g and must be "
+                    "EXACTLY 0. The traversal's only arena write is one atomicAdd at "
+                    "ScatterPush::gradAlbedoOffset + k with k = 0, i.e. arena float %u, which is "
+                    "element 0 of block %zu. A non-zero anywhere else is a scatter that landed "
+                    "outside the element it was told to write -- which check 37 is blind to, "
+                    "since it reads only that one float\n",
+                    f, describeArenaFloat(f).c_str(), static_cast<double>(wholeArena[f]),
+                    kGradAlbedoOffset, albedoParam->gradBlock);
                 wf.destroy(ctx.allocator());
                 gradArena.destroy(ctx.allocator());
                 return 1;
             }
-            for (std::size_t k = 0; k < values.size(); ++k) {
-                if (values[k] != 0.0f) {
-                    std::fprintf(
-                        stderr,
-                        "[diff_gpu_probe] FAIL: check 38 -- %s, element %zu of arena block %zu, "
-                        "is %.9g and must be EXACTLY 0. The scene does not depend on it and "
-                        "nothing scatters into it: the traversal's only arena write is an "
-                        "atomicAdd at ScatterPush::gradAlbedoOffset (%u), which addresses block "
-                        "%zu at float offset %u. A non-zero here is a scatter that landed "
-                        "outside the block it was told to write, which check 37 can be blind to "
-                        "-- it reads only the albedo block\n",
-                        nb.name, k, nb.index, static_cast<double>(values[k]), kGradAlbedoOffset,
-                        albedoParam->gradBlock, kGradAlbedoOffset);
-                    wf.destroy(ctx.allocator());
-                    gradArena.destroy(ctx.allocator());
-                    return 1;
-                }
+        }
+
+        // Cross-check: the three null blocks really are inside what was just
+        // scanned, so "the whole arena" is not quietly a smaller set than the
+        // block-wise test this replaced.
+        std::size_t namedNullFloats = 0;
+        for (const NullBlock& nb : nullBlocks) {
+            const ohao::diff::ArenaBlock b = gradReg.layout().block(nb.index);
+            const std::size_t first = b.offsetBytes / sizeof(float);
+            const std::size_t count = b.sizeBytes / sizeof(float);
+            if (count != nb.expectedFloats || first + count > wholeArena.size()) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 38 -- block %zu (%s) spans floats "
+                             "[%zu, %zu) of a %zu-float arena and holds %zu floats, expected %zu. "
+                             "The whole-arena scan cannot claim to cover a block it does not "
+                             "contain\n",
+                             nb.index, nb.name, first, first + count, wholeArena.size(), count,
+                             nb.expectedFloats);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
             }
-            nullFloatsChecked += values.size();
+            namedNullFloats += count;
         }
 
         std::printf(
             "[diff_gpu_probe] OK: check 38 -- the null test: after a run that accumulated %.9g "
-            "into the albedo's gradient block (block %zu, float offset %u of a %u-float arena), "
-            "all %zu floats of the other three blocks -- albedo's Adam m/v state and both blocks "
-            "of a second registered parameter the scene does not depend on -- are EXACTLY 0.0f, "
-            "compared as floats and not through a tolerance. This is the statement Stage 1 Task "
-            "5's per-texel scatter has to keep: one atomicAdd per element at "
-            "gradBlockOffset + k, blocks in registration order (gradient then Adam state), 256-"
-            "byte aligned, and nothing outside the block it was told to write\n",
-            measurements[2].analytic, albedoParam->gradBlock, kGradAlbedoOffset, kGradArenaFloats,
-            nullFloatsChecked);
+            "into arena float %u (element 0 of the albedo's gradient block, block %zu), ALL %zu "
+            "other floats of the %u-float arena are EXACTLY 0.0f, compared as floats and not "
+            "through a tolerance. That is the whole arena, not just the %zu floats of the three "
+            "unwritten blocks -- albedo's Adam m/v state and both blocks of a second registered "
+            "parameter the scene does not depend on -- so the %zu floats of 256-byte alignment "
+            "padding, which is where a mis-computed element index is likeliest to land, are "
+            "covered too. This is the statement Stage 1 Task 5's per-texel scatter has to keep: "
+            "one atomicAdd per element at gradBlockOffset + k, blocks in registration order "
+            "(gradient then Adam state), 256-byte aligned, and nothing anywhere else\n",
+            measurements[2].analytic, kGradAlbedoOffset, albedoParam->gradBlock, nullFloatsChecked,
+            kGradArenaFloats, namedNullFloats, nullFloatsChecked - namedNullFloats);
 
         wf.destroy(ctx.allocator());
         gradArena.destroy(ctx.allocator());

@@ -44,6 +44,14 @@ public:
     [[nodiscard]] std::vector<float> readback(GpuAllocator& allocator,
                                               std::size_t blockIndex);
 
+    /// Host-visible copy of EVERY float in the arena, including the inter-block
+    /// alignment padding no block owns. The blocks are 256-byte aligned, so
+    /// most of a small arena is padding -- and padding is precisely where a
+    /// mis-computed element index lands, which is why a null test that reads
+    /// only the blocks cannot see it. Same waiting requirement as readback().
+    /// Returns an empty vector if the arena was never built.
+    [[nodiscard]] std::vector<float> readbackAll(GpuAllocator& allocator);
+
 private:
     ArenaLayout m_layout;
     GpuBuffer m_buffer;
