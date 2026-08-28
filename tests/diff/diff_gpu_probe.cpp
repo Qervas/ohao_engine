@@ -1068,16 +1068,31 @@ bool loadShaderSourceStripped(const char* relativePath, std::string& outStripped
     return true;
 }
 
-/// The wf_scatter.comp case, named because three checks want it.
-bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFoundPath) {
-    return loadShaderSourceStripped("shaders/diff/wf_scatter.comp", outStripped, outFoundPath);
+/// The scatter TRAVERSAL case, named because four checks want it.
+///
+/// This used to load shaders/diff/wf_scatter.comp, and every constant, sink
+/// write and Push field the four ties below parse used to live there. Stage 1
+/// Task 1 extracted the whole traversal into shaders/includes/diff/traverse.glsl
+/// so that the forward and replay instantiations cannot diverge (spec section
+/// 6.2), and the declarations moved with the code. Re-pointing this loader is
+/// what keeps those four ties tied to the text the shader compiler actually
+/// consumes; leaving it aimed at wf_scatter.comp would have made every one of
+/// them fail closed (the declarations are simply not there any more), which is
+/// the right failure mode but not the right file.
+///
+/// The ties are STRONGER for the move, not weaker: they now cover the one
+/// source BOTH instantiations compile, so a drift they would catch cannot hide
+/// in whichever of the two files a reader did not open.
+bool loadDiffTraverseSourceStripped(std::string& outStripped, std::string& outFoundPath) {
+    return loadShaderSourceStripped("shaders/includes/diff/traverse.glsl", outStripped,
+                                    outFoundPath);
 }
 
 bool checkNeeStrideTie() {
     std::string stripped, found;
-    if (!loadWfScatterSourceStripped(stripped, found)) {
+    if (!loadDiffTraverseSourceStripped(stripped, found)) {
         std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "[diff_gpu_probe] FAIL: could not open shaders/includes/diff/traverse.glsl from any "
                      "candidate path, so the binding-7 record stride could not be tied to "
                      "ohao::diff::kNeeSampleFloats (%u). An unchecked tie is not a held tie: a "
                      "mismatch is a silent wrong-slot read, not a validation error\n",
@@ -1182,9 +1197,9 @@ struct NeeSlotExpectation {
 ///     a change to it fails those checks rather than passing quietly.
 bool checkWfScatterSinkLayoutTie() {
     std::string stripped, found;
-    if (!loadWfScatterSourceStripped(stripped, found)) {
+    if (!loadDiffTraverseSourceStripped(stripped, found)) {
         std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "[diff_gpu_probe] FAIL: could not open shaders/includes/diff/traverse.glsl from any "
                      "candidate path, so its per-slot sink layout could not be tied to "
                      "gpu_probe_context.hpp's NeeSampleSlot enum. An unchecked tie is not a held "
                      "tie\n");
@@ -1349,20 +1364,309 @@ bool checkWfScatterSinkLayoutTie() {
         else envStride = shaderStride;
     }
 
-    std::printf("[diff_gpu_probe] NOTE: wf_scatter.comp's probe sinks tied slot by slot -- %s "
-                "writes all %u binding-7 slots at the offsets NeeSampleSlot names, each carrying "
-                "the expression that enumerator documents (so a transposition of two same-arity "
-                "slots, which leaves the stride at %u, is rejected); binding 3 strides %u and "
-                "binding 6 strides %u, matching kDebugDrawFloats and kEnvSampleFloats\n",
-                found.c_str(), ohao::diff::kNeeSampleFloats, ohao::diff::kNeeSampleFloats,
-                debugStride, envStride);
+    // --- The binding-3 VERTEX TRACE record, slot by slot (Stage 1 Task 1).
+    //
+    // The stride check above cannot see a TRANSPOSITION: swapping the origin
+    // and dir triples, or writing `pathThroughput` where `hitT` belongs,
+    // leaves the stride at kDebugDrawFloats and every offset written exactly
+    // once. That is precisely the defect this record cannot survive, because
+    // the replay-equivalence check compares two runs SLOT BY SLOT: two
+    // instantiations sharing one traversal transpose IDENTICALLY and so still
+    // agree, meaning the comparison would pass while the host's picture of
+    // which value lives where was wrong -- and the throughput assertion that
+    // establishes the comparison is not ranging over zeros would then be
+    // reading a direction component. Binding 7 got exactly this treatment for
+    // exactly this reason; the trace record now carries the same weight and
+    // gets the same tie.
+    struct TraceSlotExpectation {
+        std::uint32_t offset;
+        const char* rhs;
+    };
+    const TraceSlotExpectation kTraceExpected[] = {
+        {ohao::diff::kTraceSlotU1, "u1"},
+        {ohao::diff::kTraceSlotU2, "u2"},
+        {ohao::diff::kTraceSlotDrawCount, "uintBitsToFloat(rng.draws)"},
+        {ohao::diff::kTraceSlotULobe, "uLobe"},
+        {ohao::diff::kTraceSlotUEnv1, "uEnv1"},
+        {ohao::diff::kTraceSlotUEnv2, "uEnv2"},
+        {ohao::diff::kTraceSlotOrigin + 0u, "origin.x"},
+        {ohao::diff::kTraceSlotOrigin + 1u, "origin.y"},
+        {ohao::diff::kTraceSlotOrigin + 2u, "origin.z"},
+        {ohao::diff::kTraceSlotDir + 0u, "dir.x"},
+        {ohao::diff::kTraceSlotDir + 1u, "dir.y"},
+        {ohao::diff::kTraceSlotDir + 2u, "dir.z"},
+        {ohao::diff::kTraceSlotThroughput + 0u, "pathThroughput.x"},
+        {ohao::diff::kTraceSlotThroughput + 1u, "pathThroughput.y"},
+        {ohao::diff::kTraceSlotThroughput + 2u, "pathThroughput.z"},
+        {ohao::diff::kTraceSlotHitT, "hitT"},
+        {ohao::diff::kTraceSlotBounce, "uintBitsToFloat(bounce)"},
+        {ohao::diff::kTraceSlotPixelIndex, "uintBitsToFloat(pixelIndex)"},
+    };
+    static_assert(sizeof(kTraceExpected) / sizeof(kTraceExpected[0]) ==
+                      ohao::diff::kDebugDrawFloats,
+                  "the expectation table must name every slot of the trace record");
+
+    const std::regex traceWrite(
+        R"(debugDraws\.v\[[ \t]*pathIndex[ \t]*\*[ \t]*[0-9]+u[ \t]*\+[ \t]*([0-9]+)u[ \t]*\][ \t]*=([^;]*);)");
+    std::map<std::uint32_t, std::string> traceWrites;
+    for (auto it = std::sregex_iterator(stripped.begin(), stripped.end(), traceWrite);
+         it != std::sregex_iterator(); ++it) {
+        const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul((*it)[1].str()));
+        traceWrites[offset] = squashWhitespace((*it)[2].str());
+    }
+    for (const TraceSlotExpectation& e : kTraceExpected) {
+        const auto it = traceWrites.find(e.offset);
+        if (it == traceWrites.end()) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s never writes binding-3 slot %u, which "
+                         "gpu_probe_context.hpp's TraceSlot enum says holds `%s`\n",
+                         found.c_str(), e.offset, e.rhs);
+            return false;
+        }
+        if (it->second != e.rhs) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s writes `%s` into binding-3 slot %u, but "
+                         "gpu_probe_context.hpp's TraceSlot enum places `%s` there. The stride "
+                         "still agrees, so nothing else would have noticed -- and the "
+                         "replay-equivalence check would keep comparing two runs that transposed "
+                         "the SAME two slots and so keep agreeing\n",
+                         found.c_str(), it->second.c_str(), e.offset, e.rhs);
+            return false;
+        }
+    }
+
+    std::printf("[diff_gpu_probe] NOTE: the scatter traversal's probe sinks tied slot by slot -- "
+                "%s writes all %u binding-7 slots at the offsets NeeSampleSlot names AND all %u "
+                "binding-3 slots at the offsets TraceSlot names, each carrying the expression "
+                "that enumerator documents (so a transposition of two same-arity slots, which "
+                "leaves the strides at %u and %u, is rejected); binding 6 strides %u, matching "
+                "kEnvSampleFloats\n",
+                found.c_str(), ohao::diff::kNeeSampleFloats, ohao::diff::kDebugDrawFloats,
+                ohao::diff::kNeeSampleFloats, debugStride, envStride);
+    return true;
+}
+
+/// Ties `ohao::diff::kDrawsPerBounce` to the traversal's own declaration, the
+/// same way `checkNeeStrideTie` ties the binding-7 stride and for a sharper
+/// reason.
+///
+/// This number is what the CPU-side `ohao::diff::PathRng` oracle FAST-FORWARDS
+/// BY before comparing a bounce's draws. If the shader's value and the host's
+/// disagree, the oracle walks a different stream than the shader from bounce 1
+/// onward -- so the checks that use it are not comparing a GPU stream against
+/// a CPU stream at all, they are comparing two unrelated streams, and their
+/// agreement or disagreement means nothing either way. That makes it exactly
+/// the "expected value derived from the same source as the measured value"
+/// shape, one level removed: the number that positions BOTH sides.
+///
+/// It is also the number the replay rests on. `kDrawsPerBounce` must be
+/// branch-independent -- the lobe draw unconditional, both environment draws
+/// taken before the miss guard -- so that a hit and a miss consume identical
+/// stream positions and the fast-forward is a pure function of `bounce`. That
+/// property is not checkable from a literal, but the literal being wrong makes
+/// every check of it vacuous, so this is where the chain starts.
+bool checkDrawsPerBounceTie() {
+    std::string stripped, found;
+    if (!loadDiffTraverseSourceStripped(stripped, found)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/includes/diff/traverse.glsl "
+                     "from any candidate path, so the per-bounce RNG draw count could not be tied "
+                     "to ohao::diff::kDrawsPerBounce (%u). An unchecked tie is not a held tie\n",
+                     ohao::diff::kDrawsPerBounce);
+        return false;
+    }
+    const std::regex decl(R"(const[ \t]+uint[ \t]+kDrawsPerBounce[ \t]*=[ \t]*([0-9]+)u[ \t]*;)");
+    std::smatch m;
+    if (!std::regex_search(stripped, m, decl)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s no longer declares `const uint kDrawsPerBounce = "
+                     "<N>u;` on one line, so the host's PathRng fast-forward cannot be tied to "
+                     "the shader's. Restore the spelling or update this check -- do not leave the "
+                     "two untied\n",
+                     found.c_str());
+        return false;
+    }
+    const unsigned long shaderDraws = std::stoul(m[1].str());
+    if (shaderDraws != static_cast<unsigned long>(ohao::diff::kDrawsPerBounce)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s draws %lu values per bounce while "
+                     "ohao::diff::kDrawsPerBounce says %u. Every CPU-side PathRng oracle in this "
+                     "probe fast-forwards by the host's number, so from bounce 1 onward it would "
+                     "be comparing a position in the stream the shader never occupied\n",
+                     found.c_str(), shaderDraws, ohao::diff::kDrawsPerBounce);
+        return false;
+    }
+    std::printf("[diff_gpu_probe] NOTE: per-bounce RNG draw count tied -- %s draws %lu values per "
+                "bounce and ohao::diff::kDrawsPerBounce is %u\n",
+                found.c_str(), shaderDraws, ohao::diff::kDrawsPerBounce);
+    return true;
+}
+
+/// Ties the "ONE SOURCE, TWO INSTANTIATIONS" claim (spec section 6.2) to the
+/// two files that make it, by REFUSING TO RUN unless neither of them can
+/// diverge from the other.
+///
+/// WHY THIS IS A CHECK AND NOT A COMMENT. The whole of Stage 1 rests on the
+/// forward and replay kernels walking the identical path, consuming the
+/// identical RNG values in the identical order. Spec section 6.2's answer is
+/// structural -- "the traversal is one piece of source, included twice, with a
+/// per-vertex hook the includer defines. Divergence is made structurally
+/// impossible rather than prevented by discipline." But "structurally
+/// impossible" is a property of the FILES, and files drift: a binding added to
+/// one instantiation and not the other, a Push field, a `#define` that switches
+/// a branch inside the shared source, a second traversal quietly written next
+/// to the hook. Each of those reintroduces exactly the divergence the design
+/// eliminated, and NONE of them would fail to compile.
+///
+/// The replay-equivalence check downstream cannot catch them either, and that
+/// is the subtle part: it compares two runs of the shared traversal, so a
+/// change that reaches BOTH instantiations changes both records identically
+/// and they still agree. Only a check on the SOURCE can see that the two
+/// instantiations stopped being two instantiations.
+///
+/// WHAT IS ENFORCED, on the comment-stripped text of both `.comp` files:
+///
+///   1. exactly ONE `#include`, and it is `diff/traverse.glsl`;
+///   2. no `layout(...)` declaration -- no bindings, no push constants, no
+///      local size. All of those live in the shared source, so neither
+///      instantiation can grow a descriptor interface the other lacks or a
+///      Push block that disagrees with `WavefrontLoop::ScatterPush`;
+///   3. the ONLY top-level function definitions are `diffVertexHook` and
+///      `main` -- a second traversal cannot hide beside the hook;
+///   4. `main` is exactly `void main() { diffTraverse(); }`, so neither
+///      instantiation can do work before or after the shared traversal;
+///   5. no preprocessor directive other than `#version` and that one
+///      `#include`. This is the one that keeps the shared source from being
+///      CONFIGURABLE per instantiation: a `#define` in one `.comp` plus an
+///      `#ifdef` in traverse.glsl is textually one source and behaviourally
+///      two, and it is the cheapest way for a future task to reintroduce a
+///      per-instantiation RNG draw.
+///
+/// Rule 3 is deliberately about DEFINITIONS at column 0. A hook body may call
+/// whatever it likes; what it may not do is define a second entry point.
+bool checkTraverseInstantiationTie() {
+    struct Instantiation {
+        const char* path;
+        const char* role;
+    };
+    const Instantiation kInstantiations[] = {
+        {"shaders/diff/wf_scatter.comp", "the FORWARD instantiation"},
+        {"shaders/diff/wf_scatter_replay.comp", "the REPLAY instantiation"},
+    };
+
+    for (const Instantiation& inst : kInstantiations) {
+        std::string stripped, found;
+        if (!loadShaderSourceStripped(inst.path, stripped, found)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: could not open %s (%s) from any candidate path, "
+                         "so the one-source/two-instantiations property could not be checked. An "
+                         "unchecked structural guarantee is not a held one -- and this is the "
+                         "guarantee every gradient in Stage 1 rests on\n",
+                         inst.path, inst.role);
+            return false;
+        }
+
+        // (1) exactly one #include, and it is the traversal.
+        // Custom raw-string delimiter: the pattern itself contains `)"`.
+        const std::regex includeRe(R"RX(#[ \t]*include[ \t]*"([^"]*)")RX");
+        std::vector<std::string> includes;
+        for (auto it = std::sregex_iterator(stripped.begin(), stripped.end(), includeRe);
+             it != std::sregex_iterator(); ++it) {
+            includes.push_back((*it)[1].str());
+        }
+        if (includes.size() != 1 || includes[0] != "diff/traverse.glsl") {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) has %zu #include(s)%s%s, expected exactly "
+                         "one of \"diff/traverse.glsl\". Anything else this file pulls in is text "
+                         "the OTHER instantiation does not compile, which is precisely the "
+                         "divergence spec 6.2 removes by construction\n",
+                         found.c_str(), inst.role, includes.size(),
+                         includes.empty() ? "" : ", first is \"",
+                         includes.empty() ? "" : (includes[0] + "\"").c_str());
+            return false;
+        }
+
+        // (2) no layout() declarations.
+        if (stripped.find("layout") != std::string::npos) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) contains a `layout` declaration. Every "
+                         "binding, the Push block and the local size belong to "
+                         "shaders/includes/diff/traverse.glsl so that BOTH instantiations have "
+                         "exactly one of each. A layout here is a descriptor interface -- or a "
+                         "Push block, byte-matched to WavefrontLoop::ScatterPush -- that only one "
+                         "of the two kernels has\n",
+                         found.c_str(), inst.role);
+            return false;
+        }
+
+        // (5) no preprocessor directive except #version and the #include.
+        const std::regex directiveRe(R"((?:^|\n)[ \t]*#[ \t]*([A-Za-z_]+))");
+        for (auto it = std::sregex_iterator(stripped.begin(), stripped.end(), directiveRe);
+             it != std::sregex_iterator(); ++it) {
+            const std::string d = (*it)[1].str();
+            if (d == "version" || d == "include") continue;
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) contains the preprocessor directive "
+                         "`#%s`. Only `#version` and the one `#include` are allowed: a `#define` "
+                         "here plus an `#ifdef` in the shared traversal is textually one source "
+                         "and behaviourally two, and one extra `diffRngNext1D` behind such a "
+                         "switch is exactly the silent divergence this whole task exists to make "
+                         "impossible\n",
+                         found.c_str(), inst.role, d.c_str());
+            return false;
+        }
+
+        // (3) top-level function definitions.
+        const std::regex fnRe(
+            R"((?:^|\n)([A-Za-z_][A-Za-z0-9_]*)[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*\()");
+        std::set<std::string> defined;
+        for (auto it = std::sregex_iterator(stripped.begin(), stripped.end(), fnRe);
+             it != std::sregex_iterator(); ++it) {
+            defined.insert((*it)[2].str());
+        }
+        const std::set<std::string> kAllowed = {"diffVertexHook", "main"};
+        if (defined != kAllowed) {
+            std::string listed;
+            for (const std::string& n : defined) {
+                if (!listed.empty()) listed += ", ";
+                listed += n;
+            }
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) defines top-level function(s) {%s}, "
+                         "expected exactly {diffVertexHook, main}. The hook is the ONLY thing an "
+                         "instantiation contributes; a second function defined here is a second "
+                         "traversal the other instantiation does not have\n",
+                         found.c_str(), inst.role, listed.c_str());
+            return false;
+        }
+
+        // (4) main's body.
+        const std::regex mainRe(
+            R"(void[ \t]+main[ \t]*\([ \t]*\)[ \t]*\{[ \t\r\n]*diffTraverse\([ \t]*\)[ \t]*;[ \t\r\n]*\})");
+        if (!std::regex_search(stripped, mainRe)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) does not spell its entry point as "
+                         "`void main() { diffTraverse(); }`. Work done before or after the shared "
+                         "traversal is work only one of the two kernels does\n",
+                         found.c_str(), inst.role);
+            return false;
+        }
+    }
+
+    std::printf("[diff_gpu_probe] NOTE: one traversal, two instantiations -- "
+                "shaders/diff/wf_scatter.comp and shaders/diff/wf_scatter_replay.comp each "
+                "include shaders/includes/diff/traverse.glsl and nothing else, declare no "
+                "layout() of their own, carry no preprocessor switch, define exactly "
+                "{diffVertexHook, main}, and spell main as `void main() { diffTraverse(); }`. "
+                "The only difference between the forward and the replay kernel is the hook "
+                "body\n");
     return true;
 }
 
 /// Ties wf_scatter.comp's `Push` block byte size to
 /// `ohao::diff::WavefrontLoop::ScatterPush`'s, the same way checkNeeStrideTie
 /// ties the NEE record stride: by parsing the SHADER SOURCE (comment-stripped
-/// via loadWfScatterSourceStripped, for the identical reason) rather than
+/// via loadDiffTraverseSourceStripped, for the identical reason) rather than
 /// trusting a comment.
 ///
 /// WHY THIS EXISTS (review Finding 6, Stage 0b-2b Task 5). ScatterPush has no
@@ -1400,9 +1704,9 @@ bool checkWfScatterSinkLayoutTie() {
 /// which this regex does not match) fails loudly instead of mis-sizing.
 bool checkScatterPushSizeTie() {
     std::string stripped, found;
-    if (!loadWfScatterSourceStripped(stripped, found)) {
+    if (!loadDiffTraverseSourceStripped(stripped, found)) {
         std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "[diff_gpu_probe] FAIL: could not open shaders/includes/diff/traverse.glsl from any "
                      "candidate path, so its Push block size could not be tied to "
                      "ohao::diff::WavefrontLoop::ScatterPush. An unchecked tie is not a held "
                      "tie\n");
@@ -1462,7 +1766,7 @@ bool checkScatterPushSizeTie() {
                      found.c_str(), fieldCount, shaderBytes, kScatterPushBytes);
         return false;
     }
-    std::printf("[diff_gpu_probe] NOTE: wf_scatter.comp Push block tied to ScatterPush -- %s "
+    std::printf("[diff_gpu_probe] NOTE: the scatter traversal's Push block tied to ScatterPush -- %s "
                 "declares %zu scalar fields (%zu bytes) and sizeof(ScatterPush) is %zu\n",
                 found.c_str(), fieldCount, shaderBytes, kScatterPushBytes);
     return true;
@@ -1612,9 +1916,9 @@ bool checkBsdfShaderConstantTies() {
 /// there is none, which is the opposite of a value this reference mirrors.
 bool checkParityRefConstantsTie() {
     std::string scatterSrc, scatterPath;
-    if (!loadWfScatterSourceStripped(scatterSrc, scatterPath)) {
+    if (!loadDiffTraverseSourceStripped(scatterSrc, scatterPath)) {
         std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "[diff_gpu_probe] FAIL: could not open shaders/includes/diff/traverse.glsl from any "
                      "candidate path, so checks 33-34's CPU reference rayTMax/surfaceOffset could "
                      "not be tied to wf_scatter.comp's kShadowTMax/kSurfaceOffset. An unchecked "
                      "tie is not a held tie\n");
@@ -1696,6 +2000,14 @@ int main() {
     // review finding): the stride tie above cannot see a transposition of two
     // same-arity slots, and the 24 offsets are what checks 28-32 index by.
     if (!checkWfScatterSinkLayoutTie()) return 1;
+    // The per-bounce RNG draw count, which positions every CPU-side PathRng
+    // oracle below relative to the shader's stream.
+    if (!checkDrawsPerBounceTie()) return 1;
+    // The one-source/two-instantiations property (spec 6.2), before any GPU
+    // object exists: if the forward and replay kernels can diverge, the
+    // replay-equivalence check below is comparing two different traversals and
+    // its agreement means nothing.
+    if (!checkTraverseInstantiationTie()) return 1;
     // bsdf_probe.comp's output stride and bsdf.glsl's DIFF_BSDF_MIN_COS -- the
     // latter is what check 20 EXCUSES a grazing rejection with, so drift there
     // widens an excuse silently.
@@ -2961,11 +3273,23 @@ int main() {
                 }
             }
             if (!scatterOk) break;
-            if (outDraws.size() != static_cast<std::size_t>(kCapacity) * 3u) {
+            // The stride is ohao::diff::kDebugDrawFloats, not a bare 3: that
+            // constant is TIED to the shader's own write statements by
+            // checkWfScatterSinkLayoutTie, and the two literal `3u`s that
+            // used to sit here were the one place in this file where the
+            // record's width was transcribed rather than referenced. Stage 1
+            // Task 1 widened the record from (u1, u2, drawCount) to a full
+            // per-vertex trace and these were what noticed -- correctly, and
+            // for the wrong reason: they were asserting a size, not a
+            // meaning. The values this check reads are still slots 0, 1 and
+            // 2, unchanged.
+            if (outDraws.size() !=
+                static_cast<std::size_t>(kCapacity) * ohao::diff::kDebugDrawFloats) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: wf_scatter bounce %u debug-draws readback "
                              "size %zu, expected %zu\n",
-                             b, outDraws.size(), static_cast<std::size_t>(kCapacity) * 3u);
+                             b, outDraws.size(),
+                             static_cast<std::size_t>(kCapacity) * ohao::diff::kDebugDrawFloats);
                 scatterOk = false;
                 break;
             }
@@ -3297,11 +3621,15 @@ int main() {
             const std::uint32_t cpuDrawCount = fusedCpuRng.drawCount();
 
             const std::vector<float>& gpuDraws = fusedDraws[b];
-            if (gpuDraws.size() != static_cast<std::size_t>(kCapacity) * 3u) {
+            // ohao::diff::kDebugDrawFloats, not a bare 3 -- see the identical
+            // note on check 14's copy of this guard above.
+            if (gpuDraws.size() !=
+                static_cast<std::size_t>(kCapacity) * ohao::diff::kDebugDrawFloats) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: fused loop bounce %u debug-draws size %zu, "
                              "expected %zu\n",
-                             b, gpuDraws.size(), static_cast<std::size_t>(kCapacity) * 3u);
+                             b, gpuDraws.size(),
+                             static_cast<std::size_t>(kCapacity) * ohao::diff::kDebugDrawFloats);
                 wf.destroy(ctx.allocator());
                 return 1;
             }
@@ -7323,6 +7651,403 @@ int main() {
                 (sigmaFloor > 0.0) ? minSigma / sigmaFloor
                                    : std::numeric_limits<double>::infinity());
         }
+    }
+
+    // =======================================================================
+    // 35-36. REPLAY EQUIVALENCE (Stage 1 Task 1). NO GRADIENT IS INVOLVED.
+    // =======================================================================
+    //
+    // Stage 1 makes this renderer differentiable by path replay
+    // backpropagation, and the single property everything else in it rests on
+    // is this: the BACKWARD kernel must walk the identical path the FORWARD
+    // kernel walked, consuming the identical RNG values in the identical
+    // order. Spec section 6.2: "Divergence by a single RNG call means the
+    // replayed path is a different path and every gradient is silently wrong
+    // -- no crash, no NaN." Established here, BEFORE any adjoint exists,
+    // because found later it would look like a bad df/dtheta derivation
+    // rather than like a stream that went out of step.
+    //
+    // THE TWO RUNS. shaders/diff/wf_scatter.comp and
+    // shaders/diff/wf_scatter_replay.comp are two instantiations of ONE
+    // source (shaders/includes/diff/traverse.glsl), differing only in the
+    // body of `diffVertexHook` -- which checkTraverseInstantiationTie()
+    // above has already established structurally. Each is dispatched in the
+    // same position of the same WavefrontLoop over the same closed-box scene,
+    // in two INDEPENDENT runs from re-zeroed buffers with the same seed, and
+    // each writes its own binding-3 vertex trace into its own buffer.
+    //
+    // THE ORACLE IS NOT THE OTHER RUN. Check 35 first validates the FORWARD
+    // trace on its own, against ohao::diff::PathRng replayed on the CPU and
+    // against analytic properties of the scene -- so that check 36's
+    // bit-exact comparison cannot pass by both runs having written nothing.
+    // The replay is handed no value the forward produced: it re-zeroes path
+    // state, re-dispatches generate, and re-derives every vertex from
+    // (pixelIndex, sampleIndex, iterationSeed) and the `bounce` it reads back
+    // out of path state. That is the seed invariant (spec 4.5) and it is the
+    // whole reason "replay" is possible without storing the path.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;
+        constexpr uint32_t kCapacity = kW * kH;  // 512
+        constexpr float kAlbedo = 0.5f;
+        constexpr uint32_t kIterationSeed = 20260828u;
+        constexpr uint32_t kBounces = 4;
+        // NOT a literal: getting this wrong makes the CPU oracle below walk a
+        // different stream than the shader, which is the very failure this
+        // pair of checks exists to detect -- so it would be an expected value
+        // and a measured value positioned by the same mistake. It is the host
+        // constant TIED to the traversal's own declaration by
+        // checkDrawsPerBounceTie() above, which the probe refuses to run
+        // without. (Checks 15 and 18 predate the tie and still state it as a
+        // local literal; they are left untouched, and this constant being
+        // tied is what makes their number checkable too.)
+        constexpr uint32_t kDrawsPerBounce = ohao::diff::kDrawsPerBounce;
+        constexpr uint32_t kStride = ohao::diff::kDebugDrawFloats;
+
+        // Slot names, for diagnostics only. Kept beside TraceSlot rather than
+        // derived from it because a printed name is not a check; the TIE that
+        // makes these offsets mean anything is checkWfScatterSinkLayoutTie's
+        // per-slot expectation table, which is parsed out of the shader.
+        struct TraceSlotName {
+            uint32_t offset;
+            const char* name;
+        };
+        const TraceSlotName kSlotNames[] = {
+            {ohao::diff::kTraceSlotU1, "u1"},
+            {ohao::diff::kTraceSlotU2, "u2"},
+            {ohao::diff::kTraceSlotDrawCount, "drawCount"},
+            {ohao::diff::kTraceSlotULobe, "uLobe"},
+            {ohao::diff::kTraceSlotUEnv1, "uEnv1"},
+            {ohao::diff::kTraceSlotUEnv2, "uEnv2"},
+            {ohao::diff::kTraceSlotOrigin + 0u, "origin.x"},
+            {ohao::diff::kTraceSlotOrigin + 1u, "origin.y"},
+            {ohao::diff::kTraceSlotOrigin + 2u, "origin.z"},
+            {ohao::diff::kTraceSlotDir + 0u, "dir.x"},
+            {ohao::diff::kTraceSlotDir + 1u, "dir.y"},
+            {ohao::diff::kTraceSlotDir + 2u, "dir.z"},
+            {ohao::diff::kTraceSlotThroughput + 0u, "throughput.r"},
+            {ohao::diff::kTraceSlotThroughput + 1u, "throughput.g"},
+            {ohao::diff::kTraceSlotThroughput + 2u, "throughput.b"},
+            {ohao::diff::kTraceSlotHitT, "hitT"},
+            {ohao::diff::kTraceSlotBounce, "bounce"},
+            {ohao::diff::kTraceSlotPixelIndex, "pixelIndex"},
+        };
+        static_assert(sizeof(kSlotNames) / sizeof(kSlotNames[0]) == kStride,
+                      "every trace slot must have a name for diagnostics");
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: replay probe buffers build\n");
+            return 1;
+        }
+
+        std::vector<std::vector<float>> fwdTrace;
+        std::vector<std::vector<float>> repTrace;
+        if (!ctx.runWavefrontReplayProbe(wf, kW, kH, kBounces, kAlbedo, kIterationSeed, fwdTrace,
+                                         repTrace)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: replay probe dispatch. Until "
+                         "shaders/diff/wf_scatter_replay.comp exists there is no second "
+                         "instantiation of the traversal, and this is the expected failure\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        if (fwdTrace.size() != kBounces || repTrace.size() != kBounces) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: replay probe returned %zu forward and %zu replay "
+                         "traces, expected %u of each\n",
+                         fwdTrace.size(), repTrace.size(), kBounces);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // -------------------------------------------------------------------
+        // 35. The FORWARD trace, validated against an oracle that is not the
+        //     replay run: ohao::diff::PathRng on the CPU, plus the analytic
+        //     properties of the closed-box scene. This is what stops check 36
+        //     from being able to pass on two buffers of zeros -- or on two
+        //     buffers of anything else that happens to match.
+        // -------------------------------------------------------------------
+        std::vector<uint32_t> pixelHits(kCapacity, 0u);
+        double minU1 = 2.0;
+        double maxU1 = -1.0;
+        double maxDirLenErr = 0.0;
+        float minHitT = std::numeric_limits<float>::infinity();
+        for (uint32_t b = 0; b < kBounces; ++b) {
+            if (fwdTrace[b].size() != static_cast<std::size_t>(kCapacity) * kStride) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: forward trace for bounce %u holds %zu floats, "
+                             "expected %u\n",
+                             b, fwdTrace[b].size(), kCapacity * kStride);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            // The arrival throughput at bounce b is exactly albedo^b: the
+            // material is Config's pure-Lambertian default, whose per-bounce
+            // estimator weight f*cos/pdf is exactly `albedo`, and the closed
+            // box keeps every path alive so nothing skips a decay. Formed by
+            // repeated float multiplication, not powf, for the same reason
+            // check 17's 0.0625 is: it must be the SAME arithmetic the GPU
+            // did, and at albedo 0.5 both are exact anyway.
+            float expectedThroughput = 1.0f;
+            for (uint32_t i = 0; i < b; ++i) expectedThroughput *= kAlbedo;
+
+            for (uint32_t path = 0; path < kCapacity; ++path) {
+                const float* rec = &fwdTrace[b][static_cast<std::size_t>(path) * kStride];
+
+                // Every slot must be a finite number. A record full of NaN
+                // would compare unequal to itself and so could not sneak
+                // through check 36 -- but it would sneak through as
+                // "different", and this says so with the right diagnosis.
+                for (uint32_t i = 0; i < kStride; ++i) {
+                    if (!std::isfinite(rec[i])) {
+                        // Slots 2, 16 and 17 are bit-cast uints, whose float
+                        // reinterpretation is meaningless; exclude them.
+                        if (i == ohao::diff::kTraceSlotDrawCount ||
+                            i == ohao::diff::kTraceSlotBounce ||
+                            i == ohao::diff::kTraceSlotPixelIndex) {
+                            continue;
+                        }
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: forward trace bounce %u path %u slot "
+                                     "%u (%s) is not finite (%g)\n",
+                                     b, path, i, kSlotNames[i].name, static_cast<double>(rec[i]));
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                }
+
+                // --- The five draws and the draw count, against PathRng.
+                //
+                // pathIndex == pixelIndex here: wf_generate.comp writes one
+                // path per pixel at sampleIndex 0 and indexes path state by
+                // the pixel index, which is also the one-sample-per-pixel
+                // condition asserted by the histogram below.
+                ohao::diff::PathRng cpu = ohao::diff::PathRng::forPath(path, /*sampleIndex=*/0u,
+                                                                       kIterationSeed);
+                for (uint32_t i = 0; i < b * kDrawsPerBounce; ++i) (void)cpu.next1D();
+                const float expected[5] = {cpu.next1D(), cpu.next1D(), cpu.next1D(), cpu.next1D(),
+                                           cpu.next1D()};
+                const uint32_t expectedDraws = cpu.drawCount();
+                const uint32_t drawSlots[5] = {
+                    ohao::diff::kTraceSlotU1, ohao::diff::kTraceSlotU2,
+                    ohao::diff::kTraceSlotULobe, ohao::diff::kTraceSlotUEnv1,
+                    ohao::diff::kTraceSlotUEnv2};
+                for (uint32_t i = 0; i < 5; ++i) {
+                    if (rec[drawSlots[i]] != expected[i]) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: forward trace bounce %u path %u draw "
+                                     "%u (%s): GPU %.9g, ohao::diff::PathRng %.9g. The shader's "
+                                     "reconstruction from (pixelIndex, sampleIndex, "
+                                     "iterationSeed) fast-forwarded by %u*%u draws does not "
+                                     "reproduce the CPU stream, so there is no forward stream for "
+                                     "a replay to be equal TO\n",
+                                     b, path, i, kSlotNames[drawSlots[i]].name,
+                                     static_cast<double>(rec[drawSlots[i]]),
+                                     static_cast<double>(expected[i]), b, kDrawsPerBounce);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                }
+                uint32_t gpuDraws = 0;
+                std::memcpy(&gpuDraws, &rec[ohao::diff::kTraceSlotDrawCount], sizeof(gpuDraws));
+                if (gpuDraws != expectedDraws || gpuDraws != (b + 1) * kDrawsPerBounce) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: forward trace bounce %u path %u drawCount "
+                                 "= %u, PathRng says %u, arithmetic says %u\n",
+                                 b, path, gpuDraws, expectedDraws, (b + 1) * kDrawsPerBounce);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+
+                // --- The vertex the traversal reached.
+                uint32_t gpuBounce = 0;
+                std::memcpy(&gpuBounce, &rec[ohao::diff::kTraceSlotBounce], sizeof(gpuBounce));
+                if (gpuBounce != b) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: forward trace slot `bounce` = %u in the "
+                                 "run of %u bounces, expected %u. The host is not comparing the "
+                                 "bounce it thinks it is\n",
+                                 gpuBounce, b + 1, b);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+                uint32_t gpuPixel = 0;
+                std::memcpy(&gpuPixel, &rec[ohao::diff::kTraceSlotPixelIndex], sizeof(gpuPixel));
+                if (gpuPixel != path) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: forward trace bounce %u path %u carries "
+                                 "pixelIndex %u. At one sample per pixel wf_generate.comp indexes "
+                                 "path state BY the pixel index, so these must be equal\n",
+                                 b, path, gpuPixel);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+                if (b == 0) ++pixelHits[gpuPixel];
+
+                const float hitT = rec[ohao::diff::kTraceSlotHitT];
+                if (!(hitT > 0.0f)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: forward trace bounce %u path %u has hitT "
+                                 "= %g. Every ray from strictly inside a CLOSED box leaves it "
+                                 "through a face, so a non-positive hit distance means the record "
+                                 "is not describing a real vertex\n",
+                                 b, path, static_cast<double>(hitT));
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+                minHitT = std::min(minHitT, hitT);
+
+                for (uint32_t c = 0; c < 3; ++c) {
+                    const float t = rec[ohao::diff::kTraceSlotThroughput + c];
+                    if (t != expectedThroughput) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: forward trace bounce %u path %u "
+                                     "arrival throughput component %u = %.9g, expected EXACTLY "
+                                     "%.9g (albedo^%u). The traced throughput is not the path's, "
+                                     "so the comparison below would be ranging over something "
+                                     "other than the vertex it names\n",
+                                     b, path, c, static_cast<double>(t),
+                                     static_cast<double>(expectedThroughput), b);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                }
+
+                const double dx = rec[ohao::diff::kTraceSlotDir + 0u];
+                const double dy = rec[ohao::diff::kTraceSlotDir + 1u];
+                const double dz = rec[ohao::diff::kTraceSlotDir + 2u];
+                const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+                maxDirLenErr = std::max(maxDirLenErr, std::abs(len - 1.0));
+                minU1 = std::min(minU1, static_cast<double>(rec[ohao::diff::kTraceSlotU1]));
+                maxU1 = std::max(maxU1, static_cast<double>(rec[ohao::diff::kTraceSlotU1]));
+            }
+        }
+        if (maxDirLenErr > 1e-5) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: a forward-trace direction is off unit length by "
+                         "%.3g. The recorded `dir` is not a ray direction\n",
+                         maxDirLenErr);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        // NON-VACUITY of the whole comparison, stated as a measurement rather
+        // than assumed: if every path drew the same u1 the trace would carry
+        // no information and two runs would agree for a reason that has
+        // nothing to do with replay. 512 independent streams spread over
+        // [0,1) is what makes agreement meaningful.
+        if (!(maxU1 - minU1 > 0.9)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: the forward trace's u1 spans only [%.6f, %.6f] "
+                         "across %u paths x %u bounces. A trace with no variety cannot "
+                         "distinguish a real replay from a stage that wrote a constant\n",
+                         minU1, maxU1, kCapacity, kBounces);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        // THE FILM HAZARD, MEASURED (spec 4.5; the choice and its reasoning
+        // are stated in wf_scatter.comp's hook). This subsystem resolved the
+        // hazard by option (a): ONE SAMPLE PER PIXEL PER DISPATCH, so that
+        // several paths of one pixel never atomicAdd the same three film
+        // floats within a dispatch and the accumulation order stops depending
+        // on the scheduler. runWavefrontReplayProbe refuses to run without
+        // width*height == capacity; this is the other half -- the histogram
+        // of what the paths ACTUALLY carried.
+        for (uint32_t pix = 0; pix < kCapacity; ++pix) {
+            if (pixelHits[pix] != 1u) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: pixel %u is covered by %u paths, expected "
+                             "exactly 1. More than one sample per pixel inside one dispatch makes "
+                             "the film's atomicAdd order scheduler-dependent, and float addition "
+                             "is not associative -- which is the accumulation-order artefact spec "
+                             "4.5 warns would present as an almost-right, irreproducible "
+                             "gradient. This subsystem's resolution is that this never happens\n",
+                             pix, pixelHits[pix]);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf(
+            "[diff_gpu_probe] OK: check 35 -- the FORWARD traversal's vertex trace is real and "
+            "independently correct: for all %u paths x %u bounces, all %u RNG draws per bounce "
+            "and the draw count match ohao::diff::PathRng replayed on the CPU (a stream the GPU "
+            "never sees), the recorded bounce and pixel indices are self-consistent, every "
+            "arrival throughput is EXACTLY albedo^bounce, every hit distance is positive (min "
+            "%.4f) and every direction is unit length to %.1e. Non-vacuous: u1 spans [%.4f, "
+            "%.4f] across the %u streams, and every one of the %u pixels is covered by exactly "
+            "one path -- the one-sample-per-pixel resolution of the film hazard (spec 4.5), "
+            "measured rather than assumed\n",
+            kCapacity, kBounces, kDrawsPerBounce, static_cast<double>(minHitT), maxDirLenErr,
+            minU1, maxU1, kCapacity, kCapacity);
+
+        // -------------------------------------------------------------------
+        // 36. REPLAY EQUIVALENCE, bit for bit.
+        //
+        // Every slot of every record, for every path and every bounce, must
+        // be BIT-identical between the two instantiations -- compared as raw
+        // 32-bit patterns, not as floats, so that a difference of one ulp is
+        // a failure and not a rounding excuse. The draws and the draw count
+        // are the RNG stream; the origin, direction, throughput and hit
+        // distance are the vertex that stream produced. "Same draws" without
+        // "same vertex" would be a replay that consumed the right numbers and
+        // went somewhere else; "same vertex" without "same draws" would be a
+        // path that happened to land in the same place with a stream that has
+        // already gone out of step for the NEXT bounce.
+        // -------------------------------------------------------------------
+        std::size_t comparedSlots = 0;
+        for (uint32_t b = 0; b < kBounces; ++b) {
+            if (repTrace[b].size() != fwdTrace[b].size()) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: replay trace for bounce %u holds %zu floats, "
+                             "forward holds %zu\n",
+                             b, repTrace[b].size(), fwdTrace[b].size());
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            for (uint32_t path = 0; path < kCapacity; ++path) {
+                const std::size_t base = static_cast<std::size_t>(path) * kStride;
+                for (uint32_t i = 0; i < kStride; ++i) {
+                    uint32_t fwdBits = 0;
+                    uint32_t repBits = 0;
+                    std::memcpy(&fwdBits, &fwdTrace[b][base + i], sizeof(fwdBits));
+                    std::memcpy(&repBits, &repTrace[b][base + i], sizeof(repBits));
+                    ++comparedSlots;
+                    if (fwdBits == repBits) continue;
+                    std::fprintf(
+                        stderr,
+                        "[diff_gpu_probe] FAIL: REPLAY DIVERGED. Bounce %u, path %u, trace slot "
+                        "%u (%s): forward 0x%08x (%.9g), replay 0x%08x (%.9g).\n"
+                        "  The replay kernel did NOT walk the path the forward kernel walked. "
+                        "Under path replay backpropagation this is not a tolerance question: a "
+                        "replayed path that differs anywhere is a DIFFERENT path, every "
+                        "df/dtheta accumulated along it is evaluated at the wrong vertex, and "
+                        "the result is a gradient that is silently wrong with no crash, no NaN "
+                        "and no diagnostic (spec 6.2). If the diverging slot is one of the five "
+                        "draws or the draw count, one instantiation consumed a different number "
+                        "of RNG values than the other -- check that nothing outside "
+                        "shaders/includes/diff/traverse.glsl draws, and that neither hook does.\n",
+                        b, path, i, kSlotNames[i].name, fwdBits,
+                        static_cast<double>(fwdTrace[b][base + i]), repBits,
+                        static_cast<double>(repTrace[b][base + i]));
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+        std::printf(
+            "[diff_gpu_probe] OK: check 36 -- the REPLAY instantiation walks the IDENTICAL path: "
+            "%zu trace slots (%u paths x %u bounces x %u slots) are bit-identical between two "
+            "independent runs of ohao::diff::WavefrontLoop, one through "
+            "shaders/diff/wf_scatter.comp and one through "
+            "shaders/diff/wf_scatter_replay.comp. Same five RNG draws per bounce, same draw "
+            "count, same origin, same direction, same throughput, same hit distance -- compared "
+            "as raw bit patterns, so one ulp is a failure. The replay run was handed nothing the "
+            "forward run produced: it re-zeroed path state, re-dispatched generate and "
+            "re-derived every vertex from (pixelIndex, sampleIndex, iterationSeed) and the "
+            "bounce it read back out of path state\n",
+            comparedSlots, kCapacity, kBounces, kStride);
+
+        wf.destroy(ctx.allocator());
     }
 
     arena.destroy(ctx.allocator());

@@ -80,20 +80,100 @@ struct WavefrontScatterMaterial {
 /// two numbers disagree.
 inline constexpr std::uint32_t kNeeSampleFloats = 25;
 
-/// Floats per PATH INDEX in wf_scatter.comp's binding-3 debug-draw sink
-/// (`u1`, `u2`, and the RNG draw count bit-cast to float) and its binding-6
-/// environment-sample sink (a unit direction plus the density it was drawn
-/// with).
+/// Floats per PATH INDEX in the traversal's binding-3 VERTEX TRACE sink and
+/// in its binding-6 environment-sample sink (a unit direction plus the
+/// density it was drawn with).
 ///
 /// Named for the same reason kNeeSampleFloats is, and tied the same way:
 /// diff_gpu_probe.cpp's `checkWfScatterSinkLayoutTie()` parses the shader's
 /// own writes into those two buffers and refuses to run the probe unless the
-/// stride AND the set of written offsets match these numbers exactly. They
-/// were bare `3u`/`4u` literals on both sides of the boundary until then --
-/// the same untied shape kNeeSampleFloats was called out for, with the same
-/// silent-wrong-slot-read failure mode.
-inline constexpr std::uint32_t kDebugDrawFloats = 3;
+/// stride, the set of written offsets AND (for binding 3 and binding 7) the
+/// expression written into each slot match these numbers and the enums below
+/// exactly. They were bare `3u`/`4u` literals on both sides of the boundary
+/// until then -- the same untied shape kNeeSampleFloats was called out for,
+/// with the same silent-wrong-slot-read failure mode.
+///
+/// kDebugDrawFloats was 3 through Stage 0b-2b, holding (u1, u2, drawCount).
+/// Stage 1 Task 1 widened it to a full per-vertex record (see TraceSlot).
+/// Slots 0, 1 and 2 still carry exactly those three values, so checks 15 and
+/// 18 -- which have read them since Stage 0b-1 and index through this
+/// constant -- are untouched by the widening.
+inline constexpr std::uint32_t kDebugDrawFloats = 18;
 inline constexpr std::uint32_t kEnvSampleFloats = 4;
+
+/// RNG draws the traversal takes per bounce -- shaders/includes/diff/traverse.glsl's
+/// own `kDrawsPerBounce`. Three for the BSDF (a 2-D direction sample plus a
+/// 1-D lobe choice) and two for the environment sample.
+///
+/// A HOST constant rather than a per-check literal, and TIED to the shader by
+/// diff_gpu_probe.cpp's `checkDrawsPerBounceTie()`, because it is what the
+/// CPU-side PathRng oracle fast-forwards by: get it wrong and the oracle
+/// walks a DIFFERENT stream than the shader, which is the exact failure the
+/// checks that use it exist to detect -- so they would be comparing two
+/// wrong things and could agree. The count must also stay independent of
+/// which lobe was chosen and of whether the path hit anything, which is why
+/// the traversal draws the lobe sample unconditionally and takes both
+/// environment draws before its miss guard.
+inline constexpr std::uint32_t kDrawsPerBounce = 5;
+
+/// Named offsets into one path's kDebugDrawFloats-float VERTEX TRACE record,
+/// binding 3 of shaders/includes/diff/traverse.glsl.
+///
+/// WHAT THIS RECORD IS FOR. It is the observable that makes REPLAY
+/// EQUIVALENCE checkable at all. Two instantiations of the traversal --
+/// shaders/diff/wf_scatter.comp and shaders/diff/wf_scatter_replay.comp --
+/// must walk the identical path, consuming the identical RNG values in the
+/// identical order (spec section 6.2); divergence by one draw silently
+/// invalidates every gradient a later task computes on the replayed path.
+/// This record is what each of them writes about the vertex it reached, and
+/// the two are compared bit for bit.
+///
+/// It therefore holds ALL FIVE of the bounce's draws, not just the two the
+/// old debug sink carried, and the ray, throughput and hit distance the
+/// traversal read OUT OF PATH STATE before overwriting them -- the four
+/// quantities "the replay reconstructs the same vertex" is a statement about.
+/// Nothing here is handed to the shader: every value is either a draw from
+/// the RNG rebuilt out of (pixelIndex, sampleIndex, iterationSeed, bounce) or
+/// a field of path state.
+enum TraceSlot : std::uint32_t {
+    /// The bounce's first two uniform draws -- the BSDF's 2-D direction
+    /// sample. Slots 0-2 are Stage 0b-1's original debug record, unmoved.
+    kTraceSlotU1 = 0,
+    kTraceSlotU2 = 1,
+    /// The RNG's draw count AFTER this bounce's draws, bit-cast to float.
+    /// The tripwire spec section 6.2 names: forward and backward must consume
+    /// the same NUMBER of draws at every bounce, and that is assertable per
+    /// stage rather than only per path.
+    kTraceSlotDrawCount = 2,
+    /// The remaining three draws: the BSDF's lobe-selection sample and the
+    /// environment sample's two uniforms. Recorded because a divergence in
+    /// draws 3-5 moves every LATER bounce's stream while leaving this
+    /// bounce's u1/u2 identical -- the failure mode a two-value record
+    /// cannot see.
+    kTraceSlotULobe = 3,
+    kTraceSlotUEnv1 = 4,
+    kTraceSlotUEnv2 = 5,
+    /// The ray that PRODUCED this vertex, as read from path state before the
+    /// traversal advanced the path. Three floats each.
+    kTraceSlotOrigin = 6,
+    kTraceSlotDir = 9,
+    /// The path's throughput on ARRIVAL, before this vertex's f*cos/pdf
+    /// decay. Three floats. Distinct from NeeSampleSlot's
+    /// kNeeSlotArrivalThroughput, which is zeroed on the miss path; this one
+    /// is the raw path-state field and is defined on every path.
+    kTraceSlotThroughput = 12,
+    /// Hit distance, -1 on a miss.
+    kTraceSlotHitT = 15,
+    /// The bounce index this record is for, bit-cast to float. Lets the host
+    /// verify it is comparing bounce b of one run against bounce b of the
+    /// other rather than trusting the dispatch bookkeeping that produced
+    /// them.
+    kTraceSlotBounce = 16,
+    /// psGetPixelIndex, bit-cast to float. The film-hazard enforcement reads
+    /// this: exactly one path per pixel per dispatch (see
+    /// wf_scatter.comp's hook, "WHICH OPTION THIS SUBSYSTEM TOOK").
+    kTraceSlotPixelIndex = 17,
+};
 
 /// Named offsets into one path's kNeeSampleFloats-float record. The order is
 /// wf_scatter.comp's single write block, in the order it writes them.
@@ -702,6 +782,68 @@ public:
     /// paths to survive: a scene that lets rays escape is the normal case
     /// and simply produces smaller live counts.
     ///
+    /// Stage 1 Task 1 -- the REPLAY-EQUIVALENCE probe.
+    ///
+    /// Runs the SAME closed-box fused loop `runWavefrontFusedLoopProbe` runs,
+    /// TWICE per bounce count: once with `shaders/diff/wf_scatter.comp` (the
+    /// FORWARD instantiation of the traversal) and once with
+    /// `shaders/diff/wf_scatter_replay.comp` (the REPLAY instantiation),
+    /// each writing its OWN binding-3 vertex-trace buffer, and hands both
+    /// traces back.
+    ///
+    /// WHAT THE REPLAY RUN IS HANDED. Nothing the forward run produced. It
+    /// re-zeroes `buffers`, re-dispatches generate, and re-runs every bounce
+    /// from scratch with the SAME `iterationSeed`. It never sees the forward
+    /// run's trace, its RNG stream, or its path state -- the forward run's
+    /// trace has already been copied out to the host by then, and the device
+    /// buffers are separate allocations besides. That is what makes the
+    /// comparison a statement about the traversal: the only thing the two
+    /// runs share is (pixel, sampleIndex, iterationSeed), which is exactly
+    /// the seed invariant (spec section 4.5) path-replay backpropagation
+    /// rests on. Handing the replay any recorded value would test nothing.
+    ///
+    /// WHY BOTH RUNS ARE FULL LOOPS AND NOT A SINGLE RESUMED DISPATCH. Path
+    /// state after a forward run of b bounces holds the FINAL vertex, not the
+    /// per-bounce ones; a replay that started from it would be replaying one
+    /// vertex, not a path. Under the seed invariant a second full run IS the
+    /// replay -- that is the whole content of "path replay": the backward
+    /// pass re-derives the path rather than storing it.
+    ///
+    /// `outForwardTracePerBounce[b]` and `outReplayTracePerBounce[b]` each
+    /// receive `capacity * kDebugDrawFloats` floats, laid out by TraceSlot,
+    /// as written by the run of b+1 bounces -- i.e. BOUNCE b's records. The
+    /// sink is indexed by path index, so within one fused run only the last
+    /// bounce's write survives; running the loop 1, 2, ... `maxBounces` times
+    /// exposes every bounce in turn, exactly as `outDrawsPerBounce` does on
+    /// the fused-loop probe and for the same reason.
+    ///
+    /// Scene, camera, material and dispatch shape are
+    /// `runWavefrontFusedLoopProbe`'s: the CLOSED box of half-extent
+    /// `kFusedLoopBoxHalfExtent` entered from its centre, whose survival
+    /// induction (see that function's scene-constants header) is what makes
+    /// "for every path and every bounce" a non-vacuous quantification -- a
+    /// scene that killed paths would leave the comparison ranging over
+    /// records nothing wrote. `height` must equal 8 and `width` be a non-zero
+    /// multiple of 8 for the same 1-D generate dispatch reason.
+    ///
+    /// `width * height` must equal `buffers.layout().capacity()`, and that
+    /// requirement carries a SECOND meaning here beyond dispatch shape: it is
+    /// exactly the condition "one path per pixel per dispatch", which is the
+    /// film-hazard option this subsystem took (spec section 4.5 offers three;
+    /// see the long note on `diffVertexHook` in wf_scatter.comp). This
+    /// function refuses to run without it, and the check that consumes its
+    /// output histograms `kTraceSlotPixelIndex` to confirm it held in fact
+    /// and not merely in argument.
+    ///
+    /// Returns false on any Vulkan error -- INCLUDING the replay stage's SPV
+    /// being absent, which is what this probe reports before that shader
+    /// exists.
+    [[nodiscard]] bool runWavefrontReplayProbe(
+        WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t maxBounces,
+        float albedo, uint32_t iterationSeed,
+        std::vector<std::vector<float>>& outForwardTracePerBounce,
+        std::vector<std::vector<float>>& outReplayTracePerBounce);
+
     /// Returns false on any Vulkan error.
     [[nodiscard]] bool runWavefrontParityProbe(WavefrontBuffers& buffers, uint32_t width,
                                                uint32_t height, uint32_t bounces,

@@ -1,0 +1,81 @@
+#version 460
+
+// ===========================================================================
+// WAVEFRONT SCATTER -- THE REPLAY INSTANTIATION
+// ===========================================================================
+//
+// The SECOND instantiation of shaders/includes/diff/traverse.glsl. Its
+// sibling shaders/diff/wf_scatter.comp is the first. Everything the scatter
+// stage does is in that one include -- extensions, bindings, the Push block,
+// the local size, the constants, the RNG reconstruction and fast-forward, the
+// BSDF, the environment sample, next-event estimation and MIS, the path
+// advance and the re-queue. Neither file adds anything to it except the body
+// of `diffVertexHook` and a `main` that calls `diffTraverse()`.
+//
+// WHAT "REPLAY" MEANS HERE, AND WHAT IT IS NOT.
+//
+// This stage is dispatched in the SAME position of the SAME
+// ohao::diff::WavefrontLoop that the forward stage occupies, in a second,
+// independent run of the whole loop -- generate, then [intersect, scatter] x
+// bounces -- from re-zeroed buffers with the SAME iteration seed. It is not
+// handed the forward run's path, its RNG stream, or any record of what the
+// forward run did. It re-derives all of it, which it can only do because the
+// seed invariant holds (spec section 4.5): a path is a pure function of
+// (pixel, sampleIndex, iterationSeed), every stage reconstructs its RNG from
+// (pixelIndex, sampleIndex, iterationSeed) and fast-forwards by the `bounce`
+// it reads out of path state, and nothing survives in a register across a
+// dispatch boundary.
+//
+// That is exactly the property path-replay backpropagation rests on, and it
+// is why this task exists BEFORE any adjoint does. If the replayed path
+// diverges from the forward path by so much as one RNG draw, every gradient
+// computed on it is silently wrong -- no crash, no NaN, no diagnostic -- and
+// found later it would look like a bad df/dtheta derivation rather than like
+// a stream that went out of step. `diff_gpu_probe.cpp`'s replay-equivalence
+// check compares this stage's binding-3 vertex trace against the forward
+// stage's, bit for bit, for every path and every bounce: the five draws, the
+// draw count, and the origin, direction, throughput and hit distance each
+// traversal read out of path state.
+//
+// WHY THE HOOK IS EMPTY.
+//
+// Stage 1 Task 1 adds NO adjoint, NO gradient and NO arena write, on purpose:
+// the point of this task is to establish that two instantiations walk one
+// path, while there is still nothing else in the picture to confuse the
+// diagnosis with. The whole of the difference between the forward pass and
+// the replay pass is therefore this function's body -- the forward one
+// accumulates the film, this one does nothing -- and that difference is the
+// only place a later task has to put the PRB recursion:
+//
+//     dL/dtheta  +=  v.adjoint * (df/dtheta) * v.Li / v.pdf
+//     v.adjoint   =  v.adjoint * v.bsdfWeight
+//
+// Every factor those two lines need is already a field of `DiffVertex` (see
+// traverse.glsl), which is why the signature could be fixed here, one task
+// before the first consumer of it exists.
+//
+// NOTE THAT THIS STAGE STILL WRITES PATH STATE AND STILL RE-QUEUES. That is
+// not an oversight and it is not "the forward pass again": it is what walking
+// the path MEANS in a wavefront design, where the path advances across
+// dispatch boundaries through path state rather than through registers. The
+// replay run's path state is its own -- it re-zeroes and re-generates -- so
+// it cannot disturb the forward run it is being compared against.
+//
+// The film (binding 9) is declared by traverse.glsl and is never written by
+// this stage, because this hook does not write it. The descriptor set still
+// binds a buffer there; the probe binds this stage its OWN film so that a
+// future hook that does touch it cannot contaminate the forward film it is
+// compared against.
+
+#include "diff/traverse.glsl"
+
+// THE REPLAY HOOK. Deliberately empty -- see "WHY THE HOOK IS EMPTY" above.
+// `v` is unnamed-but-used in the sense that matters: traverse.glsl fills
+// every field of it before this call, and the replay-equivalence check
+// verifies that those fields were reached by the identical traversal. An
+// empty body is what makes this task's claim narrow and checkable: whatever
+// the check finds, it cannot be an artefact of something this file did at the
+// vertex, because this file does nothing at the vertex.
+void diffVertexHook(inout DiffVertex v) {}
+
+void main() { diffTraverse(); }

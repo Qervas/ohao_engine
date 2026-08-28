@@ -61,10 +61,12 @@ leaving a solid-angle density proportional to luminance alone. Note what is
 {{cite shaders/includes/rt/env_sampling.glsl "void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,"}}
 
 It is not dead weight. Four callers now pass it: the three raygen profiles hand
-over `pc.tuning.z`, and the differentiable renderer's `wf_scatter.comp` hands
-over its own `pc.envIntegral`.
+over `pc.tuning.z`, and the differentiable renderer's scatter traversal hands
+over its own `pc.envIntegral`. (That traversal used to live in
+`wf_scatter.comp`; Stage 1 moved it into a shared include so that the forward
+and replay kernels compile one identical copy of it.)
 
-{{cite shaders/diff/wf_scatter.comp "sampleEnvMap(uEnv1, uEnv2, pc.envWidth, pc.envHeight, pc.envIntegral, envDir, envPdf);"}}
+{{cite shaders/includes/diff/traverse.glsl "sampleEnvMap(uEnv1, uEnv2, pc.envWidth, pc.envHeight, pc.envIntegral, envDir, envPdf);"}}
 
 The fourth caller has a consumer for it, and inverting the chain above is
 exactly what that consumer does. Rearranging p_ω = P·WH / (2π²sinθ_y) with
