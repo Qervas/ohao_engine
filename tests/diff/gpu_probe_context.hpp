@@ -69,10 +69,16 @@ struct WavefrontScatterMaterial {
 };
 
 /// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.
-/// Must equal that shader's `kNeeSampleFloats`; the two constants name each
-/// other, because a mismatch is a silent wrong-slot read rather than a
-/// validation error.
-inline constexpr std::uint32_t kNeeSampleFloats = 20;
+/// Must equal that shader's `kNeeSampleFloats`.
+///
+/// Naming each other in a comment was the whole of the tie and was not
+/// enough: a mismatch is a silent wrong-slot read, not a validation error.
+/// GLSL has no static_assert and the value survives into the SPV only as an
+/// unnamed folded literal, so the tie is a RUNTIME one --
+/// diff_gpu_probe.cpp's `checkNeeStrideTie()` reads the declaration out of
+/// shaders/diff/wf_scatter.comp and refuses to run the probe at all if the
+/// two numbers disagree.
+inline constexpr std::uint32_t kNeeSampleFloats = 21;
 
 /// Named offsets into one path's kNeeSampleFloats-float record. The order is
 /// wf_scatter.comp's single write block, in the order it writes them.
@@ -129,6 +135,14 @@ enum NeeSampleSlot : std::uint32_t {
     /// wf_scatter.comp's write block.
     kNeeSlotBsdfDir = 16,
     kNeeSlotPdfBsdfAtBsdf = 19,
+    /// The grey environment radiance the BSDF strategy multiplied in at its
+    /// own sampled direction, recovered by the shader from
+    /// `pdfEnvMapTexel` rather than from `pdfEnvMap` (kNeeSlotPdfEnvAtBsdf).
+    /// The two differ by sin(theta_centre)/sin(theta_query), so the density
+    /// at slot 11 cannot tell a correct recovery from an off-by-that-factor
+    /// one; this slot can, and check 31 asserts it against the environment
+    /// image texel by texel.
+    kNeeSlotBsdfRadiance = 20,
 };
 
 /// Occluder geometry for the shadow rays wf_scatter.comp's next-event

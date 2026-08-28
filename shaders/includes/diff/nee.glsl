@@ -48,10 +48,45 @@
 //     E[ w_E(w_e) * est_E(w_e) + w_B(w_b) * est_B(w_b) ] = I
 //
 // exactly, for any weighting that partitions unity pointwise. That per-sample
-// partition is the thing diff_gpu_probe.cpp asserts directly (it is exact and
-// cheap, and it catches an entire class of weighting bug that a convergence
-// test only ever sees as noise), which is why diffMisTerm returns BOTH halves
-// of the partition and not just the caller's own half.
+// partition is the thing diff_gpu_probe.cpp check 30 asserts directly, which
+// is why diffMisTerm returns BOTH halves of the partition and not just the
+// caller's own half.
+//
+// WHAT THAT ASSERTION DOES AND DOES NOT COVER, stated precisely rather than
+// as "a class of weighting bug". diffMisTerm forms wOwn = misBalance(a, b)
+// and wOther = misBalance(b, a) from the SAME pair (a, b), so their sum is
+// (a+b)/max(a+b, 1e-6) -- identically 1 in exact arithmetic for ANY a and b.
+// Check 30 is therefore a WITHIN-CALL identity. It catches a swapped
+// argument at one of the two call sites, a balance heuristic paired with a
+// power heuristic, and the 1e-6 floor engaging. It CANNOT catch the bug
+// class that actually biases MIS -- the two strategies evaluating DIFFERENT
+// densities for the same distribution at the same direction -- because both
+// weights would still come from one pair and still sum to 1. That one is
+// check 29's (statistically) and check 31's (per sample).
+//
+// PARTITIONING UNITY IS NECESSARY AND NOT SUFFICIENT, which matters for the
+// NEXT estimator through this file more than for this one. Unbiasedness also
+// requires
+//
+//     w_i(w) = 0 wherever p_i(w) = 0,
+//
+// so that no weight lands on a direction its own strategy can never draw.
+// The balance heuristic satisfies that automatically. A CONSISTENTLY
+// INVERTED pair -- w'_E = p_B/(p_E+p_B), w'_B = p_E/(p_E+p_B) -- does not:
+// w'_E is nonzero exactly where p_E = 0. diff_gpu_probe.cpp's negative
+// control (inverting BOTH heuristic calls is NOT rejected by check 29) is
+// therefore correct HERE for a reason specific to the environment strategy,
+// and not because "a consistent double inversion still partitions unity":
+// p_E is proportional to L, so p_E(w) = 0 implies L(w) = 0 implies the whole
+// integrand f*cos*L*V vanishes there, i.e.
+//
+//     supp(p_E) contains supp(f * cos * L * V).
+//
+// A LIGHT-BUFFER next-event strategy has no such property -- p_light is zero
+// on every direction that misses the light, where f*cos*L*V need not be --
+// so the same negative control run against it would bless a genuinely
+// biased estimator. Anyone adding a second strategy here must check the
+// support condition, not just the partition.
 //
 // ---------------------------------------------------------------------------
 // RECOVERING RADIANCE FROM A DENSITY, and why envIntegral stops being dead
@@ -71,7 +106,22 @@
 //
 //     L_grey(w) = p(w) * integral * 2*pi^2 / (W*H),
 //
-// which is diffEnvRadianceFromPdf below. `integral` is EnvCDF::integral(),
+// which is diffEnvRadianceFromPdf below.
+//
+// WHICH DENSITY MAY BE FED TO IT. That inversion is valid ONLY for the TEXEL
+// density -- the p in the display above, the one sampleEnvMap returns for
+// the texel it chose. env_sampling.glsl's pdfEnvMap is NOT that off a texel
+// centre: it is the texel density times sin(theta_centre)/sin(theta_query)
+// (its own header says so, and site/content/units/sampling/env-cdf.md said
+// so first). Inverting pdfEnvMap's answer at a BSDF-sampled direction
+// recovers L*sin(theta_centre)/sin(theta_query), not L. Callers on the BSDF
+// side must pass pdfEnvMapTexel's answer here and keep pdfEnvMap for the MIS
+// weight, where the ratio cancels between the two halves of the partition.
+// wf_scatter.comp does exactly that, and diff_gpu_probe.cpp check 31
+// asserts the recovered radiance on BOTH sides against the environment
+// image.
+//
+// `integral` is EnvCDF::integral(),
 // carried to the shader as ScatterPush::envIntegral -- the field
 // env_sampling.glsl's own header notes is accepted and never read, and which
 // consequently nothing in this repository verified had arrived intact. It is
@@ -103,6 +153,11 @@ const float DIFF_NEE_TWO_PI_SQUARED = 19.7392088021787172;
 /// (solid-angle measure) is `pdf`. See the header derivation. Returns 0 for
 /// an unconfigured environment (W or H zero), which is the same "no
 /// environment" sentinel wf_scatter.comp writes a zero pdf for.
+///
+/// `pdf` MUST be the TEXEL density -- sampleEnvMap's returned pdf, or
+/// pdfEnvMapTexel at an arbitrary direction. Passing pdfEnvMap's answer at a
+/// direction that is not a texel centre returns
+/// L*sin(theta_centre)/sin(theta_query) instead of L; see the header.
 float diffEnvRadianceFromPdf(float pdf, uint W, uint H, float envIntegral) {
     if (W == 0u || H == 0u) return 0.0;
     return pdf * envIntegral * DIFF_NEE_TWO_PI_SQUARED / (float(W) * float(H));

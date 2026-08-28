@@ -234,9 +234,16 @@ const uint kDrawsPerBounce = 5u;
 // Floats per PATH INDEX in the binding-7 sink. Must equal
 // ohao::diff::kNeeSampleFloats (tests/diff/gpu_probe_context.hpp), which is
 // what sizes the buffer and strides the readback; a mismatch is a silent
-// wrong-slot read, not a validation error, so the two constants name each
-// other.
-const uint kNeeSampleFloats = 20u;
+// wrong-slot read, not a validation error.
+//
+// Naming each other in a comment was the whole of the tie and was not
+// enough. GLSL has no static_assert and the value is not reflected out of
+// the SPV under a name, so diff_gpu_probe.cpp now READS THIS LINE from the
+// shader source at startup and refuses to run if the two disagree. The
+// literal below is parsed by the regular expression
+// `const uint kNeeSampleFloats = ([0-9]+)u;` -- keep the spelling on one
+// line and in this form.
+const uint kNeeSampleFloats = 21u;
 
 // How far a shadow ray may travel before the environment is considered
 // reached. The environment is at infinity, so this only has to exceed the
@@ -343,7 +350,9 @@ void main() {
     neeTerm.wOther = 0.0;
     DiffMisTerm bsdfTerm = neeTerm;
     float envRadiance = 0.0;
+    float bsdfRadiance = 0.0;
     float pdfEnvAtBsdfDir = 0.0;
+    float pdfEnvTexelAtBsdfDir = 0.0;
     float pdfBsdfAtEnvDir = 0.0;
     float visEnv = 0.0;
     float visBsdf = 0.0;
@@ -473,14 +482,38 @@ void main() {
         // on it -- the path's throughput still uses `weight` itself, so
         // checks 14/17's bit-exact 0.0625 are untouched, and this quantity
         // only feeds a Monte Carlo estimator.
+        //
+        // TWO DENSITIES ARE READ AT THIS ONE DIRECTION, on purpose, and
+        // they are not interchangeable:
+        //
+        //   pdfEnvAtBsdfDir      = pdfEnvMap(...)      -> the MIS WEIGHT
+        //   pdfEnvTexelAtBsdfDir = pdfEnvMapTexel(...) -> the RADIANCE
+        //
+        // pdfEnvMap divides the texel's CDF mass by sin(theta) of the QUERY
+        // direction while that mass already carries sin(theta) of the texel
+        // CENTRE (env_sampling.glsl's header; the behaviour is also written
+        // up in site/content/units/sampling/env-cdf.md). For the weight
+        // that is harmless -- both halves of a balance-heuristic partition
+        // are formed from the same pair, so the sin ratio cancels out of
+        // the weight, which is why the weight still uses it. For the
+        // RADIANCE it is not: diffEnvRadianceFromPdf inverts
+        // p = L*W*H/(integral*2*pi^2), an inversion valid ONLY for the
+        // texel density, so feeding it pdfEnvMap's answer recovers
+        // L * sin(theta_centre)/sin(theta_query) rather than L -- an error
+        // reaching several times L near the poles, which Task 5 would
+        // accumulate into the film as a near-pole energy bias and a firefly
+        // source. pdfEnvMapTexel is the density with the query's sin
+        // divided back out, and diff_gpu_probe.cpp check 31 asserts the
+        // recovered value against the environment image texel by texel.
         if (pc.envWidth > 0u && pc.envHeight > 0u) {
             pdfEnvAtBsdfDir = pdfEnvMap(bsdfDir, pc.envWidth, pc.envHeight);
+            pdfEnvTexelAtBsdfDir = pdfEnvMapTexel(bsdfDir, pc.envWidth, pc.envHeight);
         }
         if (pdf > 0.0) {
             visBsdf = diffShadowVisibility(shadowOrigin, bsdfDir);
         }
-        const float bsdfRadiance =
-            diffEnvRadianceFromPdf(pdfEnvAtBsdfDir, pc.envWidth, pc.envHeight, pc.envIntegral);
+        bsdfRadiance = diffEnvRadianceFromPdf(pdfEnvTexelAtBsdfDir, pc.envWidth, pc.envHeight,
+                                              pc.envIntegral);
         bsdfTerm = diffMisTerm(weight * pdf, vec3(bsdfRadiance), visBsdf, pdf, pdfEnvAtBsdfDir);
 
         // 1. Throughput decay by the BSDF estimator weight f*cos/pdf.
@@ -524,6 +557,15 @@ void main() {
     neeSamples.v[nb + 17u] = bsdfSampleDir.y;
     neeSamples.v[nb + 18u] = bsdfSampleDir.z;
     neeSamples.v[nb + 19u] = bsdfSamplePdf;
+    // The radiance the BSDF strategy actually multiplied in. Recorded
+    // because slot 11's density alone cannot distinguish the two candidate
+    // recoveries: L and L*sin(theta_centre)/sin(theta_query) differ by a
+    // factor that is 1 at a texel centre and up to ~5 in the tail of a
+    // cosine-weighted draw about +Y, so a check that only saw the density
+    // would be blind to which one reached the estimator. Check 31 compares
+    // this against the environment image at the texel bsdfSampleDir lands
+    // in -- an exact per-sample identity, not a statistical one.
+    neeSamples.v[nb + 20u] = bsdfRadiance;
 
     // 3. Bounce count, incremented -- this is what the next dispatch's
     // fast-forward reads to know how many draws to skip. Incremented on the

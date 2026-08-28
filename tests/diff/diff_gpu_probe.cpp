@@ -121,7 +121,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <limits>
+#include <regex>
+#include <string>
 #include <vector>
 
 namespace {
@@ -425,9 +429,87 @@ double oracleRelDiff(double reference, double measured) {
     return std::abs(measured - reference) / denom;
 }
 
+/// Bind ohao::diff::kNeeSampleFloats to wf_scatter.comp's OWN
+/// kNeeSampleFloats, at runtime, by reading the declaration out of the
+/// shader source.
+///
+/// WHY A RUNTIME CHECK AND NOT A static_assert. The two constants live on
+/// opposite sides of the GLSL/C++ boundary. GLSL has no static_assert; the
+/// value is folded into unnamed SPIR-V literals, so it cannot be reflected
+/// out of the compiled module under a name either; and there is no
+/// generated header in this build that both sides could include. What is
+/// left is the source text, which is authoritative because it is what the
+/// shader compiler consumed. A mismatch is a SILENT wrong-slot read -- the
+/// host would stride the readback by one number while the GPU wrote it with
+/// another, producing plausible-looking garbage rather than a validation
+/// error -- so this fails the whole probe rather than warning.
+///
+/// The search path mirrors ComputePipeline::loadSpv's: the probe already
+/// requires a working directory from which the shader tree is reachable.
+/// Not finding the source is itself a failure, because "the tie could not be
+/// checked" must not be allowed to read as "the tie holds".
+bool checkNeeStrideTie() {
+    static const char* const kCandidates[] = {
+        "shaders/diff/wf_scatter.comp",
+        "../shaders/diff/wf_scatter.comp",
+        "../../shaders/diff/wf_scatter.comp",
+        "../../../shaders/diff/wf_scatter.comp",
+    };
+    std::string text;
+    const char* found = nullptr;
+    for (const char* candidate : kCandidates) {
+        std::ifstream in(candidate, std::ios::binary);
+        if (!in.is_open()) continue;
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        found = candidate;
+        break;
+    }
+    if (found == nullptr) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "of %zu candidate paths, so the binding-7 record stride could not be tied to "
+                     "ohao::diff::kNeeSampleFloats (%u). An unchecked tie is not a held tie: a "
+                     "mismatch is a silent wrong-slot read, not a validation error\n",
+                     sizeof(kCandidates) / sizeof(kCandidates[0]),
+                     ohao::diff::kNeeSampleFloats);
+        return false;
+    }
+
+    const std::regex decl(R"(const[ \t]+uint[ \t]+kNeeSampleFloats[ \t]*=[ \t]*([0-9]+)u[ \t]*;)");
+    std::smatch m;
+    if (!std::regex_search(text, m, decl)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s no longer declares `const uint kNeeSampleFloats = "
+                     "<N>u;` on one line, so the binding-7 record stride cannot be tied to "
+                     "ohao::diff::kNeeSampleFloats (%u). Restore the spelling or update this "
+                     "check -- do not leave the two constants untied\n",
+                     found, ohao::diff::kNeeSampleFloats);
+        return false;
+    }
+    const unsigned long shaderStride = std::stoul(m[1].str());
+    if (shaderStride != static_cast<unsigned long>(ohao::diff::kNeeSampleFloats)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s writes %lu floats per path into binding 7 while "
+                     "ohao::diff::kNeeSampleFloats says %u. The host sizes the buffer and strides "
+                     "the readback by its own number, so every slot past path 0 would be read at "
+                     "the wrong offset and every check below would be measuring the wrong "
+                     "floats\n",
+                     found, shaderStride, ohao::diff::kNeeSampleFloats);
+        return false;
+    }
+    std::printf("[diff_gpu_probe] NOTE: binding-7 record stride tied -- %s declares %lu floats per "
+                "path and ohao::diff::kNeeSampleFloats is %u\n",
+                found, shaderStride, ohao::diff::kNeeSampleFloats);
+    return true;
+}
+
 }  // namespace
 
 int main() {
+    // The GLSL/C++ record-stride tie, before any Vulkan object exists: if it
+    // does not hold, nothing measured below means anything.
+    if (!checkNeeStrideTie()) return 1;
+
     ohao::diff::GpuProbeContext ctx;
     if (!ctx.init()) {
         std::fprintf(stderr, "[diff_gpu_probe] FAIL: could not initialise Vulkan\n");
@@ -4219,7 +4301,32 @@ int main() {
     // constant environment, while strategy B draws continuously and
     // integrates the same piecewise-constant map EXACTLY. Those two numbers
     // are not equal, and pretending they were would be a bound that passes
-    // its own perturbation.
+    // its own perturbation. (site/content/units/sampling/env-cdf.md states
+    // the same thing about the RT pipeline's env-NEE block: sampleEnvMap
+    // "returns equirectPixelToDir(x, y, W, H) unmodified -- the exact texel
+    // centre, with no intra-texel jitter", so the strategy's expectation is
+    // a midpoint quadrature "rather than the integral". The derivation
+    // below is what that costs, in closed form, for this scene.)
+    //
+    // WHICH RADIANCE STRATEGY B MULTIPLIES IN IS PART OF THIS DERIVATION,
+    // and it was wrong for one commit. The BSDF side has no radiance image
+    // either; it recovers L by inverting a density. env_sampling.glsl's
+    // pdfEnvMap is NOT the texel density off a texel centre -- it is that
+    // density times sin(theta_centre)/sin(theta_query) -- so inverting IT
+    // yields L*sin(theta_centre)/sin(theta_query), and the stray sin(theta)
+    // then cancels against the solid-angle measure. The estimator that
+    // results integrates a HALF-WIDTH midpoint rule, whose closed-form
+    // ratio is sinc(pi/(2*envH)), not sinc(pi/envH). At envH = 64 the two
+    // constants differ by 3.0e-4 relative -- 0.06 of one standard error of
+    // D1 below, i.e. invisible -- while at envH = 8 they differ by 1.9%,
+    // about 3.6 standard errors, and this check would have failed for a
+    // correct-looking reason. wf_scatter.comp now calls pdfEnvMapTexel for
+    // the radiance and keeps pdfEnvMap for the MIS weight (where the sin
+    // ratio cancels out of the balance heuristic anyway), so Y_i is
+    // albedo * L_texel -- BOUNDED, which also trims the heavy right tail
+    // the z-score discussion below assumes away. Check 31 asserts the
+    // recovered value against the environment image per sample, so the
+    // choice is measured rather than derived-and-hoped.
     //
     // The scene is chosen so the gap has a CLOSED FORM. The surface normal
     // is +Y, the equirectangular pole, so the cosine factor is
@@ -4256,6 +4363,9 @@ int main() {
     // sample:
     //
     //   D1_i = Y_i - kappa X_i        E[D1] = 0 exactly
+    //                                 (exactly, for any even envH, ONLY
+    //                                  because Y multiplies in the texel
+    //                                  radiance -- see above)
     //   D2_i = Z_i - Y_i              E[D2] = delta   (below)
     //   D3_i = Z_i - X_i              E[D3] = delta - (1-kappa) E[X]
     //
@@ -4274,8 +4384,12 @@ int main() {
     // resolutions (envH = 8, 16, 32, 64) the true ratio delta/((1-kappa)A)
     // is 0.70, 0.77, 0.80, 0.81 -- always below 1, so the allowance is
     // conservative by about 20%. At envH = 64 the allowance is 4.02e-4
-    // relative, against a Monte Carlo standard error near 3e-3 relative:
-    // the systematic term is a tenth of the bound, not the bound.
+    // relative (0.001571 absolute), against a D2 standard error of 0.014480
+    // and a total D2 bound of 0.088453: the systematic term is a TENTH OF
+    // THE STANDARD ERROR and under 2% of the bound. (It is not "a tenth of
+    // the bound"; that is what this comment used to say, and the report
+    // said 2%. The bound is what z*se makes it, and the systematic is a
+    // small correction on top.)
     //
     // z = 6. The nominal two-sided Gaussian rate is 2e-9; the HONEST rate is
     // Berry-Esseen's, and for this estimator's third absolute moment that
@@ -4286,8 +4400,11 @@ int main() {
     // of this was written, the largest |D| observed was 2.5 standard errors
     // -- comfortably under half the threshold -- while the Step 5
     // perturbation (inverting ONE misBalanceHeuristic call's arguments)
-    // shifts D2 by 26 thresholds. The bound rejects the perturbation by a
-    // factor of 26 and admits the truth by a factor of 2.4.
+    // pushes D2 to 1.114377 against a bound of 0.088453 and D3 to 1.150805
+    // against 0.048983. The bound rejects the perturbation by 12.6x on D2
+    // and 23.4x on D3, and admits the truth by a factor of 2.4. (Neither
+    // factor is 26; that number was in this comment and in the report and
+    // matched neither measurement.)
     //
     // NON-VACUITY. All three estimators are asserted strictly positive, and
     // the count of samples that contributed anything is printed. An
@@ -4313,6 +4430,49 @@ int main() {
         static_assert(kEnvH % 2u == 0u,
                      "the closed-form midpoint/exact ratio needs the +Y horizon to fall on a "
                      "row boundary, which requires an even envH");
+        // RESOLUTION GUARD. Evenness is what the kappa IDENTITY needs and
+        // it is not what this CHECK needs: three separate things below stop
+        // holding outside a band of envH, none of them visible at 64, and
+        // the failure mode of each is a spurious FAIL rather than a silent
+        // pass. Guarding the band is cheaper than rediscovering them.
+        //
+        //   * UPPER BOUND, 128. The smallest |cos(theta)| any row CENTRE
+        //     takes is sin(pi/(2*envH)) -- 0.0245 at envH = 64, 0.0123 at
+        //     128. Two things are compared against a 1e-4 floor at that
+        //     scale: check 31 compares diffBsdfEval's pdf at the light
+        //     sample against max(0, d.y)/pi UNCONDITIONALLY (valid only
+        //     while no texel centre reaches bsdf.glsl's DIFF_BSDF_MIN_COS
+        //     grazing branch), and env_sampling.glsl clamps its own
+        //     sin(theta) at 1e-4 (which must never engage at a texel
+        //     centre, or pdfEnvMapTexel stops being the texel density and
+        //     check 31's radiance tie starts failing near the poles). At
+        //     128 both keep two orders of magnitude of margin; past it the
+        //     margin erodes and these become conditional checks that this
+        //     code does not make conditional.
+        //   * LOWER BOUND, 8. D2/D3 allow for delta at (1 - kappa)*mean(X).
+        //     That allowance is justified ONLY by numerical quadrature at
+        //     envH = 8, 16, 32, 64 (ratios 0.70, 0.77, 0.80, 0.81), not by
+        //     proof. Below 8 nothing has measured it, and (1 - kappa) grows
+        //     like envH^-2, so it stops being a small correction and starts
+        //     being the bound.
+        //
+        // Note what this guard is NOT for: kappa itself is exact for every
+        // even envH now that strategy B recovers texel radiance. Before
+        // that fix the correct constant was sinc(pi/(2*envH)) and this
+        // check passed at envH = 64 only because the two agree to 3.0e-4
+        // there -- 0.06 sigma. At envH = 8 the same code would have failed
+        // at 3.6 sigma. That is precisely the class of latency an evenness
+        // assert cannot see, which is why this one names its band.
+        static_assert(kEnvH >= 8u && kEnvH <= 128u,
+                     "checks 29-31 are derived for env heights in [8, 128]: below 8 the "
+                     "delta <= (1-kappa)*mean(X) allowance is outside every resolution it was "
+                     "measured at, and above 128 the coarsest row centre's cosine approaches "
+                     "the 1e-4 grazing/sin floors that check 31 compares against "
+                     "unconditionally");
+        static_assert(kEnvW >= kEnvH,
+                     "the azimuthal resolution must not be coarser than the polar one: the "
+                     "kappa derivation integrates each row exactly in phi and only quadratures "
+                     "in theta");
         constexpr uint32_t kEnvTexels = kEnvW * kEnvH;
 
         // A floor at y = 0 seen from directly above. The camera basis is any
@@ -4481,6 +4641,7 @@ int main() {
 
         // 31's accumulators.
         double worstRadianceRelError = 0.0;
+        double worstBsdfRadianceRelError = 0.0;
         double worstPdfBsdfAbsError = 0.0;
         double worstNeeTieRelError = 0.0;
         double worstPdfEnvNormalisedError = 0.0;
@@ -4509,10 +4670,23 @@ int main() {
         // cosine-weighted sample about +Y reaches in 49152 draws is around
         // 0.005, against a first-row centre at sin(theta) = 0.0245.
         //
+        // NOT A NEW FINDING, and this file should not imply it is.
+        // site/content/units/sampling/env-cdf.md already says the two
+        // "differ by sin(theta_y)/sin(theta(w))", that it is "worst at the
+        // poles", and works a 2048-high map to "a factor of 7.7 between the
+        // two sides of one weight". What IS new here is that pdfEnvMap has
+        // a caller under test at all -- check 24 deliberately writes its own
+        // inverse rather than calling it -- and that the factor is asserted
+        // per sample rather than described.
+        //
         // This check asserts the factor rather than ignoring it. Asserting
-        // p alone was tried first and rejected 1019 of 49152 samples, which
-        // is how the behaviour above was found; a check written to the
-        // convenient formula instead would have been the weaker one.
+        // p alone was tried first and rejected 1019 of 49152 samples; a
+        // check written to the convenient formula instead would have been
+        // the weaker one. Note the direction of the lesson: the ratio is
+        // harmless in a WEIGHT (it cancels) and a bias in a RADIANCE (it
+        // does not), which is why wf_scatter.comp now reads BOTH densities
+        // at the BSDF direction and why the radiance it recovered is
+        // asserted separately below.
         const double kTwoPiSq = 2.0 * kPi * kPi;
         std::vector<double> hostTexelPdf(kEnvTexels, 0.0);
         for (uint32_t k = 0; k < kEnvTexels; ++k) {
@@ -4528,6 +4702,19 @@ int main() {
         // 1e-3, two orders of magnitude of slack, and the observed maxima
         // are printed so a value creeping towards the bound is visible.
         constexpr double kTieRelTolerance = 1e-3;
+        // ABSOLUTE, and separate, because the quantity it bounds is not a
+        // ratio. `worstPdfBsdfAbsError` is |pdfBsdfAtLight - max(0,d.y)/pi|,
+        // a difference of two numbers in [0, 1/pi]; comparing it against a
+        // RELATIVE constant (which is what this used to do, reusing
+        // kTieRelTolerance) is a category error that happened to be
+        // harmless only because the observed value is 2.3e-8. Derived
+        // instead: the shader's dot(vec3(0,1,0), envDir) is exactly d.y,
+        // both sides then divide the SAME float32 by pi, so the difference
+        // is a couple of ulp of 1/pi = 0.3183 -- one ulp there is 3.0e-8.
+        // 1e-6 is about 32 ulp: loose enough not to be a hardware lottery,
+        // tight enough that a genuinely different direction (the failure it
+        // exists to catch) is nowhere near it.
+        constexpr double kPdfBsdfAbsTolerance = 1e-6;
         // The MIS partition is two float32 divisions by the same
         // denominator; their sum is 1 to within a couple of ulp.
         constexpr double kPartitionTolerance = 1e-6;
@@ -4654,6 +4841,30 @@ int main() {
             const double bSinQuery = std::max(std::sin(bTheta), 1e-4);
             const double expectedPdfEnv =
                 hostTexelPdf[bTexel] * std::sin(bThetaCentre) / bSinQuery;
+
+            // THE RADIANCE STRATEGY B ACTUALLY MULTIPLIED IN, against the
+            // environment image at the texel its own direction lands in.
+            //
+            // This is the check that separates the two candidate recoveries
+            // and it is EXACT per sample, not statistical. Inverting
+            // pdfEnvMap's answer (which is what this shader did for one
+            // commit) yields L * sin(theta_centre)/sin(theta_query): equal
+            // to L at a centre, and up to ~5x L in the tail of a
+            // cosine-weighted draw about +Y, where the smallest
+            // sin(theta_query) reached in 49152 draws is around 0.005
+            // against a first-row centre at 0.0245. Averaged over an
+            // estimator that also divides by the same measure it is a
+            // 3.0e-4 shift in E[Y] at envH = 64 -- 0.06 of one standard
+            // error, which is why check 29 could not see it -- but it is a
+            // per-sample energy error of up to a factor of five, which is a
+            // firefly source the moment Task 5 accumulates these
+            // contributions into a film. Inverting pdfEnvMapTexel instead
+            // yields L exactly, and the comparison below is then the same
+            // float32 CDF round trip the light-sample radiance tie above
+            // makes, at the same tolerance.
+            const double bsdfRadiance = neeSamples[nb + ohao::diff::kNeeSlotBsdfRadiance];
+            worstBsdfRadianceRelError = std::max(worstBsdfRadianceRelError,
+                                                 std::abs(bsdfRadiance / envLum[bTexel] - 1.0));
             const double pdfEnvRelError = std::abs(pdfEnvAtBsdf / expectedPdfEnv - 1.0);
             worstPdfEnvRelError = std::max(worstPdfEnvRelError, pdfEnvRelError);
 
@@ -4766,12 +4977,30 @@ int main() {
         //
         // Exact and cheap where check 29 is statistical: at ONE direction
         // the two strategies' balance-heuristic weights are p_A/(p_A+p_B)
-        // and p_B/(p_A+p_B), so they sum to 1 identically. This catches a
-        // whole class of weighting bug -- a swapped argument at one call
-        // site, a power heuristic on one side and a balance heuristic on the
-        // other, a weight formed against the wrong partner density -- that a
-        // convergence test can only ever see as extra noise, and it does so
-        // without any Monte Carlo at all.
+        // and p_B/(p_A+p_B), so they sum to 1 identically.
+        //
+        // WHAT IT CAN AND CANNOT SEE, stated precisely, because "an entire
+        // class of weighting bug" is what this comment used to claim and it
+        // is more than the identity supports. nee.glsl's diffMisTerm forms
+        // wOwn = misBalance(a, b) and wOther = misBalance(b, a) from the
+        // SAME pair (a, b), so wOwn + wOther = (a+b)/max(a+b, 1e-6) is
+        // identically 1 in exact arithmetic WHATEVER a and b are. This
+        // check is therefore a WITHIN-CALL identity, and it sees exactly
+        // three things:
+        //
+        //   1. one of the two calls having its arguments swapped (Step 5's
+        //      perturbation -- both weights then come from the same
+        //      ordering and no longer complement),
+        //   2. a balance heuristic on one side and a power heuristic on the
+        //      other,
+        //   3. the 1e-6 floor engaging, i.e. a sample where both densities
+        //      are ~0 and the "weights" are not a partition at all.
+        //
+        // It CANNOT see the bug class that actually biases MIS: the two
+        // strategies evaluating DIFFERENT environment densities at the same
+        // direction. Both weights would still be formed from one pair and
+        // would still sum to 1. That failure is check 29's to catch,
+        // statistically, and check 31's to catch per sample.
         if (!(worstPartitionError <= kPartitionTolerance)) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: check 30 -- the two MIS weights at one sampled "
@@ -4799,9 +5028,25 @@ int main() {
         //     deliberately writes its own inverse rather than calling it.
         // (c) The ROUTING claim this task rests on -- that next-event
         //     estimation consumes the very sample binding 6 records rather
-        //     than drawing its own. Both remaining ties are per-sample
-        //     identities against binding 6's (direction, pdf) pair, so they
-        //     hold only if the two are the same draw.
+        //     than drawing its own.
+        //
+        //     WHICH TIE ACTUALLY CLOSES THAT LOOP, stated exactly, because
+        //     "a second draw could satisfy neither" is what this used to
+        //     say and it is too strong. The pdf tie (pdfBsdfAtLight ==
+        //     max(0, d.y)/pi) constrains d.y alone. So does the estimator
+        //     tie: X = f * d.y * envRadiance / envPdf with envRadiance =
+        //     envPdf * integral * 2*pi^2 / (W*H), so envPdf CANCELS OUT OF
+        //     X entirely and X = f * d.y * integral * 2*pi^2 / (W*H) --
+        //     again a constraint on d.y. A re-draw that shared the marginal
+        //     row and re-drew only the conditional column would satisfy
+        //     both.
+        //
+        //     The tie that closes the loop is the RADIANCE tie:
+        //     envRadiance, recovered from envPdf alone, is compared against
+        //     envLum at the texel binding 6's FULL 3-D direction bins into.
+        //     That is the one identity a second draw could not satisfy --
+        //     it pins the pdf and the direction to the same texel, which is
+        //     to say to the same draw.
         // A sample count this check would rather not lose: if boundary
         // ambiguity ever excluded a large share, the pdfEnvMap verdict would
         // quietly be about a shrinking subset.
@@ -4809,7 +5054,8 @@ int main() {
         const double skippedFraction =
             static_cast<double>(pdfEnvAtBsdfSkipped) / static_cast<double>(kCapacity);
         if (!(worstRadianceRelError <= kTieRelTolerance) ||
-            !(worstPdfBsdfAbsError <= kTieRelTolerance) ||
+            !(worstBsdfRadianceRelError <= kTieRelTolerance) ||
+            !(worstPdfBsdfAbsError <= kPdfBsdfAbsTolerance) ||
             !(worstNeeTieRelError <= kTieRelTolerance) || pdfEnvAtBsdfRejected != 0 ||
             !(skippedFraction <= kMaxSkippedFraction)) {
             std::fprintf(stderr,
@@ -4817,17 +5063,23 @@ int main() {
                          "  recovered radiance vs the environment image: worst relative error "
                          "%.3g (tolerance %.3g). This is the ONLY observable that depends on "
                          "ScatterPush::envIntegral, which nothing verified before this task.\n"
+                         "  the BSDF strategy's OWN recovered radiance vs the environment image "
+                         "at the texel its direction lands in: worst relative error %.3g (same "
+                         "tolerance). This is what separates inverting pdfEnvMapTexel (which "
+                         "gives L) from inverting pdfEnvMap (which gives "
+                         "L*sin(theta_centre)/sin(theta_query), up to ~5x L off a centre).\n"
                          "  diffBsdfEval's pdf at the LIGHT sample vs max(0, d.y)/pi computed "
-                         "from binding 6's direction: worst absolute error %.3g. A mismatch "
-                         "means next-event estimation is not using the direction binding 6 "
-                         "records.\n"
+                         "from binding 6's direction: worst absolute error %.3g (absolute "
+                         "tolerance %.3g). A mismatch means next-event estimation is not using "
+                         "the direction binding 6 records.\n"
                          "  next-event estimator vs f*cos*L/p recomputed from binding 6: worst "
                          "relative error %.3g.\n"
                          "  pdfEnvMap vs p(texel)*sin(theta_centre)/sin(theta_query): %u of %u "
                          "samples outside their own derived bound (worst raw relative error "
                          "%.3g, worst as a fraction of its bound %.3g, min returned %.6g); %u "
                          "samples (%.3f%%) excluded as texel-boundary-ambiguous\n",
-                         worstRadianceRelError, kTieRelTolerance, worstPdfBsdfAbsError,
+                         worstRadianceRelError, kTieRelTolerance, worstBsdfRadianceRelError,
+                         worstPdfBsdfAbsError, kPdfBsdfAbsTolerance,
                          worstNeeTieRelError, pdfEnvAtBsdfRejected, kCapacity,
                          worstPdfEnvRelError, worstPdfEnvNormalisedError, minPdfEnvAtBsdf,
                          pdfEnvAtBsdfSkipped, 100.0 * skippedFraction);
@@ -4836,16 +5088,21 @@ int main() {
             std::printf("[diff_gpu_probe] OK: check 31 -- across %u samples: the radiance "
                         "recovered from the density and ScatterPush::envIntegral matches the "
                         "environment image to %.3g relative (tolerance %.3g -- envIntegral's "
-                        "first end-to-end check anywhere); the BSDF pdf at the light sample "
+                        "first end-to-end check anywhere), and the BSDF strategy's own recovered "
+                        "radiance matches the image at ITS texel to %.3g relative, which is what "
+                        "pins that side to L rather than to "
+                        "L*sin(theta_centre)/sin(theta_query); the BSDF pdf at the light sample "
                         "matches max(0,d.y)/pi from binding 6's OWN direction to %.3g absolute "
-                        "and the next-event estimator matches f*cos*L/p recomputed from binding "
-                        "6's (direction, pdf) to %.3g relative, so NEE consumes the sample check "
-                        "24 bins rather than a second draw; and pdfEnvMap (min %.6g) matches "
-                        "p(texel)*sin(theta_centre)/sin(theta_query) for every one of its first "
-                        "tested calls -- worst raw relative error %.3g, worst %.3g of its own "
-                        "Vulkan-precision-derived bound (%u samples, %.3f%%, excluded as "
-                        "texel-boundary-ambiguous)\n",
-                        kCapacity, worstRadianceRelError, kTieRelTolerance, worstPdfBsdfAbsError,
+                        "(tolerance %.3g) and the next-event estimator matches f*cos*L/p "
+                        "recomputed from binding 6's (direction, pdf) to %.3g relative, and the "
+                        "radiance tie binds that pdf to that direction, so NEE consumes the "
+                        "sample check 24 bins rather than a second draw; and pdfEnvMap (min "
+                        "%.6g) matches p(texel)*sin(theta_centre)/sin(theta_query) for every one "
+                        "of its first tested calls -- worst raw relative error %.3g, worst %.3g "
+                        "of its own Vulkan-precision-derived bound (%u samples, %.3f%%, excluded "
+                        "as texel-boundary-ambiguous)\n",
+                        kCapacity, worstRadianceRelError, kTieRelTolerance,
+                        worstBsdfRadianceRelError, worstPdfBsdfAbsError, kPdfBsdfAbsTolerance,
                         worstNeeTieRelError, minPdfEnvAtBsdf, worstPdfEnvRelError,
                         worstPdfEnvNormalisedError, pdfEnvAtBsdfSkipped, 100.0 * skippedFraction);
         }
