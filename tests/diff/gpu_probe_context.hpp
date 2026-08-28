@@ -627,6 +627,77 @@ public:
         std::vector<std::vector<float>>* outNeeSamplesPerRun = nullptr,
         std::vector<std::vector<float>>* outFilmPerRun = nullptr);
 
+    /// Stage 0b-2b Task 6 -- the PARITY probe. Drives the whole wavefront
+    /// integrator (generate -> [prepare_indirect, intersect,
+    /// prepare_indirect, scatter] x `bounces`) through
+    /// ohao::diff::WavefrontLoop over a CALLER-SUPPLIED scene, camera and
+    /// material, once per entry in `iterationSeeds`, and hands back the film
+    /// each of those runs produced.
+    ///
+    /// WHY THIS IS NOT runWavefrontFusedLoopProbe WITH MORE PARAMETERS.
+    /// That probe's scene, camera and material are FIXED by a build-time
+    /// survival derivation (the closed box; see its static_asserts) and its
+    /// expected values -- the bit-exact 0.0625 throughput of checks 14/17,
+    /// the per-bounce PathRng parity, the live counts -- are calibrated to
+    /// exactly that configuration. It also runs the loop once per bounce
+    /// COUNT (1, 2, ... B) because its checks need to see each bounce
+    /// separately. This probe needs the opposite of all of that: one fixed
+    /// bounce count, an arbitrary scene, and many runs at DIFFERENT SEEDS so
+    /// the caller can average them. Generalising the other function would
+    /// have put every one of those calibrated checks one parameter default
+    /// away from silently changing scene.
+    ///
+    /// ONE GEOMETRY, TWO CONSUMERS. `positions`/`indices` (3 floats per
+    /// vertex, 3 uints per triangle -- runWavefrontIntersectOnGeometry's
+    /// packing) are bound BOTH as wf_intersect.comp's acceleration structure
+    /// plus vertex/index storage buffers AND as wf_scatter.comp's shadow-ray
+    /// acceleration structure. There is deliberately no `unoccludedShadowRays`
+    /// escape hatch here: a parity check whose shadow rays test different
+    /// geometry than its path rays is comparing two different scenes.
+    ///
+    /// EACH SEED IS ONE INDEPENDENT SAMPLE PER PIXEL. Every run re-zeroes
+    /// `buffers` and the film, so `outFilmPerSeed[i]` is the complete
+    /// width*height*3 float film of the run at `iterationSeeds[i]` and
+    /// nothing earlier. wf_generate.comp writes sampleIndex 0 for every path,
+    /// so the seed is the ONLY thing that decorrelates two runs --
+    /// wf_scatter.comp rebuilds its RNG from (pixelIndex, sampleIndex,
+    /// iterationSeed) each bounce, so distinct seeds give distinct streams
+    /// for every path. Passing the same seed twice yields two identical
+    /// films, not two samples; that is the caller's invariant to keep.
+    ///
+    /// Keeping the samples SEPARATE rather than accumulating them into one
+    /// film on the GPU is what lets the caller form a per-pixel sample
+    /// VARIANCE, which is what a derived Monte Carlo bound needs. It also
+    /// keeps every run at exactly one sample per pixel, so the film's
+    /// atomicAdd never contends within a dispatch and the run stays
+    /// bit-reproducible.
+    ///
+    /// `outLiveCountPerSeed[i]` is the live-path count after that run's
+    /// final bounce. At `bounces == 1` that is exactly the number of primary
+    /// rays that HIT something (wf_intersect.comp compacts only survivors and
+    /// wf_scatter.comp re-queues everything it is given), which is how a
+    /// caller establishes that no primary ray escaped -- the one term the
+    /// film does not contain. See diff_gpu_probe.cpp's parity check.
+    ///
+    /// `width`/`height`/`bounces` carry runWavefrontFusedLoopProbe's dispatch
+    /// shape requirements for the same reason: height must equal
+    /// wf_generate.comp's local_size_y (8) and width a non-zero multiple of
+    /// it, width*height must equal `buffers.layout().capacity()`, and
+    /// `bounces` must be non-zero. Unlike that probe, NOTHING here requires
+    /// paths to survive: a scene that lets rays escape is the normal case
+    /// and simply produces smaller live counts.
+    ///
+    /// Returns false on any Vulkan error.
+    [[nodiscard]] bool runWavefrontParityProbe(WavefrontBuffers& buffers, uint32_t width,
+                                               uint32_t height, uint32_t bounces,
+                                               const WavefrontGenerateCamera& camera,
+                                               std::span<const float> positions,
+                                               std::span<const uint32_t> indices, float albedo,
+                                               const WavefrontScatterMaterial& material,
+                                               std::span<const uint32_t> iterationSeeds,
+                                               std::vector<std::vector<float>>& outFilmPerSeed,
+                                               std::vector<uint32_t>& outLiveCountPerSeed);
+
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,

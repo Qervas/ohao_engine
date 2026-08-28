@@ -135,8 +135,12 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <cstdint>
+#include <random>
 #include <regex>
+#include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -475,6 +479,347 @@ double oracleRelDiff(double reference, double measured) {
 /// comment-stripping for the same reason (see the previous paragraph), so
 /// this is the one place that logic lives rather than two copies that could
 /// drift apart from each other.
+// ===========================================================================
+// INDEPENDENT CPU REFERENCE INTEGRATOR (Stage 0b-2b Task 6, checks 33-34)
+// ===========================================================================
+//
+// WHY THIS EXISTS AND NOT PathTracer. Task 6 asks for parity against
+// ohao::PathTracer. PathTracer is a VK_KHR_ray_tracing_pipeline renderer:
+// .rgen/.rmiss/.rchit stages, a shader binding table, ~35 descriptor
+// bindings including storage images, a bindless texture array and an
+// environment image. GpuProbeContext::init enables VK_KHR_ray_query and
+// deliberately NOT VK_KHR_ray_tracing_pipeline (gpu_probe_context.cpp's
+// device-extension list), and Task 6's constraints forbid adding a device
+// feature or extension. So PathTracer cannot be constructed against this
+// context at all, and this is a REPLACEMENT reference, chosen and stated as
+// a design call rather than an omission. See the task report.
+//
+// WHAT MAKES IT AN ORACLE. Everything below is written from the definition
+// of the estimator, in double precision, and shares NO code, no constant and
+// no sampling machinery with the GPU integrator it is compared against:
+//
+//   * its own ray-triangle intersector (Moller & Trumbore, "Fast, Minimum
+//     Storage Ray/Triangle Intersection", JGT 2(1), 1997) instead of a BVH
+//     traversal;
+//   * its own orthonormal basis (Duff et al., "Building an Orthonormal Basis,
+//     Revisited", JCGT 6(1), 2017) -- deliberately not oracleCosineHemisphere
+//     above, whose frame convention is a transcription of the shader's;
+//   * COSINE-HEMISPHERE sampling for the direct-lighting integral, with NO
+//     environment importance sampling, NO CDF, NO pdfEnvMap and NO multiple
+//     importance sampling. The GPU estimates the same integral by combining
+//     an environment sample and a BSDF sample under the balance heuristic.
+//     Two different estimators of one integral is the whole point: they agree
+//     only if both are unbiased, so a wrong CDF, a wrong recovered radiance,
+//     an MIS partition that does not sum to 1, or a double-counted throughput
+//     all show up as a difference that does NOT shrink with sample count.
+//   * its own RNG (std::mt19937_64, seeded per pixel) rather than
+//     ohao::diff::PathRng.
+//
+// The two sides share exactly three things, all of them INPUTS: the scene
+// triangles, the environment image, and the camera. That is what "the same
+// scene" means.
+//
+// The BSDF f is oracleBsdfEval above -- the paper-derived CPU oracle check 20
+// already pins the GLSL against, term by term. Reusing it here is reusing a
+// validated independent implementation, not reusing the shader: nothing in
+// oracleBsdfEval was transcribed from bsdf.glsl.
+//
+// WHAT QUANTITY IS COMPUTED, EXACTLY. wf_scatter.comp's film holds
+//
+//     F(p) = SUM over bounces k of  T_k * Lhat_direct(x_k)
+//
+// -- the MIS-combined direct lighting from the environment at every surface
+// vertex a path visits, carried by the throughput on ARRIVAL at that vertex,
+// truncated at a fixed bounce count, with NO emissive-surface term (nothing
+// in this pipeline evaluates one) and NO background term for a ray that
+// escapes. parityReferenceSample below computes exactly that, with the same
+// truncation and the same two omissions, so the two sides are comparable
+// term for term.
+//
+// THE ESCAPE TERM, AND WHY THERE IS NO GAP HERE. Two different things get
+// called "the missing escape term" and only one of them is real:
+//
+//   (a) A ray that escapes at bounce k >= 1 having been drawn from the BSDF.
+//       This is NOT missing. wf_scatter.comp evaluates the BSDF strategy's
+//       environment contribution EAGERLY at the vertex the ray leaves --
+//       T_k * w_B * (f cos / p) * L_env(w_b) * V(w_b), where V is a shadow
+//       ray along the very direction the path continues in -- and V is 1
+//       exactly when that continuation ray would have escaped. A classical
+//       NEE+MIS path tracer instead adds T_{k+1} * w_B * L_env at the miss,
+//       and T_{k+1} = T_k * (f cos / p), so the two are the same number
+//       written in two places. Dropping the escaped path from the next
+//       bounce's queue afterwards is therefore correct, not lossy.
+//   (b) The CAMERA ray missing every surface. This one IS absent from the
+//       film: it has no preceding BSDF sample and so no MIS partner, and
+//       wf_intersect.comp simply drops the path.
+//
+// The parity scene below is built so that (b) is IDENTICALLY EMPTY -- every
+// primary ray hits the floor, far from any silhouette -- and the check
+// MEASURES that rather than assuming it, by running one bounce and requiring
+// all `capacity` paths to survive. So the compared quantity is not a
+// restricted one on this scene; it is the whole image.
+
+/// One triangle in the reference intersector's own form.
+struct ParityTriangle {
+    OracleVec3 v0;
+    OracleVec3 e1;  // v1 - v0
+    OracleVec3 e2;  // v2 - v0
+};
+
+/// Moller & Trumbore 1997. `tMax` is wf_intersect.comp's / the shadow ray's
+/// own trace limit; `t > 0` mirrors those rays' tMin of exactly 0 (see
+/// wf_intersect.comp, which offsets the ORIGIN off the surface instead of
+/// raising tMin).
+bool parityRayTriangle(const OracleVec3& origin, const OracleVec3& dir, const ParityTriangle& tri,
+                       double tMax, double& outT) {
+    const OracleVec3 pv = oracleCross(dir, tri.e2);
+    const double det = oracleDot(tri.e1, pv);
+    if (std::abs(det) < 1e-14) return false;
+    const double invDet = 1.0 / det;
+    const OracleVec3 tv{origin.x - tri.v0.x, origin.y - tri.v0.y, origin.z - tri.v0.z};
+    const double u = oracleDot(tv, pv) * invDet;
+    if (u < 0.0 || u > 1.0) return false;
+    const OracleVec3 qv = oracleCross(tv, tri.e1);
+    const double v = oracleDot(dir, qv) * invDet;
+    if (v < 0.0 || u + v > 1.0) return false;
+    const double t = oracleDot(tri.e2, qv) * invDet;
+    if (t <= 0.0 || t >= tMax) return false;
+    outT = t;
+    return true;
+}
+
+/// Nearest hit over the whole soup. Returns the triangle index or -1.
+int parityTraceNearest(const std::vector<ParityTriangle>& tris, const OracleVec3& origin,
+                       const OracleVec3& dir, double tMax, double& outT) {
+    int best = -1;
+    double bestT = tMax;
+    for (std::size_t i = 0; i < tris.size(); ++i) {
+        double t = 0.0;
+        if (parityRayTriangle(origin, dir, tris[i], bestT, t)) {
+            bestT = t;
+            best = static_cast<int>(i);
+        }
+    }
+    if (best >= 0) outT = bestT;
+    return best;
+}
+
+/// Any hit within tMax. This is the reference's visibility term; it mirrors
+/// the SEMANTICS of wf_scatter.comp's diffShadowVisibility (terminate on the
+/// first hit, environment reached iff nothing was hit before kShadowTMax),
+/// not its implementation.
+bool parityOccluded(const std::vector<ParityTriangle>& tris, const OracleVec3& origin,
+                    const OracleVec3& dir, double tMax) {
+    for (const ParityTriangle& tri : tris) {
+        double t = 0.0;
+        if (parityRayTriangle(origin, dir, tri, tMax, t)) return true;
+    }
+    return false;
+}
+
+/// Duff et al. 2017, branchless. Independent of oracleFrame and of
+/// bsdf.glsl's own frame construction; any orthonormal frame gives the same
+/// cosine distribution, so nothing about the estimator depends on which.
+void parityBasis(const OracleVec3& n, OracleVec3& t, OracleVec3& b) {
+    const double sign = std::copysign(1.0, n.z);
+    const double a = -1.0 / (sign + n.z);
+    const double bb = n.x * n.y * a;
+    t = OracleVec3{1.0 + sign * n.x * n.x * a, sign * bb, -sign * n.x};
+    b = OracleVec3{bb, sign + n.y * n.y * a, -n.y};
+}
+
+/// Malley's method: a cosine-weighted direction about `n`, pdf = cos/pi.
+OracleVec3 parityCosineSample(const OracleVec3& n, double u1, double u2) {
+    const double r = std::sqrt(u1);
+    const double phi = 2.0 * kOraclePi * u2;
+    const double x = r * std::cos(phi);
+    const double y = r * std::sin(phi);
+    const double z = std::sqrt(std::max(0.0, 1.0 - u1));
+    OracleVec3 t, b;
+    parityBasis(n, t, b);
+    return oracleNormalize(oracleAdd(oracleAdd(oracleScale(t, x), oracleScale(b, y)),
+                                     oracleScale(n, z)));
+}
+
+/// The equirectangular environment, piecewise constant per texel. This is
+/// the SAME inversion check 25/27/31 use to name the texel a direction lands
+/// in (theta = acos(y), phi = atan2(z, x), row-major, texel centres), and
+/// check 31 is what pins the GPU's recovered radiance to this array texel by
+/// texel -- so this lookup is a validated host-side statement about the
+/// scene, not a copy of any shader.
+double parityEnvRadiance(const OracleVec3& dir, const std::vector<double>& envLum, uint32_t envW,
+                         uint32_t envH) {
+    const double theta = std::acos(std::clamp(dir.y, -1.0, 1.0));
+    const double phi = std::atan2(dir.z, dir.x);
+    const int ix = std::clamp(static_cast<int>(std::floor((phi / (2.0 * kOraclePi) + 0.5) *
+                                                          static_cast<double>(envW))),
+                              0, static_cast<int>(envW) - 1);
+    const int iy = std::clamp(
+        static_cast<int>(std::floor((theta / kOraclePi) * static_cast<double>(envH))), 0,
+        static_cast<int>(envH) - 1);
+    return envLum[static_cast<std::size_t>(iy) * envW + static_cast<std::size_t>(ix)];
+}
+
+/// A [0,1) uniform from the reference's own generator.
+double parityNextU(std::mt19937_64& rng) {
+    return static_cast<double>(rng() >> 11) * (1.0 / 9007199254740992.0);
+}
+
+/// Everything the reference integrator needs about the scene, gathered so
+/// the sample function takes one argument instead of nine.
+struct ParityRefScene {
+    std::vector<ParityTriangle> tris;
+    const std::vector<double>* envLum{nullptr};
+    uint32_t envW{0};
+    uint32_t envH{0};
+    OracleMaterial material{};
+    uint32_t bounces{0};
+    /// wf_intersect.comp's trace tMax and wf_scatter.comp's kShadowTMax --
+    /// the same 1000 in both stages, so "this ray found geometry" means the
+    /// same thing for a path ray and for a shadow ray.
+    double rayTMax{1000.0};
+    /// wf_scatter.comp's kSurfaceOffset, used for BOTH the shadow ray's
+    /// origin and the continuation ray's, exactly as that shader derives
+    /// both from one constant.
+    double surfaceOffset{1e-4};
+};
+
+/// ONE independent sample of the film's value at one pixel: the truncated
+/// sum over surface vertices of throughput times a cosine-sampled,
+/// MIS-free estimate of the direct lighting from the environment. Grey --
+/// the scene's base colour and the environment are both grey, so the three
+/// film channels are the same number (checks 33-34 assert that they are, bit
+/// for bit, rather than assuming it).
+double parityReferenceSample(const ParityRefScene& scene, const OracleVec3& camOrigin,
+                             const OracleVec3& camDir, std::mt19937_64& rng) {
+    OracleVec3 origin = camOrigin;
+    OracleVec3 dir = camDir;
+    double throughput = 1.0;  // wf_generate.comp writes (1,1,1).
+    double total = 0.0;
+
+    for (uint32_t k = 0; k < scene.bounces; ++k) {
+        double t = 0.0;
+        const int hit = parityTraceNearest(scene.tris, origin, dir, scene.rayTMax, t);
+        if (hit < 0) break;  // Escaped. No background term -- see the header.
+
+        const ParityTriangle& tri = scene.tris[static_cast<std::size_t>(hit)];
+        OracleVec3 n = oracleNormalize(oracleCross(tri.e1, tri.e2));
+        if (oracleDot(n, dir) > 0.0) n = oracleScale(n, -1.0);  // Oppose the ray.
+        const OracleVec3 V = oracleScale(dir, -1.0);
+        const OracleVec3 x{origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t};
+        const OracleVec3 offsetOrigin{x.x + n.x * scene.surfaceOffset,
+                                      x.y + n.y * scene.surfaceOffset,
+                                      x.z + n.z * scene.surfaceOffset};
+
+        // --- Direct lighting, cosine-sampled. The estimator is
+        // f * cos / pdf * L_env * V with pdf = cos/pi, i.e. pi * f * L * V.
+        {
+            const OracleVec3 wi = parityCosineSample(n, parityNextU(rng), parityNextU(rng));
+            OracleVec3 f;
+            double pdfUnused = 0.0;
+            oracleBsdfEval(n, V, wi, scene.material, f, pdfUnused);
+            if (f.x > 0.0) {
+                const bool blocked = parityOccluded(scene.tris, offsetOrigin, wi, scene.rayTMax);
+                if (!blocked) {
+                    total += throughput * kOraclePi * f.x *
+                             parityEnvRadiance(wi, *scene.envLum, scene.envW, scene.envH);
+                }
+            }
+        }
+
+        // --- Continuation, cosine-sampled from an INDEPENDENT pair of
+        // uniforms. Estimator weight f*cos/pdf = pi*f again.
+        const OracleVec3 wo = parityCosineSample(n, parityNextU(rng), parityNextU(rng));
+        OracleVec3 fc;
+        double pdfC = 0.0;
+        oracleBsdfEval(n, V, wo, scene.material, fc, pdfC);
+        throughput *= kOraclePi * fc.x;
+        if (!(throughput > 0.0)) break;  // Zero weight: nothing downstream can contribute.
+
+        origin = offsetOrigin;
+        dir = wo;
+    }
+    return total;
+}
+
+/// wf_generate.comp's primary ray, in double. Reproduces
+/// shaders/includes/diff/camera_ray.glsl's construction -- pixel centre,
+/// y-down NDC, aspect on the horizontal axis -- which checks 3, 4 and 8
+/// already pin against closed-form distances and a half-quad orientation
+/// test. The camera is an INPUT both integrators share; it is not part of
+/// what this check is measuring.
+OracleVec3 parityCameraRay(uint32_t px, uint32_t py, uint32_t width, uint32_t height,
+                           const ohao::diff::WavefrontGenerateCamera& cam) {
+    const double ndcX = 2.0 * (static_cast<double>(px) + 0.5) / static_cast<double>(width) - 1.0;
+    const double ndcY = 1.0 - 2.0 * (static_cast<double>(py) + 0.5) / static_cast<double>(height);
+    const double aspect = static_cast<double>(width) / static_cast<double>(height);
+    const OracleVec3 f{cam.forward[0], cam.forward[1], cam.forward[2]};
+    const OracleVec3 r{cam.right[0], cam.right[1], cam.right[2]};
+    const OracleVec3 u{cam.up[0], cam.up[1], cam.up[2]};
+    return oracleNormalize(oracleAdd(
+        oracleAdd(f, oracleScale(r, ndcX * aspect * static_cast<double>(cam.tanHalfFov))),
+        oracleScale(u, ndcY * static_cast<double>(cam.tanHalfFov))));
+}
+
+/// Appends one axis-aligned quad's two triangles, in the caller's vertex
+/// order, to a positions/indices soup in runWavefrontIntersectOnGeometry's
+/// packing. The winding is the CALLER'S: every parity-scene quad below is
+/// wound so that wf_intersect.comp's flip-to-oppose-the-ray step actually
+/// fires for the rays that reach it, which is what keeps a missing flip
+/// observable rather than a no-op.
+void parityAddQuad(std::vector<float>& positions, std::vector<uint32_t>& indices,
+                   const std::array<std::array<float, 3>, 4>& corners) {
+    const uint32_t base = static_cast<uint32_t>(positions.size() / 3u);
+    for (const auto& c : corners) {
+        positions.push_back(c[0]);
+        positions.push_back(c[1]);
+        positions.push_back(c[2]);
+    }
+    indices.push_back(base + 0u);
+    indices.push_back(base + 1u);
+    indices.push_back(base + 2u);
+    indices.push_back(base + 0u);
+    indices.push_back(base + 2u);
+    indices.push_back(base + 3u);
+}
+
+/// The host mirror of the soup handed to the GPU: the SAME floats, turned
+/// into the reference intersector's edge form. Built from the same arrays
+/// that are uploaded, so the two sides cannot see different geometry.
+std::vector<ParityTriangle> parityTrianglesFromSoup(const std::vector<float>& positions,
+                                                    const std::vector<uint32_t>& indices) {
+    std::vector<ParityTriangle> tris;
+    tris.reserve(indices.size() / 3u);
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        const auto vertexAt = [&](uint32_t vi) {
+            return OracleVec3{positions[static_cast<std::size_t>(vi) * 3u + 0u],
+                              positions[static_cast<std::size_t>(vi) * 3u + 1u],
+                              positions[static_cast<std::size_t>(vi) * 3u + 2u]};
+        };
+        const OracleVec3 a = vertexAt(indices[i + 0]);
+        const OracleVec3 b = vertexAt(indices[i + 1]);
+        const OracleVec3 c = vertexAt(indices[i + 2]);
+        tris.push_back(ParityTriangle{a, {b.x - a.x, b.y - a.y, b.z - a.z},
+                                      {c.x - a.x, c.y - a.y, c.z - a.z}});
+    }
+    return tris;
+}
+
+/// Welford-free two-pass moments over a contiguous prefix. Returns the mean
+/// and the UNBIASED sample variance (n-1), which is what a standard error
+/// needs.
+void parityMoments(const double* values, std::size_t n, double& outMean, double& outVar) {
+    double sum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) sum += values[i];
+    outMean = sum / static_cast<double>(n);
+    double sq = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const double d = values[i] - outMean;
+        sq += d * d;
+    }
+    outVar = (n > 1) ? sq / static_cast<double>(n - 1) : 0.0;
+}
+
 bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFoundPath) {
     static const char* const kCandidates[] = {
         "shaders/diff/wf_scatter.comp",
@@ -5678,6 +6023,596 @@ int main() {
                     (minBounceTotal > 0.0 ? maxBounceTotal / minBounceTotal : 0.0),
                     minBounceTotal / (finalRelTol * finalTotal), kMinDiscriminationMargin,
                     litLightSamples, litBsdfSamples);
+    }
+
+    // -----------------------------------------------------------------
+    // 33-34. THE STAGE GATE: the wavefront integrator against an
+    // independent reference integrator, on a probe-owned scene.
+    // -----------------------------------------------------------------
+    //
+    // WHAT THE REFERENCE IS, AND WHY IT IS NOT ohao::PathTracer. Stated in
+    // full at the head of this file's anonymous namespace (see "INDEPENDENT
+    // CPU REFERENCE INTEGRATOR"): PathTracer is a
+    // VK_KHR_ray_tracing_pipeline renderer and GpuProbeContext's device
+    // deliberately does not enable that extension, which this task's
+    // constraints forbid adding. The reference is therefore a CPU path
+    // tracer written from the definition of the estimator, sharing no code,
+    // no constant and no sampling machinery with the GPU integrator -- its
+    // own intersector, its own basis, its own RNG, cosine sampling with NO
+    // environment importance sampling and NO MIS. Two different estimators
+    // of one integral agree only if both are unbiased.
+    //
+    // WHAT IS COMPARED, AND WHAT IS EXCLUDED. The film holds only
+    // SUM_k T_k * Lhat_direct(x_k): MIS direct lighting at surface vertices,
+    // truncated at kBounces, with no emissive term and no background term.
+    // The reference computes exactly that, with the same truncation and the
+    // same two omissions. The one term a classical path tracer would have
+    // and this film does not is the CAMERA ray's own miss -- and the scene
+    // below is built so that set is EMPTY, which the first assertion here
+    // measures rather than assumes (a one-bounce run must leave all
+    // kCapacity paths live). A ray that escapes at a LATER bounce is not a
+    // gap at all: its environment contribution was already added, eagerly,
+    // at the vertex it left, by the BSDF strategy's shadow ray along that
+    // very direction. The anonymous-namespace header derives that identity.
+    //
+    // THE SCENE, and why each piece is where it is.
+    //   * FLOOR, y = 0, |x|,|z| <= 8. Every primary ray lands on it: the
+    //     camera sits at y = 3 looking straight down with tanHalfFov 0.2 at
+    //     aspect 8, so the extreme ray lands at |x| = 3*0.984375*8*0.2 =
+    //     4.725 and |z| = 0.525 -- 3.27 units inside the nearest edge. No
+    //     primary ray is anywhere near a silhouette, which matters because
+    //     a pixel whose primary ray grazed an edge could hit different
+    //     triangles under a BVH and under Moller-Trumbore and would show up
+    //     as a permanent per-pixel disagreement that no sample count fixes.
+    //   * OVERHANG, y = 5, |x| <= 1.5. ABOVE the camera, and every primary
+    //     ray travels strictly downward, so it is unreachable by a primary
+    //     ray by construction -- but it occludes the zenith (the most
+    //     cosine-weighted part of the hemisphere) for the middle of the
+    //     image and catches second-bounce rays. This is where most of the
+    //     visibility signal and most of the interreflection come from.
+    //   * SIDE WALL, x = 5.5, 0 <= y <= 4. Out of the primary frustum with
+    //     margin (a ray needs a horizontal slope of 5.5/3 = 1.833 to reach
+    //     it and the widest is 1.575), and it makes the occlusion vary
+    //     ASYMMETRICALLY across the image: a floor point at x = +4.725 is
+    //     0.775 from it, one at x = -4.725 is 10.2 away.
+    // Every quad is wound so that wf_intersect.comp's flip-to-oppose-the-ray
+    // step fires for the rays that actually reach it.
+    //
+    // THE ENVIRONMENT is a smooth, strictly positive, doubly asymmetric
+    // gradient (brightest at the +Y pole, where the floor can see it) with a
+    // 5:1 contrast. That contrast is a DESIGN CALL: a strongly peaked
+    // environment -- checks 29-31 use one with an 8x block -- inflates the
+    // variance of BOTH estimators, and the variance is what sets how small a
+    // disagreement this gate can resolve. Env importance sampling, pdfEnvMap
+    // and the balance heuristic are all still exercised (the CDF is not
+    // uniform in either axis); it is only their variance-reduction margin
+    // that is smaller here, and no claim is made about that.
+    //
+    // THE BOUND, DERIVED. Two independent unbiased estimators of the same
+    // per-pixel value mu(p):
+    //   * GPU: kSeedsFull runs, each ONE sample per pixel, each with a
+    //     distinct iterationSeed. wf_scatter.comp rebuilds its RNG from
+    //     (pixelIndex, sampleIndex, iterationSeed) every bounce, so distinct
+    //     seeds give independent paths. Sample mean mG(p), unbiased sample
+    //     variance vG(p), standard error seG = sqrt(vG/R).
+    //   * CPU: kCpuFull samples, its own generator. mC(p), seC = sqrt(vC/M).
+    // D(p) = mG(p) - mC(p) has expectation 0 and standard deviation
+    // sigma(p) = sqrt(seG^2 + seC^2), ESTIMATED FROM THE RUN ITSELF -- this
+    // is the "variance estimate from the run" option Task 6 names, taken
+    // deliberately: the per-pixel variance of an MIS path-tracing estimator
+    // on this geometry has no closed form to derive it from. What IS derived
+    // is the multiplier:
+    //   * PER PIXEL, kPixels comparisons, two-sided. A family-wise false
+    //     rejection rate of 1e-3 needs 2*kPixels*Phi(-z) <= 1e-3, i.e.
+    //     Phi(-z) <= 9.8e-7, i.e. z >= 4.76. kPerPixelZ = 5.0 (family-wise
+    //     ~5.7e-4 under normality). Normality is approximate at these
+    //     sample counts, which is why the pooled test below -- where the
+    //     central limit theorem is on much firmer ground -- carries the
+    //     sharp discrimination and this one carries the spatial coverage.
+    //   * POOLED, ONE comparison, on the IMAGE TOTAL. For each GPU seed i
+    //     the whole-image total S_i = sum_p film_i(p) is one draw; for each
+    //     CPU sample index j, T_j = sum_p c(p,j) is one draw. Their sample
+    //     variances are computed ACROSS RUNS, so this statistic needs no
+    //     assumption at all about whether different pixels are independent
+    //     -- any correlation is already inside Var(S_i). One comparison at
+    //     1e-4 two-sided needs z >= 3.9; kPooledZ = 4.0.
+    // No tolerance here was chosen by running the check and widening until
+    // it passed; both multipliers come from the comparison count, and both
+    // scales come from measured variances.
+    //
+    // WHY BOTH. The per-pixel test sees a disagreement that lives in a few
+    // pixels and cancels in the mean; the pooled test sees a coherent bias
+    // far too small for any single pixel to resolve (a wrong material
+    // constant, a double-counted throughput, an MIS partition that does not
+    // sum to one). Its resolution is reported as a number below and gated:
+    // if 4*sigma_pooled/mean ever exceeded kMaxPooledResolution the check
+    // refuses to claim a verdict, because "it passed" would then be
+    // compatible with "there was nothing it could have detected".
+    //
+    // CONVERGENCE. Everything above is also computed on a PREFIX of both
+    // sample sets -- a quarter of the seeds and a quarter of the CPU samples
+    // -- and the check asserts that the root-mean-square of D over the image
+    // SHRINKS BY THE PREDICTED FACTOR. rms(D)^2 estimates E[D^2] =
+    // sigma^2, and quadrupling both sample counts quarters sigma^2, so the
+    // predicted ratio is exactly 0.5. A FIXED BIAS b would floor rms(D) at
+    // |b| and drive that ratio to 1: this is the assertion a pair of
+    // wrong-but-close images cannot satisfy, and the reason a fixed
+    // tolerance alone would not be a gate. The window is [0.30, 0.70]: the
+    // sampling standard deviation of an RMS over kPixels values is about
+    // sqrt(1/(2*kPixels)) ~ 3% relative, and the two sets are NESTED (the
+    // prefix is literally the first quarter of the same runs), so the ratio
+    // is far more stable than that; the window is widened well past it to
+    // cover the non-Gaussian tail of a Monte Carlo difference. The lower
+    // edge is not decoration -- a ratio near zero would mean D collapsed,
+    // which is what comparing a quantity against itself looks like.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;  // wf_generate's 1-D dispatch requires this exactly.
+        constexpr uint32_t kCapacity = kW * kH;
+        constexpr uint32_t kPixels = kW * kH;
+        constexpr uint32_t kBounces = 3;
+        constexpr float kAlbedo = 0.6f;
+
+        constexpr uint32_t kEnvW = 64;
+        constexpr uint32_t kEnvH = 32;
+        static_assert(kEnvW != kEnvH, "a square environment hides a W<->H swap");
+        constexpr uint32_t kEnvTexels = kEnvW * kEnvH;
+
+        constexpr std::size_t kSeedsFull = 512;
+        constexpr std::size_t kSeedsPrefix = kSeedsFull / 4;
+        constexpr std::size_t kCpuFull = 4096;
+        constexpr std::size_t kCpuPrefix = kCpuFull / 4;
+        static_assert(kSeedsFull == 4 * kSeedsPrefix && kCpuFull == 4 * kCpuPrefix,
+                      "the convergence assertion predicts a factor of exactly 2 in rms(D), "
+                      "which requires BOTH sample counts to scale by exactly 4");
+
+        constexpr double kPerPixelZ = 5.0;
+        constexpr double kPooledZ = 4.0;
+        constexpr double kConvergenceMin = 0.30;
+        constexpr double kConvergenceMax = 0.70;
+        // Pre-registered non-vacuity gates. These are statements about how
+        // sharp this check has to be before its verdict means anything, not
+        // tolerances on the thing under test.
+        constexpr double kMaxPooledResolution = 0.02;   // 4*sigma/mean on the image total
+        constexpr double kMaxPerPixelResolution = 0.30;  // worst 5*sigma(p)/mu(p)
+        // A floor under sigma(p), for the arithmetic corner where a pixel's
+        // estimated variance underflows to something meaningless. Expressed
+        // as a fraction of the image's own mean pixel value so it carries no
+        // absolute scale of its own. The check reports the smallest observed
+        // sigma(p) as a multiple of it, so it is visible whether it ever
+        // came close to binding.
+        constexpr double kSigmaFloorFraction = 1e-6;
+
+        // --- The environment. Smooth, strictly positive, asymmetric in both
+        // axes, brightest towards the +Y pole (row 0 is theta = 0).
+        std::vector<float> envRgba(static_cast<std::size_t>(kEnvTexels) * 4u, 0.0f);
+        std::vector<double> envLum(kEnvTexels, 0.0);
+        for (uint32_t y = 0; y < kEnvH; ++y) {
+            for (uint32_t x = 0; x < kEnvW; ++x) {
+                const double L =
+                    0.4 +
+                    1.2 * (static_cast<double>(kEnvH - 1u - y) / static_cast<double>(kEnvH - 1u)) +
+                    0.4 * (static_cast<double>(x) / static_cast<double>(kEnvW - 1u));
+                const std::size_t k = static_cast<std::size_t>(y) * kEnvW + x;
+                envLum[k] = L;
+                envRgba[k * 4u + 0u] = static_cast<float>(L);
+                envRgba[k * 4u + 1u] = static_cast<float>(L);
+                envRgba[k * 4u + 2u] = static_cast<float>(L);
+                envRgba[k * 4u + 3u] = 1.0f;
+            }
+        }
+
+        // --- The scene. See the header above for why each quad is where it
+        // is and wound the way it is.
+        std::vector<float> positions;
+        std::vector<uint32_t> indices;
+        // Floor: wound so the geometric normal is -Y, which is what a
+        // downward primary ray must have FLIPPED to be shaded correctly.
+        parityAddQuad(positions, indices,
+                      {{{-8.0f, 0.0f, -8.0f},
+                        {8.0f, 0.0f, -8.0f},
+                        {8.0f, 0.0f, 8.0f},
+                        {-8.0f, 0.0f, 8.0f}}});
+        // Overhang at y = 5: wound normal +Y, so a ray arriving from below
+        // flips it to -Y.
+        parityAddQuad(positions, indices,
+                      {{{-1.5f, 5.0f, -8.0f},
+                        {-1.5f, 5.0f, 8.0f},
+                        {1.5f, 5.0f, 8.0f},
+                        {1.5f, 5.0f, -8.0f}}});
+        // Side wall at x = 5.5: wound normal +X, so a ray arriving from -X
+        // flips it to -X.
+        parityAddQuad(positions, indices,
+                      {{{5.5f, 0.0f, -8.0f},
+                        {5.5f, 4.0f, -8.0f},
+                        {5.5f, 4.0f, 8.0f},
+                        {5.5f, 0.0f, 8.0f}}});
+        const std::vector<ParityTriangle> refTris = parityTrianglesFromSoup(positions, indices);
+
+        ohao::diff::WavefrontGenerateCamera camera;
+        camera.origin[0] = 0.0f;
+        camera.origin[1] = 3.0f;
+        camera.origin[2] = 0.0f;
+        camera.forward[0] = 0.0f;
+        camera.forward[1] = -1.0f;
+        camera.forward[2] = 0.0f;
+        camera.right[0] = 1.0f;
+        camera.right[1] = 0.0f;
+        camera.right[2] = 0.0f;
+        camera.up[0] = 0.0f;
+        camera.up[1] = 0.0f;
+        camera.up[2] = -1.0f;
+        camera.tanHalfFov = 0.2f;
+
+        // Distinct, spread-out seeds. Any injective map would do; this one
+        // is an odd stride so no two seeds collide and consecutive runs are
+        // not neighbours in the RNG's input space.
+        std::vector<uint32_t> seeds(kSeedsFull);
+        for (std::size_t i = 0; i < kSeedsFull; ++i) {
+            seeds[i] = 20260901u + static_cast<uint32_t>(i) * 2654435761u;
+        }
+
+        struct ParityConfig {
+            const char* name;
+            uint32_t checkNumber;
+            ohao::diff::WavefrontScatterMaterial material;
+        };
+        // Two materials, so the gate covers both of diffBsdfSample's lobes.
+        // The Lambert case is the one whose per-bounce estimator weight is
+        // exactly `albedo` (checks 14/17); the conductor case has q = 1
+        // exactly, so every sample comes from the GGX visible-normal
+        // sampler and the diffuse lobe is entirely out of the picture.
+        const ParityConfig configs[2] = {
+            {"pure Lambert (roughness 1, metallic 0, specularWeight 0)", 33u, {1.0f, 0.0f, 0.0f}},
+            {"rough conductor (roughness 0.7, metallic 1, specularWeight 1)", 34u,
+             {0.7f, 1.0f, 1.0f}},
+        };
+
+        for (const ParityConfig& cfg : configs) {
+            ohao::EnvCDF envCdf;
+            envCdf.build(envRgba, static_cast<int>(kEnvW), static_cast<int>(kEnvH));
+            if (!envCdf.valid()) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: check %u: EnvCDF::build produced no "
+                                      "CDF for a %ux%u strictly-positive environment\n",
+                             cfg.checkNumber, kEnvW, kEnvH);
+                return 1;
+            }
+
+            ohao::diff::WavefrontBuffers wf;
+            if (!wf.build(ctx.allocator(), kCapacity, kEnvW, kEnvH) ||
+                !wf.uploadEnvironment(envCdf.marginalSpan(), envCdf.conditionalSpan(),
+                                      envCdf.integral())) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check %u buffers build / env CDF upload\n",
+                             cfg.checkNumber);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- NON-VACUITY GATE 1: no primary ray escapes. One bounce,
+            // one seed: wf_intersect.comp compacts only survivors and
+            // wf_scatter.comp re-queues everything it is given, so the live
+            // count after a ONE-bounce run is exactly the number of primary
+            // rays that hit something. Anything below kCapacity means the
+            // film is missing a directly-visible-environment term this
+            // comparison does not model, and the verdict below would be
+            // about a different quantity than the one it claims.
+            std::vector<std::vector<float>> probeFilm;
+            std::vector<uint32_t> probeLive;
+            const std::span<const uint32_t> oneSeed(seeds.data(), 1);
+            if (!ctx.runWavefrontParityProbe(wf, kW, kH, /*bounces=*/1u, camera,
+                                             std::span<const float>(positions),
+                                             std::span<const uint32_t>(indices), kAlbedo,
+                                             cfg.material, oneSeed, probeFilm, probeLive)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: check %u one-bounce probe dispatch\n",
+                             cfg.checkNumber);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            if (probeLive.size() != 1 || probeLive[0] != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check %u -- %u of %u primary rays hit the "
+                             "scene. This check compares a film that contains NO "
+                             "directly-visible-environment term against a reference that "
+                             "contains none either, which is only the same quantity when every "
+                             "primary ray hits. It does not, so the scene is wrong, not the "
+                             "integrator\n",
+                             cfg.checkNumber, probeLive.empty() ? 0u : probeLive[0], kCapacity);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- The GPU integrator: kSeedsFull independent 1-spp runs of
+            // the full kBounces loop, through WavefrontLoop::record.
+            std::vector<std::vector<float>> films;
+            std::vector<uint32_t> liveCounts;
+            if (!ctx.runWavefrontParityProbe(wf, kW, kH, kBounces, camera,
+                                             std::span<const float>(positions),
+                                             std::span<const uint32_t>(indices), kAlbedo,
+                                             cfg.material,
+                                             std::span<const uint32_t>(seeds), films, liveCounts)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: check %u parity probe dispatch\n",
+                             cfg.checkNumber);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            wf.destroy(ctx.allocator());
+
+            if (films.size() != kSeedsFull) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: check %u got %zu films, expected %zu\n",
+                             cfg.checkNumber, films.size(), kSeedsFull);
+                return 1;
+            }
+
+            // --- NON-VACUITY GATE 2: the three film channels. Both the base
+            // colour and the environment are grey and every film factor is
+            // applied per channel identically, so R, G and B must be the
+            // SAME BITS. Asserting it costs nothing and is the only thing
+            // here that would notice a per-channel indexing error; it also
+            // licenses everything below comparing channel 0 alone.
+            for (std::size_t i = 0; i < films.size(); ++i) {
+                if (films[i].size() != static_cast<std::size_t>(kPixels) * 3u) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: check %u film %zu has %zu floats, "
+                                 "expected %u\n",
+                                 cfg.checkNumber, i, films[i].size(), kPixels * 3u);
+                    return 1;
+                }
+                for (uint32_t p = 0; p < kPixels; ++p) {
+                    const float r = films[i][static_cast<std::size_t>(p) * 3u + 0u];
+                    const float g = films[i][static_cast<std::size_t>(p) * 3u + 1u];
+                    const float b = films[i][static_cast<std::size_t>(p) * 3u + 2u];
+                    if (!std::isfinite(r) || r < 0.0f || g != r || b != r) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: check %u run %zu pixel %u film is "
+                                     "(%.9g, %.9g, %.9g). It must be finite, non-negative and "
+                                     "bit-identical across the three channels: this scene's base "
+                                     "colour and environment are both grey\n",
+                                     cfg.checkNumber, i, p, static_cast<double>(r),
+                                     static_cast<double>(g), static_cast<double>(b));
+                        return 1;
+                    }
+                }
+            }
+
+            // --- The reference integrator. Pixel-parallel; each pixel's
+            // stream depends only on its own index, so the result does not
+            // depend on the thread count.
+            ParityRefScene refScene;
+            refScene.tris = refTris;
+            refScene.envLum = &envLum;
+            refScene.envW = kEnvW;
+            refScene.envH = kEnvH;
+            refScene.material.baseColor = {kAlbedo, kAlbedo, kAlbedo};
+            refScene.material.roughness = cfg.material.roughness;
+            refScene.material.metallic = cfg.material.metallic;
+            refScene.material.specularWeight = cfg.material.specularWeight;
+            refScene.bounces = kBounces;
+
+            const OracleVec3 camOrigin{camera.origin[0], camera.origin[1], camera.origin[2]};
+
+            std::vector<double> cpuSumPrefix(kPixels, 0.0);
+            std::vector<double> cpuSumSqPrefix(kPixels, 0.0);
+            std::vector<double> cpuSumFull(kPixels, 0.0);
+            std::vector<double> cpuSumSqFull(kPixels, 0.0);
+            // Per CPU sample index, the whole-image total. Accumulated
+            // thread-locally and reduced in thread order, so it is
+            // deterministic.
+            std::vector<double> cpuImageTotals(kCpuFull, 0.0);
+
+            const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+            const unsigned threadCount = std::min<unsigned>(hw, 16u);
+            std::vector<std::vector<double>> perThreadTotals(
+                threadCount, std::vector<double>(kCpuFull, 0.0));
+            {
+                std::vector<std::thread> workers;
+                workers.reserve(threadCount);
+                for (unsigned tIdx = 0; tIdx < threadCount; ++tIdx) {
+                    workers.emplace_back([&, tIdx]() {
+                        const uint32_t begin =
+                            static_cast<uint32_t>((static_cast<std::size_t>(kPixels) * tIdx) /
+                                                  threadCount);
+                        const uint32_t end = static_cast<uint32_t>(
+                            (static_cast<std::size_t>(kPixels) * (tIdx + 1u)) / threadCount);
+                        std::vector<double>& totals = perThreadTotals[tIdx];
+                        for (uint32_t p = begin; p < end; ++p) {
+                            const uint32_t px = p % kW;
+                            const uint32_t py = p / kW;
+                            const OracleVec3 camDir = parityCameraRay(px, py, kW, kH, camera);
+                            // Per-pixel stream, so the partition into
+                            // threads cannot change any number.
+                            std::mt19937_64 rng(0x9E3779B97F4A7C15ull *
+                                                    (static_cast<std::uint64_t>(p) + 1ull) +
+                                                static_cast<std::uint64_t>(cfg.checkNumber) *
+                                                    1000003ull);
+                            for (std::size_t j = 0; j < kCpuFull; ++j) {
+                                const double v =
+                                    parityReferenceSample(refScene, camOrigin, camDir, rng);
+                                cpuSumFull[p] += v;
+                                cpuSumSqFull[p] += v * v;
+                                if (j < kCpuPrefix) {
+                                    cpuSumPrefix[p] += v;
+                                    cpuSumSqPrefix[p] += v * v;
+                                }
+                                totals[j] += v;
+                            }
+                        }
+                    });
+                }
+                for (std::thread& w : workers) w.join();
+            }
+            for (unsigned tIdx = 0; tIdx < threadCount; ++tIdx) {
+                for (std::size_t j = 0; j < kCpuFull; ++j) {
+                    cpuImageTotals[j] += perThreadTotals[tIdx][j];
+                }
+            }
+
+            // --- Per-pixel statistics, at the prefix and at the full budget.
+            std::vector<double> gpuPixel(kSeedsFull, 0.0);
+            double meanPixelValue = 0.0;
+            for (uint32_t p = 0; p < kPixels; ++p) {
+                meanPixelValue += cpuSumFull[p] / static_cast<double>(kCpuFull);
+            }
+            meanPixelValue /= static_cast<double>(kPixels);
+            const double sigmaFloor = kSigmaFloorFraction * std::abs(meanPixelValue);
+
+            double worstZ[2] = {0.0, 0.0};
+            uint32_t worstZPixel[2] = {0u, 0u};
+            double sumDSq[2] = {0.0, 0.0};
+            double worstPixelResolution = 0.0;
+            double minSigma = std::numeric_limits<double>::infinity();
+            double worstDetail[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            bool sigmaFloorBound = false;
+
+            for (uint32_t p = 0; p < kPixels; ++p) {
+                for (std::size_t i = 0; i < kSeedsFull; ++i) {
+                    gpuPixel[i] = films[i][static_cast<std::size_t>(p) * 3u + 0u];
+                }
+                for (int which = 0; which < 2; ++which) {
+                    const std::size_t r = (which == 0) ? kSeedsPrefix : kSeedsFull;
+                    const std::size_t m = (which == 0) ? kCpuPrefix : kCpuFull;
+                    double meanG = 0.0, varG = 0.0;
+                    parityMoments(gpuPixel.data(), r, meanG, varG);
+                    const double sumC = (which == 0) ? cpuSumPrefix[p] : cpuSumFull[p];
+                    const double sumSqC = (which == 0) ? cpuSumSqPrefix[p] : cpuSumSqFull[p];
+                    const double meanC = sumC / static_cast<double>(m);
+                    const double varC =
+                        std::max(0.0, (sumSqC - static_cast<double>(m) * meanC * meanC) /
+                                          static_cast<double>(m - 1));
+                    const double sigma = std::sqrt(varG / static_cast<double>(r) +
+                                                   varC / static_cast<double>(m));
+                    const double d = meanG - meanC;
+                    const double denom = std::max(sigma, sigmaFloor);
+                    if (sigma < sigmaFloor) sigmaFloorBound = true;
+                    const double z = std::abs(d) / denom;
+                    sumDSq[which] += d * d;
+                    if (z > worstZ[which]) {
+                        worstZ[which] = z;
+                        worstZPixel[which] = p;
+                        if (which == 1) {
+                            worstDetail[0] = meanG;
+                            worstDetail[1] = meanC;
+                            worstDetail[2] = d;
+                            worstDetail[3] = sigma;
+                            worstDetail[4] = std::sqrt(varG / static_cast<double>(r));
+                            worstDetail[5] = std::sqrt(varC / static_cast<double>(m));
+                        }
+                    }
+                    if (which == 1) {
+                        minSigma = std::min(minSigma, sigma);
+                        const double mu = std::max(std::abs(meanG), std::abs(meanC));
+                        if (mu > 0.0) {
+                            worstPixelResolution =
+                                std::max(worstPixelResolution, kPerPixelZ * sigma / mu);
+                        }
+                    }
+                }
+            }
+            const double rmsPrefix = std::sqrt(sumDSq[0] / static_cast<double>(kPixels));
+            const double rmsFull = std::sqrt(sumDSq[1] / static_cast<double>(kPixels));
+
+            // --- The pooled statistic, on the IMAGE TOTAL. Its variance is
+            // taken across whole runs, so it makes no independence
+            // assumption about pixels.
+            std::vector<double> gpuImageTotals(kSeedsFull, 0.0);
+            for (std::size_t i = 0; i < kSeedsFull; ++i) {
+                double s = 0.0;
+                for (uint32_t p = 0; p < kPixels; ++p) {
+                    s += films[i][static_cast<std::size_t>(p) * 3u + 0u];
+                }
+                gpuImageTotals[i] = s;
+            }
+            double pooledZ[2] = {0.0, 0.0};
+            double pooledDetail[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            for (int which = 0; which < 2; ++which) {
+                const std::size_t r = (which == 0) ? kSeedsPrefix : kSeedsFull;
+                const std::size_t m = (which == 0) ? kCpuPrefix : kCpuFull;
+                double meanS = 0.0, varS = 0.0, meanT = 0.0, varT = 0.0;
+                parityMoments(gpuImageTotals.data(), r, meanS, varS);
+                parityMoments(cpuImageTotals.data(), m, meanT, varT);
+                const double sigma =
+                    std::sqrt(varS / static_cast<double>(r) + varT / static_cast<double>(m));
+                pooledZ[which] = (sigma > 0.0) ? std::abs(meanS - meanT) / sigma : 0.0;
+                if (which == 1) {
+                    pooledDetail[0] = meanS;
+                    pooledDetail[1] = meanT;
+                    pooledDetail[2] = meanS - meanT;
+                    pooledDetail[3] = sigma;
+                    pooledDetail[4] = std::sqrt(varS / static_cast<double>(r));
+                    pooledDetail[5] = std::sqrt(varT / static_cast<double>(m));
+                }
+            }
+            const double pooledResolution =
+                (pooledDetail[0] != 0.0) ? kPooledZ * pooledDetail[3] / std::abs(pooledDetail[0])
+                                         : std::numeric_limits<double>::infinity();
+
+            const double convergenceRatio =
+                (rmsPrefix > 0.0) ? rmsFull / rmsPrefix : std::numeric_limits<double>::infinity();
+
+            const bool perPixelOk = worstZ[1] <= kPerPixelZ;
+            const bool pooledOk = pooledZ[1] <= kPooledZ;
+            const bool convergenceOk =
+                convergenceRatio >= kConvergenceMin && convergenceRatio <= kConvergenceMax;
+            const bool sharpEnough = pooledResolution <= kMaxPooledResolution &&
+                                     worstPixelResolution <= kMaxPerPixelResolution;
+
+            if (!perPixelOk || !pooledOk || !convergenceOk || !sharpEnough || sigmaFloorBound) {
+                std::fprintf(
+                    stderr,
+                    "[diff_gpu_probe] FAIL: check %u -- wavefront integrator vs the independent "
+                    "CPU reference, %s, %u bounces, %zu GPU runs x 1 spp vs %zu reference "
+                    "samples per pixel:\n"
+                    "  PER PIXEL: worst |mean_gpu - mean_ref| / sigma = %.3f at pixel %u "
+                    "(allowed %.2f, family-wise 1e-3 over %u comparisons). There mean_gpu = "
+                    "%.9g, mean_ref = %.9g, difference %.4g, sigma %.4g (gpu %.4g, ref %.4g).\n"
+                    "  POOLED (image total, variance taken across whole runs so no "
+                    "pixel-independence assumption): |%.9g - %.9g| = %.4g, sigma %.4g (gpu %.4g, "
+                    "ref %.4g), z = %.3f (allowed %.2f).\n"
+                    "  CONVERGENCE: rms(D) went %.4g -> %.4g when both sample counts were "
+                    "quadrupled, ratio %.4f (predicted 0.5, window [%.2f, %.2f]). A ratio near 1 "
+                    "is a FIXED BIAS surviving more samples; a ratio near 0 is a difference that "
+                    "collapsed, which is what comparing a quantity against itself looks like.\n"
+                    "  SHARPNESS: the pooled test resolves a coherent bias of %.3g relative "
+                    "(gate %.3g); the worst pixel resolves %.3g relative (gate %.3g). A verdict "
+                    "is refused above those, because passing would then be compatible with there "
+                    "being nothing to detect.%s\n",
+                    cfg.checkNumber, cfg.name, kBounces, kSeedsFull, kCpuFull, worstZ[1],
+                    worstZPixel[1], kPerPixelZ, kPixels, worstDetail[0], worstDetail[1],
+                    worstDetail[2], worstDetail[3], worstDetail[4], worstDetail[5],
+                    pooledDetail[0], pooledDetail[1], pooledDetail[2], pooledDetail[3],
+                    pooledDetail[4], pooledDetail[5], pooledZ[1], kPooledZ, rmsPrefix, rmsFull,
+                    convergenceRatio, kConvergenceMin, kConvergenceMax, pooledResolution,
+                    kMaxPooledResolution, worstPixelResolution, kMaxPerPixelResolution,
+                    sigmaFloorBound ? "\n  The sigma floor BOUND on at least one pixel, so at "
+                                      "least one comparison was made against an arithmetic "
+                                      "guard rather than a measured variance."
+                                    : "");
+                return 1;
+            }
+
+            std::printf(
+                "[diff_gpu_probe] OK: check %u -- the wavefront integrator (%zu independent "
+                "1-spp runs through WavefrontLoop::record, %u bounces) and an INDEPENDENT CPU "
+                "reference path tracer (%zu samples/pixel, its own intersector, basis, RNG and "
+                "cosine-sampled MIS-free estimator -- no CDF, no pdfEnvMap, no balance "
+                "heuristic) agree on a probe-owned scene, %s. All %u primary rays hit, so the "
+                "film's missing directly-visible-environment term is identically zero here and "
+                "the two sides hold the same quantity. Per pixel: worst |D|/sigma = %.3f at "
+                "pixel %u over %u comparisons (bound %.2f, family-wise 1e-3); image total: "
+                "%.6g vs %.6g, z = %.3f (bound %.2f). Agreement IMPROVES with samples: rms(D) "
+                "%.4g -> %.4g on quadrupling both budgets, ratio %.4f against a predicted 0.5 "
+                "(window [%.2f, %.2f]) -- a fixed bias could not do that. Non-vacuous: the "
+                "pooled test resolves a coherent bias of %.3g relative (gate %.3g), the worst "
+                "pixel %.3g (gate %.3g), and the smallest per-pixel sigma is %.3gx the "
+                "arithmetic floor\n",
+                cfg.checkNumber, kSeedsFull, kBounces, kCpuFull, cfg.name, kCapacity, worstZ[1],
+                worstZPixel[1], kPixels, kPerPixelZ, pooledDetail[0], pooledDetail[1], pooledZ[1],
+                kPooledZ, rmsPrefix, rmsFull, convergenceRatio, kConvergenceMin, kConvergenceMax,
+                pooledResolution, kMaxPooledResolution, worstPixelResolution,
+                kMaxPerPixelResolution,
+                (sigmaFloor > 0.0) ? minSigma / sigmaFloor
+                                   : std::numeric_limits<double>::infinity());
+        }
     }
 
     arena.destroy(ctx.allocator());
