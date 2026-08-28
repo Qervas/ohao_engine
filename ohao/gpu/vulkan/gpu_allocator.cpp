@@ -142,9 +142,23 @@ GpuBuffer GpuAllocator::createBuffer(
         return result;
     }
 
-    // Update stats
-    m_stats.totalAllocated += size;
-    m_stats.currentUsage += size;
+    // Update stats.
+    //
+    // ACCOUNT THE VMA ALLOCATION SIZE, NOT THE REQUESTED SIZE. VMA rounds a
+    // request up to the memory type's alignment, and destroyBuffer() below
+    // subtracts `buffer.allocation.getSize()` -- that rounded-up number. This
+    // side used to add the caller's `size` instead, so currentUsage lost the
+    // per-buffer padding on every create/destroy pair and, being unsigned,
+    // WRAPPED: a run that freed everything it allocated ended with
+    // currentUsage a little under 2^64 and shutdown() printed
+    // "Warning: GPU memory leak detected - 18446744073709536560 bytes still
+    // allocated" directly above "Allocations: 290 == Frees: 290". A false
+    // leak warning on a green run is how a real one gets ignored. createImage
+    // below always used getSize() on both sides and never had the bug; this
+    // makes the buffer path match it.
+    const VkDeviceSize accountedSize = result.allocation.getSize();
+    m_stats.totalAllocated += accountedSize;
+    m_stats.currentUsage += accountedSize;
     m_stats.allocationCount++;
     if (m_stats.currentUsage > m_stats.peakUsage) {
         m_stats.peakUsage = m_stats.currentUsage;

@@ -60,27 +60,36 @@ Suballocating large resources out of shared blocks is most of what an allocator 
 for; with that branch, `GpuAllocator` returns one allocation per non-trivial
 resource — the hand-rolled topology, plus a dependency.
 
-## The leak counter that can wrap
+## The leak counter that wrapped
 
-`AllocationStats` is maintained by hand, and the two sides of the ledger use
-different numbers. `createBuffer` credits its `size` argument — what the caller
-asked for — while `destroyBuffer` debits `VmaAllocationInfo::size`, what VMA
-actually reserved:
+`AllocationStats` is maintained by hand, and for most of this tree's life the two
+sides of the ledger used different numbers. `createBuffer` credited its `size`
+argument — what the caller asked for — while `destroyBuffer` debited
+`VmaAllocationInfo::size`, what VMA actually reserved:
 
 {{cite ohao/gpu/vulkan/gpu_allocator.cpp "VkDeviceSize size = buffer.allocation.getSize();"}}
 
 VMA documents that field as possibly *greater* than the requested size — the
 allocation absorbs alignment padding. `currentUsage` is an unsigned `std::size_t`, so
-each padded buffer drifts the running total downward, and the first debit that exceeds
-what is left — destroying the last live buffer will do it — wraps the subtraction to a
-value near $2^{64}$. Nothing polls for that mid-run: `hasLeaks()` and `liveBytes()` are
-defined on `AllocationStats` and called from nowhere in `ohao/`, `tests/` or
-`examples/`. The symptom surfaces at teardown, where `shutdown()` reads `currentUsage`
-directly and prints a leak warning with a nonsense byte count.
+each padded buffer drifted the running total downward, and the first debit that
+exceeded what was left — destroying the last live buffer would do it — wrapped the
+subtraction to a value near $2^{64}$. Nothing polls for that mid-run: `hasLeaks()` and
+`liveBytes()` are defined on `AllocationStats` and called from nowhere in `ohao/`,
+`tests/` or `examples/`. The symptom surfaced at teardown, where `shutdown()` reads
+`currentUsage` directly and printed a leak warning with a nonsense byte count.
 
 {{cite ohao/gpu/vulkan/gpu_allocator.cpp "if (m_stats.currentUsage > 0) {"}}
 
-`createImage` credits `allocation.getSize()` too, so the asymmetry is buffers-only.
+`createImage` always credited `allocation.getSize()`, so the asymmetry was
+buffers-only, and the fix was to make the buffer path match it — credit the VMA
+allocation size, the same quantity the debit uses:
+
+{{cite ohao/gpu/vulkan/gpu_allocator.cpp "const VkDeviceSize accountedSize = result.allocation.getSize();"}}
+
+What forced it was `tests/diff/diff_gpu_probe.exe`, whose 290 small allocations made
+the warning print on every *passing* run — `18446744073709536560 bytes still
+allocated` directly above `Allocations: 290 == Frees: 290`. A false leak warning on a
+green run is how a real one gets ignored.
 
 ## Host-visible for the rasteriser, staged for the ray tracer
 
