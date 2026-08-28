@@ -36,21 +36,25 @@
 
 // --- THE FORWARD HOOK: FILM ACCUMULATION (Stage 0b-2b Task 5) -------------
 //
-// The MIS-combined direct-lighting estimate at this vertex, carried by the
+// The MIS-combined REFLECTED direct radiance at this vertex, carried by the
 // arrival throughput. Zero on the miss path by construction (traverse.glsl
-// leaves both `Li` and `throughput` at zero there), so this is evaluated and
+// leaves both `Lr` and `throughput` at zero there), so this is evaluated and
 // added UNCONDITIONALLY: "every invocation writes the film on every bounce"
 // is a simpler invariant to reason about than a branch, and it is the
 // invariant the barrier note below is stated against.
 //
-// `v.throughput * v.Li` is the same product, in the same order, that this
+// `v.throughput * v.Lr` is the same product, in the same order, that this
 // shader computed inline as
 //
 //     arrivalThroughput * (neeTerm.wOwn * neeTerm.unweighted +
 //                          bsdfTerm.wOwn * bsdfTerm.unweighted)
 //
 // before the traversal was extracted; traverse.glsl forms the parenthesised
-// half into `v.Li` and hands it over. The extraction is therefore bit-exact,
+// half into `v.Lr` and hands it over -- and `Lr` is the name it should always
+// have had, because the parenthesised half already contains f and has already
+// been divided by both densities, which makes it reflected radiance and not
+// the incident radiance the spec's scatter line is written in terms of (see
+// DiffVertex in traverse.glsl). The extraction is therefore bit-exact,
 // which is what lets checks 14/17's `== 0.0625` and checks 20-34 stand as the
 // proof that it changed nothing.
 //
@@ -147,7 +151,7 @@
 // bit-exactly across runs of the same seed, and must sum multi-sample films
 // on the host rather than accumulating them in one dispatch.
 void diffVertexHook(inout DiffVertex v) {
-    const vec3 filmContribution = v.throughput * v.Li;
+    const vec3 filmContribution = v.throughput * v.Lr;
 
     if (pc.filmPixelCount > 0u && v.pixelIndex < pc.filmPixelCount) {
         const uint fb = v.pixelIndex * 3u;

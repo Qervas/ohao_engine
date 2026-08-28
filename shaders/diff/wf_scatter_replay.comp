@@ -45,14 +45,45 @@
 // diagnosis with. The whole of the difference between the forward pass and
 // the replay pass is therefore this function's body -- the forward one
 // accumulates the film, this one does nothing -- and that difference is the
-// only place a later task has to put the PRB recursion:
+// only place a later task has to put the PRB recursion.
 //
-//     dL/dtheta  +=  v.adjoint * (df/dtheta) * v.Li / v.pdf
-//     v.adjoint   =  v.adjoint * v.bsdfWeight
+// THE RECURSION, FOR THIS INTEGRATOR. Spec section 6.1 writes the scatter
+// line for a single-strategy estimator. This integrator's direct-lighting
+// estimate is a TWO-STRATEGY MIS combination -- next event and BSDF sampling
+// -- so the scatter line is a sum over the strategies and each term carries
+// that strategy's own direction, density, radiance, visibility and weight:
 //
-// Every factor those two lines need is already a field of `DiffVertex` (see
-// traverse.glsl), which is why the signature could be fixed here, one task
-// before the first consumer of it exists.
+//     dL/dtheta += v.adjoint *
+//                  ( v.wEnv  * (df/dtheta at v.envDir)  * max(dot(v.normal, v.envDir), 0)
+//                            * v.envRadiance  * v.visEnv  / v.envPdf
+//                  + v.wBsdf * (d(f*cos)/dtheta at v.bsdfDir)
+//                            * v.bsdfRadiance * v.visBsdf / v.pdf )
+//     v.adjoint  =  v.adjoint * v.bsdfWeight
+//
+// (In the BSDF term the cosine is already folded into `v.f`, which is f*cos
+// at `v.bsdfDir`, so what that term needs is the derivative of `v.f` itself.)
+//
+// AN EARLIER VERSION OF THIS FILE PRINTED THE SCATTER LINE AS
+// `v.adjoint * (df/dtheta) * v.Li / v.pdf`, which was wrong twice over:
+// `v.Li` (now `v.Lr`) is the MIS-combined REFLECTED direct radiance, so it
+// already contains f and has already been divided by the densities --
+// substituting it there double-counts f and squares the pdf -- and a single
+// (f, pdf) pair cannot stand for two strategies with two directions and two
+// densities anyway. No gradient existed when that line was written, so
+// nothing computed a wrong number; what it would have produced is a Task 3
+// that read as a bad df/dtheta derivation. The derivation and the field
+// names are in `DiffVertex`'s comment in traverse.glsl, which is the
+// authority; this is a pointer to it.
+//
+// The PROPAGATE line above needs no such correction and is exact as written:
+// `v.bsdfWeight` is bit-identically the value the traversal multiplied
+// throughput by.
+//
+// Every factor of both lines is a field of `DiffVertex` (see traverse.glsl).
+// It was NOT true of the per-strategy factors for one task -- they were
+// added, as FIELDS, which is the whole point of a signature whose only
+// growth direction is a new field: the hook's parameter list and both call
+// sites are untouched by that change, exactly as claimed.
 //
 // NOTE THAT THIS STAGE STILL WRITES PATH STATE AND STILL RE-QUEUES. That is
 // not an oversight and it is not "the forward pass again": it is what walking

@@ -419,13 +419,56 @@ const float kSurfaceOffset = 1e-4;
 // new FIELD, never a new parameter, so neither instantiation's call site --
 // nor any future one -- ever has to change again.
 //
-// WHY THESE FIELDS. Spec section 6.1 states the entire PRB recursion at a
-// vertex as two lines:
+// WHY THESE FIELDS. Spec section 6.1 states the PRB recursion at a vertex as
+// two lines:
 //
 //     dL/dtheta  +=  dL * (df/dtheta) * L_i / pdf     // scatter into arena
 //     dL_next     =  dL * f / pdf                     // propagate onward
 //
-// Read off what appears in them and this struct's core is forced:
+// THE SECOND LINE IS THIS INTEGRATOR'S VERBATIM: `bsdfWeight` is bit-exactly
+// what the traversal multiplied throughput by, so `dL_next = dL * bsdfWeight`
+// is the same arithmetic the forward pass did. THE FIRST LINE IS NOT, and
+// reading it as though it were is how a wrong gradient is derived from a
+// right-looking formula. The spec writes the scatter line for a
+// SINGLE-STRATEGY estimator, in which `L_i` is the INCIDENT radiance arriving
+// along the one sampled direction, `f` is evaluated at that direction and
+// `pdf` is the one density it was drawn from. What this traversal forms at a
+// vertex is not that. It is a TWO-STRATEGY MIS combination of the
+// direct-lighting integral -- next event (a light sample) and BSDF sampling
+// -- and each strategy carries its OWN direction, its own f, its own density,
+// its own visibility and its own MIS weight. There is no single (f, L_i, pdf)
+// triple at which the spec's line could be evaluated.
+//
+// Expanding the spec's scatter line over the strategies this estimator
+// actually uses gives the line every consumer of this struct must use:
+//
+//     dL/dtheta += dL * SUM_s [ w_s * (df_s/dtheta) * cos_s * L_s * V_s / p_s ]
+//
+//   s = E (next event)  : dir = envDir, cos_E = max(dot(normal, envDir), 0),
+//                         L_E = envRadiance, V_E = visEnv, p_E = envPdf,
+//                         w_E = wEnv
+//   s = B (BSDF sample) : dir = bsdfDir, cos_B is the cosine ALREADY FOLDED
+//                         INTO `f` (which is f*cos at bsdfDir, so the product
+//                         (df_B/dtheta)*cos_B is the derivative of `f`
+//                         itself), L_B = bsdfRadiance, V_B = visBsdf,
+//                         p_B = pdf, w_B = wBsdf
+//
+// Every factor of that is a field below. `df_s/dtheta` is the only thing a
+// consumer still has to compute, and it is computed at
+// (normal, wo, dir_s, material) -- all fields too.
+//
+// WHAT THIS STRUCT MUST NOT BE READ AS. `Lr` below is the MIS-COMBINED
+// REFLECTED DIRECT RADIANCE -- SUM_s w_s * f_s*cos_s*L_s*V_s/p_s. It already
+// contains f and it has already been divided by the densities. It is L_r, NOT
+// the spec's L_i. Substituting it into the spec's scatter line double-counts
+// f and squares the pdf. This field was called `Li` for exactly one task and
+// the rename is the fix, because a field named for incident radiance that
+// holds reflected radiance is the whole of the defect. The proof that it is
+// L_r is one paragraph down and was always here: `throughput * Lr` is EXACTLY
+// the forward film contribution, and if `Lr` held incident radiance that
+// product would be missing f/pdf.
+//
+// Read off what appears in those lines and this struct's core is forced:
 //
 //   * `adjoint` is `dL` -- IN and OUT. The hook reads the adjoint arriving
 //     at this vertex and writes the propagated `dL_next` back into the same
@@ -439,18 +482,48 @@ const float kSurfaceOffset = 1e-4;
 //     and all three are here on purpose. `bsdfWeight` is what the traversal
 //     actually multiplies throughput by (f*cos/pdf, i.e. the `f / pdf` of
 //     the recursion's second line); `f` is f*cos alone; `pdf` is the density
-//     the direction was drawn with. A hook that needs `df/dtheta * L_i/pdf`
-//     needs the pdf separately from the ratio, and a hook that only wants to
-//     propagate wants the ratio without re-dividing -- offering one and
-//     making the other reconstructable is how a signature acquires a
-//     rounding difference between the forward and the backward pass.
-//   * `Li` is the incoming-radiance estimate consumed at this vertex: the
-//     MIS-combined direct-lighting estimate the traversal just formed. It is
-//     the `L_i` of the first line, and multiplied by `throughput` it is
-//     exactly the forward pass's film contribution -- which is why the
-//     FORWARD instantiation's hook is nothing but `film += throughput * Li`.
+//     the direction was drawn with.
+//
+//     THE REASON ALL THREE ARE HERE IS NOT that offering one and making the
+//     others reconstructable would cost a rounding difference. An earlier
+//     version of this comment said that, and it was self-undercutting: `f`
+//     is DERIVED here, as `weight * pdf` (see the fill site below), and so
+//     carries exactly the round-trip rounding the claim said keeping all
+//     three avoided. The true reason is plainer, and holds. The scatter line
+//     wants f*cos and the density SEPARATELY while the propagate line wants
+//     the RATIO; keeping all three spares every consumer a derivation it
+//     would otherwise repeat, and the derived one is bit-reproducible
+//     because it is derived ONCE, in this shared source, so both
+//     instantiations compile the identical expression and get identical
+//     bits. That is the property the replay rests on, and it is a property
+//     of where the derivation lives, not of how many fields there are.
+//
+//     What must NOT be re-derived is `bsdfWeight`. The path's throughput was
+//     multiplied by that exact value, so `dL_next = dL * bsdfWeight` is
+//     bit-identical to the forward decay while `dL * f / pdf` would not be.
+//   * `Lr` is the MIS-combined REFLECTED direct radiance at this vertex --
+//     SUM_s w_s * f_s*cos_s*L_s*V_s/p_s, with f and the division by the
+//     densities already inside it. Multiplied by `throughput` it is exactly
+//     the forward pass's film contribution, which is why the FORWARD
+//     instantiation's hook is nothing but `film += throughput * Lr`. It is
+//     NOT the spec's `L_i` and it does not belong in the scatter line -- see
+//     "WHAT THIS STRUCT MUST NOT BE READ AS" above. It is a field because
+//     the forward hook needs it and because a consumer wanting the vertex's
+//     whole direct term should read the one the traversal formed rather than
+//     re-summing the per-strategy fields in a second place that could drift.
+//   * The PER-STRATEGY inputs the scatter line is summed over: `envDir`,
+//     `envPdf`, `envRadiance`, `visEnv` and `wEnv` for next event;
+//     `bsdfRadiance`, `visBsdf` and `wBsdf` for BSDF sampling (whose
+//     direction, f*cos and density are `bsdfDir`, `f` and `pdf` above).
+//     These were absent for one task, during which this comment claimed
+//     "every factor those two lines need is already a field" -- which was
+//     false: without them the next-event half of the scatter line cannot be
+//     written at all. They are FIELD additions, which is the signature's
+//     central virtue holding rather than failing: extending what a vertex
+//     carries has still never changed the hook's parameter list or either
+//     instantiation's call site.
 //   * `throughput` is the path throughput ON ARRIVAL, before this vertex's
-//     `bsdfWeight` decay. The estimator in `Li` already contains this
+//     `bsdfWeight` decay. The estimator in `Lr` already contains this
 //     vertex's f*cos/p; multiplying by the post-decay value would count this
 //     bounce's BSDF twice.
 //   * `pathIndex`, `pixelIndex`, `capacity` and `bounce` are how a hook
@@ -463,6 +536,19 @@ const float kSurfaceOffset = 1e-4;
 //     They are the traversal's own values, not recomputed ones: a hook that
 //     re-derived the shading frame from path state would be a second
 //     implementation of the thing this file exists to have exactly one of.
+//
+//     THEY ARE NOT ALL IN THE SAME SPACE, and a chain rule taken without
+//     noticing that is wrong by a factor nothing would flag. `roughness` and
+//     `metallic` are POST-`unpackHitPbr` -- floor included, so the 0.01
+//     roughness clamp has already been applied and d(roughness)/d(the pushed
+//     roughness) is 1 where the floor did not engage and 0 where it did.
+//     `baseColor` and `specularWeight` are the RAW pushed values with no
+//     unpacking between. So that a consumer never has to INFER which side of
+//     the floor it is on, `rawRoughness` and `rawMetallic` carry the pushed
+//     values alongside the unpacked ones: the floor engaged exactly when
+//     `roughness != rawRoughness`, which makes the chain rule from a
+//     parameter to the unpacked value decidable from the fields instead of
+//     reconstructed from a constant copied out of bsdf.glsl.
 //   * `hit` is false when the miss guard was taken. Every field below the
 //     identity block is then zero, and a hook must not read the normal --
 //     the stored one is UNDEFINED on a miss (see psGetNormal).
@@ -474,6 +560,47 @@ const float kSurfaceOffset = 1e-4;
 // at and is therefore what a derivative must be taken at; `wi` is where the
 // path actually went. Collapsing them into one field is the kind of thing
 // that reads as harmless and silently differentiates the wrong direction.
+//
+// `pdf` IS THE MIXTURE DENSITY, NOT A LOBE-CONDITIONAL ONE, and a consumer
+// deriving df/dtheta needs to know that before it starts. diffBsdfSample
+// returns the pdf that diffBsdfEval computes (shaders/includes/diff/bsdf.glsl)
+// -- the diffuse and specular lobes' densities combined by their selection
+// probabilities -- not the density of whichever lobe `uLobe` happened to
+// select. `f` and `pdf` are therefore PURE FUNCTIONS of
+// (normal, wo, bsdfDir, material): they do not depend on the lobe choice at
+// all. A consumer differentiating them needs neither `uLobe` nor a lobe
+// index, which is why neither is a field, and why a future task must not add
+// one on the assumption that it does.
+//
+// WHAT A HOOK MAY AND MAY NOT DO -- the contract, stated because nothing
+// enforces it structurally.
+//
+// The hook is a function body inside this translation unit, so EVERYTHING
+// this file declares is in scope: the Push block, every binding, and every
+// path-state accessor. The compiler will not stop a hook from calling
+// psSetOrigin/psSetDir/psSetThroughput/psSetBounce, or from writing `queues`
+// or `counters`. A hook that did would diverge the NEXT bounce of ONE
+// instantiation while leaving this bounce's trace record identical -- exactly
+// the failure this task exists to make impossible -- and no source-level
+// check sees it: the instantiation tie constrains what a `.comp` file
+// DECLARES, not what its hook body CALLS, and the replay-equivalence check
+// catches it only at bounce b+1, and only if a bounce b+1 is run. So it is a
+// contract, written in the one place both instantiations read:
+//
+//   A HOOK MUST NOT WRITE PATH STATE, THE QUEUES, OR THE COUNTERS. Everything
+//   that advances the path is done by this file, below, identically for both
+//   instantiations. A hook that writes any of them has made the two
+//   instantiations walk different paths, which is the one thing they may not
+//   do.
+//
+//   A HOOK MAY WRITE ITS OWN OUTPUT SINK, and nothing else. The forward hook
+//   writes the film (binding 9); a gradient hook writes the gradient arena.
+//   It may READ anything. It may write `v.adjoint` -- that is what the
+//   `inout` is for -- and any other field of `v`, which dies at the return.
+//
+//   The probe binds each instantiation its OWN film buffer precisely so that
+//   a hook which breaks the first half of this contract cannot contaminate
+//   the record the other instantiation is compared against.
 //
 // The hook is called ONCE per invocation, at the point the forward pass used
 // to accumulate the film: after the vertex's estimators exist and after path
@@ -497,18 +624,36 @@ struct DiffVertex {
     vec3 wi;        // the direction the path CONTINUES along
     vec3 bsdfDir;   // the direction the BSDF actually DREW
 
-    // --- The PRB recursion's factors (spec 6.1) ------------------------
-    vec3 f;           // f * cos(theta) at bsdfDir
-    float pdf;        // the density bsdfDir was drawn with
+    // --- The PRB recursion's factors (spec 6.1, corrected above) -------
+    vec3 f;           // f * cos(theta) at bsdfDir, derived as weight*pdf
+    float pdf;        // the MIXTURE density bsdfDir was drawn with
     vec3 bsdfWeight;  // f*cos/pdf -- what throughput was multiplied by
-    vec3 Li;          // incoming-radiance estimate consumed at this vertex
+    vec3 Lr;          // MIS-combined REFLECTED direct radiance -- NOT L_i
     vec3 throughput;  // path throughput ON ARRIVAL, before the decay
 
-    // --- Material, as the traversal unpacked it ------------------------
-    vec3 baseColor;
-    float roughness;
-    float metallic;
-    float specularWeight;
+    // --- The direct-lighting estimator's TWO STRATEGIES ----------------
+    // What the corrected scatter line is summed over, one group per
+    // strategy. The BSDF strategy's direction, f*cos and density are
+    // `bsdfDir`, `f` and `pdf` above and are not repeated here. All of
+    // these are zero on the miss path, and the next-event group is zero
+    // for an unconfigured environment, where that strategy contributes
+    // nothing.
+    vec3 envDir;         // s=E: the light sample's direction
+    float envPdf;        // s=E: the density it was drawn from (0 => no env)
+    float envRadiance;   // s=E: L at envDir (grey)
+    float visEnv;        // s=E: shadow-ray visibility, exactly 1 or 0
+    float wEnv;          // s=E: the MIS weight this strategy carries
+    float bsdfRadiance;  // s=B: L at bsdfDir (grey)
+    float visBsdf;       // s=B: shadow-ray visibility, exactly 1 or 0
+    float wBsdf;         // s=B: the MIS weight this strategy carries
+
+    // --- Material. NOTE THE TWO SPACES -- see the note above. ----------
+    vec3 baseColor;        // RAW pushed value
+    float roughness;       // POST-unpackHitPbr: the 0.01 floor is applied
+    float metallic;        // POST-unpackHitPbr
+    float specularWeight;  // RAW pushed value
+    float rawRoughness;    // what unpackHitPbr was GIVEN
+    float rawMetallic;     // what unpackHitPbr was GIVEN
 
     // --- THE ADJOINT. Read by the hook, written by the hook. -----------
     vec3 adjoint;
@@ -691,12 +836,32 @@ void diffTraverse() {
     vtx.f = vec3(0.0);
     vtx.pdf = 0.0;
     vtx.bsdfWeight = vec3(0.0);
-    vtx.Li = vec3(0.0);
+    vtx.Lr = vec3(0.0);
     vtx.throughput = vec3(0.0);
+    // The per-strategy group, zero until the hit branch fills it. A miss
+    // takes the environment draws (the stream must not depend on the
+    // branch) but forms no estimator at all, so there is no strategy to
+    // describe and the whole group stays zero -- the same "every field
+    // below the identity block is zero on a miss" rule the rest obeys.
+    vtx.envDir = vec3(0.0);
+    vtx.envPdf = 0.0;
+    vtx.envRadiance = 0.0;
+    vtx.visEnv = 0.0;
+    vtx.wEnv = 0.0;
+    vtx.bsdfRadiance = 0.0;
+    vtx.visBsdf = 0.0;
+    vtx.wBsdf = 0.0;
+    // baseColor, specularWeight and the two raw PBR values are RAW pushed
+    // values -- there is no unpacking between the Push block and the field,
+    // so they are as valid on the miss path as anywhere and are set here
+    // rather than in the hit branch. `roughness`/`metallic` are the
+    // unpacked ones and are not: unpackHitPbr runs on the hit path only.
     vtx.baseColor = vec3(pc.albedo);
     vtx.roughness = 0.0;
     vtx.metallic = 0.0;
     vtx.specularWeight = pc.specularWeight;
+    vtx.rawRoughness = pc.roughness;
+    vtx.rawMetallic = pc.metallic;
     // No adjoint exists anywhere in this subsystem yet (Stage 1 Task 1
     // deliberately adds none), so it starts at zero. A later task sources it
     // from path state; that change is confined to this one line.
@@ -913,6 +1078,20 @@ void diffTraverse() {
         vtx.bsdfWeight = weight;
         vtx.roughness = roughness;
         vtx.metallic = metallic;
+        // The two strategies' own inputs, each taken from the variable the
+        // estimator above was actually formed from. A consumer summing the
+        // corrected scatter line (see DiffVertex) needs every one of these:
+        // without them the next-event half of that sum cannot be written,
+        // because nothing else in the struct carries the light sample's
+        // direction, density, radiance, visibility or MIS weight.
+        vtx.envDir = envDir;
+        vtx.envPdf = envPdf;
+        vtx.envRadiance = envRadiance;
+        vtx.visEnv = visEnv;
+        vtx.wEnv = neeTerm.wOwn;
+        vtx.bsdfRadiance = bsdfRadiance;
+        vtx.visBsdf = visBsdf;
+        vtx.wBsdf = bsdfTerm.wOwn;
     }
 
     // --- The single NEE-sink write. Every slot is named here and in
@@ -986,12 +1165,19 @@ void diffTraverse() {
     // vertex; the replay pass does something else there, and the traversal
     // that gets both of them to the same vertex must not know which.
     //
-    // `Li` is formed HERE rather than in the hook so that both instantiations
-    // are handed the identical quantity: it is the MIS-combined
-    // direct-lighting estimate at this vertex, and the forward hook's
-    // `throughput * Li` is character-for-character the product the inline
+    // `Lr` is formed HERE rather than in the hook so that both instantiations
+    // are handed the identical quantity: it is the MIS-combined REFLECTED
+    // direct radiance at this vertex, and the forward hook's
+    // `throughput * Lr` is character-for-character the product the inline
     // film write computed.
-    vtx.Li = neeTerm.wOwn * neeTerm.unweighted + bsdfTerm.wOwn * bsdfTerm.unweighted;
+    //
+    // NOTE WHAT IT CONTAINS, because the name it carried for one task said
+    // otherwise. `neeTerm.unweighted` and `bsdfTerm.unweighted` are each
+    // `f*cos * L * V / p` (nee.glsl's diffMisTerm), so this sum has f in it
+    // and has already been divided by both densities: it is L_r, not the
+    // incident radiance L_i of spec 6.1's scatter line. The per-strategy
+    // fields filled above are what that line is actually summed over.
+    vtx.Lr = neeTerm.wOwn * neeTerm.unweighted + bsdfTerm.wOwn * bsdfTerm.unweighted;
     vtx.throughput = arrivalThroughput;
     diffVertexHook(vtx);
 
