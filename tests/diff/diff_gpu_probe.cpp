@@ -117,12 +117,18 @@ int main() {
     // ohao::diff::ComputePipeline (Task 1, Stage 0b-2a) directly: build()
     // for diff_atomic_probe.comp.spv, confirm pipeline()/layout()/
     // descriptorSet() are all non-null, bind the arena buffer, then call
-    // destroy() twice to confirm the second call is a no-op. This does not
-    // get its own OK line -- dispatchStorageBufferCompute (used by
-    // runAtomicProbe just below) is now itself implemented on top of this
-    // same class, so the accumulation check below covers it end-to-end too;
-    // together the two keep this section at one printed OK line, matching
-    // the pre-refactor count.
+    // destroy() twice to confirm the second call is a no-op and that
+    // destroy() nulls all three handles.
+    //
+    // This has its own OK line. It used to have none, on the stated grounds
+    // that folding it into the atomics check below "keeps this section at
+    // one printed OK line, matching the pre-refactor count" -- which is
+    // exactly backwards: two of the assertions here (a second destroy() is
+    // a no-op; destroy() nulls pipeline()/layout()/descriptorSet()) are
+    // covered by nothing else, so deleting them would leave this probe's
+    // stdout byte-identical. A check whose removal is invisible is not a
+    // check. Printed OK-line counts are an output of what is verified,
+    // never a target to hold constant.
     {
         ohao::diff::ComputePipeline pipelineSanity;
         const VkDescriptorType bindingTypes[] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
@@ -151,6 +157,8 @@ int main() {
             return 1;
         }
     }
+    std::printf("[diff_gpu_probe] OK: ComputePipeline build + bind + double destroy (second "
+                "destroy is a no-op, all handles nulled)\n");
 
     constexpr uint32_t kInvocations = 4096;
     if (!ctx.runAtomicProbe(arena, /*targetIndex=*/0, kInvocations)) {
@@ -224,8 +232,11 @@ int main() {
             stage.record(cmd);
 
             // Same host-read barrier dispatchStorageBufferCompute records
-            // after its own dispatch (see compute_pipeline.cpp's reference
-            // sequence) -- WavefrontStage::record() deliberately does not
+            // after its own dispatch -- that function, in
+            // gpu_probe_context.cpp, IS the reference sequence for this
+            // pattern (compute_pipeline.cpp records no barriers at all; it
+            // contains no vkCmdPipelineBarrier call) --
+            // WavefrontStage::record() deliberately does not
             // add this itself (see its class comment), so the check adds it
             // directly, exactly as WavefrontLoop will for each stage it
             // sequences in Task 3.
@@ -1423,11 +1434,17 @@ int main() {
     // 17. Throughput after 4 fused bounces is exactly 0.0625.
     // 18. Per-bounce RNG draws match ohao::diff::PathRng exactly.
     {
-        // height MUST be 8: wf_generate.comp has local_size (8,8) and
-        // WavefrontStage's Fixed group-count source dispatches
-        // (groupCountX, 1, 1), so a fixed dispatch covers exactly 8 pixel
-        // rows. Checks 8-10 dispatch generate 2-D by hand and can pick any
-        // resolution; a stage recorded through WavefrontLoop cannot.
+        // height MUST be 8 because every expected value below is
+        // calibrated to exactly 512 paths at 64x8 -- the 0.0625 throughput,
+        // the per-bounce PathRng parity for kChosenPath, the live counts.
+        // It is NOT a dispatch limitation: WavefrontStage::Fixed carries
+        // groupsY/groupsZ and can dispatch a genuine 3-D grid, so a stage
+        // recorded through WavefrontLoop can cover any resolution just as
+        // checks 8-10's hand-recorded 2-D generate dispatch does.
+        // runWavefrontFusedLoopProbe leaves groupsY/groupsZ at 1 and
+        // dispatches (width/8, 1, 1) x local_size (8,8), covering exactly 8
+        // pixel rows. Changing the resolution means recomputing the
+        // expectations here first.
         constexpr uint32_t kW = 64;
         constexpr uint32_t kH = 8;
         constexpr uint32_t kCapacity = kW * kH;  // 512

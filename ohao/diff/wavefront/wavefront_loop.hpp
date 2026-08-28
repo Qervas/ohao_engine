@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <span>
 
 namespace ohao::diff {
 
@@ -213,6 +214,47 @@ void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uin
 /// ping-ponged slot overlaps 2-4 silently reintroduces a hazard this
 /// barrier does not cover. Slots 6 and 7 are free; use those.
 ///
+/// ### Caller-owned buffers the loop must also order (`extraBarrierBuffers`)
+///
+/// `WavefrontBuffers` is not the whole of what a bounce writes. `record()`
+/// therefore takes an optional `std::span<const VkBuffer>` of extra,
+/// CALLER-OWNED buffers and folds each one into the two whole-buffer
+/// COMPUTE -> COMPUTE barriers that already cover state/queue/counter: the
+/// post-generate barrier (barrier A) and the post-dispatch barrier (7) after
+/// every compacting dispatch. Nothing else changes -- the counter-only fill
+/// barriers (1)/(3) and the COMPUTE -> DRAW_INDIRECT barrier (5) stay
+/// counter-only, because the extras are neither filled nor read as indirect
+/// commands.
+///
+/// This exists because barrier (7) supplies an *execution* dependency for
+/// every buffer but restricts availability/visibility to the buffers named
+/// in its `VkBufferMemoryBarrier` list -- the exact distinction spelled out
+/// at (7)'s KNOWN GAP note in the .cpp. `wf_scatter.comp` writes its
+/// `debugDraws` (u1, u2, drawCount) triple at a FIXED `pathIndex*3` offset on
+/// EVERY bounce, so in a fused run of `bounces >= 2` several scatter
+/// dispatches write the same bytes inside one command buffer, and without
+/// the extras mechanism nothing made bounce k's write available before
+/// bounce k+1 overwrote it. The probe's per-bounce RNG check depends on the
+/// LAST bounce's write being the survivor; it passed only because the driver
+/// serialises. Passing `debugDraws` here is what actually orders it.
+///
+/// The parameter is a `std::span` passed per call rather than a setter
+/// storing a list on the loop, for two reasons. A stored span would outlive
+/// the array it points at as soon as one caller built it as a temporary --
+/// a dangling-view class of bug this class has no way to detect -- whereas a
+/// parameter cannot outlive the call. And which buffers a given `record()`
+/// must order is a property of THAT recording (a caller with a debug sink in
+/// one pass and a film accumulator in another passes different lists), not
+/// configuration of the loop, so it belongs with the other per-call
+/// arguments next to `cmd` and `bounces`. Defaulted to `{}`, so every
+/// existing caller compiles and emits byte-identical commands.
+///
+/// Stage 0b-2b (the integrator port: BSDF, NEE, MIS, environment sampling)
+/// will add more scatter-side outputs living outside `WavefrontBuffers` --
+/// radiance/film accumulation, light-sample scratch. Those go here too.
+/// `VK_NULL_HANDLE` entries are skipped, so a caller may pass a fixed-size
+/// array with optional slots.
+///
 /// ### Ownership
 ///
 /// The four stages are referenced, not owned. `WavefrontStage` deletes both
@@ -327,7 +369,16 @@ public:
     /// and vkCmdPushConstants captures into the command buffer at record
     /// time), but the stages must not be recorded concurrently from another
     /// thread.
-    void record(VkCommandBuffer cmd, WavefrontBuffers& buffers, std::uint32_t bounces) const;
+    ///
+    /// `extraBarrierBuffers` names caller-owned buffers the recorded
+    /// dispatches also write and that the loop must therefore order against
+    /// itself -- see "Caller-owned buffers the loop must also order" above
+    /// for what it does, why it is a per-call span, and why omitting it for
+    /// `debugDraws` was a real missing memory dependency rather than a
+    /// tidiness issue. Defaulting it to `{}` reproduces the previous
+    /// behaviour exactly.
+    void record(VkCommandBuffer cmd, WavefrontBuffers& buffers, std::uint32_t bounces,
+                std::span<const VkBuffer> extraBarrierBuffers = {}) const;
 
     /// Where the live path list ends up after `bounces` bounces. Two
     /// compactions per bounce means an even number of swaps, so this is
@@ -348,8 +399,12 @@ private:
     /// `stage` is already loaded with its push constants by the caller;
     /// this function sets its group-count source to the indirect args and
     /// records it.
+    ///
+    /// `extraBarrierBuffers` is forwarded from `record()` and folded into
+    /// the post-dispatch barrier (7) only.
     void recordCompactingStage(VkCommandBuffer cmd, const WavefrontBuffers& buffers,
-                               WavefrontStage& stage, const Ring& src, const Ring& dst) const;
+                               WavefrontStage& stage, const Ring& src, const Ring& dst,
+                               std::span<const VkBuffer> extraBarrierBuffers) const;
 
     Config m_config{};
     WavefrontStage* m_generate{nullptr};

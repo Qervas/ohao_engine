@@ -1040,7 +1040,10 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
             // INDIRECT_COMMAND_READ barrier ordering that write before
             // vkCmdDispatchIndirect reads it (the one barrier in this
             // subsystem anything here is proven to detect the absence of --
-            // see task-5-report.md) -> intersect, dispatched indirectly from
+            // the measurement is recorded in
+            // docs/superpowers/specs/2026-08-27-differentiable-renderer-design.md
+            // section 3.1, "What actually guards those hand-written
+            // barriers") -> intersect, dispatched indirectly from
             // the triple just made visible. Shared with
             // WavefrontLoop::recordCompactingStage and
             // runWavefrontScatterProbe -- see recordIndirectSizedDispatch's
@@ -1248,7 +1251,10 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
 
             // --- prepare_indirect: counter[srcCountSlot] ->
             // counter[argsSlot..+2] -> the COMPUTE_SHADER -> DRAW_INDIRECT /
-            // INDIRECT_COMMAND_READ barrier task-5-report.md documents as
+            // INDIRECT_COMMAND_READ barrier that
+            // docs/superpowers/specs/2026-08-27-differentiable-renderer-design.md
+            // section 3.1, "What actually guards those hand-written
+            // barriers", documents as
             // load-bearing (wf_prepare_indirect's write of the dispatch-args
             // triple must be visible to vkCmdDispatchIndirect's read before
             // that read happens -- INDIRECT_COMMAND_READ, not HOST_READ or
@@ -1648,9 +1654,13 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         }
     }
 
-    // --- The four stages. Built exactly once each: ComputePipeline::build
-    // has no re-entrancy guard, so a second build() without an intervening
-    // destroy() would leak every Vulkan object the first one created. ---
+    // --- The four stages. Built exactly once each, because this probe has
+    // no reason to rebuild one. ComputePipeline::build IS safe to call again
+    // -- commit e2f88e7 gave it a re-entrancy guard (compute_pipeline.cpp:
+    // `if (m_device != VK_NULL_HANDLE) destroy(m_device);`), so a second
+    // build() destroys the first build's objects rather than leaking them.
+    // Building once here is a statement about this probe, not a constraint
+    // to work around. ---
     WavefrontStage generate;
     WavefrontStage prepareIndirect;
     WavefrontStage intersect;
@@ -1763,7 +1773,20 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                 // anywhere inside it. Everything that orders the stages
                 // against each other is a barrier recorded by
                 // WavefrontLoop::record.
-                loop.record(cmd, buffers, bounces);
+                //
+                // debugDrawsBuffer is passed as an extra barrier buffer:
+                // wf_scatter.comp writes its (u1, u2, drawCount) triple at a
+                // FIXED pathIndex*3 offset on every bounce, so for bounces >= 2
+                // successive scatter dispatches in this ONE command buffer
+                // overwrite the same bytes. It is caller-owned -- it is not
+                // part of WavefrontBuffers -- so the loop's own barriers name
+                // only state/queue/counter and nothing would otherwise make
+                // bounce k's write available before bounce k+1's. Check 18
+                // depends on the LAST bounce's write being the survivor. See
+                // wavefront_loop.hpp's "Caller-owned buffers the loop must
+                // also order".
+                const VkBuffer loopExtras[1] = {debugDrawsBuffer.buffer};
+                loop.record(cmd, buffers, bounces, loopExtras);
 
                 // Everything below is this probe's own readback plumbing,
                 // deliberately NOT part of WavefrontLoop::record (only the

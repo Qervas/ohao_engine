@@ -1,7 +1,9 @@
 #include "diff/wavefront/wavefront_loop.hpp"
 
 #include <cassert>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace ohao::diff {
 namespace {
@@ -18,9 +20,28 @@ namespace {
 constexpr VkAccessFlags kShaderReadWrite =
     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 
-/// Records one VkBufferMemoryBarrier per entry of `targets` (at most three:
-/// state, queue, counter), all with the same stage/access scopes and all
-/// covering the whole buffer.
+/// How many barrier targets fit without touching the heap. Three is what the
+/// loop's own buffers need (state, queue, counter); the rest is headroom for
+/// `record()`'s caller-owned extras (see WavefrontLoop::record's
+/// `extraBarrierBuffers`). This is a PERFORMANCE bound only -- exceeding it
+/// spills to a vector, it never drops a barrier. See the note below.
+constexpr std::size_t kInlineBarrierTargets = 8;
+
+/// Records one VkBufferMemoryBarrier per entry of `targets` -- however many
+/// that is -- all with the same stage/access scopes and all covering the
+/// whole buffer.
+///
+/// `targets.size()` is NOT capped. An earlier version wrote into a
+/// `VkBufferMemoryBarrier[3]` behind `assert(count <= 3)` plus a
+/// `if (count > 3) count = 3;` clamp, which under NDEBUG -- which this repo's
+/// Release test targets define, so it is the configuration that actually
+/// ships -- silently dropped every barrier past the third. A dropped memory
+/// barrier in this loop is exactly the class of defect nothing here detects
+/// (see wavefront_loop.hpp's measurement: every compute-side barrier can be
+/// deleted at once and all checks still pass), so a silent clamp is the worst
+/// available failure mode. The inline array is now only an allocation
+/// optimisation: anything larger spills to `heap`, and the emitted barrier
+/// count always equals `targets.size()`.
 ///
 /// Whole-buffer rather than per-slot ranges on purpose: the counter buffer's
 /// slots are only 4 bytes apart and several of them are touched by different
@@ -29,11 +50,15 @@ constexpr VkAccessFlags kShaderReadWrite =
 /// review is the only check this code gets (see wavefront_loop.hpp).
 void recordBufferBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcStage,
                           VkPipelineStageFlags dstStage, VkAccessFlags srcAccess,
-                          VkAccessFlags dstAccess, const VkBuffer* targets, uint32_t count) {
-    VkBufferMemoryBarrier barriers[3]{};
-    assert(count <= 3 && "recordBufferBarriers: at most state/queue/counter");
-    if (count > 3) count = 3;
-    for (uint32_t i = 0; i < count; ++i) {
+                          VkAccessFlags dstAccess, std::span<const VkBuffer> targets) {
+    VkBufferMemoryBarrier inlineBarriers[kInlineBarrierTargets]{};
+    std::vector<VkBufferMemoryBarrier> heap;
+    VkBufferMemoryBarrier* barriers = inlineBarriers;
+    if (targets.size() > kInlineBarrierTargets) {
+        heap.resize(targets.size());
+        barriers = heap.data();
+    }
+    for (std::size_t i = 0; i < targets.size(); ++i) {
         barriers[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         barriers[i].srcAccessMask = srcAccess;
         barriers[i].dstAccessMask = dstAccess;
@@ -43,7 +68,23 @@ void recordBufferBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcStage,
         barriers[i].offset = 0;
         barriers[i].size = VK_WHOLE_SIZE;
     }
-    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, count, barriers, 0, nullptr);
+    vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr,
+                         static_cast<uint32_t>(targets.size()), barriers, 0, nullptr);
+}
+
+/// Builds the target list for a barrier that has to cover the loop's own
+/// three buffers AND every caller-owned buffer the caller folded in. The
+/// loop's three always come FIRST and in the same order (state, queue,
+/// counter), so adding extras cannot perturb the barrier entries that were
+/// already there -- only append to them.
+std::vector<VkBuffer> withExtras(const VkBuffer (&own)[3], std::span<const VkBuffer> extras) {
+    std::vector<VkBuffer> targets;
+    targets.reserve(3 + extras.size());
+    targets.insert(targets.end(), own, own + 3);
+    for (VkBuffer b : extras) {
+        if (b != VK_NULL_HANDLE) targets.push_back(b);
+    }
+    return targets;
 }
 
 }  // namespace
@@ -83,7 +124,8 @@ void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uin
     // WavefrontLoop's "Counter-slot layout invariant" section.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT, &counter, 1);
+                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+                         std::span<const VkBuffer>(&counter, 1));
 
     // (6) The sized dispatch itself, sized from the triple above.
     const VkDeviceSize argsOffset =
@@ -104,8 +146,8 @@ WavefrontLoop::Ring WavefrontLoop::finalLiveRing(std::uint32_t /*capacity*/,
 }
 
 void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBuffers& buffers,
-                                          WavefrontStage& stage, const Ring& src,
-                                          const Ring& dst) const {
+                                          WavefrontStage& stage, const Ring& src, const Ring& dst,
+                                          std::span<const VkBuffer> extraBarrierBuffers) const {
     const VkBuffer counter = buffers.counterBuffer();
     const VkBuffer allBuffers[3] = {buffers.stateBuffer(), buffers.queueBuffer(), counter};
     const VkDeviceSize dstSlotOffset =
@@ -126,7 +168,8 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
     // srcAccessMask names SHADER_READ as well as SHADER_WRITE because the
     // hazard being closed is write-after-READ, not write-after-write.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         kShaderReadWrite, VK_ACCESS_TRANSFER_WRITE_BIT, &counter, 1);
+                         kShaderReadWrite, VK_ACCESS_TRANSFER_WRITE_BIT,
+                         std::span<const VkBuffer>(&counter, 1));
 
     // (2) Zero the destination count slot.
     //
@@ -143,7 +186,8 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
     // dstAccessMask must include SHADER_WRITE: an atomicAdd is a
     // read-modify-write, and a read-only destination scope does not order it.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_ACCESS_TRANSFER_WRITE_BIT, kShaderReadWrite, &counter, 1);
+                         VK_ACCESS_TRANSFER_WRITE_BIT, kShaderReadWrite,
+                         std::span<const VkBuffer>(&counter, 1));
 
     // (4)-(6): prepare_indirect (counter[src.countSlot] -> the
     // {groupCountX,1,1} triple at kIndirectArgsSlot), the
@@ -158,7 +202,20 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
     // wavefront_loop.hpp has the full account of why each piece is required.
     recordIndirectSizedDispatch(cmd, counter, src.countSlot, *m_prepareIndirect, stage);
 
-    // (7) COMPUTE -> COMPUTE over all three buffers.
+    // (7) COMPUTE -> COMPUTE over all three buffers, plus every buffer in
+    // `extraBarrierBuffers` (appended after the three, never reordering
+    // them).
+    //
+    // The extras are not decoration. This barrier supplies the *execution*
+    // dependency for everything the dispatch wrote, but availability and
+    // visibility are restricted to the buffers named in its
+    // VkBufferMemoryBarrier list -- the same memory-scope/execution-scope
+    // distinction the KNOWN GAP note below turns on. wf_scatter.comp writes
+    // debugDraws.v[pathIndex*3 + 0..2] at a FIXED offset on EVERY bounce, so
+    // in a fused run of bounces >= 2 successive scatter dispatches overwrite
+    // the same bytes and only this list makes bounce k's write available
+    // before bounce k+1's. See wavefront_loop.hpp's "Caller-owned buffers
+    // the loop must also order".
     //
     // This is what makes bounce k read what bounce k-1 wrote. The dispatch
     // just recorded wrote path state, the destination queue ring, and
@@ -204,7 +261,7 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
     // task-3-report.md.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                         kShaderReadWrite, allBuffers, 3);
+                         kShaderReadWrite, withExtras(allBuffers, extraBarrierBuffers));
 
     // One WAR ordering in this function is spelled out nowhere else, so it
     // is worth naming even though no barrier had to change for it: dispatch
@@ -227,7 +284,8 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
 }
 
 void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
-                           std::uint32_t bounces) const {
+                           std::uint32_t bounces,
+                           std::span<const VkBuffer> extraBarrierBuffers) const {
     assert(isComplete() && "WavefrontLoop::record: all four stages must be set");
 
     // Fail closed, unconditionally (the assert above is compiled out under
@@ -257,13 +315,21 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
     // bounces), so this only records it.
     m_generate->record(cmd);
 
-    // generate's writes -- path state, queue ring 0, and counter slot 0 via
-    // atomicAdd -- are read by the first bounce's prepare_indirect (the
+    // (A) generate's writes -- path state, queue ring 0, and counter slot 0
+    // via atomicAdd -- are read by the first bounce's prepare_indirect (the
     // count) and intersect (state + ring). SHADER_WRITE -> SHADER_READ |
     // SHADER_WRITE, COMPUTE -> COMPUTE.
+    //
+    // `extraBarrierBuffers` is folded in here as well as at (7). generate
+    // writes none of them today, so this is not load-bearing on its own; it
+    // is recorded for the same reason as the DRAW_INDIRECT barrier just
+    // below, namely that "every caller-owned output is coherent at every
+    // bounce boundary, including the one before bounce 0" is a rule with no
+    // exceptions to remember. A generate stage that one day seeds a film or
+    // radiance buffer would otherwise be a silent hazard.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                         kShaderReadWrite, allBuffers, 3);
+                         kShaderReadWrite, withExtras(allBuffers, extraBarrierBuffers));
 
     // Counter -> DRAW_INDIRECT as well. Nothing generate wrote is read as an
     // indirect command before the first prepare_indirect overwrites the args
@@ -273,7 +339,8 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
     // where that stops being true is how the rule gets quietly broken later.
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT, &counter, 1);
+                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+                         std::span<const VkBuffer>(&counter, 1));
 
     // --- The bounce loop. ---
     //
@@ -291,7 +358,7 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                           dst.queueBase, dst.countSlot,
                                           WavefrontBuffers::kCanarySlot};
         m_intersect->setPushConstants(&intersectPush, sizeof(intersectPush));
-        recordCompactingStage(cmd, buffers, *m_intersect, src, dst);
+        recordCompactingStage(cmd, buffers, *m_intersect, src, dst, extraBarrierBuffers);
         std::swap(src, dst);
 
         // Shade + re-queue: src (which is now what intersect just produced)
@@ -300,7 +367,7 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       dst.queueBase, dst.countSlot, m_config.albedo,
                                       m_config.iterationSeed};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
-        recordCompactingStage(cmd, buffers, *m_scatter, src, dst);
+        recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);
     }
 

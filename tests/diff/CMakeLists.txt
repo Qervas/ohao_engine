@@ -1,6 +1,7 @@
 # Differentiable renderer tests.
 #   diff_unit_tests  -- GoogleTest, CPU logic + bare-instance device queries
-#   diff_gpu_probe   -- standalone exe, requires a working device (added in Task 3)
+#   diff_gpu_probe   -- standalone exe, requires a working device (added in
+#                       Stage 0a Task 3)
 
 add_executable(diff_unit_tests diff_unit_tests.cpp)
 target_include_directories(diff_unit_tests PRIVATE
@@ -22,7 +23,7 @@ target_include_directories(diff_gpu_probe PRIVATE
     ${Vulkan_INCLUDE_DIRS}
 )
 target_compile_features(diff_gpu_probe PRIVATE cxx_std_20)
-# Task 6: runVisibilityProbe uses ohao::RTAccelerationStructure
+# Stage 0b-1 Task 6: runVisibilityProbe uses ohao::RTAccelerationStructure
 # (ohao/render/rt/rt_acceleration_structure.cpp), which lives in the
 # ohao_renderer target, not ohao_gpu_vulkan -- link it in.
 target_link_libraries(diff_gpu_probe PRIVATE
@@ -33,11 +34,14 @@ endif()
 # diff_gpu_probe does not copy shader SPVs itself -- the shaders target
 # owns that copy (shaders/CMakeLists.txt) once, so that this target and
 # renderer_test don't race two independent copy_directory commands into the
-# same destination under a parallel (-j8) build (Task 5). This dependency
-# still matters on its own: without it, building diff_gpu_probe alone after
-# editing a .comp file could run before the shaders target has (re)compiled
-# and copied its output, leaving a stale or missing SPV in place. Task 6
-# adds visibility_probe.comp to this same target, so staleness here would
-# let it validate ray-query behaviour against a shader it never actually
-# built.
+# same destination under a parallel (-j8) build (Stage 0b-2a Task 5, the
+# shader-copy race). This dependency still matters on its own: without it,
+# building diff_gpu_probe alone after editing a .comp file could run before
+# the shaders target has (re)compiled and copied its output, leaving a stale
+# or missing SPV in place. Stage 0b-1 Task 6 (the visibility probe) added
+# visibility_probe.comp to this same target, so staleness here would let it
+# validate ray-query behaviour against a shader it never actually built.
+#
+# Bare "Task N" numbers restart at every stage, so both references above name
+# the stage as well: they are three lines apart and mean different stages.
 add_dependencies(diff_gpu_probe shaders)

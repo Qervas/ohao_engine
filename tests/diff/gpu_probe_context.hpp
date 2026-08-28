@@ -260,10 +260,17 @@ public:
     /// `kFusedLoopPlaneCount`), which is what makes "throughput is exactly
     /// albedo^bounces for every path" a real, non-vacuous assertion.
     ///
-    /// `height` must be exactly 8 and `width` a multiple of 8:
-    /// wf_generate.comp has local_size (8,8) and WavefrontStage's Fixed
-    /// group-count source dispatches 1-D (groupCountX,1,1), so a fixed
-    /// dispatch covers exactly 8 pixel rows.
+    /// `height` must be exactly 8 and `width` a multiple of 8. This is a
+    /// CALIBRATION constraint, not a capability one: every expected value
+    /// this probe asserts (the 0.0625 throughput, the per-bounce PathRng
+    /// parity for path 333, the live counts, the one-of-each ring check) is
+    /// computed for exactly 512 paths at 64x8, so changing the resolution
+    /// would silently invalidate them. `WavefrontStage::Fixed` carries
+    /// `groupsY`/`groupsZ` and can dispatch a genuine 3-D grid, so a stage
+    /// recorded through `WavefrontLoop` CAN cover any resolution; this probe
+    /// simply leaves them at 1 and dispatches (width/8, 1, 1) x local_size
+    /// (8,8), which covers exactly 8 pixel rows. Widening it means
+    /// recomputing the expected values, not changing the dispatch source.
     ///
     /// Runs the loop `maxBounces` times, with 1, 2, ... `maxBounces`
     /// bounces, re-zeroing `buffers` at the top of each run. Every run is
