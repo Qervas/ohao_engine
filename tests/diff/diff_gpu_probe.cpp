@@ -621,8 +621,9 @@ double oracleRelDiff(double reference, double measured) {
 //     applies to both the shadow ray's origin and the continuation ray's;
 //     wf_intersect.comp has no offset of its own to mirror -- it traces with
 //     tMin = 0 and derives its safety from this shader's offset instead (see
-//     the derivation above its ray query), and the string `1e-4` appears
-//     nowhere in it. All three shader constants are tied to these two C++
+//     the derivation above its ray query). It has no `1e-4` constant of its
+//     own; the only occurrence of that string in the file is the comment at
+//     :158 explaining why there is none. All three shader constants are tied to these two C++
 //     ones at runtime by checkParityRefConstantsTie, the same mechanism
 //     checkNeeStrideTie and checkScatterPushSizeTie use for the constants
 //     they cover.
@@ -1175,7 +1176,9 @@ struct NeeSlotExpectation {
 ///   * kDrawsPerBounce (5). Untied on purpose -- it is covered by
 ///     MEASUREMENT instead: checks 15 and 18 compare the host's replayed
 ///     PathRng draw count against the count the shader itself reports
-///     through kNeeSlotSurfaceBranch's sibling slot in the debug record, so
+///     through the binding-3 DEBUG record's slot 2 (wf_scatter.comp writes
+///     debugDraws.v[pathIndex*3u + 2u]) -- NOT through any binding-7 sink
+///     slot, so
 ///     a change to it fails those checks rather than passing quietly.
 bool checkWfScatterSinkLayoutTie() {
     std::string stripped, found;
@@ -1604,8 +1607,9 @@ bool checkBsdfShaderConstantTies() {
 /// shadow ray's origin and the continuation ray's because that shader derives
 /// both from that one constant. wf_intersect.comp contributes NOTHING to it:
 /// it deliberately traces with tMin = 0 and no offset of its own (see the
-/// derivation at the head of its ray query), and the string `1e-4` does not
-/// appear in that file at all.
+/// derivation at the head of its ray query). It has no `1e-4` constant of its
+/// own -- the only occurrence of that string is the comment at :158 saying why
+/// there is none, which is the opposite of a value this reference mirrors.
 bool checkParityRefConstantsTie() {
     std::string scatterSrc, scatterPath;
     if (!loadWfScatterSourceStripped(scatterSrc, scatterPath)) {
