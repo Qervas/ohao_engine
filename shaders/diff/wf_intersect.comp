@@ -116,8 +116,22 @@ void main() {
     // tMin is 0, not an epsilon. An epsilon here is not a self-intersection
     // guard -- for a SCATTERED ray, wf_scatter.comp already offsets the next
     // ray's origin along the geometric normal and only ever samples
-    // directions with dot(dir, normal) > 0, so that ray provably moves AWAY
-    // from the surface it just left and cannot re-hit it at any t. What a
+    // directions with dot(dir, normal) > 0, so that ray moves AWAY from the
+    // surface it just left and cannot re-hit it at any t.
+    //
+    // That is provable, but it is NOT unconditional: it holds only while the
+    // scatter offset is large enough to survive float rounding at the
+    // scene's scale. At |coordinate| == E a float's ulp is E * epsilon, so
+    // an offset at or below ~0.5 * ulp(E) rounds straight back to the hit
+    // point and the next ray origin lands exactly ON the surface -- with
+    // tMin = 0, that origin can then re-hit the face it just left at t ~ 0.
+    // The offset is therefore bounded from BELOW as well as above, and both
+    // bounds are enforced at compile time rather than assumed: see the
+    // static_asserts on kFusedLoopScatterOriginOffset next to the fused-loop
+    // scene constants in gpu_probe_context.cpp, which require it to exceed
+    // 8 * E * FLT_EPSILON (= 8 ulp(E), ~16x the rounding-away threshold).
+    // A future scene at a much larger E, or a smaller offset, breaks this
+    // argument and fails that build -- it does not silently degrade. What a
     // positive tMin does instead is silently DROP legitimate hits closer
     // than it: on a closed scene, a bounce that lands within tMin of an edge
     // would have its next, perfectly real hit on the adjoining face
