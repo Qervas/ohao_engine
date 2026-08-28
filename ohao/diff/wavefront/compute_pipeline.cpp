@@ -8,11 +8,13 @@
 namespace ohao::diff {
 
 // Declared in compute_pipeline.hpp: shared by this file's build() and by
-// tests/diff/gpu_probe_context.cpp's probe drivers not yet migrated onto
-// ComputePipeline (Task 4). tests/diff links ohao_diff, so exposing this
-// from the library rather than keeping a byte-identical copy under tests/
-// is a plain de-duplication -- it does not make the library depend on
-// tests/.
+// tests/diff/gpu_probe_context.cpp's runVisibilityProbe, the one remaining
+// caller that hand-rolls its own shader-module/pipeline sequence instead of
+// going through ComputePipeline -- it was never in Task 4's scope (every
+// other probe driver there now builds on WavefrontStage/ComputePipeline).
+// tests/diff links ohao_diff, so exposing this from the library rather than
+// keeping a byte-identical copy under tests/ is a plain de-duplication -- it
+// does not make the library depend on tests/.
 std::vector<uint32_t> loadSpv(const char* filename) {
     const std::vector<std::string> searchPaths = {
         std::string("bin/shaders/") + filename,
@@ -46,6 +48,28 @@ ComputePipeline::~ComputePipeline() {
 bool ComputePipeline::build(VkDevice device, const char* spvName,
                             std::span<const VkDescriptorType> bindings,
                             uint32_t pushConstantSize) {
+    // Re-entrancy guard: a second build() without an intervening destroy()
+    // would otherwise overwrite m_shaderModule (and every other handle
+    // below) while the first build's Vulkan objects are still alive and
+    // owned by nobody -- a straight leak of a shader module, descriptor set
+    // layout, pipeline layout, pipeline, descriptor pool and descriptor set.
+    // No current call site does this (every WavefrontStage/ComputePipeline
+    // in this codebase builds exactly once), so this is latent, not
+    // observed -- but it has been flagged as a trap by three separate task
+    // dispatches, so it is closed here rather than left for a future caller
+    // to discover by leaking. destroy()-then-rebuild rather than
+    // assert-and-fail-closed: unlike WavefrontStage::record's guard (where
+    // "silently do nothing" is the safe failure mode for a mis-sequenced
+    // call), a caller that calls build() twice almost certainly WANTS the
+    // second build to take effect (e.g. reloading a shader), and
+    // destroy()'s own device parameter is exactly the device the first
+    // build's objects were created against -- it is called with `m_device`
+    // (the device stashed by the FIRST build), not `device` (this call's
+    // possibly-different device), because Vulkan object destruction must use
+    // the device that created them.
+    if (m_device != VK_NULL_HANDLE) {
+        destroy(m_device);
+    }
     m_device = device;
 
     // --- Shader module ---

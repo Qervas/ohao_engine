@@ -151,6 +151,22 @@ public:
     /// state itself, and a counter slot 0 of exactly 0 is a valid input
     /// (the empty-queue / zero-cost-dispatch case).
     ///
+    /// UNDOCUMENTED-UNTIL-NOW PRECONDITION: `buffers`' counter slot
+    /// kNextCountSlot -- the compaction DESTINATION this call hardcodes and,
+    /// unlike runWavefrontScatterProbe, never zeroes itself -- must already
+    /// be 0 on entry. This currently always holds, but only by construction
+    /// of every existing caller, not by anything this function enforces:
+    /// `WavefrontBuffers::zero()` zeroes the whole counter buffer,
+    /// `wf_generate.comp` atomicAdds only into slot 0 (kCurrentCountSlot),
+    /// and all three call sites in this codebase run this probe exactly
+    /// once per `zero()`. Call it a second time on the same `buffers`
+    /// without an intervening zero, or pair it with a scatter call whose
+    /// `dstCountSlot == kNextCountSlot`, and wf_intersect.comp's
+    /// atomicAdd(counters.value[kNextCountSlot], 1u) starts from a stale,
+    /// non-zero base -- silently displacing every compaction offset after
+    /// the first, exactly the "left 1024 live paths, expected all 512"
+    /// failure mode measured in the fused loop, with no diagnostic.
+    ///
     /// Unlike every other probe here, wf_prepare_indirect.comp's dispatch,
     /// the barrier ordering its writes before vkCmdDispatchIndirect reads
     /// them, and wf_intersect.comp's indirect dispatch are all recorded on

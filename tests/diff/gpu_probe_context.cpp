@@ -1026,70 +1026,31 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
     }
 
     if (ok) {
-        const WavefrontLoop::PrepareIndirectPush prepPush{WavefrontBuffers::kCurrentCountSlot,
-                                                           WavefrontBuffers::kIndirectArgsSlot};
         const WavefrontLoop::IntersectPush intersectPush{capacity,
                                                           /*srcQueueBase=*/0u,
                                                           WavefrontBuffers::kCurrentCountSlot,
                                                           /*dstQueueBase=*/capacity,
                                                           WavefrontBuffers::kNextCountSlot,
                                                           WavefrontBuffers::kCanarySlot};
-        prepareIndirect.setPushConstants(&prepPush, sizeof(prepPush));
-        prepareIndirect.setGroupCount(WavefrontStage::Fixed{1u});
         intersect.setPushConstants(&intersectPush, sizeof(intersectPush));
-        const VkDeviceSize indirectOffset =
-            static_cast<VkDeviceSize>(WavefrontBuffers::kIndirectArgsSlot) * sizeof(uint32_t);
-        intersect.setGroupCount(WavefrontStage::Indirect{buffers.counterBuffer(), indirectOffset});
 
         runImmediate([&](VkCommandBuffer cmd) {
-            // --- prepare_indirect: counter[countSlot] -> counter[argsSlot..+2] ---
-            prepareIndirect.record(cmd);
-
-            // The dispatch-args triple wf_prepare_indirect just wrote must be
-            // visible to vkCmdDispatchIndirect's read of the SAME buffer
-            // before that read happens -- INDIRECT_COMMAND_READ, not
-            // HOST_READ or SHADER_READ. This is the barrier the task brief
-            // calls out as easy to miss and invalid to omit; see
-            // task-5-report.md for the proof it is load-bearing.
-            //
-            // dstAccessMask names INDIRECT_COMMAND_READ alone -- not also
-            // SHADER_READ/SHADER_WRITE for wf_intersect's own reads of
-            // counter slots kCurrentCountSlot/kCanarySlot and atomicAdd on
-            // kNextCountSlot. That is correct only because of an invariant
-            // this barrier does not itself enforce: kIndirectArgsSlot (2-4)
-            // is disjoint from kCurrentCountSlot (0), kNextCountSlot (1), and
-            // kCanarySlot (5) (see wavefront_buffers.hpp). wf_intersect's
-            // accesses to those other slots are ordered against
-            // wf_prepare_indirect's write by program order within this same
-            // command buffer plus the fact that vkCmdDispatchIndirect itself
-            // does not begin shader invocations until its indirect-buffer
-            // read completes -- they need no additional barrier here, but
-            // only because they touch different bytes of this buffer than
-            // wf_prepare_indirect wrote. Reusing WavefrontBuffers' reserved
-            // counter slots for anything that overlaps kIndirectArgsSlot
-            // would silently reintroduce a hazard this barrier does not
-            // cover, and -- per this task's barrier-removal proof --
-            // synchronization validation is not proven to catch it.
-            VkBufferMemoryBarrier toIndirect{};
-            toIndirect.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            toIndirect.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            toIndirect.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-            toIndirect.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toIndirect.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toIndirect.buffer = buffers.counterBuffer();
-            toIndirect.offset = 0;
-            toIndirect.size = VK_WHOLE_SIZE;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, nullptr, 1, &toIndirect,
-                                 0, nullptr);
-
-            // --- intersect: consumes state/queue ring 0 (written by an
-            // earlier, separately-submitted-and-waited dispatch, e.g.
-            // wf_generate -- vkQueueWaitIdle already makes those writes
-            // visible on this queue, so no additional barrier is needed for
-            // them here), compacts survivors into ring 1, sized by the
-            // indirect args buffer just made visible above. ---
-            intersect.record(cmd);
+            // --- prepare_indirect: counter[kCurrentCountSlot] ->
+            // counter[argsSlot..+2] -> the COMPUTE_SHADER -> DRAW_INDIRECT /
+            // INDIRECT_COMMAND_READ barrier ordering that write before
+            // vkCmdDispatchIndirect reads it (the one barrier in this
+            // subsystem anything here is proven to detect the absence of --
+            // see task-5-report.md) -> intersect, dispatched indirectly from
+            // the triple just made visible. Shared with
+            // WavefrontLoop::recordCompactingStage and
+            // runWavefrontScatterProbe -- see recordIndirectSizedDispatch's
+            // doc comment in wavefront_loop.hpp for the full account of why
+            // each piece is required, including the kIndirectArgsSlot
+            // disjointness invariant the lone INDIRECT_COMMAND_READ
+            // dstAccessMask depends on. ---
+            recordIndirectSizedDispatch(cmd, buffers.counterBuffer(),
+                                        WavefrontBuffers::kCurrentCountSlot, prepareIndirect,
+                                        intersect);
 
             // intersect's writes (state Alive/HitT, queue ring 1, counter
             // slots next-count/canary) must become visible to what reads
@@ -1255,17 +1216,10 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     }
 
     if (ok) {
-        const WavefrontLoop::PrepareIndirectPush prepPush{srcCountSlot,
-                                                           WavefrontBuffers::kIndirectArgsSlot};
         const WavefrontLoop::ScatterPush scatterPush{capacity,      srcQueueBase, srcCountSlot,
                                                       dstQueueBase,  dstCountSlot, albedo,
                                                       iterationSeed};
-        prepareIndirect.setPushConstants(&prepPush, sizeof(prepPush));
-        prepareIndirect.setGroupCount(WavefrontStage::Fixed{1u});
         scatter.setPushConstants(&scatterPush, sizeof(scatterPush));
-        const VkDeviceSize indirectOffset =
-            static_cast<VkDeviceSize>(WavefrontBuffers::kIndirectArgsSlot) * sizeof(uint32_t);
-        scatter.setGroupCount(WavefrontStage::Indirect{buffers.counterBuffer(), indirectOffset});
         const VkDeviceSize dstSlotOffset =
             static_cast<VkDeviceSize>(dstCountSlot) * sizeof(uint32_t);
 
@@ -1292,33 +1246,21 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                                  &fillBarrier, 0, nullptr);
 
-            // --- prepare_indirect: counter[srcCountSlot] -> counter[argsSlot..+2] ---
-            prepareIndirect.record(cmd);
-
-            // Same barrier task-5-report.md documents as load-bearing:
-            // wf_prepare_indirect's write of the dispatch-args triple must be
-            // visible to vkCmdDispatchIndirect's read before that read
-            // happens -- INDIRECT_COMMAND_READ, not HOST_READ or SHADER_READ.
-            VkBufferMemoryBarrier toIndirect{};
-            toIndirect.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-            toIndirect.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            toIndirect.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-            toIndirect.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toIndirect.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            toIndirect.buffer = buffers.counterBuffer();
-            toIndirect.offset = 0;
-            toIndirect.size = VK_WHOLE_SIZE;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 0, nullptr, 1, &toIndirect,
-                                 0, nullptr);
-
-            // --- scatter: consumes state/queue at (srcQueueBase,
-            // srcCountSlot) -- written by an earlier, separately-submitted-
-            // and-waited dispatch, so no additional barrier is needed for
-            // that read here -- writes state in place and re-queues into
-            // (dstQueueBase, dstCountSlot), sized by the indirect args
-            // buffer just made visible above. ---
-            scatter.record(cmd);
+            // --- prepare_indirect: counter[srcCountSlot] ->
+            // counter[argsSlot..+2] -> the COMPUTE_SHADER -> DRAW_INDIRECT /
+            // INDIRECT_COMMAND_READ barrier task-5-report.md documents as
+            // load-bearing (wf_prepare_indirect's write of the dispatch-args
+            // triple must be visible to vkCmdDispatchIndirect's read before
+            // that read happens -- INDIRECT_COMMAND_READ, not HOST_READ or
+            // SHADER_READ; this is the one barrier in this subsystem
+            // anything here is proven to detect the absence of) -> scatter,
+            // dispatched indirectly from the triple just made visible,
+            // re-queuing into (dstQueueBase, dstCountSlot). Shared with
+            // WavefrontLoop::recordCompactingStage and
+            // runWavefrontIntersectProbe -- see recordIndirectSizedDispatch's
+            // doc comment in wavefront_loop.hpp for the full account. ---
+            recordIndirectSizedDispatch(cmd, buffers.counterBuffer(), srcCountSlot, prepareIndirect,
+                                        scatter);
 
             // scatter's writes (state origin/dir/throughput/bounce, queue
             // dst ring, counter dstCountSlot, DebugDraws) must become
@@ -1461,8 +1403,16 @@ constexpr float kFusedLoopPlaneGap = 0.05f;
 constexpr float kFusedLoopHalfExtent = 1024.0f;
 
 /// wf_generate.comp's local_size_y. WavefrontStage's Fixed group-count
-/// source dispatches (groupCountX, 1, 1), so a fixed dispatch of that shader
-/// covers exactly this many pixel rows -- see the height check below.
+/// source now supports a genuine 3-D dispatch (groups/groupsY/groupsZ, not
+/// just groups), but this probe's own generate dispatch (see
+/// generate.setGroupCount below) only ever sets `groups` and leaves
+/// `groupsY`/`groupsZ` at Fixed's default of 1 -- i.e. it still dispatches
+/// (groupCountX, 1, 1) -- so a fixed dispatch of that shader covers exactly
+/// this many pixel rows. See the height check below. Widening this probe to
+/// a genuine 2-D dispatch (e.g. 64x48) is a possible follow-up; it is not
+/// done here because this probe's expected values (throughput, per-bounce
+/// PathRng parity, live counts) are all calibrated to 512 paths at the
+/// current resolution.
 constexpr uint32_t kFusedLoopGenerateLocalY = 8;
 
 /// The shallowest z-direction the RNG can produce, per the gap-note
@@ -1559,14 +1509,26 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: buffers not built\n");
         return false;
     }
+    // requires height == kFusedLoopGenerateLocalY: WavefrontStage::Fixed can
+    // dispatch a genuine 3-D group count now (see kFusedLoopGenerateLocalY's
+    // comment above), but this probe's own generate dispatch still only sets
+    // groupCountX and leaves groupCountY/Z at 1, so one dispatch covers
+    // exactly one row of local_size_y=8 pixels. This guard's height == 8
+    // requirement is therefore still necessary, not merely historical -- but
+    // it is NOT changed here even though the underlying 1-D limitation is
+    // gone, because this probe's expected values (throughput, per-bounce
+    // PathRng parity, live counts) are all calibrated to a single 512-path
+    // run at this resolution; widening the dispatch to cover a genuine
+    // 64x48 image is a possible follow-up, not done in this change.
     if (height != kFusedLoopGenerateLocalY || width == 0u ||
         (width % kFusedLoopGenerateLocalY) != 0u || width * height != capacity ||
         maxBounces == 0u) {
         std::fprintf(stderr,
                      "[GpuProbeContext] runWavefrontFusedLoopProbe: requires height == %u "
-                     "(wf_generate.comp's local_size_y, since a Fixed group count dispatches "
-                     "1-D), width a non-zero multiple of %u, width*height == capacity (%u), and "
-                     "maxBounces > 0; got %ux%u, maxBounces %u\n",
+                     "(wf_generate.comp's local_size_y -- this probe's generate dispatch is "
+                     "1-D, one row of pixels per group), width a non-zero multiple of %u, "
+                     "width*height == capacity (%u), and maxBounces > 0; got %ux%u, "
+                     "maxBounces %u\n",
                      kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalY, capacity, width, height,
                      maxBounces);
         return false;
@@ -1770,8 +1732,12 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         genPush.tanHalfFov = 0.2f;
         genPush.capacity = capacity;
         generate.setPushConstants(&genPush, sizeof(genPush));
-        // 1-D fixed dispatch: (width/8) groups x local_size (8,8) covers
-        // exactly width x 8 pixels. See the height check above.
+        // Fixed dispatch, used here as 1-D: groupsY/groupsZ are left at
+        // Fixed's default of 1 (Fixed itself now supports setting them to
+        // get a genuine 3-D dispatch -- see kFusedLoopGenerateLocalY's
+        // comment above -- this call site just doesn't use that), so this is
+        // (width/8, 1, 1) groups x local_size (8,8), covering exactly
+        // width x 8 pixels. See the height check above.
         generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalY});
 
         WavefrontLoop loop;

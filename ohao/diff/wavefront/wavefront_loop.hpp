@@ -9,6 +9,47 @@
 
 namespace ohao::diff {
 
+/// Records the ONE step sequence that turns a live-path count already
+/// sitting in `counter[srcCountSlot]` into a completed, GPU-sized indirect
+/// dispatch of `work` -- without any host round-trip to read that count:
+///
+///  1. Records `prepare` (`shaders/diff/wf_prepare_indirect.comp`) with a
+///     freshly-set `WavefrontLoop::PrepareIndirectPush{srcCountSlot,
+///     WavefrontBuffers::kIndirectArgsSlot}` and group count `Fixed{1u}`.
+///     This converts the count at `counter[srcCountSlot]` into a
+///     `{groupCountX,1,1}` `VkDispatchIndirectCommand` triple at
+///     `counter[kIndirectArgsSlot..+2]`.
+///  2. A `COMPUTE_SHADER -> DRAW_INDIRECT` / `SHADER_WRITE ->
+///     INDIRECT_COMMAND_READ` buffer barrier over the whole of `counter`,
+///     ordering that write before `vkCmdDispatchIndirect` (inside `work`'s
+///     record, next) reads it. `vkCmdDispatchIndirect` reads the triple in
+///     the `DRAW_INDIRECT` stage, not `COMPUTE_SHADER`, so omitting this is
+///     invalid usage -- and on this hardware it produces no diagnostic: see
+///     the measurement in `WavefrontLoop`'s class comment. **This is the
+///     ONLY barrier in the wavefront subsystem whose absence anything in
+///     this repository's checks currently detects.**
+///  3. Records `work` with its group-count source set to
+///     `Indirect{counter, kIndirectArgsSlot's byte offset}`, i.e. sized by
+///     the triple step 1 produced and step 2 just made visible.
+///
+/// `work`'s OWN push constants (e.g. `WavefrontLoop::IntersectPush` /
+/// `ScatterPush`) are the caller's responsibility -- set them before calling
+/// this function. This function only ever touches `prepare`'s push
+/// constants/group count and `work`'s group count.
+///
+/// Extracted because this exact sequence used to be hand-copied at three
+/// call sites -- `WavefrontLoop::recordCompactingStage`, and
+/// `tests/diff/gpu_probe_context.cpp`'s `runWavefrontIntersectProbe` and
+/// `runWavefrontScatterProbe` -- which record it into otherwise-different
+/// command buffers (a fused multi-bounce loop vs. a fresh command buffer per
+/// probe with `vkQueueWaitIdle` before and a host-readback tail after).
+/// Three hand-maintained copies of the one barrier anything here actually
+/// verifies is worse than one shared function; the surrounding context
+/// (what precedes `srcCountSlot` being valid, what consumes `work`'s writes
+/// afterwards) legitimately differs per call site and stays there.
+void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uint32_t srcCountSlot,
+                                 WavefrontStage& prepare, WavefrontStage& work);
+
 /// Records the ENTIRE wavefront bounce loop -- generate, then
 /// prepare_indirect/intersect/prepare_indirect/scatter once per bounce --
 /// into ONE command buffer, with no host round-trip and no

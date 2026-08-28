@@ -15,9 +15,10 @@ namespace ohao::diff {
 /// own output directory. Returns an empty vector (and logs to stderr) if
 /// the file cannot be found or opened.
 ///
-/// Shared by ComputePipeline::build() and tests/diff/gpu_probe_context.cpp
-/// (which still hand-rolls several pipelines of its own for probes not yet
-/// migrated onto ComputePipeline -- Task 4). tests/diff already links
+/// Shared by ComputePipeline::build() and tests/diff/gpu_probe_context.cpp's
+/// runVisibilityProbe -- the one remaining caller that hand-rolls its own
+/// shader-module/pipeline sequence instead of going through ComputePipeline;
+/// it was never in Task 4's migration scope. tests/diff already links
 /// ohao_diff, so calling this instead of keeping a byte-identical private
 /// copy is a plain de-duplication, not a new library/tests dependency
 /// direction.

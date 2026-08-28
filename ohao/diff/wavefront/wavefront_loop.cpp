@@ -48,6 +48,50 @@ void recordBufferBarriers(VkCommandBuffer cmd, VkPipelineStageFlags srcStage,
 
 }  // namespace
 
+void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uint32_t srcCountSlot,
+                                 WavefrontStage& prepare, WavefrontStage& work) {
+    // (4) prepare_indirect: counter[srcCountSlot] -> the {groupCountX,1,1}
+    // VkDispatchIndirectCommand triple at kIndirectArgsSlot, in this same
+    // counter buffer. The live count exists only on the GPU timeline;
+    // reading it back to size a dispatch on the host would serialise every
+    // caller on a round-trip and defeat the point of an indirect dispatch.
+    const WavefrontLoop::PrepareIndirectPush prepPush{srcCountSlot,
+                                                       WavefrontBuffers::kIndirectArgsSlot};
+    prepare.setPushConstants(&prepPush, sizeof(prepPush));
+    prepare.setGroupCount(WavefrontStage::Fixed{1u});
+    prepare.record(cmd);
+
+    // (5) COMPUTE -> DRAW_INDIRECT. vkCmdDispatchIndirect (inside
+    // work.record below) reads the triple just written, and that read
+    // happens in the DRAW_INDIRECT stage -- not COMPUTE_SHADER, not HOST.
+    // Omitting this is invalid usage that produces no diagnostic on this
+    // hardware; Stage 0b-1 deleted the equivalent barrier on purpose and
+    // watched the survivor count collapse to 0 with zero SYNC- messages
+    // emitted. This is the ONLY barrier in the wavefront subsystem whose
+    // absence anything in this repository's checks currently detects -- see
+    // WavefrontLoop's class comment and task-3-report.md for the
+    // measurement that established that.
+    //
+    // dstAccessMask is INDIRECT_COMMAND_READ ALONE. That is correct only
+    // because kIndirectArgsSlot (slots 2-4) is disjoint from every slot any
+    // caller ping-pongs and from kCanarySlot (5): the dispatch's own reads
+    // of srcCountSlot and atomicAdds on a destination slot touch different
+    // bytes of this buffer than prepare_indirect wrote, and are ordered by
+    // program order plus the fact that vkCmdDispatchIndirect starts no
+    // invocations until its indirect read completes. That invariant holds
+    // by luck of the slot layout, not by construction -- see
+    // WavefrontLoop's "Counter-slot layout invariant" section.
+    recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT, &counter, 1);
+
+    // (6) The sized dispatch itself, sized from the triple above.
+    const VkDeviceSize argsOffset =
+        static_cast<VkDeviceSize>(WavefrontBuffers::kIndirectArgsSlot) * sizeof(std::uint32_t);
+    work.setGroupCount(WavefrontStage::Indirect{counter, argsOffset});
+    work.record(cmd);
+}
+
 WavefrontLoop::Ring WavefrontLoop::finalLiveRing(std::uint32_t /*capacity*/,
                                                  std::uint32_t /*bounces*/) noexcept {
     // Two compacting dispatches per bounce -- intersect, then scatter -- so
@@ -64,8 +108,6 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
                                           const Ring& dst) const {
     const VkBuffer counter = buffers.counterBuffer();
     const VkBuffer allBuffers[3] = {buffers.stateBuffer(), buffers.queueBuffer(), counter};
-    const VkDeviceSize argsOffset =
-        static_cast<VkDeviceSize>(WavefrontBuffers::kIndirectArgsSlot) * sizeof(std::uint32_t);
     const VkDeviceSize dstSlotOffset =
         static_cast<VkDeviceSize>(dst.countSlot) * sizeof(std::uint32_t);
 
@@ -103,39 +145,18 @@ void WavefrontLoop::recordCompactingStage(VkCommandBuffer cmd, const WavefrontBu
     recordBufferBarriers(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_ACCESS_TRANSFER_WRITE_BIT, kShaderReadWrite, &counter, 1);
 
-    // (4) prepare_indirect: counter[src.countSlot] -> the
-    // {groupCountX,1,1} VkDispatchIndirectCommand triple at
-    // kIndirectArgsSlot, in this same counter buffer. The live count exists
-    // only on the GPU timeline; reading it back to size a dispatch on the
-    // host would serialise every bounce on a round-trip and defeat the whole
-    // wavefront architecture.
-    const PrepareIndirectPush prepPush{src.countSlot, WavefrontBuffers::kIndirectArgsSlot};
-    m_prepareIndirect->setPushConstants(&prepPush, sizeof(prepPush));
-    m_prepareIndirect->setGroupCount(WavefrontStage::Fixed{1u});
-    m_prepareIndirect->record(cmd);
-
-    // (5) COMPUTE -> DRAW_INDIRECT. vkCmdDispatchIndirect reads the triple
-    // just written, and that read happens in the DRAW_INDIRECT stage -- not
-    // COMPUTE_SHADER, not HOST. Omitting this is invalid usage that produces
-    // no diagnostic on this hardware; Stage 0b-1 deleted the equivalent
-    // barrier on purpose and watched the survivor count collapse to 0 with
-    // zero SYNC- messages emitted.
-    //
-    // dstAccessMask is INDIRECT_COMMAND_READ ALONE. That is correct only
-    // because kIndirectArgsSlot (slots 2-4) is disjoint from the slots this
-    // loop ping-pongs (0 and 1) and from kCanarySlot (5): the dispatch's own
-    // reads of src.countSlot and atomicAdds on dst.countSlot touch different
-    // bytes of this buffer than prepare_indirect wrote, and are ordered by
-    // program order plus the fact that vkCmdDispatchIndirect starts no
-    // invocations until its indirect read completes. That invariant holds by
-    // luck of the slot layout, not by construction -- see the class comment.
-    recordBufferBarriers(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                         VK_ACCESS_INDIRECT_COMMAND_READ_BIT, &counter, 1);
-
-    // (6) The compacting dispatch itself, sized from the triple above.
-    stage.setGroupCount(WavefrontStage::Indirect{counter, argsOffset});
-    stage.record(cmd);
+    // (4)-(6): prepare_indirect (counter[src.countSlot] -> the
+    // {groupCountX,1,1} triple at kIndirectArgsSlot), the
+    // COMPUTE -> DRAW_INDIRECT barrier ordering that write before
+    // vkCmdDispatchIndirect reads it -- the ONLY barrier in this subsystem
+    // whose absence anything in this repository's checks currently detects,
+    // see the class comment -- and the compacting dispatch itself, sized
+    // from that triple. Identical at every call site that sizes a dispatch
+    // this way (this function and gpu_probe_context.cpp's
+    // runWavefrontIntersectProbe/runWavefrontScatterProbe), so it lives in
+    // exactly one place: recordIndirectSizedDispatch's doc comment in
+    // wavefront_loop.hpp has the full account of why each piece is required.
+    recordIndirectSizedDispatch(cmd, counter, src.countSlot, *m_prepareIndirect, stage);
 
     // (7) COMPUTE -> COMPUTE over all three buffers.
     //
