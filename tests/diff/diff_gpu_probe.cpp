@@ -455,10 +455,20 @@ double oracleRelDiff(double reference, double measured) {
 /// another, producing plausible-looking garbage rather than a validation
 /// error -- so this fails the whole probe rather than warning.
 ///
-/// The search path mirrors ComputePipeline::loadSpv's: the probe already
-/// requires a working directory from which the shader tree is reachable.
-/// Not finding the source is itself a failure, because "the tie could not be
-/// checked" must not be allowed to read as "the tie holds".
+/// The search climbs parent directories looking for the SOURCE tree. Note
+/// this is NOT the same mechanism as ComputePipeline::loadSpv, which
+/// enumerates fixed sibling roots (bin/shaders/, build/Release/bin/shaders/)
+/// for compiled SPV BINARIES -- an earlier comment here claimed they matched
+/// and they do not. Not finding the source is itself a failure, because "the
+/// tie could not be checked" must not be allowed to read as "the tie holds".
+///
+/// The declaration is looked for in a COMMENT-STRIPPED copy of the source,
+/// not the raw text. Scanning raw text would match a commented-out
+/// declaration -- `// const uint kNeeSampleFloats = 21u;` -- and report a
+/// live, tied constant even if the real one had been renamed or deleted.
+/// Commenting a declaration out is precisely how such a constant goes
+/// missing, so the one case this check exists to catch is the one raw
+/// scanning would miss.
 bool checkNeeStrideTie() {
     static const char* const kCandidates[] = {
         "shaders/diff/wf_scatter.comp",
@@ -486,9 +496,31 @@ bool checkNeeStrideTie() {
         return false;
     }
 
+    // Strip GLSL comments before matching. GLSL has no string literals, so a
+    // two-state scan over // and /* */ is exact here. Newlines are preserved
+    // so that the regex's [ \t] (which cannot span lines) still rejects a
+    // reformatted multi-line declaration, as it did before.
+    std::string stripped;
+    stripped.reserve(text.size());
+    for (std::size_t i = 0; i < text.size();) {
+        if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            while (i < text.size() && text[i] != '\n') ++i;
+        } else if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/')) {
+                if (text[i] == '\n') stripped.push_back('\n');
+                ++i;
+            }
+            i = (i + 1 < text.size()) ? i + 2 : text.size();
+        } else {
+            stripped.push_back(text[i]);
+            ++i;
+        }
+    }
+
     const std::regex decl(R"(const[ \t]+uint[ \t]+kNeeSampleFloats[ \t]*=[ \t]*([0-9]+)u[ \t]*;)");
     std::smatch m;
-    if (!std::regex_search(text, m, decl)) {
+    if (!std::regex_search(stripped, m, decl)) {
         std::fprintf(stderr,
                      "[diff_gpu_probe] FAIL: %s no longer declares `const uint kNeeSampleFloats = "
                      "<N>u;` on one line, so the binding-7 record stride cannot be tied to "
