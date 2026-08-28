@@ -91,6 +91,14 @@ For Lambert, `f = albedo / pi`, so `df/dalbedo = 1 / pi`. The scatter is `dL/dal
 
 `df/droughness` and `df/dmetallic` through the microfacet model. This is the largest piece of new mathematics in the stage.
 
+**THE INSTRUMENT CHANGES HERE, AND THE PLAN ORIGINALLY MISSED THIS.** Task 2's harness compares a perturbed film against an analytic gradient under common random numbers, and that is valid only while the sampled directions do not move under the perturbation. At `metallic = 0, specularWeight = 0` the lobe probability `q` is identically 0 and the direction comes from a cosine-hemisphere draw on `u1,u2` alone — so Task 2's CRN is exact, not approximate.
+
+Neither holds here. `bsdf.glsl:262` samples `sampleGGXVNDF(Vloc, alpha, alpha, uDir)` with `alpha` from roughness, and `q` depends on `F0` and therefore on metallic. **Perturbing either parameter moves the sampled direction**, so a naive CRN finite difference measures the sum of the term you are deriving and a term you deliberately are not — spec §6.3 lists sampled directions as *not differentiated* (detached sampling).
+
+So the reference must be detached too: **hold the sampled directions fixed across `+h` and `-h`, and re-evaluate only `f` and the densities.** That makes the finite difference measure the same quantity the detached adjoint computes. Establish that instrument first — it is the task's real deliverable, and a gate built on naive CRN would report a bias that is by design.
+
+Then, separately, measure the detached-sampling bias itself: compare a *naive* CRN difference against the detached one and report the gap per parameter. The spec says the FD harness is what decides whether detached sampling is acceptable per parameter; this is where that measurement happens, and it is a finding to report, not a gate to pass.
+
 - [ ] **Step 1: Write the failing CRN finite-difference check first**, per parameter, deriving `h` for each — the two parameters have different scales and conditioning, and one `h` will not serve both. Say so with numbers.
 - [ ] **Step 2: Confirm it FAILS.**
 - [ ] **Step 3: Derive and implement.** Write each adjoint term **from the published formula**, citing the source above it, exactly as Stage 0b-2b's forward oracle did. **Do not differentiate the GLSL by transcription** — an adjoint derived from the same expression it validates cannot fail.
