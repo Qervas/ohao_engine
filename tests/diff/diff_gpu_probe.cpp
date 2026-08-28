@@ -43,6 +43,11 @@
 //       16 also asserts every path survives every bounce and the live ring
 //       holds each path index exactly once, which is what keeps 17 from
 //       passing vacuously over an empty survivor set.
+//   19. wf_intersect.comp's stored geometric normal equals the analytic
+//       surface normal of the face it hit, for every path, against a closed
+//       axis-aligned box whose face planes and outward winding are known
+//       host-side. The oracle is that geometry plus the closed-form camera
+//       ray -- nothing the shader computed.
 
 #include "gpu_probe_context.hpp"
 
@@ -851,6 +856,9 @@ int main() {
             {ohao::diff::PathStateField::Bounce, "Bounce", true, 0.0f, 7014u},
             {ohao::diff::PathStateField::Alive, "Alive", true, 0.0f, 7015u},
             {ohao::diff::PathStateField::HitT, "HitT", false, 1016.0f, 0u},
+            {ohao::diff::PathStateField::NormalX, "NormalX", false, 1017.0f, 0u},
+            {ohao::diff::PathStateField::NormalY, "NormalY", false, 1018.0f, 0u},
+            {ohao::diff::PathStateField::NormalZ, "NormalZ", false, 1019.0f, 0u},
         };
         // This array must cover every PathStateField or the "all %u
         // PathStateFields" claim below is false -- exactly the coverage gap
@@ -1474,7 +1482,7 @@ int main() {
         // 16. Survivors and compaction integrity.
         //
         // A live count of exactly kCapacity at every bounce depth is not a
-        // given: it is what the staircase scene (see
+        // given: it is what the closed-box scene (see
         // runWavefrontFusedLoopProbe's doc comment) is built to guarantee,
         // and asserting it is what stops the throughput check below from
         // passing vacuously over an empty survivor set.
@@ -1490,7 +1498,7 @@ int main() {
             if (fusedLiveCounts[b] != kCapacity) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: fused loop of %u bounces left %u live paths, "
-                             "expected all %u -- either a path fell out of the staircase scene, or "
+                             "expected all %u -- either a path escaped the closed box scene, or "
                              "a compaction counter slot was not zeroed before its atomicAdd\n",
                              b + 1u, fusedLiveCounts[b], kCapacity);
                 wf.destroy(ctx.allocator());
@@ -1630,6 +1638,261 @@ int main() {
         std::printf("[diff_gpu_probe] OK: fused loop per-bounce RNG draws (values and drawCount) "
                     "match ohao::diff::PathRng exactly across %u fused bounces for path %u\n",
                     kBounces, kChosenPath);
+
+        wf.destroy(ctx.allocator());
+    }
+
+    // 19. GEOMETRIC NORMALS (Stage 0b-2b Task 1). wf_intersect.comp must
+    // write the hit's real, forward-facing geometric normal into path state
+    // (PathStateField::NormalX/Y/Z), and this asserts it against an oracle
+    // that is pure analytic geometry computed here on the host -- the box's
+    // face planes and the camera's closed-form ray -- with nothing the
+    // shader computed anywhere in it. (The Dir field the GPU wrote is
+    // deliberately NOT read: it is check 8's subject, not this check's
+    // oracle.)
+    //
+    // WHY A BOX AND NOT THE QUAD every other intersect check uses: the
+    // single quad at z = -planeDistance, seen from a camera at the origin
+    // looking down -Z, has exactly one forward-facing normal, (0,0,1) --
+    // which is precisely the value wf_scatter.comp used to hardcode. A
+    // check built on that scene cannot tell a real normal from the constant.
+    // A closed box entered from its centre reaches five of its six faces, so
+    // five distinct analytic normals are asserted, and the box is wound
+    // OUTWARD (see buildAxisAlignedBoxGeometry) so that every one of those
+    // hits also has to go through the flip-to-oppose-the-ray step.
+    //
+    // GEOMETRY OF THE ORACLE. The camera sits at the box centre, so for a
+    // unit direction d the exit distance through the face on axis k is
+    // t_k = E / |d_k|; the face actually hit is the argmin over k, i.e. the
+    // argmax of |d_k| (E is the same on all three axes). Its inward normal
+    // -- which is the forward-facing one, since the ray leaves the box
+    // through that face -- is -sign(d_k) * e_k.
+    //
+    // TIE-FREEDOM IS BY CONSTRUCTION, NOT BY LUCK. That argmax is only
+    // well-defined if no two |d_k| are equal. With kW even and kH ODD:
+    //   |d_x| ~ |2x + 1 - kW| * tanHalfFov / kH  (odd numerator)
+    //   |d_y| ~ |kH - 2y - 1| * tanHalfFov / kH  (even numerator)
+    // so |d_x| == |d_y| would need an odd integer to equal an even one, and
+    // |d_x| == |d_z| (== 1 before normalisation) would need
+    // |2x + 1 - kW| == kH / tanHalfFov == 24.5, not an integer. The closest
+    // approach of any pair is therefore >= 0.5 * tanHalfFov / kH in
+    // pre-normalisation units, and the loop below asserts a hard margin on
+    // the normalised directions anyway, so a future change to kW/kH/FOV that
+    // reintroduced a tie fails loudly here instead of silently comparing
+    // against whichever face the GPU happened to pick.
+    //
+    // TOLERANCES. The two off-axis components are required to be BIT-EXACTLY
+    // zero: the box's edge vectors are exactly axis-aligned, so
+    // cross(v1 - v0, v2 - v0) is exactly zero on those two axes, and
+    // multiplying an exact zero by any finite normalisation factor (or
+    // negating it) stays zero. Only the remaining component passes through
+    // normalize(), whose inversesqrt() GLSL permits to be up to 2 ULP off
+    // (~2.4e-7 relative), so it is compared to +/-1 with a 1e-6 bound --
+    // roughly 4x that spec limit, and six orders of magnitude tighter than
+    // the distance to any other face's normal. HitT gets a relative bound of
+    // 1e-4, loose enough for the ray-triangle solve and far tighter than the
+    // gap between adjacent faces' distances.
+    {
+        // kH is ODD and kW EVEN on purpose -- see the tie-freedom note above.
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 49;
+        constexpr uint32_t kCapacity = kW * kH;  // 3136
+        static_assert(kW % 2 == 0 && kH % 2 == 1,
+                      "the argmax oracle's tie-freedom argument needs kW even and kH odd");
+        constexpr float kAspect = static_cast<float>(kW) / static_cast<float>(kH);
+        // Wide on purpose: at the default 0.2 every ray would hit the -Z
+        // face and the check would degenerate to the one normal the old
+        // hardcoded constant already had.
+        constexpr float kTanHalfFov = 2.0f;
+        constexpr float kBoxHalfExtent = 4.0f;
+        constexpr float kNormalTolerance = 1e-6f;
+        constexpr float kHitTRelTolerance = 1e-4f;
+        // Minimum separation required between the largest and second-largest
+        // |d_k| for the argmin face to be unambiguous. The construction above
+        // guarantees >= 0.5 * kTanHalfFov / kH / |d| ~ 0.006; this is an
+        // order of magnitude below that and ~4 orders above float noise.
+        constexpr float kFaceMargin = 1e-3f;
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: normal probe buffers build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+        // Camera at the box CENTRE, so every ray hits a face and the exit
+        // distance is E / |d_k| with no origin offset term.
+        ohao::diff::WavefrontGenerateCamera camera;
+        camera.tanHalfFov = kTanHalfFov;
+        std::vector<uint32_t> queue0;
+        if (!ctx.runWavefrontGenerateProbe(wf, kW, kH, camera, queue0)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: normal probe wf_generate dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        std::vector<uint32_t> boxQueue1;
+        if (!ctx.runWavefrontBoxIntersectProbe(wf, kBoxHalfExtent, boxQueue1)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: normal probe wf_intersect dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // A ray from strictly inside a closed convex body always leaves it
+        // through a face, so nothing may miss. If this trips, the readbacks
+        // below would be comparing against normals for hits that never
+        // happened.
+        const std::uint32_t boxSurvivors =
+            wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kNextCountSlot);
+        if (boxSurvivors != kCapacity) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: normal probe: %u of %u paths hit the closed box, "
+                         "expected all of them (a ray from the interior of a convex body cannot "
+                         "miss it)\n",
+                         boxSurvivors, kCapacity);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        const std::vector<float> nx =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::NormalX);
+        const std::vector<float> ny =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::NormalY);
+        const std::vector<float> nz =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::NormalZ);
+        const std::vector<float> hitT =
+            wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::HitT);
+        if (nx.size() != kCapacity || ny.size() != kCapacity || nz.size() != kCapacity ||
+            hitT.size() != kCapacity) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: normal probe field readback size "
+                                  "mismatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // faceHits[2*k + (sign < 0)] -- six buckets, one per box face.
+        uint32_t faceHits[6] = {0, 0, 0, 0, 0, 0};
+        float maxNormalError = 0.0f;
+        float maxHitTRelError = 0.0f;
+        for (uint32_t y = 0; y < kH; ++y) {
+            for (uint32_t x = 0; x < kW; ++x) {
+                const uint32_t i = y * kW + x;
+
+                // --- Analytic ray, host-side. Identical construction to
+                // check 8's (and to camera_ray.glsl's), recomputed here
+                // rather than read out of the Dir field so that nothing the
+                // shader produced enters the oracle. ---
+                const float ndcX = 2.0f * (static_cast<float>(x) + 0.5f) / kW - 1.0f;
+                const float ndcY = 1.0f - 2.0f * (static_cast<float>(y) + 0.5f) / kH;
+                float d[3] = {ndcX * kAspect * kTanHalfFov, ndcY * kTanHalfFov, -1.0f};
+                const float invLen =
+                    1.0f / std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                d[0] *= invLen;
+                d[1] *= invLen;
+                d[2] *= invLen;
+
+                // --- Analytic face: argmax |d_k|, with the tie margin
+                // enforced rather than assumed. ---
+                uint32_t axis = 0;
+                for (uint32_t k = 1; k < 3u; ++k) {
+                    if (std::fabs(d[k]) > std::fabs(d[axis])) axis = k;
+                }
+                float secondAbs = 0.0f;
+                for (uint32_t k = 0; k < 3u; ++k) {
+                    if (k != axis) secondAbs = std::max(secondAbs, std::fabs(d[k]));
+                }
+                if (std::fabs(d[axis]) - secondAbs < kFaceMargin) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: normal probe pixel (%u,%u): the box face "
+                                 "this ray exits through is ambiguous -- |d| = (%.9g,%.9g,%.9g), "
+                                 "largest exceeds runner-up by only %.9g < %.9g. The oracle's "
+                                 "argmax is not well defined, so kW/kH/tanHalfFov must be chosen "
+                                 "to keep every pair of |d_k| apart (see this check's "
+                                 "tie-freedom note)\n",
+                                 x, y, static_cast<double>(std::fabs(d[0])),
+                                 static_cast<double>(std::fabs(d[1])),
+                                 static_cast<double>(std::fabs(d[2])),
+                                 static_cast<double>(std::fabs(d[axis]) - secondAbs),
+                                 static_cast<double>(kFaceMargin));
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+
+                // Inward (== forward-facing) normal of the exit face, and
+                // the exit distance, both straight from the box's algebra.
+                float expected[3] = {0.0f, 0.0f, 0.0f};
+                expected[axis] = (d[axis] > 0.0f) ? -1.0f : 1.0f;
+                const float expectedT = kBoxHalfExtent / std::fabs(d[axis]);
+                faceHits[2u * axis + ((d[axis] > 0.0f) ? 0u : 1u)] += 1u;
+
+                const float actual[3] = {nx[i], ny[i], nz[i]};
+                for (uint32_t k = 0; k < 3u; ++k) {
+                    const float err = std::fabs(actual[k] - expected[k]);
+                    maxNormalError = std::max(maxNormalError, err);
+                    // Off-axis components: bit-exact zero (see this check's
+                    // tolerance note). On-axis: within kNormalTolerance.
+                    const bool bad = (k == axis) ? (err > kNormalTolerance)
+                                                 : (actual[k] != 0.0f);
+                    if (bad) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: normal probe pixel (%u,%u) path %u: "
+                                     "stored normal = (%.9g,%.9g,%.9g), analytic box-face normal "
+                                     "= (%.9g,%.9g,%.9g) (face: axis %u at %+.1f). Component %u "
+                                     "differs by %.9g -- wf_intersect.comp is not writing the "
+                                     "real geometric normal of the hit\n",
+                                     x, y, i, static_cast<double>(actual[0]),
+                                     static_cast<double>(actual[1]),
+                                     static_cast<double>(actual[2]),
+                                     static_cast<double>(expected[0]),
+                                     static_cast<double>(expected[1]),
+                                     static_cast<double>(expected[2]), axis,
+                                     static_cast<double>(-expected[axis] * kBoxHalfExtent), k,
+                                     static_cast<double>(err));
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                }
+
+                const float relT = std::fabs(hitT[i] - expectedT) / expectedT;
+                maxHitTRelError = std::max(maxHitTRelError, relT);
+                if (relT > kHitTRelTolerance) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: normal probe pixel (%u,%u) hit distance "
+                                 "%.9g, analytic box exit distance %.9g (rel err %.9g) -- the hit "
+                                 "is not on the face the oracle's normal belongs to\n",
+                                 x, y, static_cast<double>(hitT[i]),
+                                 static_cast<double>(expectedT), static_cast<double>(relT));
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+
+        // Non-degeneracy: if this scene somehow collapsed to a single face,
+        // the check would be no stronger than asserting one constant -- the
+        // exact weakness it exists to remove.
+        uint32_t facesReached = 0;
+        for (uint32_t f = 0; f < 6u; ++f) {
+            if (faceHits[f] != 0u) ++facesReached;
+        }
+        if (facesReached < 3u) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: normal probe reached only %u distinct box faces "
+                         "(+X %u, -X %u, +Y %u, -Y %u, +Z %u, -Z %u); a check that only ever sees "
+                         "one or two normals cannot distinguish a real normal from a constant\n",
+                         facesReached, faceHits[0], faceHits[1], faceHits[2], faceHits[3],
+                         faceHits[4], faceHits[5]);
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+
+        std::printf("[diff_gpu_probe] OK: wf_intersect geometric normals match the analytic "
+                    "box-face normals for all %u paths across %u distinct faces "
+                    "(+X %u, -X %u, +Y %u, -Y %u, +Z %u, -Z %u; max |normal err| = %g, "
+                    "max relative HitT err = %g)\n",
+                    kCapacity, facesReached, faceHits[0], faceHits[1], faceHits[2], faceHits[3],
+                    faceHits[4], faceHits[5], static_cast<double>(maxNormalError),
+                    static_cast<double>(maxHitTRelError));
 
         wf.destroy(ctx.allocator());
     }

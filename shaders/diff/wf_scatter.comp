@@ -82,6 +82,17 @@ const uint kDrawsPerBounce = 2u;
 // Malley's method. Stage 0b-2 replaces this with real Lambert/GGX importance
 // sampling; for Stage 0b-1 this exists only to prove the wavefront machinery
 // (state survival + RNG reconstruction) works, not to produce a correct image.
+//
+// `normal` is now an arbitrary unit vector rather than the old hardcoded
+// (0,0,1), so the up-vector choice below matters: it picks (0,0,1) unless
+// the normal is within ~2.6 degrees of the z axis, in which case it falls
+// back to (1,0,0). Either way `up` is far from parallel to `normal`, so the
+// cross product is well conditioned and the resulting (tangent, bitangent,
+// normal) frame is orthonormal for every normal. The returned direction
+// satisfies dot(result, normal) = sqrt(1 - u1) >= 2^-12 > 0 -- strictly
+// inside the hemisphere, never grazing to zero -- because diffRngNext1D
+// returns (state >> 8) * 2^-24 and so cannot exceed 1 - 2^-24. The
+// probe scene's survival proof rests on that strict positivity.
 vec3 diffCosineHemisphere(vec3 normal, float u1, float u2) {
     const float r = sqrt(u1);
     const float phi = 6.283185307179586 * u2;
@@ -132,10 +143,12 @@ void main() {
     const vec3 dir = psGetDir(pathIndex, pc.capacity);
     const float hitT = psGetHitT(pathIndex, pc.capacity);
 
-    // Placeholder normal: every probe scene this stage runs against is the
-    // single camera-facing quad, so (0,0,1) is correct for it. Stage 0b-2
-    // reads a real geometric normal out of the hit instead.
-    const vec3 normal = vec3(0.0, 0.0, 1.0);
+    // The real, forward-facing geometric normal of the hit, written into
+    // path state by wf_intersect.comp this same bounce. It replaced a
+    // hardcoded (0,0,1), which was only ever correct for the single
+    // camera-facing quad the Stage 0b-1 probes traced against, and which
+    // made every path march monotonically in +Z regardless of what it hit.
+    const vec3 normal = psGetNormal(pathIndex, pc.capacity);
     const vec3 newDir = diffCosineHemisphere(normal, u1, u2);
     const vec3 hitPoint = origin + dir * hitT;
 

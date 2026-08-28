@@ -34,8 +34,29 @@
 // exactly 2*capacity uints. A caller that reuses a ring without re-zeroing
 // its counter would otherwise write past the end of that allocation.
 //
+// GEOMETRIC NORMALS. A ray query reports a primitive index and
+// barycentrics; it never reports a normal. Recovering one therefore means
+// reading the hit triangle's own vertices back out of the same position and
+// index buffers the BLAS was built from, which is why this stage binds them
+// as storage buffers (3 and 4) alongside the acceleration structure. The
+// normal written to path state is the FORWARD-FACING geometric normal --
+// cross(v1 - v0, v2 - v0), normalised, then negated if it agrees with the
+// ray direction -- because that is the orientation wf_scatter.comp's
+// hemisphere basis and every future BSDF need. The raw winding-order normal
+// is deliberately not what is stored, so nothing downstream has to know
+// which way a given mesh happens to be wound.
+//
+// Object space == world space here: this stage assumes a single BLAS
+// instanced once with an identity transform, which is what every probe
+// builds. A scene with transformed instances would have to carry
+// rayQueryGetIntersectionObjectToWorldEXT's inverse-transpose through this
+// (and per-instance geometry offsets through the index lookup); nothing in
+// this subsystem builds one yet, and adding the plumbing before there is a
+// caller for it would be untestable code.
+//
 // Binding scheme: state (0, declared by path_state.glsl), queues (1, both
-// rings back to back), counters (2), TLAS (3).
+// rings back to back), counters (2), vertex positions (3), triangle indices
+// (4), TLAS (5).
 
 #include "diff/path_state.glsl"
 
@@ -49,7 +70,18 @@ layout(std430, binding = 2) buffer CounterBuffer {
     uint value[];
 } counters;
 
-layout(binding = 3) uniform accelerationStructureEXT topLevelAS;
+// The exact buffers the BLAS was built from: 3 floats per vertex, 3 uints
+// per triangle, tightly packed. Read-only -- this stage only ever consults
+// them to reconstruct a hit triangle.
+layout(std430, binding = 3) readonly buffer VertexPositionBuffer {
+    float p[];
+} geomVertices;
+
+layout(std430, binding = 4) readonly buffer TriangleIndexBuffer {
+    uint i[];
+} geomIndices;
+
+layout(binding = 5) uniform accelerationStructureEXT topLevelAS;
 
 layout(push_constant) uniform Push {
     uint capacity;
@@ -59,6 +91,12 @@ layout(push_constant) uniform Push {
     uint dstCountSlot;
     uint canarySlot;
 } pc;
+
+vec3 wfGeomVertex(uint vertexIndex) {
+    return vec3(geomVertices.p[vertexIndex * 3u + 0u],
+                geomVertices.p[vertexIndex * 3u + 1u],
+                geomVertices.p[vertexIndex * 3u + 2u]);
+}
 
 void main() {
     // Ran at all -- see probe check 13: with an indirect groupCountX of 0,
@@ -75,16 +113,46 @@ void main() {
     const vec3 dir = psGetDir(pathIndex, pc.capacity);
 
     rayQueryEXT rq;
-    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.001, dir, 1000.0);
+    // tMin is 0, not an epsilon. An epsilon here is not a self-intersection
+    // guard -- wf_scatter.comp already offsets the next ray's origin along
+    // the geometric normal and only ever samples directions with
+    // dot(dir, normal) > 0, so a ray provably moves AWAY from the surface it
+    // just left and cannot re-hit it at any t. What a positive tMin does
+    // instead is silently DROP legitimate hits closer than it: on a closed
+    // scene, a bounce that lands within tMin of an edge would have its next,
+    // perfectly real hit on the adjoining face rejected, the ray would leave
+    // the scene through the gap, and the path would die. That turns "every
+    // path survives every bounce" from a theorem about the geometry into a
+    // near-edge probability -- see the survival derivation in
+    // gpu_probe_context.cpp's fused-loop scene constants, which depends on
+    // tMin being exactly 0.
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.0, dir, 1000.0);
     while (rayQueryProceedEXT(rq)) { }
 
     if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         psSetHitT(pathIndex, pc.capacity, -1.0);
         psSetAlive(pathIndex, pc.capacity, 0u);
+        // Normal deliberately left untouched on a miss: there is no surface,
+        // so there is no normal, and writing a placeholder would make a
+        // stale value indistinguishable from a real one downstream.
         return;
     }
 
     psSetHitT(pathIndex, pc.capacity, rayQueryGetIntersectionTEXT(rq, true));
+
+    // --- Geometric normal of the committed hit. ---
+    const uint primitive = uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, true));
+    const vec3 v0 = wfGeomVertex(geomIndices.i[primitive * 3u + 0u]);
+    const vec3 v1 = wfGeomVertex(geomIndices.i[primitive * 3u + 1u]);
+    const vec3 v2 = wfGeomVertex(geomIndices.i[primitive * 3u + 2u]);
+    vec3 normal = normalize(cross(v1 - v0, v2 - v0));
+    // Flip to oppose the incoming ray. Every probe scene is wound so that
+    // this actually fires (see buildAxisAlignedBoxGeometry), which is what
+    // keeps a missing flip observable rather than a no-op.
+    if (dot(normal, dir) > 0.0) {
+        normal = -normal;
+    }
+    psSetNormal(pathIndex, pc.capacity, normal);
 
     // Compaction: only survivors are written into the next queue, at an
     // offset handed out by atomicAdd on the next queue's counter slot. The

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <vector>
 
 namespace ohao::diff {
@@ -182,6 +183,31 @@ public:
     [[nodiscard]] bool runWavefrontIntersectProbe(WavefrontBuffers& buffers, float planeDistance,
                                                   float quadMinY, std::vector<uint32_t>& outQueue1);
 
+    /// Exactly runWavefrontIntersectProbe's dispatch (same shaders, same
+    /// barriers, same compaction ring 0 -> ring 1), but against the CLOSED
+    /// AXIS-ALIGNED BOX of half-extent `halfExtent` centred on the origin,
+    /// wound so that every face's winding-order normal points OUT of the box
+    /// -- see buildAxisAlignedBoxGeometry in the .cpp.
+    ///
+    /// This is the scene the geometric-normal check needs and the single
+    /// quad cannot supply: a quad viewed from the -Z side yields the one
+    /// normal, (0,0,1), that the placeholder `const vec3 normal =
+    /// vec3(0,0,1)` in wf_scatter.comp happened to be correct for, so a
+    /// check built on it could not distinguish a real normal from the
+    /// hardcoded one. Five of the box's six faces are reachable from a
+    /// camera at its centre, giving five distinct analytic normals; and
+    /// because the outward winding is the opposite of what a ray leaving
+    /// the interior needs, every one of them also exercises
+    /// wf_intersect.comp's flip-to-oppose-the-ray step.
+    ///
+    /// Preconditions and outputs are runWavefrontIntersectProbe's, including
+    /// its counter-slot precondition (`kNextCountSlot` must be 0 on entry).
+    /// Every path hits -- a ray from strictly inside a closed convex body
+    /// always leaves it through a face -- so `outQueue1` receives all
+    /// `capacity` path indices.
+    [[nodiscard]] bool runWavefrontBoxIntersectProbe(WavefrontBuffers& buffers, float halfExtent,
+                                                     std::vector<uint32_t>& outQueue1);
+
     /// Runs the wavefront scatter stage (shaders/diff/wf_scatter.comp) for
     /// one bounce: wf_prepare_indirect.comp converts counter slot
     /// `srcCountSlot` into a dispatch-indirect triple (same pattern as
@@ -225,40 +251,46 @@ public:
     /// stage ordering is the barriers' job rather than a full-device idle
     /// wait's; see wavefront_loop.hpp for the ordering contract it exercises.
     ///
-    /// Scene: `kFusedLoopPlaneCount` large, axis-aligned quads stacked along
-    /// +Z (see the anonymous-namespace constants in the .cpp), one per
-    /// bounce plus slack. wf_scatter.comp's placeholder BSDF samples a
-    /// cosine hemisphere about a HARDCODED (0,0,1) normal and offsets the
-    /// new origin along it, so every bounce direction has dir.z > 0 and
-    /// every path marches monotonically in +Z (confirmed: wf_scatter.comp:138
-    /// hardcodes the normal, and abs(normal.z) == 1.0 fails
-    /// diffCosineHemisphere's < 0.999 test, so newDir.z > 0 always). A single
-    /// quad -- the scene every stage-by-stage probe uses -- would therefore
-    /// be hit only at bounce 0 and missed by every later bounce, killing
-    /// every path well before `maxBounces`.
+    /// Scene: the CLOSED axis-aligned box of half-extent
+    /// `kFusedLoopBoxHalfExtent`, entered from its centre (see the
+    /// anonymous-namespace section in the .cpp, which carries the full
+    /// survival derivation). This replaced a staircase of parallel quads
+    /// that only worked while wf_scatter.comp hardcoded the surface normal
+    /// to (0,0,1): with that constant every scattered ray had dir.z > 0
+    /// whatever it hit, so paths marched monotonically in +Z and a stack of
+    /// planes caught each in turn. A REAL forward-facing normal always
+    /// opposes the incoming ray, so a path now bounces back off the plane it
+    /// hits -- and a staircase becomes precisely the scene whose survival is
+    /// a grazing-angle probability rather than a fact.
+    ///
+    /// A closed convex body has no such failure mode: a ray from strictly
+    /// inside it always leaves through a face, at a distance no greater than
+    /// the body's longest chord, and the scatter stage's offset along the
+    /// inward normal puts the next origin strictly inside again. The
+    /// guarantee is therefore UNIFORM in the bounce count rather than
+    /// decaying with it -- see kFusedLoopSceneSafeForBounces, whose
+    /// conditions (space diagonal vs. wf_intersect.comp's tMax, scatter
+    /// offset vs. half-extent, camera inside the box) are what the runtime
+    /// guard below checks.
     ///
     /// This does NOT make the throughput assertion (check 17 in
-    /// diff_gpu_probe.cpp) pass vacuously against a single quad, and it is
-    /// not check 16 (the survivor/compaction check) that would prevent that.
-    /// Check 17 iterates every one of `kCapacity` PathState entries, not the
-    /// survivor ring -- a dead path's Throughput field still holds whatever
-    /// an earlier bounce left in it (e.g. 0.5 after one bounce), so check 17
-    /// fails LOUDLY on a single-quad scene regardless of check 16. This was
-    /// proved by stubbing both of check 16's assertions and rebuilding: a
-    /// single-quad run still fails at check 17 with
+    /// diff_gpu_probe.cpp) pass vacuously, and it is not check 16 (the
+    /// survivor/compaction check) that would prevent that. Check 17 iterates
+    /// every one of `kCapacity` PathState entries, not the survivor ring --
+    /// a dead path's Throughput field still holds whatever an earlier bounce
+    /// left in it (e.g. 0.5 after one bounce), so check 17 fails LOUDLY on a
+    /// scene that kills paths, regardless of check 16. This was proved for
+    /// the previous scene by stubbing both of check 16's assertions and
+    /// rebuilding: a single-quad run still failed at check 17 with
     /// "throughput = (0.5,0.5,0.5) after 4 bounces, expected exactly
     /// (0.0625,0.0625,0.0625)". Non-vacuity comes from check 17's
     /// quantification over the whole path-state array, not from check 16.
     ///
-    /// The staircase scene is still necessary -- this probe genuinely cannot
-    /// pass without it, since without a scene every path can survive, there
-    /// is no way to reach the intended bit-exact 0.0625 outcome instead of a
-    /// loud failure. A staircase of quads is what lets all `width*height`
-    /// paths survive all `maxBounces` bounces, by construction (see the
-    /// `maxBounces` safety check in `runWavefrontFusedLoopProbe`'s .cpp,
-    /// tied to `kFusedLoopHalfExtent`/`kFusedLoopPlaneGap`/
-    /// `kFusedLoopPlaneCount`), which is what makes "throughput is exactly
-    /// albedo^bounces for every path" a real, non-vacuous assertion.
+    /// A scene every path survives is still necessary -- this probe
+    /// genuinely cannot pass without one, since the intended bit-exact
+    /// 0.0625 outcome is only reachable if nothing dies early -- which is
+    /// what makes "throughput is exactly albedo^bounces for every path" a
+    /// real, non-vacuous assertion rather than a loud failure.
     ///
     /// `height` must be exactly 8 and `width` a multiple of 8. This is a
     /// CALIBRATION constraint, not a capability one: every expected value
@@ -298,6 +330,23 @@ public:
                                                   std::vector<uint32_t>& outFinalQueue);
 
 private:
+    /// The body both runWavefrontIntersectProbe and
+    /// runWavefrontBoxIntersectProbe share: build a BLAS/TLAS over the
+    /// caller's triangle soup, then run wf_prepare_indirect.comp +
+    /// an indirectly-dispatched wf_intersect.comp over queue ring 0,
+    /// compacting survivors into ring 1, and copy ring 1 out to the host.
+    /// Only the geometry differs between the two public entry points, so
+    /// only the geometry is a parameter.
+    ///
+    /// `positions` is 3 floats per vertex and `indices` 3 uints per
+    /// triangle; BOTH are also bound to wf_intersect.comp as storage
+    /// buffers (bindings 3 and 4), which is how it recovers the hit
+    /// triangle's vertices to compute a geometric normal.
+    [[nodiscard]] bool runWavefrontIntersectOnGeometry(WavefrontBuffers& buffers,
+                                                       std::span<const float> positions,
+                                                       std::span<const uint32_t> indices,
+                                                       std::vector<uint32_t>& outQueue1);
+
     /// Shared boilerplate for the single-storage-buffer compute probes:
     /// load SPIR-V, one STORAGE_BUFFER at binding 0, push constants, dispatch,
     /// barrier to host reads, wait. Every object is destroyed on every path.

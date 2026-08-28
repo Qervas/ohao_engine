@@ -900,18 +900,73 @@ bool GpuProbeContext::runWavefrontLayoutProbe(WavefrontBuffers& buffers) {
                                         &push, sizeof(push), /*groupCountX=*/1u);
 }
 
+// --- Scene builders shared by more than one probe -------------------------
+namespace {
+
+/// Fills `positions` (3 floats per vertex) and `indices` (3 uints per
+/// triangle) with the CLOSED axis-aligned box [-halfExtent, halfExtent]^3:
+/// six quads, twelve triangles, twenty-four vertices (each face owns its own
+/// four, so no face's winding is constrained by a neighbour's).
+///
+/// Every face is wound so that cross(v1 - v0, v2 - v0) points OUT of the
+/// box. That is deliberate and load-bearing for the normal check: a ray
+/// inside the box hits each face from behind its winding-order normal, so
+/// wf_intersect.comp's "flip the geometric normal to oppose the incoming
+/// ray" step must actually fire on every single hit. Wound inward, the flip
+/// would be a no-op on every hit and its absence would be invisible.
+///
+/// Right-handedness of the (u, v, outward) triple is what makes the winding
+/// come out that way: for the +axis face of axis k, (u, v) = ((k+1)%3,
+/// (k+2)%3) satisfies e_u x e_v = +e_k, and the pair is swapped for the
+/// -axis face so that the cross product flips with the face.
+///
+/// The face planes are exactly +/-halfExtent on one axis and the edge
+/// vectors are exactly axis-aligned, so cross(v1 - v0, v2 - v0) is exactly
+/// (+/-4*halfExtent^2) on that axis and exactly 0 on the other two -- which
+/// is what lets the normal check assert the two off-axis components are
+/// bit-exactly zero.
+void buildAxisAlignedBoxGeometry(float halfExtent, std::vector<float>& positions,
+                                 std::vector<uint32_t>& indices) {
+    positions.clear();
+    indices.clear();
+    positions.reserve(24u * 3u);
+    indices.reserve(12u * 3u);
+
+    const float e = halfExtent;
+    for (uint32_t k = 0; k < 3u; ++k) {
+        for (int signIndex = 0; signIndex < 2; ++signIndex) {
+            const float s = (signIndex == 0) ? 1.0f : -1.0f;
+            uint32_t u = (k + 1u) % 3u;
+            uint32_t v = (k + 2u) % 3u;
+            if (s < 0.0f) {
+                const uint32_t swap = u;
+                u = v;
+                v = swap;
+            }
+
+            const float du[4] = {-e, e, e, -e};
+            const float dv[4] = {-e, -e, e, e};
+            const uint32_t base = static_cast<uint32_t>(positions.size() / 3u);
+            for (int corner = 0; corner < 4; ++corner) {
+                float pos[3] = {0.0f, 0.0f, 0.0f};
+                pos[k] = s * e;
+                pos[u] = du[corner];
+                pos[v] = dv[corner];
+                positions.push_back(pos[0]);
+                positions.push_back(pos[1]);
+                positions.push_back(pos[2]);
+            }
+            const uint32_t tris[6] = {base + 0u, base + 1u, base + 2u,
+                                      base + 0u, base + 2u, base + 3u};
+            indices.insert(indices.end(), std::begin(tris), std::end(tris));
+        }
+    }
+}
+
+}  // namespace
+
 bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, float planeDistance,
                                                  float quadMinY, std::vector<uint32_t>& outQueue1) {
-    outQueue1.clear();
-
-    const uint32_t capacity = buffers.layout().capacity();
-    bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
-              buffers.queueBuffer() != VK_NULL_HANDLE && buffers.counterBuffer() != VK_NULL_HANDLE;
-    if (!ok) {
-        std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: buffers not built\n");
-        return false;
-    }
-
     // --- Quad geometry: x in [-1,1], y in [quadMinY,1] at z = -planeDistance,
     // the same shape runVisibilityProbe builds. ---
     const float d = planeDistance;
@@ -922,15 +977,47 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
         -1.0f,  1.0f,    -d,
     };
     const std::array<uint32_t, 6> indices = {0, 1, 2, 0, 2, 3};
+    return runWavefrontIntersectOnGeometry(buffers, std::span<const float>(positions),
+                                           std::span<const uint32_t>(indices), outQueue1);
+}
 
+bool GpuProbeContext::runWavefrontBoxIntersectProbe(WavefrontBuffers& buffers, float halfExtent,
+                                                    std::vector<uint32_t>& outQueue1) {
+    std::vector<float> positions;
+    std::vector<uint32_t> indices;
+    buildAxisAlignedBoxGeometry(halfExtent, positions, indices);
+    return runWavefrontIntersectOnGeometry(buffers, std::span<const float>(positions),
+                                           std::span<const uint32_t>(indices), outQueue1);
+}
+
+bool GpuProbeContext::runWavefrontIntersectOnGeometry(WavefrontBuffers& buffers,
+                                                      std::span<const float> positions,
+                                                      std::span<const uint32_t> indices,
+                                                      std::vector<uint32_t>& outQueue1) {
+    outQueue1.clear();
+
+    const uint32_t capacity = buffers.layout().capacity();
+    bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
+              buffers.queueBuffer() != VK_NULL_HANDLE && buffers.counterBuffer() != VK_NULL_HANDLE;
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontIntersectProbe: buffers not built\n");
+        return false;
+    }
+
+    // The vertex and index buffers are ALSO storage buffers, not merely
+    // acceleration-structure build input: wf_intersect.comp reads the hit
+    // triangle's three vertices back out of them (bindings 3 and 4) to
+    // compute the hit's geometric normal. There is no other way to recover
+    // it -- a ray query reports a primitive index and barycentrics, never a
+    // normal.
     GpuBuffer vertexBuffer = m_allocator.createBufferFromSpan<float>(
-        std::span<const float>(positions),
+        positions,
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     GpuBuffer indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
-        std::span<const uint32_t>(indices),
+        indices,
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     ok = vertexBuffer.isValid() && indexBuffer.isValid();
     if (!ok) {
@@ -982,7 +1069,12 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
     WavefrontStage prepareIndirect;
     WavefrontStage intersect;
     const VkDescriptorType counterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    const VkDescriptorType intersectBindingTypes[4] = {
+    // state, queues, counters, vertex positions, triangle indices, TLAS.
+    // The acceleration structure is LAST so that bindBuffers -- which writes
+    // a contiguous prefix of storage-buffer bindings starting at 0 -- can
+    // cover all five buffers in one call.
+    const VkDescriptorType intersectBindingTypes[6] = {
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
 
@@ -1000,11 +1092,12 @@ bool GpuProbeContext::runWavefrontIntersectProbe(WavefrontBuffers& buffers, floa
 
     if (ok) {
         const VkBuffer counterOnlyBuf[1] = {buffers.counterBuffer()};
-        const VkBuffer intersectBuffers[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
-                                              buffers.counterBuffer()};
+        const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                              buffers.counterBuffer(), vertexBuffer.buffer,
+                                              indexBuffer.buffer};
         if (!prepareIndirect.bindBuffers(m_device, counterOnlyBuf) ||
             !intersect.bindBuffers(m_device, intersectBuffers) ||
-            !intersect.bindAccelerationStructure(m_device, 3, accel.getTLAS())) {
+            !intersect.bindAccelerationStructure(m_device, 5, accel.getTLAS())) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontIntersectProbe: descriptor binding\n");
             ok = false;
@@ -1357,56 +1450,84 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     return ok;
 }
 
-// --- Fused-loop probe scene constants -------------------------------------
+// --- Fused-loop probe scene ------------------------------------------------
 //
-// wf_scatter.comp's placeholder BSDF samples a cosine hemisphere about a
-// HARDCODED (0,0,1) normal and offsets the new origin along that normal, so
-// every scattered ray has dir.z > 0 and every path marches monotonically in
-// +Z. One quad is therefore hit at bounce 0 and missed by every bounce after
-// it. A staircase of quads perpendicular to Z, entered from -Z, is what
-// keeps every path alive for the whole loop.
+// A CLOSED AXIS-ALIGNED BOX, entered from its centre. This replaced the
+// staircase of parallel quads that stood here through Stage 0b-2a, and the
+// replacement was forced, not cosmetic.
+//
+// The staircase existed only because wf_scatter.comp hardcoded the surface
+// normal to (0,0,1): every scattered ray then had dir.z > 0 whatever it hit,
+// so paths marched monotonically in +Z and a stack of planes perpendicular
+// to Z caught each one in turn. Reading the REAL geometric normal destroys
+// that. A real forward-facing normal always OPPOSES the incoming ray, so a
+// cosine hemisphere about it sends the path back the way it came -- a
+// staircase of parallel planes is exactly the scene that fails, because the
+// path bounces back off the first plane it meets and re-crosses the gap at
+// whatever grazing angle the RNG hands it. Survival there would be a
+// probability, not a fact, which is what check 16's hard
+// `liveCount == kCapacity` refuses to be built on.
+//
+// SURVIVAL DERIVATION (exact arithmetic). Let B = [-E, E]^3 with E =
+// kFusedLoopBoxHalfExtent, built as six quads wound outward (see
+// buildAxisAlignedBoxGeometry). Claim: every path is alive after ANY number
+// of bounces.
+//
+//   Base. wf_generate.comp puts every path's origin at the camera position
+//   c. c is the box centre, so c is in the open interior int(B).
+//
+//   Step. Let a path's origin p be in int(B) with any direction d != 0.
+//   B is compact and convex and p is interior, so the ray {p + t d : t >= 0}
+//   leaves B at a unique t* > 0, and q = p + t* d lies on some face, with
+//   |q_j| <= E on every axis -- i.e. inside that face's quad, since the quad
+//   spans exactly [-E, E] on the two axes it is not fixed on. So the ray
+//   query commits a hit, provided
+//     (a) t* >= tMin. wf_intersect.comp traces with tMin = 0 EXACTLY, so
+//         this holds for every t* > 0 with nothing to prove. This is why
+//         that shader's tMin is 0 and not an epsilon: a positive tMin drops
+//         real hits closer than it, which for a closed scene means a bounce
+//         landing within tMin of an edge leaks out through the gap and dies.
+//         With tMin > 0 the "every path survives" claim would be a statement
+//         about how near an edge the RNG happens to land -- a probability.
+//     (b) t* <= tMax. t* is at most the box's longest chord, its space
+//         diagonal 2*E*sqrt(3); the guard below checks that against
+//         wf_intersect.comp's tMax of 1000.
+//   Nothing therefore takes the miss branch, so no path is ever killed.
+//
+//   Normal. The committed hit's forward-facing geometric normal is the
+//   inward normal of the exit face: the ray leaves through that face, so
+//   d agrees in sign with the face's outward normal, and wf_intersect.comp's
+//   flip makes the stored normal point back into B.
+//
+//   Induction. wf_scatter.comp advances the path to q and offsets it along
+//   that normal: p' = q + kFusedLoopScatterOriginOffset * N. On the face's
+//   own axis k that gives |p'_k| = E - offset < E (the guard checks
+//   offset < E); on the other two axes p' keeps q's coordinates, |q_j| <= E.
+//   So p' is in int(B) again -- unless q landed exactly on an edge of B,
+//   where one |q_j| is exactly E. And the new direction satisfies
+//   dot(d', N) = sqrt(1 - u1) >= 2^-12 > 0 (diffRngNext1D returns
+//   (state >> 8) * 2^-24 and so never reaches 1), so d' != 0 and points
+//   strictly into the interior half-space. The Step applies again.
+//
+// WHAT THIS BUYS OVER THE STAIRCASE. The staircase's guarantee decayed with
+// bounce count: each scattered bounce could drift up to
+// (gap / minimum dir.z) sideways, so its guard had to compare an
+// accumulating worst-case drift against the quads' half-extent and refused
+// bounce counts above six. The induction above has NO per-bounce term -- it
+// is uniform in the number of bounces -- so raising maxBounces is safe by
+// the theorem rather than by re-deriving a budget. That is a deliberate
+// strengthening, not a loosening of the guard: the guard below still fails
+// loudly, and still refuses to run, if any hypothesis the induction actually
+// rests on (the diagonal against tMax, the offset against E, the camera
+// inside B) is broken by a future change to those constants.
+//
+// The one caveat the induction names -- a hit landing exactly on an edge of
+// B, where the next origin sits on the boundary rather than inside it -- is
+// a measure-zero set of directions, and it is not silently tolerated: check
+// 16 asserts every one of the capacity paths survives every bounce, so a
+// path that did fall out of the scene fails the probe rather than skewing
+// it.
 namespace {
-
-/// One quad per bounce, plus slack so that a hit point landing slightly past
-/// its intended plane (float error in a near-grazing t) still finds another
-/// plane ahead of it instead of falling out of the scene.
-constexpr uint32_t kFusedLoopPlaneCount = 8;
-
-/// z of the nearest-to-the-camera plane, and the gap between planes.
-///
-/// The gap is the whole safety argument. wf_intersect.comp traces with
-/// tmax = 1000, and the shallowest direction the RNG can produce is
-/// dir.z = sqrt(1 - u1max) = sqrt(2^-24) = 2^-12, since diffRngNext1D
-/// returns (state >> 8) * 2^-24 and so cannot exceed 1 - 2^-24. Crossing a
-/// gap g at that angle costs t = g / 2^-12 = 4096*g and drifts the same
-/// distance sideways. With g = 0.05 that is t <= 205 (well inside tmax) and
-/// a lateral drift under 205 per SCATTERED bounce (every bounce after the
-/// first -- the first intersect traces the camera's own primary ray, which
-/// has a fixed, known direction, not the RNG's worst case).
-///
-/// That per-bounce figure is NOT "covered many times over" by the
-/// half-extent below once it accumulates: at this repo's own probe's 4
-/// bounces (3 scattered intersects), worst case is roughly
-/// 3 * 204.4 + a small primary-ray footprint =~ 615 units against a 1024
-/// half-extent -- about a 1.7x margin, not an "many times over" one. At 6
-/// bounces the worst case is already ~1022, i.e. AT the half-extent; at 7 it
-/// exceeds it. See kFusedLoopSceneSafeForBounces() below and the runtime guard in
-/// runWavefrontFusedLoopProbe that keeps a raised maxBounces from silently
-/// turning "every path survives" from a guarantee into a probability. A
-/// larger gap would eventually push a grazing ray past tmax and silently
-/// kill it; a much smaller one would collide with wf_scatter.comp's 1e-4
-/// origin offset.
-constexpr float kFusedLoopFirstPlaneZ = -2.0f;
-constexpr float kFusedLoopPlaneGap = 0.05f;
-
-/// Half-extent of each quad in x and y. Big enough that no path can drift
-/// off the side of the staircase (see the gap note above), which is what
-/// makes "every one of the capacity paths survives every bounce" a fact
-/// rather than a probability -- PROVIDED maxBounces stays within what
-/// kFusedLoopSceneSafeForBounces() allows; see the runtime guard below. The
-/// planes are exactly axis-aligned, so their plane equation is exact
-/// regardless of how large they are.
-constexpr float kFusedLoopHalfExtent = 1024.0f;
 
 /// wf_generate.comp's local_size_y. WavefrontStage's Fixed group-count
 /// source now supports a genuine 3-D dispatch (groups/groupsY/groupsZ, not
@@ -1421,60 +1542,75 @@ constexpr float kFusedLoopHalfExtent = 1024.0f;
 /// current resolution.
 constexpr uint32_t kFusedLoopGenerateLocalY = 8;
 
-/// The shallowest z-direction the RNG can produce, per the gap-note
-/// derivation above: dir.z = sqrt(1 - u1max) = sqrt(2^-24) = 2^-12.
-constexpr float kFusedLoopMinDirZ = 1.0f / 4096.0f;
+/// Half-extent of the closed box the loop bounces inside. Small enough that
+/// its space diagonal is far inside wf_intersect.comp's tMax, large enough
+/// that the primary rays' spread is nowhere near degenerate. A power of two
+/// on purpose: the box's faces are then at exactly representable
+/// coordinates and each face's cross(v1 - v0, v2 - v0) is exactly
+/// (+/-4E^2, 0, 0) up to axis permutation, so the geometric normal comes out
+/// of normalize() with two bit-exact zero components.
+constexpr float kFusedLoopBoxHalfExtent = 4.0f;
 
-/// wf_scatter.comp's ray-origin epsilon offset along the normal, subtracted
-/// from the gap before computing worst-case crossing distance (matches the
-/// gap-note derivation: "a much smaller [gap] would collide with
-/// wf_scatter.comp's 1e-4 origin offset").
+/// wf_intersect.comp's ray tMax, mirrored here because the derivation above
+/// compares the box's longest chord against it. Change one and this guard
+/// stops meaning what it says.
+constexpr float kFusedLoopRayTMax = 1000.0f;
+
+/// wf_scatter.comp's ray-origin epsilon offset along the geometric normal,
+/// mirrored here for the same reason: the induction needs it to be smaller
+/// than the half-extent, or the "next origin is still inside" step fails.
 constexpr float kFusedLoopScatterOriginOffset = 1e-4f;
 
-/// Generous, deliberately loose bound on how far the camera's own primary
-/// ray footprint (its origin/frustum spread across `width*height` pixels)
-/// can be from the staircase's centerline, added once to the worst-case
-/// scattered-bounce drift below. It is not derived as tightly as the
-/// per-bounce figure because the scattered-bounce term dominates for any
-/// maxBounces worth guarding.
-constexpr float kFusedLoopPrimarySpreadSlack = 2.0f;
+/// The camera, which must sit strictly inside the box for the induction's
+/// base case. These are the values actually pushed to wf_generate.comp
+/// below, so the guard checks the camera the probe really uses.
+constexpr float kFusedLoopCameraX = 0.0f;
+constexpr float kFusedLoopCameraY = 0.0f;
+constexpr float kFusedLoopCameraZ = 0.0f;
+constexpr float kFusedLoopTanHalfFov = 0.2f;
 
-/// Worst-case total lateral drift (in scene units) a path can accumulate
-/// over `maxBounces` fused bounces, given the RNG's shallowest possible
-/// direction every time. A run of `maxBounces` bounces contains
-/// `maxBounces - 1` SCATTERED intersects (the first intersect traces the
-/// camera's own primary ray, not a scattered one), each of which can drift
-/// up to `(kFusedLoopPlaneGap - kFusedLoopScatterOriginOffset) /
-/// kFusedLoopMinDirZ` units sideways -- see the gap-note derivation above.
-///
-/// `maxBounces` is a runtime parameter of `runWavefrontFusedLoopProbe` (see
-/// its signature), not a value known at this translation unit's compile
-/// time, so this cannot be enforced with a `static_assert`: there is no
-/// compile-time-constant bounce count for a `static_assert` to check against
-/// here. It is `constexpr` so it folds to a compile-time constant at any
-/// call site that DOES pass a compile-time-constant `maxBounces` (as
-/// diff_gpu_probe.cpp's checks 16-18 do, with kBounces = 4), but the guard
-/// itself is evaluated at runtime in `runWavefrontFusedLoopProbe`, against
-/// whatever `maxBounces` the caller actually passed, so that raising it past
-/// what this scene can guarantee fails the probe loudly instead of quietly
-/// turning "all paths survive" from a fact into a flaky probability.
-constexpr float kFusedLoopWorstCaseDrift(uint32_t maxBounces) {
-    const uint32_t scatteredBounces = maxBounces > 0u ? maxBounces - 1u : 0u;
-    const float perBounceDrift =
-        (kFusedLoopPlaneGap - kFusedLoopScatterOriginOffset) / kFusedLoopMinDirZ;
-    return static_cast<float>(scatteredBounces) * perBounceDrift + kFusedLoopPrimarySpreadSlack;
+/// sqrt(3), to four more digits than float can hold -- the box's space
+/// diagonal is 2*E*sqrt(3).
+constexpr float kSqrt3 = 1.7320508075688772f;
+
+constexpr float kFusedLoopAbs(float v) { return v < 0.0f ? -v : v; }
+
+/// The longest distance any ray can travel inside the box: its space
+/// diagonal. Every committed hit is at t* <= this.
+constexpr float kFusedLoopBoxDiagonal() { return 2.0f * kFusedLoopBoxHalfExtent * kSqrt3; }
+
+constexpr float kFusedLoopCameraMaxAbsCoord() {
+    float m = kFusedLoopAbs(kFusedLoopCameraX);
+    if (kFusedLoopAbs(kFusedLoopCameraY) > m) m = kFusedLoopAbs(kFusedLoopCameraY);
+    if (kFusedLoopAbs(kFusedLoopCameraZ) > m) m = kFusedLoopAbs(kFusedLoopCameraZ);
+    return m;
 }
 
-/// True iff this staircase scene (kFusedLoopHalfExtent, kFusedLoopPlaneGap,
-/// kFusedLoopPlaneCount) can GUARANTEE -- not merely make likely -- that
-/// every path survives `maxBounces` fused bounces. Two independent
-/// necessary conditions: the worst-case lateral drift must stay inside the
-/// half-extent, and there must be enough planes for `maxBounces` bounces to
-/// each hit one (a run of `maxBounces` bounces uses planes
-/// 0 .. maxBounces - 1, so it needs at least `maxBounces` of them).
+/// True iff this box scene can GUARANTEE -- not merely make likely -- that
+/// every path survives `maxBounces` fused bounces. These are exactly the
+/// hypotheses the induction in this section's header rests on:
+///
+///   1. `maxBounces >= 1`. A zero-bounce run has nothing to guarantee.
+///   2. The box's space diagonal fits inside wf_intersect.comp's tMax, so
+///      no exit hit is ever rejected as too far.
+///   3. wf_scatter.comp's origin offset is smaller than the half-extent, so
+///      stepping off a face lands strictly inside the box rather than
+///      through the opposite one.
+///   4. The camera is strictly inside the box, which is the induction's
+///      base case.
+///
+/// Unlike the staircase this replaced, NONE of conditions 2-4 depends on
+/// `maxBounces`: the induction is uniform in the bounce count, so a scene
+/// that survives one bounce survives a thousand. `maxBounces` is still a
+/// parameter, and this is still evaluated at RUNTIME against whatever the
+/// caller passed, because that is what makes a future change to E, to
+/// wf_intersect.comp's tMax, or to wf_scatter.comp's offset fail loudly here
+/// instead of quietly turning check 16's hard `== kCapacity` equality into
+/// something that merely happens to hold on this run.
 constexpr bool kFusedLoopSceneSafeForBounces(uint32_t maxBounces) {
-    return kFusedLoopWorstCaseDrift(maxBounces) <= kFusedLoopHalfExtent &&
-           maxBounces <= kFusedLoopPlaneCount;
+    return maxBounces >= 1u && kFusedLoopBoxDiagonal() <= kFusedLoopRayTMax &&
+           kFusedLoopScatterOriginOffset < kFusedLoopBoxHalfExtent &&
+           kFusedLoopCameraMaxAbsCoord() < kFusedLoopBoxHalfExtent;
 }
 
 }  // namespace
@@ -1539,56 +1675,54 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                      maxBounces);
         return false;
     }
-    // This scene's "every path survives every bounce" guarantee is only a
-    // guarantee up to a bounce count the geometry was sized for -- see
-    // kFusedLoopWorstCaseDrift's doc comment. Fail loudly here, rather than
-    // silently letting a raised maxBounces turn check 16's hard `==
-    // kCapacity` equality (and the throughput/RNG checks built on top of it)
-    // from a certainty into something that merely happens to pass on this
-    // run. This is a runtime check, not a static_assert, because maxBounces
-    // is a runtime parameter of this function with no compile-time-constant
-    // value in this translation unit to assert against.
+    // This scene's "every path survives every bounce" guarantee holds only
+    // while the hypotheses of the induction in the scene-constants header
+    // above hold -- see kFusedLoopSceneSafeForBounces. Fail loudly here,
+    // rather than silently letting a changed constant turn check 16's hard
+    // `== kCapacity` equality (and the throughput/RNG checks built on top of
+    // it) from a certainty into something that merely happens to pass on
+    // this run. This is a runtime check, not a static_assert, because
+    // maxBounces is a runtime parameter of this function with no
+    // compile-time-constant value in this translation unit to assert
+    // against.
     if (!kFusedLoopSceneSafeForBounces(maxBounces)) {
         std::fprintf(stderr,
-                     "[GpuProbeContext] runWavefrontFusedLoopProbe: maxBounces=%u exceeds what "
-                     "the staircase scene can GUARANTEE to survive -- worst-case lateral drift is "
-                     "%.1f against a half-extent of %.1f (kFusedLoopHalfExtent), and/or maxBounces "
-                     "exceeds the %u available planes (kFusedLoopPlaneCount). Raise "
-                     "kFusedLoopHalfExtent/kFusedLoopPlaneCount to match, or lower maxBounces; do "
-                     "not proceed and rely on this run happening to pass\n",
-                     maxBounces, static_cast<double>(kFusedLoopWorstCaseDrift(maxBounces)),
-                     static_cast<double>(kFusedLoopHalfExtent), kFusedLoopPlaneCount);
+                     "[GpuProbeContext] runWavefrontFusedLoopProbe: this box scene cannot "
+                     "GUARANTEE that every path survives %u bounces. Hypotheses of the survival "
+                     "induction (see the scene-constants header): maxBounces >= 1 (%u); box space "
+                     "diagonal %.3f <= ray tMax %.1f; scatter origin offset %g < half-extent "
+                     "%.3f; camera max |coord| %.3f < half-extent %.3f. Fix the constant that "
+                     "broke, or lower maxBounces; do not proceed and rely on this run happening "
+                     "to pass\n",
+                     maxBounces, maxBounces, static_cast<double>(kFusedLoopBoxDiagonal()),
+                     static_cast<double>(kFusedLoopRayTMax),
+                     static_cast<double>(kFusedLoopScatterOriginOffset),
+                     static_cast<double>(kFusedLoopBoxHalfExtent),
+                     static_cast<double>(kFusedLoopCameraMaxAbsCoord()),
+                     static_cast<double>(kFusedLoopBoxHalfExtent));
         return false;
     }
 
-    // --- Staircase geometry: kFusedLoopPlaneCount quads perpendicular to Z. ---
+    // --- Scene: the closed box derived above. ---
     std::vector<float> positions;
     std::vector<uint32_t> indices;
-    positions.reserve(static_cast<std::size_t>(kFusedLoopPlaneCount) * 12u);
-    indices.reserve(static_cast<std::size_t>(kFusedLoopPlaneCount) * 6u);
-    for (uint32_t p = 0; p < kFusedLoopPlaneCount; ++p) {
-        const float z = kFusedLoopFirstPlaneZ + kFusedLoopPlaneGap * static_cast<float>(p);
-        const float e = kFusedLoopHalfExtent;
-        const float quad[12] = {-e, -e, z, e, -e, z, e, e, z, -e, e, z};
-        positions.insert(positions.end(), std::begin(quad), std::end(quad));
-        const uint32_t base = p * 4u;
-        const uint32_t tris[6] = {base + 0u, base + 1u, base + 2u,
-                                  base + 0u, base + 2u, base + 3u};
-        indices.insert(indices.end(), std::begin(tris), std::end(tris));
-    }
+    buildAxisAlignedBoxGeometry(kFusedLoopBoxHalfExtent, positions, indices);
 
+    // Storage-buffer usage as well as build input: wf_intersect.comp reads
+    // the hit triangle's vertices back out of these to compute its geometric
+    // normal (bindings 3 and 4).
     GpuBuffer vertexBuffer = m_allocator.createBufferFromSpan<float>(
         std::span<const float>(positions),
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     GpuBuffer indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
         std::span<const uint32_t>(indices),
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     ok = vertexBuffer.isValid() && indexBuffer.isValid();
     if (!ok) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: failed to create "
-                              "staircase vertex/index buffers\n");
+                              "box vertex/index buffers\n");
     }
 
     RTAccelerationStructure accel;
@@ -1670,7 +1804,12 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
     const VkDescriptorType kCounterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    const VkDescriptorType kIntersectBindings[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // state, queues, counters, vertex positions, triangle indices, TLAS --
+    // the acceleration structure last, so bindBuffers can write all five
+    // storage buffers as one contiguous prefix.
+    const VkDescriptorType kIntersectBindings[6] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
@@ -1705,12 +1844,15 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
                                                buffers.counterBuffer()};
         const VkBuffer counterOnly[1] = {buffers.counterBuffer()};
+        const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                              buffers.counterBuffer(), vertexBuffer.buffer,
+                                              indexBuffer.buffer};
         const VkBuffer scatterBuffers[4] = {buffers.stateBuffer(), buffers.queueBuffer(),
                                             buffers.counterBuffer(), debugDrawsBuffer.buffer};
         if (!generate.bindBuffers(m_device, stateQueueCounter) ||
             !prepareIndirect.bindBuffers(m_device, counterOnly) ||
-            !intersect.bindBuffers(m_device, stateQueueCounter) ||
-            !intersect.bindAccelerationStructure(m_device, 3, accel.getTLAS()) ||
+            !intersect.bindBuffers(m_device, intersectBuffers) ||
+            !intersect.bindAccelerationStructure(m_device, 5, accel.getTLAS()) ||
             !scatter.bindBuffers(m_device, scatterBuffers)) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontFusedLoopProbe: descriptor binding\n");
@@ -1719,15 +1861,17 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
     }
 
     if (ok) {
-        // Camera sits at -Z looking along +Z, i.e. INTO the staircase, so
-        // that the primary ray hits the nearest plane (kFusedLoopFirstPlaneZ)
-        // and every scattered +Z ray then walks up the remaining planes. A
-        // camera looking down -Z (runWavefrontGenerateProbe's default) would
-        // hit the LAST plane first and have nothing ahead of it.
+        // Camera at the box CENTRE. That is the survival induction's base
+        // case -- an origin in the open interior -- and unlike the staircase
+        // it replaced, no direction is privileged: whichever way a primary
+        // ray goes it leaves through a face, so the camera basis below is
+        // free to be the plain identity one. These fields are pushed from
+        // the same constants kFusedLoopSceneSafeForBounces checks, so the
+        // camera the guard reasons about is the camera the probe uses.
         GeneratePush genPush{};
-        genPush.origin[0] = 0.0f;
-        genPush.origin[1] = 0.0f;
-        genPush.origin[2] = -10.0f;
+        genPush.origin[0] = kFusedLoopCameraX;
+        genPush.origin[1] = kFusedLoopCameraY;
+        genPush.origin[2] = kFusedLoopCameraZ;
         genPush.forward[0] = 0.0f;
         genPush.forward[1] = 0.0f;
         genPush.forward[2] = 1.0f;
@@ -1739,7 +1883,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         genPush.up[2] = 0.0f;
         genPush.width = width;
         genPush.height = height;
-        genPush.tanHalfFov = 0.2f;
+        genPush.tanHalfFov = kFusedLoopTanHalfFov;
         genPush.capacity = capacity;
         generate.setPushConstants(&genPush, sizeof(genPush));
         // Fixed dispatch, used here as 1-D: groupsY/groupsZ are left at

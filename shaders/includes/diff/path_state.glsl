@@ -20,8 +20,9 @@
 // gives offsetBytes(i) = i * alignUp(capacity*4, 256) by induction (every
 // block in this arena is the same size), and because 256 == 4*64 the
 // identity alignUp(4c, 256) == 4*alignUp(c, 64) holds exactly. Every stage
-// therefore only needs to push `capacity` (one uint), not 16 offsets -- a
-// push-constant array of 16 uints (64 bytes) plus a camera block (80 bytes,
+// therefore only needs to push `capacity` (one uint), not one offset per
+// field -- a push-constant array of PS_FIELD_COUNT uints (80 bytes at the
+// current 20 fields, and growing) plus a camera block (80 bytes,
 // see camera_ray.glsl / visibility_probe.comp) would exceed the 128-byte
 // push-constant size Vulkan guarantees on every implementation.
 
@@ -48,7 +49,14 @@ const uint PS_SAMPLE_INDEX  = 13u;  // bit-cast uint
 const uint PS_BOUNCE        = 14u;  // bit-cast uint
 const uint PS_ALIVE         = 15u;  // bit-cast uint, 0 or 1
 const uint PS_HIT_T         = 16u;  // intersect-stage output: hit distance, -1 on miss (Task 5)
-const uint PS_FIELD_COUNT   = 17u;
+// Intersect-stage output: the FORWARD-FACING geometric normal of the hit
+// (already flipped to oppose the incoming ray), world space, unit length.
+// Three scalars, not a packed octahedral pair -- see PathStateField's
+// comment in ohao/diff/wavefront/path_state_layout.hpp for why.
+const uint PS_NORMAL_X      = 17u;
+const uint PS_NORMAL_Y      = 18u;
+const uint PS_NORMAL_Z      = 19u;
+const uint PS_FIELD_COUNT   = 20u;
 
 // Every ArenaLayout block is aligned to 256 bytes == 64 floats.
 const uint PS_ALIGNMENT_FLOATS = 64u;
@@ -125,6 +133,18 @@ void psSetRadiance(uint pathIndex, uint capacity, vec3 v) {
     psSetScalar(PS_RADIANCE_R, pathIndex, capacity, v.x);
     psSetScalar(PS_RADIANCE_G, pathIndex, capacity, v.y);
     psSetScalar(PS_RADIANCE_B, pathIndex, capacity, v.z);
+}
+
+vec3 psGetNormal(uint pathIndex, uint capacity) {
+    return vec3(psGetScalar(PS_NORMAL_X, pathIndex, capacity),
+                psGetScalar(PS_NORMAL_Y, pathIndex, capacity),
+                psGetScalar(PS_NORMAL_Z, pathIndex, capacity));
+}
+
+void psSetNormal(uint pathIndex, uint capacity, vec3 v) {
+    psSetScalar(PS_NORMAL_X, pathIndex, capacity, v.x);
+    psSetScalar(PS_NORMAL_Y, pathIndex, capacity, v.y);
+    psSetScalar(PS_NORMAL_Z, pathIndex, capacity, v.z);
 }
 
 // -- Integer accessors (bit-cast through the same float storage) --

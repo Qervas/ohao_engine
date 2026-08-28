@@ -9,7 +9,7 @@
 // {ThroughputR,G,B}, within {RadianceR,G,B}, or between SampleIndex and
 // Bounce would round-trip undetected there.
 //
-// Here every one of the 17 fields gets a distinct value: float fields get
+// Here every one of the 20 fields gets a distinct value: float fields get
 // 1000.0 + fieldIndex, integer fields get 7000 + fieldIndex, in the enum's
 // declared order (OriginX=0 .. HitT=16). These are written as PLAIN
 // LITERALS, deliberately NOT derived from the PS_* constants -- if a value
@@ -54,4 +54,9 @@ void main() {
 
     // Field 16 (float, Task 5): 1000+index.
     psSetHitT(i, pc.capacity, 1016.0);
+
+    // Fields 17-19 (float, Stage 0b-2b Task 1): 1000+index. Deliberately
+    // NOT a unit vector -- this probe is about field placement, not about
+    // anything the value means.
+    psSetNormal(i, pc.capacity, vec3(1017.0, 1018.0, 1019.0));
 }
