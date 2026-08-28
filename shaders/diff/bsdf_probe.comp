@@ -1,0 +1,94 @@
+#version 450
+
+// Probe-only: evaluates ONE BSDF configuration per dispatch and writes the
+// result where the host can compare it against an INDEPENDENT CPU oracle
+// (diff_gpu_probe.cpp's bsdfOracle*, written from the published microfacet
+// formulas rather than from this shader or from bsdf.glsl).
+//
+// This exists because wf_scatter.comp offers no way to observe f or the pdf:
+// it only ever writes the finished throughput product into path state, and a
+// product is not enough to localise a wrong Fresnel exponent, a wrong GGX
+// denominator, or a pdf that silently disagrees with the sampler. This
+// shader calls exactly the same shaders/includes/diff/bsdf.glsl entry points
+// wf_scatter.comp calls -- diffBsdfEval and diffBsdfSample -- so it is the
+// production code under test, not a copy of it.
+//
+// One case per dispatch, driven entirely by push constants (80 bytes, well
+// inside the 128 Vulkan guarantees), so the host needs no upload path: the
+// only buffer is the output sink at binding 0, and each case writes its own
+// disjoint 12-float slot so a whole table can be filled by repeated
+// dispatches and read back once.
+//
+// Output layout, 12 floats at outIndex * 12:
+//   0..2   f(N, V, L)                        -- diffBsdfEval
+//   3      pdf(N, V, L)                      -- diffBsdfEval
+//   4..6   L_sampled, EXACTLY as drawn        -- diffBsdfSample
+//   7..9   weight (= f*cos/pdf at L_sampled) -- diffBsdfSample
+//   10     pdf at L_sampled                  -- diffBsdfSample
+//   11     dot(N, L_sampled)
+//
+// Slot 10 being 0 marks a REJECTED sample -- the GGX VNDF's below-horizon
+// tail, where the BRDF vanishes. The host confirms such a rejection is
+// legitimate by evaluating its own oracle at slots 4..6, which is only
+// possible because diffBsdfSample reports the direction it really drew
+// rather than substituting a usable one (wf_scatter.comp does that).
+
+#include "diff/bsdf.glsl"
+#include "pbr_unpack.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) buffer OutBuffer {
+    float v[];
+} outBuf;
+
+layout(push_constant) uniform Push {
+    vec4 normalRoughness;    // xyz = N (unit), w = roughness
+    vec4 viewMetallic;       // xyz = V (unit, points AWAY from the surface), w = metallic
+    vec4 lightSpecular;      // xyz = L (unit), w = specularWeight
+    vec4 baseColorU1;        // xyz = base colour, w = uDir.x
+    float u2;                // uDir.y
+    float uLobe;             // lobe-selection sample
+    uint outIndex;
+    uint pad;
+} pc;
+
+void main() {
+    if (gl_GlobalInvocationID.x != 0u) return;
+
+    const vec3 N = normalize(pc.normalRoughness.xyz);
+    const vec3 V = normalize(pc.viewMetallic.xyz);
+    const vec3 L = normalize(pc.lightSpecular.xyz);
+    const vec3 baseColor = pc.baseColorU1.xyz;
+    const float specularWeight = pc.lightSpecular.w;
+
+    // Same material unpack the RT pipeline and wf_scatter.comp use, so a
+    // change to the shared clamping convention moves both together.
+    float roughness;
+    float metallic;
+    unpackHitPbr(vec3(pc.normalRoughness.w, pc.viewMetallic.w, 0.0), roughness, metallic);
+
+    vec3 f;
+    float pdf;
+    diffBsdfEval(N, V, L, baseColor, roughness, metallic, specularWeight, f, pdf);
+
+    vec3 sampledL;
+    vec3 weight;
+    float pdfAtSample;
+    diffBsdfSample(N, V, baseColor, roughness, metallic, specularWeight,
+                   vec2(pc.baseColorU1.w, pc.u2), pc.uLobe, sampledL, weight, pdfAtSample);
+
+    const uint base = pc.outIndex * 12u;
+    outBuf.v[base + 0u]  = f.r;
+    outBuf.v[base + 1u]  = f.g;
+    outBuf.v[base + 2u]  = f.b;
+    outBuf.v[base + 3u]  = pdf;
+    outBuf.v[base + 4u]  = sampledL.x;
+    outBuf.v[base + 5u]  = sampledL.y;
+    outBuf.v[base + 6u]  = sampledL.z;
+    outBuf.v[base + 7u]  = weight.r;
+    outBuf.v[base + 8u]  = weight.g;
+    outBuf.v[base + 9u]  = weight.b;
+    outBuf.v[base + 10u] = pdfAtSample;
+    outBuf.v[base + 11u] = dot(N, sampledL);
+}

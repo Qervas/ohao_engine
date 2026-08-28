@@ -25,6 +25,49 @@ struct WavefrontGenerateCamera {
     float tanHalfFov{0.2f};
 };
 
+/// One BSDF configuration for runBsdfProbe. Byte-layout-matched to
+/// shaders/diff/bsdf_probe.comp's Push block: four vec4s followed by
+/// {float, float, uint, uint}. Kept as plain arrays for the same reason
+/// WavefrontGenerateCamera is -- no glm in this header.
+///
+/// `normal`, `view` and `light` are world-space directions; `view` points
+/// AWAY from the surface (it is -rayDirection), matching what
+/// wf_scatter.comp hands the BSDF. `roughness`/`metallic` go through
+/// shaders/includes/pbr_unpack.glsl's unpackHitPbr inside the shader, so
+/// values below its 0.01 roughness floor are clamped there.
+struct BsdfProbeCase {
+    float normal[3]{0.0f, 0.0f, 1.0f};
+    float roughness{1.0f};
+    float view[3]{0.0f, 0.0f, 1.0f};
+    float metallic{0.0f};
+    float light[3]{0.0f, 0.0f, 1.0f};
+    float specularWeight{0.0f};
+    float baseColor[3]{1.0f, 1.0f, 1.0f};
+    float u1{0.5f};
+    float u2{0.5f};
+    float uLobe{0.5f};
+    std::uint32_t outIndex{0};
+    std::uint32_t pad{0};
+};
+static_assert(sizeof(BsdfProbeCase) == 80,
+              "BsdfProbeCase must match bsdf_probe.comp's Push block layout");
+
+/// The material parameters wf_scatter.comp's BSDF needs beyond the base
+/// colour (`albedo`), byte-matched to the tail of
+/// WavefrontLoop::ScatterPush.
+///
+/// The defaults are the PURE LAMBERTIAN configuration: `specularWeight` 0
+/// removes the specular lobe entirely (both from f and from the lobe
+/// selection probability), leaving f = albedo/pi sampled by a cosine
+/// hemisphere, whose estimator weight f*cos/pdf is exactly `albedo` -- which
+/// is what keeps the pre-existing constant-albedo throughput checks (14, 17)
+/// asserting exactly what they asserted before, bit for bit.
+struct WavefrontScatterMaterial {
+    float roughness{1.0f};
+    float metallic{0.0f};
+    float specularWeight{0.0f};
+};
+
 /// Headless Vulkan context for standalone GPU probe executables.
 ///
 /// Owns a VkInstance, VkDevice (with the differentiable-renderer device
@@ -95,6 +138,17 @@ public:
     [[nodiscard]] bool runVisibilityProbe(float planeDistance, uint32_t width, uint32_t height,
                                           float tanHalfFov, std::vector<float>& outHits,
                                           float quadMinY = -1.0f);
+
+    /// Runs shaders/diff/bsdf_probe.comp for ONE BSDF configuration,
+    /// writing 12 floats into `sink`'s block `blockIndex` at
+    /// `probeCase.outIndex * 12` (see bsdf_probe.comp's header for the
+    /// slot layout). One dispatch per case; the caller reads the whole
+    /// block back once at the end.
+    ///
+    /// The shader calls the same shaders/includes/diff/bsdf.glsl entry
+    /// points wf_scatter.comp calls, so this observes the production BSDF,
+    /// not a copy of it.
+    [[nodiscard]] bool runBsdfProbe(GradientArena& sink, const BsdfProbeCase& probeCase);
 
     /// Runs shaders/diff/wf_generate.comp over a `width` x `height` grid of
     /// pixels (one path per pixel), writing origin/dir/throughput/radiance/
@@ -242,7 +296,8 @@ public:
                                                 uint32_t dstCountSlot, float albedo,
                                                 uint32_t iterationSeed,
                                                 std::vector<uint32_t>& outQueueDst,
-                                                std::vector<float>& outDebugDraws);
+                                                std::vector<float>& outDebugDraws,
+                                                const WavefrontScatterMaterial& material = {});
 
     /// Runs the WHOLE wavefront bounce loop through ohao::diff::WavefrontLoop
     /// -- generate, then prepare_indirect/intersect/prepare_indirect/scatter

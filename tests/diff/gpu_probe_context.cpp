@@ -404,6 +404,13 @@ bool GpuProbeContext::runAtomicProbe(GradientArena& arena, uint32_t targetIndex,
                                         &push, sizeof(push), (invocations + 63u) / 64u);
 }
 
+bool GpuProbeContext::runBsdfProbe(GradientArena& sink, const BsdfProbeCase& probeCase) {
+    // bsdf_probe.comp guards on gl_GlobalInvocationID.x == 0 and its
+    // local_size_x is 1, so one group is one invocation is one case.
+    return dispatchStorageBufferCompute("diff_bsdf_probe.comp.spv", sink.buffer(), &probeCase,
+                                        sizeof(probeCase), 1u);
+}
+
 bool GpuProbeContext::runRngParityProbe(uint32_t pixelIndex, uint32_t sampleIndex,
                                         uint32_t iterationSeed, uint32_t drawCount,
                                         GradientArena& scratch, std::size_t blockIndex,
@@ -1230,7 +1237,8 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                                uint32_t dstCountSlot, float albedo,
                                                uint32_t iterationSeed,
                                                std::vector<uint32_t>& outQueueDst,
-                                               std::vector<float>& outDebugDraws) {
+                                               std::vector<float>& outDebugDraws,
+                                               const WavefrontScatterMaterial& material) {
     outQueueDst.clear();
     outDebugDraws.clear();
 
@@ -1313,9 +1321,16 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     }
 
     if (ok) {
-        const WavefrontLoop::ScatterPush scatterPush{capacity,      srcQueueBase, srcCountSlot,
-                                                      dstQueueBase,  dstCountSlot, albedo,
-                                                      iterationSeed};
+        const WavefrontLoop::ScatterPush scatterPush{capacity,
+                                                     srcQueueBase,
+                                                     srcCountSlot,
+                                                     dstQueueBase,
+                                                     dstCountSlot,
+                                                     albedo,
+                                                     iterationSeed,
+                                                     material.roughness,
+                                                     material.metallic,
+                                                     material.specularWeight};
         scatter.setPushConstants(&scatterPush, sizeof(scatterPush));
         const VkDeviceSize dstSlotOffset =
             static_cast<VkDeviceSize>(dstCountSlot) * sizeof(uint32_t);
@@ -1949,7 +1964,17 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalY});
 
         WavefrontLoop loop;
-        loop.setConfig(WavefrontLoop::Config{albedo, iterationSeed});
+        // Named rather than positional: Config grew material fields BETWEEN
+        // albedo and iterationSeed (Stage 0b-2b Task 2), and a positional
+        // aggregate here would have silently re-bound iterationSeed to
+        // roughness had the compiler not caught the narrowing. The material
+        // is left at Config's defaults -- the pure Lambertian configuration
+        // for which the per-bounce estimator weight is exactly `albedo`, so
+        // checks 16-18 keep asserting what they always asserted.
+        WavefrontLoop::Config loopConfig;
+        loopConfig.albedo = albedo;
+        loopConfig.iterationSeed = iterationSeed;
+        loop.setConfig(loopConfig);
         loop.setGenerate(generate);
         loop.setPrepareIndirect(prepareIndirect);
         loop.setIntersect(intersect);

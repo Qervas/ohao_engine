@@ -1,24 +1,33 @@
 #version 450
 
-// Wavefront stage: scatter. Applies a CONSTANT albedo -- there is no real
-// BSDF yet, that is Stage 0b-2 -- to every path in the source queue, samples
-// a new direction, advances the path to its hit point, increments its
-// bounce counter, and re-queues it into the next bounce's ring by atomicAdd,
-// mirroring wf_intersect.comp's compaction mechanism exactly (every
-// invocation here always re-queues -- nothing terminates in scatter yet;
-// Stage 0b-2's Russian roulette would add a condition right where
+// Wavefront stage: scatter. Evaluates and importance-samples the surface
+// BSDF (shaders/includes/diff/bsdf.glsl -- Lambert + single-scattering GGX),
+// multiplies the path's throughput by the resulting estimator weight
+// f*cos/pdf, advances the path to its hit point along the sampled direction,
+// increments its bounce counter, and re-queues it into the next bounce's
+// ring by atomicAdd, mirroring wf_intersect.comp's compaction mechanism
+// exactly (every invocation here always re-queues -- nothing terminates in
+// scatter yet; Russian roulette would add a condition right where
 // wf_intersect.comp's miss branch sits).
 //
-// RNG reconstruction is the entire point of this file (see task-6 brief).
-// A megakernel keeps a path's RNG state in a register across every bounce,
-// so draw order is preserved for free. This stage cannot: it is a separate
-// vkCmdDispatch every bounce, so nothing survives in registers across that
-// boundary. Every invocation therefore rebuilds its RNG from
+// The BSDF is NOT written here. It lives in shaders/includes/diff/bsdf.glsl,
+// which in turn builds on shaders/includes/material/ggx_aniso.glsl -- the
+// same microfacet file the RT pipeline's raygen shaders use -- and is
+// observed directly by shaders/diff/bsdf_probe.comp, so diff_gpu_probe.cpp
+// can compare f, the pdf and the sampler weight term by term against a CPU
+// oracle written from the published formulas. This file's job is the
+// wavefront plumbing around that call, not the physics inside it.
+//
+// RNG reconstruction is the other entire point of this file (see task-6
+// brief). A megakernel keeps a path's RNG state in a register across every
+// bounce, so draw order is preserved for free. This stage cannot: it is a
+// separate vkCmdDispatch every bounce, so nothing survives in registers
+// across that boundary. Every invocation therefore rebuilds its RNG from
 // (pixelIndex, sampleIndex, iterationSeed) via diffRngForPath and
 // fast-forwards it past every earlier bounce's draws
 // (bounce * kDrawsPerBounce, where `bounce` comes from path state's Bounce
 // field -- never from anything carried over) before drawing this bounce's
-// own two values. Get the fast-forward count wrong and the path replays a
+// own values. Get the fast-forward count wrong and the path replays a
 // DIFFERENT random sequence starting next bounce: a perfectly plausible
 // image now, silently wrong gradients when Stage 1's backward pass replays
 // it. No crash, no NaN.
@@ -44,6 +53,8 @@
 
 #include "diff/path_state.glsl"
 #include "diff/rng.glsl"
+#include "diff/bsdf.glsl"
+#include "pbr_unpack.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -68,43 +79,37 @@ layout(push_constant) uniform Push {
     uint srcCountSlot;
     uint dstQueueBase;
     uint dstCountSlot;
+    // Base colour, as a grey scalar. There is one material for the whole
+    // dispatch: nothing in the wavefront path state carries a per-hit
+    // material id yet, and inventing one before there is a scene that needs
+    // it would be untestable plumbing.
     float albedo;
     uint iterationSeed;
+    // Material, matching WavefrontLoop::ScatterPush's tail. roughness and
+    // metallic go through pbr_unpack.glsl's unpackHitPbr below -- the SAME
+    // unpack the RT closest-hit path uses -- so the two pipelines' material
+    // interpretation (including its 0.01 roughness floor) cannot drift.
+    // specularWeight = 0 with metallic = 0 is the pure-Lambertian
+    // configuration whose per-bounce weight is exactly `albedo`.
+    float roughness;
+    float metallic;
+    float specularWeight;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
 // replaying ohao::diff::PathRng must agree on this exactly. Kept as a literal
 // constant (not derived from anything) so the CPU side can predict it without
 // querying the GPU for anything but the final draw values/count.
-const uint kDrawsPerBounce = 2u;
-
-// Placeholder BSDF sampling: cosine-weighted hemisphere about `normal` via
-// Malley's method. Stage 0b-2 replaces this with real Lambert/GGX importance
-// sampling; for Stage 0b-1 this exists only to prove the wavefront machinery
-// (state survival + RNG reconstruction) works, not to produce a correct image.
 //
-// `normal` is now an arbitrary unit vector rather than the old hardcoded
-// (0,0,1), so the up-vector choice below matters: it picks (0,0,1) unless
-// the normal is within ~2.6 degrees of the z axis, in which case it falls
-// back to (1,0,0). Either way `up` is far from parallel to `normal`, so the
-// cross product is well conditioned and the resulting (tangent, bitangent,
-// normal) frame is orthonormal for every normal. The returned direction
-// satisfies dot(result, normal) = sqrt(1 - u1) >= 2^-12 > 0 -- strictly
-// inside the hemisphere, never grazing to zero -- because diffRngNext1D
-// returns (state >> 8) * 2^-24 and so cannot exceed 1 - 2^-24. The
-// probe scene's survival proof rests on that strict positivity.
-vec3 diffCosineHemisphere(vec3 normal, float u1, float u2) {
-    const float r = sqrt(u1);
-    const float phi = 6.283185307179586 * u2;
-    const float x = r * cos(phi);
-    const float y = r * sin(phi);
-    const float z = sqrt(max(0.0, 1.0 - u1));
-
-    const vec3 up = (abs(normal.z) < 0.999) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-    const vec3 tangent = normalize(cross(up, normal));
-    const vec3 bitangent = cross(normal, tangent);
-    return normalize(tangent * x + bitangent * y + normal * z);
-}
+// THREE, not the two Stage 0b-1's placeholder sampler took: the BSDF needs a
+// 2-D sample for the direction plus a 1-D sample to choose between the
+// diffuse and specular lobes. The count must stay INDEPENDENT of which lobe
+// is chosen -- a data-dependent draw count would make the fast-forward above
+// unpredictable, and path-replay backpropagation would walk a different
+// stream than the forward pass -- which is why uLobe is drawn
+// unconditionally, even in the configurations where the lobe choice is
+// foregone.
+const uint kDrawsPerBounce = 3u;
 
 void main() {
     const uint slot = gl_GlobalInvocationID.x;
@@ -119,7 +124,7 @@ void main() {
 
     // Reconstruct from the tuple -- never from a register carried across a
     // dispatch boundary -- then fast-forward past every earlier bounce's
-    // draws before taking this bounce's own two. This loop is the seed
+    // draws before taking this bounce's own. This loop is the seed
     // invariant made literal: it is what makes this dispatch produce the
     // same stream a megakernel's register-resident RNG would have, despite
     // running as an entirely separate command.
@@ -127,36 +132,110 @@ void main() {
     for (uint i = 0u; i < bounce * kDrawsPerBounce; ++i) {
         diffRngNext1D(rng);
     }
+    // Direction sample FIRST, lobe choice second. That order is deliberate:
+    // it keeps the two values the debug sink records identical to the ones
+    // the Stage 0b-1 placeholder recorded, so the per-bounce RNG-parity
+    // checks compare the same stream positions they always did and only the
+    // draw COUNT moved.
     const float u1 = diffRngNext1D(rng);
     const float u2 = diffRngNext1D(rng);
+    const float uLobe = diffRngNext1D(rng);
 
     debugDraws.v[pathIndex * 3u + 0u] = u1;
     debugDraws.v[pathIndex * 3u + 1u] = u2;
     debugDraws.v[pathIndex * 3u + 2u] = uintBitsToFloat(rng.draws);
 
-    // 1. Constant-albedo throughput decay.
-    const vec3 throughput = psGetThroughput(pathIndex, pc.capacity);
-    psSetThroughput(pathIndex, pc.capacity, throughput * pc.albedo);
-
-    // 2. Advance to the hit point and sample a new direction.
     const vec3 origin = psGetOrigin(pathIndex, pc.capacity);
     const vec3 dir = psGetDir(pathIndex, pc.capacity);
     const float hitT = psGetHitT(pathIndex, pc.capacity);
 
-    // The real, forward-facing geometric normal of the hit, written into
-    // path state by wf_intersect.comp this same bounce. It replaced a
-    // hardcoded (0,0,1), which was only ever correct for the single
-    // camera-facing quad the Stage 0b-1 probes traced against, and which
-    // made every path march monotonically in +Z regardless of what it hit.
-    const vec3 normal = psGetNormal(pathIndex, pc.capacity);
-    const vec3 newDir = diffCosineHemisphere(normal, u1, u2);
-    const vec3 hitPoint = origin + dir * hitT;
+    // MISS GUARD. The stored Normal is UNDEFINED on a miss -- wf_intersect.comp
+    // deliberately leaves PS_NORMAL_X/Y/Z untouched when HitT is -1, so they
+    // hold whatever the arena held before, not a sentinel (see psGetNormal in
+    // path_state.glsl and PathStateField in path_state_layout.hpp). There is
+    // also no hit point to move to and no surface to scatter off. Nothing in
+    // the current pipeline routes a missed path here -- wf_intersect.comp
+    // compacts only survivors into the ring this stage consumes -- but the
+    // guard is not conditional on that continuing to hold. It re-queues
+    // without touching throughput, origin, dir or normal, preserving this
+    // stage's "every invocation re-queues" invariant while refusing to read
+    // an undefined field. The RNG draws above are taken BEFORE this point so
+    // that a missed path still advances its stream by exactly
+    // kDrawsPerBounce, keeping the fast-forward arithmetic uniform.
+    if (hitT >= 0.0) {
+        // The real geometric normal of the hit, written into path state by
+        // wf_intersect.comp.
+        vec3 normal = psGetNormal(pathIndex, pc.capacity);
 
-    psSetOrigin(pathIndex, pc.capacity, hitPoint + normal * 1e-4);
-    psSetDir(pathIndex, pc.capacity, newDir);
+        // Re-establish "forward-facing" AT THE POINT OF USE. wf_intersect.comp
+        // guarantees dot(Normal, Dir) <= 0 for the Dir that produced the hit,
+        // so in the real pipeline -- where intersect runs immediately before
+        // scatter, every bounce -- this flip never fires and costs one dot
+        // product. It exists because that guarantee is about a PAIR of
+        // fields, and scatter is what breaks the pair: it overwrites Dir with
+        // the scattered direction while leaving Normal alone, so any caller
+        // that runs scatter again without an intervening intersect (as
+        // diff_gpu_probe.cpp's check 14 deliberately does -- intersect once,
+        // scatter four times) hands this stage a Normal and a Dir from
+        // different bounces. Without the flip the BSDF would see
+        // dot(N, V) < 0, correctly report zero throughput for a direction
+        // below the surface, and the path would go black for a reason that
+        // has nothing to do with the BSDF being wrong. A one-sided opaque
+        // BSDF has no other sensible reading of a normal on the far side of
+        // the surface from the viewer.
+        //
+        // This does NOT weaken the geometric-normal check: check 19 asserts
+        // the STORED normal against an analytic oracle directly, so an
+        // intersect stage that forgot to flip is caught there, not hidden
+        // here.
+        if (dot(normal, dir) > 0.0) {
+            normal = -normal;
+        }
+
+        // V points away from the surface, back along the incoming ray.
+        const vec3 V = -dir;
+
+        float roughness;
+        float metallic;
+        unpackHitPbr(vec3(pc.roughness, pc.metallic, 0.0), roughness, metallic);
+
+        vec3 newDir;
+        vec3 weight;
+        float pdf;
+        diffBsdfSample(normal, V, vec3(pc.albedo), roughness, metallic, pc.specularWeight,
+                       vec2(u1, u2), uLobe, newDir, weight, pdf);
+
+        // PATH CONTINUATION for a rejected sample. diffBsdfSample returns
+        // the direction it actually drew, which for the GGX VNDF's
+        // below-horizon tail is a direction the BRDF is zero at: pdf = 0 and
+        // weight = 0. Zero weight is the correct Monte Carlo answer and is
+        // kept -- the path from here on contributes nothing -- but the
+        // direction cannot be: tracing a ray that points INTO the surface
+        // would send it out through the geometry, and the fused-loop
+        // survival theorem (every path alive at every bounce) needs
+        // dot(newDir, normal) > 0 for every path regardless of what the BSDF
+        // decided. Substituting the cosine-hemisphere direction the same
+        // uDir would have produced keeps the ray inside the scene at zero
+        // cost in extra random draws and, because the weight is already
+        // exactly zero, introduces no bias.
+        if (pdf <= 0.0) {
+            newDir = diffCosineHemisphere(normal, u1, u2);
+        }
+
+        // 1. Throughput decay by the BSDF estimator weight f*cos/pdf.
+        const vec3 throughput = psGetThroughput(pathIndex, pc.capacity);
+        psSetThroughput(pathIndex, pc.capacity, throughput * weight);
+
+        // 2. Advance to the hit point, offset along the geometric normal so
+        //    the next trace cannot re-hit the face it just left.
+        const vec3 hitPoint = origin + dir * hitT;
+        psSetOrigin(pathIndex, pc.capacity, hitPoint + normal * 1e-4);
+        psSetDir(pathIndex, pc.capacity, newDir);
+    }
 
     // 3. Bounce count, incremented -- this is what the next dispatch's
-    // fast-forward reads to know how many draws to skip.
+    // fast-forward reads to know how many draws to skip. Incremented on the
+    // miss path too, so the stream stays aligned with the draws taken above.
     psSetBounce(pathIndex, pc.capacity, bounce + 1u);
 
     // 4. Re-queue into the next bounce's ring. Every invocation reaching

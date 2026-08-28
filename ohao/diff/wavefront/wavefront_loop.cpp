@@ -363,9 +363,16 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
 
         // Shade + re-queue: src (which is now what intersect just produced)
         // -> dst.
-        const ScatterPush scatterPush{capacity,      src.queueBase, src.countSlot,
-                                      dst.queueBase, dst.countSlot, m_config.albedo,
-                                      m_config.iterationSeed};
+        const ScatterPush scatterPush{capacity,
+                                      src.queueBase,
+                                      src.countSlot,
+                                      dst.queueBase,
+                                      dst.countSlot,
+                                      m_config.albedo,
+                                      m_config.iterationSeed,
+                                      m_config.roughness,
+                                      m_config.metallic,
+                                      m_config.specularWeight};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);

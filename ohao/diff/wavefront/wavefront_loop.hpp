@@ -275,9 +275,31 @@ public:
     /// to `record()`, which is the only object that can state it
     /// authoritatively.
     struct Config {
-        /// Constant albedo `wf_scatter.comp` multiplies throughput by every
-        /// bounce. There is no real BSDF yet (Stage 0b-2).
+        /// The surface's base colour, as a grey scalar. `wf_scatter.comp`
+        /// expands it to vec3(albedo) and feeds it to
+        /// `shaders/includes/diff/bsdf.glsl`'s Lambert + GGX BSDF as the
+        /// base colour; with the default material below (pure Lambertian)
+        /// the resulting per-bounce estimator weight f*cos/pdf is exactly
+        /// this value, which is why it is still spelled "albedo".
         float albedo{0.5f};
+        /// GGX roughness, passed through `unpackHitPbr` (which floors it at
+        /// 0.01) inside the shader. Irrelevant while `specularWeight` is 0.
+        float roughness{1.0f};
+        /// Metalness. 0 = dielectric (diffuse lobe carries the base colour),
+        /// 1 = conductor (no diffuse lobe, specular tinted by the base
+        /// colour, lobe selection forced to specular).
+        float metallic{0.0f};
+        /// Scales the DIELECTRIC specular lobe -- both its contribution to
+        /// f and its share of the lobe-selection probability. 0 removes the
+        /// specular lobe entirely, leaving a pure Lambertian surface whose
+        /// estimator weight is exactly `albedo`; 1 reproduces the RT
+        /// pipeline's F0 = 0.04 dielectric. Conductors (`metallic` = 1) are
+        /// unaffected -- a metal has no diffuse lobe to fall back to.
+        ///
+        /// It defaults to 0, not 1, so that every pre-existing caller keeps
+        /// producing the exact constant-albedo throughput decay checks 14
+        /// and 17 assert bit-exactly.
+        float specularWeight{0.0f};
         /// Per-iteration RNG seed. Combined with (pixelIndex, sampleIndex)
         /// and the path's stored bounce count, this is the ONLY thing a
         /// scatter dispatch reconstructs its random stream from -- nothing
@@ -323,6 +345,10 @@ public:
         std::uint32_t dstCountSlot;
         float albedo;
         std::uint32_t iterationSeed;
+        // --- Material (Stage 0b-2b Task 2). See Config above for meaning.
+        float roughness;
+        float metallic;
+        float specularWeight;
     };
 
     WavefrontLoop() = default;

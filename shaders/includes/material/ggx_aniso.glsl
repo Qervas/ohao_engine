@@ -63,12 +63,36 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // branch (a = roughness*roughness), so the sampled D and the pdf below agree.
 // ---------------------------------------------------------------------------
 
-// Isotropic GGX normal distribution term with alpha = roughness^2 (numerically
-// identical to ggxD_anisoOrIso's isotropic branch).
+// Isotropic GGX normal distribution term with alpha = roughness^2.
+//
+// The divide-by-zero guard is a FLOOR ON alpha, not an epsilon added to the
+// denominator. It used to be `+ 1e-8` on the denominator, which is not a
+// guard so much as a bias: for alpha <= ~0.024 (roughness <= ~0.155) the
+// true denominator at the lobe's peak, pi*alpha^4, is itself of order 1e-6,
+// so the epsilon suppressed D by around a percent exactly where the lobe is
+// sharpest. That showed up as a measured 0.9% disagreement between this
+// function and an independent double-precision GGX written from Walter et
+// al. 2007 Eq. 33 (diff_gpu_probe.cpp's check 20, conductor at roughness
+// 0.15), which is a real inaccuracy in the D term rather than float noise.
+//
+// The floor is safe without an epsilon because denom = (N.H)^2(a^2-1)+1 is
+// bounded below by a^2 for every a <= 1 and by 1 for a >= 1, so with
+// a^2 >= 1e-8 the denominator is at least pi*1e-16 ~ 3e-16 -- comfortably
+// normal in float32. a^2 = 1e-8 is alpha = 1e-4, i.e. roughness = 0.01,
+// which is exactly the floor pbr_unpack.glsl's unpackHitPbr already applies,
+// so this changes nothing for any material that came through that unpack and
+// only makes near-mirror lobes fractionally brighter and more accurate for
+// any that did not.
+//
+// NOTE: ggxD_anisoOrIso's isotropic branch above still carries its own
+// `+ 0.0001` and is therefore NO LONGER numerically identical to this
+// function at sharp roughness. That epsilon is deliberately left alone: it
+// is load-bearing for the pre-existing rendered references the RT pipeline
+// is compared against, and nothing in the wavefront integrator calls it.
 float ggxDiso(float NdotH, float alpha) {
-    float a2    = alpha * alpha;
+    float a2    = max(alpha * alpha, 1e-8);
     float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    return a2 / (3.14159265 * denom * denom + 1e-8);
+    return a2 / (3.14159265 * denom * denom);
 }
 
 // Smith masking-shadowing auxiliary (GGX Lambda). cosTheta = N·w.

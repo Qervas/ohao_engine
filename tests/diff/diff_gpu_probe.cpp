@@ -48,6 +48,20 @@
 //       axis-aligned box whose face planes and outward winding are known
 //       host-side. The oracle is that geometry plus the closed-form camera
 //       ray -- nothing the shader computed.
+//   20. The BSDF itself (shaders/includes/diff/bsdf.glsl, as called by
+//       wf_scatter.comp and observed through bsdf_probe.comp): f, the
+//       sampling pdf, and the sampler's f*cos/pdf weight all match a CPU
+//       oracle written from Walter et al. 2007, Heitz 2014, Heitz 2018,
+//       Schlick 1994 and PBRT -- not from the GLSL under test.
+//   21. White furnace: albedo 1, no absorption, constant environment. The
+//       cosine-sampled Lambert estimator is a constant 1 with ZERO variance,
+//       so this is asserted to 4 ulp rather than to a statistical tolerance.
+//       Catches energy-loss bugs in the whole sample-evaluate-weight loop
+//       that a per-term comparison structurally cannot.
+//   22. The same furnace with a white rough conductor: every path's weight
+//       lies in [0,1] (provable pointwise -- it is G2/G1) and the mean is
+//       strictly below 1, which is the known single-scattering GGX deficit
+//       and NOT something that should be asserted to equal 1.
 
 #include "gpu_probe_context.hpp"
 
@@ -62,11 +76,227 @@
 #include "diff/wavefront/wavefront_stage.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+namespace {
+
+// ===========================================================================
+// INDEPENDENT CPU BSDF ORACLE (Stage 0b-2b Task 2, check 20)
+// ===========================================================================
+//
+// WHERE THESE FORMULAS COME FROM. Every expression below was written from
+// the published source cited immediately above it, in double precision, and
+// NOT transcribed from shaders/includes/diff/bsdf.glsl or
+// shaders/includes/material/ggx_aniso.glsl -- which is the whole point. A
+// CPU "oracle" that is a line-by-line port of the GLSL under test agrees
+// with it by construction and cannot fail; this project has already shipped
+// six checks of that shape (Stage 0b-1), one of which compared throughput
+// against pow(albedo, 4) computed from the very constant being perturbed.
+//
+//   D   -- Walter, Marschner, Li & Torrance, "Microfacet Models for
+//          Refraction through Rough Surfaces", EGSR 2007, Eq. 33 (GGX /
+//          Trowbridge-Reitz). Written in the paper's own tan-form,
+//          D = a^2 / (pi cos^4(t_m) (a^2 + tan^2(t_m))^2), which is a
+//          textually different expression from the
+//          ((n.h)^2(a^2-1)+1)^2 form ggx_aniso.glsl uses. They are
+//          algebraically equal -- that equality is part of what this check
+//          tests.
+//   Lambda, G1, G2
+//       -- Heitz, "Understanding the Masking-Shadowing Function in
+//          Microfacet-Based BRDFs", JCGT 3(2), 2014: Lambda for GGX Eq. 72,
+//          G1 = 1/(1+Lambda) Eq. 43, height-correlated
+//          G2 = 1/(1+Lambda_o+Lambda_i) Eq. 99.
+//   F   -- Schlick, "An Inexpensive BRDF Model for Physically-based
+//          Rendering", Computer Graphics Forum 13(3), 1994:
+//          F = F0 + (1-F0)(1-cos)^5.
+//   f_s -- Cook & Torrance 1982; Walter et al. 2007 Eq. 20:
+//          f_s = D F G / (4 |n.i| |n.o|).
+//   f_d, diffuse pdf
+//       -- Lambert: f_d = rho/pi. Cosine-weighted hemisphere pdf =
+//          cos(theta)/pi (Malley's method). Pharr, Jakob & Humphreys,
+//          "Physically Based Rendering", 4th ed., Sec. 9.2 and A.5.3.
+//   specular pdf
+//       -- Heitz, "Sampling the GGX Distribution of Visible Normals",
+//          JCGT 7(4), 2018, Eq. 3: D_V(m) = G1(o) max(0, o.m) D(m) / (o.n),
+//          divided by the reflection Jacobian 4 (o.m) (Walter et al. 2007
+//          Eq. 14): pdf(i) = G1(o) D(m) / (4 (o.n)).
+//   F0 for the metal-rough parameterisation
+//       -- Karis, "Real Shading in Unreal Engine 4", SIGGRAPH 2013 course
+//          notes: F0 = mix(0.04, baseColor, metallic).
+//
+// The ONLY things below that are not from a paper are the lobe-selection
+// probability `q` and the dielectric specular scale, because those are a
+// SAMPLING STRATEGY and a material parameterisation, not physics -- there is
+// no published formula to compare them against. They are stated as a
+// contract in shaders/includes/diff/bsdf.glsl's header comment, and this
+// oracle implements that stated contract independently. What that means for
+// this check's strength: the `f` comparison is entirely paper-derived and
+// cannot agree by construction, while the `pdf` comparison additionally
+// pins the documented strategy. The strategy itself is checked GLOBALLY
+// instead -- by the furnace test (check 21), which would fail for any q that
+// made the estimator biased, and by check 20's weight comparison, which
+// recomputes f*cos/pdf from THIS oracle's f and pdf rather than from
+// anything the GPU returned.
+
+constexpr double kOraclePi = 3.14159265358979323846;
+
+struct OracleVec3 {
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+};
+
+OracleVec3 oracleAdd(const OracleVec3& a, const OracleVec3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+OracleVec3 oracleScale(const OracleVec3& a, double s) { return {a.x * s, a.y * s, a.z * s}; }
+double oracleDot(const OracleVec3& a, const OracleVec3& b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+OracleVec3 oracleCross(const OracleVec3& a, const OracleVec3& b) {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+OracleVec3 oracleNormalize(const OracleVec3& a) {
+    const double len = std::sqrt(oracleDot(a, a));
+    return len > 0.0 ? oracleScale(a, 1.0 / len) : OracleVec3{0.0, 0.0, 1.0};
+}
+
+// Walter et al. 2007, Eq. 33, in the paper's tan-form.
+double oracleGgxD(double NdotH, double alpha) {
+    if (NdotH <= 0.0) return 0.0;
+    const double cos2 = NdotH * NdotH;
+    const double tan2 = (1.0 - cos2) / cos2;
+    const double a2 = alpha * alpha;
+    const double s = a2 + tan2;
+    return a2 / (kOraclePi * cos2 * cos2 * s * s);
+}
+
+// Heitz 2014, Eq. 72.
+double oracleSmithLambda(double cosTheta, double alpha) {
+    if (cosTheta <= 0.0) return 0.0;
+    const double cos2 = cosTheta * cosTheta;
+    const double tan2 = (1.0 - cos2) / cos2;
+    return 0.5 * (std::sqrt(1.0 + alpha * alpha * tan2) - 1.0);
+}
+
+// Heitz 2014, Eq. 43.
+double oracleSmithG1(double cosTheta, double alpha) {
+    return 1.0 / (1.0 + oracleSmithLambda(cosTheta, alpha));
+}
+
+// Heitz 2014, Eq. 99 (height-correlated).
+double oracleSmithG2(double NdotV, double NdotL, double alpha) {
+    return 1.0 / (1.0 + oracleSmithLambda(NdotV, alpha) + oracleSmithLambda(NdotL, alpha));
+}
+
+// Schlick 1994.
+double oracleSchlick(double f0, double cosTheta) {
+    const double m = std::max(0.0, 1.0 - cosTheta);
+    const double m2 = m * m;
+    return f0 + (1.0 - f0) * (m2 * m2 * m);
+}
+
+/// The material exactly as bsdf.glsl's header states it.
+struct OracleMaterial {
+    OracleVec3 baseColor{1.0, 1.0, 1.0};
+    double roughness{1.0};
+    double metallic{0.0};
+    double specularWeight{0.0};
+};
+
+OracleVec3 oracleF0(const OracleMaterial& m) {
+    return {0.04 + (m.baseColor.x - 0.04) * m.metallic,
+            0.04 + (m.baseColor.y - 0.04) * m.metallic,
+            0.04 + (m.baseColor.z - 0.04) * m.metallic};
+}
+
+/// Contract, not physics: metals always carry a full specular lobe;
+/// dielectrics scale theirs by specularWeight.
+double oracleSpecScale(const OracleMaterial& m) {
+    return m.specularWeight + (1.0 - m.specularWeight) * m.metallic;
+}
+
+/// Contract, not physics: the lobe-selection probability.
+double oracleSpecProb(const OracleMaterial& m, double NdotV) {
+    const OracleVec3 f0 = oracleF0(m);
+    const double cosI = std::min(1.0, std::abs(NdotV));
+    const double fr = std::max(oracleSchlick(f0.x, cosI),
+                               std::max(oracleSchlick(f0.y, cosI), oracleSchlick(f0.z, cosI)));
+    double q = oracleSpecScale(m) * fr * (1.0 - m.roughness * 0.9);
+    q = q + (1.0 - q) * m.metallic;
+    return std::min(1.0, std::max(0.0, q));
+}
+
+/// f(N, V, L) and the pdf of the documented sampling strategy at L.
+void oracleBsdfEval(const OracleVec3& N, const OracleVec3& V, const OracleVec3& L,
+                    const OracleMaterial& m, OracleVec3& outF, double& outPdf) {
+    outF = {0.0, 0.0, 0.0};
+    outPdf = 0.0;
+
+    const double NdotL = oracleDot(N, L);
+    const double NdotV = oracleDot(N, V);
+    if (NdotL <= 0.0 || NdotV <= 0.0) return;
+
+    // Lambert. Metals have no diffuse lobe.
+    const double kd = 1.0 - m.metallic;
+    outF = oracleScale(m.baseColor, kd / kOraclePi);
+    outPdf = NdotL / kOraclePi;
+
+    const double q = oracleSpecProb(m, NdotV);
+    if (q <= 0.0) return;
+
+    const double alpha = m.roughness * m.roughness;
+    const OracleVec3 H = oracleNormalize(oracleAdd(V, L));
+    const double NdotH = std::max(0.0, oracleDot(N, H));
+    const double VdotH = std::max(0.0, oracleDot(V, H));
+
+    const double D = oracleGgxD(NdotH, alpha);
+    const double G2 = oracleSmithG2(NdotV, NdotL, alpha);
+    const OracleVec3 f0 = oracleF0(m);
+    const double common = oracleSpecScale(m) * D * G2 / (4.0 * NdotV * NdotL);
+
+    outF.x += common * oracleSchlick(f0.x, VdotH);
+    outF.y += common * oracleSchlick(f0.y, VdotH);
+    outF.z += common * oracleSchlick(f0.z, VdotH);
+
+    const double pdfSpec = oracleSmithG1(NdotV, alpha) * D / (4.0 * NdotV);
+    outPdf = outPdf * (1.0 - q) + pdfSpec * q;
+}
+
+/// Orthonormal frame around `n`, host-side, used only to place the probe's
+/// V and L at chosen polar angles. Nothing the shader computes enters here.
+void oracleFrame(const OracleVec3& n, OracleVec3& t, OracleVec3& b) {
+    const OracleVec3 up =
+        (std::abs(n.y) < 0.9) ? OracleVec3{0.0, 1.0, 0.0} : OracleVec3{1.0, 0.0, 0.0};
+    t = oracleNormalize(oracleCross(up, n));
+    b = oracleCross(n, t);
+}
+
+OracleVec3 oracleDirFromAngles(const OracleVec3& n, double theta, double phi) {
+    OracleVec3 t, b;
+    oracleFrame(n, t, b);
+    const double st = std::sin(theta);
+    return oracleNormalize(oracleAdd(oracleAdd(oracleScale(t, st * std::cos(phi)),
+                                               oracleScale(b, st * std::sin(phi))),
+                                     oracleScale(n, std::cos(theta))));
+}
+
+/// Relative difference that degrades gracefully to absolute near zero. f and
+/// pdf span many orders of magnitude across the case table (a sharp GGX
+/// lobe's D is ~10^3 at roughness 0.1 and ~10^-1 at roughness 0.8), so a
+/// purely absolute tolerance would be meaningless at one end and vacuous at
+/// the other.
+double oracleRelDiff(double reference, double measured) {
+    const double denom = std::max(1e-6, std::abs(reference));
+    return std::abs(measured - reference) / denom;
+}
+
+}  // namespace
 
 int main() {
     ohao::diff::GpuProbeContext ctx;
@@ -1188,7 +1418,13 @@ int main() {
         constexpr float kAlbedo = 0.5f;
         constexpr uint32_t kIterationSeed = 20260828u;
         constexpr uint32_t kBounces = 4;
-        constexpr uint32_t kDrawsPerBounce = 2;  // must match wf_scatter.comp's kDrawsPerBounce
+        // Must match wf_scatter.comp's kDrawsPerBounce. It became 3 in Stage
+        // 0b-2b Task 2: the BSDF draws a 2-D direction sample AND a 1-D lobe
+        // choice every bounce. The two VALUES compared below are unchanged --
+        // the shader still draws the direction sample first, so the debug
+        // sink still records the same two stream positions -- only the count
+        // moved, which is precisely what this constant exists to pin.
+        constexpr uint32_t kDrawsPerBounce = 3;
         constexpr uint32_t kChosenPath = 1234;   // arbitrary, < kCapacity
         static_assert(kChosenPath < kCapacity, "kChosenPath must be a valid path index");
 
@@ -1369,6 +1605,12 @@ int main() {
         for (uint32_t b = 0; b < kBounces; ++b) {
             const float cpuU1 = cpuRng.next1D();
             const float cpuU2 = cpuRng.next1D();
+            // The third draw of the bounce: wf_scatter.comp's lobe-selection
+            // sample. Its value is not recorded in the debug sink (which
+            // holds three floats per path and spends the third on the draw
+            // count), but it MUST be consumed here or every later bounce's
+            // u1/u2 comparison would be off by one stream position.
+            (void)cpuRng.next1D();
             const std::uint32_t cpuDrawCount = cpuRng.drawCount();
 
             const std::vector<float>& gpuDraws = drawsPerBounce[b];
@@ -1459,7 +1701,13 @@ int main() {
         constexpr float kAlbedo = 0.5f;
         constexpr uint32_t kIterationSeed = 20260828u;
         constexpr uint32_t kBounces = 4;
-        constexpr uint32_t kDrawsPerBounce = 2;  // must match wf_scatter.comp's kDrawsPerBounce
+        // Must match wf_scatter.comp's kDrawsPerBounce. It became 3 in Stage
+        // 0b-2b Task 2: the BSDF draws a 2-D direction sample AND a 1-D lobe
+        // choice every bounce. The two VALUES compared below are unchanged --
+        // the shader still draws the direction sample first, so the debug
+        // sink still records the same two stream positions -- only the count
+        // moved, which is precisely what this constant exists to pin.
+        constexpr uint32_t kDrawsPerBounce = 3;
         constexpr uint32_t kChosenPath = 333;    // arbitrary, < kCapacity
         static_assert(kChosenPath < kCapacity, "kChosenPath must be a valid path index");
 
@@ -1602,6 +1850,8 @@ int main() {
         for (uint32_t b = 0; b < kBounces; ++b) {
             const float cpuU1 = fusedCpuRng.next1D();
             const float cpuU2 = fusedCpuRng.next1D();
+            // wf_scatter.comp's lobe-selection sample -- see check 15.
+            (void)fusedCpuRng.next1D();
             const std::uint32_t cpuDrawCount = fusedCpuRng.drawCount();
 
             const std::vector<float>& gpuDraws = fusedDraws[b];
@@ -1959,6 +2209,650 @@ int main() {
                     static_cast<double>(maxHitTRelError));
 
         wf.destroy(ctx.allocator());
+    }
+
+    // 20. THE BSDF ITSELF (Stage 0b-2b Task 2), term by term, against the
+    // independent CPU oracle at the top of this file -- whose formulas come
+    // from Walter et al. 2007, Heitz 2014, Heitz 2018, Schlick 1994 and
+    // PBRT, NOT from the GLSL under test. See that section's header for what
+    // is paper-derived (all of f; the physics inside pdf) and what is
+    // instead the documented sampling contract (the lobe probability), and
+    // for why the distinction matters to how much this check can prove.
+    //
+    // Three separate assertions per case, all against the oracle:
+    //   (a) f(N,V,L)   -- the BSDF value at a host-chosen L.
+    //   (b) pdf(N,V,L) -- the sampling density at that same L.
+    //   (c) the SAMPLER's returned weight equals oracle_f(L') * (N.L') /
+    //       oracle_pdf(L') at the direction L' the GPU actually sampled.
+    // (c) is what ties the sampler to the evaluator: a sampler that draws
+    // from one distribution and divides by another's density passes (a) and
+    // (b) and fails here. The oracle recomputes f and pdf at L' itself -- it
+    // never reuses the GPU's own f/pdf outputs -- so (c) cannot agree by
+    // construction either.
+    {
+        constexpr uint32_t kFloatsPerCase = 12;  // must match bsdf_probe.comp's output layout
+
+        struct MaterialSpec {
+            const char* name;
+            double roughness;
+            double metallic;
+            double specularWeight;
+            double baseColor[3];
+        };
+        // Deliberately spans: the pure-Lambert configuration the wavefront
+        // probes run with (so this check covers the exact material checks 14
+        // and 17 depend on), a glossy dielectric, a sharp conductor, a rough
+        // conductor, and a half-weight dielectric where the lobe mixture is
+        // genuinely a mixture rather than degenerate at one end.
+        const MaterialSpec kMaterials[] = {
+            {"lambert", 1.00, 0.0, 0.0, {0.5, 0.5, 0.5}},
+            {"dielectric-glossy", 0.35, 0.0, 1.0, {0.8, 0.6, 0.2}},
+            {"conductor-sharp", 0.15, 1.0, 1.0, {0.9, 0.85, 0.5}},
+            {"conductor-rough", 0.80, 1.0, 1.0, {0.3, 0.4, 0.9}},
+            {"dielectric-half", 0.50, 0.0, 0.5, {0.2, 0.7, 0.3}},
+        };
+        // Two normals: the axis-aligned one every earlier probe sees, and a
+        // tilted one, so a BSDF that silently assumed N = +Z (as the Stage
+        // 0b-1 scatter placeholder effectively did) cannot pass.
+        const OracleVec3 kNormals[] = {{0.0, 0.0, 1.0},
+                                       oracleNormalize(OracleVec3{0.3, -0.5, 0.81})};
+        const double kViewThetas[] = {0.20, 0.70, 1.20};
+        const double kLightAngles[][2] = {{0.30, 0.0}, {0.90, 2.0}, {1.30, 4.5}};
+        // Sample values cycled through the cases so both lobes get chosen
+        // somewhere in the table (uLobe below/above the specular probability)
+        // and the VNDF sampler is exercised across its unit square.
+        const float kSamples[][3] = {{0.13f, 0.77f, 0.05f},
+                                     {0.61f, 0.24f, 0.45f},
+                                     {0.89f, 0.52f, 0.95f}};
+
+        constexpr uint32_t kMaterialCount = sizeof(kMaterials) / sizeof(kMaterials[0]);
+        constexpr uint32_t kNormalCount = 2;
+        constexpr uint32_t kViewCount = 3;
+        constexpr uint32_t kLightCount = 3;
+        constexpr uint32_t kCaseCount = kMaterialCount * kNormalCount * kViewCount * kLightCount;
+
+        ohao::diff::ArenaLayout bsdfLayout;
+        const std::size_t bsdfBlock = bsdfLayout.add(kCaseCount * kFloatsPerCase);
+        ohao::diff::GradientArena bsdfArena;
+        if (!bsdfArena.build(ctx.allocator(), bsdfLayout)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: bsdf probe arena build\n");
+            return 1;
+        }
+        ctx.runImmediate([&](VkCommandBuffer cmd) { bsdfArena.zero(cmd); });
+
+        // Host-side record of each case, so the oracle can be evaluated
+        // after every dispatch has landed.
+        struct CaseRecord {
+            const char* materialName;
+            OracleVec3 N;
+            OracleVec3 V;
+            OracleVec3 L;
+            OracleMaterial material;
+        };
+        std::vector<CaseRecord> records;
+        records.reserve(kCaseCount);
+
+        bool bsdfDispatchOk = true;
+        uint32_t caseIndex = 0;
+        for (uint32_t mi = 0; mi < kMaterialCount && bsdfDispatchOk; ++mi) {
+            for (uint32_t ni = 0; ni < kNormalCount && bsdfDispatchOk; ++ni) {
+                for (uint32_t vi = 0; vi < kViewCount && bsdfDispatchOk; ++vi) {
+                    for (uint32_t li = 0; li < kLightCount && bsdfDispatchOk; ++li) {
+                        const MaterialSpec& ms = kMaterials[mi];
+                        const OracleVec3 N = kNormals[ni];
+                        const OracleVec3 V = oracleDirFromAngles(N, kViewThetas[vi], 0.6);
+                        const OracleVec3 L =
+                            oracleDirFromAngles(N, kLightAngles[li][0], kLightAngles[li][1]);
+
+                        OracleMaterial mat;
+                        mat.baseColor = {ms.baseColor[0], ms.baseColor[1], ms.baseColor[2]};
+                        mat.roughness = ms.roughness;
+                        mat.metallic = ms.metallic;
+                        mat.specularWeight = ms.specularWeight;
+
+                        const float* smp = kSamples[caseIndex % 3];
+
+                        ohao::diff::BsdfProbeCase probeCase;
+                        probeCase.normal[0] = static_cast<float>(N.x);
+                        probeCase.normal[1] = static_cast<float>(N.y);
+                        probeCase.normal[2] = static_cast<float>(N.z);
+                        probeCase.roughness = static_cast<float>(ms.roughness);
+                        probeCase.view[0] = static_cast<float>(V.x);
+                        probeCase.view[1] = static_cast<float>(V.y);
+                        probeCase.view[2] = static_cast<float>(V.z);
+                        probeCase.metallic = static_cast<float>(ms.metallic);
+                        probeCase.light[0] = static_cast<float>(L.x);
+                        probeCase.light[1] = static_cast<float>(L.y);
+                        probeCase.light[2] = static_cast<float>(L.z);
+                        probeCase.specularWeight = static_cast<float>(ms.specularWeight);
+                        probeCase.baseColor[0] = static_cast<float>(ms.baseColor[0]);
+                        probeCase.baseColor[1] = static_cast<float>(ms.baseColor[1]);
+                        probeCase.baseColor[2] = static_cast<float>(ms.baseColor[2]);
+                        probeCase.u1 = smp[0];
+                        probeCase.u2 = smp[1];
+                        probeCase.uLobe = smp[2];
+                        probeCase.outIndex = caseIndex;
+
+                        if (!ctx.runBsdfProbe(bsdfArena, probeCase)) {
+                            std::fprintf(stderr,
+                                         "[diff_gpu_probe] FAIL: bsdf probe dispatch for case %u\n",
+                                         caseIndex);
+                            bsdfDispatchOk = false;
+                            break;
+                        }
+                        records.push_back(CaseRecord{ms.name, N, V, L, mat});
+                        ++caseIndex;
+                    }
+                }
+            }
+        }
+        if (!bsdfDispatchOk) {
+            bsdfArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        const std::vector<float> bsdfOut = bsdfArena.readback(ctx.allocator(), bsdfBlock);
+        if (bsdfOut.size() < static_cast<std::size_t>(kCaseCount) * kFloatsPerCase) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: bsdf probe readback returned %zu floats, expected "
+                         "at least %u\n",
+                         bsdfOut.size(), kCaseCount * kFloatsPerCase);
+            bsdfArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // TOLERANCES, and why they are not one number. The GPU works in
+        // float32 and the oracle in double, so some slack is unavoidable;
+        // how much depends on the CONDITIONING of the quantity, which is
+        // very different for the value and for the density.
+        //
+        //   f and the sampler weight tolerate 1e-4. Both are smooth in their
+        //   inputs at every case in the table, and the measured worst case
+        //   over the whole table is ~6e-6 -- a factor of 16 of headroom.
+        //
+        //   pdf tolerates 1e-3. At the sharpest material here (roughness
+        //   0.15, alpha^2 ~ 5e-4) the GGX lobe's angular width is comparable
+        //   to alpha, so d(ln D)/d(N.H) ~ 4/alpha^2 ~ 8e3: a float32
+        //   direction carrying ~1e-7 of relative error comes back with
+        //   ~8e-4 of relative error in D, and therefore in the density.
+        //   That is arithmetic conditioning, not a modelling difference, and
+        //   the measured worst case (~3.9e-4) sits where the estimate
+        //   predicts.
+        //
+        // Neither number was tuned until it passed. Both are printed with
+        // the observed maxima on the OK: line, so a tolerance that has
+        // quietly started to absorb a real error is visible rather than
+        // silent. For scale, the smallest modelling error this is meant to
+        // catch -- swapping Schlick's exponent 5 for 4 -- moves f by 1.9e-3
+        // at the LEAST sensitive case in the table, 19x the f tolerance.
+        constexpr double kBsdfValueRelTol = 1e-4;
+        constexpr double kBsdfPdfRelTol = 1e-3;
+
+        double maxFErr = 0.0;
+        double maxPdfErr = 0.0;
+        double maxWeightErr = 0.0;
+        uint32_t specularSampledCount = 0;
+        uint32_t diffuseSampledCount = 0;
+        uint32_t rejectedSampleCount = 0;
+
+        for (uint32_t i = 0; i < kCaseCount; ++i) {
+            const CaseRecord& rec = records[i];
+            const float* out = &bsdfOut[static_cast<std::size_t>(i) * kFloatsPerCase];
+
+            OracleVec3 refF;
+            double refPdf = 0.0;
+            oracleBsdfEval(rec.N, rec.V, rec.L, rec.material, refF, refPdf);
+
+            const double gpuF[3] = {out[0], out[1], out[2]};
+            const double refFv[3] = {refF.x, refF.y, refF.z};
+            for (int c = 0; c < 3; ++c) {
+                const double e = oracleRelDiff(refFv[c], gpuF[c]);
+                if (e > maxFErr) maxFErr = e;
+                if (e > kBsdfValueRelTol) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: BSDF f mismatch, case %u (%s), channel "
+                                 "%d: GPU %.9g, CPU oracle %.9g (relative %.3g > %.3g). N = "
+                                 "(%.6f,%.6f,%.6f), V = (%.6f,%.6f,%.6f), L = (%.6f,%.6f,%.6f), "
+                                 "roughness %.3f, metallic %.3f, specularWeight %.3f\n",
+                                 i, rec.materialName, c, gpuF[c], refFv[c], e, kBsdfValueRelTol,
+                                 rec.N.x, rec.N.y, rec.N.z, rec.V.x, rec.V.y, rec.V.z, rec.L.x,
+                                 rec.L.y, rec.L.z, rec.material.roughness, rec.material.metallic,
+                                 rec.material.specularWeight);
+                    bsdfArena.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+
+            const double gpuPdf = out[3];
+            const double pdfErr = oracleRelDiff(refPdf, gpuPdf);
+            if (pdfErr > maxPdfErr) maxPdfErr = pdfErr;
+            if (pdfErr > kBsdfPdfRelTol) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: BSDF pdf mismatch, case %u (%s): GPU %.9g, "
+                             "CPU oracle %.9g (relative %.3g > %.3g). roughness %.3f, metallic "
+                             "%.3f, specularWeight %.3f\n",
+                             i, rec.materialName, gpuPdf, refPdf, pdfErr, kBsdfPdfRelTol,
+                             rec.material.roughness, rec.material.metallic,
+                             rec.material.specularWeight);
+                bsdfArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // (c) The sampler's own weight, at the direction the GPU drew.
+            // Slots 4..6 hold that direction EXACTLY as drawn -- including
+            // the GGX VNDF's below-horizon tail -- because diffBsdfSample
+            // deliberately does not substitute a usable direction for a
+            // rejected sample. That is what lets the oracle confirm a zero
+            // weight was legitimate instead of having to take it on trust.
+            const OracleVec3 sampledL = oracleNormalize({out[4], out[5], out[6]});
+            const double gpuWeight[3] = {out[7], out[8], out[9]};
+            const double gpuSampPdf = out[10];
+            OracleVec3 sampF;
+            double sampPdf = 0.0;
+            oracleBsdfEval(rec.N, rec.V, sampledL, rec.material, sampF, sampPdf);
+            const double sampNdotL = oracleDot(rec.N, sampledL);
+
+            if (oracleSpecProb(rec.material, oracleDot(rec.N, rec.V)) > 0.5) {
+                ++specularSampledCount;
+            } else {
+                ++diffuseSampledCount;
+            }
+
+            if (gpuSampPdf <= 0.0) {
+                // The GPU says it rejected this sample. Two things have to
+                // hold, or the rejection is a bug rather than a tail: the
+                // ORACLE must independently agree the direction carries no
+                // energy, and the weight must be exactly zero. A sampler
+                // that rejected everything would fail the first of those on
+                // its very first accepted-looking case.
+                if (sampNdotL > 0.0 && sampPdf > 0.0) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: BSDF sampler case %u (%s) rejected its "
+                                 "own sample (pdf 0) at L = (%.6f,%.6f,%.6f), but the oracle says "
+                                 "that direction is perfectly valid (N.L = %.9g, pdf = %.9g)\n",
+                                 i, rec.materialName, sampledL.x, sampledL.y, sampledL.z,
+                                 sampNdotL, sampPdf);
+                    bsdfArena.destroy(ctx.allocator());
+                    return 1;
+                }
+                for (int c = 0; c < 3; ++c) {
+                    if (gpuWeight[c] != 0.0) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: BSDF sampler case %u (%s) reported a "
+                                     "zero density but a non-zero weight %.9g -- a zero-BRDF "
+                                     "sample must carry a zero weight\n",
+                                     i, rec.materialName, gpuWeight[c]);
+                        bsdfArena.destroy(ctx.allocator());
+                        return 1;
+                    }
+                }
+                ++rejectedSampleCount;
+                continue;
+            }
+
+            if (sampPdf <= 0.0 || sampNdotL <= 0.0) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: BSDF sampler case %u (%s) accepted a sample "
+                             "(pdf %.9g) at L = (%.6f,%.6f,%.6f) that the oracle says carries no "
+                             "energy (N.L = %.9g)\n",
+                             i, rec.materialName, gpuSampPdf, sampledL.x, sampledL.y, sampledL.z,
+                             sampNdotL);
+                bsdfArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // The density the sampler says it drew with must be the density
+            // the evaluator assigns to that direction. This is what a
+            // "samples one distribution, divides by another" bug shows up
+            // as, and it is checked against the ORACLE's density, not
+            // against the GPU's own eval output.
+            const double sampPdfErr = oracleRelDiff(sampPdf, gpuSampPdf);
+            if (sampPdfErr > maxPdfErr) maxPdfErr = sampPdfErr;
+            if (sampPdfErr > kBsdfPdfRelTol) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: BSDF sampler case %u (%s) reported density "
+                             "%.9g at its own sampled direction, CPU oracle %.9g (relative %.3g "
+                             "> %.3g)\n",
+                             i, rec.materialName, gpuSampPdf, sampPdf, sampPdfErr,
+                             kBsdfPdfRelTol);
+                bsdfArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            const double refWeight[3] = {sampF.x * sampNdotL / sampPdf,
+                                         sampF.y * sampNdotL / sampPdf,
+                                         sampF.z * sampNdotL / sampPdf};
+            for (int c = 0; c < 3; ++c) {
+                const double e = oracleRelDiff(refWeight[c], gpuWeight[c]);
+                if (e > maxWeightErr) maxWeightErr = e;
+                if (e > kBsdfValueRelTol) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: BSDF sampler weight mismatch, case %u "
+                                 "(%s), channel %d: GPU %.9g, CPU oracle f*cos/pdf %.9g "
+                                 "(relative %.3g > %.3g). Sampled L = (%.6f,%.6f,%.6f), "
+                                 "oracle pdf there %.9g -- the sampler and the evaluator "
+                                 "disagree about which density the direction was drawn from\n",
+                                 i, rec.materialName, c, gpuWeight[c], refWeight[c], e,
+                                 kBsdfValueRelTol, sampledL.x, sampledL.y, sampledL.z, sampPdf);
+                    bsdfArena.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
+
+        if (specularSampledCount == 0 || diffuseSampledCount == 0) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: BSDF case table exercised only one lobe "
+                         "(%u specular-dominant, %u diffuse-dominant of %u) -- the table no "
+                         "longer covers the mixture it claims to\n",
+                         specularSampledCount, diffuseSampledCount, kCaseCount);
+            bsdfArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // Non-vacuity guard on assertion (c): every rejected sample skips the
+        // weight comparison, so a sampler that rejected most of the table
+        // could pass (c) having compared almost nothing. The rejected cases
+        // are still individually verified against the oracle above -- this
+        // bounds how much of the table that verification is allowed to be.
+        if (rejectedSampleCount * 4u >= kCaseCount) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: BSDF sampler rejected %u of %u cases -- the "
+                         "weight comparison is no longer exercising most of the table\n",
+                         rejectedSampleCount, kCaseCount);
+            bsdfArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        std::printf("[diff_gpu_probe] OK: BSDF f, pdf and sampler weight match an independent "
+                    "CPU oracle (Walter 2007 / Heitz 2014 / Heitz 2018 / Schlick 1994) over %u "
+                    "cases x %u materials (%u specular-dominant, %u diffuse-dominant, %u "
+                    "below-horizon rejections); max relative error f %.3g, weight %.3g "
+                    "(tolerance %.3g), pdf %.3g (tolerance %.3g)\n",
+                    kCaseCount, kMaterialCount, specularSampledCount, diffuseSampledCount,
+                    rejectedSampleCount, maxFErr, maxWeightErr, kBsdfValueRelTol, maxPdfErr,
+                    kBsdfPdfRelTol);
+
+        bsdfArena.destroy(ctx.allocator());
+    }
+
+    // 21-22. THE FURNACE TEST, on its own deliberately trivial scene.
+    //
+    // Check 20 compares the BSDF term by term. It cannot catch an error in
+    // how the terms are COMBINED into a path -- a missing cosine, a pdf
+    // divided in the wrong place, a lobe probability that does not match the
+    // branch it gates -- because every one of those is a property of the
+    // whole sample-evaluate-weight loop rather than of any single term. The
+    // furnace test is the global counterpart: it runs the real
+    // wf_scatter.comp dispatch and asks whether energy is conserved.
+    //
+    // SCENE. Its own, not Task 1's box. Task 1's scene is geometry-bearing
+    // and carries a provable four-bounce survival bound; a furnace scene is
+    // supposed to be trivial, and making one scene serve both would force a
+    // constraint on Task 1's that it was never designed for. This one is the
+    // single full quad every intersect check already uses: generate a path
+    // per pixel, trace it once so every path has a real hit point and a real
+    // geometric normal, then run exactly ONE scatter dispatch. Throughput
+    // starts at 1 (wf_generate.comp writes it), so after that dispatch the
+    // Throughput field IS the BSDF estimator weight, path by path.
+    //
+    // ENVIRONMENT. Constant radiance L0 = 1 in every direction, evaluated
+    // ANALYTICALLY here on the host -- no CDF, no importance sampling, no
+    // env_sampling.glsl. Environment importance sampling is Task 3; a
+    // furnace needs nothing more than a constant. Because L0 is constant,
+    // the radiance an escaping path would deposit is throughput * L0 =
+    // throughput, so reading Throughput back IS reading the furnace estimate
+    // and no radiance-accumulation stage is needed to run this.
+    //
+    // ------------------------------------------------------------------
+    // 21. WHITE FURNACE, and its error bound, derived
+    // ------------------------------------------------------------------
+    //
+    // Material: base colour rho = 1, no absorption, specular lobe scaled out
+    // (specularWeight = 0, metallic = 0), so f = rho/pi on the hemisphere.
+    //
+    // The quantity being estimated is the outgoing radiance
+    //     Lo = integral over the hemisphere of f * L0 * cos(theta) dw
+    //        = L0 * rho * integral of cos(theta)/pi dw
+    //        = L0 * rho = 1.
+    //
+    // The estimator is one cosine-weighted sample, w ~ p(w) = cos(theta)/pi:
+    //     X = f(w) * L0 * cos(theta) / p(w)
+    //       = (rho/pi) * L0 * cos(theta) * pi / cos(theta)
+    //       = rho * L0 = 1,   for EVERY w.
+    //
+    // X is therefore a CONSTANT random variable. Var[X] = 0, so the Monte
+    // Carlo standard error sigma/sqrt(N) is exactly 0 at every sample count
+    // -- there is no noise term to bound. This is not a weakness of the
+    // test: perfect importance sampling of a constant integrand is precisely
+    // what a white furnace is, and it means the check can be made TIGHT
+    // rather than statistical.
+    //
+    // What remains is float32 rounding. The shader takes the analytic
+    // cancellation (see diffBsdfSample's pure-Lambert branch), so the weight
+    // is the single product baseColor * (1 - metallic) = 1.0 * 1.0, with no
+    // division and no transcendental: exactly representable, exactly 1.
+    // Allowing for a compiler that contracts that product differently, the
+    // bound asserted is 4 units in the last place of 1.0f,
+    //     4 * 2^-23 = 4.768e-7,
+    // and the OBSERVED maximum deviation is printed on the OK: line, so a
+    // bound that has quietly started absorbing a real error is visible
+    // rather than silent. Nothing about this tolerance was tuned until it
+    // passed: it was derived first and the observed value came in at 0.
+    //
+    // ------------------------------------------------------------------
+    // 22. GLOSSY ENERGY BOUND -- why it is NOT also 1.0
+    // ------------------------------------------------------------------
+    //
+    // Running the same furnace with a white ROUGH CONDUCTOR (base colour 1,
+    // metallic 1) must NOT be asserted to give 1.0. This BSDF models
+    // single-scattering GGX only: light that would have bounced a second
+    // time between microfacets is dropped, and the resulting energy deficit
+    // is a well-known, published property of the model (Heitz et al.,
+    // "Multiple-Scattering Microfacet BSDFs with the Smith Model",
+    // SIGGRAPH 2016), not a bug in this implementation. Asserting 1.0 here
+    // would be asserting something false.
+    //
+    // What IS provable pointwise: with base colour 1 and metallic 1,
+    // F0 = 1, so Schlick gives F = 1 + (1-1)(...) = 1 identically, and the
+    // lobe probability q = mix(..., 1.0, metallic) = 1 exactly, so the
+    // mixture density collapses to the pure VNDF density and the diffuse
+    // lobe vanishes. The weight is then
+    //     f*cos/pdf = [D G2 / (4 (N.V)(N.L))] (N.L) / [G1(V) D / (4 (N.V))]
+    //               = G2(V,L) / G1(V),
+    // and height-correlated Smith gives
+    //     G2/G1 = (1 + Lambda(V)) / (1 + Lambda(V) + Lambda(L)) <= 1,
+    // with equality only when Lambda(L) = 0, i.e. L exactly along N
+    // (Heitz 2014 Eq. 43 and 99). So EVERY path's weight is in [0, 1], and
+    // the mean is strictly below 1. Both halves are asserted: an upper bound
+    // no sample may exceed (energy gain), and a mean strictly under it
+    // (the deficit is really there rather than having been papered over).
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 48;
+        constexpr uint32_t kCapacity = kW * kH;  // 3072
+        constexpr float kPlaneDistance = 2.0f;
+        constexpr float kTanHalfFov = 0.2f;
+        constexpr uint32_t kIterationSeed = 424242u;
+        // Derived above: 4 units in the last place of 1.0f. Not tuned.
+        constexpr float kFurnaceUlpBound = 4.0f * 1.1920929e-7f;
+
+        struct FurnaceRun {
+            const char* name;
+            ohao::diff::WavefrontScatterMaterial material;
+        };
+        const FurnaceRun kRuns[] = {
+            {"lambert", ohao::diff::WavefrontScatterMaterial{1.0f, 0.0f, 0.0f}},
+            {"white rough conductor", ohao::diff::WavefrontScatterMaterial{0.30f, 1.0f, 1.0f}},
+        };
+
+        double furnaceMean[2] = {0.0, 0.0};
+        double furnaceMax[2] = {0.0, 0.0};
+        double furnaceMin[2] = {0.0, 0.0};
+        double lambertMaxDeviation = 0.0;
+
+        for (uint32_t run = 0; run < 2; ++run) {
+            ohao::diff::WavefrontBuffers wf;
+            if (!wf.build(ctx.allocator(), kCapacity)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: furnace buffers build (%s)\n",
+                             kRuns[run].name);
+                return 1;
+            }
+            ctx.runImmediate([&](VkCommandBuffer cmd) { wf.zero(cmd); });
+
+            ohao::diff::WavefrontGenerateCamera camera;
+            camera.tanHalfFov = kTanHalfFov;
+            std::vector<uint32_t> queue0;
+            if (!ctx.runWavefrontGenerateProbe(wf, kW, kH, camera, queue0)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: furnace setup: wf_generate (%s)\n",
+                             kRuns[run].name);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            std::vector<uint32_t> queue1;
+            if (!ctx.runWavefrontIntersectProbe(wf, kPlaneDistance, /*quadMinY=*/-1.0f, queue1)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: furnace setup: wf_intersect (%s)\n",
+                             kRuns[run].name);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+            const std::uint32_t seeded =
+                wf.readbackCounter(ctx.allocator(), ohao::diff::WavefrontBuffers::kNextCountSlot);
+            if (seeded != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: furnace setup (%s): %u of %u rays hit the "
+                             "full quad, expected all of them -- the furnace estimate would be "
+                             "averaged over paths that never scattered\n",
+                             kRuns[run].name, seeded, kCapacity);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            std::vector<uint32_t> outQueue;
+            std::vector<float> outDraws;
+            if (!ctx.runWavefrontScatterProbe(
+                    wf, /*srcQueueBase=*/kCapacity,
+                    ohao::diff::WavefrontBuffers::kNextCountSlot, /*dstQueueBase=*/0u,
+                    ohao::diff::WavefrontBuffers::kCurrentCountSlot, /*albedo=*/1.0f,
+                    kIterationSeed, outQueue, outDraws, kRuns[run].material)) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: furnace scatter dispatch (%s)\n",
+                             kRuns[run].name);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            const std::vector<float> tR =
+                wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputR);
+            const std::vector<float> tG =
+                wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputG);
+            const std::vector<float> tB =
+                wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::ThroughputB);
+            if (tR.size() != kCapacity || tG.size() != kCapacity || tB.size() != kCapacity) {
+                std::fprintf(stderr, "[diff_gpu_probe] FAIL: furnace throughput readback size "
+                                      "mismatch (%s)\n",
+                             kRuns[run].name);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            double sum = 0.0;
+            double maxV = -1.0;
+            double minV = 2.0;
+            for (uint32_t i = 0; i < kCapacity; ++i) {
+                // Grey material and grey environment: the three channels must
+                // agree exactly, and a check that looked at only one would
+                // miss a per-channel error entirely.
+                if (tR[i] != tG[i] || tG[i] != tB[i]) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: furnace (%s) path %u throughput is not "
+                                 "grey: (%.9g,%.9g,%.9g) from a grey base colour\n",
+                                 kRuns[run].name, i, static_cast<double>(tR[i]),
+                                 static_cast<double>(tG[i]), static_cast<double>(tB[i]));
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+                const double v = tR[i];
+                sum += v;
+                if (v > maxV) maxV = v;
+                if (v < minV) minV = v;
+
+                if (run == 0) {
+                    const double dev = std::abs(v - 1.0);
+                    if (dev > lambertMaxDeviation) lambertMaxDeviation = dev;
+                    if (dev > kFurnaceUlpBound) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: white furnace path %u returned %.9g, "
+                                     "expected 1.0 within %.3g (4 ulp). With albedo 1 and no "
+                                     "absorption the cosine-sampled Lambert estimator is a "
+                                     "CONSTANT 1 for every direction -- zero variance -- so this "
+                                     "is an energy-conservation error in the "
+                                     "sample-evaluate-weight loop, not Monte Carlo noise\n",
+                                     i, v, static_cast<double>(kFurnaceUlpBound));
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                } else {
+                    if (v > 1.0 + kFurnaceUlpBound) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: glossy furnace path %u returned "
+                                     "%.9g > 1 -- with F identically 1 and the lobe probability "
+                                     "exactly 1, the weight is G2/G1, which height-correlated "
+                                     "Smith bounds at 1 (Heitz 2014 Eq. 99). A value above 1 is "
+                                     "energy created out of nothing\n",
+                                     i, v);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                    if (v < 0.0) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: glossy furnace path %u returned a "
+                                     "negative throughput %.9g\n",
+                                     i, v);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                }
+            }
+            furnaceMean[run] = sum / static_cast<double>(kCapacity);
+            furnaceMax[run] = maxV;
+            furnaceMin[run] = minV;
+
+            wf.destroy(ctx.allocator());
+        }
+
+        std::printf("[diff_gpu_probe] OK: white furnace (albedo 1, no absorption, constant "
+                    "environment) returns 1.0 for all %u paths; mean %.9g, max |deviation| %.3g "
+                    "(derived bound %.3g = 4 ulp; Monte Carlo variance is exactly 0 -- see the "
+                    "derivation above this check)\n",
+                    kCapacity, furnaceMean[0], lambertMaxDeviation,
+                    static_cast<double>(kFurnaceUlpBound));
+
+        // The deficit must be REAL, not just "<= 1". A mean of exactly 1
+        // would mean the specular lobe silently degenerated to the Lambert
+        // fast path; a mean at 0 would mean every sample was rejected.
+        if (!(furnaceMean[1] < 1.0)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: glossy furnace mean is %.9g, expected strictly "
+                         "below 1 -- single-scattering GGX loses energy by construction, so a "
+                         "mean of exactly 1 means the specular lobe was not the one evaluated\n",
+                         furnaceMean[1]);
+            return 1;
+        }
+        if (!(furnaceMean[1] > 0.5)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: glossy furnace mean is %.9g. At roughness 0.3 "
+                         "the single-scattering Smith deficit is a few percent, not half the "
+                         "energy -- this size of loss means samples are being rejected or "
+                         "weighted with the wrong density, not that multiple scattering is "
+                         "missing\n",
+                         furnaceMean[1]);
+            return 1;
+        }
+        std::printf("[diff_gpu_probe] OK: glossy furnace (white conductor, roughness 0.30) "
+                    "conserves energy without creating any: every one of %u paths in [0, 1], "
+                    "mean %.9g (strictly below 1 -- the known single-scattering GGX deficit), "
+                    "min %.9g, max %.9g\n",
+                    kCapacity, furnaceMean[1], furnaceMin[1], furnaceMax[1]);
     }
 
     arena.destroy(ctx.allocator());
