@@ -1,13 +1,36 @@
 #ifndef OHAO_ENV_SAMPLING_GLSL
 #define OHAO_ENV_SAMPLING_GLSL
 
-// Requires the caller to declare (before including this header):
-//   layout(set=0, binding=17) readonly buffer EnvMarginalCDF   { float data[]; } envMarg;
-//   layout(set=0, binding=18) readonly buffer EnvConditionalCDF { float data[]; } envCond;
-// and push constants with:
-//   uint  envWidth     = pc.control.w
-//   uint  envHeight    = uint(pc.tuning.y)
-//   float envIntegral  = pc.tuning.z
+// This header declares NO bindings and reads NO push constants of its own.
+// The only caller-provided symbols it references are `envMarg.data` and
+// `envCond.data`, which the caller must declare BEFORE including it:
+//
+//   layout(std430, ...) readonly buffer EnvMarginalCDF    { float data[]; } envMarg;
+//   layout(std430, ...) readonly buffer EnvConditionalCDF { float data[]; } envCond;
+//
+// The binding indices are the caller's to choose. The RT pipeline's raygen
+// and miss shaders use set=0 bindings 17 and 18; shaders/diff/wf_scatter.comp
+// uses 4 and 5 in its own set. Nothing here depends on which.
+//
+// The map's dimensions and integral are ORDINARY ARGUMENTS of the entry
+// points below, not push-constant reads, so a caller supplies them from
+// wherever it keeps them. The RT shaders pass (pc.control.w,
+// uint(pc.tuning.y), pc.tuning.z); wf_scatter.comp passes its own
+// (pc.envWidth, pc.envHeight, pc.envIntegral). Note that `envIntegral` is
+// currently accepted by sampleEnvMap and then unused -- the solid-angle pdf
+// is recovered from CDF differences, which are already normalised, and
+// pdfEnvMap does not take it at all. It is kept in the signature because
+// callers pass it and a next-event estimator needs it to convert the CDF's
+// density into radiance.
+//
+// CDF CONVENTION, which the host-side builder must match exactly
+// (ohao/render/rt/env_cdf.cpp is the one this repository uses):
+//   * `envCond` is H rows of W floats, each row an INCLUSIVE cumulative
+//     distribution NORMALISED WITHIN THAT ROW, so envCond[y*W + W-1] == 1.
+//   * `envMarg` is H floats, an INCLUSIVE cumulative distribution over rows,
+//     normalised over the whole map, so envMarg[H-1] == 1.
+//   * Both are built from luminance weighted by sin(theta), so the
+//     solid-angle density below comes out proportional to luminance.
 
 const float OHAO_PI    = 3.14159265358979;
 const float OHAO_TWOPI = 6.28318530717959;

@@ -1238,9 +1238,11 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                                uint32_t iterationSeed,
                                                std::vector<uint32_t>& outQueueDst,
                                                std::vector<float>& outDebugDraws,
-                                               const WavefrontScatterMaterial& material) {
+                                               const WavefrontScatterMaterial& material,
+                                               std::vector<float>* outEnvSamples) {
     outQueueDst.clear();
     outDebugDraws.clear();
+    if (outEnvSamples != nullptr) outEnvSamples->clear();
 
     const uint32_t capacity = buffers.layout().capacity();
     bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
@@ -1259,9 +1261,15 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     WavefrontStage prepareIndirect;
     WavefrontStage scatter;
     const VkDescriptorType counterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-    const VkDescriptorType scatterBindingTypes[4] = {
+    // state, queues, counters, debug draws, env marginal CDF, env
+    // conditional CDF, env samples -- wf_scatter.comp's bindings 0..6 in
+    // order. The two env CDF buffers are read-only to the shader but are
+    // ordinary storage buffers as far as the descriptor set is concerned.
+    const VkDescriptorType scatterBindingTypes[7] = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (!prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", counterOnly,
                                sizeof(WavefrontLoop::PrepareIndirectPush))) {
@@ -1308,10 +1316,29 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
         }
     }
 
+    // wf_scatter.comp's environment-sample sink (binding 6): 4 floats per
+    // path index. Allocated unconditionally -- the descriptor set needs
+    // something valid bound there whether or not the caller asked to read it
+    // back.
+    GpuBuffer envSamplesBuffer;
+    const VkDeviceSize envSamplesBytes = static_cast<VkDeviceSize>(capacity) * 4u * sizeof(float);
+    if (ok) {
+        envSamplesBuffer = m_allocator.createBuffer(
+            envSamplesBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuToCpu,
+            /*persistentlyMapped=*/true);
+        if (!envSamplesBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: env samples buffer "
+                                  "allocation failed\n");
+            ok = false;
+        }
+    }
+
     if (ok) {
         const VkBuffer counterOnlyBuf[1] = {buffers.counterBuffer()};
-        const VkBuffer scatterBuffers[4] = {buffers.stateBuffer(), buffers.queueBuffer(),
-                                            buffers.counterBuffer(), debugDrawsBuffer.buffer};
+        const VkBuffer scatterBuffers[7] = {buffers.stateBuffer(),         buffers.queueBuffer(),
+                                            buffers.counterBuffer(),       debugDrawsBuffer.buffer,
+                                            buffers.envMarginalBuffer(),   buffers.envConditionalBuffer(),
+                                            envSamplesBuffer.buffer};
         if (!prepareIndirect.bindBuffers(m_device, counterOnlyBuf) ||
             !scatter.bindBuffers(m_device, scatterBuffers)) {
             std::fprintf(stderr,
@@ -1330,7 +1357,10 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
                                                      iterationSeed,
                                                      material.roughness,
                                                      material.metallic,
-                                                     material.specularWeight};
+                                                     material.specularWeight,
+                                                     buffers.envWidth(),
+                                                     buffers.envHeight(),
+                                                     buffers.envIntegral()};
         scatter.setPushConstants(&scatterPush, sizeof(scatterPush));
         const VkDeviceSize dstSlotOffset =
             static_cast<VkDeviceSize>(dstCountSlot) * sizeof(uint32_t);
@@ -1385,10 +1415,10 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             // function's own mapped buffer (HOST_READ), and the
             // vkCmdCopyBuffer below that pulls the dst queue ring out
             // (TRANSFER_READ).
-            VkBufferMemoryBarrier postScatter[3]{};
-            VkBuffer writtenBuffers[3] = {buffers.stateBuffer(), buffers.counterBuffer(),
-                                          debugDrawsBuffer.buffer};
-            for (int i = 0; i < 3; ++i) {
+            VkBufferMemoryBarrier postScatter[4]{};
+            VkBuffer writtenBuffers[4] = {buffers.stateBuffer(), buffers.counterBuffer(),
+                                          debugDrawsBuffer.buffer, envSamplesBuffer.buffer};
+            for (int i = 0; i < 4; ++i) {
                 postScatter[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
                 postScatter[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
                 postScatter[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -1408,11 +1438,11 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             queueToTransfer.offset = 0;
             queueToTransfer.size = VK_WHOLE_SIZE;
 
-            VkBufferMemoryBarrier postDispatch[4] = {postScatter[0], postScatter[1], postScatter[2],
-                                                     queueToTransfer};
+            VkBufferMemoryBarrier postDispatch[5] = {postScatter[0], postScatter[1], postScatter[2],
+                                                     postScatter[3], queueToTransfer};
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                                 nullptr, 4, postDispatch, 0, nullptr);
+                                 nullptr, 5, postDispatch, 0, nullptr);
 
             // Copy the dst queue ring (elements [dstQueueBase,
             // dstQueueBase+capacity)) into this function's own host-visible
@@ -1455,9 +1485,23 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
         } else {
             outDebugDraws.assign(mappedDebug, mappedDebug + (static_cast<std::size_t>(capacity) * 3u));
         }
+
+        if (outEnvSamples != nullptr) {
+            m_allocator.invalidateBuffer(envSamplesBuffer);
+            const auto* mappedEnv = static_cast<const float*>(envSamplesBuffer.getMappedData());
+            if (mappedEnv == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontScatterProbe: env samples "
+                                      "buffer not mapped, cannot read back\n");
+                ok = false;
+            } else {
+                outEnvSamples->assign(mappedEnv,
+                                      mappedEnv + (static_cast<std::size_t>(capacity) * 4u));
+            }
+        }
     }
 
     // --- Cleanup, reverse order. ---
+    if (envSamplesBuffer.isValid()) m_allocator.destroyBuffer(envSamplesBuffer);
     if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
     scatter.destroy(m_device);
@@ -1856,6 +1900,24 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
             ok = false;
         }
     }
+    // wf_scatter.comp's environment-sample sink (binding 6). This probe does
+    // not read it back -- the chi-squared check runs against the
+    // stage-by-stage scatter probe, which can vary the seed per dispatch --
+    // but the descriptor set needs it bound, and every scatter dispatch in
+    // the fused loop writes it, so it goes into loopExtras below for exactly
+    // the reason debugDrawsBuffer does.
+    GpuBuffer envSamplesBuffer;
+    const VkDeviceSize envSamplesBytes = static_cast<VkDeviceSize>(capacity) * 4u * sizeof(float);
+    if (ok) {
+        envSamplesBuffer =
+            m_allocator.createBuffer(envSamplesBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     AllocationUsage::GpuToCpu, /*persistentlyMapped=*/true);
+        if (!envSamplesBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: env samples buffer "
+                                  "allocation failed\n");
+            ok = false;
+        }
+    }
 
     // --- The four stages. Built exactly once each, because this probe has
     // no reason to rebuild one. ComputePipeline::build IS safe to call again
@@ -1882,7 +1944,12 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
-    const VkDescriptorType kScatterBindings[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // state, queues, counters, debug draws, env marginal CDF, env
+    // conditional CDF, env samples -- wf_scatter.comp's bindings 0..6.
+    const VkDescriptorType kScatterBindings[7] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
@@ -1916,8 +1983,10 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
                                               buffers.counterBuffer(), vertexBuffer.buffer,
                                               indexBuffer.buffer};
-        const VkBuffer scatterBuffers[4] = {buffers.stateBuffer(), buffers.queueBuffer(),
-                                            buffers.counterBuffer(), debugDrawsBuffer.buffer};
+        const VkBuffer scatterBuffers[7] = {buffers.stateBuffer(),       buffers.queueBuffer(),
+                                            buffers.counterBuffer(),     debugDrawsBuffer.buffer,
+                                            buffers.envMarginalBuffer(), buffers.envConditionalBuffer(),
+                                            envSamplesBuffer.buffer};
         if (!generate.bindBuffers(m_device, stateQueueCounter) ||
             !prepareIndirect.bindBuffers(m_device, counterOnly) ||
             !intersect.bindBuffers(m_device, intersectBuffers) ||
@@ -2008,7 +2077,13 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                 // depends on the LAST bounce's write being the survivor. See
                 // wavefront_loop.hpp's "Caller-owned buffers the loop must
                 // also order".
-                const VkBuffer loopExtras[1] = {debugDrawsBuffer.buffer};
+                //
+                // envSamplesBuffer is here for the identical reason: every
+                // scatter dispatch writes the same pathIndex*4 slots.
+                // buffers.envMarginalBuffer()/envConditionalBuffer() are NOT
+                // -- no dispatch writes them, and extraBarrierBuffers orders
+                // buffers the dispatches write.
+                const VkBuffer loopExtras[2] = {debugDrawsBuffer.buffer, envSamplesBuffer.buffer};
                 loop.record(cmd, buffers, bounces, loopExtras);
 
                 // Everything below is this probe's own readback plumbing,
@@ -2093,6 +2168,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
     intersect.destroy(m_device);
     prepareIndirect.destroy(m_device);
     generate.destroy(m_device);
+    if (envSamplesBuffer.isValid()) m_allocator.destroyBuffer(envSamplesBuffer);
     if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
     if (queueReadback.isValid()) m_allocator.destroyBuffer(queueReadback);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);

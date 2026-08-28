@@ -1,6 +1,7 @@
 #include "diff/wavefront/wavefront_buffers.hpp"
 
 #include <cstring>
+#include <vector>
 
 namespace ohao::diff {
 
@@ -24,11 +25,15 @@ WavefrontBuffers::~WavefrontBuffers() {
         if (m_stateBuffer.isValid()) m_allocator->destroyBuffer(m_stateBuffer);
         if (m_queueBuffer.isValid()) m_allocator->destroyBuffer(m_queueBuffer);
         if (m_counterBuffer.isValid()) m_allocator->destroyBuffer(m_counterBuffer);
+        if (m_envMarginalBuffer.isValid()) m_allocator->destroyBuffer(m_envMarginalBuffer);
+        if (m_envConditionalBuffer.isValid()) m_allocator->destroyBuffer(m_envConditionalBuffer);
     }
 }
 
-bool WavefrontBuffers::build(GpuAllocator& allocator, std::uint32_t capacity) {
+bool WavefrontBuffers::build(GpuAllocator& allocator, std::uint32_t capacity,
+                             std::uint32_t envWidth, std::uint32_t envHeight) {
     if (capacity == 0) return false;
+    if (envWidth == 0 || envHeight == 0) return false;
 
     m_layout = PathStateLayout(capacity);
     if (m_layout.arena().totalBytes() == 0) return false;
@@ -56,14 +61,78 @@ bool WavefrontBuffers::build(GpuAllocator& allocator, std::uint32_t capacity) {
         counterBytes, kCommonUsage | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
         AllocationUsage::CpuToGpu, /*persistentlyMapped=*/true);
 
-    return m_stateBuffer.isValid() && m_queueBuffer.isValid() && m_counterBuffer.isValid();
+    // --- Environment CDF, read-only for every dispatch. Same CpuToGpu +
+    // persistently-mapped allocation as the rest of this class, because the
+    // upload is a host memcpy into the mapped pointer rather than a staged
+    // transfer -- these are kilobytes of CDF, not an HDR image. ---
+    m_envWidth = envWidth;
+    m_envHeight = envHeight;
+    m_envMarginalBuffer = allocator.createBuffer(
+        static_cast<VkDeviceSize>(envHeight) * sizeof(float), kCommonUsage,
+        AllocationUsage::CpuToGpu, /*persistentlyMapped=*/true);
+    m_envConditionalBuffer = allocator.createBuffer(
+        static_cast<VkDeviceSize>(envWidth) * static_cast<VkDeviceSize>(envHeight) * sizeof(float),
+        kCommonUsage, AllocationUsage::CpuToGpu, /*persistentlyMapped=*/true);
+
+    if (!m_stateBuffer.isValid() || !m_queueBuffer.isValid() || !m_counterBuffer.isValid() ||
+        !m_envMarginalBuffer.isValid() || !m_envConditionalBuffer.isValid()) {
+        return false;
+    }
+
+    // Seed with the UV-uniform CDF -- conditional[y][x] = (x+1)/W,
+    // marginal[y] = (y+1)/H. This is exactly the fallback ohao::EnvCDF
+    // itself writes for an all-black map, so a caller that never calls
+    // uploadEnvironment gets a well-formed, strictly-increasing CDF whose
+    // every texel has positive probability, rather than an all-zero one
+    // whose differences are 0 and whose pdf is therefore 0 everywhere.
+    // Uniform in UV is NOT uniform on the sphere; see kDefaultEnvWidth.
+    std::vector<float> marginal(envHeight);
+    for (std::uint32_t y = 0; y < envHeight; ++y) {
+        marginal[y] = static_cast<float>(y + 1) / static_cast<float>(envHeight);
+    }
+    std::vector<float> conditional(static_cast<std::size_t>(envWidth) * envHeight);
+    for (std::uint32_t y = 0; y < envHeight; ++y) {
+        for (std::uint32_t x = 0; x < envWidth; ++x) {
+            conditional[static_cast<std::size_t>(y) * envWidth + x] =
+                static_cast<float>(x + 1) / static_cast<float>(envWidth);
+        }
+    }
+    return uploadEnvironment(marginal, conditional, 1.0f);
+}
+
+bool WavefrontBuffers::uploadEnvironment(std::span<const float> marginalCdf,
+                                         std::span<const float> conditionalCdf, float integral) {
+    if (!m_envMarginalBuffer.isValid() || !m_envConditionalBuffer.isValid()) return false;
+    if (marginalCdf.size() != static_cast<std::size_t>(m_envHeight)) return false;
+    if (conditionalCdf.size() !=
+        static_cast<std::size_t>(m_envWidth) * static_cast<std::size_t>(m_envHeight)) {
+        return false;
+    }
+
+    auto* marg = static_cast<float*>(m_envMarginalBuffer.getMappedData());
+    auto* cond = static_cast<float*>(m_envConditionalBuffer.getMappedData());
+    if (marg == nullptr || cond == nullptr) return false;
+
+    std::memcpy(marg, marginalCdf.data(), marginalCdf.size() * sizeof(float));
+    std::memcpy(cond, conditionalCdf.data(), conditionalCdf.size() * sizeof(float));
+    if (m_allocator != nullptr) {
+        m_allocator->flushBuffer(m_envMarginalBuffer);
+        m_allocator->flushBuffer(m_envConditionalBuffer);
+    }
+    m_envIntegral = integral;
+    return true;
 }
 
 void WavefrontBuffers::destroy(GpuAllocator& allocator) {
     if (m_stateBuffer.isValid()) allocator.destroyBuffer(m_stateBuffer);
     if (m_queueBuffer.isValid()) allocator.destroyBuffer(m_queueBuffer);
     if (m_counterBuffer.isValid()) allocator.destroyBuffer(m_counterBuffer);
+    if (m_envMarginalBuffer.isValid()) allocator.destroyBuffer(m_envMarginalBuffer);
+    if (m_envConditionalBuffer.isValid()) allocator.destroyBuffer(m_envConditionalBuffer);
     m_layout = PathStateLayout(0);
+    m_envWidth = 0;
+    m_envHeight = 0;
+    m_envIntegral = 0.0f;
     m_allocator = nullptr;
 }
 

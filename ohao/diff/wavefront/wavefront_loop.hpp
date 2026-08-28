@@ -253,7 +253,16 @@ void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uin
 /// will add more scatter-side outputs living outside `WavefrontBuffers` --
 /// radiance/film accumulation, light-sample scratch. Those go here too.
 /// `VK_NULL_HANDLE` entries are skipped, so a caller may pass a fixed-size
-/// array with optional slots.
+/// array with optional slots. Task 3's environment-sample sink (binding 6 of
+/// `wf_scatter.comp`, written at a fixed `pathIndex*4` offset every bounce)
+/// is the first of them and belongs here for exactly `debugDraws`' reason.
+///
+/// READ-ONLY buffers do NOT belong here. Task 3 also added the two
+/// environment CDF buffers at bindings 4 and 5, and they are deliberately
+/// absent from every caller's extras list: no dispatch writes them, so there
+/// is no write to make available and nothing to order. Adding them would not
+/// be harmless noise -- it would blur the one rule this parameter encodes,
+/// which is that it names buffers the recorded dispatches WRITE.
 ///
 /// ### Ownership
 ///
@@ -349,6 +358,14 @@ public:
         float roughness;
         float metallic;
         float specularWeight;
+        // --- Environment (Stage 0b-2b Task 3). NOT in Config: these are
+        // properties of the WavefrontBuffers passed to record(), which is
+        // the only object that can state them authoritatively -- the same
+        // reason `capacity` is not in Config either. record() fills all
+        // three from `buffers`.
+        std::uint32_t envWidth;
+        std::uint32_t envHeight;
+        float envIntegral;
     };
 
     WavefrontLoop() = default;

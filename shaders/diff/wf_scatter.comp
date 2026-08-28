@@ -48,8 +48,27 @@
 // exactly 2*capacity uints. A caller that reuses a ring without re-zeroing
 // its counter would otherwise write past the end of that allocation.
 //
+// ENVIRONMENT IMPORTANCE SAMPLING (Stage 0b-2b Task 3) is the other thing
+// this stage now does per bounce. It draws a direction proportional to the
+// environment's sin(theta)-weighted luminance through
+// shaders/includes/rt/env_sampling.glsl's sampleEnvMap -- the SAME header
+// the RT pipeline's raygen/miss shaders use, so the two pipelines' CDF
+// convention (inclusive per-row-normalised conditional, inclusive marginal,
+// texel-centre directions, solid-angle pdf) cannot drift -- and writes the
+// (direction, pdf) pair to a probe-only sink at binding 6.
+//
+// NOTHING IN THE PATH CONSUMES IT YET. The sample does not touch throughput,
+// origin, dir or radiance: next-event estimation and MIS are Task 4, and
+// weighting a light sample against a BSDF sample is exactly the step that
+// needs both densities, which is what this task exists to supply. Writing
+// the sample to an observable sink rather than folding it into the path is
+// deliberate -- it is what lets diff_gpu_probe.cpp bin a real dispatch's
+// directions and reject them against a host-built oracle with a chi-squared
+// test, instead of inferring the sampler's correctness from an image.
+//
 // Binding scheme: state (0, declared by path_state.glsl), queues (1),
-// counters (2), debug draws (3).
+// counters (2), debug draws (3), env marginal CDF (4), env conditional CDF
+// (5), env samples (6).
 
 #include "diff/path_state.glsl"
 #include "diff/rng.glsl"
@@ -73,6 +92,43 @@ layout(std430, binding = 3) buffer DebugDraws {
     float v[];
 } debugDraws;
 
+// --- Environment CDF, READ-ONLY -------------------------------------------
+//
+// shaders/includes/rt/env_sampling.glsl declares no bindings of its own (the
+// layout() lines near its top sit inside a comment describing what a caller
+// owes it); the only caller-provided symbols it references are envMarg.data
+// and envCond.data. W, H and the integral are already ORDINARY ARGUMENTS of
+// sampleEnvMap/pdfEnvMap, so this stage passes its own push-constant fields
+// and does not have to adopt the RT pipeline's pc.control/pc.tuning names --
+// nothing in the header itself had to change for that. These two buffers do
+// have to be declared BEFORE the include, which is why it sits below them
+// rather than with the other includes at the top of the file.
+//
+// Uploaded once by WavefrontBuffers and never written by any dispatch, so
+// they are NOT among the buffers WavefrontLoop::record must order against
+// itself: its extraBarrierBuffers parameter is for buffers the dispatches
+// WRITE.
+layout(std430, binding = 4) readonly buffer EnvMarginalCDF {
+    float data[];
+} envMarg;
+
+layout(std430, binding = 5) readonly buffer EnvConditionalCDF {
+    float data[];
+} envCond;
+
+#include "rt/env_sampling.glsl"
+
+// Probe-only, like DebugDraws above: 4 floats per PATH INDEX
+// (dirX, dirY, dirZ, pdf) as sampleEnvMap returned them for THIS dispatch.
+// Written unconditionally -- an environment sample is a property of the
+// environment, not of whether this path hit anything -- so a missed path
+// still produces one. Task 4's NEE is what will consume the pair inside the
+// shader; until then this sink is its only consumer, and it is what
+// diff_gpu_probe.cpp's chi-squared check bins.
+layout(std430, binding = 6) buffer EnvSamples {
+    float v[];
+} envSamples;
+
 layout(push_constant) uniform Push {
     uint capacity;
     uint srcQueueBase;
@@ -94,6 +150,19 @@ layout(push_constant) uniform Push {
     float roughness;
     float metallic;
     float specularWeight;
+    // --- Environment (Stage 0b-2b Task 3), matching ScatterPush's tail.
+    // envWidth/envHeight are the equirectangular CDF's dimensions: the
+    // marginal buffer holds envHeight floats and the conditional
+    // envWidth*envHeight. Either being 0 means "no environment configured"
+    // and is the one case sampleEnvMap must not be called for -- its binary
+    // searches would index a zero-length row. envIntegral is passed through
+    // for the header's signature and for Task 4; sampleEnvMap's body does
+    // not currently read it (pdfEnvMap does not even take it), because the
+    // solid-angle pdf is recovered from CDF differences, which are already
+    // normalised.
+    uint envWidth;
+    uint envHeight;
+    float envIntegral;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
@@ -101,15 +170,22 @@ layout(push_constant) uniform Push {
 // constant (not derived from anything) so the CPU side can predict it without
 // querying the GPU for anything but the final draw values/count.
 //
-// THREE, not the two Stage 0b-1's placeholder sampler took: the BSDF needs a
-// 2-D sample for the direction plus a 1-D sample to choose between the
-// diffuse and specular lobes. The count must stay INDEPENDENT of which lobe
-// is chosen -- a data-dependent draw count would make the fast-forward above
-// unpredictable, and path-replay backpropagation would walk a different
-// stream than the forward pass -- which is why uLobe is drawn
-// unconditionally, even in the configurations where the lobe choice is
-// foregone.
-const uint kDrawsPerBounce = 3u;
+// FIVE. Three for the BSDF -- a 2-D sample for the direction plus a 1-D
+// sample to choose between the diffuse and specular lobes -- and two more
+// for the environment sample. The count must stay INDEPENDENT of which lobe
+// is chosen and of whether the path hit anything: a data-dependent draw
+// count would make the fast-forward above unpredictable, and path-replay
+// backpropagation would walk a different stream than the forward pass --
+// which is why uLobe is drawn unconditionally even in the configurations
+// where the lobe choice is foregone, and why the two environment draws are
+// taken before the miss guard rather than inside the hit branch.
+//
+// It was 2 in Stage 0b-1 (a placeholder direction sampler) and 3 in Stage
+// 0b-2b Task 2 (the real BSDF). The environment draws are appended AFTER
+// the BSDF's three, not interleaved, so every earlier stream position keeps
+// its meaning and diff_gpu_probe.cpp's per-bounce RNG-parity checks compare
+// the same (u1, u2) they always did -- only the per-bounce stride moved.
+const uint kDrawsPerBounce = 5u;
 
 void main() {
     const uint slot = gl_GlobalInvocationID.x;
@@ -140,10 +216,27 @@ void main() {
     const float u1 = diffRngNext1D(rng);
     const float u2 = diffRngNext1D(rng);
     const float uLobe = diffRngNext1D(rng);
+    const float uEnv1 = diffRngNext1D(rng);
+    const float uEnv2 = diffRngNext1D(rng);
 
     debugDraws.v[pathIndex * 3u + 0u] = u1;
     debugDraws.v[pathIndex * 3u + 1u] = u2;
     debugDraws.v[pathIndex * 3u + 2u] = uintBitsToFloat(rng.draws);
+
+    // --- Environment importance sample. Observed, not consumed (see the
+    // file header). Guarded on a configured environment: with envWidth or
+    // envHeight 0 there is no CDF to search, and the (0,0,0) direction with
+    // pdf 0 written instead is the "no environment" sentinel a consumer has
+    // to test before dividing by it.
+    vec3 envDir = vec3(0.0);
+    float envPdf = 0.0;
+    if (pc.envWidth > 0u && pc.envHeight > 0u) {
+        sampleEnvMap(uEnv1, uEnv2, pc.envWidth, pc.envHeight, pc.envIntegral, envDir, envPdf);
+    }
+    envSamples.v[pathIndex * 4u + 0u] = envDir.x;
+    envSamples.v[pathIndex * 4u + 1u] = envDir.y;
+    envSamples.v[pathIndex * 4u + 2u] = envDir.z;
+    envSamples.v[pathIndex * 4u + 3u] = envPdf;
 
     const vec3 origin = psGetOrigin(pathIndex, pc.capacity);
     const vec3 dir = psGetDir(pathIndex, pc.capacity);

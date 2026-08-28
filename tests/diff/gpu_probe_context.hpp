@@ -290,14 +290,25 @@ public:
     /// `capacity * 3` floats: per path index, (u1, u2,
     /// uintBitsToFloat(rng.draws)) as computed by THIS dispatch) -- the only
     /// way to verify RNG values a real GPU dispatch produced, bit-exactly,
-    /// against ohao::diff::PathRng. Returns false on any Vulkan error.
+    /// against ohao::diff::PathRng.
+    ///
+    /// `outEnvSamples`, when non-null, receives the other probe-only sink
+    /// wf_scatter.comp writes: binding 6, `capacity * 4` floats holding the
+    /// (dirX, dirY, dirZ, pdf) `shaders/includes/rt/env_sampling.glsl`'s
+    /// sampleEnvMap returned for each path index, against the CDF currently
+    /// uploaded into `buffers` (bindings 4 and 5, read-only). It is a
+    /// pointer with a nullptr default rather than a reference so the callers
+    /// that have no interest in environment sampling are unchanged; the
+    /// buffer is allocated, bound and written either way, because the
+    /// descriptor set is not optional. Returns false on any Vulkan error.
     [[nodiscard]] bool runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32_t srcQueueBase,
                                                 uint32_t srcCountSlot, uint32_t dstQueueBase,
                                                 uint32_t dstCountSlot, float albedo,
                                                 uint32_t iterationSeed,
                                                 std::vector<uint32_t>& outQueueDst,
                                                 std::vector<float>& outDebugDraws,
-                                                const WavefrontScatterMaterial& material = {});
+                                                const WavefrontScatterMaterial& material = {},
+                                                std::vector<float>* outEnvSamples = nullptr);
 
     /// Runs the WHOLE wavefront bounce loop through ohao::diff::WavefrontLoop
     /// -- generate, then prepare_indirect/intersect/prepare_indirect/scatter

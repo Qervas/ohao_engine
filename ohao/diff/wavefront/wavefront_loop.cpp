@@ -372,7 +372,10 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       m_config.iterationSeed,
                                       m_config.roughness,
                                       m_config.metallic,
-                                      m_config.specularWeight};
+                                      m_config.specularWeight,
+                                      buffers.envWidth(),
+                                      buffers.envHeight(),
+                                      buffers.envIntegral()};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);
