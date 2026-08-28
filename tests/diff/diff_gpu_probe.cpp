@@ -57,11 +57,20 @@
 //       cosine-sampled Lambert estimator is a constant 1 with ZERO variance,
 //       so this is asserted to 4 ulp rather than to a statistical tolerance.
 //       Catches energy-loss bugs in the whole sample-evaluate-weight loop
-//       that a per-term comparison structurally cannot.
+//       that a per-term comparison structurally cannot. Runs at q = 0
+//       EXACTLY, which is the pure-Lambert early-return branch.
 //   22. The same furnace with a white rough conductor: every path's weight
 //       lies in [0,1] (provable pointwise -- it is G2/G1) and the mean is
 //       strictly below 1, which is the known single-scattering GGX deficit
-//       and NOT something that should be asserted to equal 1.
+//       and NOT something that should be asserted to equal 1. Runs at
+//       q = 1 EXACTLY.
+//   23. The same furnace at an INTERMEDIATE lobe probability (q ~ 0.69), so
+//       the mixture density and the f*cos/pdf division are executed at all
+//       -- 21 and 22 sit at the two values of q that cannot bias anything,
+//       and 21 does not even reach the division. Asserts a derived pointwise
+//       energy-creation bound and a derived interval for the mean, the
+//       latter anchored to 22's own measurement of the single-scattering
+//       GGX albedo.
 
 #include "gpu_probe_context.hpp"
 
@@ -137,11 +146,24 @@ namespace {
 // oracle implements that stated contract independently. What that means for
 // this check's strength: the `f` comparison is entirely paper-derived and
 // cannot agree by construction, while the `pdf` comparison additionally
-// pins the documented strategy. The strategy itself is checked GLOBALLY
-// instead -- by the furnace test (check 21), which would fail for any q that
-// made the estimator biased, and by check 20's weight comparison, which
-// recomputes f*cos/pdf from THIS oracle's f and pdf rather than from
-// anything the GPU returned.
+// pins the documented strategy.
+//
+// WHERE q IS ACTUALLY GUARDED, stated precisely because it is easy to
+// overclaim. Three things reach it, and none of them is "the furnace covers
+// it":
+//   * check 20's pdf and weight comparisons, which use this oracle's q at
+//     the host-chosen and GPU-sampled directions;
+//   * check 20's branch-agreement assertion, which decides from the
+//     DIRECTION THE GPU RETURNED which of the sampler's two lobes drew it
+//     and requires that to match `uLobe < q`;
+//   * check 23, the intermediate-q furnace run.
+// Checks 21 and 22 do NOT cover q. Check 21 runs {roughness 1, metallic 0,
+// specularWeight 0}, which is q = 0 exactly, and at q = 0 diffBsdfSample
+// takes an early-return branch that never calls diffBsdfEval, never forms
+// f or pdf and never divides -- so it verifies that one multiplication
+// returns baseColor, not that f*cos/pdf is assembled correctly. Check 22
+// runs a conductor, which is q = 1 exactly. Those are precisely the two
+// values at which q cannot bias anything, which is why check 23 exists.
 
 constexpr double kOraclePi = 3.14159265358979323846;
 
@@ -268,6 +290,46 @@ void oracleBsdfEval(const OracleVec3& N, const OracleVec3& V, const OracleVec3& 
     outPdf = outPdf * (1.0 - q) + pdfSpec * q;
 }
 
+/// Directional albedo, INT f(N,V,L) (N.L) dL over the upper hemisphere, by
+/// midpoint quadrature of THIS FILE'S oracle f. It is independent of the
+/// GLSL under test in exactly the way oracleBsdfEval is: the published model
+/// integrated numerically, with nothing the GPU produced entering it.
+///
+/// This is precisely the quantity a furnace estimates. With a constant
+/// environment L0 = 1, an unbiased single-sample estimator has
+/// E[f*cos/pdf] = INT f cos dL = rho_dir(V), whatever the sampling strategy
+/// is -- so comparing the GPU's sample mean against this number is a direct
+/// statement about the whole sample-evaluate-weight loop, at a lobe
+/// probability that is neither 0 nor 1.
+///
+/// The BSDF is isotropic, so only the angle between N and V matters; N is
+/// taken as +Z and V placed in the x-z plane at the requested cosine. The
+/// materials this is called with are grey, so the red channel is the whole
+/// answer.
+double oracleDirectionalAlbedo(const OracleMaterial& m, double cosThetaV, uint32_t nTheta,
+                               uint32_t nPhi) {
+    const OracleVec3 N{0.0, 0.0, 1.0};
+    const double sinThetaV = std::sqrt(std::max(0.0, 1.0 - cosThetaV * cosThetaV));
+    const OracleVec3 V{sinThetaV, 0.0, cosThetaV};
+    const double dTheta = (0.5 * kOraclePi) / static_cast<double>(nTheta);
+    const double dPhi = (2.0 * kOraclePi) / static_cast<double>(nPhi);
+    double total = 0.0;
+    for (uint32_t i = 0; i < nTheta; ++i) {
+        const double theta = (static_cast<double>(i) + 0.5) * dTheta;
+        const double st = std::sin(theta);
+        const double ct = std::cos(theta);
+        for (uint32_t j = 0; j < nPhi; ++j) {
+            const double phi = (static_cast<double>(j) + 0.5) * dPhi;
+            const OracleVec3 L{st * std::cos(phi), st * std::sin(phi), ct};
+            OracleVec3 f;
+            double pdf = 0.0;
+            oracleBsdfEval(N, V, L, m, f, pdf);
+            total += f.x * ct * st * dTheta * dPhi;
+        }
+    }
+    return total;
+}
+
 /// Orthonormal frame around `n`, host-side, used only to place the probe's
 /// V and L at chosen polar angles. Nothing the shader computes enters here.
 void oracleFrame(const OracleVec3& n, OracleVec3& t, OracleVec3& b) {
@@ -285,6 +347,41 @@ OracleVec3 oracleDirFromAngles(const OracleVec3& n, double theta, double phi) {
                                                oracleScale(b, st * std::sin(phi))),
                                      oracleScale(n, std::cos(theta))));
 }
+
+/// NOT part of the oracle, and never used as a reference value. This
+/// reproduces bsdf.glsl's diffCosineHemisphere (Malley's method, with that
+/// function's documented up-vector convention) for exactly one purpose:
+/// deciding, FROM THE DIRECTION THE GPU RETURNED, which of diffBsdfSample's
+/// two branches drew it. The two branches draw from different distributions,
+/// so the direction identifies the branch -- which is what makes the
+/// both-lobes-exercised guard below a measurement of GPU behaviour rather
+/// than a restatement of the hardcoded material table.
+OracleVec3 oracleCosineHemisphere(const OracleVec3& n, double u1, double u2) {
+    const double r = std::sqrt(u1);
+    const double phi = 2.0 * kOraclePi * u2;
+    const double x = r * std::cos(phi);
+    const double y = r * std::sin(phi);
+    const double z = std::sqrt(std::max(0.0, 1.0 - u1));
+    const OracleVec3 up =
+        (std::abs(n.z) < 0.999) ? OracleVec3{0.0, 0.0, 1.0} : OracleVec3{1.0, 0.0, 0.0};
+    const OracleVec3 t = oracleNormalize(oracleCross(up, n));
+    const OracleVec3 b = oracleCross(n, t);
+    return oracleNormalize(oracleAdd(oracleAdd(oracleScale(t, x), oracleScale(b, y)),
+                                     oracleScale(n, z)));
+}
+
+double oracleDistance(const OracleVec3& a, const OracleVec3& b) {
+    const OracleVec3 d{a.x - b.x, a.y - b.y, a.z - b.z};
+    return std::sqrt(oracleDot(d, d));
+}
+
+/// bsdf.glsl's DIFF_BSDF_MIN_COS. The shader treats a view or light cosine at
+/// or below this as grazing and refuses the specular math; this oracle
+/// rejects at 0, because the physics does. The two thresholds are therefore
+/// NOT the same, and the band (0, 1e-4] is a documented disagreement rather
+/// than a bug -- see the rejection branch below, which names it explicitly
+/// instead of letting it surface as a spurious failure.
+constexpr double kShaderGrazingCos = 1e-4;
 
 /// Relative difference that degrades gracefully to absolute near zero. f and
 /// pdf span many orders of magnitude across the case table (a sharp GGX
@@ -2258,12 +2355,31 @@ int main() {
                                        oracleNormalize(OracleVec3{0.3, -0.5, 0.81})};
         const double kViewThetas[] = {0.20, 0.70, 1.20};
         const double kLightAngles[][2] = {{0.30, 0.0}, {0.90, 2.0}, {1.30, 4.5}};
+        // The view's AZIMUTH about N, cycled independently of everything
+        // else. An isotropic BSDF must be invariant to it, and until this was
+        // a list the whole table shared one value (0.6) -- so nothing tested
+        // that invariance, and a tangent-frame-dependent bug that only
+        // showed up at some azimuths could not be seen. 5 is coprime with the
+        // 7 sample triples below, so the pairing does not lock into a short
+        // cycle over the 90 cases.
+        const double kViewPhis[] = {0.6, 1.9, 3.3, 4.7, 5.9};
         // Sample values cycled through the cases so both lobes get chosen
         // somewhere in the table (uLobe below/above the specular probability)
-        // and the VNDF sampler is exercised across its unit square.
+        // and the VNDF sampler is exercised across its unit square. Seven
+        // triples, not three: with three, 90 cases carried only three
+        // distinct (u1, u2, uLobe) points, so the sampler was being asked the
+        // same question thirty times over. The first three are the original
+        // ones, kept so the coverage this table already had is not traded
+        // away for the new coverage.
         const float kSamples[][3] = {{0.13f, 0.77f, 0.05f},
                                      {0.61f, 0.24f, 0.45f},
-                                     {0.89f, 0.52f, 0.95f}};
+                                     {0.89f, 0.52f, 0.95f},
+                                     {0.03f, 0.41f, 0.28f},
+                                     {0.37f, 0.95f, 0.68f},
+                                     {0.72f, 0.09f, 0.11f},
+                                     {0.96f, 0.63f, 0.82f}};
+        constexpr uint32_t kSampleCount = sizeof(kSamples) / sizeof(kSamples[0]);
+        constexpr uint32_t kViewPhiCount = sizeof(kViewPhis) / sizeof(kViewPhis[0]);
 
         constexpr uint32_t kMaterialCount = sizeof(kMaterials) / sizeof(kMaterials[0]);
         constexpr uint32_t kNormalCount = 2;
@@ -2288,6 +2404,9 @@ int main() {
             OracleVec3 V;
             OracleVec3 L;
             OracleMaterial material;
+            double u1;
+            double u2;
+            double uLobe;
         };
         std::vector<CaseRecord> records;
         records.reserve(kCaseCount);
@@ -2300,7 +2419,8 @@ int main() {
                     for (uint32_t li = 0; li < kLightCount && bsdfDispatchOk; ++li) {
                         const MaterialSpec& ms = kMaterials[mi];
                         const OracleVec3 N = kNormals[ni];
-                        const OracleVec3 V = oracleDirFromAngles(N, kViewThetas[vi], 0.6);
+                        const double viewPhi = kViewPhis[caseIndex % kViewPhiCount];
+                        const OracleVec3 V = oracleDirFromAngles(N, kViewThetas[vi], viewPhi);
                         const OracleVec3 L =
                             oracleDirFromAngles(N, kLightAngles[li][0], kLightAngles[li][1]);
 
@@ -2310,7 +2430,7 @@ int main() {
                         mat.metallic = ms.metallic;
                         mat.specularWeight = ms.specularWeight;
 
-                        const float* smp = kSamples[caseIndex % 3];
+                        const float* smp = kSamples[caseIndex % kSampleCount];
 
                         ohao::diff::BsdfProbeCase probeCase;
                         probeCase.normal[0] = static_cast<float>(N.x);
@@ -2340,7 +2460,8 @@ int main() {
                             bsdfDispatchOk = false;
                             break;
                         }
-                        records.push_back(CaseRecord{ms.name, N, V, L, mat});
+                        records.push_back(CaseRecord{ms.name, N, V, L, mat, smp[0], smp[1],
+                                                     smp[2]});
                         ++caseIndex;
                     }
                 }
@@ -2382,9 +2503,19 @@ int main() {
         // Neither number was tuned until it passed. Both are printed with
         // the observed maxima on the OK: line, so a tolerance that has
         // quietly started to absorb a real error is visible rather than
-        // silent. For scale, the smallest modelling error this is meant to
-        // catch -- swapping Schlick's exponent 5 for 4 -- moves f by 1.9e-3
-        // at the LEAST sensitive case in the table, 19x the f tolerance.
+        // silent.
+        //
+        // For scale, the smallest modelling error this is meant to catch --
+        // swapping Schlick's exponent 5 for 4 -- was measured by making that
+        // edit: the run aborts at case 20 (dielectric-glossy) with a
+        // deviation of 4.8e-4, i.e. 4.8x the f tolerance and ~140x the
+        // observed float32 noise floor of ~3.4e-6. It is NOT true that every
+        // case moves by that much: cases 18 and 19 are the same material and
+        // moved by LESS than the tolerance, so they did not register at all.
+        // What catches this class of error is the BREADTH of the table -- the
+        // spread of view, light and normal geometry means some case is
+        // sensitive -- not the sensitivity of any individual case. Shrinking
+        // the table would weaken the check even with the tolerance untouched.
         constexpr double kBsdfValueRelTol = 1e-4;
         constexpr double kBsdfPdfRelTol = 1e-3;
 
@@ -2394,6 +2525,16 @@ int main() {
         uint32_t specularSampledCount = 0;
         uint32_t diffuseSampledCount = 0;
         uint32_t rejectedSampleCount = 0;
+        uint32_t grazingRejectionCount = 0;
+        uint32_t branchAssertedCount = 0;
+        // How close uLobe may sit to q before the branch-agreement assertion
+        // below stands down. At |uLobe - q| under this the GPU's float32 q
+        // and the oracle's double q can legitimately land on opposite sides
+        // of the comparison, and asserting there would be asserting float
+        // rounding. The count of cases actually asserted is printed, so a
+        // margin that quietly disabled the assertion for the whole table
+        // would be visible.
+        constexpr double kLobeDecisionMargin = 1e-3;
 
         for (uint32_t i = 0; i < kCaseCount; ++i) {
             const CaseRecord& rec = records[i];
@@ -2452,10 +2593,48 @@ int main() {
             oracleBsdfEval(rec.N, rec.V, sampledL, rec.material, sampF, sampPdf);
             const double sampNdotL = oracleDot(rec.N, sampledL);
 
-            if (oracleSpecProb(rec.material, oracleDot(rec.N, rec.V)) > 0.5) {
-                ++specularSampledCount;
-            } else {
+            // WHICH LOBE THE GPU ACTUALLY SAMPLED, decided from the returned
+            // direction rather than predicted from the material table. The
+            // diffuse branch draws diffCosineHemisphere(N, uDir); the
+            // specular branch draws a VNDF half-vector and reflects. So if
+            // the returned direction IS the cosine-hemisphere direction for
+            // this case's uDir, the diffuse branch ran. (The two agreeing by
+            // accident is a measure-zero coincidence, and the tolerance here
+            // is float32 noise, not a window.) This previously classified by
+            // oracleSpecProb(...) > 0.5, which reads only the hardcoded
+            // material table and the hardcoded normals: no GPU output entered
+            // it, so it was deterministic and could not fail while its FAIL
+            // message claimed to describe which branch the sampler took.
+            const OracleVec3 cosineL = oracleCosineHemisphere(rec.N, rec.u1, rec.u2);
+            const bool tookDiffuseBranch = oracleDistance(sampledL, cosineL) < 1e-4;
+            if (tookDiffuseBranch) {
                 ++diffuseSampledCount;
+            } else {
+                ++specularSampledCount;
+            }
+
+            // And the branch it took must be the branch the documented
+            // strategy asks for: uLobe < q, with q the lobe probability this
+            // oracle computes independently. This is the only place the
+            // lobe-selection rule itself is asserted per-case -- see the
+            // oracle header's note on where q is guarded.
+            const double caseQ = oracleSpecProb(rec.material, oracleDot(rec.N, rec.V));
+            const bool expectSpecularBranch =
+                (rec.uLobe < caseQ) && (oracleDot(rec.N, rec.V) > kShaderGrazingCos);
+            if (std::abs(rec.uLobe - caseQ) > kLobeDecisionMargin) {
+                ++branchAssertedCount;
+                if (expectSpecularBranch == tookDiffuseBranch) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: BSDF sampler case %u (%s) took the %s "
+                                 "branch, but the contract's lobe probability q = %.9g with "
+                                 "uLobe = %.9g asks for the %s branch. The branch actually taken "
+                                 "was read off the returned direction L = (%.6f,%.6f,%.6f)\n",
+                                 i, rec.materialName, tookDiffuseBranch ? "diffuse" : "specular",
+                                 caseQ, rec.uLobe, expectSpecularBranch ? "specular" : "diffuse",
+                                 sampledL.x, sampledL.y, sampledL.z);
+                    bsdfArena.destroy(ctx.allocator());
+                    return 1;
+                }
             }
 
             if (gpuSampPdf <= 0.0) {
@@ -2465,13 +2644,30 @@ int main() {
                 // energy, and the weight must be exactly zero. A sampler
                 // that rejected everything would fail the first of those on
                 // its very first accepted-looking case.
-                if (sampNdotL > 0.0 && sampPdf > 0.0) {
+                //
+                // One documented exception, and it is a real threshold
+                // difference rather than slack: bsdf.glsl refuses the
+                // specular math at N.L <= DIFF_BSDF_MIN_COS (1e-4) while this
+                // oracle refuses it at N.L <= 0, because 1e-4 is an
+                // implementation guard against dividing by (N.L) twice and
+                // has no place in the physics. A sample landing in the band
+                // (0, 1e-4] is therefore rejected by the shader and accepted
+                // by the oracle, legitimately. Such cases are counted and
+                // reported rather than being allowed to fail the run; every
+                // case in the current table sits orders of magnitude above
+                // the band, so the count is expected to be 0 and a nonzero
+                // one is worth looking at.
+                if (sampNdotL > 0.0 && sampNdotL <= kShaderGrazingCos) {
+                    ++grazingRejectionCount;
+                } else if (sampNdotL > 0.0 && sampPdf > 0.0) {
                     std::fprintf(stderr,
                                  "[diff_gpu_probe] FAIL: BSDF sampler case %u (%s) rejected its "
                                  "own sample (pdf 0) at L = (%.6f,%.6f,%.6f), but the oracle says "
-                                 "that direction is perfectly valid (N.L = %.9g, pdf = %.9g)\n",
+                                 "that direction is perfectly valid (N.L = %.9g, pdf = %.9g) and "
+                                 "is not inside the shader's documented grazing band "
+                                 "(0, %.0e]\n",
                                  i, rec.materialName, sampledL.x, sampledL.y, sampledL.z,
-                                 sampNdotL, sampPdf);
+                                 sampNdotL, sampPdf, kShaderGrazingCos);
                     bsdfArena.destroy(ctx.allocator());
                     return 1;
                 }
@@ -2542,10 +2738,20 @@ int main() {
 
         if (specularSampledCount == 0 || diffuseSampledCount == 0) {
             std::fprintf(stderr,
-                         "[diff_gpu_probe] FAIL: BSDF case table exercised only one lobe "
-                         "(%u specular-dominant, %u diffuse-dominant of %u) -- the table no "
-                         "longer covers the mixture it claims to\n",
-                         specularSampledCount, diffuseSampledCount, kCaseCount);
+                         "[diff_gpu_probe] FAIL: over %u cases the sampler took only one of its "
+                         "two branches (%u specular, %u diffuse, counted from the direction the "
+                         "GPU returned) -- the table no longer covers the mixture it claims to\n",
+                         kCaseCount, specularSampledCount, diffuseSampledCount);
+            bsdfArena.destroy(ctx.allocator());
+            return 1;
+        }
+        if (branchAssertedCount * 4u < kCaseCount) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: the lobe-branch agreement assertion stood down "
+                         "on all but %u of %u cases (uLobe within %.0e of q) -- it is no longer "
+                         "asserting the lobe-selection rule over a meaningful part of the "
+                         "table\n",
+                         branchAssertedCount, kCaseCount, kLobeDecisionMargin);
             bsdfArena.destroy(ctx.allocator());
             return 1;
         }
@@ -2566,17 +2772,21 @@ int main() {
 
         std::printf("[diff_gpu_probe] OK: BSDF f, pdf and sampler weight match an independent "
                     "CPU oracle (Walter 2007 / Heitz 2014 / Heitz 2018 / Schlick 1994) over %u "
-                    "cases x %u materials (%u specular-dominant, %u diffuse-dominant, %u "
-                    "below-horizon rejections); max relative error f %.3g, weight %.3g "
+                    "cases x %u materials x %u sample triples x %u view azimuths; the GPU took "
+                    "the specular branch %u times and the diffuse branch %u times (measured from "
+                    "the returned direction), and the branch matched the contract's uLobe < q on "
+                    "all %u cases where the assertion applied; %u below-horizon rejections, %u "
+                    "inside the shader's grazing band; max relative error f %.3g, weight %.3g "
                     "(tolerance %.3g), pdf %.3g (tolerance %.3g)\n",
-                    kCaseCount, kMaterialCount, specularSampledCount, diffuseSampledCount,
-                    rejectedSampleCount, maxFErr, maxWeightErr, kBsdfValueRelTol, maxPdfErr,
-                    kBsdfPdfRelTol);
+                    kCaseCount, kMaterialCount, kSampleCount, kViewPhiCount,
+                    specularSampledCount, diffuseSampledCount, branchAssertedCount,
+                    rejectedSampleCount, grazingRejectionCount, maxFErr, maxWeightErr,
+                    kBsdfValueRelTol, maxPdfErr, kBsdfPdfRelTol);
 
         bsdfArena.destroy(ctx.allocator());
     }
 
-    // 21-22. THE FURNACE TEST, on its own deliberately trivial scene.
+    // 21-23. THE FURNACE TEST, on its own deliberately trivial scene.
     //
     // Check 20 compares the BSDF term by term. It cannot catch an error in
     // how the terms are COMBINED into a path -- a missing cosine, a pdf
@@ -2667,6 +2877,89 @@ int main() {
     // the mean is strictly below 1. Both halves are asserted: an upper bound
     // no sample may exceed (energy gain), and a mean strictly under it
     // (the deficit is really there rather than having been papered over).
+    //
+    // ------------------------------------------------------------------
+    // 23. INTERMEDIATE q -- the run that actually exercises the mixture
+    // ------------------------------------------------------------------
+    //
+    // WHY A THIRD RUN. Checks 21 and 22 sit at the two lobe probabilities
+    // that cannot bias anything: 21 is {roughness 1, metallic 0,
+    // specularWeight 0}, i.e. q = 0 exactly, and 22 is a conductor, i.e.
+    // q = 1 exactly. Worse, at q = 0 diffBsdfSample takes an early-return
+    // branch that never calls diffBsdfEval, never forms f, never forms pdf
+    // and never divides -- so check 21's derivation above describes
+    // arithmetic the GPU does not execute. It verifies that one
+    // multiplication returns baseColor. That is worth having, and it is not
+    // a statement about the mixture density or about f*cos/pdf.
+    //
+    // MATERIAL. baseColor 1, roughness 0.30, metallic 0.5, specularWeight 1.
+    // A pure dielectric cannot reach an intermediate q in this model: its
+    // F0 is 0.04, so q = specularWeight * F_max(|N.V|) * (1 - 0.9*roughness)
+    // is capped near 0.04 at the near-normal incidence this scene provides.
+    // Raising metallic instead is what moves q into the middle -- here to
+    // about 0.69 -- while keeping BOTH lobes materially present in f
+    // (kd = 1 - metallic = 0.5). Every path now goes through diffBsdfEval,
+    // forms the full mixture density, and divides. (DESIGN CALL: the review
+    // asked for "a dielectric with specularWeight > 0"; no dielectric in
+    // this parameterisation has an intermediate q, so a half-metal is used
+    // instead and the reason is recorded here.)
+    //
+    // WHAT IS ASSERTED, and how each bound is derived.
+    //
+    // (a) A POINTWISE upper bound on the weight. Unlike check 22 the weight
+    //     is not G2/G1 and is not bounded by 1 -- it is a mixture estimator,
+    //     and a mixture estimator's weight is not bounded by the material's
+    //     albedo. It IS bounded, though, and the bound is elementary. With
+    //     f = f_d + f_s and pdf = (1-q) p_d + q p_s, dropping one term from
+    //     each denominator gives
+    //         f cos / pdf <= f_d cos / ((1-q) p_d)  +  f_s cos / (q p_s)
+    //                      = rho(1-metallic)/(1-q)  +  F (G2/G1) / q
+    //                     <= rho(1-metallic)/(1-q)  +  specScale / q,
+    //     using F <= 1 and G2/G1 <= 1 (Heitz 2014 Eq. 99), and p_d, p_s
+    //     being the cosine and VNDF densities the two branches draw from.
+    //     q varies across the frame only through |N.V|, which this narrow
+    //     frustum confines to a small interval, so the bound is evaluated at
+    //     the worst q in that interval and is a constant. A weight above it
+    //     is energy created out of nothing.
+    //
+    // (b) The MEAN, against a numerically integrated reference. The
+    //     estimator is unbiased for the directional albedo whatever the
+    //     sampling strategy is,
+    //         E[f cos / pdf] = INT f(N,V,L) (N.L) dL = rho_dir(V),
+    //     and rho_dir is computable here: oracleDirectionalAlbedo integrates
+    //     THIS FILE'S paper-derived f by midpoint quadrature in double
+    //     precision. There is no closed form for it -- that is the point of
+    //     Heitz 2016 -- but there does not need to be one.
+    //
+    //     An earlier version of this check bracketed the mean instead, using
+    //     F0 <= F <= 1 with check 22's measurement of the single-scattering
+    //     GGX albedo. That bracket is correct but useless in one direction:
+    //     Schlick's grazing term is (1 - V.H)^5, and at this geometry -- a
+    //     narrow frustum onto a facing quad, alpha = 0.09 -- V.H sits within
+    //     about 0.02 of 1 across the whole lobe, so F is F0 to four decimal
+    //     places and the F <= 1 end is slack by a third of the answer. A q
+    //     perturbation that biased the mean upward by 14% was measured
+    //     passing it. The quadrature reference is two-sided and tight.
+    //
+    //     rho_dir depends on the view angle, and each path has its own,
+    //     so the reference is evaluated across the frame's whole |N.V| range
+    //     and the min and max are taken. Two error terms are added to that
+    //     interval, both MEASURED rather than chosen: the quadrature's own
+    //     discretisation error, estimated by redoing one evaluation at half
+    //     resolution and taking the difference, and 5 standard errors of the
+    //     GPU sample mean, computed from the 3072 samples themselves. Both
+    //     are printed, as is the distance from the reference in units of the
+    //     standard error, so a run drifting toward the bound is visible long
+    //     before it crosses one.
+    //
+    // WHAT THIS DOES AND DOES NOT GUARD ABOUT q. A consistent change to q --
+    // one that moves the branch probability and the mixture weight together
+    // -- leaves the estimator unbiased, and this check will correctly not
+    // fire: any q in (0,1) that is nonzero wherever f is nonzero is a legal
+    // strategy. What it catches is q's coverage failing (a lobe stops being
+    // reachable while f still has energy there) and the branch and the
+    // density disagreeing about q, which is the bug this arrangement is
+    // actually exposed to.
     {
         constexpr uint32_t kW = 64;
         constexpr uint32_t kH = 48;
@@ -2684,14 +2977,48 @@ int main() {
         const FurnaceRun kRuns[] = {
             {"lambert", ohao::diff::WavefrontScatterMaterial{1.0f, 0.0f, 0.0f}},
             {"white rough conductor", ohao::diff::WavefrontScatterMaterial{0.30f, 1.0f, 1.0f}},
+            {"half-metal, intermediate q",
+             ohao::diff::WavefrontScatterMaterial{0.30f, 0.5f, 1.0f}},
         };
+        constexpr uint32_t kFurnaceRunCount = sizeof(kRuns) / sizeof(kRuns[0]);
+        constexpr uint32_t kMixtureRun = 2;
 
-        double furnaceMean[2] = {0.0, 0.0};
-        double furnaceMax[2] = {0.0, 0.0};
-        double furnaceMin[2] = {0.0, 0.0};
+        double furnaceMean[kFurnaceRunCount] = {0.0, 0.0, 0.0};
+        double furnaceMax[kFurnaceRunCount] = {0.0, 0.0, 0.0};
+        double furnaceMin[kFurnaceRunCount] = {0.0, 0.0, 0.0};
+        double furnaceStdErr[kFurnaceRunCount] = {0.0, 0.0, 0.0};
         double lambertMaxDeviation = 0.0;
 
-        for (uint32_t run = 0; run < 2; ++run) {
+        // The mixture run's material, restated for the host so the bounds
+        // below are derived from the contract rather than from constants
+        // typed twice. oracleSpecProb / oracleSpecScale / oracleF0 are the
+        // same independent implementations check 20 uses.
+        OracleMaterial mixMat;
+        mixMat.baseColor = {1.0, 1.0, 1.0};  // furnace albedo is 1
+        mixMat.roughness = kRuns[kMixtureRun].material.roughness;
+        mixMat.metallic = kRuns[kMixtureRun].material.metallic;
+        mixMat.specularWeight = kRuns[kMixtureRun].material.specularWeight;
+
+        // |N.V| over the frame. The quad faces the camera, so N.V for the
+        // pixel at (x,y) is 1/sqrt(1 + dx^2 + dy^2) with the same dx, dy the
+        // closed-form ray in check 3 uses; it is 1 dead centre and smallest
+        // in a corner.
+        constexpr double kFurnaceAspect = static_cast<double>(kW) / static_cast<double>(kH);
+        const double dxMax = (1.0 - 1.0 / kW) * kFurnaceAspect * kTanHalfFov;
+        const double dyMax = (1.0 - 1.0 / kH) * kTanHalfFov;
+        const double cosMin = 1.0 / std::sqrt(1.0 + dxMax * dxMax + dyMax * dyMax);
+        const double qAtNormal = oracleSpecProb(mixMat, 1.0);
+        const double qAtCorner = oracleSpecProb(mixMat, cosMin);
+        const double qMin = std::min(qAtNormal, qAtCorner);
+        const double qMax = std::max(qAtNormal, qAtCorner);
+        const double mixDiffuseAlbedo = mixMat.baseColor.x * (1.0 - mixMat.metallic);
+        const double mixSpecScale = oracleSpecScale(mixMat);
+        // (a), derived above: rho(1-metallic)/(1-q) + specScale/q, at the
+        // worst q in the frame's interval (the first term grows with q, the
+        // second shrinks, so the extremes are taken independently).
+        const double mixPointwiseBound = mixDiffuseAlbedo / (1.0 - qMax) + mixSpecScale / qMin;
+
+        for (uint32_t run = 0; run < kFurnaceRunCount; ++run) {
             ohao::diff::WavefrontBuffers wf;
             if (!wf.build(ctx.allocator(), kCapacity)) {
                 std::fprintf(stderr, "[diff_gpu_probe] FAIL: furnace buffers build (%s)\n",
@@ -2756,6 +3083,7 @@ int main() {
             }
 
             double sum = 0.0;
+            double sumSq = 0.0;
             double maxV = -1.0;
             double minV = 2.0;
             for (uint32_t i = 0; i < kCapacity; ++i) {
@@ -2772,7 +3100,16 @@ int main() {
                     return 1;
                 }
                 const double v = tR[i];
+                if (!std::isfinite(v)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: furnace (%s) path %u throughput is not "
+                                 "finite (%.9g)\n",
+                                 kRuns[run].name, i, v);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
                 sum += v;
+                sumSq += v * v;
                 if (v > maxV) maxV = v;
                 if (v < minV) minV = v;
 
@@ -2791,7 +3128,7 @@ int main() {
                         wf.destroy(ctx.allocator());
                         return 1;
                     }
-                } else {
+                } else if (run == 1) {
                     if (v > 1.0 + kFurnaceUlpBound) {
                         std::fprintf(stderr,
                                      "[diff_gpu_probe] FAIL: glossy furnace path %u returned "
@@ -2811,11 +3148,39 @@ int main() {
                         wf.destroy(ctx.allocator());
                         return 1;
                     }
+                } else {
+                    // (a): the pointwise mixture bound derived above. NOT 1 --
+                    // a mixture estimator's weight legitimately exceeds the
+                    // albedo on directions one lobe's density under-covers.
+                    if (v > mixPointwiseBound) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: mixture furnace path %u returned "
+                                     "%.9g, above the derived pointwise bound %.9g = "
+                                     "rho(1-metallic)/(1-q) + specScale/q with q in [%.6f, "
+                                     "%.6f]. Every term in that bound comes from F <= 1 and "
+                                     "G2/G1 <= 1, so exceeding it is energy created out of "
+                                     "nothing\n",
+                                     i, v, mixPointwiseBound, qMin, qMax);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
+                    if (v < 0.0) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: mixture furnace path %u returned a "
+                                     "negative throughput %.9g\n",
+                                     i, v);
+                        wf.destroy(ctx.allocator());
+                        return 1;
+                    }
                 }
             }
             furnaceMean[run] = sum / static_cast<double>(kCapacity);
             furnaceMax[run] = maxV;
             furnaceMin[run] = minV;
+            const double meanSq = sumSq / static_cast<double>(kCapacity);
+            const double var =
+                std::max(0.0, meanSq - furnaceMean[run] * furnaceMean[run]);
+            furnaceStdErr[run] = std::sqrt(var / static_cast<double>(kCapacity));
 
             wf.destroy(ctx.allocator());
         }
@@ -2853,6 +3218,67 @@ int main() {
                     "mean %.9g (strictly below 1 -- the known single-scattering GGX deficit), "
                     "min %.9g, max %.9g\n",
                     kCapacity, furnaceMean[1], furnaceMin[1], furnaceMax[1]);
+
+        // ------------------------------------------------------------------
+        // 23. The intermediate-q run's mean, against a quadrature of the
+        // oracle's own f. See the derivation above this block.
+        // ------------------------------------------------------------------
+        constexpr uint32_t kQuadTheta = 512;
+        constexpr uint32_t kQuadPhi = 512;
+        // rho_dir over the frame's |N.V| range. The range is narrow, so a
+        // scan is enough to bracket it; the observed spread is printed, and
+        // it is orders of magnitude under the Monte Carlo allowance.
+        constexpr uint32_t kCosScan = 5;
+        double rhoLo = 0.0;
+        double rhoHi = 0.0;
+        for (uint32_t k = 0; k < kCosScan; ++k) {
+            const double t =
+                static_cast<double>(k) / static_cast<double>(kCosScan - 1);
+            const double c = cosMin + (1.0 - cosMin) * t;
+            const double r = oracleDirectionalAlbedo(mixMat, c, kQuadTheta, kQuadPhi);
+            if (k == 0 || r < rhoLo) rhoLo = r;
+            if (k == 0 || r > rhoHi) rhoHi = r;
+        }
+        // Discretisation error, measured rather than assumed: the same
+        // integral at half resolution in each dimension.
+        const double rhoCoarse =
+            oracleDirectionalAlbedo(mixMat, 1.0, kQuadTheta / 2u, kQuadPhi / 2u);
+        const double rhoFine = oracleDirectionalAlbedo(mixMat, 1.0, kQuadTheta, kQuadPhi);
+        const double quadError = std::abs(rhoFine - rhoCoarse);
+        // 5 standard errors of the GPU sample mean, computed from the samples.
+        const double mixSigma = furnaceStdErr[kMixtureRun];
+        const double meanAllowance = 5.0 * mixSigma + quadError;
+        const double mixLower = rhoLo - meanAllowance;
+        const double mixUpper = rhoHi + meanAllowance;
+        const double rhoMid = 0.5 * (rhoLo + rhoHi);
+        const double sigmasOff =
+            mixSigma > 0.0 ? (furnaceMean[kMixtureRun] - rhoMid) / mixSigma : 0.0;
+        if (!(furnaceMean[kMixtureRun] >= mixLower) || !(furnaceMean[kMixtureRun] <= mixUpper)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: mixture furnace mean is %.9g, outside [%.9g, "
+                         "%.9g]. The reference is rho_dir = INT f cos dL over the upper "
+                         "hemisphere, integrated in double precision from the CPU oracle's own f "
+                         "(not from the GLSL), and evaluated across this frame's |N.V| range: "
+                         "[%.9g, %.9g]. The allowance is %.3g = 5 x the sample standard error "
+                         "%.3g plus the measured quadrature error %.3g. The estimator is "
+                         "unbiased for rho_dir for ANY lobe probability in (0,1) that covers f's "
+                         "support, so landing outside means the mixture density and the branch "
+                         "that was actually taken disagree, or a lobe has stopped being "
+                         "reachable -- it is %+.1f sigma off\n",
+                         furnaceMean[kMixtureRun], mixLower, mixUpper, rhoLo, rhoHi,
+                         meanAllowance, mixSigma, quadError, sigmasOff);
+            return 1;
+        }
+        std::printf("[diff_gpu_probe] OK: mixture furnace (roughness 0.30, metallic 0.50, "
+                    "specularWeight 1.00 -- q in [%.4f, %.4f], so both branches run and every "
+                    "path forms the full mixture density and divides): all %u paths in [0, %.6f] "
+                    "(derived pointwise bound), mean %.9g matches the quadrature of the CPU "
+                    "oracle's own f, rho_dir in [%.6f, %.6f] over this frame's |N.V| range, to "
+                    "%+.2f sigma (allowance %.3g = 5 x sigma %.3g + quadrature error %.3g at "
+                    "%ux%u); min %.9g, max %.9g\n",
+                    qMin, qMax, kCapacity, mixPointwiseBound, furnaceMean[kMixtureRun], rhoLo,
+                    rhoHi, sigmasOff, meanAllowance, mixSigma, quadError, kQuadTheta, kQuadPhi,
+                    furnaceMin[kMixtureRun], furnaceMax[kMixtureRun]);
     }
 
     arena.destroy(ctx.allocator());

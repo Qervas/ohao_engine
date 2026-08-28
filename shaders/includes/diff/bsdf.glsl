@@ -153,6 +153,18 @@ void diffBsdfEval(vec3 N, vec3 V, vec3 L, vec3 baseColor, float roughness, float
 
     const float NdotL = dot(N, L);
     const float NdotV = dot(N, V);
+    // DELIBERATELY NOT `<= 0.0`. diff_gpu_probe.cpp's CPU oracle rejects at
+    // 0, because the physics does: f is nonzero for every direction strictly
+    // above the horizon. This rejects at 1e-4 instead, because the specular
+    // branch below divides by (N.V) and by (N.L) and would return a
+    // meaningless value in the band (0, 1e-4]. The two thresholds therefore
+    // disagree, on purpose, over that band. It is a loud disagreement rather
+    // than a silent one -- a sample landing there is a zero weight the oracle
+    // calls valid -- so check 20 names the band explicitly (kShaderGrazingCos)
+    // and counts such cases instead of failing on them. Every case in that
+    // table sits orders of magnitude above the band, so the count is 0; if it
+    // ever is not, the band is being entered and this comment is where to
+    // start.
     if (NdotL <= DIFF_BSDF_MIN_COS || NdotV <= DIFF_BSDF_MIN_COS) return;
 
     // --- Lambertian diffuse. Metals have none. ---
