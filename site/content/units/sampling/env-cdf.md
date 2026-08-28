@@ -54,12 +54,32 @@ $$P(x,y) \;=\; \frac{w_{x,y}}{S_y}\cdot\frac{S_y}{T} \;=\; \frac{w_{x,y}}{T}
 
 The sinθ inserted at build time is annihilated by the Jacobian at sample time,
 leaving a solid-angle density proportional to luminance alone. Note what is
-*absent* from that chain: T. Because both tables are already normalised, the
-shader never needs the integral — which is why `sampleEnvMap` accepts an
-`envIntegral` argument that its body never reads, even though all three raygen
-profiles dutifully pass `pc.tuning.z` into it.
+*absent* from that chain: T. Because both tables are already normalised,
+*sampling* never needs the integral — which is why `sampleEnvMap` takes an
+`envIntegral` argument its own body does not read.
 
 {{cite shaders/includes/rt/env_sampling.glsl "void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,"}}
+
+It is not dead weight. Four callers now pass it: the three raygen profiles hand
+over `pc.tuning.z`, and the differentiable renderer's `wf_scatter.comp` hands
+over its own `pc.envIntegral`.
+
+{{cite shaders/diff/wf_scatter.comp "sampleEnvMap(uEnv1, uEnv2, pc.envWidth, pc.envHeight, pc.envIntegral, envDir, envPdf);"}}
+
+The fourth caller has a consumer for it, and inverting the chain above is
+exactly what that consumer does. Rearranging p_ω = P·WH / (2π²sinθ_y) with
+P = w/T and w = L·sinθ_y gives L back from the density alone, provided T is
+known:
+
+$$L \;=\; p_\omega \cdot \frac{2\pi^{2}\,T}{W H}$$
+
+Here T is the grand total the builder accumulated — the `envIntegral` argument —
+and the sinθ_y that the build-time weight and the sample-time Jacobian cancelled
+against each other never appears. `nee.glsl` writes that one line, and it is the
+only thing in either pipeline whose answer depends on the integral reaching the
+GPU intact:
+
+{{cite shaders/includes/diff/nee.glsl "return pdf * envIntegral * DIFF_NEE_TWO_PI_SQUARED / (float(W) * float(H));"}}
 
 ## Two binary searches per sample
 
@@ -106,6 +126,41 @@ inside 1e-4 rad of the pole `pdfEnvMap`'s denominator bottoms out at the clamp
 while `sampleEnvMap` uses sinθ₀ ≈ 7.7e-4 for that same top row of a 2048-high
 map — a factor of 7.7 between the two sides of one weight.
 
+## Which of the two densities a caller wants
+
+That gap makes `pdfEnvMap` the wrong function for half the callers, so the file
+exports both halves. `envTexelPdfUV` does the binning once and returns the
+texel's UV-space mass together with *both* polar angles; the two entry points
+differ only in which one they divide by. `pdfEnvMap` divides by sinθ of the
+direction it was handed:
+
+{{cite shaders/includes/rt/env_sampling.glsl "float sinT = max(sin(thetaQuery), 1e-4);"}}
+
+`pdfEnvMapTexel` divides by sinθ of the centre of the texel that direction landed
+in, which makes it exactly the density `sampleEnvMap` would have reported for
+that texel — piecewise constant, with no dependence on where inside the texel ω
+fell:
+
+{{cite shaders/includes/rt/env_sampling.glsl "float sinT = max(sin(thetaCentre), 1e-4);"}}
+
+The choice is not a tuning knob; it follows from whether the caller is forming a
+*ratio* or a *magnitude*.
+
+A **balance-heuristic weight** is a ratio, p_A/(p_A+p_B), and both halves of one
+partition are built from the same density pair — so the sinθ_y/sinθ(ω) factor
+cancels out of the weight entirely and `pdfEnvMap` is correct there. That is what
+the miss shader reports in the payload.
+
+**Recovering radiance** by inverting the density is a magnitude, and only the
+texel density inverts. Feed `pdfEnvMap`'s answer at an off-centre direction into
+the L formula above and it returns L·sinθ_centre/sinθ_query instead of L — an
+energy error reaching several times L near the poles, and a firefly source once
+it is accumulated into a film. `wf_scatter.comp` did exactly that for one commit.
+`pdfEnvMapTexel` exists so that no caller has to reconstruct sinθ_centre from the
+binning by hand:
+
+{{cite shaders/includes/rt/env_sampling.glsl "float pdfEnvMapTexel(vec3 dir, uint W, uint H) {"}}
+
 ## The flip between the sampler and the sky
 
 `sampleEnvMap` returns a direction, never a radiance. The raygen fires an
@@ -114,9 +169,10 @@ occlusion ray along it and takes whatever colour the miss shader hands back:
 {{cite shaders/rt/pt_raygen.rgen "vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;"}}
 
 That leaves two functions responsible for one texel↔direction map:
-`equirectPixelToDir`/`pdfEnvMap` in `env_sampling.glsl`, and `dirToEquirect` in
-`pt_miss.rmiss`. They agree on longitude. On latitude one uses arccosine of the
-up axis, the other arcsine:
+`equirectPixelToDir` and its inverse `envTexelPdfUV` — the shared binning behind
+both `pdfEnvMap` and `pdfEnvMapTexel` — in `env_sampling.glsl`, and
+`dirToEquirect` in `pt_miss.rmiss`. They agree on longitude. On latitude one uses
+arccosine of the up axis, the other arcsine:
 
 {{cite shaders/includes/rt/env_sampling.glsl "float theta = acos(clamp(dir.y, -1.0, 1.0));"}}
 {{cite shaders/rt/pt_miss.rmiss "float theta = asin(clamp(dir.y, -1.0, 1.0));"}}

@@ -33,7 +33,7 @@
         <p>CPU build + GPU sampleEnvMap/pdfEnvMap.</p>
       </div>
       <nav class="on-this-page reveal"><div class="otp-label">On this page</div>
-        <ol><li><a href="#the-light-you-cannot-sample-uniformly">The light you cannot sample uniformly</a></li><li><a href="#the-sin-that-has-to-be-there">The sinθ that has to be there</a></li><li><a href="#two-binary-searches-per-sample">Two binary searches per sample</a></li><li><a href="#the-flip-between-the-sampler-and-the-sky">The flip between the sampler and the sky</a></li><li><a href="#what-happens-with-no-environment-map">What happens with no environment map</a></li><li><a href="#where-the-tables-live-and-what-leaks">Where the tables live, and what leaks</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
+        <ol><li><a href="#the-light-you-cannot-sample-uniformly">The light you cannot sample uniformly</a></li><li><a href="#the-sin-that-has-to-be-there">The sinθ that has to be there</a></li><li><a href="#two-binary-searches-per-sample">Two binary searches per sample</a></li><li><a href="#which-of-the-two-densities-a-caller-wants">Which of the two densities a caller wants</a></li><li><a href="#the-flip-between-the-sampler-and-the-sky">The flip between the sampler and the sky</a></li><li><a href="#what-happens-with-no-environment-map">What happens with no environment map</a></li><li><a href="#where-the-tables-live-and-what-leaks">Where the tables live, and what leaks</a></li><li><a href="#contracts">Contracts</a></li><li><a href="#sources">Sources</a></li></ol>
       </nav>
 
 <div class="section-rule"><h2 id="the-light-you-cannot-sample-uniformly">The light you cannot sample uniformly</h2></div>
@@ -56,8 +56,16 @@ $$</div>
 P(x,y) \;=\; \frac{w_{x,y}}{S_y}\cdot\frac{S_y}{T} \;=\; \frac{w_{x,y}}{T}
 \qquad p_{uv} = P\,W H, \qquad p_\omega = \frac{p_{uv}}{2\pi^2\sin\theta_y} \;\propto\; L_{x,y}
 $$</div>
-<p>The sinθ inserted at build time is annihilated by the Jacobian at sample time, leaving a solid-angle density proportional to luminance alone. Note what is *absent* from that chain: T. Because both tables are already normalised, the shader never needs the integral — which is why `sampleEnvMap` accepts an `envIntegral` argument that its body never reads, even though all three raygen profiles dutifully pass `pc.tuning.z` into it.</p>
+<p>The sinθ inserted at build time is annihilated by the Jacobian at sample time, leaving a solid-angle density proportional to luminance alone. Note what is *absent* from that chain: T. Because both tables are already normalised, *sampling* never needs the integral — which is why `sampleEnvMap` takes an `envIntegral` argument its own body does not read.</p>
 <div class="citation-chip"><code class="citation-code">void sampleEnvMap(float u1, float u2, uint W, uint H, float envIntegral,</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L116" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:116</a></div>
+<p>It is not dead weight. Four callers now pass it: the three raygen profiles hand over `pc.tuning.z`, and the differentiable renderer&#x27;s `wf_scatter.comp` hands over its own `pc.envIntegral`.</p>
+<div class="citation-chip"><code class="citation-code">sampleEnvMap(uEnv1, uEnv2, pc.envWidth, pc.envHeight, pc.envIntegral, envDir, envPdf);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/diff/wf_scatter.comp#L407" target="_blank" rel="noopener">shaders/diff/wf_scatter.comp:407</a></div>
+<p>The fourth caller has a consumer for it, and inverting the chain above is exactly what that consumer does. Rearranging p_ω = P·WH / (2π²sinθ_y) with P = w/T and w = L·sinθ_y gives L back from the density alone, provided T is known:</p>
+<div class="math-block">$$
+L \;=\; p_\omega \cdot \frac{2\pi^{2}\,T}{W H}
+$$</div>
+<p>Here T is the grand total the builder accumulated — the `envIntegral` argument — and the sinθ_y that the build-time weight and the sample-time Jacobian cancelled against each other never appears. `nee.glsl` writes that one line, and it is the only thing in either pipeline whose answer depends on the integral reaching the GPU intact:</p>
+<div class="citation-chip"><code class="citation-code">return pdf * envIntegral * DIFF_NEE_TWO_PI_SQUARED / (float(W) * float(H));</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/diff/nee.glsl#L163" target="_blank" rel="noopener">shaders/includes/diff/nee.glsl:163</a></div>
 </div>
 <div class="section-rule"><h2 id="two-binary-searches-per-sample">Two binary searches per sample</h2></div>
 <div class="prose reveal">
@@ -72,11 +80,22 @@ $$</div>
 <div class="citation-chip"><code class="citation-code">float theta = (float(y) + 0.5) / float(H) * OHAO_PI;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L125" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:125</a></div>
 <p>On the directions the sampler itself emits the two agree, because those directions *are* row centres. For a BSDF-sampled direction they differ by sinθ_y/sinθ(ω), which is within a texel&#x27;s worth of 1 across most of the sphere and worst at the poles, where sinθ varies fastest across a row: for a direction inside 1e-4 rad of the pole `pdfEnvMap`&#x27;s denominator bottoms out at the clamp while `sampleEnvMap` uses sinθ₀ ≈ 7.7e-4 for that same top row of a 2048-high map — a factor of 7.7 between the two sides of one weight.</p>
 </div>
+<div class="section-rule"><h2 id="which-of-the-two-densities-a-caller-wants">Which of the two densities a caller wants</h2></div>
+<div class="prose reveal">
+<p>That gap makes `pdfEnvMap` the wrong function for half the callers, so the file exports both halves. `envTexelPdfUV` does the binning once and returns the texel&#x27;s UV-space mass together with *both* polar angles; the two entry points differ only in which one they divide by. `pdfEnvMap` divides by sinθ of the direction it was handed:</p>
+<div class="citation-chip"><code class="citation-code">float sinT = max(sin(thetaQuery), 1e-4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L177" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:177</a></div>
+<p>`pdfEnvMapTexel` divides by sinθ of the centre of the texel that direction landed in, which makes it exactly the density `sampleEnvMap` would have reported for that texel — piecewise constant, with no dependence on where inside the texel ω fell:</p>
+<div class="citation-chip"><code class="citation-code">float sinT = max(sin(thetaCentre), 1e-4);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L200" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:200</a></div>
+<p>The choice is not a tuning knob; it follows from whether the caller is forming a *ratio* or a *magnitude*.</p>
+<p>A **balance-heuristic weight** is a ratio, p_A/(p_A+p_B), and both halves of one partition are built from the same density pair — so the sinθ_y/sinθ(ω) factor cancels out of the weight entirely and `pdfEnvMap` is correct there. That is what the miss shader reports in the payload.</p>
+<p>**Recovering radiance** by inverting the density is a magnitude, and only the texel density inverts. Feed `pdfEnvMap`&#x27;s answer at an off-centre direction into the L formula above and it returns L·sinθ_centre/sinθ_query instead of L — an energy error reaching several times L near the poles, and a firefly source once it is accumulated into a film. `wf_scatter.comp` did exactly that for one commit. `pdfEnvMapTexel` exists so that no caller has to reconstruct sinθ_centre from the binning by hand:</p>
+<div class="citation-chip"><code class="citation-code">float pdfEnvMapTexel(vec3 dir, uint W, uint H) {</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L196" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:196</a></div>
+</div>
 <div class="section-rule"><h2 id="the-flip-between-the-sampler-and-the-sky">The flip between the sampler and the sky</h2></div>
 <div class="prose reveal">
 <p>`sampleEnvMap` returns a direction, never a radiance. The raygen fires an occlusion ray along it and takes whatever colour the miss shader hands back:</p>
 <div class="citation-chip"><code class="citation-code">vec3 envContribution = envRadiance * brdf * NdotL_env * w / envPdf;</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_raygen.rgen#L481" target="_blank" rel="noopener">shaders/rt/pt_raygen.rgen:481</a></div>
-<p>That leaves two functions responsible for one texel↔direction map: `equirectPixelToDir`/`pdfEnvMap` in `env_sampling.glsl`, and `dirToEquirect` in `pt_miss.rmiss`. They agree on longitude. On latitude one uses arccosine of the up axis, the other arcsine:</p>
+<p>That leaves two functions responsible for one texel↔direction map: `equirectPixelToDir` and its inverse `envTexelPdfUV` — the shared binning behind both `pdfEnvMap` and `pdfEnvMapTexel` — in `env_sampling.glsl`, and `dirToEquirect` in `pt_miss.rmiss`. They agree on longitude. On latitude one uses arccosine of the up axis, the other arcsine:</p>
 <div class="citation-chip"><code class="citation-code">float theta = acos(clamp(dir.y, -1.0, 1.0));         // [0, pi]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/env_sampling.glsl#L148" target="_blank" rel="noopener">shaders/includes/rt/env_sampling.glsl:148</a></div>
 <div class="citation-chip"><code class="citation-code">float theta = asin(clamp(dir.y, -1.0, 1.0));  // [-pi/2, pi/2]</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/rt/pt_miss.rmiss#L54" target="_blank" rel="noopener">shaders/rt/pt_miss.rmiss:54</a></div>
 <p>Since acos(y)/π = ½ − asin(y)/π, the two v coordinates satisfy v_env = 1 − v_miss: they are vertical mirrors. The importance sampler finds a bright texel in row y and emits the direction whose radiance the miss shader then fetches from row H−1−y. For any environment that is not symmetric about the horizon — which is every real capture — the CDF steers samples at the mirror image of the bright region.</p>
@@ -128,6 +147,8 @@ $$</div>
         <div class="row"><code>ohao/gpu/vulkan/light_upload.cpp</code><span class="desc"></span></div>
         <div class="row"><code>ohao/render/rt/env_cdf.cpp</code><span class="desc"></span></div>
         <div class="row"><code>shaders/includes/rt/env_sampling.glsl</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/diff/wf_scatter.comp</code><span class="desc"></span></div>
+        <div class="row"><code>shaders/includes/diff/nee.glsl</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_miss.rmiss</code><span class="desc"></span></div>
         <div class="row"><code>shaders/rt/pt_raygen.rgen</code><span class="desc"></span></div>
         <div class="row"><code>shaders/core/deferred_lighting.frag</code><span class="desc"></span></div>

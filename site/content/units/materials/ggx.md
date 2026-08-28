@@ -12,7 +12,9 @@ This tree writes the isotropic GGX distribution out twenty-four times. Four of
 those copies sit behind a function name: `distributionGGX` in `brdf_ggx.glsl`,
 which only `deferred_lighting.frag` and `forward.frag` reach — through
 `evaluateBRDF`; `ggxD_anisoOrIso`'s isotropic branch and `ggxDiso` in
-`ggx_aniso.glsl`, `#include`d by the three path-tracer raygens and nothing else;
+`ggx_aniso.glsl`, `#include`d by the three path-tracer raygens and by
+`includes/diff/bsdf.glsl`, the differentiable renderer's BSDF, which calls
+`ggxDiso` for its specular lobe;
 and `D_ClearCoat` in `advanced_brdf.glsl`, a file no shader `#include`s. The other
 twenty are inline. Past bounce 0 the raygens stop calling `ggx_aniso.glsl` and
 paste the algebra straight into each NEE, env-MIS and pdf branch — six copies in
