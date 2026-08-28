@@ -844,6 +844,58 @@ public:
         std::vector<std::vector<float>>& outForwardTracePerBounce,
         std::vector<std::vector<float>>& outReplayTracePerBounce);
 
+    /// Stage 1 Task 2 -- the GRADIENT probe. ONE evaluation point of
+    /// (film, dJ/d(albedo)) on a caller-supplied scene.
+    ///
+    /// Runs the fused wavefront loop TWICE from zeroed buffers with the SAME
+    /// `iterationSeed`, over the same scene, camera, material and bounce
+    /// count:
+    ///
+    ///   1. through `shaders/diff/wf_scatter.comp` -- the FORWARD
+    ///      instantiation, whose hook accumulates the film -- and copies the
+    ///      resulting `width*height*3` floats into `outFilm`;
+    ///   2. through `shaders/diff/wf_scatter_replay.comp` -- the REPLAY
+    ///      instantiation, whose hook scatters the adjoint -- into `arena`,
+    ///      which is zeroed at the top of that run's command buffer.
+    ///
+    /// The two runs share nothing but the seed, which is exactly the seed
+    /// invariant (spec 4.5) the replay rests on and which check 36 measures
+    /// directly. Splitting them is what keeps the finite-difference gate's
+    /// two sides on separate buffers: the FD side reads a film the forward
+    /// hook wrote and never touches the arena; the analytic side reads an
+    /// arena the replay hook wrote and never touches the film.
+    ///
+    /// `gradArenaFloats` and `gradAlbedoOffset` are pushed to the traversal
+    /// verbatim (see WavefrontLoop::Config). `arena.buffer()` is bound at
+    /// binding 10, passed to `record`'s `extraBarrierBuffers` -- the write is
+    /// an atomicAdd, so bounce k's accumulation must be available to bounce
+    /// k+1's -- and named in this function's SHADER_WRITE -> HOST_READ
+    /// barrier, because the caller reads it back through
+    /// `GradientArena::readback`. The caller must NOT zero the arena itself;
+    /// this function does, inside the same command buffer as the loop.
+    ///
+    /// REFUSES to dispatch unless `material.metallic` and
+    /// `material.specularWeight` are both exactly 0. That is not a
+    /// convenience restriction: `shaders/includes/diff/bsdf_adjoint.glsl` is
+    /// exact only for the pure Lambertian configuration (its header names
+    /// both failure directions), and at `metallic > 0` the lobe-selection
+    /// probability itself depends on the base colour, so a finite-difference
+    /// perturbation of the albedo would MOVE THE SAMPLED DIRECTION and common
+    /// random numbers would not hold at all -- the comparison would be
+    /// between two different paths, and would fail for a reason that has
+    /// nothing to do with the derivative.
+    ///
+    /// Dispatch-shape requirements are runWavefrontParityProbe's, including
+    /// `width * height == capacity` (one path per pixel, the film-hazard
+    /// resolution). Returns false on any Vulkan error, including the replay
+    /// stage's SPV being absent.
+    [[nodiscard]] bool runWavefrontGradientProbe(
+        WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t bounces,
+        const WavefrontGenerateCamera& camera, std::span<const float> positions,
+        std::span<const uint32_t> indices, float albedo,
+        const WavefrontScatterMaterial& material, uint32_t iterationSeed, GradientArena& arena,
+        uint32_t gradArenaFloats, uint32_t gradAlbedoOffset, std::vector<float>& outFilm);
+
     /// Returns false on any Vulkan error.
     [[nodiscard]] bool runWavefrontParityProbe(WavefrontBuffers& buffers, uint32_t width,
                                                uint32_t height, uint32_t bounces,

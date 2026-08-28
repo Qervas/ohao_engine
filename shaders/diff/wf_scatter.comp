@@ -24,7 +24,8 @@
 // the per-vertex hook traverse.glsl declares and calls exactly once per
 // invocation. For the FORWARD pass that hook is the film accumulation, which
 // is what this stage always did at that point in the traversal, character
-// for character. For the replay pass it is (in this task) nothing at all.
+// for character. For the replay pass it is the gradient scatter -- the
+// derivative of the very film this hook writes (Stage 1 Task 2).
 //
 // `diff_gpu_probe.cpp`'s `checkTraverseInstantiationTie()` reads both `.comp`
 // files at startup and fails the whole probe if either one grows a

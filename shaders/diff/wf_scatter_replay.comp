@@ -37,15 +37,22 @@
 // draw count, and the origin, direction, throughput and hit distance each
 // traversal read out of path state.
 //
-// WHY THE HOOK IS EMPTY.
+// WHAT THE HOOK DOES, AND WHAT IT DID.
 //
-// Stage 1 Task 1 adds NO adjoint, NO gradient and NO arena write, on purpose:
-// the point of this task is to establish that two instantiations walk one
-// path, while there is still nothing else in the picture to confuse the
-// diagnosis with. The whole of the difference between the forward pass and
-// the replay pass is therefore this function's body -- the forward one
-// accumulates the film, this one does nothing -- and that difference is the
-// only place a later task has to put the PRB recursion.
+// Stage 1 Task 1 left it EMPTY on purpose: the point of that task was to
+// establish that two instantiations walk one path, with nothing else in the
+// picture to confuse the diagnosis with. Stage 1 Task 2 filled it with the
+// first gradient in this project -- d(film)/d(albedo), scattered into the
+// gradient arena at binding 10 by one atomicAdd per vertex. The whole of the
+// difference between the forward pass and the replay pass is still exactly
+// this function's body: the forward one accumulates the film, this one
+// accumulates its derivative.
+//
+// The replay-equivalence claim above is UNCHANGED by that and is the reason
+// the hook contract is worth restating here. A hook may write its own sink
+// and `v`; it may not write path state, the queues or the counters. This one
+// writes one float of the arena and `v.adjoint`. If it wrote anything else,
+// check 36 would be the thing that noticed -- one bounce later.
 //
 // THE RECURSION, FOR THIS INTEGRATOR. Spec section 6.1 writes the scatter
 // line for a single-strategy estimator. This integrator's direct-lighting
@@ -79,6 +86,23 @@
 // `v.bsdfWeight` is bit-identically the value the traversal multiplied
 // throughput by.
 //
+// AND THE SCATTER LINE, EVEN CORRECTED, IS NOT THE WHOLE DERIVATIVE ONCE THE
+// LOOP RUNS MORE THAN ONE BOUNCE. That was found by MEASUREMENT, not by
+// re-reading: the finite-difference gate accepts it at one bounce and rejects
+// it at two and three. The film is SUM_b T_b * Lr_b, so
+//
+//     dJ/dtheta = SUM_b [ (dT_b/dtheta) * Lr_b  +  T_b * (dLr_b/dtheta) ]
+//
+// and the scatter line above is the second half only. The first half is not a
+// correction term: with a pure Lambertian surface T_b = albedo^b exactly, so
+// dropping it HALVES the second bounce's contribution. A reverse-mode PRB
+// formulation folds it into the scatter line by using the full INCIDENT
+// radiance along the continuation direction rather than the environment
+// radiance along it -- which this vertex does not have, it being the future of
+// the path. shaders/includes/diff/bsdf_adjoint.glsl adds it as an explicit
+// second term with the closed form for dT_b/dtheta, and carries the whole
+// derivation.
+//
 // Every factor of both lines is a field of `DiffVertex` (see traverse.glsl).
 // It was NOT true of the per-strategy factors for one task -- they were
 // added, as FIELDS, which is the whole point of a signature whose only
@@ -100,13 +124,72 @@
 
 #include "diff/traverse.glsl"
 
-// THE REPLAY HOOK. Deliberately empty -- see "WHY THE HOOK IS EMPTY" above.
-// `v` is unnamed-but-used in the sense that matters: traverse.glsl fills
-// every field of it before this call, and the replay-equivalence check
-// verifies that those fields were reached by the identical traversal. An
-// empty body is what makes this task's claim narrow and checkable: whatever
-// the check finds, it cannot be an artefact of something this file did at the
-// vertex, because this file does nothing at the vertex.
-void diffVertexHook(inout DiffVertex v) {}
+// THE REPLAY HOOK -- Stage 1 Task 2, the FIRST GRADIENT IN THIS PROJECT.
+//
+// It was empty for exactly one task, which is what let the replay-equivalence
+// check above make a claim about the traversal and nothing else. It is not
+// empty now, and the contract it must stay inside is `DiffVertex`'s: a hook
+// may write ITS OWN SINK and `v`, and may not write path state, the queues or
+// the counters. This one writes one float of the gradient arena and `v.adjoint`
+// and nothing else -- which is why check 36 above still holds after this task,
+// and would be the first thing to fail if it did not.
+//
+// WHAT IT ACCUMULATES. d/d(albedo) of
+//
+//     J = SUM over pixels, SUM over channels of film[pixel][channel]
+//
+// -- the film the FORWARD instantiation's hook writes. The whole derivation,
+// the objective, the two terms and the one material configuration it is exact
+// for are in shaders/includes/diff/bsdf_adjoint.glsl, which is where a hook's
+// helpers have to live: a `.comp` may define only `diffVertexHook` and `main`
+// (checkTraverseInstantiationTie rule 3).
+//
+// THE THREE LINES, and what each is:
+//
+//   1. `v.adjoint = v.throughput` SEEDS dL. For a plain sum-of-film objective
+//      dL_0 = 1 and dL_{b+1} = dL_b * bsdfWeight_b, which is bit-for-bit the
+//      recursion the path's own throughput obeys -- so the adjoint at this
+//      vertex IS the arrival throughput and needs no path-state field of its
+//      own. That identity is specific to THIS objective; a weighted image loss
+//      breaks it at the first vertex, and this line is the one place that
+//      changes. See bsdf_adjoint.glsl's header.
+//   2. The scatter. `diffVertexDirectAlbedoScatter` is DiffVertex's recursion
+//      verbatim -- the sum over the two MIS strategies -- and
+//      `diffVertexThroughputAlbedoTerm` is the (dT/dtheta)*Lr term that
+//      recursion does not contain and that the finite-difference gate
+//      MEASURED to be necessary from two bounces on.
+//   3. `v.adjoint = v.adjoint * v.bsdfWeight` is the propagate line, written
+//      where the signature says the propagated adjoint goes. It is NOT read
+//      again: the traversal discards `v` at the return and the next bounce's
+//      dispatch re-derives the adjoint from path state by line 1. Saying so
+//      here is better than leaving a reader to assume this is what carries the
+//      adjoint forward, because it is not -- the throughput is, and it is the
+//      traversal that writes it.
+//
+// THE ARENA WRITE. One `atomicAdd` on one float, guarded on the arena being
+// configured (`gradArenaFloats` 0 means "no arena", which is what every other
+// probe in this repository binds) and on the offset being inside it. Many
+// paths at many vertices land on the same float with no ordering between them,
+// so this accumulation is NOT bit-reproducible the way the film is -- the
+// film's hazard is avoided by construction (one sample per pixel per
+// dispatch), this one is real and the gate's tolerance is derived with it in.
+//
+// The three channels are summed here rather than scattered separately because
+// J sums them: the pushed albedo is ONE grey scalar feeding all three, so its
+// gradient is one number, and adding the three channel contributions is the
+// chain rule for `vec3 baseColor = vec3(pc.albedo)`.
+void diffVertexHook(inout DiffVertex v) {
+    v.adjoint = v.throughput;
+
+    const vec3 contribution = diffVertexDirectAlbedoScatter(v, v.adjoint) +
+                              diffVertexThroughputAlbedoTerm(v, pc.albedo);
+
+    v.adjoint = v.adjoint * v.bsdfWeight;
+
+    if (pc.gradArenaFloats > 0u && pc.gradAlbedoOffset < pc.gradArenaFloats) {
+        atomicAdd(grad.v[pc.gradAlbedoOffset],
+                  contribution.x + contribution.y + contribution.z);
+    }
+}
 
 void main() { diffTraverse(); }

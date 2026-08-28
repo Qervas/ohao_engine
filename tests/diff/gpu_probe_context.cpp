@@ -1342,12 +1342,16 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     // buffers are no longer one contiguous prefix -- bindBuffers writes
     // 0..N-1 in order, so the film cannot go through it and is bound
     // separately by bindStorageBuffer below.
-    const VkDescriptorType scatterBindingTypes[10] = {
+    // ... and binding 10, the gradient arena (Stage 1 Task 2). See the note
+    // at the bindStorageBuffer call below for why THIS probe binds the film
+    // buffer there rather than allocating a placeholder.
+    const VkDescriptorType scatterBindingTypes[11] = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (!prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", counterOnly,
                                sizeof(WavefrontLoop::PrepareIndirectPush))) {
@@ -1466,7 +1470,23 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             !scatter.bindAccelerationStructure(m_device, 8, shadowAccel.getTLAS()) ||
             // Binding 9 sits after the acceleration structure, so it cannot
             // go through bindBuffers' 0-based prefix.
-            !scatter.bindStorageBuffer(m_device, 9, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 9, filmBuffer.buffer) ||
+            // BINDING 10, THE GRADIENT ARENA. A descriptor set must cover
+            // every binding the shader statically declares, and this probe
+            // has no arena: it runs the FORWARD instantiation, whose hook is
+            // the film write, and it leaves ScatterPush::gradArenaFloats at
+            // 0, which disables every gradient write in the traversal.
+            //
+            // The FILM buffer is re-bound here rather than a placeholder
+            // being allocated, and that choice is deliberate rather than
+            // lazy: if a gradient write ever DID reach a probe that set
+            // gradArenaFloats to 0, it would land in the film -- where
+            // checks 32, 33 and 34 compare the film against independent
+            // oracles and would fail loudly. A private placeholder buffer
+            // would absorb the same stray write in silence. The same
+            // reasoning and the same re-bind appear in the fused-loop,
+            // replay and parity probes.
+            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer)) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontScatterProbe: descriptor binding\n");
             ok = false;
@@ -2254,7 +2274,10 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
     // why nothing about the estimator is concluded from such a run.
     // ... and the film at 9, after the acceleration structure, so it is
     // bound with bindStorageBuffer rather than through bindBuffers' prefix.
-    const VkDescriptorType kScatterBindings[10] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
+    // See runWavefrontScatterProbe's note at its binding-10 bind for why the
+    // probes that have no arena re-bind the film buffer there.
+    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -2263,6 +2286,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -2306,7 +2330,11 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
             // scatterTLAS is accel's TLAS unless the caller asked for
             // unoccluded shadow rays -- see the shadow-scene block above.
             !scatter.bindAccelerationStructure(m_device, 8, scatterTLAS) ||
-            !scatter.bindStorageBuffer(m_device, 9, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 9, filmBuffer.buffer) ||
+            // Binding 10, the gradient arena: none here, so the film is
+            // re-bound and ScatterPush::gradArenaFloats stays 0. See
+            // runWavefrontScatterProbe's note at the same call.
+            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer)) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontFusedLoopProbe: descriptor binding\n");
             ok = false;
@@ -2840,7 +2868,10 @@ bool GpuProbeContext::runWavefrontReplayProbe(
     // include the same traverse.glsl -- that is the structural claim this
     // task rests on, and here it shows up as one binding-type array used
     // twice rather than two that have to be kept in step.
-    const VkDescriptorType kScatterBindings[10] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
+    // See runWavefrontScatterProbe's note at its binding-10 bind for why the
+    // probes that have no arena re-bind the film buffer there.
+    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -2849,6 +2880,7 @@ bool GpuProbeContext::runWavefrontReplayProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -2911,7 +2943,13 @@ bool GpuProbeContext::runWavefrontReplayProbe(
             // scene, which is what keeps the two runs comparable at all.
             ok = scatterStages[i]->bindBuffers(m_device, scatterBuffers) &&
                  scatterStages[i]->bindAccelerationStructure(m_device, 8, accel.getTLAS()) &&
-                 scatterStages[i]->bindStorageBuffer(m_device, 9, s.film.buffer);
+                 scatterStages[i]->bindStorageBuffer(m_device, 9, s.film.buffer) &&
+                 // Binding 10, the gradient arena. This probe has none --
+                 // it is about the two traversals walking ONE path, not
+                 // about gradients -- so each variant re-binds its OWN
+                 // film there and gradArenaFloats stays 0. See
+                 // runWavefrontScatterProbe's note at the same call.
+                 scatterStages[i]->bindStorageBuffer(m_device, 10, s.film.buffer);
         }
         if (!ok) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontReplayProbe: descriptor binding\n");
@@ -3229,7 +3267,10 @@ bool GpuProbeContext::runWavefrontParityProbe(
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                     VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
-    const VkDescriptorType kScatterBindings[10] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
+    // See runWavefrontScatterProbe's note at its binding-10 bind for why the
+    // probes that have no arena re-bind the film buffer there.
+    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -3238,6 +3279,7 @@ bool GpuProbeContext::runWavefrontParityProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -3281,7 +3323,11 @@ bool GpuProbeContext::runWavefrontParityProbe(
             // The SAME TLAS the path rays trace. Deliberately not a second
             // one -- see this function's doc comment.
             !scatter.bindAccelerationStructure(m_device, 8, accel.getTLAS()) ||
-            !scatter.bindStorageBuffer(m_device, 9, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 9, filmBuffer.buffer) ||
+            // Binding 10, the gradient arena: none here, so the film is
+            // re-bound and ScatterPush::gradArenaFloats stays 0. See
+            // runWavefrontScatterProbe's note at the same call.
+            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer)) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontParityProbe: descriptor binding\n");
             ok = false;
         }
@@ -3413,6 +3459,420 @@ bool GpuProbeContext::runWavefrontParityProbe(
     if (neeSamplesBuffer.isValid()) m_allocator.destroyBuffer(neeSamplesBuffer);
     if (envSamplesBuffer.isValid()) m_allocator.destroyBuffer(envSamplesBuffer);
     if (debugDrawsBuffer.isValid()) m_allocator.destroyBuffer(debugDrawsBuffer);
+    if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
+    if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
+
+    return ok;
+}
+
+
+// ===========================================================================
+// Stage 1 Task 2 -- the GRADIENT probe.
+// ===========================================================================
+//
+// One evaluation point of (film, dJ/d(albedo)) on a caller-supplied scene,
+// produced by two fused runs of ohao::diff::WavefrontLoop at one seed: the
+// FORWARD instantiation for the film and the REPLAY one for the arena. See
+// the doc comment in gpu_probe_context.hpp for why the two halves are kept on
+// separate buffers and why this refuses to run outside the pure Lambertian
+// configuration.
+//
+// WHY THIS IS NOT runWavefrontParityProbe WITH MORE PARAMETERS. That probe
+// runs ONE stage (the forward one) many times, once per seed, because its
+// subject is a Monte Carlo mean over seeds. This one runs TWO stages once,
+// because its subject is a derivative at a single common-random-number
+// realisation -- a second seed would be a second measurement, not a better
+// one. Generalising the parity probe would have put its calibrated
+// non-vacuity gates one parameter default away from a different question.
+bool GpuProbeContext::runWavefrontGradientProbe(
+    WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t bounces,
+    const WavefrontGenerateCamera& camera, std::span<const float> positions,
+    std::span<const uint32_t> indices, float albedo, const WavefrontScatterMaterial& material,
+    uint32_t iterationSeed, GradientArena& arena, uint32_t gradArenaFloats,
+    uint32_t gradAlbedoOffset, std::vector<float>& outFilm) {
+    // Byte-identical to runWavefrontGenerateProbe's (80 bytes).
+    struct GeneratePush {
+        float origin[3];
+        float pad0;
+        float forward[3];
+        float pad1;
+        float right[3];
+        float pad2;
+        float up[3];
+        float pad3;
+        uint32_t width;
+        uint32_t height;
+        float tanHalfFov;
+        uint32_t capacity;
+    };
+    static_assert(sizeof(GeneratePush) == 80,
+                  "GeneratePush must match wf_generate.comp's Push block layout");
+
+    outFilm.clear();
+
+    const uint32_t capacity = buffers.layout().capacity();
+    bool ok = capacity > 0 && buffers.stateBuffer() != VK_NULL_HANDLE &&
+              buffers.queueBuffer() != VK_NULL_HANDLE && buffers.counterBuffer() != VK_NULL_HANDLE;
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: buffers not built\n");
+        return false;
+    }
+    if (height != kFusedLoopGenerateLocalY || width == 0u ||
+        (width % kFusedLoopGenerateLocalX) != 0u || width * height != capacity || bounces == 0u) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: requires height == %u, width a "
+                     "non-zero multiple of %u, width*height == capacity (%u) -- which is also the "
+                     "ONE-SAMPLE-PER-PIXEL condition the film-hazard resolution rests on -- and "
+                     "bounces > 0; got %ux%u, bounces %u\n",
+                     kFusedLoopGenerateLocalY, kFusedLoopGenerateLocalX, capacity, width, height,
+                     bounces);
+        return false;
+    }
+    if (positions.size() < 9u || positions.size() % 3u != 0u || indices.size() < 3u ||
+        indices.size() % 3u != 0u) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: needs at least one triangle "
+                     "(3 floats per vertex, 3 indices per triangle); got %zu floats, %zu indices\n",
+                     positions.size(), indices.size());
+        return false;
+    }
+    // THE MATERIAL REFUSAL. See the doc comment: bsdf_adjoint.glsl's
+    // derivative is exact only at metallic == 0 (where F0 and the lobe
+    // probability q stop depending on the base colour) and its throughput
+    // term is exact only at specularWeight == 0 (where bsdf.glsl's fast path
+    // makes the per-bounce weight EXACTLY `albedo`). Outside that, a green
+    // gradient check would be measuring a derivative of something other than
+    // what it thinks -- and at metallic > 0 the finite difference would not
+    // even be comparing two runs of the same path.
+    if (material.metallic != 0.0f || material.specularWeight != 0.0f) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: refuses to run with metallic "
+                     "%.9g / specularWeight %.9g. shaders/includes/diff/bsdf_adjoint.glsl is the "
+                     "PURE LAMBERTIAN derivative only: at metallic > 0 the base colour enters both "
+                     "F0 and the lobe-selection probability, so a +/-h perturbation of the albedo "
+                     "MOVES THE SAMPLED DIRECTION and the common-random-number comparison is "
+                     "between two different paths; at specularWeight > 0 the per-bounce weight "
+                     "stops being exactly `albedo` and the throughput term's closed form fails. "
+                     "Task 3 replaces those bodies; until then this is a refusal, not a "
+                     "tolerance\n",
+                     static_cast<double>(material.metallic),
+                     static_cast<double>(material.specularWeight));
+        return false;
+    }
+    if (arena.buffer() == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: gradient arena not "
+                              "built\n");
+        return false;
+    }
+
+    // --- Scene. ONE triangle soup, bound to the primary trace (acceleration
+    // structure plus wf_intersect.comp's vertex/index storage buffers) and to
+    // the traversal's shadow rays. Not two.
+    GpuBuffer vertexBuffer = m_allocator.createBufferFromSpan<float>(
+        positions, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    GpuBuffer indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
+        indices, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    ok = vertexBuffer.isValid() && indexBuffer.isValid();
+    if (!ok) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: failed to create scene "
+                              "vertex/index buffers\n");
+    }
+
+    RTAccelerationStructure accel;
+    if (ok && !accel.init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: "
+                              "RTAccelerationStructure::init failed\n");
+        ok = false;
+    }
+    BlasHandle blas = INVALID_BLAS;
+    if (ok) {
+        runImmediate([&](VkCommandBuffer cmd) {
+            blas = accel.createBLASFromPositions(vertexBuffer.buffer,
+                                                 static_cast<uint32_t>(positions.size() / 3),
+                                                 indexBuffer.buffer,
+                                                 static_cast<uint32_t>(indices.size()),
+                                                 /*indexByteOffset=*/0, cmd);
+        });
+        if (blas == INVALID_BLAS) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: "
+                                  "createBLASFromPositions failed\n");
+            ok = false;
+        }
+    }
+    if (ok) {
+        accel.clearInstances();
+        accel.addInstance(blas, glm::mat4(1.0f));
+        runImmediate([&](VkCommandBuffer cmd) { accel.buildTLAS(cmd); });
+        if (accel.getTLAS() == VK_NULL_HANDLE) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: buildTLAS produced "
+                                  "no TLAS\n");
+            ok = false;
+        }
+    }
+
+    // --- Sinks. Two INDEPENDENT sets, one per instantiation, for
+    // runWavefrontReplayProbe's reason: nothing the replay run writes may
+    // reach a byte the forward run's film is read out of. debugDraws (3),
+    // envSamples (6) and neeSamples (7) are allocated and bound but never
+    // read -- a descriptor set must cover every binding the shader statically
+    // uses -- and still go through extraBarrierBuffers, because every scatter
+    // dispatch overwrites the same per-path offsets in them.
+    struct ScatterSinks {
+        GpuBuffer trace;
+        GpuBuffer env;
+        GpuBuffer nee;
+        GpuBuffer film;
+    };
+    ScatterSinks fwdSinks;
+    ScatterSinks repSinks;
+    ScatterSinks* const sinkSets[2] = {&fwdSinks, &repSinks};
+    const uint32_t filmPixelCount = width * height;
+    const VkDeviceSize filmBytes = static_cast<VkDeviceSize>(filmPixelCount) * 3u * sizeof(float);
+    for (ScatterSinks* s : sinkSets) {
+        if (!ok) break;
+        s->trace = m_allocator.createBuffer(
+            static_cast<VkDeviceSize>(capacity) * kDebugDrawFloats * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
+        s->env = m_allocator.createBuffer(
+            static_cast<VkDeviceSize>(capacity) * kEnvSampleFloats * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
+        s->nee = m_allocator.createBuffer(
+            static_cast<VkDeviceSize>(capacity) * kNeeSampleFloats * sizeof(float),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
+        s->film = m_allocator.createBuffer(
+            filmBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            AllocationUsage::GpuToCpu, /*persistentlyMapped=*/true);
+        if (!s->trace.isValid() || !s->env.isValid() || !s->nee.isValid() || !s->film.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: scatter sink "
+                                  "allocation failed\n");
+            ok = false;
+        }
+    }
+
+    WavefrontStage generate;
+    WavefrontStage prepareIndirect;
+    WavefrontStage intersect;
+    WavefrontStage scatterForward;
+    WavefrontStage scatterReplay;
+    WavefrontStage* const scatterStages[2] = {&scatterForward, &scatterReplay};
+
+    const VkDescriptorType kStateQueueCounter[3] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    const VkDescriptorType kCounterOnly[1] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    const VkDescriptorType kIntersectBindings[6] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR};
+    // Both instantiations declare the same eleven bindings, because both
+    // include the same traverse.glsl. Binding 10 is the gradient arena and is
+    // bound to the REAL arena for both -- unlike every other probe here,
+    // which has none and re-binds its film there.
+    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+
+    if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
+                              sizeof(GeneratePush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: generate build\n");
+        ok = false;
+    }
+    if (ok && !prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", kCounterOnly,
+                                     sizeof(WavefrontLoop::PrepareIndirectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: prepare_indirect "
+                              "build\n");
+        ok = false;
+    }
+    if (ok && !intersect.build(m_device, "diff_wf_intersect.comp.spv", kIntersectBindings,
+                               sizeof(WavefrontLoop::IntersectPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: intersect build\n");
+        ok = false;
+    }
+    if (ok && !scatterForward.build(m_device, "diff_wf_scatter.comp.spv", kScatterBindings,
+                                    sizeof(WavefrontLoop::ScatterPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: forward scatter "
+                              "build\n");
+        ok = false;
+    }
+    if (ok && !scatterReplay.build(m_device, "diff_wf_scatter_replay.comp.spv", kScatterBindings,
+                                   sizeof(WavefrontLoop::ScatterPush))) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: REPLAY scatter build "
+                              "failed (diff_wf_scatter_replay.comp.spv)\n");
+        ok = false;
+    }
+
+    if (ok) {
+        const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                               buffers.counterBuffer()};
+        const VkBuffer counterOnly[1] = {buffers.counterBuffer()};
+        const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
+                                              buffers.counterBuffer(), vertexBuffer.buffer,
+                                              indexBuffer.buffer};
+        ok = generate.bindBuffers(m_device, stateQueueCounter) &&
+             prepareIndirect.bindBuffers(m_device, counterOnly) &&
+             intersect.bindBuffers(m_device, intersectBuffers) &&
+             intersect.bindAccelerationStructure(m_device, 5, accel.getTLAS());
+        for (int i = 0; ok && i < 2; ++i) {
+            const ScatterSinks& s = *sinkSets[i];
+            const VkBuffer scatterBuffers[8] = {buffers.stateBuffer(),
+                                                buffers.queueBuffer(),
+                                                buffers.counterBuffer(),
+                                                s.trace.buffer,
+                                                buffers.envMarginalBuffer(),
+                                                buffers.envConditionalBuffer(),
+                                                s.env.buffer,
+                                                s.nee.buffer};
+            ok = scatterStages[i]->bindBuffers(m_device, scatterBuffers) &&
+                 scatterStages[i]->bindAccelerationStructure(m_device, 8, accel.getTLAS()) &&
+                 scatterStages[i]->bindStorageBuffer(m_device, 9, s.film.buffer) &&
+                 // The REAL gradient arena, bound to BOTH instantiations. The
+                 // forward one never writes it (its hook is the film write)
+                 // and is pushed gradArenaFloats = 0 below besides.
+                 scatterStages[i]->bindStorageBuffer(m_device, 10, arena.buffer());
+        }
+        if (!ok) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontGradientProbe: descriptor binding\n");
+        }
+    }
+
+    if (ok) {
+        GeneratePush genPush{};
+        for (int i = 0; i < 3; ++i) {
+            genPush.origin[i] = camera.origin[i];
+            genPush.forward[i] = camera.forward[i];
+            genPush.right[i] = camera.right[i];
+            genPush.up[i] = camera.up[i];
+        }
+        genPush.width = width;
+        genPush.height = height;
+        genPush.tanHalfFov = camera.tanHalfFov;
+        genPush.capacity = capacity;
+        generate.setPushConstants(&genPush, sizeof(genPush));
+        generate.setGroupCount(WavefrontStage::Fixed{width / kFusedLoopGenerateLocalX});
+
+        WavefrontLoop loop;
+        loop.setGenerate(generate);
+        loop.setPrepareIndirect(prepareIndirect);
+        loop.setIntersect(intersect);
+
+        for (int variant = 0; ok && variant < 2; ++variant) {
+            const bool isReplay = (variant == 1);
+            ScatterSinks& s = *sinkSets[variant];
+            loop.setScatter(*scatterStages[variant]);
+
+            WavefrontLoop::Config loopConfig;
+            loopConfig.albedo = albedo;
+            loopConfig.roughness = material.roughness;
+            loopConfig.metallic = material.metallic;
+            loopConfig.specularWeight = material.specularWeight;
+            loopConfig.filmPixelCount = filmPixelCount;
+            // ONLY the replay run is given an arena. The forward run's
+            // gradArenaFloats stays 0, which disables every gradient write in
+            // its traversal -- so "the forward pass wrote no gradient" is
+            // enforced by a push constant as well as by its hook being the
+            // film write.
+            loopConfig.gradArenaFloats = isReplay ? gradArenaFloats : 0u;
+            loopConfig.gradAlbedoOffset = isReplay ? gradAlbedoOffset : 0u;
+            loopConfig.iterationSeed = iterationSeed;
+            loop.setConfig(loopConfig);
+
+            runImmediate([&](VkCommandBuffer cmd) {
+                buffers.zero(cmd);
+
+                // The film is caller-owned and read-modify-written, so it is
+                // zeroed here with its own TRANSFER_WRITE ->
+                // SHADER_READ|SHADER_WRITE barrier.
+                vkCmdFillBuffer(cmd, s.film.buffer, 0, VK_WHOLE_SIZE, 0u);
+                VkBufferMemoryBarrier filmZero{};
+                filmZero.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                filmZero.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                filmZero.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+                filmZero.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                filmZero.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                filmZero.buffer = s.film.buffer;
+                filmZero.offset = 0;
+                filmZero.size = VK_WHOLE_SIZE;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                                     &filmZero, 0, nullptr);
+
+                // The arena is zeroed on BOTH runs, in the same command
+                // buffer as the loop that follows -- GradientArena::zero
+                // records the fill AND its TRANSFER_WRITE ->
+                // SHADER_READ|SHADER_WRITE barrier, which is exactly the
+                // configuration its own comment says that barrier becomes
+                // load-bearing in.
+                arena.zero(cmd);
+
+                const VkBuffer loopExtras[5] = {s.trace.buffer, s.env.buffer, s.nee.buffer,
+                                                s.film.buffer, arena.buffer()};
+                loop.record(cmd, buffers, bounces, loopExtras);
+
+                // Host-read availability for exactly what this function reads
+                // back: the film (mapped) and, on the replay run, the arena
+                // (mapped, through GradientArena::readback). vkQueueWaitIdle
+                // does not make writes visible in the host domain and
+                // vmaInvalidateAllocation covers only the CPU cache side.
+                VkBufferMemoryBarrier toHost[2]{};
+                const VkBuffer hostRead[2] = {s.film.buffer, arena.buffer()};
+                const uint32_t hostReadCount = isReplay ? 2u : 1u;
+                for (uint32_t i = 0; i < hostReadCount; ++i) {
+                    toHost[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+                    toHost[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                    toHost[i].dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                    toHost[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toHost[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toHost[i].buffer = hostRead[i];
+                    toHost[i].offset = 0;
+                    toHost[i].size = VK_WHOLE_SIZE;
+                }
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, hostReadCount,
+                                     toHost, 0, nullptr);
+            });
+
+            if (!isReplay) {
+                m_allocator.invalidateBuffer(s.film);
+                const auto* mappedFilm = static_cast<const float*>(s.film.getMappedData());
+                if (mappedFilm == nullptr) {
+                    std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: film buffer "
+                                          "not mapped, cannot read back\n");
+                    ok = false;
+                    break;
+                }
+                outFilm.assign(mappedFilm,
+                               mappedFilm + (static_cast<std::size_t>(filmPixelCount) * 3u));
+            }
+        }
+    }
+
+    scatterReplay.destroy(m_device);
+    scatterForward.destroy(m_device);
+    intersect.destroy(m_device);
+    prepareIndirect.destroy(m_device);
+    generate.destroy(m_device);
+    for (ScatterSinks* s : sinkSets) {
+        if (s->film.isValid()) m_allocator.destroyBuffer(s->film);
+        if (s->nee.isValid()) m_allocator.destroyBuffer(s->nee);
+        if (s->env.isValid()) m_allocator.destroyBuffer(s->env);
+        if (s->trace.isValid()) m_allocator.destroyBuffer(s->trace);
+    }
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
     if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 

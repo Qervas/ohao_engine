@@ -309,6 +309,48 @@ layout(std430, binding = 9) buffer Film {
     float v[];
 } film;
 
+// --- THE GRADIENT ARENA (Stage 1 Task 2). NOT probe-only ----------------
+//
+// One flat float array covering the WHOLE of ohao::diff::GradientArena -- the
+// single VkBuffer ohao::diff::ParamRegistry's ArenaLayout suballocates every
+// parameter's gradient block and Adam state block out of. The shader is told
+// WHERE its parameter's gradient block starts (`pc.gradAlbedoOffset`, a FLOAT
+// index, not a byte offset) and how many floats the whole arena holds
+// (`pc.gradArenaFloats`), and addresses element k of that parameter at
+// `gradAlbedoOffset + k`. For the one ScalarBlock parameter this task
+// differentiates, k is 0. Stage 1 Task 5's per-texel scatter is the same
+// arithmetic with k = (y*width + x)*channels + c -- the ordering
+// ParamShape::floatCount() already implies.
+//
+// BUFFER ATOMICS, NEVER IMAGE ATOMICS. Every write into this buffer is an
+// `atomicAdd` on a `float`, which is why the traversal requires
+// GL_EXT_shader_atomic_float at the top of this file: many paths at many
+// vertices accumulate into the SAME element, within one dispatch and across
+// bounces, and no ordering exists between them. Float addition is not
+// associative, so the accumulated gradient is reproducible only to a
+// tolerance -- unlike the film, which this subsystem keeps bit-reproducible
+// by running one sample per pixel per dispatch. That is not the same
+// property and this file does not claim it: the film hazard is avoided by
+// construction, the gradient's accumulation order genuinely is scheduler-
+// dependent, and the finite-difference gate's tolerance is derived with that
+// in it.
+//
+// CALLER-OWNED, like the film, and written by every REPLAY scatter dispatch.
+// It therefore MUST be passed to WavefrontLoop::record's
+// `extraBarrierBuffers` -- an atomicAdd is a read-modify-write, so bounce k's
+// accumulation has to be available to bounce k+1's, and the barrier's memory
+// scope covers only the buffers it NAMES. It must also be ZEROED before the
+// loop (GradientArena::zero records exactly that fill and its
+// TRANSFER_WRITE -> SHADER_READ|SHADER_WRITE barrier), and named in a
+// SHADER_WRITE -> HOST_READ barrier by anything that reads it back.
+//
+// `pc.gradArenaFloats == 0` means "no arena configured" and disables every
+// write below -- which is what every probe that binds a placeholder buffer
+// here gets.
+layout(std430, binding = 10) buffer GradientArena {
+    float v[];
+} grad;
+
 layout(push_constant) uniform Push {
     uint capacity;
     uint srcQueueBase;
@@ -356,6 +398,20 @@ layout(push_constant) uniform Push {
     // number and the buffer's real size in agreement is the caller's own
     // invariant, not something this guard verifies.
     uint filmPixelCount;
+    // --- The gradient arena (Stage 1 Task 2), matching ScatterPush's tail.
+    // Both come from WavefrontLoop::Config, NOT from `buffers`, for the same
+    // reason filmPixelCount does: the arena is CALLER-OWNED and
+    // WavefrontBuffers cannot state its size.
+    //
+    // gradArenaFloats is the TOTAL number of floats in the bound arena and 0
+    // disables every gradient write. gradAlbedoOffset is the FLOAT index at
+    // which the base-colour parameter's gradient block begins. The guard on
+    // the write below rejects an offset this count says is out of range; as
+    // with filmPixelCount it cannot catch the count itself being wrong --
+    // keeping it equal to the bound buffer's real size is the caller's
+    // invariant.
+    uint gradArenaFloats;
+    uint gradAlbedoOffset;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
@@ -667,6 +723,15 @@ struct DiffVertex {
 /// as a physics bug rather than as a wiring one.
 void diffVertexHook(inout DiffVertex v);
 
+// The derivative half of the BSDF. It takes a `DiffVertex` and reads `pc`, so
+// it has to follow both -- which is the whole reason it is included HERE
+// rather than beside bsdf.glsl at the top of the file. Both instantiations
+// compile it; only the REPLAY one calls it, exactly as both compile the film
+// binding and only the FORWARD one writes it. A hook may not define a
+// function of its own (checkTraverseInstantiationTie rule 3), so a hook's
+// helpers have nowhere else to live.
+#include "diff/bsdf_adjoint.glsl"
+
 /// Floats per PATH INDEX in the binding-3 VERTEX TRACE record (the sink this
 /// file writes at `debugDraws.v[pathIndex * 18u + <slot>]`).
 ///
@@ -862,9 +927,13 @@ void diffTraverse() {
     vtx.specularWeight = pc.specularWeight;
     vtx.rawRoughness = pc.roughness;
     vtx.rawMetallic = pc.metallic;
-    // No adjoint exists anywhere in this subsystem yet (Stage 1 Task 1
-    // deliberately adds none), so it starts at zero. A later task sources it
-    // from path state; that change is confined to this one line.
+    // Seeded to zero HERE and re-seeded by the hook that wants one: Stage 1
+    // Task 2's gradient hook sets it to `v.throughput`, because for a plain
+    // sum-of-film objective the adjoint and the throughput obey the identical
+    // recursion (shaders/includes/diff/bsdf_adjoint.glsl derives it). An
+    // objective whose adjoint is NOT the throughput -- a weighted image loss,
+    // say -- needs a real per-path adjoint, which means a path-state field;
+    // that change is confined to this one line and to the hook's first.
     vtx.adjoint = vec3(0.0);
 
     // --- The two MIS strategies' per-sample record, declared HERE so that

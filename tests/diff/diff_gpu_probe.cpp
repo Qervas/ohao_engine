@@ -158,6 +158,24 @@
 //       anything. Why the reference is not ohao::PathTracer, and exactly
 //       what the two sides share, is derived at the head of this file's
 //       anonymous namespace ("INDEPENDENT CPU REFERENCE INTEGRATOR").
+//   35-36. REPLAY EQUIVALENCE (Stage 1 Task 1): 35 establishes that the
+//       FORWARD traversal's binding-3 vertex trace is real and independently
+//       correct (every draw against a CPU PathRng the GPU never sees, every
+//       arrival throughput exactly albedo^bounce, every pixel covered once);
+//       36 then compares that trace bit-for-bit against the REPLAY
+//       instantiation's, from two independent runs of the loop at one seed.
+//   37-38. THE FIRST GRADIENT (Stage 1 Task 2). 37 is a COMMON-RANDOM-NUMBER
+//       finite difference: the film is rendered at albedo +/- h through the
+//       forward instantiation and differenced, and compared against what the
+//       replay instantiation's hook scattered into the gradient arena on a
+//       separate run at the same seed. Because both sides describe ONE
+//       realisation of the estimator there is no sampling error in the
+//       budget at all -- the tolerance is a derived arithmetic bound
+//       (cancellation + truncation, computed from the run's own J and h) and
+//       the step size is derived, not tuned. It runs at 1, 2 and 3 bounces,
+//       which is what separates "the direct scatter line is right" from "the
+//       whole derivative is right". 38 is the NULL TEST: every arena block
+//       the scatter was not told to write comes back EXACTLY zero.
 //
 // Five GLSL/C++ ties run BEFORE any Vulkan object exists, and refuse to run
 // the probe at all if they do not hold -- see checkNeeStrideTie,
@@ -2146,6 +2164,351 @@ bool checkParityRefConstantsTie() {
                 "matching kParityRayTMax = %.9g and kParitySurfaceOffset = %.9g exactly\n",
                 scatterPath.c_str(), shaderShadowTMax, shaderOffset, intersectPath.c_str(),
                 shaderTraceTMax, kParityRayTMax, kParitySurfaceOffset);
+    return true;
+}
+
+// ===========================================================================
+// THE SHARED SCENE: one geometry, one environment, one camera
+// ===========================================================================
+//
+// Checks 33-34 (the integrator parity gate) and the Stage 1 Task 2 gradient
+// checks below run against the SAME configuration, and it is built HERE, once,
+// rather than transcribed into each. Two copies of a test scene are two
+// chances for a "quad wound the other way" or a "brightest at the wrong pole"
+// to appear in one and not the other, at which point two checks that read as
+// though they measure one scene silently measure two.
+//
+// WHY THIS SCENE. Every piece is placed for a stated reason:
+//
+//   * FLOOR, y = 0, |x|,|z| <= 8. Every primary ray lands on it: the camera
+//     sits at y = 3 looking straight down with tanHalfFov 0.2 at aspect 8, so
+//     the extreme ray lands at |x| = 3*0.984375*8*0.2 = 4.725 and
+//     |z| = 0.525 -- 3.27 units inside the nearest edge. No primary ray is
+//     near a silhouette, which matters because a pixel whose primary ray
+//     grazed an edge could hit different triangles under a BVH and under
+//     Moller-Trumbore.
+//   * OVERHANG, y = 5, |x| <= 1.5. ABOVE the camera and every primary ray
+//     travels strictly downward, so it is unreachable by a primary ray by
+//     construction -- but it occludes the zenith (the most cosine-weighted
+//     part of the hemisphere) for the middle of the image and catches
+//     second-bounce rays. This is where most of the visibility signal and
+//     most of the interreflection come from, which is what makes the
+//     gradient's SECOND and THIRD bounce terms non-negligible rather than a
+//     rounding correction on the first.
+//   * SIDE WALL, x = 5.5, 0 <= y <= 4. Out of the primary frustum with margin
+//     (a ray needs a horizontal slope of 5.5/3 = 1.833 to reach it and the
+//     widest is 1.575), and it makes the occlusion vary ASYMMETRICALLY across
+//     the image.
+//
+// Every quad is wound so that wf_intersect.comp's flip-to-oppose-the-ray step
+// fires for the rays that actually reach it.
+void buildParityScene(std::vector<float>& positions, std::vector<uint32_t>& indices) {
+    positions.clear();
+    indices.clear();
+    // Floor: wound so the geometric normal is -Y, which is what a downward
+    // primary ray must have FLIPPED to be shaded correctly.
+    parityAddQuad(positions, indices,
+                  {{{-8.0f, 0.0f, -8.0f},
+                    {8.0f, 0.0f, -8.0f},
+                    {8.0f, 0.0f, 8.0f},
+                    {-8.0f, 0.0f, 8.0f}}});
+    // Overhang at y = 5: wound normal +Y, so a ray arriving from below flips
+    // it to -Y.
+    parityAddQuad(positions, indices,
+                  {{{-1.5f, 5.0f, -8.0f},
+                    {-1.5f, 5.0f, 8.0f},
+                    {1.5f, 5.0f, 8.0f},
+                    {1.5f, 5.0f, -8.0f}}});
+    // Side wall at x = 5.5: wound normal +X, so a ray arriving from -X flips
+    // it to -X.
+    parityAddQuad(positions, indices,
+                  {{{5.5f, 0.0f, -8.0f},
+                    {5.5f, 4.0f, -8.0f},
+                    {5.5f, 4.0f, 8.0f},
+                    {5.5f, 0.0f, 8.0f}}});
+}
+
+/// The environment both gates use: a smooth, strictly positive, doubly
+/// asymmetric gradient (brightest at the +Y pole, where the floor can see it)
+/// with a 5:1 contrast. That contrast is a DESIGN CALL: a strongly peaked
+/// environment -- checks 29-31 use one with an 8x block -- inflates the
+/// variance of the estimators, and the variance is what sets how small a
+/// disagreement a gate can resolve. Environment importance sampling, pdfEnvMap
+/// and the balance heuristic are all still exercised (the CDF is not uniform
+/// in either axis).
+///
+/// `outRgba` is what EnvCDF::build consumes; `outLum` is the same values as
+/// the grey luminance checks 33-34's reference integrator reads. Both come out
+/// of ONE loop, so the CDF and the reference cannot see different environments.
+void buildParityEnvironment(uint32_t envW, uint32_t envH, std::vector<float>& outRgba,
+                            std::vector<double>& outLum) {
+    const std::size_t texels = static_cast<std::size_t>(envW) * envH;
+    outRgba.assign(texels * 4u, 0.0f);
+    outLum.assign(texels, 0.0);
+    for (uint32_t y = 0; y < envH; ++y) {
+        for (uint32_t x = 0; x < envW; ++x) {
+            const double L =
+                0.4 + 1.2 * (static_cast<double>(envH - 1u - y) / static_cast<double>(envH - 1u)) +
+                0.4 * (static_cast<double>(x) / static_cast<double>(envW - 1u));
+            const std::size_t k = static_cast<std::size_t>(y) * envW + x;
+            outLum[k] = L;
+            outRgba[k * 4u + 0u] = static_cast<float>(L);
+            outRgba[k * 4u + 1u] = static_cast<float>(L);
+            outRgba[k * 4u + 2u] = static_cast<float>(L);
+            outRgba[k * 4u + 3u] = 1.0f;
+        }
+    }
+}
+
+/// The camera both gates use: at y = 3 above the floor's centre, looking
+/// straight down, with `up` along -Z so the basis is right-handed.
+ohao::diff::WavefrontGenerateCamera parityCamera() {
+    ohao::diff::WavefrontGenerateCamera camera;
+    camera.origin[0] = 0.0f;
+    camera.origin[1] = 3.0f;
+    camera.origin[2] = 0.0f;
+    camera.forward[0] = 0.0f;
+    camera.forward[1] = -1.0f;
+    camera.forward[2] = 0.0f;
+    camera.right[0] = 1.0f;
+    camera.right[1] = 0.0f;
+    camera.right[2] = 0.0f;
+    camera.up[0] = 0.0f;
+    camera.up[1] = 0.0f;
+    camera.up[2] = -1.0f;
+    camera.tanHalfFov = 0.2f;
+    return camera;
+}
+
+// ===========================================================================
+// THE CRN FINITE-DIFFERENCE HARNESS (Stage 1 Task 2)
+// ===========================================================================
+//
+// One reusable measurement of a scalar derivative of the rendered image, by
+// central difference under COMMON RANDOM NUMBERS, against whatever the
+// gradient arena holds.
+//
+// It is a helper and not three transcriptions inside three checks because
+// Tasks 3 and 4 differentiate the OTHER scalar material parameters through
+// exactly this shape -- perturb one pushed float, render at +h and -h with the
+// identical (pixel, sampleIndex, iterationSeed), difference the films -- and
+// three hand-written harnesses would be three chances at the same defect and
+// three oracles to audit. Task 6 adds the two-step-size convergence on top of
+// this, not beside it.
+//
+// ---------------------------------------------------------------------------
+// WHAT IS DIFFERENTIATED, AND WHY COMMON RANDOM NUMBERS MAKE THIS SHARP
+// ---------------------------------------------------------------------------
+//
+// The scalar is
+//
+//     J(theta) = SUM over pixels, SUM over channels of film[pixel][channel]
+//
+// -- the same J shaders/includes/diff/bsdf_adjoint.glsl states it is the
+// derivative of. Both renders use ONE seed and one sample per pixel, so this
+// is not a comparison of two Monte Carlo means with a sampling error between
+// them: it is the derivative of ONE realisation of the estimator, and the
+// analytic side is the derivative of that same realisation. There is no
+// variance term in the error budget at all. That is what CRN buys, and it is
+// why one seed is not a weaker measurement than a hundred here -- a hundred
+// seeds would be a hundred separate exact comparisons, not a tighter one.
+//
+// CRN holds only because nothing the perturbation touches changes the PATH.
+// The albedo enters `f` and the throughput; it does NOT enter the sampled
+// direction, the density, the MIS weights or the visibility, because the
+// lobe-selection probability q is independent of the base colour at
+// metallic == 0. GpuProbeContext::runWavefrontGradientProbe REFUSES to run
+// outside that configuration, which is what keeps this paragraph a
+// precondition rather than an assumption.
+//
+// ---------------------------------------------------------------------------
+// THE STEP SIZE, DERIVED -- both error terms and where their sum is minimised
+// ---------------------------------------------------------------------------
+//
+// The central difference D(h) = (J(a+h) - J(a-h)) / (2h) carries two errors
+// that move in opposite directions:
+//
+//   * ROUNDOFF, from cancellation. Each film value is a float32 accumulated
+//     on the GPU, so J is known to a relative error eps; the numerator is a
+//     difference of two nearly equal numbers, so the absolute error on D is
+//     about eps*(|J(a+h)| + |J(a-h)|) / (2h) ~ eps*|J|/h. It GROWS as h
+//     shrinks.
+//   * TRUNCATION, from the third and higher odd derivatives. In this
+//     configuration J is an exact POLYNOMIAL in the albedo -- with a pure
+//     Lambertian surface the throughput on arrival at bounce b is exactly
+//     a^b and the direct estimate at that vertex is exactly linear in a, so
+//     J(a) = SUM_{n=1..B} K_n a^n with every K_n >= 0 (they are products of
+//     radiances, cosines, visibilities and MIS weights, none of which is
+//     negative). It GROWS as h grows.
+//
+// Both are BOUNDED here rather than guessed, and the bounds are computed from
+// the run's own numbers:
+//
+//   roundoffBound   = eps * (|J(a+h)| + |J(a-h)|) / (2h)
+//   truncationBound = |J(a)| * MAX over n=1..B of  E_n(h) / a^n,
+//       where E_n(h) = ((a+h)^n - (a-h)^n)/(2h) - n*a^(n-1)
+//
+// The truncation bound is exact-arithmetic-tight for this polynomial family:
+// the true truncation error is SUM_n K_n E_n(h), every term is non-negative,
+// and K_n a^n <= J(a) for each n because all the K are, so
+// SUM_n K_n E_n <= (max_n E_n/a^n) * SUM_n K_n a^n = (max_n E_n/a^n) * J.
+// Note E_1 = E_2 = 0 identically -- a central difference is EXACT on linear
+// and quadratic terms -- so a one-bounce run has NO truncation error at all
+// and the bound correctly reports zero.
+//
+// eps is `filmRelativeEps`, supplied by the caller and derived there rather
+// than tuned here.
+//
+// The minimiser follows in closed form for the leading behaviour. With
+// E_B(h)/a^B ~ (B choose 3) h^2 / a^3 for the top term and |J'| >= J/a,
+//
+//     E(h)/|J'|  ~  eps*a/h  +  c*h^2/a^2,
+//
+// so h* = (eps*a^3/(2c))^(1/3) -- a CUBE ROOT of the machine precision, which
+// is the standard result and the reason the answer is around 1e-2 and not
+// around 1e-7. The caller states the h it picked and the arithmetic that
+// produced it; this function reports both bounds it actually computed so the
+// choice is auditable against the run rather than only against the algebra.
+//
+// ---------------------------------------------------------------------------
+// WHY THE TWO SIDES ARE INDEPENDENT
+// ---------------------------------------------------------------------------
+//
+// The finite-difference side reads the FILM, written by the forward
+// instantiation's hook. The analytic side reads the GRADIENT ARENA, written by
+// the replay instantiation's hook, on a different run, into a different
+// buffer, with a different push constant (the forward run is pushed
+// gradArenaFloats = 0 and cannot write the arena at all). They share the
+// traversal -- necessarily, that is the point of the traversal being one
+// source -- and they share no accumulator, no constant and no host helper: the
+// bounds above are computed from J and h alone and mention nothing the shader
+// defines.
+struct CrnFdMeasurement {
+    double jMinus{0.0};
+    double jCenter{0.0};
+    double jPlus{0.0};
+    /// Half the difference of the two floats ACTUALLY pushed, in double. Used
+    /// as the divisor instead of the requested step so that the representation
+    /// error of (a +/- h) cancels out of the quotient exactly.
+    double hActual{0.0};
+    double finiteDiff{0.0};
+    double analytic{0.0};
+    double absError{0.0};
+    double relError{0.0};
+    double roundoffBound{0.0};
+    double truncationBound{0.0};
+    double errorBound{0.0};
+};
+
+/// Sum of every float in a film, in double. The film's three channels are
+/// bit-identical in this configuration (grey base colour, grey environment,
+/// per-channel-identical factors), so this is 3x the luminance sum -- but it
+/// is summed as it is stored rather than assuming that, so a per-channel
+/// indexing error would move J.
+double filmTotal(const std::vector<float>& film) {
+    double total = 0.0;
+    for (float v : film) total += static_cast<double>(v);
+    return total;
+}
+
+/// Runs the three renders and fills `out`. Returns false on a dispatch
+/// failure, a non-finite film, or a film readback of the wrong size -- never
+/// on a comparison result, which is the caller's verdict to reach.
+bool measureCrnAlbedoGradient(ohao::diff::GpuProbeContext& ctx, ohao::diff::WavefrontBuffers& wf,
+                              uint32_t width, uint32_t height, uint32_t bounces,
+                              const ohao::diff::WavefrontGenerateCamera& camera,
+                              const std::vector<float>& positions,
+                              const std::vector<uint32_t>& indices, float albedo, float step,
+                              const ohao::diff::WavefrontScatterMaterial& material, uint32_t seed,
+                              ohao::diff::GradientArena& arena, std::size_t gradBlockIndex,
+                              uint32_t gradArenaFloats, uint32_t gradAlbedoOffset,
+                              double filmRelativeEps, CrnFdMeasurement& out) {
+    out = CrnFdMeasurement{};
+
+    const float aMinus = albedo - step;
+    const float aPlus = albedo + step;
+    const std::size_t expectedFloats = static_cast<std::size_t>(width) * height * 3u;
+
+    struct Point {
+        float value;
+        double* total;
+    };
+    // ORDER MATTERS: the centre is LAST so that the arena the caller reads
+    // back is the one the centre's replay run left, not a perturbed run's.
+    const Point points[3] = {
+        {aMinus, &out.jMinus}, {aPlus, &out.jPlus}, {albedo, &out.jCenter}};
+
+    for (const Point& p : points) {
+        std::vector<float> film;
+        if (!ctx.runWavefrontGradientProbe(wf, width, height, bounces, camera,
+                                           std::span<const float>(positions),
+                                           std::span<const uint32_t>(indices), p.value, material,
+                                           seed, arena, gradArenaFloats, gradAlbedoOffset, film)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: gradient probe dispatch failed at albedo %.9g\n",
+                         static_cast<double>(p.value));
+            return false;
+        }
+        if (film.size() != expectedFloats) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: gradient probe returned a film of %zu floats at "
+                         "albedo %.9g, expected %zu\n",
+                         film.size(), static_cast<double>(p.value), expectedFloats);
+            return false;
+        }
+        for (float v : film) {
+            if (!std::isfinite(v) || v < 0.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: gradient probe film at albedo %.9g holds a "
+                             "non-finite or negative value (%.9g). Everything downstream -- the "
+                             "difference, both error bounds -- assumes a finite non-negative "
+                             "film\n",
+                             static_cast<double>(p.value), static_cast<double>(v));
+                return false;
+            }
+        }
+        *p.total = filmTotal(film);
+    }
+
+    const std::vector<float> gradBlock = arena.readback(ctx.allocator(), gradBlockIndex);
+    if (gradBlock.empty()) {
+        std::fprintf(stderr, "[diff_gpu_probe] FAIL: gradient arena block %zu read back empty\n",
+                     gradBlockIndex);
+        return false;
+    }
+    out.analytic = static_cast<double>(gradBlock[0]);
+
+    out.hActual = 0.5 * (static_cast<double>(aPlus) - static_cast<double>(aMinus));
+    if (!(out.hActual > 0.0)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: the two perturbed albedos round to the same float "
+                     "(%.9g), so the step is below the representable resolution at albedo %.9g "
+                     "and the difference quotient is a division by zero\n",
+                     static_cast<double>(aPlus), static_cast<double>(albedo));
+        return false;
+    }
+    out.finiteDiff = (out.jPlus - out.jMinus) / (2.0 * out.hActual);
+    out.absError = std::fabs(out.finiteDiff - out.analytic);
+    out.relError = (std::fabs(out.analytic) > 0.0) ? out.absError / std::fabs(out.analytic) : 0.0;
+
+    out.roundoffBound =
+        filmRelativeEps * (std::fabs(out.jPlus) + std::fabs(out.jMinus)) / (2.0 * out.hActual);
+
+    // max over n = 1..bounces of E_n(h)/a^n. See the header for why this
+    // bounds SUM_n K_n E_n(h) given K_n >= 0.
+    const double a = static_cast<double>(albedo);
+    const double h = out.hActual;
+    double worstShape = 0.0;
+    for (uint32_t n = 1; n <= bounces; ++n) {
+        const double en = (std::pow(a + h, static_cast<double>(n)) -
+                           std::pow(a - h, static_cast<double>(n))) /
+                              (2.0 * h) -
+                          static_cast<double>(n) * std::pow(a, static_cast<double>(n) - 1.0);
+        const double shape = std::fabs(en) / std::pow(a, static_cast<double>(n));
+        if (shape > worstShape) worstShape = shape;
+    }
+    out.truncationBound = std::fabs(out.jCenter) * worstShape;
+    out.errorBound = out.roundoffBound + out.truncationBound;
     return true;
 }
 
@@ -7347,7 +7710,8 @@ int main() {
         constexpr uint32_t kEnvW = 64;
         constexpr uint32_t kEnvH = 32;
         static_assert(kEnvW != kEnvH, "a square environment hides a W<->H swap");
-        constexpr uint32_t kEnvTexels = kEnvW * kEnvH;
+        // (the texel count is no longer needed here: buildParityEnvironment
+        // sizes both of its outputs from kEnvW/kEnvH itself)
 
         constexpr std::size_t kSeedsFull = 512;
         constexpr std::size_t kSeedsPrefix = kSeedsFull / 4;
@@ -7374,66 +7738,23 @@ int main() {
         // came close to binding.
         constexpr double kSigmaFloorFraction = 1e-6;
 
-        // --- The environment. Smooth, strictly positive, asymmetric in both
-        // axes, brightest towards the +Y pole (row 0 is theta = 0).
-        std::vector<float> envRgba(static_cast<std::size_t>(kEnvTexels) * 4u, 0.0f);
-        std::vector<double> envLum(kEnvTexels, 0.0);
-        for (uint32_t y = 0; y < kEnvH; ++y) {
-            for (uint32_t x = 0; x < kEnvW; ++x) {
-                const double L =
-                    0.4 +
-                    1.2 * (static_cast<double>(kEnvH - 1u - y) / static_cast<double>(kEnvH - 1u)) +
-                    0.4 * (static_cast<double>(x) / static_cast<double>(kEnvW - 1u));
-                const std::size_t k = static_cast<std::size_t>(y) * kEnvW + x;
-                envLum[k] = L;
-                envRgba[k * 4u + 0u] = static_cast<float>(L);
-                envRgba[k * 4u + 1u] = static_cast<float>(L);
-                envRgba[k * 4u + 2u] = static_cast<float>(L);
-                envRgba[k * 4u + 3u] = 1.0f;
-            }
-        }
+        // --- The environment, the scene and the camera. All three are built
+        // by the shared builders in this file's anonymous namespace, NOT
+        // transcribed here: the Stage 1 Task 2 gradient checks run against
+        // the identical configuration, and two copies of a test scene are two
+        // chances for one of them to drift into measuring something else. The
+        // reasons each quad is where it is, and the reason the environment's
+        // contrast is 5:1 rather than peaked, are on those builders.
+        std::vector<float> envRgba;
+        std::vector<double> envLum;
+        buildParityEnvironment(kEnvW, kEnvH, envRgba, envLum);
 
-        // --- The scene. See the header above for why each quad is where it
-        // is and wound the way it is.
         std::vector<float> positions;
         std::vector<uint32_t> indices;
-        // Floor: wound so the geometric normal is -Y, which is what a
-        // downward primary ray must have FLIPPED to be shaded correctly.
-        parityAddQuad(positions, indices,
-                      {{{-8.0f, 0.0f, -8.0f},
-                        {8.0f, 0.0f, -8.0f},
-                        {8.0f, 0.0f, 8.0f},
-                        {-8.0f, 0.0f, 8.0f}}});
-        // Overhang at y = 5: wound normal +Y, so a ray arriving from below
-        // flips it to -Y.
-        parityAddQuad(positions, indices,
-                      {{{-1.5f, 5.0f, -8.0f},
-                        {-1.5f, 5.0f, 8.0f},
-                        {1.5f, 5.0f, 8.0f},
-                        {1.5f, 5.0f, -8.0f}}});
-        // Side wall at x = 5.5: wound normal +X, so a ray arriving from -X
-        // flips it to -X.
-        parityAddQuad(positions, indices,
-                      {{{5.5f, 0.0f, -8.0f},
-                        {5.5f, 4.0f, -8.0f},
-                        {5.5f, 4.0f, 8.0f},
-                        {5.5f, 0.0f, 8.0f}}});
+        buildParityScene(positions, indices);
         const std::vector<ParityTriangle> refTris = parityTrianglesFromSoup(positions, indices);
 
-        ohao::diff::WavefrontGenerateCamera camera;
-        camera.origin[0] = 0.0f;
-        camera.origin[1] = 3.0f;
-        camera.origin[2] = 0.0f;
-        camera.forward[0] = 0.0f;
-        camera.forward[1] = -1.0f;
-        camera.forward[2] = 0.0f;
-        camera.right[0] = 1.0f;
-        camera.right[1] = 0.0f;
-        camera.right[2] = 0.0f;
-        camera.up[0] = 0.0f;
-        camera.up[1] = 0.0f;
-        camera.up[2] = -1.0f;
-        camera.tanHalfFov = 0.2f;
+        const ohao::diff::WavefrontGenerateCamera camera = parityCamera();
 
         // Distinct, spread-out seeds. Any injective map would do; this one
         // is an odd stride so no two seeds collide and consecutive runs are
@@ -8262,6 +8583,397 @@ int main() {
             comparedSlots, kCapacity, kBounces, kStride);
 
         wf.destroy(ctx.allocator());
+    }
+
+
+    // -----------------------------------------------------------------
+    // 37-38. THE FIRST GRADIENT: dJ/d(albedo) against a common-random-number
+    // finite difference, and the null test.
+    // -----------------------------------------------------------------
+    //
+    // WHAT IS MEASURED. J(a) = the sum of every float in the film -- every
+    // pixel, every channel -- produced by a fused `bounces`-bounce run of
+    // ohao::diff::WavefrontLoop at ONE seed, one sample per pixel. The
+    // analytic side is what shaders/diff/wf_scatter_replay.comp's hook
+    // scattered into the gradient arena on a SEPARATE run of the same loop at
+    // the same seed. The finite-difference side is
+    // (J(a+h) - J(a-h)) / (2h) from two more runs at the same seed.
+    //
+    // WHY THIS IS AN EXACT COMPARISON AND NOT A STATISTICAL ONE. Common random
+    // numbers: all three renders walk the SAME paths, because the albedo does
+    // not enter any sampling decision at metallic == 0 (the lobe probability q
+    // is built from F0 = 0.04 there, not from the base colour) and every stage
+    // rebuilds its RNG from (pixelIndex, sampleIndex, iterationSeed). So this
+    // is the derivative of ONE realisation of the estimator compared against
+    // the analytic derivative of that same realisation -- there is no sampling
+    // variance in the error budget at all, and the tolerance is pure
+    // arithmetic. `runWavefrontGradientProbe` REFUSES to run at metallic != 0
+    // or specularWeight != 0 rather than leaving that a comment.
+    //
+    // THE STEP SIZE, DERIVED. kStep = 2^-7 = 0.0078125, and here is where it
+    // comes from. The two error terms of a central difference are
+    //
+    //     roundoff    ~ eps * |J| / h                (cancellation; grows as h shrinks)
+    //     truncation  ~ |J| * max_n E_n(h)/a^n       (odd derivatives; grows as h grows)
+    //
+    // with E_n(h) = ((a+h)^n - (a-h)^n)/(2h) - n*a^(n-1). In THIS configuration
+    // J is an exact polynomial in a: a pure Lambertian surface makes the
+    // arrival throughput at bounce b exactly a^b and the direct estimate at
+    // that vertex exactly linear in a, so J(a) = SUM_{n=1..B} K_n a^n with
+    // every K_n >= 0. Relative to |J'| >= J/a, and keeping only the leading
+    // term of E_n (which is (n choose 3) h^2 a^(n-3), so E_n/a^n ~ c h^2/a^3):
+    //
+    //     E(h)/|J'|  ~  eps*a/h  +  c*h^2/a^2,      minimised at
+    //     h*         =  (eps * a^3 / (2c))^(1/3)
+    //
+    // -- a CUBE ROOT of the precision, which is why the answer is near 1e-2
+    // and not near 1e-7. With eps = 2e-6 (see below), a = 0.6 and c = 1 (the
+    // B = 3 case, where E_3(h) = h^2 exactly, so E_3/a^3 = h^2/a^3):
+    //
+    //     h*    = (2e-6 * 0.216 / 2)^(1/3) = (2.16e-7)^(1/3) = 6.0e-3
+    //     E(h*) = 2e-6*0.6/6.0e-3 + (6.0e-3)^2/0.36
+    //           = 2.00e-4 + 1.00e-4 = 3.0e-4      (relative to J')
+    //
+    // kStep = 2^-7 = 7.8125e-3 is the nearest power of two, giving
+    // E = 1.54e-4 + 1.70e-4 = 3.2e-4 -- within 7% of the minimum, so the
+    // choice is not sensitive to the estimate of eps. A power of two is used
+    // so that a +/- h is exact in float32 (0.6f has ulp 2^-24, and 2^-7 is
+    // representable in its low bits), and the harness divides by the ACTUAL
+    // float difference regardless, so the representation of a itself cancels.
+    //
+    // eps = kFilmRelativeEps = 2e-6, or about 32 float32 ulp. Derivation: a
+    // film value is a sum over `bounces` vertices of a product of about six
+    // float32 factors (throughput, MIS weight, f*cos, radiance, visibility,
+    // 1/pdf), each rounding at 2^-24 = 6.0e-8; a few tens of roundings is
+    // 2e-6. It is a BOUND on the film's relative accuracy, not a measured
+    // reproducibility -- two runs at one albedo are bit-identical, which says
+    // nothing about the distance from exact arithmetic.
+    //
+    // THE VERDICT IS |FD - analytic| <= (the bound the harness computed from
+    // this run's own J and h). No safety factor is applied and no tolerance
+    // was widened until it passed: both terms are computed from the numbers
+    // the run produced, and the truncation half is exact-arithmetic-tight for
+    // this polynomial family (see the harness header).
+    //
+    // NON-VACUITY, PRE-REGISTERED. A verdict means nothing unless the gate
+    // could have failed. Two gates:
+    //   * kMaxGradientResolution -- the error bound, as a fraction of the
+    //     analytic gradient, must be below 1e-2. That is the resolution
+    //     claim: this check can resolve a 1% error in the gradient, which is
+    //     exactly what Step 5's demonstration perturbs by.
+    //   * The film must be strictly positive and the gradient strictly
+    //     positive: a scene that produced no light would let 0 == 0 pass.
+    // The check also reports analytic*a/J, which is 1 exactly for a
+    // single-bounce film (J is then linear in a) and strictly greater than 1
+    // whenever the higher bounces contribute -- so the OK line SHOWS that the
+    // multi-bounce terms, including the throughput-derivative term
+    // bsdf_adjoint.glsl adds, are carrying real weight rather than rounding.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;  // wf_generate's 1-D dispatch requires this exactly.
+        constexpr uint32_t kCapacity = kW * kH;
+        constexpr uint32_t kEnvW = 64;
+        constexpr uint32_t kEnvH = 32;
+        static_assert(kEnvW != kEnvH, "a square environment hides a W<->H swap");
+        constexpr float kAlbedo = 0.6f;
+        constexpr float kStep = 0.0078125f;  // 2^-7 -- derived above
+        constexpr double kFilmRelativeEps = 2e-6;
+        constexpr uint32_t kGradientSeed = 20260828u;
+        constexpr double kMaxGradientResolution = 1e-2;
+        // One, two and three bounces. One is the case the recursion in
+        // DiffVertex is complete for on its own (J is linear in a, the central
+        // difference is EXACT, and the truncation bound is identically zero);
+        // two and three are where the throughput-derivative term
+        // bsdf_adjoint.glsl adds is load-bearing. Running all three is what
+        // distinguishes "the direct scatter line is right" from "the whole
+        // derivative is right", and the OK line reports both.
+        constexpr uint32_t kBounceCounts[3] = {1u, 2u, 3u};
+
+        // --- The parameters. ONE ScalarBlock for the albedo, and a SECOND
+        // one the scene does not depend on and nothing scatters into, which
+        // is the null test's subject. ParamRegistry allocates two blocks per
+        // parameter -- the gradient block, then the Adam m/v state block --
+        // so registering two parameters lays out four blocks, of which
+        // exactly ONE is ever written.
+        ohao::diff::ParamRegistry gradReg;
+        const auto regAlbedo = gradReg.registerScalarBlock("albedo", 1);
+        const auto regUnused = gradReg.registerScalarBlock("unused_scalar", 1);
+        if (!regAlbedo.ok || !regUnused.ok) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 37 registry setup: %s %s\n",
+                         regAlbedo.error.c_str(), regUnused.error.c_str());
+            return 1;
+        }
+        const ohao::diff::DiffParam* albedoParam = gradReg.find("albedo");
+        const ohao::diff::DiffParam* unusedParam = gradReg.find("unused_scalar");
+        if (albedoParam == nullptr || unusedParam == nullptr) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 37 registered params not found\n");
+            return 1;
+        }
+
+        ohao::diff::GradientArena gradArena;
+        if (!gradArena.build(ctx.allocator(), gradReg.layout())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 37 gradient arena build\n");
+            return 1;
+        }
+        // What the shader is told. The offset is a FLOAT index, derived from
+        // the layout's byte offset -- the one place the host's picture of the
+        // arena and the shader's addressing meet. The arena's blocks are
+        // 256-byte aligned, so this is always a whole number of floats.
+        const ohao::diff::ArenaBlock albedoGradBlock =
+            gradReg.layout().block(albedoParam->gradBlock);
+        const uint32_t kGradArenaFloats =
+            static_cast<uint32_t>(gradReg.layout().totalBytes() / sizeof(float));
+        const uint32_t kGradAlbedoOffset =
+            static_cast<uint32_t>(albedoGradBlock.offsetBytes / sizeof(float));
+
+        std::vector<float> envRgba;
+        std::vector<double> envLum;
+        buildParityEnvironment(kEnvW, kEnvH, envRgba, envLum);
+        std::vector<float> positions;
+        std::vector<uint32_t> indices;
+        buildParityScene(positions, indices);
+        const ohao::diff::WavefrontGenerateCamera camera = parityCamera();
+
+        ohao::EnvCDF gradEnvCdf;
+        gradEnvCdf.build(envRgba, static_cast<int>(kEnvW), static_cast<int>(kEnvH));
+        if (!gradEnvCdf.valid()) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 37 EnvCDF::build produced no CDF\n");
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity, kEnvW, kEnvH) ||
+            !wf.uploadEnvironment(gradEnvCdf.marginalSpan(), gradEnvCdf.conditionalSpan(),
+                                  gradEnvCdf.integral())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 37 buffers build / env CDF upload\n");
+            wf.destroy(ctx.allocator());
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // Pure Lambert. Not a default: runWavefrontGradientProbe refuses
+        // anything else, and bsdf_adjoint.glsl's header says why in both
+        // directions.
+        const ohao::diff::WavefrontScatterMaterial kGradMaterial{1.0f, 0.0f, 0.0f};
+
+        CrnFdMeasurement measurements[3]{};
+        double worstRatio = 0.0;
+        double worstResolution = 0.0;
+
+        for (std::size_t i = 0; i < 3; ++i) {
+            const uint32_t bounces = kBounceCounts[i];
+            CrnFdMeasurement& m = measurements[i];
+            if (!measureCrnAlbedoGradient(ctx, wf, kW, kH, bounces, camera, positions, indices,
+                                          kAlbedo, kStep, kGradMaterial, kGradientSeed, gradArena,
+                                          albedoParam->gradBlock, kGradArenaFloats,
+                                          kGradAlbedoOffset, kFilmRelativeEps, m)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 37 measurement failed at %u bounce(s)\n",
+                             bounces);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- NON-VACUITY 1: there is light, and there is a gradient.
+            if (!(m.jCenter > 0.0) || !std::isfinite(m.jCenter) || !(m.analytic > 0.0) ||
+                !std::isfinite(m.analytic)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 37 at %u bounce(s): J = %.9g and the "
+                             "scattered gradient = %.9g. Both must be finite and strictly "
+                             "positive -- every factor of both is non-negative and the scene is "
+                             "lit, so a zero on either side means nothing was accumulated and "
+                             "the comparison below would be 0 against 0\n",
+                             bounces, m.jCenter, m.analytic);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- NON-VACUITY 2: the gate's resolution, pre-registered.
+            const double resolution = m.errorBound / m.analytic;
+            if (resolution > worstResolution) worstResolution = resolution;
+            if (!(resolution <= kMaxGradientResolution)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 37 at %u bounce(s) REFUSES TO CLAIM A "
+                             "VERDICT: the derived error bound is %.6g, which is %.3g of the "
+                             "gradient %.9g -- above the pre-registered %.3g. A pass at this "
+                             "resolution would be compatible with there being nothing it could "
+                             "have detected. roundoff %.6g + truncation %.6g at h = %.9g\n",
+                             bounces, m.errorBound, resolution, m.analytic,
+                             kMaxGradientResolution, m.roundoffBound, m.truncationBound,
+                             m.hActual);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- THE GATE.
+            const double ratio = m.absError / m.errorBound;
+            if (ratio > worstRatio) worstRatio = ratio;
+            if (!(m.absError <= m.errorBound)) {
+                std::fprintf(
+                    stderr,
+                    "[diff_gpu_probe] FAIL: check 37 at %u bounce(s) -- THE ANALYTIC GRADIENT IS "
+                    "NOT THE DERIVATIVE OF THE FILM.\n"
+                    "  finite difference (J(a+h) - J(a-h)) / 2h = %.12g\n"
+                    "  gradient scattered into the arena         = %.12g\n"
+                    "  |difference| = %.6g, which is %.6g of the gradient\n"
+                    "  derived error bound = %.6g (roundoff %.6g + truncation %.6g)\n"
+                    "  J(a-h) = %.12g, J(a) = %.12g, J(a+h) = %.12g, h = %.12g\n"
+                    "  Both sides describe ONE realisation of the estimator at seed %u under "
+                    "common random numbers, so there is no sampling error to absorb this: the "
+                    "two numbers are the derivative of the same function computed two ways, and "
+                    "they disagree. WHICH bounce counts fail localises it: if only the ONE-bounce "
+                    "measurement fails, the DIRECT scatter line (DiffVertex's recursion) is "
+                    "wrong; if one bounce passes and two/three fail, the throughput-derivative "
+                    "term is. If all three fail by a common factor, "
+                    "suspect one of the eight per-strategy fields of DiffVertex before "
+                    "suspecting the derivative -- nothing else in this repository reads them.\n",
+                    bounces, m.finiteDiff, m.analytic, m.absError, m.relError, m.errorBound,
+                    m.roundoffBound, m.truncationBound, m.jMinus, m.jCenter, m.jPlus, m.hActual,
+                    kGradientSeed);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+
+        // --- NON-VACUITY 3: the higher bounces actually contribute. For a
+        // one-bounce film J is exactly linear in a, so a*J'/J is exactly 1;
+        // every extra bounce raises it. If the 3-bounce run's value were also
+        // 1, the second and third bounces would be contributing nothing and
+        // the two of the three measurements that exercise the
+        // throughput-derivative term would be measuring a term that is zero.
+        const double shape1 = kAlbedo * measurements[0].analytic / measurements[0].jCenter;
+        const double shape3 = kAlbedo * measurements[2].analytic / measurements[2].jCenter;
+        if (!(shape3 > shape1 + 0.05)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 37 -- a*J'/J is %.6f at one bounce and "
+                         "%.6f at three. It is exactly 1 for a film that is linear in the albedo "
+                         "and rises with every bounce that contributes, so these being equal "
+                         "means the multi-bounce terms carry no weight and the 2- and 3-bounce "
+                         "measurements are not exercising the throughput-derivative term at "
+                         "all\n",
+                         shape1, shape3);
+            wf.destroy(ctx.allocator());
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        std::printf(
+            "[diff_gpu_probe] OK: check 37 -- the gradient shaders/diff/wf_scatter_replay.comp "
+            "scatters into the arena IS the derivative of the film shaders/diff/wf_scatter.comp "
+            "accumulates. Common random numbers, seed %u, %u paths at one sample per pixel, "
+            "h = 2^-7 = %.9g (derived: the minimiser of eps*a/h + h^2/a^2 at eps = %.0e is "
+            "6.0e-3; this is the nearest power of two).\n"
+            "    1 bounce : FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g "
+            "(roundoff %.4g + truncation %.4g)\n"
+            "    2 bounces: FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g "
+            "(roundoff %.4g + truncation %.4g)\n"
+            "    3 bounces: FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g "
+            "(roundoff %.4g + truncation %.4g)\n"
+            "  Worst |err|/bound %.4g; worst bound/gradient %.3g (pre-registered limit %.3g, so "
+            "the gate resolves better than 1%% and would reject Step 5's 1.01 scaling). "
+            "a*J'/J rises from %.4f at one bounce to %.4f at three, so the throughput-derivative "
+            "term is carrying real weight and not rounding\n",
+            kGradientSeed, kCapacity, static_cast<double>(kStep), kFilmRelativeEps,
+            measurements[0].finiteDiff, measurements[0].analytic, measurements[0].absError,
+            measurements[0].errorBound, measurements[0].roundoffBound,
+            measurements[0].truncationBound, measurements[1].finiteDiff,
+            measurements[1].analytic, measurements[1].absError, measurements[1].errorBound,
+            measurements[1].roundoffBound, measurements[1].truncationBound,
+            measurements[2].finiteDiff, measurements[2].analytic, measurements[2].absError,
+            measurements[2].errorBound, measurements[2].roundoffBound,
+            measurements[2].truncationBound, worstRatio, worstResolution,
+            kMaxGradientResolution, shape1, shape3);
+
+        // -----------------------------------------------------------------
+        // 38. THE NULL TEST. Exactly zero, not "small".
+        // -----------------------------------------------------------------
+        //
+        // The arena holds FOUR blocks: albedo's gradient, albedo's Adam m/v
+        // state, the unused parameter's gradient, and the unused parameter's
+        // state. The scatter addresses exactly one of them, through
+        // ScatterPush::gradAlbedoOffset. So the other three must come back
+        // BIT-EXACTLY zero after a run that wrote a large gradient into the
+        // first -- and it is bit-exact rather than a tolerance because
+        // nothing added anything to them at all: `GradientArena::zero` filled
+        // them and no atomicAdd named them.
+        //
+        // WHAT THIS CATCHES THAT THE GATE ABOVE DOES NOT. A scatter into the
+        // wrong block is not necessarily visible to check 37: if the offset
+        // were wrong by a whole block the gate would read zero from the
+        // albedo block and fail -- but an offset wrong by an amount that
+        // happens to land inside the albedo block's 256-byte alignment
+        // padding, or a stray second write, leaves the gate's number intact
+        // and corrupts a neighbouring parameter. That is exactly the failure
+        // Task 5's per-texel scatter can make at scale, and this is the
+        // cheapest statement of "the arena is addressed, not sprayed".
+        //
+        // It also states the block layout Task 5 must fit: ONE float per
+        // ScalarBlock element at gradAlbedoOffset + k, blocks in registration
+        // order, gradient block before state block, 256-byte aligned.
+        struct NullBlock {
+            const char* name;
+            std::size_t index;
+            std::size_t expectedFloats;
+        };
+        const NullBlock nullBlocks[3] = {
+            {"albedo's Adam m/v state", albedoParam->stateBlock, albedoParam->floatCount * 2u},
+            {"unused_scalar's gradient", unusedParam->gradBlock, unusedParam->floatCount},
+            {"unused_scalar's Adam m/v state", unusedParam->stateBlock,
+             unusedParam->floatCount * 2u},
+        };
+        std::size_t nullFloatsChecked = 0;
+        for (const NullBlock& nb : nullBlocks) {
+            const std::vector<float> values = gradArena.readback(ctx.allocator(), nb.index);
+            if (values.size() != nb.expectedFloats) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 38 -- block %zu (%s) read back %zu "
+                             "floats, expected %zu. A null test over the wrong number of floats "
+                             "is not a null test\n",
+                             nb.index, nb.name, values.size(), nb.expectedFloats);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+            for (std::size_t k = 0; k < values.size(); ++k) {
+                if (values[k] != 0.0f) {
+                    std::fprintf(
+                        stderr,
+                        "[diff_gpu_probe] FAIL: check 38 -- %s, element %zu of arena block %zu, "
+                        "is %.9g and must be EXACTLY 0. The scene does not depend on it and "
+                        "nothing scatters into it: the traversal's only arena write is an "
+                        "atomicAdd at ScatterPush::gradAlbedoOffset (%u), which addresses block "
+                        "%zu at float offset %u. A non-zero here is a scatter that landed "
+                        "outside the block it was told to write, which check 37 can be blind to "
+                        "-- it reads only the albedo block\n",
+                        nb.name, k, nb.index, static_cast<double>(values[k]), kGradAlbedoOffset,
+                        albedoParam->gradBlock, kGradAlbedoOffset);
+                    wf.destroy(ctx.allocator());
+                    gradArena.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+            nullFloatsChecked += values.size();
+        }
+
+        std::printf(
+            "[diff_gpu_probe] OK: check 38 -- the null test: after a run that accumulated %.9g "
+            "into the albedo's gradient block (block %zu, float offset %u of a %u-float arena), "
+            "all %zu floats of the other three blocks -- albedo's Adam m/v state and both blocks "
+            "of a second registered parameter the scene does not depend on -- are EXACTLY 0.0f, "
+            "compared as floats and not through a tolerance. This is the statement Stage 1 Task "
+            "5's per-texel scatter has to keep: one atomicAdd per element at "
+            "gradBlockOffset + k, blocks in registration order (gradient then Adam state), 256-"
+            "byte aligned, and nothing outside the block it was told to write\n",
+            measurements[2].analytic, albedoParam->gradBlock, kGradAlbedoOffset, kGradArenaFloats,
+            nullFloatsChecked);
+
+        wf.destroy(ctx.allocator());
+        gradArena.destroy(ctx.allocator());
     }
 
     arena.destroy(ctx.allocator());

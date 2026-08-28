@@ -344,6 +344,27 @@ public:
         /// and the buffer's real size in agreement is the caller's own
         /// invariant, not something the shader verifies for it.
         std::uint32_t filmPixelCount{0};
+        /// Total number of floats in the CALLER-OWNED gradient arena bound at
+        /// the traversal's binding 10, and the FLOAT index at which the
+        /// base-colour parameter's gradient block begins inside it.
+        ///
+        /// `gradArenaFloats == 0` disables every gradient write, which is
+        /// what every caller that binds a placeholder buffer there gets --
+        /// and is the default, so no existing caller changes behaviour.
+        ///
+        /// These are here and not derived from `buffers` for
+        /// `filmPixelCount`'s reason exactly: `GradientArena` is caller-owned
+        /// and `WavefrontBuffers` cannot state its size. A caller that passes
+        /// a count larger than the buffer it actually bound still writes past
+        /// the end of that allocation, guard and all.
+        ///
+        /// A caller setting these MUST also pass the arena's VkBuffer to
+        /// `record`'s `extraBarrierBuffers`: the write is an `atomicAdd`, so
+        /// bounce k's accumulation must be available to bounce k+1's, and
+        /// a `VkBufferMemoryBarrier`'s memory scope covers only the buffers
+        /// it names.
+        std::uint32_t gradArenaFloats{0};
+        std::uint32_t gradAlbedoOffset{0};
         /// Per-iteration RNG seed. Combined with (pixelIndex, sampleIndex)
         /// and the path's stored bounce count, this is the ONLY thing a
         /// scatter dispatch reconstructs its random stream from -- nothing
@@ -415,6 +436,10 @@ public:
         // `buffers`, for the reason Config::filmPixelCount gives: the film
         // is caller-owned and WavefrontBuffers cannot state its size.
         std::uint32_t filmPixelCount;
+        // --- Gradient arena (Stage 1 Task 2). From Config, for the film's
+        // reason: the arena is caller-owned.
+        std::uint32_t gradArenaFloats;
+        std::uint32_t gradAlbedoOffset;
     };
 
     WavefrontLoop() = default;

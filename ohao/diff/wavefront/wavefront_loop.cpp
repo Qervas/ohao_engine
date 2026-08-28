@@ -383,7 +383,16 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       // the accumulation, which is what
                                       // every caller that passes no film
                                       // buffer gets.
-                                      m_config.filmPixelCount};
+                                      m_config.filmPixelCount,
+                                      // Gradient arena: from Config, for the
+                                      // film's reason -- caller-owned, so
+                                      // `buffers` cannot state its size. 0
+                                      // floats disables every gradient write,
+                                      // which is what every caller that binds
+                                      // a placeholder buffer at binding 10
+                                      // gets.
+                                      m_config.gradArenaFloats,
+                                      m_config.gradAlbedoOffset};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);
