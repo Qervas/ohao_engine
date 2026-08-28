@@ -365,6 +365,42 @@ public:
         /// it names.
         std::uint32_t gradArenaFloats{0};
         std::uint32_t gradAlbedoOffset{0};
+        /// THE DETACHED-SAMPLING MATERIAL (Stage 1 Task 3). The material every
+        /// SAMPLING DECISION inside the traversal is made from -- the lobe
+        /// choice and the GGX VNDF's alpha -- as opposed to the four fields
+        /// above, which are what `f` and the densities are EVALUATED with.
+        ///
+        /// A NEGATIVE `samplingRoughness` means "use the evaluated material",
+        /// which is the default and what every renderer wants. The sentinel is
+        /// resolved IN THE TRAVERSAL, not here, so that a ScatterPush built by
+        /// hand somewhere else -- several probes do -- gets the same answer
+        /// from a zero-filled tail's -1 default rather than a silently
+        /// cosine-sampled dispatch. With it active the shader's split body
+        /// reduces, expression for expression, to the single-material one it
+        /// replaced. Nothing that predates this task changes behaviour, and a
+        /// caller cannot half-set the override.
+        ///
+        /// Setting it is a MEASUREMENT, not a rendering mode. Spec section 6.3
+        /// does not differentiate sampled directions, so the derivative this
+        /// subsystem computes is the estimator's derivative at FIXED
+        /// directions; a finite difference that perturbs roughness or metallic
+        /// and re-runs the sampler also moves every direction, and measures
+        /// the sum of the term the adjoint computes and a term it deliberately
+        /// omits. Freezing this material at theta_0 across the +h and -h
+        /// renders holds the whole path still, so the difference quotient
+        /// measures what the adjoint computes and nothing else. With the
+        /// override set, the film is not an unbiased estimator of anything.
+        float samplingAlbedo{0.0f};
+        float samplingRoughness{-1.0f};
+        float samplingMetallic{0.0f};
+        float samplingSpecularWeight{0.0f};
+        /// Which scalar parameter the REPLAY hook differentiates, and whether
+        /// the traversal maintains the forward-mode throughput tangent in path
+        /// state. 0 = base colour (Stage 1 Task 2's closed-form path, and the
+        /// default, so no existing caller changes), 1 = roughness,
+        /// 2 = metallic. The enumerators are DIFF_PARAM_* in
+        /// shaders/includes/diff/bsdf_adjoint.glsl.
+        std::uint32_t diffParam{0};
         /// Per-iteration RNG seed. Combined with (pixelIndex, sampleIndex)
         /// and the path's stored bounce count, this is the ONLY thing a
         /// scatter dispatch reconstructs its random stream from -- nothing
@@ -440,6 +476,31 @@ public:
         // reason: the arena is caller-owned.
         std::uint32_t gradArenaFloats;
         std::uint32_t gradAlbedoOffset;
+        // --- The detached-sampling material and the differentiated parameter
+        // (Stage 1 Task 3). From Config, passed through verbatim.
+        //
+        // THESE FIVE CARRY DEFAULT MEMBER INITIALISERS AND THE ONES ABOVE DO
+        // NOT, on purpose. Several probes build a ScatterPush by hand with a
+        // braced list that stops at `filmPixelCount`; every member after the
+        // last initialiser is then value-initialised to zero, which was
+        // harmless while zero meant "no gradient arena" but is NOT harmless
+        // for a sampling material -- a zeroed one is roughness 0 (floored to
+        // 0.01), metallic 0, specularWeight 0, i.e. a lobe probability of
+        // exactly 0, which turns every dispatch into a cosine-hemisphere
+        // sampler while `f` and the density stay GGX. That is a silently
+        // biased estimator, and it is what the mixture furnace check caught
+        // the first time this tail was added without a sentinel.
+        //
+        // So `sampleRoughness` defaults to -1, there is no such roughness,
+        // and the TRAVERSAL reads a negative value as "sample with the
+        // evaluated material" -- the resolution lives in the shader rather
+        // than in record(), precisely so that a push built anywhere else
+        // still gets it.
+        float sampleAlbedo{0.0f};
+        float sampleRoughness{-1.0f};
+        float sampleMetallic{0.0f};
+        float sampleSpecularWeight{0.0f};
+        std::uint32_t diffParam{0};
     };
 
     WavefrontLoop() = default;

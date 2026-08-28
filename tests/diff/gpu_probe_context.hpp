@@ -68,6 +68,41 @@ struct WavefrontScatterMaterial {
     float specularWeight{0.0f};
 };
 
+/// Stage 1 Task 3 -- what a gradient run differentiates, and whether it holds
+/// its sampled directions still while doing it.
+///
+/// THE SECOND FIELD IS THE INSTRUMENT. Spec section 6.3 lists sampled
+/// directions as NOT differentiated, so the adjoint computes the derivative of
+/// the estimator at FIXED directions. Perturbing roughness or metallic and
+/// re-running the sampler moves the GGX VNDF's alpha and the lobe-selection
+/// probability, so a naive common-random-number difference measures that
+/// derivative PLUS the movement of every direction -- the term the adjoint
+/// deliberately omits. `freezeSampling` pushes `WavefrontLoop::Config`'s
+/// sampling-material override, so the +h and -h renders draw from the SAME
+/// material as the unperturbed one and only `f` and the densities move. That
+/// makes the difference quotient and the adjoint two computations of one
+/// quantity.
+///
+/// Running the same measurement with it OFF is the detached-sampling BIAS,
+/// which is a number to report rather than a gate to pass.
+struct WavefrontGradientOptions {
+    /// 0 = base colour (Stage 1 Task 2), 1 = roughness, 2 = metallic. Matches
+    /// DIFF_PARAM_* in shaders/includes/diff/bsdf_adjoint.glsl.
+    std::uint32_t diffParam{0};
+    /// When true, `samplingAlbedo`/`samplingMaterial` are what every sampling
+    /// decision uses, regardless of the evaluated material passed alongside.
+    bool freezeSampling{false};
+    float samplingAlbedo{0.0f};
+    WavefrontScatterMaterial samplingMaterial{};
+    /// Optional: receives the FORWARD run's binding-3 vertex trace as it stood
+    /// after the LAST bounce (`capacity * kDebugDrawFloats` floats). It is how
+    /// a caller MEASURES the frozen-direction claim instead of asserting it:
+    /// slots 6-8, 9-11 and 15 are the ray origin, the ray direction and the
+    /// hit distance the traversal read out of path state, so two renders whose
+    /// paths did not move produce bit-identical values there.
+    std::vector<float>* outForwardTrace{nullptr};
+};
+
 /// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.
 /// Must equal that shader's `kNeeSampleFloats`.
 ///
@@ -889,12 +924,22 @@ public:
     /// `width * height == capacity` (one path per pixel, the film-hazard
     /// resolution). Returns false on any Vulkan error, including the replay
     /// stage's SPV being absent.
+    /// The material refusal above is `options.diffParam == 0`'s. For the two
+    /// parameters Stage 1 Task 3 adds it is REPLACED, not relaxed, by the
+    /// conditions those derivatives need: a specular lobe must EXIST
+    /// (`metallic > 0 || specularWeight > 0`, else the lobe probability q is
+    /// identically 0, the GGX terms are never evaluated and both gradients are
+    /// trivially zero), the roughness must sit strictly above `unpackHitPbr`'s
+    /// 0.01 floor, and a metallic run must sit strictly inside the [0,1]
+    /// clamp -- at either endpoint the true derivative is one-sided and a
+    /// central difference measures half of it.
     [[nodiscard]] bool runWavefrontGradientProbe(
         WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t bounces,
         const WavefrontGenerateCamera& camera, std::span<const float> positions,
         std::span<const uint32_t> indices, float albedo,
         const WavefrontScatterMaterial& material, uint32_t iterationSeed, GradientArena& arena,
-        uint32_t gradArenaFloats, uint32_t gradAlbedoOffset, std::vector<float>& outFilm);
+        uint32_t gradArenaFloats, uint32_t gradAlbedoOffset, std::vector<float>& outFilm,
+        const WavefrontGradientOptions& options = {});
 
     /// Returns false on any Vulkan error.
     [[nodiscard]] bool runWavefrontParityProbe(WavefrontBuffers& buffers, uint32_t width,

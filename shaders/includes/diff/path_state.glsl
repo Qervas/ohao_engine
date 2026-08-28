@@ -21,8 +21,8 @@
 // block in this arena is the same size), and because 256 == 4*64 the
 // identity alignUp(4c, 256) == 4*alignUp(c, 64) holds exactly. Every stage
 // therefore only needs to push `capacity` (one uint), not one offset per
-// field -- a push-constant array of PS_FIELD_COUNT uints (80 bytes at the
-// current 20 fields, and growing) plus a camera block (80 bytes,
+// field -- a push-constant array of PS_FIELD_COUNT uints (92 bytes at the
+// current 23 fields, and growing) plus a camera block (80 bytes,
 // see camera_ray.glsl / visibility_probe.comp) would exceed the 128-byte
 // push-constant size Vulkan guarantees on every implementation.
 
@@ -56,7 +56,15 @@ const uint PS_HIT_T         = 16u;  // intersect-stage output: hit distance, -1 
 const uint PS_NORMAL_X      = 17u;
 const uint PS_NORMAL_Y      = 18u;
 const uint PS_NORMAL_Z      = 19u;
-const uint PS_FIELD_COUNT   = 20u;
+// Traversal-maintained: d(Throughput)/d(theta) for the ONE scalar parameter a
+// run differentiates (Stage 1 Task 3). See PathStateField::TangentR in
+// ohao/diff/wavefront/path_state_layout.hpp for why the tangent has to be
+// stored rather than recovered in closed form, and traverse.glsl's update for
+// the product rule it obeys.
+const uint PS_TANGENT_R     = 20u;
+const uint PS_TANGENT_G     = 21u;
+const uint PS_TANGENT_B     = 22u;
+const uint PS_FIELD_COUNT   = 23u;
 
 // Every ArenaLayout block is aligned to 256 bytes == 64 floats.
 const uint PS_ALIGNMENT_FLOATS = 64u;
@@ -152,6 +160,21 @@ void psSetNormal(uint pathIndex, uint capacity, vec3 v) {
     psSetScalar(PS_NORMAL_X, pathIndex, capacity, v.x);
     psSetScalar(PS_NORMAL_Y, pathIndex, capacity, v.y);
     psSetScalar(PS_NORMAL_Z, pathIndex, capacity, v.z);
+}
+
+// d(Throughput)/d(theta), the forward-mode tangent the traversal carries
+// alongside the throughput. Zero at bounce 0 (T_0 = 1 for every theta) and
+// updated by the product rule at every scattering vertex.
+vec3 psGetTangent(uint pathIndex, uint capacity) {
+    return vec3(psGetScalar(PS_TANGENT_R, pathIndex, capacity),
+                psGetScalar(PS_TANGENT_G, pathIndex, capacity),
+                psGetScalar(PS_TANGENT_B, pathIndex, capacity));
+}
+
+void psSetTangent(uint pathIndex, uint capacity, vec3 v) {
+    psSetScalar(PS_TANGENT_R, pathIndex, capacity, v.x);
+    psSetScalar(PS_TANGENT_G, pathIndex, capacity, v.y);
+    psSetScalar(PS_TANGENT_B, pathIndex, capacity, v.z);
 }
 
 // -- Integer accessors (bit-cast through the same float storage) --

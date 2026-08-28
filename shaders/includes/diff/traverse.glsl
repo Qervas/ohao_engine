@@ -436,6 +436,49 @@ layout(push_constant) uniform Push {
     // invariant.
     uint gradArenaFloats;
     uint gradAlbedoOffset;
+    // --- THE DETACHED-SAMPLING MATERIAL (Stage 1 Task 3), matching
+    // ScatterPush's tail. The material every SAMPLING DECISION is made from:
+    // the lobe choice and the GGX VNDF's alpha. `albedo`/`roughness`/
+    // `metallic`/`specularWeight` above stay the material `f` and the
+    // densities are EVALUATED with.
+    //
+    // WHY THE TRAVERSAL CARRIES TWO MATERIALS. Spec section 6.3 does not
+    // differentiate sampled directions, so the derivative this subsystem
+    // computes is the derivative of the estimator AT FIXED DIRECTIONS. A
+    // finite difference that perturbs roughness or metallic and re-runs the
+    // sampler measures that PLUS the movement of the direction -- the term
+    // the adjoint deliberately omits -- so a gate built on it would report a
+    // bias that is by design. Holding this material at theta_0 while the
+    // evaluated one moves to theta_0 +/- h freezes every direction of every
+    // bounce and makes the difference quotient measure exactly what
+    // bsdf_adjoint.glsl computes.
+    //
+    // EVERY RENDERER SETS THESE EQUAL TO THE FOUR ABOVE, which is what
+    // `WavefrontLoop::Config::samplingMaterial`'s default does, and in that
+    // configuration bsdf.glsl's split body is expression-for-expression the
+    // single-material one it replaced. The split is a measurement
+    // instrument, not a rendering feature.
+    // A NEGATIVE `sampleRoughness` is the SENTINEL for "sample with the
+    // evaluated material", resolved at the call site below. It has to be a
+    // sentinel the SHADER honours rather than one the host resolves: several
+    // probes build ScatterPush with a braced list that stops before this
+    // tail, so a zero-filled tail must not read as a legal material.
+    float sampleAlbedo;
+    float sampleRoughness;
+    float sampleMetallic;
+    float sampleSpecularWeight;
+    // --- WHICH PARAMETER THIS RUN DIFFERENTIATES (Stage 1 Task 3), matching
+    // ScatterPush's tail. DIFF_PARAM_BASECOLOR (0, the default and Stage 1
+    // Task 2's behaviour), DIFF_PARAM_ROUGHNESS (1) or DIFF_PARAM_METALLIC
+    // (2); the enumerators are in bsdf_adjoint.glsl, which is included below.
+    //
+    // It selects TWO things, in this file and in the replay hook: whether the
+    // traversal maintains the forward-mode throughput tangent in path state
+    // (only 1 and 2 need one -- the base colour has a closed form), and which
+    // adjoint the hook scatters. The FORWARD instantiation is pushed the same
+    // value as the REPLAY one, so the branch is uniform across both and the
+    // two still walk the identical path.
+    uint diffParam;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
@@ -565,9 +608,9 @@ const float kSurfaceOffset = 1e-4;
 // incident radiance along the continuation direction (the spec's L_i), which
 // this vertex does not have: it is the future of the path.
 //
-// THE TERM THAT IS ABSENT BECAUSE IT IS ZERO, NOT BECAUSE NOBODY WROTE IT
-// DOWN. Spec section 6.3 lists the MIS weights as differentiable, so the
-// direct term is in full
+// THE TERM THAT IS ZERO FOR ONE PARAMETER AND NOT FOR THE OTHER TWO. Spec
+// section 6.3 lists the MIS weights as differentiable, so the direct term is
+// in full
 //
 //     dL * SUM_s [ (dw_s/dtheta) * f_s * cos_s * L_s * V_s / p_s
 //                 + w_s * (df_s/dtheta) * cos_s * L_s * V_s / p_s ]
@@ -576,11 +619,24 @@ const float kSurfaceOffset = 1e-4;
 // Stage 1 Task 2 differentiates -- metallic == 0 and specularWeight == 0, for
 // theta = the base colour. There `pdf` is NdotL/pi and `pdfEnvMap` is the
 // environment's density: neither mentions the base colour, so `wEnv` and
-// `wBsdf` (balance heuristic over those two densities) are CONSTANTS of the
-// differentiation. It stops being zero the moment a pdf becomes
-// parameter-dependent -- roughness, or any theta that moves the lobe-
-// selection probability q -- and Task 3 must add it then. It is named here
-// so that its absence is a stated fact rather than an omission.
+// `wBsdf` (balance heuristic over those two densities) are CONSTANTS of that
+// differentiation.
+//
+// IT IS NOT ZERO FOR ROUGHNESS OR METALLIC, and Stage 1 Task 3 writes it out.
+// `pdf` is the MIXTURE density mix(NdotL/pi, G1 D/(4 N.V), q): roughness moves
+// it through D, through G1 and through q, and metallic moves it through q
+// alone. So both `wEnv` (whose partner density is `pdf` evaluated at `envDir`)
+// and `wBsdf` (whose own density is `pdf` at `bsdfDir`) are functions of
+// theta. `pdfBsdfAtEnvDir` and `pdfEnvAtBsdfDir` are fields below for exactly
+// this term: a balance-heuristic weight's derivative needs BOTH halves of the
+// pair that formed it, and a weight alone does not determine them.
+//
+// A FOURTH TERM APPEARS WITH THEM, for the same reason and in the same task:
+// the BSDF strategy's own estimator is f*cos*L*V / p_B, and p_B moves too, so
+// the QUOTIENT must be differentiated and not only its numerator. Task 2's
+// scatter line treats p_s as a constant, which was true of its parameter and
+// is false of these two. bsdf_adjoint.glsl folds it in by differentiating
+// `bsdfWeight` = f*cos/p_B as a whole.
 //
 // Every factor of the two retained terms is a field below. `df_s/dtheta` is
 // the only thing a consumer still has to compute, and it is computed at
@@ -764,6 +820,31 @@ struct DiffVertex {
     vec3 Lr;          // MIS-combined REFLECTED direct radiance -- NOT L_i
     vec3 throughput;  // path throughput ON ARRIVAL, before the decay
 
+    // --- THE FORWARD-MODE THROUGHPUT TANGENT (Stage 1 Task 3) ----------
+    // d(throughput)/d(theta) ON ARRIVAL, for the ONE parameter `pc.diffParam`
+    // names -- the (dT_b/dtheta) of the recursion above, as a VALUE rather
+    // than as a closed form.
+    //
+    // Stage 1 Task 2 needed no such field because a pure Lambertian
+    // per-bounce weight is EXACTLY the albedo, so T_b = albedo^b and
+    // dT_b/d(albedo) = (b/albedo)*T_b in closed form. That form is Lambert's
+    // alone: a microfacet weight f*cos/pdf has none, and a wavefront stage
+    // keeps nothing in registers across a dispatch boundary. So the TRAVERSAL
+    // carries it in path state (PathStateField::TangentR), by the product
+    // rule T'_{b+1} = T'_b*weight_b + T_b*weight'_b, and hands the arrival
+    // value here. It is ZERO for DIFF_PARAM_BASECOLOR, where nothing
+    // maintains it and the closed form is used instead.
+    vec3 tangent;
+
+    // --- WHAT THE TRAVERSAL ALREADY DIFFERENTIATED, at bsdfDir ---------
+    // The traversal must compute these two to advance the tangent above, so
+    // they are handed over rather than recomputed in the hook -- the same
+    // rule every other field of this struct obeys. Both are with respect to
+    // the PUSHED parameter, i.e. the unpack Jacobian is already applied.
+    // Both are zero for DIFF_PARAM_BASECOLOR and on the miss path.
+    vec3 dBsdfWeight;  // d(bsdfWeight)/d(theta)
+    float dPdf;        // d(pdf)/d(theta), the MIXTURE density's derivative
+
     // --- The direct-lighting estimator's TWO STRATEGIES ----------------
     // What the corrected scatter line is summed over, one group per
     // strategy. The BSDF strategy's direction, f*cos and density are
@@ -779,6 +860,19 @@ struct DiffVertex {
     float bsdfRadiance;  // s=B: L at bsdfDir (grey)
     float visBsdf;       // s=B: shadow-ray visibility, exactly 1 or 0
     float wBsdf;         // s=B: the MIS weight this strategy carries
+    // The PARTNER densities each MIS weight was formed against, and each
+    // strategy's own unweighted estimator f*cos*L*V/p_own. Added by Stage 1
+    // Task 3, which is the first consumer of the (dw_s/dtheta) half of the
+    // direct term: a balance-heuristic weight w = p_own/(p_own+p_other) has a
+    // derivative only through the densities that formed it, and neither
+    // partner density nor either unweighted estimator is recoverable from the
+    // fields above. `envUnweighted`/`bsdfUnweighted` are nee.glsl's
+    // `DiffMisTerm::unweighted` for the two strategies -- taken from the
+    // values the traversal formed, not re-divided here.
+    float pdfBsdfAtEnvDir;   // s=E: p_B at envDir, the partner of wEnv
+    float pdfEnvAtBsdfDir;   // s=B: p_E at bsdfDir, the partner of wBsdf
+    vec3 envUnweighted;      // s=E: f*cos*L*V/p_E, no MIS weight applied
+    vec3 bsdfUnweighted;     // s=B: f*cos*L*V/p_B, no MIS weight applied
 
     // --- Material. NOTE THE TWO SPACES -- see the note above. ----------
     vec3 baseColor;        // RAW pushed value
@@ -915,6 +1009,11 @@ void diffTraverse() {
     // re-reading the field, so the trace record and the decay cannot
     // disagree about what arrived.
     const vec3 pathThroughput = psGetThroughput(pathIndex, pc.capacity);
+    // The forward-mode tangent d(throughput)/d(theta) as it ARRIVES here,
+    // read for the same reason and at the same point as the throughput it
+    // differentiates. It is identically zero unless pc.diffParam names a
+    // parameter with no closed form for the throughput (see DiffVertex).
+    const vec3 pathTangent = psGetTangent(pathIndex, pc.capacity);
 
     // --- THE VERTEX TRACE RECORD (binding 3, kTraceFloats floats per path).
     //
@@ -980,6 +1079,12 @@ void diffTraverse() {
     vtx.bsdfWeight = vec3(0.0);
     vtx.Lr = vec3(0.0);
     vtx.throughput = vec3(0.0);
+    // The arrival tangent is as valid on the miss path as the arrival
+    // throughput would be -- but a miss forms no estimator, so like `Lr` and
+    // `throughput` it stays zero here and is filled in the hit branch.
+    vtx.tangent = vec3(0.0);
+    vtx.dBsdfWeight = vec3(0.0);
+    vtx.dPdf = 0.0;
     // The per-strategy group, zero until the hit branch fills it. A miss
     // takes the environment draws (the stream must not depend on the
     // branch) but forms no estimator at all, so there is no strategy to
@@ -993,6 +1098,10 @@ void diffTraverse() {
     vtx.bsdfRadiance = 0.0;
     vtx.visBsdf = 0.0;
     vtx.wBsdf = 0.0;
+    vtx.pdfBsdfAtEnvDir = 0.0;
+    vtx.pdfEnvAtBsdfDir = 0.0;
+    vtx.envUnweighted = vec3(0.0);
+    vtx.bsdfUnweighted = vec3(0.0);
     // baseColor, specularWeight and the two raw PBR values are RAW pushed
     // values -- there is no unpacking between the Push block and the field,
     // so they are as valid on the miss path as anywhere and are set here
@@ -1090,11 +1199,52 @@ void diffTraverse() {
         float metallic;
         unpackHitPbr(vec3(pc.roughness, pc.metallic, 0.0), roughness, metallic);
 
+        // TWO MATERIALS, ONE CALL. The unprefixed group is what `f` and the
+        // densities are EVALUATED with; the `sample*` group is what the lobe
+        // choice and the VNDF's alpha are drawn from. Every renderer pushes
+        // them equal, in which case this is expression-for-expression the
+        // single-material call it replaced (bsdf.glsl's `diffBsdfSample`
+        // delegates here with the same material twice). They differ only in
+        // the finite-difference reference, which freezes the sampling
+        // material at theta_0 so that the derivative being measured is the
+        // detached one the adjoint computes -- see the Push block.
+        //
+        // A NEGATIVE `pc.sampleRoughness` means "sample with the EVALUATED
+        // material" -- there is no such roughness, and the sentinel is
+        // resolved HERE rather than on the host so that a ScatterPush built
+        // by hand with a short braced list (several probes do exactly that,
+        // leaving this whole tail zero-filled) still samples correctly. A
+        // zero-filled tail would otherwise read as roughness 0, metallic 0,
+        // specularWeight 0 -- lobe probability exactly 0 -- and every
+        // dispatch would draw from a cosine hemisphere while `f` and the
+        // density stayed GGX. That is a silently biased estimator with no
+        // symptom other than a furnace mean drifting, which is exactly what
+        // check 23 caught the first time this tail existed without one.
+        //
+        // The branch is on a PUSH CONSTANT, so it is uniform across the
+        // dispatch and identical in both instantiations.
+        const bool overrideSampling = pc.sampleRoughness >= 0.0;
+        // The sampling material goes through the SAME unpackHitPbr as the
+        // evaluated one: a frozen sampling roughness that skipped the 0.01
+        // floor would select a different lobe width than the unperturbed
+        // render did, which is the one thing this instrument may not do. With
+        // the sentinel active the two unpacks receive the same value, so
+        // `sampleRoughness == roughness` bit-for-bit and the split sampler is
+        // the single-material one exactly.
+        float sampleRoughness;
+        float sampleMetallic;
+        unpackHitPbr(vec3(overrideSampling ? pc.sampleRoughness : pc.roughness,
+                          overrideSampling ? pc.sampleMetallic : pc.metallic, 0.0),
+                     sampleRoughness, sampleMetallic);
+
         vec3 newDir;
         vec3 weight;
         float pdf;
-        diffBsdfSample(normal, V, vec3(pc.albedo), roughness, metallic, pc.specularWeight,
-                       vec2(u1, u2), uLobe, newDir, weight, pdf);
+        diffBsdfSampleDetached(normal, V, vec3(pc.albedo), roughness, metallic, pc.specularWeight,
+                               vec3(overrideSampling ? pc.sampleAlbedo : pc.albedo),
+                               sampleRoughness, sampleMetallic,
+                               overrideSampling ? pc.sampleSpecularWeight : pc.specularWeight,
+                               vec2(u1, u2), uLobe, newDir, weight, pdf);
 
         // PATH CONTINUATION for a rejected sample. diffBsdfSample returns
         // the direction it actually drew, which for the GGX VNDF's
@@ -1203,6 +1353,36 @@ void diffTraverse() {
         arrivalThroughput = pathThroughput;
         psSetThroughput(pathIndex, pc.capacity, pathThroughput * weight);
 
+        // 1b. THE FORWARD-MODE THROUGHPUT TANGENT (Stage 1 Task 3), advanced
+        // by the product rule beside the decay it differentiates:
+        //
+        //     T_{b+1} = T_b * weight_b
+        //     T'_{b+1} = T'_b * weight_b + T_b * weight'_b
+        //
+        // THIS IS THE TRAVERSAL'S WORK, NOT A HOOK'S, and deliberately so.
+        // The hook contract forbids a hook writing path state, and a tangent
+        // written by only ONE instantiation would make the two walk different
+        // paths from the next bounce on -- the exact failure the one-source
+        // traversal exists to make impossible. Written here, both
+        // instantiations compile and execute the identical update, and only
+        // the replay one reads the result out of `DiffVertex`.
+        //
+        // The FORWARD instantiation therefore also maintains a tangent it
+        // never uses, at the cost of one derivative evaluation per vertex
+        // while `pc.diffParam` names a parameter. It is skipped entirely for
+        // DIFF_PARAM_BASECOLOR -- the default, and what every caller that
+        // predates this task pushes -- so no existing dispatch does any of
+        // this work, and the base colour's closed-form throughput term
+        // (bsdf_adjoint.glsl) is unaffected.
+        vec3 dWeight = vec3(0.0);
+        float dPdfBsdf = 0.0;
+        if (pc.diffParam != DIFF_PARAM_BASECOLOR) {
+            diffBsdfWeightDeriv(normal, V, bsdfDir, vec3(pc.albedo), roughness, metallic,
+                                pc.specularWeight, pc.roughness, pc.metallic, weight, pdf,
+                                pc.diffParam, dWeight, dPdfBsdf);
+            psSetTangent(pathIndex, pc.capacity, pathTangent * weight + pathThroughput * dWeight);
+        }
+
         // 2. Advance to the hit point, offset along the geometric normal so
         //    the next trace cannot re-hit the face it just left.
         psSetOrigin(pathIndex, pc.capacity, hitPoint + normal * kSurfaceOffset);
@@ -1238,6 +1418,20 @@ void diffTraverse() {
         vtx.bsdfRadiance = bsdfRadiance;
         vtx.visBsdf = visBsdf;
         vtx.wBsdf = bsdfTerm.wOwn;
+        // The partner densities and the two unweighted estimators, taken from
+        // the variables the MIS combination above was formed from. A consumer
+        // differentiating a balance-heuristic weight needs both halves of the
+        // pair that formed it, and nothing else in this struct carries them.
+        vtx.pdfBsdfAtEnvDir = pdfBsdfAtEnvDir;
+        vtx.pdfEnvAtBsdfDir = pdfEnvAtBsdfDir;
+        vtx.envUnweighted = neeTerm.unweighted;
+        vtx.bsdfUnweighted = bsdfTerm.unweighted;
+        // The tangent on ARRIVAL -- before the update above, exactly as
+        // `throughput` is the throughput before its decay -- and the two
+        // derivatives the update had to compute anyway.
+        vtx.tangent = pathTangent;
+        vtx.dBsdfWeight = dWeight;
+        vtx.dPdf = dPdfBsdf;
     }
 
     // --- The single NEE-sink write. Every slot is named here and in

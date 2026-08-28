@@ -392,7 +392,21 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       // a placeholder buffer at binding 10
                                       // gets.
                                       m_config.gradArenaFloats,
-                                      m_config.gradAlbedoOffset};
+                                      m_config.gradAlbedoOffset,
+                                      // The detached-sampling material
+                                      // (Stage 1 Task 3), passed through
+                                      // verbatim. A negative
+                                      // `samplingRoughness` is the "sample
+                                      // with the evaluated material" default
+                                      // and is resolved by the TRAVERSAL, not
+                                      // here -- see ScatterPush's note on why
+                                      // the sentinel has to survive as far as
+                                      // the shader.
+                                      m_config.samplingAlbedo,
+                                      m_config.samplingRoughness,
+                                      m_config.samplingMetallic,
+                                      m_config.samplingSpecularWeight,
+                                      m_config.diffParam};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);

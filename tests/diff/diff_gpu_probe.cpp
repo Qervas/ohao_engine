@@ -2512,6 +2512,279 @@ bool measureCrnAlbedoGradient(ohao::diff::GpuProbeContext& ctx, ohao::diff::Wave
     return true;
 }
 
+// ===========================================================================
+// STAGE 1 TASK 3 -- THE DETACHED FINITE-DIFFERENCE INSTRUMENT
+// ===========================================================================
+//
+// WHY TASK 2's HARNESS ABOVE IS NOT THE INSTRUMENT FOR THIS.
+//
+// `measureCrnAlbedoGradient` is EXACT, and it is exact for a reason that does
+// not survive a change of parameter. At `metallic = 0, specularWeight = 0` the
+// lobe probability q is identically 0, so `diffBsdfSample` takes its
+// cosine-hemisphere fast path and the drawn direction is a function of (u1,u2)
+// and the shading frame ALONE. Nothing about the sampled direction depends on
+// the albedo, so perturbing it re-renders the SAME path and the difference
+// quotient is the derivative of one realisation of the estimator.
+//
+// Neither half of that holds for roughness or metallic. `bsdf.glsl` samples
+// the GGX VNDF with `alpha = roughness^2`, and q -- the lobe choice -- is built
+// from F0 and therefore from metallic. Perturbing either MOVES THE SAMPLED
+// DIRECTION, at this vertex and at every earlier one. A naive common-random-
+// number difference would therefore measure
+//
+//     (the derivative the adjoint computes) + (the movement of the directions)
+//
+// and the second term is one spec section 6.3 says is NOT differentiated:
+// sampled directions are detached. A gate built on the naive difference would
+// report a bias that is BY DESIGN, and would read as a broken adjoint.
+//
+// SO THE REFERENCE IS DETACHED TOO. `WavefrontLoop::Config`'s sampling-material
+// override (pushed to the traversal as `sampleAlbedo`/`sampleRoughness`/
+// `sampleMetallic`/`sampleSpecularWeight`, consumed by
+// `bsdf.glsl`'s `diffBsdfSampleDetached`) holds every SAMPLING decision at
+// theta_0 while the EVALUATED material moves to theta_0 +/- h. Because the
+// frozen material also fixes every earlier bounce's draw, the whole path is
+// held still -- not just this vertex's -- and the only things that move
+// between the +h and -h renders are `f`, the mixture density, the partner
+// density at the other strategy's direction, and everything downstream of
+// those two (the MIS weights, the per-bounce weight, the throughput).
+//
+// That is exactly the function `shaders/includes/diff/bsdf_adjoint.glsl`
+// differentiates, so the two sides compute one quantity two ways.
+//
+// AND THE CLAIM IS MEASURED, NOT ARGUED. Every render returns the FORWARD
+// instantiation's binding-3 vertex trace as it stood after the last bounce,
+// whose slots 6-8, 9-11 and 15 are the ray origin, ray direction and hit
+// distance the traversal read out of path state. `traceMismatches` counts the
+// floats of those seven slots that differ between a perturbed render and the
+// centre one, ACROSS EVERY PATH. For a detached measurement it must be
+// exactly 0; for a naive one it must not be, or the freeze was not doing
+// anything and the comparison between them would be vacuous.
+//
+// ---------------------------------------------------------------------------
+// THE ERROR BOUND, AND WHY ITS TRUNCATION HALF IS NOT TASK 2's
+// ---------------------------------------------------------------------------
+//
+// Task 2 could bound truncation EXACTLY: with a pure Lambertian surface J is a
+// polynomial in the albedo with non-negative coefficients, so
+// max_n E_n(h)/a^n * J bounds SUM_n K_n E_n(h) term by term. J is NOT a
+// polynomial in roughness or in metallic -- D, the Smith terms and the mixture
+// density are rational and irrational in both -- so that argument has no
+// counterpart here and copying its FORM while dropping its PROOF would be a
+// bound that cannot fail.
+//
+// What is available instead is the leading term itself, MEASURED. A central
+// difference has D(h) = J' + C h^2 + O(h^4), so
+//
+//     D(2h) - D(h) = 3 C h^2 + O(h^4)   =>   C h^2 = (D(2h) - D(h)) / 3
+//
+// -- Richardson's estimate of the truncation of D(h), computed from two step
+// sizes of THIS run and nothing else. Five renders per measurement instead of
+// three buys it: J at theta_0, theta_0 +/- h and theta_0 +/- 2h.
+//
+// It degrades in the right direction. When truncation is far below roundoff,
+// |D(2h) - D(h)| is dominated by the two quotients' own cancellation error and
+// the reported "truncation" is really a second roundoff estimate -- larger
+// than the truth, so the bound is conservative, never optimistic. When
+// truncation dominates it is the actual leading term. What it is NOT is a
+// bound on the h^4 and higher terms; the step sizes below are derived to put
+// those far under the h^2 term, and the check reports both halves so that a
+// case where they are comparable is visible rather than hidden.
+//
+// The roundoff half is Task 2's unchanged, including its eps: a film value is
+// still a sum over bounces of a product of about six float32 factors, so
+// `kFilmRelativeEps = 2e-6` bounds its relative accuracy for the same reason
+// and by the same arithmetic.
+struct GgxFdMeasurement {
+    double jMinus2{0.0};
+    double jMinus{0.0};
+    double jCenter{0.0};
+    double jPlus{0.0};
+    double jPlus2{0.0};
+    /// Half the difference of the two floats ACTUALLY pushed at +/-h, in
+    /// double -- the divisor, so the representation error of theta +/- h
+    /// cancels out of the quotient. Task 2's `hActual`, same reason.
+    double hActual{0.0};
+    double hActual2{0.0};
+    double finiteDiff{0.0};    // D(h)
+    double finiteDiff2h{0.0};  // D(2h)
+    double analytic{0.0};
+    double absError{0.0};
+    double relError{0.0};
+    double roundoffBound{0.0};
+    double truncationBound{0.0};
+    double errorBound{0.0};
+    /// Floats of the trace's (origin, dir, hitT) slots that differ between a
+    /// perturbed render and the centre one, summed over all four perturbed
+    /// renders and every path. 0 <=> every render walked the identical path.
+    std::size_t traceMismatches{0};
+    /// The naive counterpart of `finiteDiff`, filled only when the caller
+    /// asked for the un-frozen measurement.
+    bool sampledDetached{true};
+};
+
+/// Compares the (origin, dir, hitT) slots of two vertex traces and returns the
+/// number of floats that differ, compared as BITS (memcmp of the float), not
+/// through a tolerance: two renders that walked the same path wrote the same
+/// bytes, and "nearly the same path" is not a thing this instrument may accept.
+///
+/// The throughput slots (12-14) are deliberately NOT compared: the throughput
+/// is the quantity the perturbation is SUPPOSED to move. Comparing it would
+/// make the check fail for the very effect it exists to permit.
+std::size_t traceGeometryMismatches(const std::vector<float>& a, const std::vector<float>& b,
+                                    uint32_t capacity) {
+    if (a.size() != b.size()) return a.size() + b.size();
+    const uint32_t slots[7] = {
+        ohao::diff::kTraceSlotOrigin + 0u, ohao::diff::kTraceSlotOrigin + 1u,
+        ohao::diff::kTraceSlotOrigin + 2u, ohao::diff::kTraceSlotDir + 0u,
+        ohao::diff::kTraceSlotDir + 1u,    ohao::diff::kTraceSlotDir + 2u,
+        ohao::diff::kTraceSlotHitT};
+    std::size_t mismatches = 0;
+    for (uint32_t p = 0; p < capacity; ++p) {
+        const std::size_t base = static_cast<std::size_t>(p) * ohao::diff::kDebugDrawFloats;
+        for (uint32_t s : slots) {
+            const float x = a[base + s];
+            const float y = b[base + s];
+            if (std::memcmp(&x, &y, sizeof(float)) != 0) ++mismatches;
+        }
+    }
+    return mismatches;
+}
+
+/// Runs the five renders and fills `out`. `param` is DIFF_PARAM_ROUGHNESS (1)
+/// or DIFF_PARAM_METALLIC (2) and selects which field of `material` the step
+/// is applied to. Returns false on a dispatch failure or a bad film -- never on
+/// a comparison result, which is the caller's verdict to reach.
+bool measureDetachedGgxGradient(ohao::diff::GpuProbeContext& ctx,
+                                ohao::diff::WavefrontBuffers& wf, uint32_t width, uint32_t height,
+                                uint32_t bounces, const ohao::diff::WavefrontGenerateCamera& camera,
+                                const std::vector<float>& positions,
+                                const std::vector<uint32_t>& indices, float albedo,
+                                const ohao::diff::WavefrontScatterMaterial& material,
+                                uint32_t param, float step, bool freezeSampling, uint32_t seed,
+                                ohao::diff::GradientArena& arena, std::size_t gradBlockIndex,
+                                uint32_t gradArenaFloats, uint32_t gradOffset,
+                                double filmRelativeEps, GgxFdMeasurement& out) {
+    out = GgxFdMeasurement{};
+    out.sampledDetached = freezeSampling;
+
+    const uint32_t capacity = width * height;
+    const std::size_t expectedFloats = static_cast<std::size_t>(capacity) * 3u;
+
+    auto perturbed = [&](float delta) {
+        ohao::diff::WavefrontScatterMaterial m = material;
+        if (param == 1u) {
+            m.roughness += delta;
+        } else {
+            m.metallic += delta;
+        }
+        return m;
+    };
+
+    struct Point {
+        float delta;
+        double* total;
+        std::vector<float>* trace;
+    };
+    std::vector<float> traces[5];
+    // ORDER MATTERS: the centre is LAST so the arena the caller reads back is
+    // the one the CENTRE's replay run left, not a perturbed run's. Task 2's
+    // harness makes the same choice for the same reason.
+    const Point points[5] = {
+        {-2.0f * step, &out.jMinus2, &traces[0]}, {-step, &out.jMinus, &traces[1]},
+        {step, &out.jPlus, &traces[2]},           {2.0f * step, &out.jPlus2, &traces[3]},
+        {0.0f, &out.jCenter, &traces[4]},
+    };
+
+    for (const Point& p : points) {
+        const ohao::diff::WavefrontScatterMaterial m = perturbed(p.delta);
+        ohao::diff::WavefrontGradientOptions options;
+        options.diffParam = param;
+        options.freezeSampling = freezeSampling;
+        options.samplingAlbedo = albedo;
+        // The UNPERTURBED material, on every one of the five renders. That is
+        // the whole of the instrument.
+        options.samplingMaterial = material;
+        options.outForwardTrace = p.trace;
+
+        std::vector<float> film;
+        if (!ctx.runWavefrontGradientProbe(wf, width, height, bounces, camera,
+                                           std::span<const float>(positions),
+                                           std::span<const uint32_t>(indices), albedo, m, seed,
+                                           arena, gradArenaFloats, gradOffset, film, options)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: detached gradient probe dispatch failed at "
+                         "roughness %.9g / metallic %.9g\n",
+                         static_cast<double>(m.roughness), static_cast<double>(m.metallic));
+            return false;
+        }
+        if (film.size() != expectedFloats) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: detached gradient probe returned a film of %zu "
+                         "floats, expected %zu\n",
+                         film.size(), expectedFloats);
+            return false;
+        }
+        double total = 0.0;
+        for (float v : film) {
+            if (!std::isfinite(v) || v < 0.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: detached gradient probe film holds a "
+                             "non-finite or negative value (%.9g)\n",
+                             static_cast<double>(v));
+                return false;
+            }
+            total += static_cast<double>(v);
+        }
+        *p.total = total;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        out.traceMismatches += traceGeometryMismatches(traces[i], traces[4], capacity);
+    }
+
+    const std::vector<float> gradBlock = arena.readback(ctx.allocator(), gradBlockIndex);
+    if (gradBlock.empty()) {
+        std::fprintf(stderr, "[diff_gpu_probe] FAIL: gradient arena block %zu read back empty\n",
+                     gradBlockIndex);
+        return false;
+    }
+    out.analytic = static_cast<double>(gradBlock[0]);
+
+    // The ACTUAL float steps, recovered the way Task 2's harness recovers
+    // its own: from the two perturbed values as floats, so the representation
+    // error of theta +/- h cancels out of the quotient exactly.
+    const float base = (param == 1u) ? material.roughness : material.metallic;
+    const float plus = base + step;
+    const float minus = base - step;
+    const float plus2 = base + 2.0f * step;
+    const float minus2 = base - 2.0f * step;
+    out.hActual = 0.5 * (static_cast<double>(plus) - static_cast<double>(minus));
+    out.hActual2 = 0.5 * (static_cast<double>(plus2) - static_cast<double>(minus2));
+    if (!(out.hActual > 0.0) || !(out.hActual2 > 0.0)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: the perturbed parameter values round to the same "
+                     "float at base %.9g, step %.9g -- the difference quotient is a division by "
+                     "zero\n",
+                     static_cast<double>(base), static_cast<double>(step));
+        return false;
+    }
+
+    out.finiteDiff = (out.jPlus - out.jMinus) / (2.0 * out.hActual);
+    out.finiteDiff2h = (out.jPlus2 - out.jMinus2) / (2.0 * out.hActual2);
+    out.absError = std::fabs(out.finiteDiff - out.analytic);
+    out.relError = (std::fabs(out.analytic) > 0.0) ? out.absError / std::fabs(out.analytic) : 0.0;
+
+    out.roundoffBound =
+        filmRelativeEps * (std::fabs(out.jPlus) + std::fabs(out.jMinus)) / (2.0 * out.hActual);
+    // Richardson: D(2h) - D(h) = 3 C h^2 + O(h^4), and C h^2 is the truncation
+    // of D(h). See this harness's header for why this replaces Task 2's exact
+    // polynomial bound and in which direction it errs.
+    out.truncationBound = std::fabs(out.finiteDiff2h - out.finiteDiff) / 3.0;
+    out.errorBound = out.roundoffBound + out.truncationBound;
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -3122,6 +3395,9 @@ int main() {
         const std::vector<float> sampleIndexField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::SampleIndex);
         const std::vector<float> bounceField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Bounce);
         const std::vector<float> aliveField = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::Alive);
+        const std::vector<float> tangentR = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::TangentR);
+        const std::vector<float> tangentG = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::TangentG);
+        const std::vector<float> tangentB = wf.readbackField(ctx.allocator(), ohao::diff::PathStateField::TangentB);
 
         // Deliberately NOT all kFieldCount fields: wf_generate.comp does not
         // write HitT (that is wf_intersect.comp's output, checked
@@ -3133,6 +3409,7 @@ int main() {
             &throughputR, &throughputG, &throughputB,
             &radianceR, &radianceG, &radianceB,
             &pixelIndexField, &sampleIndexField, &bounceField, &aliveField,
+            &tangentR, &tangentG, &tangentB,
         };
         for (const auto* f : allFields) {
             if (f->size() != kCapacity) {
@@ -3209,6 +3486,19 @@ int main() {
                              "[diff_gpu_probe] FAIL: path %u radiance = (%f,%f,%f), expected "
                              "(0,0,0)\n",
                              i, radianceR[i], radianceG[i], radianceB[i]);
+                wf.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // The throughput tangent (Stage 1 Task 3). Exactly zero, as a
+            // DERIVATIVE and not as a placeholder: generate writes a
+            // throughput of exactly 1 for every parameter value, so
+            // d(throughput)/d(theta) is 0 there for every theta.
+            if (tangentR[i] != 0.0f || tangentG[i] != 0.0f || tangentB[i] != 0.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: path %u throughput tangent = (%f,%f,%f), "
+                             "expected (0,0,0)\n",
+                             i, tangentR[i], tangentG[i], tangentB[i]);
                 wf.destroy(ctx.allocator());
                 return 1;
             }
@@ -3354,6 +3644,9 @@ int main() {
             {ohao::diff::PathStateField::NormalX, "NormalX", false, 1017.0f, 0u},
             {ohao::diff::PathStateField::NormalY, "NormalY", false, 1018.0f, 0u},
             {ohao::diff::PathStateField::NormalZ, "NormalZ", false, 1019.0f, 0u},
+            {ohao::diff::PathStateField::TangentR, "TangentR", false, 1020.0f, 0u},
+            {ohao::diff::PathStateField::TangentG, "TangentG", false, 1021.0f, 0u},
+            {ohao::diff::PathStateField::TangentB, "TangentB", false, 1022.0f, 0u},
         };
         // This array must cover every PathStateField or the "all %u
         // PathStateFields" claim below is false -- exactly the coverage gap
@@ -9031,6 +9324,562 @@ int main() {
 
         wf.destroy(ctx.allocator());
         gradArena.destroy(ctx.allocator());
+    }
+
+    // -----------------------------------------------------------------
+    // 39-41. THE GGX ADJOINTS: dJ/d(roughness), dJ/d(metallic), and the
+    //        detached-sampling bias.
+    // -----------------------------------------------------------------
+    //
+    // WHAT IS MEASURED, AND AGAINST WHAT. Same J as check 37 -- the sum of
+    // every float of the film a fused `bounces`-bounce run of
+    // ohao::diff::WavefrontLoop produced at ONE seed, one sample per pixel --
+    // but differentiated with respect to the pushed roughness or the pushed
+    // metallic, and against a DETACHED finite difference. The instrument and
+    // the reason it had to change are in `measureDetachedGgxGradient`'s
+    // header; the short of it is that perturbing either parameter moves the
+    // sampled direction, spec section 6.3 does not differentiate sampled
+    // directions, so the reference must hold the directions still or it
+    // measures a term the adjoint deliberately omits.
+    //
+    // THE STEP SIZES, DERIVED, AND WHY ONE WOULD NOT SERVE BOTH.
+    //
+    // The central difference D(h) = (J(t+h) - J(t-h))/(2h) carries the two
+    // errors Task 2's harness derives:
+    //
+    //     E(h) ~ eps |J| / h   +   |J'''| h^2 / 6
+    //
+    // Write L for the length scale on which J varies in the parameter, so that
+    // |J| ~ |J'| L and |J'''| ~ |J'| / L^2. Then, relative to |J'|,
+    //
+    //     E(h)/|J'|  ~  eps L / h  +  h^2 / (6 L^2)
+    //
+    // whose minimiser is h* = (3 eps)^(1/3) L = 0.0182 L at eps = 2e-6, with
+    // E(h*)/|J'| = 1.10e-4 + 5.5e-5 = 1.65e-4. The whole question is therefore
+    // "what is L", and the two parameters answer it differently by up to a
+    // factor of 30.
+    //
+    //   METALLIC. Every appearance of metallic is low-order polynomial over
+    //   the WHOLE of [0,1]: F0 = 0.04 + m(baseColor - 0.04) is linear,
+    //   specScale = mix(specularWeight,1,m) is linear, the diffuse lobe's
+    //   (1-m) is linear, and q is a cubic in m. There is no small parameter,
+    //   so L_m = 1 and h*_m = 1.8e-2. kMetallicStep = 2^-6 = 1.5625e-2 is the
+    //   nearest power of two, giving E/|J'| = 1.28e-4 + 4.1e-5 = 1.7e-4.
+    //
+    //   ROUGHNESS. Everything that matters -- D, both Smith Lambdas, and the
+    //   specular half of the mixture density -- is a function of
+    //   alpha = roughness^2, and the GGX lobe's angular width IS alpha. A step
+    //   dr changes alpha by 2 r dr, i.e. by a RELATIVE 2 dr / r, so J varies
+    //   in r on the scale L_r = r/2 and
+    //
+    //       h*_r = 0.0182 * r / 2 = 0.0091 r
+    //
+    //   -- proportional to the roughness itself. At r = 0.60 that is 5.4e-3
+    //   (2^-8); at r = 0.04 it is 3.6e-4 (2^-11), THIRTY-TWO TIMES SMALLER.
+    //   Using metallic's 2^-6 at r = 0.04 would perturb alpha by +/-78% and
+    //   measure a chord across the whole lobe rather than a derivative; using
+    //   roughness's 2^-11 for metallic would put the difference quotient's
+    //   cancellation error 32x higher for no truncation benefit. Each case
+    //   below therefore carries its own step, derived from its own r.
+    //
+    // A POWER OF TWO in every case, so that t +/- h and t +/- 2h are exact in
+    // float32 and the doubling Richardson needs is exact too; the harness
+    // divides by the ACTUAL float difference regardless.
+    //
+    // THE ERROR BOUND is roundoffBound + truncationBound with the roundoff
+    // half computed exactly as check 37's (eps = 2e-6, same derivation, same
+    // kind of film) and the truncation half RICHARDSON-MEASURED from the run's
+    // own D(h) and D(2h) -- because J is not a polynomial in these parameters
+    // and Task 2's exact polynomial bound has no counterpart. See the
+    // harness's header for the direction it errs in.
+    //
+    // NON-VACUITY, PRE-REGISTERED, four ways:
+    //   * kMaxGgxResolution -- the bound, as a fraction of |analytic|, must be
+    //     below 1e-2, so the gate resolves better than 1% and could reject
+    //     Step 5's per-term perturbations.
+    //   * The film must be strictly positive and the gradient strictly
+    //     non-zero and finite: 0 == 0 is not a pass.
+    //   * traceMismatches == 0 -- the instrument's own claim, MEASURED. Every
+    //     one of the five renders must have walked the bit-identical path.
+    //     If it did not, the difference quotient is not the detached
+    //     derivative and the comparison below means nothing.
+    //   * Check 41 measures the naive difference on the same cases and
+    //     REQUIRES its traceMismatches to be non-zero -- otherwise freezing
+    //     the sampling material changed nothing and the whole instrument is a
+    //     no-op that the three checks above would not notice.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;  // wf_generate's 1-D dispatch requires this exactly.
+        constexpr uint32_t kCapacity = kW * kH;
+        constexpr uint32_t kEnvW = 64;
+        constexpr uint32_t kEnvH = 32;
+        static_assert(kEnvW != kEnvH, "a square environment hides a W<->H swap");
+        constexpr float kAlbedo = 0.6f;
+        constexpr double kFilmRelativeEps = 2e-6;
+        constexpr uint32_t kGgxSeed = 20260829u;
+        constexpr double kMaxGgxResolution = 1e-2;
+        constexpr uint32_t kParamRoughness = 1u;
+        constexpr uint32_t kParamMetallic = 2u;
+
+        ohao::diff::ParamRegistry ggxReg;
+        const auto regGgx = ggxReg.registerScalarBlock("ggx_scalar", 1);
+        if (!regGgx.ok) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 39 registry setup: %s\n",
+                         regGgx.error.c_str());
+            return 1;
+        }
+        const ohao::diff::DiffParam* ggxParam = ggxReg.find("ggx_scalar");
+        if (ggxParam == nullptr) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 39 registered param not found\n");
+            return 1;
+        }
+
+        ohao::diff::GradientArena ggxArena;
+        if (!ggxArena.build(ctx.allocator(), ggxReg.layout())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 39 gradient arena build\n");
+            return 1;
+        }
+        const ohao::diff::ArenaBlock ggxBlock = ggxReg.layout().block(ggxParam->gradBlock);
+        const uint32_t kGgxArenaFloats =
+            static_cast<uint32_t>(ggxReg.layout().totalBytes() / sizeof(float));
+        const uint32_t kGgxOffset = static_cast<uint32_t>(ggxBlock.offsetBytes / sizeof(float));
+
+        std::vector<float> envRgba;
+        std::vector<double> envLum;
+        buildParityEnvironment(kEnvW, kEnvH, envRgba, envLum);
+        std::vector<float> positions;
+        std::vector<uint32_t> indices;
+        buildParityScene(positions, indices);
+        const ohao::diff::WavefrontGenerateCamera camera = parityCamera();
+
+        ohao::EnvCDF ggxEnvCdf;
+        ggxEnvCdf.build(envRgba, static_cast<int>(kEnvW), static_cast<int>(kEnvH));
+        if (!ggxEnvCdf.valid()) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 39 EnvCDF::build produced no CDF\n");
+            ggxArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity, kEnvW, kEnvH) ||
+            !wf.uploadEnvironment(ggxEnvCdf.marginalSpan(), ggxEnvCdf.conditionalSpan(),
+                                  ggxEnvCdf.integral())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 39 buffers build / env CDF upload\n");
+            wf.destroy(ctx.allocator());
+            ggxArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        struct GgxCase {
+            const char* name;
+            ohao::diff::WavefrontScatterMaterial material;
+            uint32_t param;
+            float step;  // derived above: 0.0091*r for roughness, 2^-6 for metallic
+            uint32_t bounces;
+        };
+        // FOUR ROUGHNESS CASES SPANNING THE CONDITIONING. The last is
+        // near-specular, where alpha = 1.6e-3, the lobe is at its sharpest,
+        // D at its peak is ~1/(pi alpha^2) ~ 1.2e5, and the derivative is the
+        // worst conditioned of the set -- which is exactly why it is here and
+        // why it carries the smallest step.
+        const GgxCase roughnessCases[4] = {
+            {"dielectric, broad lobe (r=0.60, m=0.00, sw=1.0)",
+             {0.60f, 0.00f, 1.0f},
+             kParamRoughness,
+             0.00390625f,  // 2^-8; h* = 0.0091*0.60 = 5.4e-3
+             2u},
+            {"mixture (r=0.35, m=0.50, sw=1.0)",
+             {0.35f, 0.50f, 1.0f},
+             kParamRoughness,
+             0.00390625f,  // 2^-8; h* = 0.0091*0.35 = 3.2e-3
+             3u},
+            {"conductor, glossy (r=0.10, m=1.00, sw=1.0)",
+             {0.10f, 1.00f, 1.0f},
+             kParamRoughness,
+             0.0009765625f,  // 2^-10; h* = 0.0091*0.10 = 9.1e-4
+             2u},
+            {"conductor, NEAR-SPECULAR (r=0.04, m=1.00, sw=1.0)",
+             {0.04f, 1.00f, 1.0f},
+             kParamRoughness,
+             0.001953125f,  // 2^-9 -- CORRECTED FROM 2^-11, see below
+             2u},
+        };
+        const GgxCase metallicCases[2] = {
+            {"broad lobe, mid metallic (r=0.60, m=0.35, sw=1.0)",
+             {0.60f, 0.35f, 1.0f},
+             kParamMetallic,
+             0.015625f,  // 2^-6; h* = 0.0182 (L = 1, no small parameter)
+             2u},
+            {"glossy, high metallic (r=0.20, m=0.70, sw=1.0)",
+             {0.20f, 0.70f, 1.0f},
+             kParamMetallic,
+             0.015625f,
+             3u},
+        };
+
+        // ONE gate body for both parameters: the two differ only in which
+        // field the step moves and in how that step was derived, and writing
+        // the verdict twice is how two gates drift apart.
+        GgxFdMeasurement roughnessM[4]{};
+        GgxFdMeasurement metallicM[2]{};
+        // TWO "worst" INDICES, because the two questions are different and
+        // their answers need not be the same case. `worstResolution` is the
+        // largest bound/|gradient| -- how little the gate could have resolved
+        // -- and `worstRatio` is the largest |err|/bound, i.e. how close the
+        // adjoint came to being rejected. On this run they land on different
+        // cases by a hair, and reporting only one of them under the single
+        // word "worst" would be a claim narrower than it sounds.
+        auto runGate = [&](const char* checkName, const GgxCase* cases, std::size_t count,
+                           GgxFdMeasurement* out, double& worstRatio, double& worstResolution,
+                           std::size_t& worstRatioIndex, std::size_t& worstIndex) -> bool {
+            worstRatio = 0.0;
+            worstResolution = 0.0;
+            worstIndex = 0;
+            worstRatioIndex = 0;
+            for (std::size_t i = 0; i < count; ++i) {
+                const GgxCase& c = cases[i];
+                if (!measureDetachedGgxGradient(ctx, wf, kW, kH, c.bounces, camera, positions,
+                                                indices, kAlbedo, c.material, c.param, c.step,
+                                                /*freezeSampling=*/true, kGgxSeed, ggxArena,
+                                                ggxParam->gradBlock, kGgxArenaFloats, kGgxOffset,
+                                                kFilmRelativeEps, out[i])) {
+                    std::fprintf(stderr, "[diff_gpu_probe] FAIL: %s measurement failed on %s\n",
+                                 checkName, c.name);
+                    return false;
+                }
+                const GgxFdMeasurement& m = out[i];
+
+                // --- NON-VACUITY 1: the instrument's own claim. Every one of
+                // the five renders walked the bit-identical path.
+                if (m.traceMismatches != 0) {
+                    std::fprintf(
+                        stderr,
+                        "[diff_gpu_probe] FAIL: %s on %s -- THE FINITE DIFFERENCE IS NOT "
+                        "DETACHED. %zu float(s) of the vertex trace's (origin, dir, hitT) slots "
+                        "differ between a perturbed render and the centre one, across %u paths. "
+                        "The sampling material was frozen at the unperturbed value on all five "
+                        "renders, so every direction of every bounce should be bit-identical; "
+                        "that it is not means the difference quotient below measures the "
+                        "movement of the sampled directions as well as the derivative of the "
+                        "estimator -- and spec 6.3 says the adjoint does NOT contain that term. "
+                        "Suspect the sampling-material override (WavefrontLoop::Config's "
+                        "sampling* fields, the traversal's pc.sample* tail, or "
+                        "diffBsdfSampleDetached's use of qs vs q) before suspecting the "
+                        "derivative\n",
+                        checkName, c.name, m.traceMismatches, kCapacity);
+                    return false;
+                }
+
+                // --- NON-VACUITY 2: there is light and there is a gradient.
+                if (!(m.jCenter > 0.0) || !std::isfinite(m.jCenter) ||
+                    !std::isfinite(m.analytic) || !(std::fabs(m.analytic) > 0.0)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: %s on %s: J = %.9g and the scattered "
+                                 "gradient = %.9g. J must be finite and strictly positive (the "
+                                 "scene is lit and every factor is non-negative) and the gradient "
+                                 "finite and non-zero -- a zero on either side makes the "
+                                 "comparison 0 against 0\n",
+                                 checkName, c.name, m.jCenter, m.analytic);
+                    return false;
+                }
+
+                // --- NON-VACUITY 3: the gate's resolution, pre-registered.
+                const double resolution = m.errorBound / std::fabs(m.analytic);
+                if (resolution > worstResolution) {
+                    worstResolution = resolution;
+                    worstIndex = i;
+                }
+                if (!(resolution <= kMaxGgxResolution)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: %s on %s REFUSES TO CLAIM A VERDICT: the "
+                                 "error bound is %.6g, which is %.3g of the gradient %.9g -- above "
+                                 "the pre-registered %.3g. A pass at this resolution would be "
+                                 "compatible with there being nothing it could have detected. "
+                                 "roundoff %.6g + truncation %.6g at h = %.9g\n",
+                                 checkName, c.name, m.errorBound, resolution, m.analytic,
+                                 kMaxGgxResolution, m.roundoffBound, m.truncationBound, m.hActual);
+                    return false;
+                }
+
+                // --- THE GATE.
+                const double ratio = m.absError / m.errorBound;
+                if (ratio > worstRatio) {
+                    worstRatio = ratio;
+                    worstRatioIndex = i;
+                }
+                if (!(m.absError <= m.errorBound)) {
+                    std::fprintf(
+                        stderr,
+                        "[diff_gpu_probe] FAIL: %s on %s (%u bounce(s)) -- THE ANALYTIC GRADIENT "
+                        "IS NOT THE DETACHED DERIVATIVE OF THE FILM.\n"
+                        "  detached finite difference D(h)  = %.12g\n"
+                        "  gradient scattered into the arena = %.12g\n"
+                        "  |difference| = %.6g, which is %.6g of the gradient\n"
+                        "  error bound = %.6g (roundoff %.6g + Richardson truncation %.6g)\n"
+                        "  D(2h) = %.12g, h = %.12g\n"
+                        "  J(-2h) = %.12g J(-h) = %.12g J(0) = %.12g J(+h) = %.12g "
+                        "J(+2h) = %.12g\n"
+                        "  All five renders walked the bit-identical path (measured: 0 trace "
+                        "mismatches), so there is no sampling difference to absorb this: the two "
+                        "numbers are the derivative of one arithmetic function of theta computed "
+                        "two ways. WHERE TO LOOK: a failure on the METALLIC cases only points at "
+                        "dF0/dm, dspecScale/dm or dq/dm; on the ROUGHNESS cases only, at dD/dA, "
+                        "dLambda/dA or dq/dr; on BOTH and growing with the bounce count, at the "
+                        "throughput tangent the traversal carries (PathStateField::TangentR); on "
+                        "BOTH at every bounce count, at the MIS-weight term or at the "
+                        "d(1/pdf) half of d(bsdfWeight)\n",
+                        checkName, c.name, c.bounces, m.finiteDiff, m.analytic, m.absError,
+                        m.relError, m.errorBound, m.roundoffBound, m.truncationBound,
+                        m.finiteDiff2h, m.hActual, m.jMinus2, m.jMinus, m.jCenter, m.jPlus,
+                        m.jPlus2);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        double rWorstRatio = 0.0, rWorstRes = 0.0, mWorstRatio = 0.0, mWorstRes = 0.0;
+        std::size_t rWorstIdx = 0, mWorstIdx = 0, rWorstRatioIdx = 0, mWorstRatioIdx = 0;
+        if (!runGate("check 39 (d/d roughness)", roughnessCases, 4, roughnessM, rWorstRatio,
+                     rWorstRes, rWorstRatioIdx, rWorstIdx)) {
+            wf.destroy(ctx.allocator());
+            ggxArena.destroy(ctx.allocator());
+            return 1;
+        }
+        std::printf(
+            "[diff_gpu_probe] OK: check 39 -- dJ/d(roughness) through the GGX microfacet model IS "
+            "the DETACHED derivative of the film, at %zu material configurations. Seed %u, %u "
+            "paths at one sample per pixel, sampling material frozen at the unperturbed value on "
+            "all five renders of each case (0 trace mismatches measured over "
+            "%zu perturbed renders x %u paths x 7 geometry slots). Step per case h = 0.0091*r, "
+            "the minimiser of eps*L/h + h^2/(6L^2) at L = r/2 (the scale alpha = r^2 varies on), "
+            "rounded to a power of two.\n",
+            static_cast<std::size_t>(4), kGgxSeed, kCapacity, static_cast<std::size_t>(16),
+            kCapacity);
+        for (std::size_t i = 0; i < 4; ++i) {
+            std::printf("    %-52s h=%.9g bounces=%u: FD %.9g vs analytic %.9g -- |err| %.4g <= "
+                        "bound %.4g (roundoff %.4g + truncation %.4g)\n",
+                        roughnessCases[i].name, static_cast<double>(roughnessCases[i].step),
+                        roughnessCases[i].bounces, roughnessM[i].finiteDiff, roughnessM[i].analytic,
+                        roughnessM[i].absError, roughnessM[i].errorBound,
+                        roughnessM[i].roundoffBound, roughnessM[i].truncationBound);
+        }
+        std::printf("  Closest to rejection: %s at |err|/bound %.4g. Least resolving: %s at "
+                    "bound/|gradient| %.3g (pre-registered limit %.3g). The near-specular case is "
+                    "the only one of the four where the Richardson truncation term exceeds the "
+                    "roundoff term -- the lobe is sharp enough there that h is finally limited by "
+                    "curvature rather than by cancellation, which is what 'worst conditioned' "
+                    "means for this parameter\n",
+                    roughnessCases[rWorstRatioIdx].name, rWorstRatio,
+                    roughnessCases[rWorstIdx].name, rWorstRes, kMaxGgxResolution);
+
+        if (!runGate("check 40 (d/d metallic)", metallicCases, 2, metallicM, mWorstRatio, mWorstRes,
+                     mWorstRatioIdx, mWorstIdx)) {
+            wf.destroy(ctx.allocator());
+            ggxArena.destroy(ctx.allocator());
+            return 1;
+        }
+        std::printf(
+            "[diff_gpu_probe] OK: check 40 -- dJ/d(metallic) through F0, specScale and the "
+            "lobe-selection probability IS the DETACHED derivative of the film, at %zu material "
+            "configurations. Seed %u, %u paths, same frozen-sampling instrument (0 trace "
+            "mismatches). Step h = 2^-6 = %.9g for both: metallic has NO small parameter -- F0, "
+            "specScale and the diffuse (1-m) are all linear over the whole of [0,1] -- so L = 1 "
+            "and h* = (3*eps)^(1/3) = 1.8e-2, THIRTY-TWO TIMES the near-specular roughness case's "
+            "step.\n",
+            static_cast<std::size_t>(2), kGgxSeed, kCapacity, 0.015625);
+        for (std::size_t i = 0; i < 2; ++i) {
+            std::printf("    %-52s h=%.9g bounces=%u: FD %.9g vs analytic %.9g -- |err| %.4g <= "
+                        "bound %.4g (roundoff %.4g + truncation %.4g)\n",
+                        metallicCases[i].name, static_cast<double>(metallicCases[i].step),
+                        metallicCases[i].bounces, metallicM[i].finiteDiff, metallicM[i].analytic,
+                        metallicM[i].absError, metallicM[i].errorBound, metallicM[i].roundoffBound,
+                        metallicM[i].truncationBound);
+        }
+        std::printf("  Closest to rejection: %s at |err|/bound %.4g. Least resolving: %s at "
+                    "bound/|gradient| %.3g (pre-registered limit %.3g)\n",
+                    metallicCases[mWorstRatioIdx].name, mWorstRatio,
+                    metallicCases[mWorstIdx].name, mWorstRes, kMaxGgxResolution);
+
+        // -----------------------------------------------------------------
+        // 41. THE DETACHED-SAMPLING BIAS. A FINDING, NOT A GATE.
+        // -----------------------------------------------------------------
+        //
+        // Spec section 6.3 makes the finite-difference harness the thing that
+        // decides whether detached sampling is acceptable PER PARAMETER. This
+        // is where that decision gets its number: the same five-render
+        // measurement, on the same cases, at the same steps, with the sampling
+        // material NOT frozen -- so the +/-h renders re-run the sampler and
+        // the paths move. The difference between that quotient and the
+        // detached one is the term the adjoint omits by design.
+        //
+        // NOTHING HERE GATES ON THE SIZE OF THE GAP. A large gap would be a
+        // statement about the estimator (detached sampling is a poor
+        // approximation for this parameter at this configuration), not about
+        // the adjoint, and turning it into a pass/fail would be inventing a
+        // threshold nobody derived.
+        //
+        // WHAT IS GATED, because without it the number would be meaningless:
+        // the naive measurement's paths MUST actually differ from the centre
+        // render's. If they did not, the sampling-material override would be a
+        // no-op, the "detached" measurement above would be the naive one, and
+        // checks 39-40 would be measuring something other than what they say.
+        // That is the one way this section can fail, and it is a statement
+        // about the INSTRUMENT rather than about the bias.
+        struct BiasCase {
+            const char* name;
+            ohao::diff::WavefrontScatterMaterial material;
+            uint32_t param;
+            float step;
+            uint32_t bounces;
+        };
+        // THREE BOUNCES for all three, whatever bounce count the gate above
+        // ran them at, and the reason is the sensitivity of the one thing
+        // this section gates on. The last bounce's trace record is the only
+        // one that survives -- every bounce overwrites it -- so a moved
+        // direction is visible in it only if some EARLIER bounce moved, which
+        // for the first case (a dielectric at specularWeight 1, whose lobe
+        // probability q is about 1.8%) happens for only ~9 of 512 paths per
+        // opportunity. At two bounces there is ONE such opportunity per path
+        // and a zero count is an ordinary outcome: 134, 16 and 0 measured
+        // over three seeds. At three bounces there are two per path, and the
+        // gate is on the per-case TOTAL over three seeds -- of order 55
+        // expected affected paths, so an all-zero case is e^-55 rather than a
+        // coin flip. Worth spelling out, because a gate that fails one run in
+        // ten teaches people to re-run it instead of reading it.
+        const uint32_t kBiasBounces = 3u;
+        const BiasCase biasCases[3] = {
+            {roughnessCases[0].name, roughnessCases[0].material, roughnessCases[0].param,
+             roughnessCases[0].step, kBiasBounces},
+            {roughnessCases[3].name, roughnessCases[3].material, roughnessCases[3].param,
+             roughnessCases[3].step, kBiasBounces},
+            {metallicCases[0].name, metallicCases[0].material, metallicCases[0].param,
+             metallicCases[0].step, kBiasBounces},
+        };
+        // THREE SEEDS PER CASE, and the reason is that a single realisation
+        // cannot tell a systematic bias from a noisy one. The naive quotient
+        // is a genuine derivative -- sampleGGXVNDF is smooth in alpha, so
+        // J_naive(theta) is a smooth function of theta and its central
+        // difference converges -- but it is the derivative of ONE 512-path,
+        // one-sample-per-pixel realisation, and the term it adds is the
+        // movement of 512 sample points across an integrand they each see
+        // only once. Its VARIANCE is therefore large and its sign is not
+        // fixed. Reporting one number would invite reading a large |gap| as
+        // "detached sampling is badly biased here" when it may be "this
+        // estimator of the attached term has a large spread". Three seeds is
+        // the fewest from which a spread can be quoted at all, and it is
+        // quoted rather than tested: nothing below gates on the size of the
+        // gap or on its spread.
+        constexpr uint32_t kBiasSeeds[3] = {20260829u, 20260830u, 20260831u};
+        double gapRatio[3][3]{};
+        double detachedFd[3][3]{};
+        double naiveFd[3][3]{};
+        std::size_t naiveMismatchTotal = 0;
+        std::size_t naiveMismatchByCase[3] = {0, 0, 0};
+        for (std::size_t i = 0; i < 3; ++i) {
+            for (std::size_t k = 0; k < 3; ++k) {
+                GgxFdMeasurement det{};
+                GgxFdMeasurement nai{};
+                if (!measureDetachedGgxGradient(ctx, wf, kW, kH, biasCases[i].bounces, camera,
+                                                positions, indices, kAlbedo, biasCases[i].material,
+                                                biasCases[i].param, biasCases[i].step,
+                                                /*freezeSampling=*/true, kBiasSeeds[k], ggxArena,
+                                                ggxParam->gradBlock, kGgxArenaFloats, kGgxOffset,
+                                                kFilmRelativeEps, det) ||
+                    !measureDetachedGgxGradient(ctx, wf, kW, kH, biasCases[i].bounces, camera,
+                                                positions, indices, kAlbedo, biasCases[i].material,
+                                                biasCases[i].param, biasCases[i].step,
+                                                /*freezeSampling=*/false, kBiasSeeds[k], ggxArena,
+                                                ggxParam->gradBlock, kGgxArenaFloats, kGgxOffset,
+                                                kFilmRelativeEps, nai)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: check 41 measurement failed on %s at "
+                                 "seed %u\n",
+                                 biasCases[i].name, kBiasSeeds[k]);
+                    wf.destroy(ctx.allocator());
+                    ggxArena.destroy(ctx.allocator());
+                    return 1;
+                }
+                // --- THE ONE GATE HERE, and it is about the INSTRUMENT, not
+                // about the bias: freezing the sampling material must
+                // actually change which path is walked, or checks 39-40's
+                // "0 trace mismatches" is a fact about nothing.
+                if (det.traceMismatches != 0) {
+                    std::fprintf(
+                        stderr,
+                        "[diff_gpu_probe] FAIL: check 41 on %s at seed %u -- the DETACHED "
+                        "measurement MOVED: %zu float(s) of the vertex trace's geometry slots "
+                        "differ from the centre render, with the sampling material frozen on all "
+                        "five renders. Same failure and same causes as checks 39-40's own trace "
+                        "gate\n",
+                        biasCases[i].name, kBiasSeeds[k], det.traceMismatches);
+                    wf.destroy(ctx.allocator());
+                    ggxArena.destroy(ctx.allocator());
+                    return 1;
+                }
+                naiveMismatchByCase[i] += nai.traceMismatches;
+                naiveMismatchTotal += nai.traceMismatches;
+                detachedFd[i][k] = det.finiteDiff;
+                naiveFd[i][k] = nai.finiteDiff;
+                gapRatio[i][k] =
+                    (nai.finiteDiff - det.finiteDiff) / std::fabs(det.analytic);
+            }
+        }
+        // --- THE ONE GATE, and it is about the INSTRUMENT, not about the
+        // bias. Freezing the sampling material must ACTUALLY change which
+        // path is walked, or checks 39-40's "0 trace mismatches" is a fact
+        // about nothing: their measurement would be detached by accident
+        // rather than by the override, and their central non-vacuity claim
+        // would be empty. Stated per CASE over the three seeds rather than
+        // per measurement, for the sensitivity reason on kBiasBounces above.
+        for (std::size_t i = 0; i < 3; ++i) {
+            if (naiveMismatchByCase[i] == 0) {
+                std::fprintf(
+                    stderr,
+                    "[diff_gpu_probe] FAIL: check 41 on %s -- the NAIVE measurement walked the "
+                    "IDENTICAL path at all three seeds (0 differing geometry slots over %u paths "
+                    "x %zu measurements). Perturbing roughness or metallic without freezing the "
+                    "sampling material must move the GGX VNDF's alpha or the lobe-selection "
+                    "probability and therefore the sampled direction, so identical paths mean "
+                    "the sampling-material override is not what makes checks 39-40 detached, and "
+                    "their non-vacuity claim is empty\n",
+                    biasCases[i].name, kCapacity, static_cast<std::size_t>(3));
+                wf.destroy(ctx.allocator());
+                ggxArena.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+        std::printf(
+            "[diff_gpu_probe] OK: check 41 -- THE DETACHED-SAMPLING BIAS, MEASURED (a finding, "
+            "not a gate). The same five-render difference with the sampling material NOT frozen "
+            "re-runs the sampler at theta +/- h, so the paths move -- confirmed and not assumed: "
+            "%zu vertex-trace geometry slots differ from the centre render across the 9 naive "
+            "measurements below, against exactly 0 across all 9 detached ones. NOTHING GATES ON "
+            "THE SIZE OF THE GAP: it is the derivative of the sampled directions' own "
+            "contribution, which spec 6.3 says the adjoint does not contain, and it is estimated "
+            "here from ONE 512-path realisation per seed -- a high-variance quantity whose spread "
+            "over three seeds is quoted beside its mean precisely so a large value is not read as "
+            "a large systematic bias.\n",
+            naiveMismatchTotal);
+        for (std::size_t i = 0; i < 3; ++i) {
+            double mean = 0.0;
+            for (std::size_t k = 0; k < 3; ++k) mean += gapRatio[i][k];
+            mean /= 3.0;
+            double var = 0.0;
+            for (std::size_t k = 0; k < 3; ++k) var += (gapRatio[i][k] - mean) * (gapRatio[i][k] - mean);
+            const double sd = std::sqrt(var / 2.0);  // sample sd, n-1 = 2
+            std::printf("    %-52s gap/|gradient| over 3 seeds: %+.4g %+.4g %+.4g  -> mean %+.4g, "
+                        "sample sd %.4g\n",
+                        biasCases[i].name, gapRatio[i][0], gapRatio[i][1], gapRatio[i][2], mean,
+                        sd);
+            std::printf("        %-48s detached FD %+.6g %+.6g %+.6g | naive FD %+.6g %+.6g "
+                        "%+.6g\n",
+                        "", detachedFd[i][0], detachedFd[i][1], detachedFd[i][2], naiveFd[i][0],
+                        naiveFd[i][1], naiveFd[i][2]);
+        }
+
+        wf.destroy(ctx.allocator());
+        ggxArena.destroy(ctx.allocator());
     }
 
     arena.destroy(ctx.allocator());

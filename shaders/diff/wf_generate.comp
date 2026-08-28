@@ -65,6 +65,13 @@ void main() {
     psSetSampleIndex(pixelIndex, pc.capacity, 0u);
     psSetBounce(pixelIndex, pc.capacity, 0u);
     psSetAlive(pixelIndex, pc.capacity, 1u);
+    // The throughput tangent d(Throughput)/d(theta) (Stage 1 Task 3). Seeded
+    // to ZERO, and that is a derivative and not a placeholder: the throughput
+    // above is the constant 1 for every value of every parameter, so its
+    // derivative with respect to any of them is exactly 0. Written
+    // explicitly rather than left to WavefrontBuffers::zero's fill, so that
+    // "what generate produces" stays a property of this shader.
+    psSetTangent(pixelIndex, pc.capacity, vec3(0.0));
 
     const uint slot = atomicAdd(counters.value[kQueue0CounterSlot], 1u);
     queues.idx[kQueue0Base + slot] = pixelIndex;

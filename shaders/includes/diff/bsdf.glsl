@@ -235,13 +235,51 @@ void diffBsdfEval(vec3 N, vec3 V, vec3 L, vec3 baseColor, float roughness, float
 /// 21) are only meaningful because this branch exists; with the division
 /// they would have had to be relaxed to a tolerance, which is exactly the
 /// kind of quiet weakening this stage is under instructions not to do.
-void diffBsdfSample(vec3 N, vec3 V, vec3 baseColor, float roughness, float metallic,
-                    float specularWeight, vec2 uDir, float uLobe, out vec3 L, out vec3 weight,
-                    out float pdf) {
+///
+/// TWO MATERIALS, AND WHY THE SECOND ONE EXISTS (Stage 1 Task 3). The
+/// `s*`-prefixed material is the one every SAMPLING DECISION is made from --
+/// the lobe choice and the VNDF's alpha -- while the unprefixed one is what
+/// `f` and the density are EVALUATED with. `diffBsdfSample` below passes the
+/// same material twice, which is the only configuration any renderer uses and
+/// which reproduces the previous single-material body expression for
+/// expression (the two `diffBsdfSpecProb` calls receive identical arguments
+/// and so return identical bits).
+///
+/// The split exists for the FINITE-DIFFERENCE REFERENCE, not for rendering.
+/// Spec section 6.3 lists sampled directions as NOT differentiated -- detached
+/// sampling -- so the derivative this subsystem computes is the derivative of
+/// the estimator AT FIXED DIRECTIONS. A finite difference that perturbs
+/// roughness or metallic and re-runs the sampler measures something else: it
+/// measures that derivative PLUS the movement of the sampled direction, which
+/// is the term the adjoint deliberately omits. Freezing the `s*` material at
+/// theta_0 while the evaluated material moves to theta_0 +/- h makes the
+/// difference quotient measure exactly what the adjoint computes -- and
+/// because the frozen material also fixes every EARLIER bounce's direction,
+/// the whole path is held still, not just this vertex's draw.
+///
+/// This is a measurement instrument, not a physically meaningful BSDF: with
+/// the two materials different, the returned `weight` is f*cos/p with `f` and
+/// `p` from one material and the direction drawn from another, which is an
+/// unbiased estimator of nothing in particular. The probe that uses it says
+/// so; production code passes one material through `diffBsdfSample`.
+void diffBsdfSampleDetached(vec3 N, vec3 V, vec3 baseColor, float roughness, float metallic,
+                            float specularWeight, vec3 sBaseColor, float sRoughness,
+                            float sMetallic, float sSpecularWeight, vec2 uDir, float uLobe,
+                            out vec3 L, out vec3 weight, out float pdf) {
+    // The density the LOBE CHOICE is made from -- the sampling material's.
+    const float qs =
+        diffBsdfSpecProb(N, V, sBaseColor, sRoughness, sMetallic, sSpecularWeight);
+    // The evaluated material's own q, which is what decides whether the
+    // pure-Lambert fast path below is the right answer for `f` and `pdf`.
     const float q = diffBsdfSpecProb(N, V, baseColor, roughness, metallic, specularWeight);
     const float NdotV = dot(N, V);
 
-    if (q <= 0.0) {
+    // BOTH must be zero to take the exact fast path. With one material (the
+    // only configuration any renderer uses) qs == q and this is the identical
+    // `q <= 0` test the single-material body had. With two, taking it on the
+    // strength of either one alone would return `baseColor` for a material
+    // whose f is not Lambertian, or divide when the closed form was exact.
+    if (qs <= 0.0 && q <= 0.0) {
         L = diffCosineHemisphere(N, uDir.x, uDir.y);
         const float NdotL = dot(N, L);
         pdf = NdotL * DIFF_BSDF_INV_PI;
@@ -252,10 +290,11 @@ void diffBsdfSample(vec3 N, vec3 V, vec3 baseColor, float roughness, float metal
         return;
     }
 
-    if (uLobe < q && NdotV > DIFF_BSDF_MIN_COS) {
+    if (uLobe < qs && NdotV > DIFF_BSDF_MIN_COS) {
         // GGX VNDF (Heitz 2018): sample a visible microfacet normal in the
-        // local frame, then reflect the view direction about it.
-        const float alpha = roughness * roughness;
+        // local frame, then reflect the view direction about it. `sRoughness`,
+        // not `roughness`: this is a sampling decision.
+        const float alpha = sRoughness * sRoughness;
         vec3 T, B;
         ggxBuildBasis(N, T, B);
         const vec3 Vloc = normalize(vec3(dot(V, T), dot(V, B), NdotV));
@@ -283,6 +322,18 @@ void diffBsdfSample(vec3 N, vec3 V, vec3 baseColor, float roughness, float metal
     }
 
     weight = f * NdotL / pdf;
+}
+
+/// The ONE-MATERIAL entry point every renderer uses: samples and evaluates
+/// with the same material. Kept as the whole of the previous signature so no
+/// call site changed, and defined as a delegation rather than as a second
+/// body so there is exactly one implementation of the sampler -- the same
+/// rule this file's header states about the microfacet terms.
+void diffBsdfSample(vec3 N, vec3 V, vec3 baseColor, float roughness, float metallic,
+                    float specularWeight, vec2 uDir, float uLobe, out vec3 L, out vec3 weight,
+                    out float pdf) {
+    diffBsdfSampleDetached(N, V, baseColor, roughness, metallic, specularWeight, baseColor,
+                           roughness, metallic, specularWeight, uDir, uLobe, L, weight, pdf);
 }
 
 #endif  // OHAO_DIFF_BSDF_GLSL

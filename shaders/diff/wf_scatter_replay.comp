@@ -71,8 +71,10 @@
 // (In the BSDF term the cosine is already folded into `v.f`, which is f*cos at
 // `v.bsdfDir`, so what that term needs is the derivative of `v.f` itself. A
 // (dw_s/dtheta) term also belongs to the direct sum and is identically zero
-// here, because at metallic 0 and specularWeight 0 neither density mentions
-// the base colour; traverse.glsl states it and says when Task 3 must add it.)
+// for the BASE COLOUR, because at metallic 0 and specularWeight 0 neither
+// density mentions it. Stage 1 Task 3's two parameters both move `pdf`, so
+// for them that term is present -- along with the derivative of the BSDF
+// strategy's own 1/p_B -- and `diffVertexGgxScatter` carries both.)
 //
 // TWO EARLIER VERSIONS OF THIS RECURSION WERE WRONG, both in `DiffVertex`'s
 // comment, and both are recorded there rather than only here:
@@ -193,11 +195,37 @@
 // J sums them: the pushed albedo is ONE grey scalar feeding all three, so its
 // gradient is one number, and adding the three channel contributions is the
 // chain rule for `vec3 baseColor = vec3(pc.albedo)`.
+//
+// WHICH PARAMETER (Stage 1 Task 3). `pc.diffParam` names it, and the two
+// branches below are two DIFFERENT statements of the same recursion, not a
+// general one and a special case:
+//
+//   * DIFF_PARAM_BASECOLOR is Stage 1 Task 2's, unchanged. Its throughput
+//     term is the closed form (dT_b/d(albedo) = b*T_b/albedo, exact for a
+//     pure Lambertian per-bounce weight) and its direct term omits the
+//     (dw_s/dtheta) half, which is identically zero for that parameter in the
+//     configuration its host-side guard enforces.
+//   * DIFF_PARAM_ROUGHNESS and DIFF_PARAM_METALLIC are Task 3's. Neither has
+//     a closed form for the throughput, so the term comes from the tangent
+//     the TRAVERSAL carried in path state; and both move every density, so
+//     the MIS-weight half and the d(1/p_B) half are both present. It is one
+//     function, `diffVertexGgxScatter`, because the two parameters differ
+//     only in which derivatives `diffBsdfEvalDeriv` returns.
+//
+// The two are kept as separate call sites rather than merged behind one
+// entry point because merging them would have to reconcile the closed form
+// with the tangent, and the closed form is what checks 37/38 measure
+// bit-for-bit. A future task that retires the closed form (the tangent
+// reproduces it: weight = albedo exactly, so T' = b*albedo^(b-1)) deletes
+// this branch rather than generalising it.
 void diffVertexHook(inout DiffVertex v) {
     v.adjoint = v.throughput;
 
-    const vec3 contribution = diffVertexDirectAlbedoScatter(v, v.adjoint) +
-                              diffVertexThroughputAlbedoTerm(v, pc.albedo);
+    const vec3 contribution =
+        (pc.diffParam == DIFF_PARAM_BASECOLOR)
+            ? (diffVertexDirectAlbedoScatter(v, v.adjoint) +
+               diffVertexThroughputAlbedoTerm(v, pc.albedo))
+            : diffVertexGgxScatter(v, pc.diffParam);
 
     v.adjoint = v.adjoint * v.bsdfWeight;
 
@@ -219,6 +247,15 @@ void diffVertexHook(inout DiffVertex v) {
         atomicAdd(grad.v[pc.gradAlbedoOffset + kGradElement],
                   contribution.x + contribution.y + contribution.z);
     }
+    // NOTE ON THE THREE-CHANNEL SUM for the Task 3 parameters. J sums the
+    // film's channels, and roughness and metallic are ONE scalar each feeding
+    // all three, exactly as the grey base colour is -- so summing the three
+    // channel contributions is the same chain rule, not an approximation of
+    // a per-channel gradient. What differs is that `contribution` is no
+    // longer channel-uniform in general: a coloured base colour makes
+    // df/d(metallic) differ per channel through F0. The sum is still right;
+    // it is the arena's ONE float per scalar parameter that makes it the
+    // whole answer.
 }
 
 void main() { diffTraverse(); }

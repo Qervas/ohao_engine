@@ -3489,7 +3489,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     const WavefrontGenerateCamera& camera, std::span<const float> positions,
     std::span<const uint32_t> indices, float albedo, const WavefrontScatterMaterial& material,
     uint32_t iterationSeed, GradientArena& arena, uint32_t gradArenaFloats,
-    uint32_t gradAlbedoOffset, std::vector<float>& outFilm) {
+    uint32_t gradAlbedoOffset, std::vector<float>& outFilm,
+    const WavefrontGradientOptions& options) {
     // Byte-identical to runWavefrontGenerateProbe's (80 bytes).
     struct GeneratePush {
         float origin[3];
@@ -3544,7 +3545,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // gradient check would be measuring a derivative of something other than
     // what it thinks -- and at metallic > 0 the finite difference would not
     // even be comparing two runs of the same path.
-    if (material.metallic != 0.0f || material.specularWeight != 0.0f) {
+    if (options.diffParam == 0u &&
+        (material.metallic != 0.0f || material.specularWeight != 0.0f)) {
         std::fprintf(stderr,
                      "[GpuProbeContext] runWavefrontGradientProbe: refuses to run with metallic "
                      "%.9g / specularWeight %.9g. shaders/includes/diff/bsdf_adjoint.glsl is the "
@@ -3553,10 +3555,50 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                      "MOVES THE SAMPLED DIRECTION and the common-random-number comparison is "
                      "between two different paths; at specularWeight > 0 the per-bounce weight "
                      "stops being exactly `albedo` and the throughput term's closed form fails. "
-                     "Task 3 replaces those bodies; until then this is a refusal, not a "
-                     "tolerance\n",
+                     "Task 3 replaces those bodies FOR ROUGHNESS AND METALLIC (diffParam 1 and 2, "
+                     "which carry their own preconditions below); for the base colour this is "
+                     "still a refusal, not a tolerance\n",
                      static_cast<double>(material.metallic),
                      static_cast<double>(material.specularWeight));
+        return false;
+    }
+    // --- THE TASK 3 PRECONDITIONS. Not a relaxation of the one above: a
+    // different parameter needs different things to be true, and each of these
+    // is a condition without which the measurement would be vacuous or wrong
+    // rather than merely awkward.
+    if (options.diffParam == 1u || options.diffParam == 2u) {
+        if (material.metallic <= 0.0f && material.specularWeight <= 0.0f) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontGradientProbe: refuses to differentiate "
+                         "roughness or metallic at metallic %.9g / specularWeight %.9g. The "
+                         "lobe-selection probability q = clamp(mix(specScale * maxF * (1-0.9r), "
+                         "1, metallic), 0, 1) is then identically 0, diffBsdfEval returns before "
+                         "it evaluates D, G or F at all, and BOTH gradients are exactly zero -- "
+                         "which a finite difference would confirm, vacuously\n",
+                         static_cast<double>(material.metallic),
+                         static_cast<double>(material.specularWeight));
+            return false;
+        }
+        if (!(material.roughness > 0.01f)) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontGradientProbe: refuses to differentiate "
+                         "at roughness %.9g. pbr_unpack.glsl floors roughness at 0.01, so at or "
+                         "below the floor d(unpacked)/d(pushed) is 0 on one side and 1 on the "
+                         "other: the analytic derivative reports 0 and a central difference "
+                         "reports half the unfloored slope. A run must sit strictly above it, "
+                         "with room for +/-h\n",
+                         static_cast<double>(material.roughness));
+            return false;
+        }
+    }
+    if (options.diffParam == 2u && !(material.metallic > 0.0f && material.metallic < 1.0f)) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: refuses to differentiate "
+                     "metallic at metallic %.9g. unpackHitPbr clamps it to [0,1], so at either "
+                     "endpoint the derivative is ONE-SIDED -- the adjoint reports 0 there and a "
+                     "central difference reports half the interior slope. A metallic gradient run "
+                     "must sit strictly inside, with room for +/-h\n",
+                     static_cast<double>(material.metallic));
         return false;
     }
     if (arena.buffer() == VK_NULL_HANDLE) {
@@ -3635,9 +3677,15 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     const VkDeviceSize filmBytes = static_cast<VkDeviceSize>(filmPixelCount) * 3u * sizeof(float);
     for (ScatterSinks* s : sinkSets) {
         if (!ok) break;
+        // HOST-READABLE, unlike the other two sinks: Stage 1 Task 3's
+        // frozen-direction measurement reads the FORWARD run's vertex trace
+        // back and compares two renders' ray origins, directions and hit
+        // distances bit for bit. That is how the detached instrument's
+        // defining claim is MEASURED rather than argued.
         s->trace = m_allocator.createBuffer(
             static_cast<VkDeviceSize>(capacity) * kDebugDrawFloats * sizeof(float),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuToCpu,
+            /*persistentlyMapped=*/true);
         s->env = m_allocator.createBuffer(
             static_cast<VkDeviceSize>(capacity) * kEnvSampleFloats * sizeof(float),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
@@ -3789,6 +3837,19 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             // film write.
             loopConfig.gradArenaFloats = isReplay ? gradArenaFloats : 0u;
             loopConfig.gradAlbedoOffset = isReplay ? gradAlbedoOffset : 0u;
+            // Both runs are pushed the SAME diffParam and the SAME sampling
+            // material. They must be: the two instantiations walk one path
+            // only while every push-constant field that steers the traversal
+            // agrees, and both of these steer it -- diffParam gates the
+            // tangent update in path state, and the sampling material gates
+            // every direction.
+            loopConfig.diffParam = options.diffParam;
+            if (options.freezeSampling) {
+                loopConfig.samplingAlbedo = options.samplingAlbedo;
+                loopConfig.samplingRoughness = options.samplingMaterial.roughness;
+                loopConfig.samplingMetallic = options.samplingMaterial.metallic;
+                loopConfig.samplingSpecularWeight = options.samplingMaterial.specularWeight;
+            }
             loopConfig.iterationSeed = iterationSeed;
             loop.setConfig(loopConfig);
 
@@ -3829,9 +3890,17 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                 // (mapped, through GradientArena::readback). vkQueueWaitIdle
                 // does not make writes visible in the host domain and
                 // vmaInvalidateAllocation covers only the CPU cache side.
-                VkBufferMemoryBarrier toHost[2]{};
-                const VkBuffer hostRead[2] = {s.film.buffer, arena.buffer()};
-                const uint32_t hostReadCount = isReplay ? 2u : 1u;
+                VkBufferMemoryBarrier toHost[3]{};
+                VkBuffer hostRead[3] = {s.film.buffer, arena.buffer(), VK_NULL_HANDLE};
+                uint32_t hostReadCount = isReplay ? 2u : 1u;
+                // Any host readback must be NAMED in this barrier, not merely
+                // waited for: vkQueueWaitIdle does not make writes visible in
+                // the host domain, and a VkBufferMemoryBarrier's memory scope
+                // covers only the buffers it lists.
+                if (!isReplay && options.outForwardTrace != nullptr) {
+                    hostRead[hostReadCount] = s.trace.buffer;
+                    ++hostReadCount;
+                }
                 for (uint32_t i = 0; i < hostReadCount; ++i) {
                     toHost[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
                     toHost[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -3858,6 +3927,25 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                 }
                 outFilm.assign(mappedFilm,
                                mappedFilm + (static_cast<std::size_t>(filmPixelCount) * 3u));
+                // The LAST bounce's vertex trace, if the caller asked for it.
+                // It is what makes the frozen-direction claim MEASURABLE
+                // rather than argued: two renders that walked the same path
+                // wrote bit-identical origins, directions and hit distances
+                // into these slots.
+                if (options.outForwardTrace != nullptr) {
+                    m_allocator.invalidateBuffer(s.trace);
+                    const auto* mappedTrace = static_cast<const float*>(s.trace.getMappedData());
+                    if (mappedTrace == nullptr) {
+                        std::fprintf(stderr,
+                                     "[GpuProbeContext] runWavefrontGradientProbe: vertex trace "
+                                     "buffer not mapped, cannot read back\n");
+                        ok = false;
+                        break;
+                    }
+                    options.outForwardTrace->assign(
+                        mappedTrace,
+                        mappedTrace + (static_cast<std::size_t>(capacity) * kDebugDrawFloats));
+                }
             }
         }
     }

@@ -45,6 +45,37 @@ enum class PathStateField : std::uint32_t {
     // octahedron's edges, which is a poor thing to sit underneath a
     // renderer whose entire purpose is gradients flowing through geometry.
     NormalX, NormalY, NormalZ,
+    // THE THROUGHPUT TANGENT (Stage 1 Task 3): d(Throughput)/d(theta) for the
+    // ONE scalar parameter a run differentiates, carried across bounces by
+    // the traversal itself.
+    //
+    // WHY IT HAS TO BE STORED AT ALL. The film is J = SUM_b T_b * Lr_b, so
+    // dJ/dtheta carries a (dT_b/dtheta) * Lr_b term, and
+    //
+    //     T_{b+1} = T_b * weight_b   =>   T'_{b+1} = T'_b * weight_b
+    //                                                + T_b * weight'_b
+    //
+    // is a RUNNING product-rule accumulation: the value at bounce b depends
+    // on every earlier bounce's weight derivative. Stage 1 Task 2 avoided
+    // storing it because for a pure Lambertian surface T_b = albedo^b
+    // exactly, so dT_b/d(albedo) = (b/albedo) * T_b in closed form. That
+    // closed form is Lambert's alone. Once the BSDF weight is
+    // f*cos/pdf through a microfacet lobe there is no closed form for the
+    // product, and a wavefront stage keeps NOTHING in registers across a
+    // dispatch boundary -- so the tangent has to live where the throughput
+    // it differentiates lives.
+    //
+    // Written by the TRAVERSAL (shaders/includes/diff/traverse.glsl), never
+    // by a hook: the hook contract forbids a hook writing path state, and
+    // both instantiations must update it identically or they walk different
+    // paths. Seeded to zero by wf_generate.comp -- T_0 = 1 for every theta,
+    // so its derivative is 0 -- and left untouched on the miss path, where
+    // the throughput is not decayed either.
+    //
+    // Three scalar fields rather than one, for ThroughputR/G/B's reason: the
+    // tangent of a vec3 is a vec3, and the probe's configurations are grey
+    // only by choice of scene, not by anything this layout may assume.
+    TangentR, TangentG, TangentB,
     Count
 };
 
