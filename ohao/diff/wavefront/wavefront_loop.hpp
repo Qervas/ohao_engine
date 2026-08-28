@@ -370,15 +370,32 @@ public:
         /// choice and the GGX VNDF's alpha -- as opposed to the four fields
         /// above, which are what `f` and the densities are EVALUATED with.
         ///
-        /// A NEGATIVE `samplingRoughness` means "use the evaluated material",
-        /// which is the default and what every renderer wants. The sentinel is
-        /// resolved IN THE TRAVERSAL, not here, so that a ScatterPush built by
-        /// hand somewhere else -- several probes do -- gets the same answer
-        /// from a zero-filled tail's -1 default rather than a silently
-        /// cosine-sampled dispatch. With it active the shader's split body
-        /// reduces, expression for expression, to the single-material one it
-        /// replaced. Nothing that predates this task changes behaviour, and a
-        /// caller cannot half-set the override.
+        /// A NON-POSITIVE `samplingRoughness` means "use the evaluated
+        /// material", which is the default and what every renderer wants.
+        /// The sentinel is resolved IN THE TRAVERSAL (`pc.sampleRoughness >
+        /// 0.0`, not `>= 0.0` -- see traverse.glsl), not here: this member's
+        /// `-1.0f` default member initialiser is what makes a ScatterPush
+        /// built by hand somewhere else -- several probes do -- land on
+        /// "no override" rather than a silently cosine-sampled dispatch, but
+        /// it is the SHADER-SIDE `> 0.0` test that actually closes the hole,
+        /// because it is what makes a zero-filled tail (this member never
+        /// having been set at all, its NSDMI stripped by a braced list that
+        /// stops early) read the same way as this member's own explicit
+        /// -1.0f default: as "no override". This member's default initialiser
+        /// alone is a host-side mechanism and is NOT sufficient by itself --
+        /// see traverse.glsl's comment on the same sentinel for why the
+        /// shader-side test is what is actually load-bearing. With the
+        /// override active the shader's split body reduces, expression for
+        /// expression, to the single-material one it replaced. Nothing that
+        /// predates this task changes behaviour.
+        ///
+        /// A CALLER CAN HALF-SET THE OVERRIDE: setting only
+        /// `samplingRoughness` (to a positive value) while leaving
+        /// `samplingAlbedo`/`samplingMetallic`/`samplingSpecularWeight` at
+        /// their own defaults activates the override with those three
+        /// implicitly zero, which is a legitimate but easy-to-miss partial
+        /// configuration -- there is no compile-time or run-time check that
+        /// all four were set together.
         ///
         /// Setting it is a MEASUREMENT, not a rendering mode. Spec section 6.3
         /// does not differentiate sampled directions, so the derivative this
@@ -491,11 +508,20 @@ public:
         // biased estimator, and it is what the mixture furnace check caught
         // the first time this tail was added without a sentinel.
         //
-        // So `sampleRoughness` defaults to -1, there is no such roughness,
-        // and the TRAVERSAL reads a negative value as "sample with the
-        // evaluated material" -- the resolution lives in the shader rather
-        // than in record(), precisely so that a push built anywhere else
-        // still gets it.
+        // So `sampleRoughness` defaults to -1, and the TRAVERSAL reads any
+        // NON-POSITIVE value (`pc.sampleRoughness > 0.0`, not `>= 0.0` -- see
+        // traverse.glsl) as "sample with the evaluated material". Testing
+        // `> 0.0` rather than `>= 0.0` is what actually closes the hole: a
+        // push built anywhere else that leaves this whole tail zero-filled
+        // gets `sampleRoughness == 0.0`, which `> 0.0` reads the same way as
+        // this struct's own `-1.0f` default -- "no override" -- at no cost,
+        // because `unpackHitPbr` floors roughness at 0.01 regardless, so no
+        // caller can ever observe a sampling roughness of exactly 0.0 as
+        // distinct from 0.01. The resolution therefore has to live in the
+        // shader, not in record(): this struct's default member initialiser
+        // only helps a caller that goes through record() at all, and the
+        // several probes this comment refers to build a ScatterPush by hand
+        // and never call record().
         float sampleAlbedo{0.0f};
         float sampleRoughness{-1.0f};
         float sampleMetallic{0.0f};

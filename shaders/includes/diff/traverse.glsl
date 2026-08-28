@@ -1209,21 +1209,32 @@ void diffTraverse() {
         // material at theta_0 so that the derivative being measured is the
         // detached one the adjoint computes -- see the Push block.
         //
-        // A NEGATIVE `pc.sampleRoughness` means "sample with the EVALUATED
-        // material" -- there is no such roughness, and the sentinel is
-        // resolved HERE rather than on the host so that a ScatterPush built
-        // by hand with a short braced list (several probes do exactly that,
-        // leaving this whole tail zero-filled) still samples correctly. A
-        // zero-filled tail would otherwise read as roughness 0, metallic 0,
-        // specularWeight 0 -- lobe probability exactly 0 -- and every
-        // dispatch would draw from a cosine hemisphere while `f` and the
-        // density stayed GGX. That is a silently biased estimator with no
-        // symptom other than a furnace mean drifting, which is exactly what
-        // check 23 caught the first time this tail existed without one.
+        // A NON-POSITIVE `pc.sampleRoughness` means "sample with the
+        // EVALUATED material" -- there is no such roughness (unpackHitPbr
+        // floors it at 0.01, so no caller-visible roughness is ever exactly
+        // 0.0 or negative), and the sentinel is resolved HERE rather than on
+        // the host so that a ScatterPush built by hand with a short braced
+        // list (several probes do exactly that, leaving this whole tail
+        // zero-filled) still samples correctly.
+        //
+        // THE TEST IS `> 0.0`, NOT `>= 0.0`, ON PURPOSE. A zero-filled tail
+        // gives `sampleRoughness == 0.0`; `>= 0.0` would read that as
+        // "override active" with a sampling material of (0.01 after the
+        // floor, metallic 0, specularWeight 0) -- lobe probability exactly
+        // 0, cosine-hemisphere sampling under a GGX density -- which is the
+        // ORIGINAL bug this sentinel exists to close, reproduced bit for
+        // bit. `> 0.0` reads the same zero-filled tail as "no override": a
+        // zero-filled tail draws with the evaluated material, the safe
+        // default. `unpackHitPbr`'s floor is what makes this free -- no
+        // caller can distinguish a sampling roughness of 0.0 from 0.01, so
+        // excluding 0.0 from the override band closes the hole at no cost.
+        // That is a silently biased estimator with no symptom other than a
+        // furnace mean drifting, which is exactly what check 23 caught the
+        // first time this tail existed without a sentinel at all.
         //
         // The branch is on a PUSH CONSTANT, so it is uniform across the
         // dispatch and identical in both instantiations.
-        const bool overrideSampling = pc.sampleRoughness >= 0.0;
+        const bool overrideSampling = pc.sampleRoughness > 0.0;
         // The sampling material goes through the SAME unpackHitPbr as the
         // evaluated one: a frozen sampling roughness that skipped the 0.01
         // floor would select a different lobe width than the unperturbed

@@ -755,9 +755,28 @@ void diffBsdfWeightDeriv(vec3 N, vec3 V, vec3 L, vec3 baseColor, float roughness
 ///   w_B = p_B(bsdfDir) / (p_B(bsdfDir) + p_E(bsdfDir))
 ///     dw_B/dtheta = p_E(bsdfDir) * (dp_B/dtheta) / S_B^2, S_B = p_B + p_E(bsdfDir)
 ///
-/// Both are zero where the heuristic's own 1e-6 floor is the active branch of
-/// its `max` -- there the weight does not depend on either density at all, and
-/// mirroring that is the same band discipline as everywhere else in this file.
+/// BOTH ARE CODED AS ZERO where the heuristic's own 1e-6 floor is the active
+/// branch of its `max`, but for two DIFFERENT reasons, and only one of them
+/// is "the weight does not depend on the density":
+///
+///   - `dw_E`: TRUE zero. `w_E`'s numerator `p_E` does not depend on theta at
+///     all (the NEE direction and its density are material-independent), so
+///     in the floored band `w_E = p_E/1e-6` is theta-independent and its
+///     derivative really is 0 regardless of the floor.
+///   - `dw_B`: zero IN EFFECT, not because the dependency vanishes. In the
+///     floored band `misBalanceHeuristic` returns `p_B/1e-6`, whose
+///     derivative is `dp_B/1e-6` -- NOT zero, and dominated by the very
+///     density (`p_B`) that moves with theta. The floor being active here
+///     means `p_B + p_E(bsdfDir) < 1e-6`, i.e. `p_E(bsdfDir) ~ 0` (p_B > 0 or
+///     the vertex would not reach this branch); an unlit-from-the-BSDF-
+///     strategy's-partner-density texel is one where `v.bsdfRadiance` (or the
+///     visibility) is itself driving the whole B-branch estimator to zero, so
+///     the coded 0 agrees with the true derivative's CONTRIBUTION to `dLr`,
+///     not with `dw_B` itself being zero. It is unreachable in a way that
+///     makes the number right, not a case the formula above actually covers
+///     -- band-mirroring this file's discipline elsewhere would require
+///     computing `dp_B/1e-6` here, and the reason that is not done is this
+///     paragraph, not "the weight does not depend on either density."
 vec3 diffVertexGgxScatter(in DiffVertex v, uint param) {
     if (!v.hit) return vec3(0.0);
 

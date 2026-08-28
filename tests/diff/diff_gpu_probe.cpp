@@ -2562,6 +2562,30 @@ bool measureCrnAlbedoGradient(ohao::diff::GpuProbeContext& ctx, ohao::diff::Wave
 // anything and the comparison between them would be vacuous.
 //
 // ---------------------------------------------------------------------------
+// WHY ONE SEED SUFFICES FOR CHECKS 39-40, AND NOT FOR CHECK 41
+// ---------------------------------------------------------------------------
+//
+// With every path frozen at theta_0 by the sampling-material override, J(theta)
+// is a DETERMINISTIC ARITHMETIC FUNCTION of theta: the same finite set of
+// paths, the same hit points, the same directions at every bounce, for every
+// theta the five renders visit. Nothing in the film is a random variable of
+// theta any more -- the randomness (the seed, u1/u2/uLobe) only ever chose
+// WHICH paths get walked, and the override holds that choice fixed too. So
+// D(h) and the scattered analytic gradient are two arithmetic computations of
+// the derivative of ONE number, not two estimators of an expectation, and the
+// comparison below needs no Monte Carlo error term and no seed average: a
+// single seed is not an under-sampled measurement of anything, because there
+// is nothing left to sample once the paths are frozen.
+//
+// THIS IS WHY check 41's 40% seed-to-seed spread (the NAIVE quotient's, see
+// its own header below) is not a problem for checks 39-40's one-seed gate --
+// the naive measurement re-samples on every perturbed render, so ITS quotient
+// really is an estimator with variance, while the detached one it is compared
+// against is not. A reader who does not have this paragraph will eventually
+// wonder why one gate needs three seeds and the other needs exactly one; this
+// is the reason, and it does not follow from anything else in this file.
+//
+// ---------------------------------------------------------------------------
 // THE ERROR BOUND, AND WHY ITS TRUNCATION HALF IS NOT TASK 2's
 // ---------------------------------------------------------------------------
 //
@@ -9375,12 +9399,47 @@ int main() {
     //       h*_r = 0.0182 * r / 2 = 0.0091 r
     //
     //   -- proportional to the roughness itself. At r = 0.60 that is 5.4e-3
-    //   (2^-8); at r = 0.04 it is 3.6e-4 (2^-11), THIRTY-TWO TIMES SMALLER.
+    //   (2^-8); the A-PRIORI estimate at r = 0.04 is 3.6e-4 (2^-11).
+    //
+    //   THE NEAR-SPECULAR CASE'S STEP IS CORRECTED FROM THAT A-PRIORI VALUE.
+    //   At h = 2^-11 kMaxGgxResolution's non-vacuity guard (below) refused to
+    //   claim a verdict: error bound 4.248 against a gradient of 287.7, i.e.
+    //   1.48% -- above the pre-registered 1%. The two halves were
+    //   roundoff 4.179 + truncation 0.0688, a ratio of 61:1, where the E(h)
+    //   model above is minimised at roundoff = 2*truncation. That imbalance
+    //   is the model's OWN diagnostic that L = r/2 underestimated the true
+    //   scale for this case: the film integrates over many directions and
+    //   the sharp lobe is a modest part of J, so J varies more slowly in r
+    //   than alpha's local geometry alone predicts. The two-term model gives
+    //   the correction from measured quantities alone --
+    //
+    //       h_opt = h * (roundoff / (2*truncation))^(1/3)
+    //             = 2^-11 * (4.179 / (2*0.0688))^(1/3)
+    //             = 2^-11 * 3.12 = 1.52e-3
+    //
+    //   -- and 2^-9 = 1.953e-3 is the nearest power of two. At 2^-9 the
+    //   halves are roundoff 1.045 + truncation 1.148, balanced as the model
+    //   predicts, and the resolution is 0.76%. That is the correction
+    //   kParamRoughness's fourth case carries below.
+    //
+    //   WHY THIS IS A MEASUREMENT, NOT A FIT TOWARD A PASSING COMPARISON.
+    //   roundoffBound and truncationBound (GgxFdMeasurement, computed in
+    //   measureDetachedGgxGradient above) are functions of jPlus, jMinus,
+    //   jPlus2, jMinus2 and hActual alone -- the five FORWARD renders and
+    //   the step -- and read `out.analytic`, the scattered gradient, NOWHERE.
+    //   So h was re-derived from a run that computes no gradient at all: the
+    //   E(h) model itself (derived above) was fixed BEFORE any case ran, and
+    //   only its input L was re-estimated here, from adjoint-independent
+    //   measurements. A step chosen to make the comparison pass would have
+    //   had to read `analytic` to know what to aim at, and this derivation
+    //   never does.
+    //
     //   Using metallic's 2^-6 at r = 0.04 would perturb alpha by +/-78% and
-    //   measure a chord across the whole lobe rather than a derivative; using
-    //   roughness's 2^-11 for metallic would put the difference quotient's
-    //   cancellation error 32x higher for no truncation benefit. Each case
-    //   below therefore carries its own step, derived from its own r.
+    //   measure a chord across the whole lobe rather than a derivative;
+    //   using the near-specular case's own (corrected) 2^-9 for metallic
+    //   would put the difference quotient's cancellation error 8x higher for
+    //   no truncation benefit. Each case below therefore carries its own
+    //   step, derived from its own r.
     //
     // A POWER OF TWO in every case, so that t +/- h and t +/- 2h are exact in
     // float32 and the doubling Richardson needs is exact too; the harness
@@ -9501,7 +9560,9 @@ int main() {
             {"conductor, NEAR-SPECULAR (r=0.04, m=1.00, sw=1.0)",
              {0.04f, 1.00f, 1.0f},
              kParamRoughness,
-             0.001953125f,  // 2^-9 -- CORRECTED FROM 2^-11, see below
+             0.001953125f,  // 2^-9 -- corrected from the a-priori 2^-11; the
+                             // derivation is in this check's header comment,
+                             // "THE NEAR-SPECULAR CASE'S STEP IS CORRECTED..."
              2u},
         };
         const GgxCase metallicCases[2] = {
@@ -9529,6 +9590,17 @@ int main() {
         // adjoint came to being rejected. On this run they land on different
         // cases by a hair, and reporting only one of them under the single
         // word "worst" would be a claim narrower than it sounds.
+        // COLLECTS EVERY FAILING CASE, IT DOES NOT STOP AT THE FIRST. An
+        // earlier version `return`ed the instant any of the four per-case
+        // checks below failed, which meant a perturbed adjoint was always
+        // diagnosed from `cases[0]` alone (the broad dielectric) and no
+        // perturbed build ever exercised, let alone printed, a rejection at
+        // the near-specular case's corrected h = 2^-9 -- the one case this
+        // whole section's step correction is about. Only a dispatch failure
+        // (no measurement to report at all) still aborts the loop early;
+        // every other failure is printed and the loop continues, so a run
+        // with more than one broken case reports all of them and the
+        // corrected-h case gets its own verdict instead of being shadowed.
         auto runGate = [&](const char* checkName, const GgxCase* cases, std::size_t count,
                            GgxFdMeasurement* out, double& worstRatio, double& worstResolution,
                            std::size_t& worstRatioIndex, std::size_t& worstIndex) -> bool {
@@ -9536,6 +9608,7 @@ int main() {
             worstResolution = 0.0;
             worstIndex = 0;
             worstRatioIndex = 0;
+            bool anyFailed = false;
             for (std::size_t i = 0; i < count; ++i) {
                 const GgxCase& c = cases[i];
                 if (!measureDetachedGgxGradient(ctx, wf, kW, kH, c.bounces, camera, positions,
@@ -9567,7 +9640,8 @@ int main() {
                         "diffBsdfSampleDetached's use of qs vs q) before suspecting the "
                         "derivative\n",
                         checkName, c.name, m.traceMismatches, kCapacity);
-                    return false;
+                    anyFailed = true;
+                    continue;
                 }
 
                 // --- NON-VACUITY 2: there is light and there is a gradient.
@@ -9580,7 +9654,8 @@ int main() {
                                  "finite and non-zero -- a zero on either side makes the "
                                  "comparison 0 against 0\n",
                                  checkName, c.name, m.jCenter, m.analytic);
-                    return false;
+                    anyFailed = true;
+                    continue;
                 }
 
                 // --- NON-VACUITY 3: the gate's resolution, pre-registered.
@@ -9598,7 +9673,8 @@ int main() {
                                  "roundoff %.6g + truncation %.6g at h = %.9g\n",
                                  checkName, c.name, m.errorBound, resolution, m.analytic,
                                  kMaxGgxResolution, m.roundoffBound, m.truncationBound, m.hActual);
-                    return false;
+                    anyFailed = true;
+                    continue;
                 }
 
                 // --- THE GATE.
@@ -9619,10 +9695,16 @@ int main() {
                         "  D(2h) = %.12g, h = %.12g\n"
                         "  J(-2h) = %.12g J(-h) = %.12g J(0) = %.12g J(+h) = %.12g "
                         "J(+2h) = %.12g\n"
-                        "  All five renders walked the bit-identical path (measured: 0 trace "
-                        "mismatches), so there is no sampling difference to absorb this: the two "
-                        "numbers are the derivative of one arithmetic function of theta computed "
-                        "two ways. WHERE TO LOOK: a failure on the METALLIC cases only points at "
+                        "  0 trace mismatches were measured, covering bounces 0..N-2 (the trace "
+                        "record is written at the TOP of each bounce, so a divergence at any "
+                        "earlier bounce propagates forward into it). The LAST bounce's own drawn "
+                        "direction never reaches path state before the run ends and so is NOT "
+                        "directly measured here; it is covered instead by a structural argument: "
+                        "the direction is a function of the frozen sampling material alone, in "
+                        "every branch diffBsdfSampleDetached takes. So there is no sampling "
+                        "difference to absorb this: the two numbers are the derivative of one "
+                        "arithmetic function of theta computed two ways. WHERE TO LOOK: a failure "
+                        "on the METALLIC cases only points at "
                         "dF0/dm, dspecScale/dm or dq/dm; on the ROUGHNESS cases only, at dD/dA, "
                         "dLambda/dA or dq/dr; on BOTH and growing with the bounce count, at the "
                         "throughput tangent the traversal carries (PathStateField::TangentR); on "
@@ -9632,10 +9714,11 @@ int main() {
                         m.relError, m.errorBound, m.roundoffBound, m.truncationBound,
                         m.finiteDiff2h, m.hActual, m.jMinus2, m.jMinus, m.jCenter, m.jPlus,
                         m.jPlus2);
-                    return false;
+                    anyFailed = true;
+                    continue;
                 }
             }
-            return true;
+            return !anyFailed;
         };
 
         double rWorstRatio = 0.0, rWorstRes = 0.0, mWorstRatio = 0.0, mWorstRes = 0.0;
@@ -9651,7 +9734,11 @@ int main() {
             "the DETACHED derivative of the film, at %zu material configurations. Seed %u, %u "
             "paths at one sample per pixel, sampling material frozen at the unperturbed value on "
             "all five renders of each case (0 trace mismatches measured over "
-            "%zu perturbed renders x %u paths x 7 geometry slots). Step per case h = 0.0091*r, "
+            "%zu perturbed renders x %u paths x 7 geometry slots, covering bounces 0..N-2; the "
+            "last bounce's own drawn direction is never written to path state and so is not "
+            "directly measured by this count -- it is covered instead by a structural argument, "
+            "that the direction is a function of the frozen sampling material alone in every "
+            "branch diffBsdfSampleDetached takes). Step per case h = 0.0091*r, "
             "the minimiser of eps*L/h + h^2/(6L^2) at L = r/2 (the scale alpha = r^2 varies on), "
             "rounded to a power of two.\n",
             static_cast<std::size_t>(4), kGgxSeed, kCapacity, static_cast<std::size_t>(16),
@@ -9683,10 +9770,13 @@ int main() {
             "[diff_gpu_probe] OK: check 40 -- dJ/d(metallic) through F0, specScale and the "
             "lobe-selection probability IS the DETACHED derivative of the film, at %zu material "
             "configurations. Seed %u, %u paths, same frozen-sampling instrument (0 trace "
-            "mismatches). Step h = 2^-6 = %.9g for both: metallic has NO small parameter -- F0, "
+            "mismatches over bounces 0..N-2; see check 39's note on the last bounce's own drawn "
+            "direction). Step h = 2^-6 = %.9g for both: metallic has NO small parameter -- F0, "
             "specScale and the diffuse (1-m) are all linear over the whole of [0,1] -- so L = 1 "
-            "and h* = (3*eps)^(1/3) = 1.8e-2, THIRTY-TWO TIMES the near-specular roughness case's "
-            "step.\n",
+            "and h* = (3*eps)^(1/3) = 1.8e-2. The largest true ratio anywhere in checks 39-40 is "
+            "SIXTEEN, against the glossy conductor's 2^-10; the near-specular case's own step, "
+            "corrected in check 39's header, is 2^-9 -- EIGHT times smaller than this one, not "
+            "thirty-two.\n",
             static_cast<std::size_t>(2), kGgxSeed, kCapacity, 0.015625);
         for (std::size_t i = 0; i < 2; ++i) {
             std::printf("    %-52s h=%.9g bounces=%u: FD %.9g vs analytic %.9g -- |err| %.4g <= "

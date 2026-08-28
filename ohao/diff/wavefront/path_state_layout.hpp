@@ -79,6 +79,20 @@ enum class PathStateField : std::uint32_t {
     Count
 };
 
+// A NAMED COST: `kFieldCount` went 20 -> 23 for these three fields, and
+// PathStateLayout allocates one ArenaLayout block PER FIELD UNCONDITIONALLY
+// -- the arena's size is a pure function of `capacity` and `kFieldCount`,
+// with no per-run flag to omit the tangent blocks. So every wavefront run
+// now carries 15% more path-state memory and bandwidth, including a forward
+// render that never sets `diffParam` and therefore never reads or writes
+// TangentR/G/B at all (wf_generate.comp still zero-seeds them, and the
+// traversal still updates them -- see the comment above; only the
+// PER-PARAMETER derivative *compute* is gated on `diffParam`, not this
+// *allocation*). Almost certainly the right trade against the alternative --
+// a second path-state layout, switched on `diffParam`, doubling the surface
+// this file and its GLSL mirror have to stay in sync on -- but it is a cost
+// a caller pays whether or not it uses Stage 1 Task 3, and it is not free.
+
 /// SoA offsets for `capacity` in-flight paths. Pure -- no Vulkan.
 ///
 /// shaders/includes/diff/path_state.glsl mirrors this layout. The two are a
