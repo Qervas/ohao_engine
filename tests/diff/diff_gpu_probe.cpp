@@ -191,6 +191,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -1524,7 +1525,21 @@ bool checkDrawsPerBounceTie() {
 /// and they still agree. Only a check on the SOURCE can see that the two
 /// instantiations stopped being two instantiations.
 ///
-/// WHAT IS ENFORCED, on the comment-stripped text of both `.comp` files:
+/// WHICH FILES ARE CHECKED -- DISCOVERED, NOT LISTED (review Finding 2). This
+/// used to name the two `.comp` paths in a hardcoded array, which left a
+/// THIRD file including the traversal completely unchecked: it could declare
+/// its own `layout(...)`, define a second top-level function, or carry the
+/// `#define` half of a `#define`/`#ifdef` pair straight into the shared
+/// source -- the precise sabotage rule 5 exists to catch, reintroduced
+/// through a file this check did not know existed. Worse, rule 5 ACTIVELY
+/// PUSHES a future compile-time variant toward writing exactly such a file,
+/// which turns a good rule into a trap. So the set is now globbed:
+/// `shaders/diff/*.comp` is enumerated, every file whose comment-stripped
+/// text includes `diff/traverse.glsl` is an instantiation, and ALL of them
+/// must satisfy every rule below. Fewer than two discovered is itself a
+/// failure -- deleting an instantiation must not be a way to pass.
+///
+/// WHAT IS ENFORCED, on the comment-stripped text of every discovered file:
 ///
 ///   1. exactly ONE `#include`, and it is `diff/traverse.glsl`;
 ///   2. no `layout(...)` declaration -- no bindings, no push constants, no
@@ -1541,30 +1556,139 @@ bool checkDrawsPerBounceTie() {
 ///      `#ifdef` in traverse.glsl is textually one source and behaviourally
 ///      two, and it is the cheapest way for a future task to reintroduce a
 ///      per-instantiation RNG draw.
+///   6. every discovered instantiation declares the SAME `#version`. Rule 5
+///      permits `#version` because a `.comp` must have one; permitting it
+///      without comparing them left two files free to compile the shared
+///      source under two language versions, which is a behavioural
+///      difference in one source (review Finding 4b). Both are 460 today.
 ///
 /// Rule 3 is deliberately about DEFINITIONS at column 0. A hook body may call
 /// whatever it likes; what it may not do is define a second entry point.
+///
+/// WHERE THIS IS STILL NOT AIRTIGHT -- read it, do not assume the five rules
+/// close every channel:
+///
+///   * A HOOK BODY IS UNCONSTRAINED. Everything traverse.glsl declares is in
+///     scope inside a hook, so one can call psSetOrigin/psSetDir/
+///     psSetThroughput/psSetBounce or write `queues`/`counters` and diverge
+///     the NEXT bounce, leaving this bounce's record identical. Rule 3 does
+///     not see it (it constrains DEFINITIONS, not calls) and the
+///     replay-equivalence check sees it only at bounce b+1, and only if a
+///     bounce b+1 is run. traverse.glsl's DiffVertex comment states the
+///     may/may-not as an explicit contract for that reason -- Task 2's hook
+///     legitimately writes a gradient arena, so the boundary has to be
+///     written down before it is crossed.
+///   * NOTHING CHECKS traverse.glsl ITSELF for conditionals beyond its
+///     include guard. Rule 5 keeps the `#define` half out of the `.comp`
+///     files; an `#ifdef` in the shared source with no `#define` anywhere is
+///     inert, but the pair is only half-prevented.
+///   * NOTHING CHECKS THE COMPILE COMMAND LINES. A per-file `-D` would
+///     reopen the same sabotage from the other end, with no `.comp` edit at
+///     all. What makes that safe TODAY is shaders/CMakeLists.txt emitting one
+///     identical `glslc` line for every shader with no per-file options --
+///     a property of the build script, not of this check.
 bool checkTraverseInstantiationTie() {
-    struct Instantiation {
-        const char* path;
-        const char* role;
-    };
-    const Instantiation kInstantiations[] = {
-        {"shaders/diff/wf_scatter.comp", "the FORWARD instantiation"},
-        {"shaders/diff/wf_scatter_replay.comp", "the REPLAY instantiation"},
-    };
+    // --- DISCOVERY: find the shader directory, then every `.comp` in it. The
+    // prefixes are loadShaderSourceStripped's, for the same reason -- the
+    // probe runs from build/Release and the source tree is some number of
+    // parents up. Not finding the directory is a FAILURE, not a skip: a check
+    // that globs and finds nothing knows nothing.
+    static const char* const kInstantiationPrefixes[] = {"", "../", "../../", "../../../"};
+    std::string dir;
+    for (const char* prefix : kInstantiationPrefixes) {
+        std::error_code ec;
+        const std::string candidate = std::string(prefix) + "shaders/diff";
+        if (std::filesystem::is_directory(candidate, ec)) {
+            dir = candidate;
+            break;
+        }
+    }
+    if (dir.empty()) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not locate the shaders/diff directory from any "
+                     "candidate path, so the set of files including the shared traversal could "
+                     "not be ENUMERATED. This check globs rather than naming files precisely so "
+                     "that a third instantiation cannot escape it; if it cannot glob, it knows "
+                     "nothing, and an unchecked structural guarantee is not a held one\n");
+        return false;
+    }
 
-    for (const Instantiation& inst : kInstantiations) {
-        std::string stripped, found;
-        if (!loadShaderSourceStripped(inst.path, stripped, found)) {
+    std::vector<std::string> candidates;
+    {
+        std::error_code ec;
+        std::filesystem::directory_iterator it(dir, ec);
+        if (ec) {
             std::fprintf(stderr,
-                         "[diff_gpu_probe] FAIL: could not open %s (%s) from any candidate path, "
-                         "so the one-source/two-instantiations property could not be checked. An "
-                         "unchecked structural guarantee is not a held one -- and this is the "
-                         "guarantee every gradient in Stage 1 rests on\n",
-                         inst.path, inst.role);
+                         "[diff_gpu_probe] FAIL: could not enumerate %s (%s), so the set of "
+                         "traversal instantiations is unknown\n",
+                         dir.c_str(), ec.message().c_str());
             return false;
         }
+        for (const std::filesystem::directory_entry& e : it) {
+            if (!e.is_regular_file()) continue;
+            if (e.path().extension() != ".comp") continue;
+            candidates.push_back("shaders/diff/" + e.path().filename().string());
+        }
+    }
+    // Sorted so the diagnostics and the NOTE below are deterministic on a
+    // filesystem that does not enumerate in a stable order.
+    std::sort(candidates.begin(), candidates.end());
+    if (candidates.empty()) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s contains no `.comp` file at all. The scatter stage "
+                     "is one of them, so either the directory found is not the one this probe "
+                     "compiles from or the shaders are gone\n",
+                     dir.c_str());
+        return false;
+    }
+
+    struct Instantiation {
+        std::string path;
+        const char* role;
+        std::string stripped;
+        std::string found;
+    };
+    std::vector<Instantiation> instantiations;
+    for (const std::string& rel : candidates) {
+        std::string stripped, found;
+        if (!loadShaderSourceStripped(rel.c_str(), stripped, found)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s was enumerated in %s but could not then be "
+                         "opened through the loader, so this check cannot tell whether it includes "
+                         "the shared traversal. A file it cannot read is a file it cannot clear\n",
+                         rel.c_str(), dir.c_str());
+            return false;
+        }
+        // Matched on the COMMENT-STRIPPED text, so a commented-out include
+        // does not enroll a file -- and, far more to the point, so a real one
+        // cannot hide behind a reader's assumption that only two files matter.
+        const std::regex traverseIncludeRe(
+            R"RX(#[ \t]*include[ \t]*"diff/traverse\.glsl")RX");
+        if (!std::regex_search(stripped, traverseIncludeRe)) continue;
+        const char* role = "an ADDITIONAL instantiation, discovered by glob";
+        if (rel == "shaders/diff/wf_scatter.comp") role = "the FORWARD instantiation";
+        if (rel == "shaders/diff/wf_scatter_replay.comp") role = "the REPLAY instantiation";
+        instantiations.push_back({rel, role, std::move(stripped), std::move(found)});
+    }
+
+    if (instantiations.size() < 2u) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: only %zu file(s) in %s include "
+                     "\"diff/traverse.glsl\". Stage 1 rests on the traversal having TWO "
+                     "instantiations -- a forward one and a replay one -- that walk the same path; "
+                     "with fewer than two there is nothing for the replay-equivalence check to "
+                     "compare, and deleting an instantiation must not be a way to pass this "
+                     "check\n",
+                     instantiations.size(), dir.c_str());
+        return false;
+    }
+
+    std::string sharedVersion;
+    std::string sharedVersionFile;
+
+    for (const Instantiation& inst : instantiations) {
+        const std::string& stripped = inst.stripped;
+        const std::string& found = inst.found;
 
         // (1) exactly one #include, and it is the traversal.
         // Custom raw-string delimiter: the pattern itself contains `)"`.
@@ -1651,15 +1775,54 @@ bool checkTraverseInstantiationTie() {
                          found.c_str(), inst.role);
             return false;
         }
+
+        // (6) the #version, compared rather than merely permitted. Rule 5
+        // lets `#version` through because a `.comp` must have one; letting it
+        // through WITHOUT comparing the numbers left the instantiations free
+        // to compile the one shared source under two language versions, which
+        // is a behavioural difference inside a single source -- exactly the
+        // shape rule 5 exists to exclude. The profile token is captured too:
+        // `460 core` and `460 compatibility` are not the same language.
+        const std::regex versionRe(
+            R"((?:^|\n)[ \t]*#[ \t]*version[ \t]+([0-9]+)[ \t]*([A-Za-z_]*))");
+        std::smatch vm;
+        if (!std::regex_search(stripped, vm, versionRe)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) declares no `#version`, so the language "
+                         "version it compiles the shared traversal under cannot be compared with "
+                         "the other instantiations'\n",
+                         found.c_str(), inst.role);
+            return false;
+        }
+        const std::string version = vm[1].str() + (vm[2].str().empty() ? "" : " " + vm[2].str());
+        if (sharedVersion.empty()) {
+            sharedVersion = version;
+            sharedVersionFile = found;
+        } else if (version != sharedVersion) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: %s (%s) declares `#version %s` while %s declares "
+                         "`#version %s`. Two instantiations of ONE traversal compiled under two "
+                         "GLSL versions are two behaviours in one source -- the same divergence a "
+                         "`#define` would buy, through the one directive rule 5 has to allow\n",
+                         found.c_str(), inst.role, version.c_str(), sharedVersionFile.c_str(),
+                         sharedVersion.c_str());
+            return false;
+        }
     }
 
-    std::printf("[diff_gpu_probe] NOTE: one traversal, two instantiations -- "
-                "shaders/diff/wf_scatter.comp and shaders/diff/wf_scatter_replay.comp each "
-                "include shaders/includes/diff/traverse.glsl and nothing else, declare no "
-                "layout() of their own, carry no preprocessor switch, define exactly "
-                "{diffVertexHook, main}, and spell main as `void main() { diffTraverse(); }`. "
-                "The only difference between the forward and the replay kernel is the hook "
-                "body\n");
+    std::string listed;
+    for (const Instantiation& inst : instantiations) {
+        if (!listed.empty()) listed += ", ";
+        listed += inst.path;
+    }
+    std::printf("[diff_gpu_probe] NOTE: one traversal, %zu instantiations -- every `.comp` in %s "
+                "that includes shaders/includes/diff/traverse.glsl was DISCOVERED by glob (a "
+                "third one cannot escape this check by not being listed in it), and all of them "
+                "{%s} include that file and nothing else, declare no layout() of their own, carry "
+                "no preprocessor switch, define exactly {diffVertexHook, main}, spell main as "
+                "`void main() { diffTraverse(); }`, and agree on `#version %s`. The only "
+                "difference between them is the hook body\n",
+                instantiations.size(), dir.c_str(), listed.c_str(), sharedVersion.c_str());
     return true;
 }
 
@@ -7769,6 +7932,11 @@ int main() {
         //     buffers of anything else that happens to match.
         // -------------------------------------------------------------------
         std::vector<uint32_t> pixelHits(kCapacity, 0u);
+        // Every record's reported pixel index, kept so that the pixel-index
+        // IDENTITY assertion can run AFTER the coverage histogram rather than
+        // before it. See the note at the histogram itself: asserting the
+        // identity first is what made the histogram unable to fail.
+        std::vector<uint32_t> recordedPixel(static_cast<std::size_t>(kCapacity) * kBounces, 0u);
         double minU1 = 2.0;
         double maxU1 = -1.0;
         double maxDirLenErr = 0.0;
@@ -7874,15 +8042,21 @@ int main() {
                 }
                 uint32_t gpuPixel = 0;
                 std::memcpy(&gpuPixel, &rec[ohao::diff::kTraceSlotPixelIndex], sizeof(gpuPixel));
-                if (gpuPixel != path) {
+                // RANGE first (the histogram below indexes by this value, so
+                // an out-of-range one would be a write past the end rather
+                // than a diagnosis), then RECORD. The `gpuPixel == path`
+                // identity is asserted after the loop, NOT here -- see the
+                // histogram for why the order is the whole point.
+                if (gpuPixel >= kCapacity) {
                     std::fprintf(stderr,
                                  "[diff_gpu_probe] FAIL: forward trace bounce %u path %u carries "
-                                 "pixelIndex %u. At one sample per pixel wf_generate.comp indexes "
-                                 "path state BY the pixel index, so these must be equal\n",
-                                 b, path, gpuPixel);
+                                 "pixelIndex %u, which is not a pixel of the %u-pixel film this "
+                                 "run allocates\n",
+                                 b, path, gpuPixel, kCapacity);
                     wf.destroy(ctx.allocator());
                     return 1;
                 }
+                recordedPixel[static_cast<std::size_t>(b) * kCapacity + path] = gpuPixel;
                 if (b == 0) ++pixelHits[gpuPixel];
 
                 const float hitT = rec[ohao::diff::kTraceSlotHitT];
@@ -7953,6 +8127,27 @@ int main() {
         // on the scheduler. runWavefrontReplayProbe refuses to run without
         // width*height == capacity; this is the other half -- the histogram
         // of what the paths ACTUALLY carried.
+        //
+        // WHY THIS RUNS BEFORE THE IDENTITY ASSERTION (review Finding 3).
+        // This histogram used to be built AFTER a per-record
+        // `gpuPixel == path` hard failure, which made it a tautology: given
+        // that assertion, every record's pixel index was already known to be
+        // its own path index, so incrementing a bin per path in [0, capacity)
+        // could not produce anything but all-ones. It was structurally
+        // incapable of failing, while this check's own OK line credited it
+        // with measuring the coverage. The property was still enforced -- by
+        // the identity assertion, which is a real comparison against a GPU
+        // record -- but by the other assertion, not this one.
+        //
+        // The fix is ORDER, not deletion: the identity assertion is still
+        // made, in full, immediately below, and nothing was weakened. What
+        // changed is that the whole trace is now read into `recordedPixel`
+        // and `pixelHits` FIRST, so this loop is a measurement of what 512
+        // GPU records actually said before anything has asserted what they
+        // must say. A stage that wrote `pixelIndex = pathIndex / 2` now fails
+        // HERE, with "pixel 0 is covered by 2 paths", rather than being
+        // intercepted one record earlier by the identity check. Both
+        // assertions remain; only the vacuous one became capable of firing.
         for (uint32_t pix = 0; pix < kCapacity; ++pix) {
             if (pixelHits[pix] != 1u) {
                 std::fprintf(stderr,
@@ -7967,6 +8162,24 @@ int main() {
                 return 1;
             }
         }
+        // THE PIXEL-INDEX IDENTITY, deferred out of the record loop above so
+        // that the coverage histogram measures something (see the note on
+        // it). Unchanged in what it asserts: every record, every bounce.
+        for (uint32_t b = 0; b < kBounces; ++b) {
+            for (uint32_t path = 0; path < kCapacity; ++path) {
+                const uint32_t gpuPixel =
+                    recordedPixel[static_cast<std::size_t>(b) * kCapacity + path];
+                if (gpuPixel != path) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: forward trace bounce %u path %u carries "
+                                 "pixelIndex %u. At one sample per pixel wf_generate.comp indexes "
+                                 "path state BY the pixel index, so these must be equal\n",
+                                 b, path, gpuPixel);
+                    wf.destroy(ctx.allocator());
+                    return 1;
+                }
+            }
+        }
         std::printf(
             "[diff_gpu_probe] OK: check 35 -- the FORWARD traversal's vertex trace is real and "
             "independently correct: for all %u paths x %u bounces, all %u RNG draws per bounce "
@@ -7976,7 +8189,8 @@ int main() {
             "%.4f) and every direction is unit length to %.1e. Non-vacuous: u1 spans [%.4f, "
             "%.4f] across the %u streams, and every one of the %u pixels is covered by exactly "
             "one path -- the one-sample-per-pixel resolution of the film hazard (spec 4.5), "
-            "measured rather than assumed\n",
+            "histogrammed over the recorded indices BEFORE the pixelIndex == pathIndex identity "
+            "is asserted, so the coverage is measured and not implied by that assertion\n",
             kCapacity, kBounces, kDrawsPerBounce, static_cast<double>(minHitT), maxDirLenErr,
             minU1, maxU1, kCapacity, kCapacity);
 
