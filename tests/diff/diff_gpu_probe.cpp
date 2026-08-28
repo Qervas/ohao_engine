@@ -96,6 +96,17 @@
 //       wf.build()'s default UV-uniform CDF makes pdf = 1/(2 pi^2 sin(theta))
 //       exactly, so no CDF builder is needed to know what record() should
 //       have produced.
+//   32. RADIANCE ACCUMULATION INTO THE FILM (Stage 0b-2b Task 5). After a
+//       FUSED multi-bounce run through WavefrontLoop::record, the
+//       caller-owned film buffer equals the sum of the per-bounce
+//       contributions, reconstructed on the host from primitives the
+//       binding-7 sink records separately (arrival throughput, both
+//       single-strategy estimators, both MIS weights, the pixel index) --
+//       so the accumulator is never compared against a copy of itself. The
+//       per-bounce values come from the probe's existing one-run-per-bounce
+//       structure. Asserted to a derived gamma_{k+4} float32 bound, with
+//       explicit non-vacuity gates on how far a dropped bounce would move
+//       the film relative to that bound.
 
 #include "gpu_probe_context.hpp"
 
@@ -5108,6 +5119,311 @@ int main() {
         }
 
         if (task4Failed) return 1;
+    }
+
+    // ------------------------------------------------------------------
+    // 32. RADIANCE ACCUMULATION INTO THE FILM (Stage 0b-2b Task 5).
+    // ------------------------------------------------------------------
+    //
+    // wf_scatter.comp now adds
+    //
+    //     T_k * (w_E,k * E_k + w_B,k * B_k)
+    //
+    // into film[pixelIndex] by atomicAdd on EVERY bounce -- T_k the path's
+    // throughput on arrival at bounce k's vertex, E_k/B_k the two
+    // single-strategy direct-lighting estimators and w_E/w_B their MIS
+    // weights. This check asserts that what ends up in that buffer after a
+    // FUSED B-bounce run really is the sum of the B per-bounce
+    // contributions, reconstructed on the host from primitives read back
+    // INDEPENDENTLY of the accumulator.
+    //
+    // WHAT MAKES THE ORACLE INDEPENDENT. The film is not compared against a
+    // copy of itself. wf_scatter.comp records T_k, E_k, w_E, B_k, w_B and
+    // the pixel index as SEPARATE floats in the binding-7 sink; the host
+    // multiplies and sums them in double. So this rejects an accumulator
+    // that drops a bounce, that overwrites instead of adding, that resets,
+    // that double-counts, that applies the post-decay throughput instead of
+    // the arrival one, that uses one strategy instead of the MIS
+    // combination, or that lands in the wrong pixel. It deliberately does
+    // NOT re-derive E_k and B_k from the BSDF and the environment -- checks
+    // 29-31 own the estimators, and Task 4's report records why those stay
+    // host-accumulated and independent of this buffer.
+    //
+    // WHERE THE PER-BOUNCE VALUES COME FROM. The binding-7 sink is written
+    // at a fixed per-path offset every bounce, so only the LAST bounce's
+    // record survives one fused run. runWavefrontFusedLoopProbe already runs
+    // the loop once per bounce count (1, 2, ... B) for exactly this reason,
+    // so the run of k+1 bounces exposes bounce k. Every run restarts from
+    // zeroed buffers with the same seed, wf_scatter.comp rebuilds its RNG
+    // from (pixelIndex, sampleIndex, iterationSeed, storedBounce) rather
+    // than carrying it, and every stage indexes path state by path index --
+    // so bounce k is bit-identical across runs. That is not assumed here: if
+    // it did not hold, the sums below would not match the films, and this
+    // check is what would say so.
+    //
+    // THE SCENE IS A RIG, NOT A SCENE. It runs the closed box (so every path
+    // is alive at every bounce and every bounce therefore contributes) with
+    // wf_scatter.comp's shadow rays pointed at a DIFFERENT, empty
+    // acceleration structure, so those contributions are nonzero. Inside the
+    // closed box every direct-lighting contribution is exactly zero -- that
+    // is check 28 -- and a film check there would be comparing 0 against 0
+    // and could not fail. Nothing about the estimator is concluded from this
+    // run; see runWavefrontFusedLoopProbe's `unoccludedShadowRays` doc.
+    //
+    // THE BOUND, DERIVED. Let C_k(p,c) be the exact (real-arithmetic)
+    // contribution of bounce k to pixel p, channel c, formed from the
+    // float32 values the sink recorded. Every factor is NONNEGATIVE
+    // (throughput, f*cos, radiance, visibility in {0,1}, balance-heuristic
+    // weights in [0,1]), so there is no cancellation anywhere and the
+    // classic Higham bound |fl(x) - x| <= gamma_n |x| applies with
+    // gamma_n = n*u/(1 - n*u), u = 2^-24 the float32 unit roundoff.
+    //
+    //   * The shader evaluates T*(w_E*E + w_B*B) per channel. As written
+    //     that is 4 roundings (two products, one sum, one product); a
+    //     compiler that distributes it to T*w_E*E + T*w_B*B uses 5. Take the
+    //     larger: n_eval = 5. (FMA contraction can only reduce the error, so
+    //     it stays inside this bound.)
+    //   * The GPU then accumulates k such values into a zeroed float32 film
+    //     by atomicAdd. 0 + C_0 is exact, so that is k-1 roundings:
+    //     n_sum = k - 1.
+    //   * The host recomputes the same expression in float64 from the same
+    //     float32 inputs; at u_64 = 2^-53 its own error is 2^29 times
+    //     smaller and is neglected.
+    //
+    // Total n = n_eval + n_sum = k + 4, giving relTol(k) = gamma_{k+4}.
+    // At k = 4 bounces that is 8u/(1-8u) = 4.77e-7 relative.
+    //
+    // Plus an absolute floor of 1e-30, which exists only for the underflow
+    // corner: a contribution below the float32 subnormal threshold (1.2e-38)
+    // can flush to zero on the GPU while the double reconstruction keeps it,
+    // and a purely relative bound would call that a 100% error. It is thirty
+    // orders of magnitude below the contributions this scene actually
+    // produces (~1e-2), so it cannot absorb a real discrepancy. The
+    // non-vacuity gate below states that margin as a number rather than
+    // leaving it to this comment.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;  // wf_generate's 1-D dispatch requires this exactly.
+        constexpr uint32_t kCapacity = kW * kH;  // 512
+        constexpr uint32_t kPixels = kW * kH;    // one sample per pixel here
+        constexpr uint32_t kBounces = 4;
+        constexpr float kAlbedo = 0.5f;
+        constexpr uint32_t kIterationSeed = 20260829u;
+        // Non-square, for the same reason check 27 is: it costs nothing and
+        // a W<->H swap anywhere in the film path would stop being symmetric.
+        constexpr uint32_t kEnvW = 16;
+        constexpr uint32_t kEnvH = 4;
+
+        constexpr double kUnitRoundoff = 1.0 / 16777216.0;  // 2^-24
+        constexpr double kAbsFloor = 1e-30;
+        // How many times larger than the tolerance the smallest single
+        // bounce's total contribution must be for this check to be able to
+        // reject a dropped bounce. 1e3 is not a physical constant -- it is
+        // the margin this check refuses to run below, so that "it passed"
+        // is never compatible with "there was nothing to detect".
+        constexpr double kMinDiscriminationMargin = 1.0e3;
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity, kEnvW, kEnvH)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 32 buffers build\n");
+            return 1;
+        }
+
+        std::vector<std::vector<float>> drawsPerBounce;
+        std::vector<uint32_t> liveCountPerRun;
+        std::vector<uint32_t> finalQueue;
+        std::vector<std::vector<float>> neePerRun;
+        std::vector<std::vector<float>> filmPerRun;
+        if (!ctx.runWavefrontFusedLoopProbe(wf, kW, kH, kBounces, kAlbedo, kIterationSeed,
+                                            drawsPerBounce, liveCountPerRun, finalQueue,
+                                            /*outEnvSamples=*/nullptr,
+                                            /*outNeeSamples=*/nullptr,
+                                            /*unoccludedShadowRays=*/true, &neePerRun,
+                                            &filmPerRun)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 32 fused loop dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        wf.destroy(ctx.allocator());
+
+        if (neePerRun.size() != kBounces || filmPerRun.size() != kBounces) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 32 got %zu NEE runs and %zu film runs, "
+                         "expected %u of each\n",
+                         neePerRun.size(), filmPerRun.size(), kBounces);
+            return 1;
+        }
+
+        // Running sum of the reconstructed contributions, in double.
+        std::vector<double> hostFilm(static_cast<std::size_t>(kPixels) * 3u, 0.0);
+        // Per-bounce total over all pixels and channels, for the
+        // discrimination margin below.
+        double bounceTotal[kBounces] = {};
+        double worstRelError = 0.0;
+        double worstAbsError = 0.0;
+        uint32_t worstBounce = 0;
+        uint32_t litLightSamples = 0;
+        uint32_t litBsdfSamples = 0;
+
+        for (uint32_t k = 0; k < kBounces; ++k) {
+            if (neePerRun[k].size() != static_cast<std::size_t>(kCapacity) *
+                                           ohao::diff::kNeeSampleFloats ||
+                filmPerRun[k].size() != static_cast<std::size_t>(kPixels) * 3u) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 32 bounce %u readback sizes are %zu "
+                             "NEE floats and %zu film floats, expected %u and %u\n",
+                             k, neePerRun[k].size(), filmPerRun[k].size(),
+                             kCapacity * ohao::diff::kNeeSampleFloats, kPixels * 3u);
+                return 1;
+            }
+            if (liveCountPerRun[k] != kCapacity) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 32 run of %u bounces left %u live "
+                             "paths, expected all %u. Every bounce must contribute for the "
+                             "accumulation across bounces to be what is under test\n",
+                             k + 1u, liveCountPerRun[k], kCapacity);
+                return 1;
+            }
+
+            // Fold bounce k's per-path contributions into hostFilm, and
+            // check that every pixel is written exactly once (the film is
+            // indexed by PIXEL; the mapping is read from the sink rather
+            // than assumed to be the identity).
+            std::vector<uint32_t> pixelHits(kPixels, 0);
+            for (uint32_t i = 0; i < kCapacity; ++i) {
+                const std::size_t b =
+                    static_cast<std::size_t>(i) * ohao::diff::kNeeSampleFloats;
+                if (neePerRun[k][b + ohao::diff::kNeeSlotSurfaceBranch] != 1.0f) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: check 32 path %u did not take "
+                                 "wf_scatter.comp's surface branch at bounce %u. Inside a closed "
+                                 "box every ray hits a face, so a miss means the scene is not "
+                                 "what this check assumes and the contributions it sums would "
+                                 "be silently short\n",
+                                 i, k);
+                    return 1;
+                }
+                const float pixF = neePerRun[k][b + ohao::diff::kNeeSlotPixelIndex];
+                if (!(pixF >= 0.0f) || pixF >= static_cast<float>(kPixels) ||
+                    pixF != std::floor(pixF)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: check 32 path %u reported pixel index "
+                                 "%.9g at bounce %u, which is not an integer in [0, %u)\n",
+                                 i, static_cast<double>(pixF), k, kPixels);
+                    return 1;
+                }
+                const uint32_t pix = static_cast<uint32_t>(pixF);
+                ++pixelHits[pix];
+
+                if (neePerRun[k][b + ohao::diff::kNeeSlotVisLight] != 0.0f) ++litLightSamples;
+                if (neePerRun[k][b + ohao::diff::kNeeSlotVisBsdf] != 0.0f) ++litBsdfSamples;
+
+                const double wEnv = neePerRun[k][b + ohao::diff::kNeeSlotWEnvAtLight];
+                const double wBsdf = neePerRun[k][b + ohao::diff::kNeeSlotWBsdfAtBsdf];
+                for (uint32_t c = 0; c < 3u; ++c) {
+                    const double thr =
+                        neePerRun[k][b + ohao::diff::kNeeSlotArrivalThroughput + c];
+                    const double nee = neePerRun[k][b + ohao::diff::kNeeSlotNeeUnweighted + c];
+                    const double bsdf = neePerRun[k][b + ohao::diff::kNeeSlotBsdfUnweighted + c];
+                    const double contribution = thr * (wEnv * nee + wBsdf * bsdf);
+                    hostFilm[static_cast<std::size_t>(pix) * 3u + c] += contribution;
+                    bounceTotal[k] += contribution;
+                }
+            }
+            for (uint32_t p = 0; p < kPixels; ++p) {
+                if (pixelHits[p] != 1u) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: check 32 pixel %u was written by %u "
+                                 "paths at bounce %u, expected exactly 1 (this probe runs one "
+                                 "sample per pixel)\n",
+                                 p, pixelHits[p], k);
+                    return 1;
+                }
+            }
+
+            // gamma_{k+4} -- see the derivation in this check's header. k is
+            // 0-based here, so the run summed k+1 bounces and n = (k+1) + 4.
+            const double n = static_cast<double>(k + 1u) + 4.0;
+            const double relTol = (n * kUnitRoundoff) / (1.0 - n * kUnitRoundoff);
+            for (std::size_t idx = 0; idx < hostFilm.size(); ++idx) {
+                const double gpu = filmPerRun[k][idx];
+                const double host = hostFilm[idx];
+                const double absErr = std::abs(gpu - host);
+                const double allowed = relTol * std::abs(host) + kAbsFloor;
+                if (!(absErr <= allowed) || !std::isfinite(gpu)) {
+                    std::fprintf(stderr,
+                                 "[diff_gpu_probe] FAIL: check 32 -- after a FUSED run of %u "
+                                 "bounces, film[pixel %zu][channel %zu] = %.9g but the sum of "
+                                 "the %u per-bounce contributions, reconstructed on the host "
+                                 "from independently recorded throughput/estimator/MIS-weight "
+                                 "primitives, is %.9g. Absolute error %.3g, allowed %.3g "
+                                 "(gamma_%g = %.3g relative, plus a %.3g absolute floor)\n",
+                                 k + 1u, idx / 3u, idx % 3u, gpu, k + 1u, host, absErr, allowed,
+                                 n, relTol, kAbsFloor);
+                    return 1;
+                }
+                worstAbsError = std::max(worstAbsError, absErr);
+                if (std::abs(host) > 0.0) {
+                    const double rel = absErr / std::abs(host);
+                    if (rel > worstRelError) {
+                        worstRelError = rel;
+                        worstBounce = k + 1u;
+                    }
+                }
+            }
+        }
+
+        // --- NON-VACUITY. All of the above is satisfied by a film of zeros
+        // and a sink of zeros. These are the gates that say there was
+        // something to detect.
+        double finalTotal = 0.0;
+        for (const double v : hostFilm) finalTotal += v;
+        double minBounceTotal = bounceTotal[0];
+        double maxBounceTotal = bounceTotal[0];
+        for (uint32_t k = 0; k < kBounces; ++k) {
+            minBounceTotal = std::min(minBounceTotal, bounceTotal[k]);
+            maxBounceTotal = std::max(maxBounceTotal, bounceTotal[k]);
+        }
+        if (litLightSamples == 0 || litBsdfSamples == 0) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 32 -- %u light-sample and %u BSDF-sample "
+                         "shadow rays were unoccluded across %u bounces. This run points the "
+                         "shadow rays at an EMPTY acceleration structure precisely so they are "
+                         "not occluded; with all of them blocked every contribution is zero and "
+                         "the accumulation check would compare 0 against 0\n",
+                         litLightSamples, litBsdfSamples, kBounces);
+            return 1;
+        }
+        const double finalRelTol =
+            ((kBounces + 4.0) * kUnitRoundoff) / (1.0 - (kBounces + 4.0) * kUnitRoundoff);
+        if (!(minBounceTotal > kMinDiscriminationMargin * finalRelTol * finalTotal) ||
+            !(finalTotal > 0.0)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 32 -- the smallest single bounce "
+                         "contributes %.9g of a film total of %.9g. Dropping that bounce "
+                         "entirely would have to move the film by more than %.0fx the "
+                         "tolerance (%.3g relative) for this check to be able to reject it, and "
+                         "it does not -- so a pass here would not be evidence\n",
+                         minBounceTotal, finalTotal, kMinDiscriminationMargin, finalRelTol);
+            return 1;
+        }
+
+        std::printf("[diff_gpu_probe] OK: check 32 -- after a FUSED %u-bounce run through "
+                    "WavefrontLoop::record, the caller-owned film buffer holds exactly the sum "
+                    "of the %u per-bounce contributions reconstructed on the host from "
+                    "independently recorded primitives (arrival throughput, both "
+                    "single-strategy estimators, both MIS weights, the pixel index): worst "
+                    "relative error %.3g over %u pixels x 3 channels x %u prefix lengths (worst "
+                    "at %u bounces; bound gamma_{k+4}, %.3g at k=%u), worst absolute error "
+                    "%.3g. Non-vacuous: the film total is %.6g, the smallest single bounce "
+                    "contributes %.6g of it (the largest is %.1fx that, and the smallest is "
+                    "%.3g times the tolerance -- floor %.0fx), and %u light-sample / %u "
+                    "BSDF-sample shadow rays reached the environment\n",
+                    kBounces, kBounces, worstRelError, kPixels, kBounces, worstBounce,
+                    finalRelTol, kBounces, worstAbsError, finalTotal, minBounceTotal,
+                    (minBounceTotal > 0.0 ? maxBounceTotal / minBounceTotal : 0.0),
+                    minBounceTotal / (finalRelTol * finalTotal), kMinDiscriminationMargin,
+                    litLightSamples, litBsdfSamples);
     }
 
     arena.destroy(ctx.allocator());

@@ -1,5 +1,11 @@
 #version 460
 #extension GL_EXT_ray_query : require
+// Buffer float atomics ONLY -- the film accumulation at the end of this file
+// is an atomicAdd on a storage buffer. No image atomics anywhere in this
+// subsystem: shaders/diff/atomic_probe.comp already proves
+// shaderBufferFloat32AtomicAdd accumulates correctly under contention on
+// this device, and diff_gpu_probe.cpp refuses to run without that feature.
+#extension GL_EXT_shader_atomic_float : require
 
 // Wavefront stage: scatter. Evaluates and importance-samples the surface
 // BSDF (shaders/includes/diff/bsdf.glsl -- Lambert + single-scattering GGX),
@@ -85,10 +91,30 @@
 // readback. A host accumulator is an oracle INDEPENDENT of the GPU
 // accumulation path, which is what this stage's check discipline needs, and
 // it keeps the checks valid whatever Task 5 does to film accumulation.
+// Task 5 did NOT move them onto the film buffer below, deliberately: checks
+// 29-31 would then depend on the very accumulation path they are the
+// independent oracle for.
+//
+// RADIANCE ACCUMULATION INTO A FILM (Stage 0b-2b Task 5) is what turns the
+// two per-sample estimators above into an image. Every invocation adds
+//
+//     throughput_on_arrival * (w_E * E_unweighted + w_B * B_unweighted)
+//
+// -- the MIS-combined direct-lighting estimate at this vertex, carried by
+// the path's throughput BEFORE this bounce's BSDF decay -- into
+// film[pixelIndex] at binding 9, by atomicAdd. The throughput used is the
+// arrival throughput, not the decayed one, because the estimator already
+// contains this vertex's f*cos/p; multiplying by the post-decay value would
+// count this bounce's BSDF twice.
+//
+// The film is CALLER-OWNED, written at a FIXED pixelIndex*3 offset on EVERY
+// bounce, and read-modify-written (atomicAdd). See the barrier note above
+// the write itself at the end of this file for exactly which barrier orders
+// it between bounces -- nothing in this repository tests that ordering.
 //
 // Binding scheme: state (0, declared by path_state.glsl), queues (1),
 // counters (2), debug draws (3), env marginal CDF (4), env conditional CDF
-// (5), env samples (6), NEE samples (7), TLAS (8).
+// (5), env samples (6), NEE samples (7), TLAS (8), film (9).
 
 #include "diff/path_state.glsl"
 #include "diff/rng.glsl"
@@ -173,6 +199,26 @@ layout(std430, binding = 7) buffer NeeSamples {
 // among the buffers WavefrontLoop::record must order against itself.
 layout(binding = 8) uniform accelerationStructureEXT topLevelAS;
 
+// --- THE FILM (Stage 0b-2b Task 5). NOT probe-only ---------------------
+//
+// 3 floats per PIXEL INDEX (R, G, B), accumulated across bounces AND across
+// samples by atomicAdd. Indexed by psGetPixelIndex, not by path index: the
+// film is the image, and several paths (different sample indices of the same
+// pixel) legitimately land on the same three floats. That is why the write
+// is atomic rather than a plain store -- with one sample per pixel, as every
+// probe here runs, there is no intra-dispatch contention at all, so the
+// atomic is here for the multi-sample case and for the read-modify-write
+// against the PREVIOUS bounce's value, which exists in every configuration.
+//
+// This buffer is CALLER-OWNED -- it is not part of WavefrontBuffers -- and
+// it is written by every scatter dispatch. It therefore MUST be passed to
+// WavefrontLoop::record's `extraBarrierBuffers`, which is what folds it into
+// the loop's post-dispatch COMPUTE -> COMPUTE barrier. See the note at the
+// atomicAdd itself.
+layout(std430, binding = 9) buffer Film {
+    float v[];
+} film;
+
 layout(push_constant) uniform Push {
     uint capacity;
     uint srcQueueBase;
@@ -207,6 +253,14 @@ layout(push_constant) uniform Push {
     uint envWidth;
     uint envHeight;
     float envIntegral;
+    // --- Film (Stage 0b-2b Task 5), matching ScatterPush's tail. The
+    // number of PIXELS the binding-9 film buffer holds; it is 3*this many
+    // floats. 0 means "no film configured" and disables the accumulation
+    // entirely, which is also what makes the bounds guard below meaningful
+    // rather than decorative: unlike capacity, this is a property of a
+    // CALLER-OWNED allocation the shader cannot otherwise know the size of,
+    // so a mismatched caller would write past the end of it.
+    uint filmPixelCount;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
@@ -243,7 +297,7 @@ const uint kDrawsPerBounce = 5u;
 // literal below is parsed by the regular expression
 // `const uint kNeeSampleFloats = ([0-9]+)u;` -- keep the spelling on one
 // line and in this form.
-const uint kNeeSampleFloats = 21u;
+const uint kNeeSampleFloats = 25u;
 
 // How far a shadow ray may travel before the environment is considered
 // reached. The environment is at infinity, so this only has to exceed the
@@ -359,6 +413,12 @@ void main() {
     float surfaceBranch = 0.0;
     vec3 bsdfSampleDir = vec3(0.0);
     float bsdfSamplePdf = 0.0;
+    // The path's throughput ON ARRIVAL at this vertex -- i.e. BEFORE this
+    // bounce's f*cos/pdf decay. Declared out here, and recorded to the sink
+    // unconditionally like everything else, so the host can reconstruct the
+    // exact film contribution this dispatch computed from independently
+    // recorded primitives. Zero on the miss path, where there is no vertex.
+    vec3 arrivalThroughput = vec3(0.0);
 
     // MISS GUARD. The stored Normal is UNDEFINED on a miss -- wf_intersect.comp
     // deliberately leaves PS_NORMAL_X/Y/Z untouched when HitT is -1, so they
@@ -518,6 +578,7 @@ void main() {
 
         // 1. Throughput decay by the BSDF estimator weight f*cos/pdf.
         const vec3 throughput = psGetThroughput(pathIndex, pc.capacity);
+        arrivalThroughput = throughput;
         psSetThroughput(pathIndex, pc.capacity, throughput * weight);
 
         // 2. Advance to the hit point, offset along the geometric normal so
@@ -566,6 +627,72 @@ void main() {
     // this against the environment image at the texel bsdfSampleDir lands
     // in -- an exact per-sample identity, not a statistical one.
     neeSamples.v[nb + 20u] = bsdfRadiance;
+    // The path's throughput on ARRIVAL at this vertex and the pixel this
+    // path belongs to (Stage 0b-2b Task 5). Together with slots 0-9 these
+    // are every factor of the film contribution below, recorded as
+    // separate primitives rather than as the product, so that
+    // diff_gpu_probe.cpp's film check reconstructs the contribution from
+    // parts instead of comparing the accumulator against a copy of itself.
+    // pixelIndex is a uint stored as a float: the film is indexed by it,
+    // and capacities here are far below 2^24, so the round trip is exact.
+    neeSamples.v[nb + 21u] = arrivalThroughput.x;
+    neeSamples.v[nb + 22u] = arrivalThroughput.y;
+    neeSamples.v[nb + 23u] = arrivalThroughput.z;
+    neeSamples.v[nb + 24u] = float(pixelIndex);
+
+    // --- FILM ACCUMULATION (Stage 0b-2b Task 5) --------------------------
+    //
+    // The MIS-combined direct-lighting estimate at this vertex, carried by
+    // the arrival throughput. Zero on the miss path by construction (both
+    // terms and arrivalThroughput are all zero there), so this is evaluated
+    // and added UNCONDITIONALLY: "every invocation writes the film on every
+    // bounce" is a simpler invariant to reason about than a branch, and it
+    // is the invariant the barrier note below is stated against.
+    const vec3 filmContribution =
+        arrivalThroughput * (neeTerm.wOwn * neeTerm.unweighted +
+                             bsdfTerm.wOwn * bsdfTerm.unweighted);
+
+    // WHICH BARRIER ORDERS THIS BUFFER BETWEEN BOUNCES, AND WHY. NOTHING
+    // TESTS THIS -- read it, do not trust a green run.
+    //
+    // In a fused multi-bounce run (ohao::diff::WavefrontLoop::record) every
+    // bounce dispatches this shader again into the SAME command buffer, and
+    // every one of those dispatches read-modify-writes the same three floats
+    // at film[pixelIndex*3 .. +2]. That is a read-after-write AND a
+    // write-after-write across dispatch boundaries, and it is ordered by
+    // exactly one thing: barrier (7) in WavefrontLoop::recordCompactingStage
+    // -- VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT -> COMPUTE_SHADER,
+    // VK_ACCESS_SHADER_WRITE_BIT -> SHADER_READ | SHADER_WRITE -- recorded
+    // after every compacting dispatch and given this buffer through
+    // record()'s `extraBarrierBuffers` span. A VkBufferMemoryBarrier's
+    // memory scope covers only the buffers it NAMES, so a caller that
+    // allocates a film and forgets to pass it there gets the execution
+    // dependency and none of the availability/visibility: bounce k's
+    // accumulation is not guaranteed to be seen by bounce k+1's atomicAdd.
+    // Nothing fails. The driver serialises back-to-back compute on one
+    // queue, synchronization validation has been MEASURED silent on this
+    // subsystem (wavefront_loop.hpp's class comment: every compute-side
+    // barrier disabled, zero SYNC- diagnostics), and the image still looks
+    // right. Stage 0b-2a shipped precisely this bug on `debugDraws`.
+    //
+    // The destination access mask MUST include SHADER_WRITE, not just
+    // SHADER_READ. An atomicAdd is a read-modify-write; a read-only
+    // destination scope does not order it. That is rule 1 of the three
+    // ordering rules in wavefront_loop.hpp's class comment, and this write
+    // is its third instance in the loop after the two counter atomicAdds.
+    //
+    // The film also has to be ZEROED before the loop and made visible to
+    // this dispatch. record() does not do that -- it zeroes nothing it does
+    // not own -- so the caller owes a vkCmdFillBuffer plus a
+    // TRANSFER_WRITE -> SHADER_READ|SHADER_WRITE barrier ahead of the loop,
+    // exactly as WavefrontBuffers::zero does for the buffers it owns. Skip
+    // it and the film accumulates onto whatever the allocator handed back.
+    if (pc.filmPixelCount > 0u && pixelIndex < pc.filmPixelCount) {
+        const uint fb = pixelIndex * 3u;
+        atomicAdd(film.v[fb + 0u], filmContribution.x);
+        atomicAdd(film.v[fb + 1u], filmContribution.y);
+        atomicAdd(film.v[fb + 2u], filmContribution.z);
+    }
 
     // 3. Bounce count, incremented -- this is what the next dispatch's
     // fast-forward reads to know how many draws to skip. Incremented on the

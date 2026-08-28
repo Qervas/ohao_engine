@@ -250,17 +250,26 @@ void recordIndirectSizedDispatch(VkCommandBuffer cmd, VkBuffer counter, std::uin
 /// existing caller compiles and emits byte-identical commands.
 ///
 /// Stage 0b-2b (the integrator port: BSDF, NEE, MIS, environment sampling)
-/// will add more scatter-side outputs living outside `WavefrontBuffers` --
-/// radiance/film accumulation, light-sample scratch. Those go here too.
+/// added more scatter-side outputs living outside `WavefrontBuffers`.
 /// `VK_NULL_HANDLE` entries are skipped, so a caller may pass a fixed-size
 /// array with optional slots. Task 3's environment-sample sink (binding 6 of
 /// `wf_scatter.comp`, written at a fixed `pathIndex*4` offset every bounce)
 /// is the first of them and belongs here for exactly `debugDraws`' reason;
-/// Task 4's next-event sink (binding 7, a fixed `pathIndex*20` offset every
+/// Task 4's next-event sink (binding 7, a fixed `pathIndex*25` offset every
 /// bounce) is the second, for the identical reason. Task 4 also gave
 /// `wf_scatter.comp` an acceleration structure at binding 8 for its shadow
 /// rays -- that one does NOT belong here, on the read-only rule above: no
 /// dispatch writes an acceleration structure.
+///
+/// **Task 5's FILM (binding 9) is the third, and it is the one where the
+/// consequence of forgetting is worst.** The other two are probe-only sinks
+/// whose stale values a check might notice; the film is the actual image,
+/// it is written at a fixed `pixelIndex*3` offset on EVERY bounce, and the
+/// write is an `atomicAdd` -- a read-modify-write, so a missing barrier
+/// costs the *read* of bounce k-1's accumulated value as well as the
+/// write-after-write. A caller that allocates a film and does not pass it
+/// here has an integrator that silently drops radiance, and nothing in this
+/// repository will say so. See `wf_scatter.comp`'s note at the atomicAdd.
 ///
 /// READ-ONLY buffers do NOT belong here. Task 3 also added the two
 /// environment CDF buffers at bindings 4 and 5, and they are deliberately
@@ -314,6 +323,19 @@ public:
         /// producing the exact constant-albedo throughput decay checks 14
         /// and 17 assert bit-exactly.
         float specularWeight{0.0f};
+        /// Number of PIXELS in the caller-owned film buffer bound at
+        /// `wf_scatter.comp`'s binding 9 (the buffer holds 3 floats per
+        /// pixel). 0 disables film accumulation entirely.
+        ///
+        /// This is in Config and not derived from `buffers` -- unlike
+        /// `capacity` and the environment tail -- because the film is
+        /// CALLER-OWNED. `WavefrontBuffers` does not allocate it and cannot
+        /// state its size; the only object that can is the caller that
+        /// allocated it and bound it into the scatter stage's descriptor
+        /// set. Getting it wrong is a write past the end of somebody else's
+        /// allocation, which is why the shader bounds-guards on it rather
+        /// than trusting it.
+        std::uint32_t filmPixelCount{0};
         /// Per-iteration RNG seed. Combined with (pixelIndex, sampleIndex)
         /// and the path's stored bounce count, this is the ONLY thing a
         /// scatter dispatch reconstructs its random stream from -- nothing
@@ -371,6 +393,10 @@ public:
         std::uint32_t envWidth;
         std::uint32_t envHeight;
         float envIntegral;
+        // --- Film (Stage 0b-2b Task 5). Comes from Config, NOT from
+        // `buffers`, for the reason Config::filmPixelCount gives: the film
+        // is caller-owned and WavefrontBuffers cannot state its size.
+        std::uint32_t filmPixelCount;
     };
 
     WavefrontLoop() = default;

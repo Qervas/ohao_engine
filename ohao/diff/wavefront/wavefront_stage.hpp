@@ -93,6 +93,10 @@ public:
     void destroy(VkDevice device);
 
     [[nodiscard]] bool bindBuffers(VkDevice device, std::span<const VkBuffer> buffers);
+    /// One storage buffer at an arbitrary binding -- for the bindings that
+    /// sit after an acceleration structure and so cannot be part of
+    /// bindBuffers' 0-based prefix. See ComputePipeline::bindStorageBuffer.
+    [[nodiscard]] bool bindStorageBuffer(VkDevice device, uint32_t binding, VkBuffer buffer);
     [[nodiscard]] bool bindAccelerationStructure(VkDevice device, uint32_t binding,
                                                  VkAccelerationStructureKHR accel);
 

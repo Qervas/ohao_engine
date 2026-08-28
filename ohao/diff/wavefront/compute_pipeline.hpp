@@ -95,6 +95,19 @@ public:
     /// VK_DESCRIPTOR_TYPE_STORAGE_BUFFER.
     [[nodiscard]] bool bindBuffers(VkDevice device, std::span<const VkBuffer> buffers);
 
+    /// Writes ONE VK_DESCRIPTOR_TYPE_STORAGE_BUFFER descriptor at an
+    /// arbitrary `binding`, for the layouts bindBuffers' prefix rule cannot
+    /// express: a storage buffer that sits AFTER an acceleration structure.
+    /// `shaders/diff/wf_scatter.comp` is the first such layout -- storage
+    /// buffers at 0-7, the TLAS at 8, the film at 9 -- and renumbering its
+    /// bindings so the storage buffers stayed contiguous would have moved a
+    /// binding index that two probe call sites and several file comments
+    /// already name, to buy nothing but bindBuffers' convenience.
+    ///
+    /// Returns false if `binding` is out of range or was not declared
+    /// VK_DESCRIPTOR_TYPE_STORAGE_BUFFER in build().
+    [[nodiscard]] bool bindStorageBuffer(VkDevice device, uint32_t binding, VkBuffer buffer);
+
     /// Writes a VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR descriptor at
     /// `binding`. Returns false if `binding` is out of range or was not
     /// declared that type in build().

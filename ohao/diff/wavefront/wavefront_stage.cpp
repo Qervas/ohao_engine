@@ -30,6 +30,12 @@ bool WavefrontStage::bindBuffers(VkDevice device, std::span<const VkBuffer> buff
     return ok;
 }
 
+bool WavefrontStage::bindStorageBuffer(VkDevice device, uint32_t binding, VkBuffer buffer) {
+    const bool ok = m_pipeline.bindStorageBuffer(device, binding, buffer);
+    if (ok) m_bound = true;
+    return ok;
+}
+
 bool WavefrontStage::bindAccelerationStructure(VkDevice device, uint32_t binding,
                                                VkAccelerationStructureKHR accel) {
     const bool ok = m_pipeline.bindAccelerationStructure(device, binding, accel);

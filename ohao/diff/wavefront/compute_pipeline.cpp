@@ -256,6 +256,32 @@ bool ComputePipeline::bindBuffers(VkDevice device, std::span<const VkBuffer> buf
     return true;
 }
 
+bool ComputePipeline::bindStorageBuffer(VkDevice device, uint32_t binding, VkBuffer buffer) {
+    if (binding >= m_bindingTypes.size() ||
+        m_bindingTypes[binding] != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+        std::fprintf(stderr,
+                     "[ComputePipeline] bindStorageBuffer: binding %u was not declared "
+                     "VK_DESCRIPTOR_TYPE_STORAGE_BUFFER\n",
+                     binding);
+        return false;
+    }
+
+    VkDescriptorBufferInfo info{};
+    info.buffer = buffer;
+    info.offset = 0;
+    info.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_descriptorSet;
+    write.dstBinding = binding;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &info;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    return true;
+}
+
 bool ComputePipeline::bindAccelerationStructure(VkDevice device, uint32_t binding,
                                                 VkAccelerationStructureKHR accel) {
     if (binding >= m_bindingTypes.size() ||

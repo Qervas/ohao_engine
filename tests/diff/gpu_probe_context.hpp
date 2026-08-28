@@ -78,7 +78,7 @@ struct WavefrontScatterMaterial {
 /// diff_gpu_probe.cpp's `checkNeeStrideTie()` reads the declaration out of
 /// shaders/diff/wf_scatter.comp and refuses to run the probe at all if the
 /// two numbers disagree.
-inline constexpr std::uint32_t kNeeSampleFloats = 21;
+inline constexpr std::uint32_t kNeeSampleFloats = 25;
 
 /// Named offsets into one path's kNeeSampleFloats-float record. The order is
 /// wf_scatter.comp's single write block, in the order it writes them.
@@ -143,6 +143,19 @@ enum NeeSampleSlot : std::uint32_t {
     /// one; this slot can, and check 31 asserts it against the environment
     /// image texel by texel.
     kNeeSlotBsdfRadiance = 20,
+    /// The path's throughput ON ARRIVAL at this vertex -- before this
+    /// bounce's f*cos/pdf decay. Three floats. Recorded because it is the
+    /// one factor of wf_scatter.comp's film contribution that is otherwise
+    /// unobservable per bounce: path state holds only the CURRENT (already
+    /// decayed) throughput, and in a fused multi-bounce run the earlier
+    /// bounces' values are gone by the time the host reads anything.
+    kNeeSlotArrivalThroughput = 21,
+    /// The pixel this path's radiance is accumulated into -- psGetPixelIndex,
+    /// stored as a float (exact for any capacity below 2^24). The film is
+    /// indexed by PIXEL, not by path, so a host oracle that reconstructs the
+    /// film has to be told the mapping rather than assume pathIndex ==
+    /// pixelIndex, which holds only at one sample per pixel.
+    kNeeSlotPixelIndex = 24,
 };
 
 /// Occluder geometry for the shadow rays wf_scatter.comp's next-event
@@ -411,6 +424,17 @@ public:
     /// out by NeeSampleSlot. Like outEnvSamples it is a pointer with a
     /// nullptr default -- the buffer is allocated, bound and written either
     /// way, because the descriptor set is not optional.
+    ///
+    /// The FILM (binding 9, Stage 0b-2b Task 5) is allocated, zeroed and
+    /// bound by this function and is NOT read back. That is deliberate: this
+    /// probe submits one command buffer per call with a full device idle
+    /// wait around it, so the accumulation across bounces it would observe
+    /// is ordered by that wait rather than by any barrier, which is the
+    /// exact configuration wavefront_loop.hpp's class comment says makes
+    /// ordering unobservable. The film check lives on
+    /// runWavefrontFusedLoopProbe, where the ordering IS a barrier's job.
+    /// The buffer still has to exist here, because a descriptor set must
+    /// cover every binding the shader statically uses.
     [[nodiscard]] bool runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32_t srcQueueBase,
                                                 uint32_t srcCountSlot, uint32_t dstQueueBase,
                                                 uint32_t dstCountSlot, float albedo,
@@ -546,14 +570,58 @@ public:
     /// that record must be exactly zero -- which is what makes it the check
     /// that the shadow ray is traced at all, as opposed to a visibility term
     /// silently stuck at 1.
-    [[nodiscard]] bool runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint32_t width,
-                                                  uint32_t height, uint32_t maxBounces,
-                                                  float albedo, uint32_t iterationSeed,
-                                                  std::vector<std::vector<float>>& outDrawsPerBounce,
-                                                  std::vector<uint32_t>& outLiveCountPerRun,
-                                                  std::vector<uint32_t>& outFinalQueue,
-                                                  std::vector<float>* outEnvSamples = nullptr,
-                                                  std::vector<float>* outNeeSamples = nullptr);
+    ///
+    /// `unoccludedShadowRays` DECOUPLES the acceleration structure bound to
+    /// wf_scatter.comp's shadow rays (binding 8) from the one
+    /// wf_intersect.comp traces the path rays against (its binding 5). It
+    /// defaults to false, which binds ONE TLAS -- the closed box -- to both,
+    /// exactly as before; check 28 depends on that and is unchanged by this
+    /// parameter existing.
+    ///
+    /// Passing true substitutes runWavefrontScatterProbe's "no occluders"
+    /// rig -- a single triangle a million units out, three orders of
+    /// magnitude past the shader's kShadowTMax -- for the SHADOW scene only,
+    /// leaving the box in place for the path rays. That is deliberately not
+    /// a physical scene: it is a rig. It exists because the film check needs
+    /// two things at once that the closed box cannot give together --
+    /// (a) every path alive at every bounce, which needs a closed body, and
+    /// (b) a NONZERO direct-lighting contribution at every bounce, which
+    /// needs shadow rays that reach the environment. Inside a closed box
+    /// every contribution is exactly zero (that IS check 28), so a film
+    /// check run there would compare 0 against 0 and could not fail. The
+    /// path rays and the shadow rays therefore see two scenes here, on
+    /// purpose, and nothing about the ESTIMATOR is asserted from this run --
+    /// checks 29-31 own that, in a scene where both agree.
+    ///
+    /// `outNeeSamplesPerRun`, when non-null, receives one NEE record per
+    /// RUN rather than only the last: `outNeeSamplesPerRun[b]` is binding 7
+    /// after the run of b+1 bounces, i.e. bounce b's values, by the same
+    /// argument `outDrawsPerBounce` rests on. Every run starts from zeroed
+    /// buffers with the same seed and the RNG is reconstructed from
+    /// (pixelIndex, sampleIndex, iterationSeed, bounce) rather than carried,
+    /// and every stage indexes path state by path index, so bounce b is
+    /// bit-identical between the run of b+1 bounces and the run of any more.
+    /// (Queue ORDER varies between runs -- compaction offsets come from an
+    /// atomicAdd race -- but nothing here reads a path's values by queue
+    /// position.)
+    ///
+    /// `outFilmPerRun`, when non-null, receives the caller-owned FILM buffer
+    /// (binding 9, Stage 0b-2b Task 5) after each run: `width*height*3`
+    /// floats, R/G/B per pixel index. The film is zeroed at the top of every
+    /// run's command buffer (vkCmdFillBuffer + a TRANSFER_WRITE ->
+    /// SHADER_READ|SHADER_WRITE barrier), so `outFilmPerRun[b]` is the total
+    /// accumulated over exactly b+1 bounces and nothing earlier. It is
+    /// passed to WavefrontLoop::record's `extraBarrierBuffers` alongside the
+    /// three probe sinks -- see wavefront_loop.hpp for why that is not
+    /// optional -- and named in this function's host-read barrier.
+    [[nodiscard]] bool runWavefrontFusedLoopProbe(
+        WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t maxBounces,
+        float albedo, uint32_t iterationSeed, std::vector<std::vector<float>>& outDrawsPerBounce,
+        std::vector<uint32_t>& outLiveCountPerRun, std::vector<uint32_t>& outFinalQueue,
+        std::vector<float>* outEnvSamples = nullptr, std::vector<float>* outNeeSamples = nullptr,
+        bool unoccludedShadowRays = false,
+        std::vector<std::vector<float>>* outNeeSamplesPerRun = nullptr,
+        std::vector<std::vector<float>>* outFilmPerRun = nullptr);
 
 private:
     /// Shared boilerplate for the single-storage-buffer compute probes:

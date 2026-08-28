@@ -375,7 +375,15 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       m_config.specularWeight,
                                       buffers.envWidth(),
                                       buffers.envHeight(),
-                                      buffers.envIntegral()};
+                                      buffers.envIntegral(),
+                                      // Film: from Config, not from
+                                      // `buffers` -- the film is
+                                      // caller-owned and WavefrontBuffers
+                                      // cannot state its size. 0 disables
+                                      // the accumulation, which is what
+                                      // every caller that passes no film
+                                      // buffer gets.
+                                      m_config.filmPixelCount};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);
