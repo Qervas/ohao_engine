@@ -1,0 +1,161 @@
+# Stage 1 — Interior Gradients
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make the wavefront integrator differentiable — hand-derived Lambert and GGX adjoints, PRB replay, texture scatter — gated on common-random-number finite differences.
+
+**Architecture:** Path Replay Backpropagation. The backward pass is a second forward traversal, not a tape: `O(1)` memory for roughly `2x` compute. At each vertex the forward computes `L = Le + f(theta) * L_i / pdf`; given an adjoint `dL` arriving there, backward does exactly two things — scatter `dL * (df/dtheta) * L_i / pdf` into the gradient arena, and propagate `dL_next = dL * f / pdf`. **The only genuinely new mathematics is `df/dtheta` per BSDF.**
+
+**Tech Stack:** Vulkan 1.3, `VK_KHR_ray_query`, `shaderBufferFloat32AtomicAdd`, GLSL compute, C++20.
+
+**Spec:** `docs/superpowers/specs/2026-08-27-differentiable-renderer-design.md` (§6.1–6.3 are the contract this plan implements)
+
+---
+
+## Global Constraints
+
+- **Hand-written GLSL adjoints.** No autodiff framework. The spec chose this so the mechanism stays inspectable; Slang remains an escape hatch only if hand-derivation becomes the bottleneck, and only behind a harness that already passes.
+- **Detached sampling.** Sampled directions are not differentiated. Neither is the ray query (visibility is discrete), Russian roulette, or lobe selection. Differentiable: BSDF evaluation, texture reads, emission, throughput products, MIS weights.
+- **No new Vulkan features or extensions** beyond `VK_KHR_ray_query` and `shaderBufferFloat32AtomicAdd`. **Never image atomics** — buffer float atomics only.
+- **A stage records WORK, never ORDERING.** `WavefrontStage` contains no barriers; `WavefrontLoop` owns them all. Any caller-owned buffer a stage WRITES goes through `record()`'s `extraBarrierBuffers`; read-only buffers must not.
+- **Editing a shader can break the documentation build.** `site/content/**/*.md` cites shader source by exact substring and `cite.py` raises when it is gone. Grep `site/content/` for citations of lines you touch and run `python site/tools/generate_tree.py` (must exit 0). This slipped through twice in Stage 0b-2b and no C++ test detects it.
+- **Check counts are descriptions, never targets.** Count before, count after, report both. The only failure is a check that disappears, goes silent, or gets weaker. The probe currently prints 39 `OK:` lines.
+
+## Inherited hazards — read all of these before Task 1
+
+**1. Synchronization validation is MEASURED BLIND here.** With every compute-side memory barrier in the fused loop disabled, all checks pass across three runs with zero `SYNC-` diagnostics. The only barrier whose absence anything detects is `COMPUTE_SHADER → DRAW_INDIRECT`. **A passing test suite is not evidence about barriers.** Reading them is the only guard.
+
+**2. The seed invariant covers the PATH, not the FILM.** Verified at the close of Stage 0b-2b: `kDrawsPerBounce` is branch-independent (the lobe draw is unconditional and both environment draws are taken *before* the miss guard, so a hit and a miss consume identical stream positions), the fast-forward reads `bounce` from path state alone, and rejected-sample substitution is deterministic. **But at >1 spp several paths of one pixel `atomicAdd` the same three film floats in one dispatch, and float addition is not associative** — so the film is not a pure function of `(pixel, sampleIndex, iterationSeed)`. Nothing observes this today because every probe runs 1 spp and check 32 asserts `pixelHits == 1` as a hard failure.
+
+**This is the hazard most likely to cost this stage a day.** A PRB forward/backward mismatch at multi-spp would present as a gradient that is *almost* right and irreproducible between runs — which reads as a backward-pass bug while being an accumulation-order artefact. **Decide before writing the backward pass:** replay at 1 spp per dispatch, accumulate per-path and reduce deterministically, or document a tolerance covering atomic reordering.
+
+**3. The recurring defect class: a check whose expected value derives from the same constant, shader or helper as the measured value cannot fail, while looking rigorous.** Stage 0b-2b produced five instances, every one found by review rather than by a test:
+- a furnace bound that **passed its own perturbation** (a term it relied on never fired in that configuration);
+- a report that **claimed a verdict for a check that never ran**, because check ordering made the inference natural;
+- a derivation **never reconciled against the code it described** — whose fix round then found a **real production shader bug** hiding 0.056 sigma under a noise floor;
+- a check header claiming a rejection it **could not perform**, because a sink slot and the value under test read the same local variable;
+- a statistical gate **never observed to be the decisive rejector** until a localised perturbation was constructed for it.
+
+**Every gate in this stage needs an oracle derived independently of the code path it measures, and every one needs a demonstrated failure.** Treat a bound that survives your own perturbation as evidence the bound is wrong. If your oracle shares a variable, a constant, or a helper with what it measures, it is not an oracle.
+
+**4. Constants transcribed across the GLSL/C++ boundary must be tied, not commented.** Stage 0b-2b built `checkNeeStrideTie`, `checkScatterPushSizeTie`, `checkWfScatterSinkLayoutTie` and `checkParityRefConstantsTie` — runtime source-parsers, comment-stripped — because "naming each other in a comment was the whole of the tie and was not enough." Any constant this stage transcribes gets the same treatment, or an explicit statement of why it is covered by measurement instead.
+
+**5. Assertions quantified over a set that can be empty pass vacuously.** Prefer quantifying over all `kCapacity` entries and asserting the live count separately.
+
+## The one thing that makes gradients silently wrong
+
+**The backward kernel must walk the identical path, consuming the identical RNG values in the identical order.** Divergence by a single RNG call means the replayed path is a different path and every gradient is wrong — *no crash, no NaN, no diagnostic*.
+
+Under a wavefront design this sharpens rather than softens: path state crosses a dispatch boundary between bounces, so nothing may rely on registers surviving. Every stage already reconstructs its RNG from `(pixel, sampleIndex, bounce)` rather than carrying it, which is exactly what makes replay possible.
+
+`drawCount()` is the tripwire, and the wavefront makes it **assertable per stage rather than only per path** — forward and backward must consume the same number of draws at every bounce.
+
+Per spec §6.2, **the traversal is one piece of source, included twice**, with a per-vertex hook the includer defines. Divergence is made structurally impossible rather than prevented by discipline. Task 1 establishes this before any gradient exists.
+
+---
+
+### Task 1: Replay equivalence, before any gradient exists
+
+**Files:** Create `shaders/includes/diff/traverse.glsl`; modify `shaders/diff/wf_scatter.comp`; create `shaders/diff/wf_scatter_replay.comp`; modify `tests/diff/gpu_probe_context.{hpp,cpp}`, `tests/diff/diff_gpu_probe.cpp`.
+
+Extract the scatter stage's traversal into one included source with a `VERTEX_HOOK` the includer defines, and build a second instantiation that replays. **No adjoint, no gradient, no arena.** The deliverable is proof that two instantiations walk the same path.
+
+- [ ] **Step 1: Write the failing check first.** Assert that for every path and every bounce, the replay stage consumes **exactly** the same RNG draws — values *and* `drawCount` — as the forward stage, and reconstructs the same origin, direction, throughput and hit. The oracle is the forward run's own recorded stream, read back independently; the replay must not be handed anything the forward stage did not write to path state.
+- [ ] **Step 2: Run it and confirm it FAILS** (no replay stage yet). Paste it.
+- [ ] **Step 3: Extract `traverse.glsl`** and re-point `wf_scatter.comp` at it. **Every existing check must still pass, untouched** — this is a pure extraction, and checks 14/17's exact `== 0.0625`, the survival check, and checks 20–34 are the proof.
+- [ ] **Step 4: Add the replay instantiation.**
+- [ ] **Step 5: Verify.** Then **demonstrate the check can fail**: insert one extra RNG draw in the replay hook, confirm the check rejects, restore. **Paste both.** This is the single most important demonstration in the stage — it is the failure mode that produces silently wrong gradients.
+- [ ] **Step 6:** Resolve inherited hazard 2 explicitly. State in the code which of the three options you took and why. **Nothing will test it.**
+- [ ] **Step 7: Commit.**
+
+---
+
+### Task 2: The Lambert albedo adjoint
+
+**Files:** Create `shaders/includes/diff/bsdf_adjoint.glsl`; modify `shaders/diff/wf_scatter_replay.comp`; modify the probe.
+
+For Lambert, `f = albedo / pi`, so `df/dalbedo = 1 / pi`. The scatter is `dL/dalbedo += dL * (1/pi) * L_i / pdf`.
+
+- [ ] **Step 1: Write the failing check first — a CRN finite difference.** Perturb albedo by `+h` and `-h`, render both with **identical** `(pixel, sampleIndex, iterationSeed)`, and compare `(L(+h) - L(-h)) / 2h` against the analytic gradient. **State the `h` you chose and derive it** — too large and truncation error dominates, too small and cancellation does. Report both error terms and where their sum is minimised.
+- [ ] **Step 2: Confirm it FAILS.** Paste it.
+- [ ] **Step 3: Implement**, scattering into the gradient arena with `atomicAdd`. The arena is caller-owned and written by a stage: route it through `extraBarrierBuffers`.
+- [ ] **Step 4: Verify**, and assert the gradient is **exactly zero** for a parameter the scene does not depend on — a null test that a scatter into the wrong arena block would fail.
+- [ ] **Step 5: Demonstrate failure** — scale the analytic adjoint by 1.01, confirm the FD gate rejects, restore. Paste both.
+- [ ] **Step 6: Commit.**
+
+---
+
+### Task 3: The GGX adjoints — roughness and metallic
+
+**Files:** Modify `shaders/includes/diff/bsdf_adjoint.glsl`, the replay stage, the probe.
+
+`df/droughness` and `df/dmetallic` through the microfacet model. This is the largest piece of new mathematics in the stage.
+
+- [ ] **Step 1: Write the failing CRN finite-difference check first**, per parameter, deriving `h` for each — the two parameters have different scales and conditioning, and one `h` will not serve both. Say so with numbers.
+- [ ] **Step 2: Confirm it FAILS.**
+- [ ] **Step 3: Derive and implement.** Write each adjoint term **from the published formula**, citing the source above it, exactly as Stage 0b-2b's forward oracle did. **Do not differentiate the GLSL by transcription** — an adjoint derived from the same expression it validates cannot fail.
+- [ ] **Step 4: Verify** at several roughnesses including near-specular, where the lobe is sharp and conditioning is worst. Report the worst-conditioned case and its error.
+- [ ] **Step 5: Demonstrate failure** per parameter — perturb one term of each adjoint, confirm rejection, restore. Paste all of it.
+- [ ] **Step 6: Commit.**
+
+---
+
+### Task 4: Emission and light-parameter gradients
+
+**Files:** Modify the adjoint header, the replay stage, the probe.
+
+`dL/dLe` is the simplest adjoint in the stage — the emitted term passes straight through — which makes it the best check on the **plumbing** rather than the mathematics.
+
+- [ ] **Step 1: Write the failing check first.** For a scene whose only parameter is emission, the analytic gradient has a closed form: derive it and state it.
+- [ ] **Step 2: Confirm it FAILS. Step 3: Implement. Step 4: Verify.**
+- [ ] **Step 5: Demonstrate failure**, and additionally assert the gradient is correct in **magnitude**, not only in direction — a plumbing bug that scales every gradient by a constant passes a direction-only check.
+- [ ] **Step 6: Commit.**
+
+---
+
+### Task 5: Texture scatter — the custom bilinear adjoint
+
+**Files:** Modify the adjoint header and replay stage; extend `ParamRegistry` usage in the probe.
+
+A texture read is `sum_i w_i * texel_i` over four texels; the adjoint scatters `dL * w_i` into each. The weights are the same bilinear weights the forward read used, and they must come from the same reconstruction — this is the one place sharing is *required* rather than forbidden.
+
+- [ ] **Step 1: Write the failing check first.** Assert the four scattered weights **sum to the incoming adjoint exactly** (a conservation identity independent of the weights' values), and that a texel outside the footprint receives exactly zero.
+- [ ] **Step 2: Confirm it FAILS. Step 3: Implement. Step 4: Verify.**
+- [ ] **Step 5: Demonstrate failure** — perturb one weight, confirm the conservation check rejects, restore.
+- [ ] **Step 6: Commit.**
+
+---
+
+### Task 6: The four gates
+
+**Files:** `tests/diff/diff_gpu_probe.cpp`, `tests/diff/gpu_probe_context.{hpp,cpp}`.
+
+Consolidate Gates 1–4 from the spec: albedo, roughness/metal, emission, light. Each is a CRN finite-difference agreement on a probe-owned scene with a stated, derived tolerance.
+
+- [ ] **Step 1:** Assert each gate at **two step sizes**, confirming the FD error falls as `h^2` for a central difference. **A single-`h` agreement can pass on a wrong gradient**; a convergence rate cannot.
+- [ ] **Step 2:** Assert every gradient the scene does not depend on is **exactly zero**.
+- [ ] **Step 3: Demonstrate failure** for each of the four gates independently — perturb one adjoint, confirm only that gate rejects. Specificity matters: a gate that fires for every perturbation localises nothing.
+- [ ] **Step 4: Commit.**
+
+---
+
+## Exit criteria
+
+- [ ] `diff_gpu_probe` exits 0, 0 validation errors, every check existing at the start of this stage still passing with its original expected values, plus the new gradient checks. Report the `OK:` count — a description, never a target.
+- [ ] **Replay consumes bit-identical RNG draws to the forward pass at every bounce**, demonstrated to fail on a single inserted draw.
+- [ ] Gates 1–4 pass at two step sizes each, with FD error falling as `h^2`.
+- [ ] Every gradient the scene does not depend on is exactly zero.
+- [ ] Every new check has a **demonstrated failure** recorded with pasted output.
+- [ ] The `>1 spp` film-accumulation hazard is resolved explicitly, with the choice stated in code.
+- [ ] `diff_unit_tests`, `renderer_test`, clean `-j8` build, and `python site/tools/generate_tree.py` all pass.
+
+## What this stage deliberately does not do
+
+- **No optimisation loop.** Loss kernels, Adam and multi-view batching are Stage 2.
+- **No boundary term.** Silhouette gradients need edge sampling or a warped-area reparameterisation; interior gradients come first, and the FD harness is what will later show the boundary term is missing.
+- **No device-local arena.** Still the known host-visible sizing issue.
+- **No geometry gradients.** Vertex positions are Stage 3.
+
+## Next plan
+
+**Stage 2 — the optimisation loop.** Loss kernels, Adam over the registry, multi-view batching, and Gate 5: recover a known `theta*` on synthetic scenes. The FD harness built here is what makes a failed recovery attributable to the optimiser rather than the gradient.
