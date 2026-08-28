@@ -406,7 +406,12 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       m_config.samplingRoughness,
                                       m_config.samplingMetallic,
                                       m_config.samplingSpecularWeight,
-                                      m_config.diffParam};
+                                      m_config.diffParam,
+                                      // Emission (Stage 1 Task 4), passed
+                                      // through verbatim -- see
+                                      // ScatterPush's note on why this MUST
+                                      // stay the last initialiser.
+                                      m_config.emission};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);

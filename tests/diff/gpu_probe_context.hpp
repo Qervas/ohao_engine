@@ -101,6 +101,14 @@ struct WavefrontGradientOptions {
     /// hit distance the traversal read out of path state, so two renders whose
     /// paths did not move produce bit-identical values there.
     std::vector<float>* outForwardTrace{nullptr};
+    /// Stage 1 Task 4. The uniform self-emission scalar, pushed to BOTH the
+    /// forward and replay runs verbatim (`WavefrontLoop::Config::emission`),
+    /// exactly as `albedo` is. Not part of `WavefrontScatterMaterial` because
+    /// it is not read by the BSDF at all -- it is a property of the FILM,
+    /// added by the forward hook, not a property of the surface the BSDF
+    /// evaluates. Defaults to 0.0, so an `options` left at `{}` renders the
+    /// film every caller that predates this task already expects.
+    float emission{0.0f};
 };
 
 /// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.

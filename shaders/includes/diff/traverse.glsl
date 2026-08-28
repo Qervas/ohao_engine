@@ -167,6 +167,16 @@
 // contains this vertex's f*cos/p; multiplying by the post-decay value would
 // count this bounce's BSDF twice.
 //
+// STAGE 1 TASK 4 adds a SECOND, ADDITIVE term to what the forward hook
+// writes: `throughput_on_arrival * pc.emission`, a uniform self-emitted
+// radiance for the whole dispatch, added at every hit vertex and never
+// blended into the MIS-combined estimate above (see the Push block's
+// `emission` field and bsdf_adjoint.glsl's DIFF_PARAM_EMISSION section).
+// `pc.emission` defaults to 0.0, so this is a genuine addition only for a
+// caller that sets it -- every dispatch that predates this task pushes an
+// implicit 0.0 through ScatterPush's own member initialiser and renders the
+// identical film it always did.
+//
 // The film is CALLER-OWNED, written at a FIXED pixelIndex*3 offset on EVERY
 // bounce, and read-modify-written (atomicAdd). See the barrier note above
 // the write itself at the end of this file for exactly which barrier orders
@@ -291,20 +301,33 @@ layout(binding = 8) uniform accelerationStructureEXT topLevelAS;
 //
 // WHAT THIS BUFFER DOES NOT CONTAIN (informational, review Finding 3 on
 // Stage 0b-2b Task 5 -- read this before comparing it against a PathTracer
-// image in Task 6). It holds ONLY MIS direct lighting at surface vertices:
-//   * NO escape/environment term. wf_intersect.comp compacts only survivors
-//     of the trace, so a path that misses everything and escapes to the
-//     environment is simply dropped from the next bounce's queue -- it never
-//     reaches this stage again and contributes nothing further here.
-//   * NO emissive-surface term. Nothing in this pipeline evaluates one yet;
-//     a hit surface's own emission (if it had any) is not part of the film
-//     contribution the forward hook forms.
+// image in Task 6; UPDATED by Stage 1 Task 4, which closed one of the two
+// gaps this section used to name). It holds MIS direct lighting at surface
+// vertices PLUS, since Task 4, a uniform self-emission term:
+//   * NO escape/environment term, still. wf_intersect.comp compacts only
+//     survivors of the trace, so a path that misses everything and escapes
+//     to the environment is simply dropped from the next bounce's queue --
+//     it never reaches this stage again and contributes nothing further
+//     here.
+//   * AN EMISSIVE-SURFACE TERM, AS OF STAGE 1 TASK 4 -- but only a UNIFORM
+//     one, and only when a caller sets `pc.emission` away from its 0.0
+//     default. There is still no per-object or per-material emission: the
+//     same "one material for the whole dispatch" limitation `pc.albedo`
+//     already carries (see the Push block above) applies to `pc.emission`
+//     too, so this is not yet a general emissive-surface system, just the
+//     uniform special case Stage 1's gradient work needed. Every check that
+//     predates this task leaves `emission` at 0.0 and its film is therefore
+//     byte-for-byte what it always was.
 // A PathTracer parity comparison will therefore differ from this film by
-// exactly the directly-visible environment plus any emissive-surface term --
-// neither exists on the PathTracer side of that comparison either today, but
-// closing the box here (this file's own test rig) makes the gap
-// unobservable from inside this subsystem. It is not a defect in this task;
-// it is the shape of what "MIS-combined radiance" was asked to accumulate.
+// exactly the directly-visible environment plus any PER-OBJECT emissive
+// term a real scene's materials carry (this subsystem has no per-object
+// material id yet) -- neither exists on the PathTracer side of that
+// comparison either today, but closing the box here (this file's own test
+// rig) makes the gap unobservable from inside this subsystem, PROVIDED the
+// comparison also leaves `pc.emission` at 0.0, which every existing parity
+// check (32-34) does. It is not a defect in this task; it is the shape of
+// what "MIS-combined radiance plus uniform self-emission" was asked to
+// accumulate.
 layout(std430, binding = 9) buffer Film {
     float v[];
 } film;
@@ -479,6 +502,28 @@ layout(push_constant) uniform Push {
     // value as the REPLAY one, so the branch is uniform across both and the
     // two still walk the identical path.
     uint diffParam;
+    // --- EMISSION (Stage 1 Task 4), matching ScatterPush's tail. A SECOND
+    // grey scalar, exactly like `albedo` above: one uniform self-emitted
+    // radiance for the whole dispatch (no per-object material id exists any
+    // more here than it does for the base colour), ADDED to every hit
+    // vertex's own outgoing radiance by the FORWARD hook -- see the film
+    // note above for the exact expression -- independent of the BSDF and of
+    // the next-event/BSDF-sampled environment lighting `Lr` carries.
+    //
+    // IT IS ADDED, NEVER SAMPLED FROM. Nothing in
+    // diffBsdfSample/diffBsdfSampleDetached or sampleEnvMap reads this
+    // field, so perturbing it moves no sampled direction at any bounce --
+    // unlike roughness and metallic, this parameter needs no detached
+    // instrument and no forward-mode tangent (dT_b/d(emission) is exactly 0
+    // for the same reason: nothing the throughput recursion multiplies by
+    // ever reads it). See bsdf_adjoint.glsl's DIFF_PARAM_EMISSION section.
+    //
+    // Defaults to 0.0 via ScatterPush's own member initialiser, so a
+    // ScatterPush built by hand with a braced list that stops before this
+    // tail -- several probes do exactly that -- renders the film every
+    // caller that predates this task already expects:
+    // `throughput * (Lr + vec3(0.0))` is `throughput * Lr` exactly.
+    float emission;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe

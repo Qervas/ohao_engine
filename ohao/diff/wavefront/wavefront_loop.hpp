@@ -423,6 +423,18 @@ public:
         /// scatter dispatch reconstructs its random stream from -- nothing
         /// survives in registers across a dispatch boundary.
         std::uint32_t iterationSeed{0};
+        /// A SECOND grey scalar (Stage 1 Task 4), exactly like `albedo`
+        /// above: one uniform self-emitted radiance for the whole dispatch,
+        /// added to every hit vertex's own outgoing radiance by the forward
+        /// hook, independent of the BSDF and of the MIS-combined direct
+        /// lighting `Lr` carries. It is ADDED, never sampled from -- nothing
+        /// in `shaders/includes/diff/bsdf.glsl` or
+        /// `shaders/includes/rt/env_sampling.glsl` reads it -- so unlike the
+        /// detached-sampling material above, this parameter needs no
+        /// sampling override: perturbing it moves no direction at any
+        /// bounce. Defaults to 0.0, so every caller that predates this task
+        /// renders the identical film it always did.
+        float emission{0.0f};
     };
 
     /// One end of the ping-pong: a queue ring's element base and the
@@ -527,6 +539,19 @@ public:
         float sampleMetallic{0.0f};
         float sampleSpecularWeight{0.0f};
         std::uint32_t diffParam{0};
+        // --- Emission (Stage 1 Task 4). From Config, passed through
+        // verbatim. Defaults to 0.0 for the reason the four sampling fields
+        // above default the way they do: a ScatterPush built by hand with a
+        // braced list that stops before this tail must still render the
+        // film every pre-Task-4 caller expects, and 0.0 emission is exactly
+        // that film (see traverse.glsl's Push block and wf_scatter.comp's
+        // forward hook). MUST stay the LAST field: traverse.glsl's Push
+        // block declares `emission` as its own last field, and
+        // `checkScatterPushSizeTie` only ties the TOTAL byte size, not the
+        // per-field order -- keeping this struct's member order identical to
+        // the shader's declaration order is this file's own invariant to
+        // hold, not one any check enforces.
+        float emission{0.0f};
     };
 
     WavefrontLoop() = default;

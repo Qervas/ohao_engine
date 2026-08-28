@@ -3844,6 +3844,13 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             // tangent update in path state, and the sampling material gates
             // every direction.
             loopConfig.diffParam = options.diffParam;
+            // Stage 1 Task 4. Pushed to BOTH runs, unconditionally, like
+            // `albedo` above and unlike the arena offset: the emission is a
+            // property of the SCENE this loop renders (what the FORWARD
+            // hook adds to the film), not a property of which run this is,
+            // so both the forward film and the replay run's material context
+            // must agree on it.
+            loopConfig.emission = options.emission;
             if (options.freezeSampling) {
                 loopConfig.samplingAlbedo = options.samplingAlbedo;
                 loopConfig.samplingRoughness = options.samplingMaterial.roughness;

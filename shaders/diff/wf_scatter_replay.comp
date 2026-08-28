@@ -196,9 +196,9 @@
 // gradient is one number, and adding the three channel contributions is the
 // chain rule for `vec3 baseColor = vec3(pc.albedo)`.
 //
-// WHICH PARAMETER (Stage 1 Task 3). `pc.diffParam` names it, and the two
-// branches below are two DIFFERENT statements of the same recursion, not a
-// general one and a special case:
+// WHICH PARAMETER (Stage 1 Tasks 3 and 4). `pc.diffParam` names it, and the
+// three branches below are three DIFFERENT statements of the same recursion,
+// not a general one and two special cases:
 //
 //   * DIFF_PARAM_BASECOLOR is Stage 1 Task 2's, unchanged. Its throughput
 //     term is the closed form (dT_b/d(albedo) = b*T_b/albedo, exact for a
@@ -211,21 +211,41 @@
 //     the MIS-weight half and the d(1/p_B) half are both present. It is one
 //     function, `diffVertexGgxScatter`, because the two parameters differ
 //     only in which derivatives `diffBsdfEvalDeriv` returns.
+//   * DIFF_PARAM_EMISSION is Task 4's, and simplest of the three: its
+//     throughput term, MIS-weight term and d(1/p_B) term are all identically
+//     ZERO (bsdf_adjoint.glsl's "STAGE 1 TASK 4" banner says why each one
+//     is, term by term), so `diffVertexEmissionScatter` is the recursion
+//     with every term but "d(emission)/d(emission) = 1" struck out.
 //
-// The two are kept as separate call sites rather than merged behind one
-// entry point because merging them would have to reconcile the closed form
-// with the tangent, and the closed form is what checks 37/38 measure
-// bit-for-bit. A future task that retires the closed form (the tangent
-// reproduces it: weight = albedo exactly, so T' = b*albedo^(b-1)) deletes
-// this branch rather than generalising it.
+// The three are kept as separate call sites rather than merged behind one
+// entry point because merging the first two would have to reconcile the
+// closed form with the tangent, and the closed form is what checks 37/38
+// measure bit-for-bit. A future task that retires the closed form (the
+// tangent reproduces it: weight = albedo exactly, so T' = b*albedo^(b-1))
+// deletes that branch rather than generalising it. Emission's branch could
+// in principle be folded into either of the other two as an added term that
+// happens to be zero for their parameters and vice versa -- it is kept
+// separate instead because "zero" is a property of a PARAMETER, not of a
+// call site, and a merged function would need a per-term zero test that
+// `diffVertexEmissionScatter`'s single return statement makes unnecessary.
 void diffVertexHook(inout DiffVertex v) {
     v.adjoint = v.throughput;
 
+    // WHICH PARAMETER (Stage 1 Task 4 adds the third branch). DIFF_PARAM_
+    // EMISSION's scatter is `diffVertexEmissionScatter`, which returns
+    // `v.adjoint` UNMODIFIED -- "the emitted term passes straight through",
+    // because d(the additive emission term)/d(emission) is exactly 1 and
+    // every other term of the recursion (the throughput-derivative term, the
+    // MIS-weight term, d(1/p_B)) is identically zero for this parameter; see
+    // bsdf_adjoint.glsl's "STAGE 1 TASK 4" banner for why each is zero
+    // rather than merely small.
     const vec3 contribution =
         (pc.diffParam == DIFF_PARAM_BASECOLOR)
             ? (diffVertexDirectAlbedoScatter(v, v.adjoint) +
                diffVertexThroughputAlbedoTerm(v, pc.albedo))
-            : diffVertexGgxScatter(v, pc.diffParam);
+            : (pc.diffParam == DIFF_PARAM_EMISSION)
+                ? diffVertexEmissionScatter(v)
+                : diffVertexGgxScatter(v, pc.diffParam);
 
     v.adjoint = v.adjoint * v.bsdfWeight;
 

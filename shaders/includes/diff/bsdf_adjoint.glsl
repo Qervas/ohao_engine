@@ -5,16 +5,20 @@
 // THE ADJOINTS -- d(film)/d(theta) at ONE vertex
 // ===========================================================================
 //
-// THIS FILE HAS TWO HALVES, and the split is by PARAMETER, not by convenience.
-// The first is Stage 1 Task 2's d(film)/d(albedo), which is exact only for the
-// pure Lambertian configuration and uses a closed form for the throughput
-// term. The second, from the banner "STAGE 1 TASK 3" onward, is
-// d(film)/d(roughness) and d(film)/d(metallic) through the microfacet model,
-// which have no closed form for the throughput and which move the densities
-// and therefore the MIS weights. `pc.diffParam` selects between them at the
-// hook, and the constants that name it (DIFF_PARAM_*) are declared in the
-// second half. Everything down to that banner is about the albedo alone and
-// says so wherever it makes a claim.
+// THIS FILE HAS THREE PARTS, and the split is by PARAMETER, not by
+// convenience. The first is Stage 1 Task 2's d(film)/d(albedo), which is
+// exact only for the pure Lambertian configuration and uses a closed form for
+// the throughput term. The second, from the banner "STAGE 1 TASK 3" onward,
+// is d(film)/d(roughness) and d(film)/d(metallic) through the microfacet
+// model, which have no closed form for the throughput and which move the
+// densities and therefore the MIS weights. The third, from "STAGE 1 TASK 4"
+// onward, is d(film)/d(emission) -- the simplest of the three, because
+// emission is ADDED to the film rather than sampled from or multiplied
+// through a density, so none of Task 3's machinery (a detached instrument, a
+// carried tangent, a moving MIS weight) is needed. `pc.diffParam` selects
+// among all three at the hook, and the constants that name it (DIFF_PARAM_*)
+// are declared in the second part. Everything down to the "STAGE 1 TASK 3"
+// banner is about the albedo alone and says so wherever it makes a claim.
 //
 // This file is the derivative half of shaders/includes/diff/bsdf.glsl. It is
 // included by shaders/includes/diff/traverse.glsl AFTER `DiffVertex` is
@@ -44,9 +48,10 @@
 // where `film` is exactly what the FORWARD instantiation's hook accumulates
 // (shaders/diff/wf_scatter.comp): the MIS-combined direct lighting at every
 // surface vertex, carried by the path throughput on arrival, truncated at the
-// loop's bounce count, with no emissive and no escape term. J is a scalar, so
-// dJ/d(albedo) is a scalar, and it is what this file scatters into ONE float
-// of the gradient arena.
+// loop's bounce count, PLUS -- since Stage 1 Task 4 -- a uniform self-emission
+// term at every hit vertex, with no escape term still. J is a scalar, so
+// dJ/d(theta) is a scalar for every theta this file differentiates, and it is
+// what this file scatters into ONE float of the gradient arena.
 //
 // The finite-difference gate that measures it (diff_gpu_probe.cpp) forms the
 // SAME J from the same film buffer, at albedo +/- h under common random
@@ -505,10 +510,12 @@ vec3 diffVertexThroughputAlbedoTerm(in DiffVertex v, float albedo) {
 /// task keeps Stage 1 Task 2's behaviour exactly: the closed-form throughput
 /// term, no MIS-weight term, and no forward-mode tangent maintained in path
 /// state. 1 and 2 are the two this task adds, and they are the two with no
-/// closed form for the throughput -- see `DiffVertex::tangent`.
+/// closed form for the throughput -- see `DiffVertex::tangent`. 3 is Stage 1
+/// Task 4's -- see the "STAGE 1 TASK 4" banner at the end of this file.
 const uint DIFF_PARAM_BASECOLOR = 0u;
 const uint DIFF_PARAM_ROUGHNESS = 1u;
 const uint DIFF_PARAM_METALLIC = 2u;
+const uint DIFF_PARAM_EMISSION = 3u;
 
 /// d(unpacked)/d(pushed) for `pbr_unpack.glsl`'s roughness floor and metallic
 /// clamp, decided from the raw/unpacked pair rather than from a copy of the
@@ -819,6 +826,96 @@ vec3 diffVertexGgxScatter(in DiffVertex v, uint param) {
 
     // J = SUM_b T_b * Lr_b, so BOTH factors of this summand contribute.
     return v.tangent * v.Lr + v.throughput * dLr;
+}
+
+// ===========================================================================
+// STAGE 1 TASK 4 -- d(film)/d(EMISSION), THE SIMPLEST ADJOINT IN THE STAGE
+// ===========================================================================
+//
+// WHY THIS IS THE PLUMBING TEST, NOT A THIRD PHYSICS PROBLEM.
+//
+// The forward hook (shaders/diff/wf_scatter.comp) now writes
+//
+//     filmContribution = throughput * (Lr + vec3(pc.emission))
+//
+// so J(emission) = SUM over pixels, channels, bounces of
+// throughput_b(pixel) * (Lr_b(pixel) + emission). Differentiating termwise:
+//
+//     dJ/d(emission) = SUM_b [ (dT_b/d(emission)) * (Lr_b + emission)
+//                             + T_b * (dLr_b/d(emission) + 1) ]
+//
+// and EVERY term but the last is IDENTICALLY ZERO, not merely small, for a
+// reason that is a statement about the shader source rather than an
+// approximation:
+//
+//   * dT_b/d(emission) = 0. The throughput recursion is
+//     T_{b+1} = T_b * bsdfWeight_b, and bsdfWeight (f*cos/pdf) comes out of
+//     diffBsdfSample/diffBsdfSampleDetached (shaders/includes/diff/bsdf.glsl),
+//     which takes baseColor/roughness/metallic/specularWeight and NEVER
+//     `pc.emission` -- grep the file and it is not a parameter of either
+//     function. So the throughput a path arrives with does not depend on
+//     emission at ANY bounce, and unlike roughness/metallic this parameter
+//     needs no forward-mode tangent carried in path state: the closed form
+//     is 0 and it is exact, not approximate, at every theta.
+//   * dLr_b/d(emission) = 0. `Lr` is nee.glsl's MIS-combined estimate --
+//     built from `neeTerm`/`bsdfTerm`, which read baseColor, the material,
+//     the environment CDF and the shadow-ray visibility, and again never
+//     `pc.emission`. The self-emission term is ADDED to the film alongside
+//     `Lr` in the forward hook, never blended into the sum `Lr` itself is
+//     built from -- see traverse.glsl's film note. So the MIS weights
+//     (which live inside `Lr`'s own construction, not this file's business
+//     to touch here) do not move either: `(dw_s/d(emission))` is zero for
+//     the SAME reason it was zero for the base colour at metallic 0 -- the
+//     quantity in question never reaches `pdf` or `pdfEnvMap` -- except here
+//     it is zero UNCONDITIONALLY, for every material, because nothing about
+//     `emission` ever reaches a density at all, sampled or evaluated.
+//   * d(emission)/d(emission) = 1, trivially -- the one surviving term.
+//
+// So the whole of DiffVertex's recursion collapses to
+//
+//     dJ/d(emission) = SUM_b T_b
+//
+// -- the arrival throughput at every hit vertex, summed over channels and
+// bounces. That is a CLOSED FORM, exact for every material and every bounce
+// count, and it is what makes J(emission) EXACTLY LINEAR in the parameter:
+// J = A + emission * B with A = SUM_b T_b*Lr_b and B = SUM_b T_b, NEITHER of
+// which depends on emission. A central difference is therefore exact for
+// EVERY step size, not merely a small one -- unlike Task 2's albedo, whose
+// linearity held only up to the E_1/E_2 terms of a genuine polynomial (see
+// that file's harness), emission's higher "coefficients" are not small, they
+// are absent: there is no emission^2 term anywhere in this shader for a
+// central difference to have truncation error against.
+//
+// AT THE VERTEX LEVEL, "the emitted term passes straight through" means
+// exactly this: with `dL` the adjoint arriving at this vertex (Task 2's
+// `v.adjoint`, seeded from `v.throughput` for this sum-of-film objective and
+// unaffected by any of the above -- the propagate line `dL_next = dL *
+// bsdfWeight` reads no emission either), the scatter contribution is
+// `dL * d(emission_term)/d(emission) = dL * 1 = dL`. No BSDF derivative, no
+// density, no cosine, no MIS weight, nothing to differentiate at all -- the
+// incoming adjoint is scattered UNMODIFIED. That is deliberately the whole
+// of this function's body, and is what makes this task a test of the
+// PLUMBING (does the right float end up in the right arena element,
+// unmangled) rather than of any calculus.
+//
+// WHY THIS PARAMETER NEEDS NO DETACHED INSTRUMENT, stated as the check this
+// file's header asks every new parameter to pass. Task 3's detached
+// finite-difference harness exists because perturbing roughness or metallic
+// moves the sampled direction (bsdf.glsl reads both to build `alpha` and the
+// lobe-selection probability `q`). Emission is read by NEITHER
+// diffBsdfSample/diffBsdfSampleDetached NOR sampleEnvMap (grep both files:
+// neither takes an emission argument), so a +/-h perturbation of it changes
+// no draw and moves no direction at any bounce -- the property Task 2's
+// plain common-random-number harness needs to be exact. `diff_gpu_probe.cpp`
+// measures this rather than asserting it, the same way Task 3's instrument
+// measured that roughness and metallic do NOT have this property: it diffs
+// the vertex trace's origin/direction/hitT slots (the same bit-exact
+// comparison `traceGeometryMismatches` performs for Task 3) between the
+// emission +/-h renders and the centre one, under a PLAIN (non-frozen)
+// perturbation, and requires zero mismatches.
+vec3 diffVertexEmissionScatter(in DiffVertex v) {
+    if (!v.hit) return vec3(0.0);
+    return v.adjoint;
 }
 
 #endif  // OHAO_DIFF_BSDF_ADJOINT_GLSL

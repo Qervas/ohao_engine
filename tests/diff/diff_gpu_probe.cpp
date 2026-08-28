@@ -2398,6 +2398,15 @@ struct CrnFdMeasurement {
     double roundoffBound{0.0};
     double truncationBound{0.0};
     double errorBound{0.0};
+    /// Floats of the trace's (origin, dir, hitT) slots that differ between a
+    /// perturbed render and the centre one, summed over every perturbed
+    /// render and every path -- Task 3's `traceGeometryMismatches`, applied
+    /// here by `measureCrnEmissionGradient` to a PLAIN perturbation (no
+    /// sampling override) to MEASURE rather than assume that plain CRN is
+    /// valid for a new parameter. 0 for every caller that never asked for it
+    /// (`measureCrnAlbedoGradient` does not fill this field), so its
+    /// presence on this struct changes nothing about check 37/38.
+    std::size_t traceMismatches{0};
 };
 
 /// Sum of every float in a film, in double. The film's three channels are
@@ -2805,6 +2814,168 @@ bool measureDetachedGgxGradient(ohao::diff::GpuProbeContext& ctx,
     // of D(h). See this harness's header for why this replaces Task 2's exact
     // polynomial bound and in which direction it errs.
     out.truncationBound = std::fabs(out.finiteDiff2h - out.finiteDiff) / 3.0;
+    out.errorBound = out.roundoffBound + out.truncationBound;
+    return true;
+}
+
+// ===========================================================================
+// STAGE 1 TASK 4 -- d(film)/d(EMISSION), THE PLUMBING CHECK
+// ===========================================================================
+//
+// WHY PLAIN CRN (Task 2's harness, not Task 3's detached one) IS THE
+// INSTRUMENT, AND HOW THAT IS MEASURED RATHER THAN ASSUMED.
+//
+// Task 3's detached instrument exists because perturbing roughness or
+// metallic moves the sampled direction: `bsdf.glsl` reads both to build the
+// GGX VNDF's `alpha` and the lobe-selection probability `q`. Emission is read
+// by NEITHER `diffBsdfSample`/`diffBsdfSampleDetached` (roughness/metallic's
+// callee) NOR `sampleEnvMap` -- grep both files and `pc.emission` appears in
+// neither -- so a +/-h perturbation of it changes no draw and moves no
+// direction at any bounce. That is the SAME property that made Task 2's
+// plain common-random-number harness exact for the albedo at metallic 0, and
+// this function measures it exactly the way Task 3 measured the ABSENCE of
+// that property for roughness/metallic: it captures the forward run's
+// binding-3 vertex trace at emission-h, emission and emission+h (via
+// `WavefrontGradientOptions::outForwardTrace`, the same field Task 3's
+// harness uses) and runs `traceGeometryMismatches` -- the identical bit-exact
+// origin/direction/hitT comparison, unmodified -- between the two perturbed
+// traces and the centre one. `out.traceMismatches` is the sum; the caller
+// requires it to be exactly 0, and it is 0 for a reason this function's
+// comment states and the check's own run confirms rather than assumes.
+//
+// THIS IS A SIBLING OF `measureCrnAlbedoGradient`, NOT A THIRD HARNESS. Both
+// run three common-random-number renders under `runWavefrontGradientProbe`
+// and reduce to a `CrnFdMeasurement`; the reason this is a separate function
+// rather than a call to that one is that `measureCrnAlbedoGradient` perturbs
+// its `albedo` PARAMETER (the function argument that becomes
+// `runWavefrontGradientProbe`'s positional `albedo`), while emission is
+// threaded through `WavefrontGradientOptions::emission` instead -- `albedo`
+// and `material` here are the FIXED, unperturbed scene, exactly as Task 3's
+// `measureDetachedGgxGradient` holds `albedo` fixed while perturbing a field
+// of `material`. "A scene whose only parameter is emission" (the brief's
+// phrase for Step 1) means precisely that: `albedo`/`material` do not move
+// across the three renders below, only `emission` does.
+//
+// THE ERROR BOUND HAS NO TRUNCATION TERM -- not a measured near-zero one, an
+// ABSENT one, and that is the mathematical content Step 1 asks to be derived
+// and stated. `J(emission) = A + emission * B` with
+// `A = SUM_b T_b * Lr_b` and `B = SUM_b T_b`, NEITHER of which depends on
+// emission (see bsdf_adjoint.glsl's "STAGE 1 TASK 4" banner for why every
+// other term of the recursion is identically zero for this parameter). A
+// function that is EXACTLY linear has E_n(h) == 0 for its one nonzero
+// term (n=1, a central difference is exact on a linear function) and no
+// n >= 2 term to have any curvature at all -- unlike the albedo, whose
+// linearity held only up to Task 2's E_1/E_2 (the polynomial's own 3rd term
+// gave it a genuine, if small, truncation error from 3 bounces on).
+// Consequently `out.truncationBound` below is not computed by any
+// Richardson estimate or polynomial bound; it is set to the literal `0.0`
+// the derivation gives. This is not asserted blindly: the comparison this
+// feeds (`|FD - analytic| <= roundoffBound`, with NO SLACK for anything a
+// truncation term could have absorbed) is run at three bounce counts with a
+// resolution the caller checks is far inside the pre-registered limit --
+// which a genuinely nonzero cubic/quadratic term would have no room to hide
+// from.
+bool measureCrnEmissionGradient(ohao::diff::GpuProbeContext& ctx, ohao::diff::WavefrontBuffers& wf,
+                                uint32_t width, uint32_t height, uint32_t bounces,
+                                const ohao::diff::WavefrontGenerateCamera& camera,
+                                const std::vector<float>& positions,
+                                const std::vector<uint32_t>& indices, float albedo,
+                                const ohao::diff::WavefrontScatterMaterial& material,
+                                float emission, float step, uint32_t seed,
+                                ohao::diff::GradientArena& arena, std::size_t gradBlockIndex,
+                                uint32_t gradArenaFloats, uint32_t gradEmissionOffset,
+                                double filmRelativeEps, CrnFdMeasurement& out) {
+    out = CrnFdMeasurement{};
+
+    const uint32_t capacity = width * height;
+    const float eMinus = emission - step;
+    const float ePlus = emission + step;
+    const std::size_t expectedFloats = static_cast<std::size_t>(width) * height * 3u;
+
+    struct Point {
+        float value;
+        double* total;
+        std::vector<float>* trace;
+    };
+    std::vector<float> traces[3];
+    // ORDER MATTERS: the centre is LAST so that the arena the caller reads
+    // back is the one the centre's replay run left, not a perturbed run's --
+    // the same reason `measureCrnAlbedoGradient` orders its points this way.
+    const Point points[3] = {{eMinus, &out.jMinus, &traces[0]},
+                             {ePlus, &out.jPlus, &traces[1]},
+                             {emission, &out.jCenter, &traces[2]}};
+
+    for (const Point& p : points) {
+        ohao::diff::WavefrontGradientOptions options;
+        options.diffParam = 3u;  // DIFF_PARAM_EMISSION (bsdf_adjoint.glsl)
+        options.emission = p.value;
+        options.outForwardTrace = p.trace;
+
+        std::vector<float> film;
+        if (!ctx.runWavefrontGradientProbe(wf, width, height, bounces, camera,
+                                           std::span<const float>(positions),
+                                           std::span<const uint32_t>(indices), albedo, material,
+                                           seed, arena, gradArenaFloats, gradEmissionOffset, film,
+                                           options)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: emission gradient probe dispatch failed at "
+                         "emission %.9g\n",
+                         static_cast<double>(p.value));
+            return false;
+        }
+        if (film.size() != expectedFloats) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: emission gradient probe returned a film of %zu "
+                         "floats at emission %.9g, expected %zu\n",
+                         film.size(), static_cast<double>(p.value), expectedFloats);
+            return false;
+        }
+        for (float v : film) {
+            if (!std::isfinite(v) || v < 0.0f) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: emission gradient probe film at emission "
+                             "%.9g holds a non-finite or negative value (%.9g)\n",
+                             static_cast<double>(p.value), static_cast<double>(v));
+                return false;
+            }
+        }
+        *p.total = filmTotal(film);
+    }
+
+    // THE CRN-VALIDITY MEASUREMENT. See the header: this is what makes "plain
+    // CRN is exact for emission" a measured claim rather than an inherited
+    // one. traces[0]/traces[1] are the perturbed renders, traces[2] the
+    // centre; every one of the seven geometry slots (origin, dir, hitT) must
+    // be bit-identical across all `capacity` paths.
+    out.traceMismatches = traceGeometryMismatches(traces[0], traces[2], capacity) +
+                          traceGeometryMismatches(traces[1], traces[2], capacity);
+
+    const std::vector<float> gradBlock = arena.readback(ctx.allocator(), gradBlockIndex);
+    if (gradBlock.empty()) {
+        std::fprintf(stderr, "[diff_gpu_probe] FAIL: gradient arena block %zu read back empty\n",
+                     gradBlockIndex);
+        return false;
+    }
+    out.analytic = static_cast<double>(gradBlock[0]);
+
+    out.hActual = 0.5 * (static_cast<double>(ePlus) - static_cast<double>(eMinus));
+    if (!(out.hActual > 0.0)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: the two perturbed emissions round to the same float "
+                     "(%.9g), so the step is below the representable resolution at emission %.9g "
+                     "and the difference quotient is a division by zero\n",
+                     static_cast<double>(ePlus), static_cast<double>(emission));
+        return false;
+    }
+    out.finiteDiff = (out.jPlus - out.jMinus) / (2.0 * out.hActual);
+    out.absError = std::fabs(out.finiteDiff - out.analytic);
+    out.relError = (std::fabs(out.analytic) > 0.0) ? out.absError / std::fabs(out.analytic) : 0.0;
+
+    out.roundoffBound =
+        filmRelativeEps * (std::fabs(out.jPlus) + std::fabs(out.jMinus)) / (2.0 * out.hActual);
+    // See the function header: J(emission) is EXACTLY linear, so there is no
+    // truncation term to bound -- 0.0 literally, not a measured near-zero.
+    out.truncationBound = 0.0;
     out.errorBound = out.roundoffBound + out.truncationBound;
     return true;
 }
@@ -9970,6 +10141,425 @@ int main() {
 
         wf.destroy(ctx.allocator());
         ggxArena.destroy(ctx.allocator());
+    }
+
+    // -----------------------------------------------------------------
+    // 42-43. STAGE 1 TASK 4: dJ/d(EMISSION), THE PLUMBING CHECK.
+    // -----------------------------------------------------------------
+    //
+    // THE CLOSED FORM, DERIVED (Step 1). `wf_scatter.comp`'s forward hook
+    // now writes `throughput * (Lr + vec3(pc.emission))`, so
+    //
+    //     J(emission) = SUM_p SUM_c SUM_b T_b(p) * (Lr_b(p)[c] + emission)
+    //                 = A + emission * B
+    //
+    //     A = SUM_p SUM_c SUM_b T_b(p) * Lr_b(p)[c]     (check 37's J at
+    //                                                     emission == 0)
+    //     B = SUM_p SUM_b (T_b.r(p) + T_b.g(p) + T_b.b(p))
+    //
+    // and NEITHER A nor B depends on emission: `Lr` is built from
+    // `neeTerm`/`bsdfTerm`, which read the material and the environment and
+    // never `pc.emission` (grep nee.glsl and bsdf.glsl -- neither declares
+    // the parameter), and the throughput recursion `T_{b+1} = T_b *
+    // bsdfWeight_b` reads the same BSDF and is equally blind to it. So
+    // `dJ/d(emission) = B`, a CONSTANT (independent of emission itself) equal
+    // to the arrival throughput summed over every hit vertex -- and J is
+    // EXACTLY LINEAR, not merely locally so, which is the mathematical
+    // content that makes this the easiest derivative in the stage and the
+    // sharpest test of the PLUMBING: a central difference has zero
+    // truncation error at every step size and every bounce count, so nothing
+    // about the comparison below can be blamed on curvature.
+    //
+    // `h`, DERIVED THE WAY TASKS 2 AND 3 WERE (Step 1). Both harnesses
+    // minimise `E(h)/|J'| ~ eps*L/h + h^2/(6L^2)`, giving
+    // `h* = (3*eps)^(1/3) * L`, with `eps = 2e-6` UNCHANGED from Tasks 2/3
+    // (still: a film value is a sum over bounces of a product of about six
+    // float32 factors, each rounding at 2^-24) and `L` the scale the film
+    // varies over in the parameter -- here `L = kEmission = 0.6`, the same
+    // convention Task 2 used for the albedo (a representative value of an
+    // unbounded-above physical quantity, not a domain like metallic's [0,1]).
+    //
+    //     h* = (3 * 2e-6)^(1/3) * 0.6 = (6e-6)^(1/3) * 0.6 ~= 0.01817 * 0.6
+    //        ~= 1.090e-2
+    //
+    // nearest power of two: 2^-7 = 7.8125e-3 (log2(1.090e-2) = -6.52, closer
+    // to -7 than to -6).
+    //
+    // THIS h IS NOT ACTUALLY OPTIMAL, AND THAT IS STATED RATHER THAN LEFT
+    // IMPLICIT. Unlike albedo/roughness/metallic, the h^2/(6L^2) term of the
+    // model above is not merely small at this h -- it is IDENTICALLY ZERO AT
+    // EVERY h, because J is exactly linear (see the derivation above). The
+    // two-term optimum this formula computes therefore does not exist for
+    // this parameter: `E(h)/|J'|` is monotonically DECREASING in h (pure
+    // roundoff, no offsetting curvature), so a LARGER h would give a
+    // strictly smaller error bound with no downside. `h* = 2^-7` is used
+    // anyway, for two reasons stated rather than hidden: (a) it keeps the
+    // derivation procedure identical across all four parameters this stage
+    // differentiates, which is what makes it auditable by inspection rather
+    // than by re-deriving a special case each time, and (b) the resulting
+    // bound, measured below, already resolves far inside the pre-registered
+    // limit, so there is no practical need to push h larger. A future task
+    // that wants the tightest possible emission gate should simply use a
+    // bigger h; this one does not need to.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;
+        constexpr uint32_t kEnvW = 64;
+        constexpr uint32_t kEnvH = 32;
+        static_assert(kEnvW != kEnvH, "a square environment hides a W<->H swap");
+        // The FIXED, unperturbed scene -- "a scene whose only parameter is
+        // emission" means these do not move across the three renders.
+        constexpr float kMatAlbedo = 0.4f;
+        constexpr float kEmission = 0.6f;
+        constexpr float kStep = 0.0078125f;  // 2^-7 -- derived above
+        constexpr double kFilmRelativeEps = 2e-6;
+        constexpr uint32_t kGradientSeed = 20260829u;
+        constexpr double kMaxGradientResolution = 1e-2;
+        constexpr uint32_t kDiffParamEmission = 3u;  // DIFF_PARAM_EMISSION
+        constexpr uint32_t kBounceCounts[3] = {1u, 2u, 3u};
+
+        // ONE ScalarBlock for the emission, and a SECOND the scene does not
+        // depend on -- check 43's null-test subject, the same shape check
+        // 38 uses for the albedo.
+        ohao::diff::ParamRegistry gradReg;
+        const auto regEmission = gradReg.registerScalarBlock("emission", 1);
+        const auto regUnused = gradReg.registerScalarBlock("unused_scalar_emission", 1);
+        if (!regEmission.ok || !regUnused.ok) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 42 registry setup: %s %s\n",
+                         regEmission.error.c_str(), regUnused.error.c_str());
+            return 1;
+        }
+        const ohao::diff::DiffParam* emissionParam = gradReg.find("emission");
+        const ohao::diff::DiffParam* unusedParam = gradReg.find("unused_scalar_emission");
+        if (emissionParam == nullptr || unusedParam == nullptr) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 42 registered params not found\n");
+            return 1;
+        }
+
+        ohao::diff::GradientArena gradArena;
+        if (!gradArena.build(ctx.allocator(), gradReg.layout())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 42 gradient arena build\n");
+            return 1;
+        }
+        const ohao::diff::ArenaBlock emissionGradBlock =
+            gradReg.layout().block(emissionParam->gradBlock);
+        const uint32_t kGradArenaFloats =
+            static_cast<uint32_t>(gradReg.layout().totalBytes() / sizeof(float));
+        const uint32_t kGradEmissionOffset =
+            static_cast<uint32_t>(emissionGradBlock.offsetBytes / sizeof(float));
+
+        std::vector<float> envRgba;
+        std::vector<double> envLum;
+        buildParityEnvironment(kEnvW, kEnvH, envRgba, envLum);
+        std::vector<float> positions;
+        std::vector<uint32_t> indices;
+        buildParityScene(positions, indices);
+        const ohao::diff::WavefrontGenerateCamera camera = parityCamera();
+
+        ohao::EnvCDF gradEnvCdf;
+        gradEnvCdf.build(envRgba, static_cast<int>(kEnvW), static_cast<int>(kEnvH));
+        if (!gradEnvCdf.valid()) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 42 EnvCDF::build produced no CDF\n");
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kW * kH, kEnvW, kEnvH) ||
+            !wf.uploadEnvironment(gradEnvCdf.marginalSpan(), gradEnvCdf.conditionalSpan(),
+                                  gradEnvCdf.integral())) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 42 buffers build / env CDF upload\n");
+            wf.destroy(ctx.allocator());
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        // Pure Lambert, like check 37's material -- irrelevant to the
+        // derivative under test (emission reaches neither the BSDF nor the
+        // sampler at all) but a fixed, lit, non-degenerate scene the direct
+        // term A above is genuinely nonzero on, so the film is a sum of two
+        // nonzero pieces rather than emission alone.
+        const ohao::diff::WavefrontScatterMaterial kEmissionMaterial{1.0f, 0.0f, 0.0f};
+
+        CrnFdMeasurement measurements[3]{};
+        double worstRatio = 0.0;
+        double worstResolution = 0.0;
+        double worstMagnitudeError = 0.0;
+        std::size_t totalTraceMismatches = 0;
+
+        for (std::size_t i = 0; i < 3; ++i) {
+            const uint32_t bounces = kBounceCounts[i];
+            CrnFdMeasurement& m = measurements[i];
+            if (!measureCrnEmissionGradient(ctx, wf, kW, kH, bounces, camera, positions, indices,
+                                            kMatAlbedo, kEmissionMaterial, kEmission, kStep,
+                                            kGradientSeed, gradArena, emissionParam->gradBlock,
+                                            kGradArenaFloats, kGradEmissionOffset,
+                                            kFilmRelativeEps, m)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 42 measurement failed at %u bounce(s)\n",
+                             bounces);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+            totalTraceMismatches += m.traceMismatches;
+
+            // --- THE CRN-VALIDITY MEASUREMENT (Step 1's self-check). Plain
+            // CRN is valid for emission ONLY IF perturbing it moves no
+            // sampled direction; this is what confirms that rather than
+            // inheriting it from Task 2's albedo case by analogy.
+            if (m.traceMismatches != 0u) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 42 at %u bounce(s) -- %zu vertex-trace "
+                             "geometry slots differ between an emission +/-h render and the "
+                             "centre one. Plain common-random-number comparison is NOT valid if "
+                             "this is nonzero: something now reads pc.emission from inside "
+                             "diffBsdfSample/diffBsdfSampleDetached or sampleEnvMap, which would "
+                             "move a sampled direction and require Task 3's detached instrument "
+                             "instead\n",
+                             bounces, m.traceMismatches);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- NON-VACUITY 1: there is light, and there is a gradient.
+            if (!(m.jCenter > 0.0) || !std::isfinite(m.jCenter) || !(m.analytic > 0.0) ||
+                !std::isfinite(m.analytic)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 42 at %u bounce(s): J = %.9g and the "
+                             "scattered gradient = %.9g. Both must be finite and strictly "
+                             "positive -- every hit vertex's arrival throughput is non-negative "
+                             "and the scene is lit, so a zero on either side means nothing was "
+                             "accumulated and the comparison below would be 0 against 0\n",
+                             bounces, m.jCenter, m.analytic);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- NON-VACUITY 2: the gate's resolution, pre-registered.
+            const double resolution = m.errorBound / m.analytic;
+            if (resolution > worstResolution) worstResolution = resolution;
+            if (!(resolution <= kMaxGradientResolution)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 42 at %u bounce(s) REFUSES TO CLAIM A "
+                             "VERDICT: the derived error bound is %.6g, which is %.3g of the "
+                             "gradient %.9g -- above the pre-registered %.3g. A pass at this "
+                             "resolution would be compatible with there being nothing it could "
+                             "have detected. roundoff %.6g (no truncation term -- J is exactly "
+                             "linear) at h = %.9g\n",
+                             bounces, m.errorBound, resolution, m.analytic,
+                             kMaxGradientResolution, m.roundoffBound, m.hActual);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- THE GATE.
+            const double ratio = m.absError / m.errorBound;
+            if (ratio > worstRatio) worstRatio = ratio;
+            if (!(m.absError <= m.errorBound)) {
+                std::fprintf(
+                    stderr,
+                    "[diff_gpu_probe] FAIL: check 42 at %u bounce(s) -- THE ANALYTIC GRADIENT IS "
+                    "NOT THE DERIVATIVE OF THE FILM.\n"
+                    "  finite difference (J(e+h) - J(e-h)) / 2h = %.12g\n"
+                    "  gradient scattered into the arena         = %.12g\n"
+                    "  |difference| = %.6g, which is %.6g of the gradient\n"
+                    "  derived error bound = %.6g (roundoff only, no truncation term)\n"
+                    "  J(e-h) = %.12g, J(e) = %.12g, J(e+h) = %.12g, h = %.12g\n"
+                    "  Both sides describe ONE realisation of the estimator at seed %u under "
+                    "common random numbers (measured 0 trace mismatches), so there is no "
+                    "sampling error and no truncation error to absorb this: the two numbers are "
+                    "the derivative of the SAME LINEAR function computed two ways, and they "
+                    "disagree. diffVertexEmissionScatter returns v.adjoint UNMODIFIED -- if this "
+                    "fails, suspect the SCATTER SITE (wrong offset, wrong sign, missing branch) "
+                    "before suspecting any calculus, because there is none here to get wrong\n",
+                    bounces, m.finiteDiff, m.analytic, m.absError, m.relError, m.errorBound,
+                    m.jMinus, m.jCenter, m.jPlus, m.hActual, kGradientSeed);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+
+            // --- MAGNITUDE, NOT ONLY DIRECTION (Step 5's explicit
+            // requirement). The gate above already bounds |FD - analytic|
+            // to a tolerance ~1e-4 of the gradient's own scale, which a
+            // uniform-scale bug fails hard -- but that is stated here as an
+            // EXPLICIT ratio-to-1 assertion, separate from the error-bound
+            // framing, so a plumbing bug that scales every contribution by
+            // a constant (same SIGN, wrong SCALE -- exactly what a
+            // direction-only check would miss) is rejected by a comparison
+            // that says so in those terms.
+            const double magnitudeError = std::fabs(m.analytic / m.finiteDiff - 1.0);
+            if (magnitudeError > worstMagnitudeError) worstMagnitudeError = magnitudeError;
+            if (!(magnitudeError <= kMaxGradientResolution)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 42 at %u bounce(s) -- MAGNITUDE check: "
+                             "analytic/finiteDiff = %.9g, i.e. %.3g away from 1 -- above the "
+                             "pre-registered %.3g. A direction-only check (same sign) would have "
+                             "passed this; this one does not\n",
+                             bounces, m.analytic / m.finiteDiff, magnitudeError,
+                             kMaxGradientResolution);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+
+        // --- NON-VACUITY 3: every hit vertex actually contributes, at every
+        // bounce count -- B = SUM_b T_b strictly increases with the number
+        // of bounces in a scene where every path stays alive (the fused-loop
+        // survival induction, same as check 37 relies on), so the gradient
+        // itself must strictly increase from one bounce count to three. If
+        // it did not, emission would only be reaching the film at bounce 0
+        // (a plausible bug: applying it once at the camera ray rather than
+        // at every hit vertex) and the 2- and 3-bounce measurements would be
+        // exercising nothing the one-bounce case does not already cover.
+        if (!(measurements[2].analytic > measurements[0].analytic + 1.0)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 42 -- dJ/d(emission) is %.6f at one bounce "
+                         "and %.6f at three. It must strictly increase with the bounce count in "
+                         "this closed-box scene (every path is alive at every bounce), because it "
+                         "equals the arrival throughput summed over every hit vertex -- more "
+                         "bounces means more vertices. Equal values would mean emission is only "
+                         "reaching the film at bounce 0, not at every hit vertex\n",
+                         measurements[0].analytic, measurements[2].analytic);
+            wf.destroy(ctx.allocator());
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        std::printf(
+            "[diff_gpu_probe] OK: check 42 -- the gradient shaders/diff/wf_scatter_replay.comp "
+            "scatters into the arena for DIFF_PARAM_EMISSION IS the derivative of the film "
+            "shaders/diff/wf_scatter.comp accumulates. J(emission) is EXACTLY LINEAR (dT_b/d"
+            "(emission) = 0 and dLr_b/d(emission) = 0 for every b -- neither the throughput "
+            "recursion nor the MIS-combined direct term ever reads pc.emission), so the only "
+            "error term is roundoff. Common random numbers, seed %u, %u paths at one sample per "
+            "pixel, h = 2^-7 = %.9g (derived: h* = (3*eps)^(1/3)*L at eps = %.0e, L = %.2g is "
+            "~1.090e-2; this is the nearest power of two -- NOT the true optimum, since the "
+            "truncation half of the model is identically zero here and a larger h would resolve "
+            "even better; kept for derivation-procedure consistency with Tasks 2/3). PLAIN CRN "
+            "MEASURED VALID: %zu vertex-trace geometry mismatches across all 6 perturbed renders "
+            "(3 bounce counts x 2 perturbations), against a nonzero count for roughness/metallic "
+            "at check 41 -- this parameter genuinely does not need Task 3's detached instrument.\n"
+            "    1 bounce : FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g (roundoff only)\n"
+            "    2 bounces: FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g (roundoff only)\n"
+            "    3 bounces: FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g (roundoff only)\n"
+            "  Worst |err|/bound %.4g; worst bound/gradient %.3g; worst |analytic/FD - 1| %.3g "
+            "(pre-registered limit %.3g for both). dJ/d(emission) rises from %.4f at one bounce "
+            "to %.4f at three, so every hit vertex is carrying real weight, not just bounce 0\n",
+            kGradientSeed, kW * kH, static_cast<double>(kStep), kFilmRelativeEps,
+            static_cast<double>(kEmission), totalTraceMismatches, measurements[0].finiteDiff,
+            measurements[0].analytic, measurements[0].absError, measurements[0].errorBound,
+            measurements[1].finiteDiff, measurements[1].analytic, measurements[1].absError,
+            measurements[1].errorBound, measurements[2].finiteDiff, measurements[2].analytic,
+            measurements[2].absError, measurements[2].errorBound, worstRatio, worstResolution,
+            worstMagnitudeError, kMaxGradientResolution, measurements[0].analytic,
+            measurements[2].analytic);
+
+        // -----------------------------------------------------------------
+        // 43. THE NULL TEST. Exactly zero, not "small" -- check 38's shape,
+        // applied to the emission block. See check 38 for the full
+        // rationale (a scatter into the wrong element is invisible to
+        // check 42, which reads only the addressed float); this restates it
+        // for a SECOND registered parameter to confirm the plumbing
+        // generalises rather than happening to work for one.
+        // -----------------------------------------------------------------
+        struct NullBlock {
+            const char* name;
+            std::size_t index;
+            std::size_t expectedFloats;
+        };
+        const NullBlock nullBlocks[3] = {
+            {"emission's Adam m/v state", emissionParam->stateBlock,
+             emissionParam->floatCount * 2u},
+            {"unused_scalar_emission's gradient", unusedParam->gradBlock, unusedParam->floatCount},
+            {"unused_scalar_emission's Adam m/v state", unusedParam->stateBlock,
+             unusedParam->floatCount * 2u},
+        };
+
+        const std::vector<float> wholeArena = gradArena.readbackAll(ctx.allocator());
+        if (wholeArena.size() != static_cast<std::size_t>(kGradArenaFloats)) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 43 -- the whole-arena readback returned "
+                         "%zu floats, expected %u. A null test over the wrong number of floats "
+                         "is not a null test\n",
+                         wholeArena.size(), kGradArenaFloats);
+            wf.destroy(ctx.allocator());
+            gradArena.destroy(ctx.allocator());
+            return 1;
+        }
+
+        auto describeArenaFloat = [&](std::size_t f) -> std::string {
+            for (const NullBlock& nb : nullBlocks) {
+                const ohao::diff::ArenaBlock b = gradReg.layout().block(nb.index);
+                const std::size_t first = b.offsetBytes / sizeof(float);
+                const std::size_t count = b.sizeBytes / sizeof(float);
+                if (f >= first && f < first + count) {
+                    return std::string(nb.name) + ", element " + std::to_string(f - first) +
+                           " of arena block " + std::to_string(nb.index);
+                }
+            }
+            return "256-byte alignment padding owned by no block";
+        };
+
+        std::size_t nullFloatsChecked = 0;
+        for (std::size_t f = 0; f < wholeArena.size(); ++f) {
+            if (f == static_cast<std::size_t>(kGradEmissionOffset)) continue;  // the one written
+            ++nullFloatsChecked;
+            if (wholeArena[f] != 0.0f) {
+                std::fprintf(
+                    stderr,
+                    "[diff_gpu_probe] FAIL: check 43 -- arena float %zu (%s) is %.9g and must be "
+                    "EXACTLY 0. The traversal's only arena write for DIFF_PARAM_EMISSION is one "
+                    "atomicAdd at ScatterPush::gradAlbedoOffset + k with k = 0, i.e. arena float "
+                    "%u, which is element 0 of block %zu. A non-zero anywhere else is a scatter "
+                    "that landed outside the element it was told to write -- which check 42 is "
+                    "blind to, since it reads only that one float\n",
+                    f, describeArenaFloat(f).c_str(), static_cast<double>(wholeArena[f]),
+                    kGradEmissionOffset, emissionParam->gradBlock);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+        }
+
+        std::size_t namedNullFloats = 0;
+        for (const NullBlock& nb : nullBlocks) {
+            const ohao::diff::ArenaBlock b = gradReg.layout().block(nb.index);
+            const std::size_t first = b.offsetBytes / sizeof(float);
+            const std::size_t count = b.sizeBytes / sizeof(float);
+            if (count != nb.expectedFloats || first + count > wholeArena.size()) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 43 -- block %zu (%s) spans floats "
+                             "[%zu, %zu) of a %zu-float arena and holds %zu floats, expected "
+                             "%zu. The whole-arena scan cannot claim to cover a block it does "
+                             "not contain\n",
+                             nb.index, nb.name, first, first + count, wholeArena.size(), count,
+                             nb.expectedFloats);
+                wf.destroy(ctx.allocator());
+                gradArena.destroy(ctx.allocator());
+                return 1;
+            }
+            namedNullFloats += count;
+        }
+
+        std::printf(
+            "[diff_gpu_probe] OK: check 43 -- the null test for DIFF_PARAM_EMISSION: after a run "
+            "that accumulated %.9g into arena float %u (element 0 of the emission's gradient "
+            "block, block %zu), ALL %zu other floats of the %u-float arena are EXACTLY 0.0f, "
+            "compared as floats and not through a tolerance -- emission's Adam m/v state and both "
+            "blocks of a second registered parameter the scene does not depend on (%zu floats), "
+            "plus %zu floats of 256-byte alignment padding\n",
+            measurements[2].analytic, kGradEmissionOffset, emissionParam->gradBlock,
+            nullFloatsChecked, kGradArenaFloats, namedNullFloats,
+            nullFloatsChecked - namedNullFloats);
+
+        wf.destroy(ctx.allocator());
+        gradArena.destroy(ctx.allocator());
     }
 
     arena.destroy(ctx.allocator());

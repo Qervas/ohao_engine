@@ -152,7 +152,17 @@
 // bit-exactly across runs of the same seed, and must sum multi-sample films
 // on the host rather than accumulating them in one dispatch.
 void diffVertexHook(inout DiffVertex v) {
-    const vec3 filmContribution = v.throughput * v.Lr;
+    // Stage 1 Task 4: self-emission. `pc.emission` is ADDED here, alongside
+    // `v.Lr`, and is never blended into the MIS-combined sum `Lr` itself is
+    // built from -- see traverse.glsl's Push block and its film note, and
+    // bsdf_adjoint.glsl's DIFF_PARAM_EMISSION section for why that
+    // separation is what keeps dLr/d(emission) exactly zero. `v.throughput`
+    // is already zero on the miss path (traverse.glsl leaves it at
+    // vec3(0.0) there), so this needs no separate `v.hit` guard to
+    // contribute nothing on a miss. `pc.emission` defaults to 0.0, so for
+    // every dispatch that predates this task this is bit-identically
+    // `v.throughput * v.Lr`, unchanged.
+    const vec3 filmContribution = v.throughput * (v.Lr + vec3(pc.emission));
 
     if (pc.filmPixelCount > 0u && v.pixelIndex < pc.filmPixelCount) {
         const uint fb = v.pixelIndex * 3u;
