@@ -299,6 +299,28 @@ It pays for three things at once:
    unless `theta+h` and `theta-h` draw identical samples.
 3. **Reproducibility.** A gradient bug that cannot be reproduced cannot be fixed.
 
+**The invariant holds for the PATH and not for the FILM (measured 2026-08-28, Stage 0b-2b).** The
+path side is sound and was verified by reading at the close of the integrator stage: `kDrawsPerBounce`
+is branch-independent (the lobe draw is unconditional and both environment draws are taken *before*
+the miss guard, so a hit and a miss consume identical stream positions), the fast-forward reads
+`bounce` from path state alone, and the rejected-sample substitution reuses its draws
+deterministically.
+
+The **film** is a different matter. At more than one sample per pixel, several paths belonging to one
+pixel `atomicAdd` the same three floats within a single dispatch, and floating-point addition is not
+associative — so the accumulated value depends on a scheduling order the seed does not control. The
+film is therefore *not* a pure function of `(pixel, sampleIndex, iterationSeed)` at >1 spp.
+
+Nothing observes this today: every probe in Stage 0b-2b runs exactly 1 spp, and the film check
+asserts `pixelHits[p] == 1` as a hard failure precisely because its per-bounce reconstruction depends
+on that. **A PRB forward/backward comparison at multi-spp would observe it**, and would present as a
+gradient that is *almost* right and irreproducible between runs — the single hardest failure mode to
+attribute, and one that would look like a backward-pass bug while being an accumulation-order artefact.
+
+Stage 1 must therefore either keep replay at 1 spp per dispatch, accumulate per-path and reduce
+deterministically, or accept and document a tolerance that covers atomic reordering. Choosing that
+before writing the backward pass is much cheaper than diagnosing it afterwards.
+
 The existing Sobol + Owen scramble sampler (`sobol_generator.cpp`, `owen_scramble.cpp`) is already
 index-addressable — "sample N of dimension D" as a pure function — so the right sampler is already
 in the tree.
