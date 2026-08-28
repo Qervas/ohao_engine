@@ -1498,8 +1498,13 @@ int main() {
             if (fusedLiveCounts[b] != kCapacity) {
                 std::fprintf(stderr,
                              "[diff_gpu_probe] FAIL: fused loop of %u bounces left %u live paths, "
-                             "expected all %u -- either a path escaped the closed box scene, or "
-                             "a compaction counter slot was not zeroed before its atomicAdd\n",
+                             "expected all %u -- survival here is conditional on wf_intersect.comp "
+                             "writing the CORRECT stored normal (see the survival derivation's "
+                             "\"Normal\" step in gpu_probe_context.cpp), so a wrong or missing "
+                             "normal sending a path's scattered direction out through the wrong "
+                             "face is the most likely cause; also consider a path that escaped the "
+                             "closed box scene some other way, or a compaction counter slot not "
+                             "zeroed before its atomicAdd\n",
                              b + 1u, fusedLiveCounts[b], kCapacity);
                 wf.destroy(ctx.allocator());
                 return 1;
@@ -1692,6 +1697,28 @@ int main() {
     // the distance to any other face's normal. HitT gets a relative bound of
     // 1e-4, loose enough for the ray-triangle solve and far tighter than the
     // gap between adjacent faces' distances.
+    //
+    // LIMITATION: this check CANNOT distinguish a face from its opposite.
+    // The stored normal's sign comes entirely from wf_intersect.comp's flip
+    // against the ray direction, not from which primitive was actually hit:
+    // for any triangle whose cross product lies on axis k, the stored
+    // normal is -sign(d_k) * e_k regardless of which triangle's index was
+    // actually looked up. buildAxisAlignedBoxGeometry emits each face's two
+    // triangles adjacently, axis by axis (tris 0,1 = +X; 2,3 = -X; 4,5 =
+    // +Y; 6,7 = -Y; 8,9 = +Z; 10,11 = -Z), so a primitive-index bug of the
+    // form `primitive ^ 1` (the OTHER triangle of the SAME face) or
+    // `primitive ^ 2` (the OPPOSITE face, same axis) reads back a triangle
+    // whose cross product still lies on the same axis with the same sign,
+    // so it still normalize()s to the exact expected normal -- and HitT
+    // (from rayQueryGetIntersectionTEXT, which never goes through the index
+    // lookup at all) is unaffected by the bug in the first place. Both
+    // assertions above would pass with the wrong triangle read. The
+    // residual bug class this leaves uncaught is narrow -- an off-by-a-
+    // different-amount indexing bug such as `primitive + 1` still fails
+    // outright on 3 of the 6 faces, and a stride or scale error in the
+    // index lookup fails everywhere -- but it is real, and this check does
+    // not close it. It is not weakened to pretend otherwise; this is simply
+    // what it does not cover.
     {
         // kH is ODD and kW EVEN on purpose -- see the tie-freedom note above.
         constexpr uint32_t kW = 64;
@@ -1868,22 +1895,59 @@ int main() {
             }
         }
 
-        // Non-degeneracy: if this scene somehow collapsed to a single face,
-        // the check would be no stronger than asserting one constant -- the
-        // exact weakness it exists to remove.
+        // Non-degeneracy: this scene reaches exactly FIVE of the box's six
+        // faces, not "at least three" -- the sixth, +Z, is unreachable BY
+        // CONSTRUCTION, not by bad luck on this run. The camera used above
+        // is WavefrontGenerateCamera's default (only tanHalfFov is
+        // overridden), whose forward is (0,0,-1); camera_ray.glsl's
+        // dir = normalize(forward + right*(...) + up*(...)) only ever picks
+        // up a z-component from `forward` (right and up are both z == 0
+        // here), so every primary ray has d_z < 0 and none can exit through
+        // +Z. faceHits[4] is +Z's bucket (2*axis + (d[axis]>0 ? 0 : 1) with
+        // axis == 2, sign > 0 -- see the faceHits indexing comment above the
+        // loop), so it must be exactly 0; the other five buckets (+X -X +Y
+        // -Y -Z: faceHits[0,1,2,3,5]) must each be nonzero. Asserting each
+        // face individually, rather than a floor on the count reached, is
+        // what makes a future FOV or resolution change that collapsed
+        // coverage to three faces fail here instead of passing silently --
+        // and it also catches the oracle's own ray model being wrong: if
+        // +Z ever came out nonzero, a sign got flipped somewhere and this
+        // check's normals could no longer be trusted either.
+        //
+        // (-Z alone always totals exactly 600 at this kW/kH/tanHalfFov: the
+        // argmax-of-|d_k| condition works out to |2x+1-kW| < kH/tanHalfFov,
+        // i.e. |2x+1-64| < 24.5, giving x in [20,43] (24 columns), and
+        // |kH-2y-1| < kH/tanHalfFov, i.e. |48-2y| < 24.5, giving y in
+        // [12,36] (25 rows); 24*25 == 600. Not asserted as an exact count
+        // here -- that arithmetic belongs in a comment, not baked into a
+        // brittle assertion -- but it is why -Z's count in the OK: line
+        // below is always 600.)
+        static constexpr uint32_t kUnreachableFaceZPlus = 4u;
+        static constexpr const char* kFaceNames[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+        bool faceCoverageOk = true;
+        for (uint32_t f = 0; f < 6u; ++f) {
+            const bool shouldBeReached = (f != kUnreachableFaceZPlus);
+            const bool reached = faceHits[f] != 0u;
+            if (reached != shouldBeReached) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: normal probe face %s (bucket %u) got %u hits, "
+                             "expected %s -- +Z is unreachable by construction (camera forward is "
+                             "(0,0,-1), so d_z < 0 for every primary ray) and the other five faces "
+                             "must each be reached at least once (+X %u, -X %u, +Y %u, -Y %u, "
+                             "+Z %u, -Z %u)\n",
+                             kFaceNames[f], f, faceHits[f], shouldBeReached ? "nonzero" : "exactly 0",
+                             faceHits[0], faceHits[1], faceHits[2], faceHits[3], faceHits[4],
+                             faceHits[5]);
+                faceCoverageOk = false;
+            }
+        }
+        if (!faceCoverageOk) {
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
         uint32_t facesReached = 0;
         for (uint32_t f = 0; f < 6u; ++f) {
             if (faceHits[f] != 0u) ++facesReached;
-        }
-        if (facesReached < 3u) {
-            std::fprintf(stderr,
-                         "[diff_gpu_probe] FAIL: normal probe reached only %u distinct box faces "
-                         "(+X %u, -X %u, +Y %u, -Y %u, +Z %u, -Z %u); a check that only ever sees "
-                         "one or two normals cannot distinguish a real normal from a constant\n",
-                         facesReached, faceHits[0], faceHits[1], faceHits[2], faceHits[3],
-                         faceHits[4], faceHits[5]);
-            wf.destroy(ctx.allocator());
-            return 1;
         }
 
         std::printf("[diff_gpu_probe] OK: wf_intersect geometric normals match the analytic "

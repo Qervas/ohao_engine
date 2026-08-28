@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace ohao::diff {
@@ -1521,12 +1522,49 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
 // rests on (the diagonal against tMax, the offset against E, the camera
 // inside B) is broken by a future change to those constants.
 //
-// The one caveat the induction names -- a hit landing exactly on an edge of
-// B, where the next origin sits on the boundary rather than inside it -- is
-// a measure-zero set of directions, and it is not silently tolerated: check
-// 16 asserts every one of the capacity paths survives every bounce, so a
-// path that did fall out of the scene fails the probe rather than skewing
+// THREE CAVEATS, not one, and none of them silently tolerated: check 16
+// asserts every one of the capacity paths survives every bounce, so any path
+// that actually falls out of the scene fails the probe rather than skewing
 // it.
+//
+//   1. The edge exclusion is a FLOAT BAND, not a measure-zero set. The Step
+//      above reasons about the exact real-number exit point q = p + t* d,
+//      but wf_scatter.comp:153 reconstructs it in float as
+//      hitPoint = origin + dir * hitT rather than using an exact intersection
+//      point, so on a FREE axis (one not fixed by the face) |q_j| can exceed
+//      E by about ulp(4) ~= 5e-7 due to that reconstruction's rounding. A hit
+//      within that band of an edge is not exactly ON the edge but IS outside
+//      the box after reconstruction, so the induction's "p' is in int(B)
+//      again" step fails and the path dies next bounce. Correct statement:
+//      within ~1e-6 of an edge, not exactly on one; at 512 paths and a box
+//      whose edges are a vanishingly thin sliver of the sphere of
+//      directions, the probability of landing in that band on any given
+//      bounce is of order 1e-3 per run -- still negligible, still caught
+//      loudly by check 16 rather than silently skewing a result, but not
+//      literally zero the way "measure-zero" claims.
+//
+//   2. The face-internal triangulation diagonal is a SECOND, distinct
+//      window, independent of (1). Each face is two triangles sharing a
+//      diagonal (see buildAxisAlignedBoxGeometry), and a ray aimed exactly
+//      at that diagonal is a case the derivation's "lies on some face"
+//      step glosses over: Vulkan's ray-triangle watertightness language for
+//      a ray through a shared edge between two triangles is a SHOULD, not a
+//      MUST (VK_KHR_ray_query / VK_KHR_acceleration_structure leave exact
+//      watertightness at shared edges as non-normative guidance, not a
+//      guarantee this derivation is entitled to lean on).
+//
+//   3. The theorem is now CONDITIONAL on the feature under test. The
+//      "Normal" step above assumes wf_intersect.comp writes the correct
+//      forward-facing geometric normal; if it does not (a wrong sign, a
+//      swapped axis, a stale value), a scattered direction can point back
+//      out through the surface instead of into B, breaking the induction's
+//      "p' is in int(B) again" step directly. That is precisely what makes
+//      check 16 a genuine, independent-looking observer of a normal bug --
+//      the task's own failure demonstration tripped check 16 before the
+//      dedicated normals check (19) -- but it also means check 16's
+//      guarantee is no longer independent of what Task 1 added: it is now a
+//      joint statement about the scene AND about wf_intersect.comp's normal
+//      being correct, not about the scene alone.
 namespace {
 
 /// wf_generate.comp's local_size_y. WavefrontStage's Fixed group-count
@@ -1558,7 +1596,10 @@ constexpr float kFusedLoopRayTMax = 1000.0f;
 
 /// wf_scatter.comp's ray-origin epsilon offset along the geometric normal,
 /// mirrored here for the same reason: the induction needs it to be smaller
-/// than the half-extent, or the "next origin is still inside" step fails.
+/// than the half-extent, or the "next origin is still inside" step fails --
+/// AND larger than float resolution at the box's scale, or the offset
+/// rounds away to nothing and the "next origin is still inside" step fails
+/// the other way (see kFusedLoopScatterOriginOffsetMinBound below).
 constexpr float kFusedLoopScatterOriginOffset = 1e-4f;
 
 /// The camera, which must sit strictly inside the box for the induction's
@@ -1579,6 +1620,25 @@ constexpr float kFusedLoopAbs(float v) { return v < 0.0f ? -v : v; }
 /// diagonal. Every committed hit is at t* <= this.
 constexpr float kFusedLoopBoxDiagonal() { return 2.0f * kFusedLoopBoxHalfExtent * kSqrt3; }
 
+/// Lower bound on kFusedLoopScatterOriginOffset. With wf_intersect.comp's
+/// tMin at exactly 0 (see that shader's comment), the ENTIRE
+/// self-intersection guarantee rests on the scatter offset being large
+/// relative to float resolution at the box's scale -- not merely small
+/// relative to the half-extent, which is a completely different, unrelated
+/// bound (see the comment above kFusedLoopScatterOriginOffset). A face at
+/// |coordinate| == E has an ulp of E * epsilon(); if the offset is at or
+/// below that, `q + offset * N` rounds back to `q` exactly in float, and
+/// the next ray origin lands ON the surface with tMin == 0 -- ray-tracing
+/// APIs make no promise about a ray whose origin is exactly on a triangle
+/// it did not just leave a genuine distance from, and a self-intersection
+/// there would look like a path randomly dying via check 16.
+///
+/// 8x is a generous, round margin over the 1-ulp threshold where the
+/// guarantee actually first breaks -- not a tight bound.
+constexpr float kFusedLoopScatterOriginOffsetMinBound() {
+    return 8.0f * kFusedLoopBoxHalfExtent * std::numeric_limits<float>::epsilon();
+}
+
 constexpr float kFusedLoopCameraMaxAbsCoord() {
     float m = kFusedLoopAbs(kFusedLoopCameraX);
     if (kFusedLoopAbs(kFusedLoopCameraY) > m) m = kFusedLoopAbs(kFusedLoopCameraY);
@@ -1586,32 +1646,45 @@ constexpr float kFusedLoopCameraMaxAbsCoord() {
     return m;
 }
 
-/// True iff this box scene can GUARANTEE -- not merely make likely -- that
-/// every path survives `maxBounces` fused bounces. These are exactly the
-/// hypotheses the induction in this section's header rests on:
-///
-///   1. `maxBounces >= 1`. A zero-bounce run has nothing to guarantee.
-///   2. The box's space diagonal fits inside wf_intersect.comp's tMax, so
-///      no exit hit is ever rejected as too far.
-///   3. wf_scatter.comp's origin offset is smaller than the half-extent, so
-///      stepping off a face lands strictly inside the box rather than
-///      through the opposite one.
-///   4. The camera is strictly inside the box, which is the induction's
-///      base case.
-///
-/// Unlike the staircase this replaced, NONE of conditions 2-4 depends on
-/// `maxBounces`: the induction is uniform in the bounce count, so a scene
-/// that survives one bounce survives a thousand. `maxBounces` is still a
-/// parameter, and this is still evaluated at RUNTIME against whatever the
-/// caller passed, because that is what makes a future change to E, to
-/// wf_intersect.comp's tMax, or to wf_scatter.comp's offset fail loudly here
-/// instead of quietly turning check 16's hard `== kCapacity` equality into
-/// something that merely happens to hold on this run.
-constexpr bool kFusedLoopSceneSafeForBounces(uint32_t maxBounces) {
-    return maxBounces >= 1u && kFusedLoopBoxDiagonal() <= kFusedLoopRayTMax &&
-           kFusedLoopScatterOriginOffset < kFusedLoopBoxHalfExtent &&
-           kFusedLoopCameraMaxAbsCoord() < kFusedLoopBoxHalfExtent;
-}
+// These are exactly the hypotheses the survival induction in this section's
+// header rests on, other than `maxBounces >= 1` (checked at RUNTIME below,
+// against the caller's actual argument, where a zero-bounce run is rejected
+// alongside this probe's other dispatch-shape requirements):
+//
+//   1. The box's space diagonal fits inside wf_intersect.comp's tMax, so no
+//      exit hit is ever rejected as too far.
+//   2. wf_scatter.comp's origin offset is smaller than the half-extent, so
+//      stepping off a face lands strictly inside the box rather than
+//      through the opposite one.
+//   3. wf_scatter.comp's origin offset is larger than float resolution at
+//      the box's scale, so it survives rounding and the next ray origin is
+//      not left sitting exactly on the surface it just left (tMin == 0 --
+//      see wf_intersect.comp and kFusedLoopScatterOriginOffsetMinBound).
+//   4. The camera is strictly inside the box, which is the induction's base
+//      case.
+//
+// Every one of these is a compile-time constant -- unlike the staircase
+// scene this box replaced, NONE of them depends on `maxBounces`, since the
+// induction is uniform in the bounce count (a scene that survives one
+// bounce survives a thousand) -- so they are asserted at BUILD time,
+// unconditionally, rather than only when this probe happens to run. A
+// future edit to E, to wf_intersect.comp's mirrored tMax, or to
+// wf_scatter.comp's mirrored offset fails the build instead of quietly
+// turning check 16's hard `== kCapacity` equality into something that
+// merely happens to hold on this run.
+static_assert(kFusedLoopBoxDiagonal() <= kFusedLoopRayTMax,
+              "fused-loop box's space diagonal must fit inside wf_intersect.comp's ray tMax, or "
+              "some exit hit is rejected as too far and the survival induction's step (b) fails");
+static_assert(kFusedLoopScatterOriginOffset < kFusedLoopBoxHalfExtent,
+              "fused-loop scatter origin offset must be smaller than the box half-extent, or "
+              "stepping off a face can land through the opposite one");
+static_assert(kFusedLoopScatterOriginOffset > kFusedLoopScatterOriginOffsetMinBound(),
+              "fused-loop scatter origin offset must exceed float resolution at the box's scale "
+              "(see kFusedLoopScatterOriginOffsetMinBound), or it rounds away to nothing and the "
+              "next ray origin lands ON the surface with wf_intersect.comp's tMin == 0");
+static_assert(kFusedLoopCameraMaxAbsCoord() < kFusedLoopBoxHalfExtent,
+              "fused-loop camera must sit strictly inside the box, which is the survival "
+              "induction's base case");
 
 }  // namespace
 
@@ -1675,33 +1748,14 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                      maxBounces);
         return false;
     }
-    // This scene's "every path survives every bounce" guarantee holds only
-    // while the hypotheses of the induction in the scene-constants header
-    // above hold -- see kFusedLoopSceneSafeForBounces. Fail loudly here,
-    // rather than silently letting a changed constant turn check 16's hard
-    // `== kCapacity` equality (and the throughput/RNG checks built on top of
-    // it) from a certainty into something that merely happens to pass on
-    // this run. This is a runtime check, not a static_assert, because
-    // maxBounces is a runtime parameter of this function with no
-    // compile-time-constant value in this translation unit to assert
-    // against.
-    if (!kFusedLoopSceneSafeForBounces(maxBounces)) {
-        std::fprintf(stderr,
-                     "[GpuProbeContext] runWavefrontFusedLoopProbe: this box scene cannot "
-                     "GUARANTEE that every path survives %u bounces. Hypotheses of the survival "
-                     "induction (see the scene-constants header): maxBounces >= 1 (%u); box space "
-                     "diagonal %.3f <= ray tMax %.1f; scatter origin offset %g < half-extent "
-                     "%.3f; camera max |coord| %.3f < half-extent %.3f. Fix the constant that "
-                     "broke, or lower maxBounces; do not proceed and rely on this run happening "
-                     "to pass\n",
-                     maxBounces, maxBounces, static_cast<double>(kFusedLoopBoxDiagonal()),
-                     static_cast<double>(kFusedLoopRayTMax),
-                     static_cast<double>(kFusedLoopScatterOriginOffset),
-                     static_cast<double>(kFusedLoopBoxHalfExtent),
-                     static_cast<double>(kFusedLoopCameraMaxAbsCoord()),
-                     static_cast<double>(kFusedLoopBoxHalfExtent));
-        return false;
-    }
+    // This scene's "every path survives every bounce" guarantee also needs
+    // maxBounces >= 1 (a zero-bounce run has nothing to guarantee), which is
+    // exactly the condition already checked and reported above, alongside
+    // this probe's other dispatch-shape requirements -- so it is not
+    // repeated here. Every other hypothesis of the survival induction (see
+    // the scene-constants header above) is a compile-time constant and is
+    // enforced by the static_asserts just above this function, which fail
+    // the BUILD, unconditionally, rather than only when this probe runs.
 
     // --- Scene: the closed box derived above. ---
     std::vector<float> positions;
@@ -1866,8 +1920,8 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
         // it replaced, no direction is privileged: whichever way a primary
         // ray goes it leaves through a face, so the camera basis below is
         // free to be the plain identity one. These fields are pushed from
-        // the same constants kFusedLoopSceneSafeForBounces checks, so the
-        // camera the guard reasons about is the camera the probe uses.
+        // the same constants the static_asserts above check, so the camera
+        // the build-time guard reasons about is the camera the probe uses.
         GeneratePush genPush{};
         genPush.origin[0] = kFusedLoopCameraX;
         genPush.origin[1] = kFusedLoopCameraY;

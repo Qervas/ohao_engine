@@ -268,10 +268,13 @@ public:
     /// the body's longest chord, and the scatter stage's offset along the
     /// inward normal puts the next origin strictly inside again. The
     /// guarantee is therefore UNIFORM in the bounce count rather than
-    /// decaying with it -- see kFusedLoopSceneSafeForBounces, whose
-    /// conditions (space diagonal vs. wf_intersect.comp's tMax, scatter
-    /// offset vs. half-extent, camera inside the box) are what the runtime
-    /// guard below checks.
+    /// decaying with it -- see the static_asserts next to the fused-loop
+    /// scene constants in the .cpp (space diagonal vs. wf_intersect.comp's
+    /// tMax, scatter offset vs. half-extent both above AND below float
+    /// resolution at the box's scale, camera inside the box), which enforce
+    /// every one of those conditions at BUILD time since none of them
+    /// depends on `maxBounces`; only `maxBounces >= 1` is still checked at
+    /// runtime, alongside this probe's dispatch-shape requirements.
     ///
     /// This does NOT make the throughput assertion (check 17 in
     /// diff_gpu_probe.cpp) pass vacuously, and it is not check 16 (the

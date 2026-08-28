@@ -26,6 +26,11 @@ enum class PathStateField : std::uint32_t {
     // scatter stage's hemisphere basis needs; the raw winding-order normal
     // is deliberately not what is stored.
     //
+    // UNDEFINED ON A MISS: wf_intersect.comp leaves these three fields
+    // untouched when HitT is set to -1 (no surface, so no normal to write).
+    // Any read of Normal must gate on HitT >= 0 first -- on a miss this
+    // holds whatever the arena held before that bounce, not a sentinel.
+    //
     // Three scalar fields rather than one packed octahedral field. That is a
     // decision, not an oversight -- see shaders/includes/common/encoding.glsl
     // for the packing that was NOT used, and this file's git history / the

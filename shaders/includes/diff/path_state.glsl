@@ -135,6 +135,13 @@ void psSetRadiance(uint pathIndex, uint capacity, vec3 v) {
     psSetScalar(PS_RADIANCE_B, pathIndex, capacity, v.z);
 }
 
+// UNDEFINED ON A MISS. wf_intersect.comp deliberately leaves PS_NORMAL_X/Y/Z
+// untouched when a ray misses (see that shader's comment at its miss
+// branch) -- there is no surface to report a normal for, and writing a
+// placeholder would make a stale value indistinguishable from a real one.
+// Callers MUST gate any read of this on HitT >= 0 (psGetHitT(...) >= 0.0);
+// on a miss this returns whatever the arena happened to hold before this
+// bounce, not a sentinel.
 vec3 psGetNormal(uint pathIndex, uint capacity) {
     return vec3(psGetScalar(PS_NORMAL_X, pathIndex, capacity),
                 psGetScalar(PS_NORMAL_Y, pathIndex, capacity),

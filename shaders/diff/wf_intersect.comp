@@ -114,18 +114,35 @@ void main() {
 
     rayQueryEXT rq;
     // tMin is 0, not an epsilon. An epsilon here is not a self-intersection
-    // guard -- wf_scatter.comp already offsets the next ray's origin along
-    // the geometric normal and only ever samples directions with
-    // dot(dir, normal) > 0, so a ray provably moves AWAY from the surface it
-    // just left and cannot re-hit it at any t. What a positive tMin does
-    // instead is silently DROP legitimate hits closer than it: on a closed
-    // scene, a bounce that lands within tMin of an edge would have its next,
-    // perfectly real hit on the adjoining face rejected, the ray would leave
-    // the scene through the gap, and the path would die. That turns "every
-    // path survives every bounce" from a theorem about the geometry into a
-    // near-edge probability -- see the survival derivation in
-    // gpu_probe_context.cpp's fused-loop scene constants, which depends on
-    // tMin being exactly 0.
+    // guard -- for a SCATTERED ray, wf_scatter.comp already offsets the next
+    // ray's origin along the geometric normal and only ever samples
+    // directions with dot(dir, normal) > 0, so that ray provably moves AWAY
+    // from the surface it just left and cannot re-hit it at any t. What a
+    // positive tMin does instead is silently DROP legitimate hits closer
+    // than it: on a closed scene, a bounce that lands within tMin of an edge
+    // would have its next, perfectly real hit on the adjoining face
+    // rejected, the ray would leave the scene through the gap, and the path
+    // would die. That turns "every path survives every bounce" from a
+    // theorem about the geometry into a near-edge probability -- see the
+    // survival derivation in gpu_probe_context.cpp's fused-loop scene
+    // constants, which depends on tMin being exactly 0.
+    //
+    // A PRIMARY ray (this bounce's first trace of a path, straight out of
+    // wf_generate.comp) has none of that -- there is no 1e-4*normal offset
+    // to reason about, because there was no prior hit to offset away from.
+    // Its tMin = 0 safety rests on a different, simpler hypothesis instead:
+    // the camera is not already sitting on a surface. wf_generate.comp:60
+    // writes the camera position into path state verbatim, with no offset
+    // of its own, so that hypothesis is exactly "the camera position is
+    // strictly inside the scene, not on its boundary" -- which is precisely
+    // what the fused-loop scene guard's condition 4 (camera max |coord| <
+    // half-extent E) checks for the camera this probe actually uses. So the
+    // same tMin = 0 both scattered and primary rays trace with is justified
+    // by two different hypotheses -- the scatter offset for scattered rays,
+    // the camera-not-on-a-surface guard for primary rays -- and both are
+    // enforced, not assumed: see the static_asserts next to the fused-loop
+    // scene constants in gpu_probe_context.cpp and this file's own
+    // scattered-ray argument above.
     rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.0, dir, 1000.0);
     while (rayQueryProceedEXT(rq)) { }
 
