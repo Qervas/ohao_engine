@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -81,6 +82,14 @@ public:
     [[nodiscard]] VkPipeline pipeline() const noexcept { return m_pipeline; }
     [[nodiscard]] VkPipelineLayout layout() const noexcept { return m_pipelineLayout; }
     [[nodiscard]] VkDescriptorSet descriptorSet() const noexcept { return m_descriptorSet; }
+
+    /// How many bindings build() declared, i.e. how many descriptors the
+    /// set has to have written into it before a dispatch against it is
+    /// well defined. Zero before a successful build() and after destroy().
+    /// Exposed for WavefrontStage::record's fail-closed guard, which needs
+    /// to know what "fully bound" MEANS for this pipeline rather than
+    /// settling for "at least one bind call succeeded".
+    [[nodiscard]] std::size_t bindingCount() const noexcept { return m_bindingTypes.size(); }
 
     /// Writes `buffers[i]` as a VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
     /// descriptor at binding `i` (0-based) -- i.e. `buffers` is assumed to

@@ -125,13 +125,19 @@ public:
     /// never a barrier (see class comment).
     ///
     /// Precondition: the most recent build() on this object succeeded and
-    /// was not followed by destroy(), AND a bindBuffers()/
-    /// bindAccelerationStructure() call has succeeded since that build()
-    /// (see m_bound below -- build() allocates the descriptor set but does
-    /// not write it, so a built-but-never-bound stage has a non-null
+    /// was not followed by destroy(), AND EVERY binding that build()
+    /// declared has since been written by a successful bindBuffers() /
+    /// bindStorageBuffer() / bindAccelerationStructure() call (see
+    /// m_boundBindings below -- build() allocates the descriptor set but
+    /// does not write it, so a built-but-never-bound stage has a non-null
     /// descriptor set whose bindings were never populated by
-    /// vkUpdateDescriptorSets). Calling record() on a stage that was never
-    /// built, was destroyed, or was built but never bound, is a caller bug:
+    /// vkUpdateDescriptorSets). "Every binding", not "at least one bind
+    /// call": bindStorageBuffer writes ONE arbitrary binding, so a stage
+    /// bound only by e.g. bindStorageBuffer(9, film) would otherwise satisfy
+    /// a one-bit flag while bindings 0-8 stayed unwritten -- exactly the
+    /// built-but-never-bound case this precondition exists to catch.
+    /// Calling record() on a stage that was never built, was destroyed, or
+    /// was not fully bound, is a caller bug:
     /// this method returns void rather than bool because every vkCmd* call
     /// it wraps is itself void and fails only through validation layers or
     /// device loss, and a bool return here would imply a caller could
@@ -154,14 +160,46 @@ private:
     std::vector<std::byte> m_pushConstants;
     GroupCountSource m_groupCount{Fixed{0}};
 
-    // Set true by a successful bindBuffers()/bindAccelerationStructure();
-    // cleared by destroy() and by build() (even a successful one -- a
-    // freshly (re)built stage's descriptor set is unwritten regardless of
-    // whether a previous build()/bind() cycle on this object had set this
-    // true). record() fails closed on this being false the same way it
-    // fails closed on a null pipeline/layout/descriptor-set handle -- see
-    // record()'s precondition doc above.
-    bool m_bound{false};
+    // One bit per descriptor binding this stage's pipeline declares, set by
+    // whichever bind call wrote that binding: bindBuffers sets bits
+    // 0..N-1 for the N-buffer prefix it writes, bindStorageBuffer and
+    // bindAccelerationStructure each set the single bit they write. Cleared
+    // by destroy() and by build() (even a successful one -- a freshly
+    // (re)built stage's descriptor set is unwritten regardless of whether a
+    // previous build()/bind() cycle on this object had bound anything).
+    //
+    // record() requires the low `m_pipeline.bindingCount()` bits to ALL be
+    // set, and fails closed otherwise the same way it fails closed on a null
+    // pipeline/layout/descriptor-set handle -- see record()'s precondition
+    // doc above. A bitmask rather than a bool because bindStorageBuffer
+    // (added when the film became binding 9) writes one arbitrary binding:
+    // with a bool, one such call would have satisfied the guard for a stage
+    // whose other nine bindings vkUpdateDescriptorSets had never touched.
+    //
+    // 64 bits is not a limit worth parameterising: build() would have to
+    // declare more than 64 descriptor bindings in one set for it to bind,
+    // and bindingsFullyWritten() below fails closed -- refuses to claim the
+    // stage is bound -- rather than silently ignoring the excess, if a
+    // future pipeline ever does.
+    std::uint64_t m_boundBindings{0};
+
+    /// True when every binding the pipeline declares has been written.
+    [[nodiscard]] bool bindingsFullyWritten() const noexcept {
+        const std::size_t count = m_pipeline.bindingCount();
+        if (count == 0 || count > 64) return false;
+        const std::uint64_t mask =
+            (count == 64) ? ~std::uint64_t{0} : ((std::uint64_t{1} << count) - 1u);
+        return (m_boundBindings & mask) == mask;
+    }
+
+    /// Records that bindings [first, first + count) were written. Bindings at
+    /// or beyond 64 are dropped, which makes bindingsFullyWritten() false
+    /// rather than accidentally true -- see m_boundBindings above.
+    void markBound(std::size_t first, std::size_t count) noexcept {
+        for (std::size_t i = first; i < first + count && i < 64; ++i) {
+            m_boundBindings |= (std::uint64_t{1} << i);
+        }
+    }
 };
 
 }  // namespace ohao::diff
