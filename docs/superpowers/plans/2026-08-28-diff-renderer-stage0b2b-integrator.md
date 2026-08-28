@@ -21,6 +21,16 @@
 - **No new Vulkan features or extensions** beyond `VK_KHR_ray_query` and `shaderBufferFloat32AtomicAdd`. Never image atomics.
 - **Do not validate against `examples/`.** Every check is probe-owned.
 - **A stage records WORK, never ORDERING.** `WavefrontStage` contains no barriers. `WavefrontLoop` owns them all.
+- **Editing a shader can break the documentation build.** `site/content/units/**/*.md` cites shader source
+  by EXACT SUBSTRING via `{{cite <path> "<text>"}}`, and `site/tools/monograph/cite.py` raises
+  `CitationError` when the substring is gone — there is deliberately no fallback from the working tree to
+  history. So deleting or reworded a cited line breaks the site build, silently as far as the C++ test suite
+  is concerned: `diff_gpu_probe`, `diff_unit_tests` and `renderer_test` all still pass. **Before committing a
+  change to any file under `shaders/`, grep `site/content/` for citations of the lines you touched.** If a
+  cited line is genuinely wrong (as `ggxDiso`'s `+1e-8` was), fix the code and update the prose — do not
+  preserve a bug to keep a citation resolving. Pin with `{{cite path@<rev> "text"}}` only where the text is
+  deliberately discussing the historical form.
+
 - **Check counts are descriptions, never targets.** Count before, count after, report both. The only failure is a check that disappears, goes silent, or gets weaker. The probe currently prints 23 `OK:` lines.
 
 ## Inherited hazards — read before Task 1
