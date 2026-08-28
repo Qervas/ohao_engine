@@ -390,13 +390,29 @@ public:
     /// `buffers` is left holding that run's path state, so the caller reads
     /// throughput back through `buffers.readbackField` afterwards.
     ///
+    /// `outEnvSamples`, when non-null, receives binding 6's `capacity * 4`
+    /// floats (dirX, dirY, dirZ, pdf per path index) after the FINAL run --
+    /// the env-sample sink every scatter dispatch in that run wrote to, at a
+    /// fixed pathIndex*4 offset, so only the last bounce's write survives
+    /// (same reasoning as outDrawsPerBounce, but this sink is not re-read
+    /// bounce by bounce because nothing here needs the intermediate values).
+    /// Unlike runWavefrontScatterProbe, which fills wf_scatter.comp's
+    /// ScatterPush envWidth/envHeight/envIntegral fields BY HAND at its own
+    /// call site, this probe's push constants are filled by
+    /// ohao::diff::WavefrontLoop::record itself from `buffers` -- this is
+    /// the only test path that exercises record()'s fill of those three
+    /// fields, which is otherwise unobserved. Default nullptr, matching
+    /// runWavefrontScatterProbe's outEnvSamples, so existing callers are
+    /// unchanged; the buffer is allocated, bound and written either way.
+    ///
     /// Returns false on any Vulkan error.
     [[nodiscard]] bool runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint32_t width,
                                                   uint32_t height, uint32_t maxBounces,
                                                   float albedo, uint32_t iterationSeed,
                                                   std::vector<std::vector<float>>& outDrawsPerBounce,
                                                   std::vector<uint32_t>& outLiveCountPerRun,
-                                                  std::vector<uint32_t>& outFinalQueue);
+                                                  std::vector<uint32_t>& outFinalQueue,
+                                                  std::vector<float>* outEnvSamples = nullptr);
 
 private:
     /// The body both runWavefrontIntersectProbe and

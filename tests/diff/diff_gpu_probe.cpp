@@ -88,6 +88,14 @@
 //       condDiff * margDiff with the sine cancelling, so the sum is an
 //       identity rather than a quadrature, and is asserted to a derived
 //       float32 error budget.
+//   27. ohao::diff::WavefrontLoop::record's OWN fill of ScatterPush's
+//       envWidth/envHeight (production path -- checks 24-26 exercise
+//       runWavefrontScatterProbe's hand-filled push constants, a different
+//       call site) against a genuinely NON-SQUARE environment, read back
+//       through the fused loop's binding-6 sink. The oracle is closed-form:
+//       wf.build()'s default UV-uniform CDF makes pdf = 1/(2 pi^2 sin(theta))
+//       exactly, so no CDF builder is needed to know what record() should
+//       have produced.
 
 #include "gpu_probe_context.hpp"
 
@@ -3333,8 +3341,15 @@ int main() {
     // built by ohao::EnvCDF (ohao/render/rt/env_cdf.cpp), the SAME builder
     // that feeds the RT pipeline. Under test are: the GPU's two binary
     // searches over those arrays, the texel -> direction map, the CDF ->
-    // solid-angle pdf conversion, and the whole binding/push-constant path
-    // that gets the arrays to the shader.
+    // solid-angle pdf conversion, and the binding/push-constant path that
+    // gets the arrays to the shader THROUGH THIS PROBE'S OWN CALL SITE --
+    // GpuProbeContext::runWavefrontScatterProbe, which fills ScatterPush's
+    // envWidth/envHeight/envIntegral BY HAND (gpu_probe_context.cpp). It is
+    // NOT a test of ohao::diff::WavefrontLoop::record's OWN fill of those
+    // same three fields at its own, separate call site
+    // (wavefront_loop.cpp) -- record() is what the production wavefront
+    // loop actually calls, and until check 27 below, nothing exercised it
+    // with an environment where a mistake in that fill would be visible.
     //
     // THE ORACLE IS NOT THE CDF. It would have been easy to bin the samples
     // and compare against differences of the uploaded CDF arrays, but that
@@ -3706,6 +3721,23 @@ int main() {
 
         wf.destroy(ctx.allocator());
 
+        // Checks 24, 25 and 26 are three INDEPENDENT verdicts computed from
+        // this same run's 24576 samples: 24 from binCount, 25 from
+        // minPdf/maxPdf (collected per-sample above, before any binning),
+        // 26 from texelPdf/texelSeen. Nothing below depends on an earlier
+        // one of the three having passed, so a perturbation that fails one
+        // must not stop the other two from being computed and reported --
+        // otherwise a bug that also happens to trip the chi-squared can
+        // never be shown to be (or not be) independently caught by the
+        // pdf-ratio and integrate-to-1 identities too, which is exactly the
+        // comparison Step 5's perturbation report depends on. Each verdict
+        // is therefore evaluated and printed unconditionally; failures
+        // accumulate in checksFailed, and the group returns non-zero once,
+        // at the very end, only after all three have had their say. Every
+        // assertion below is exactly as strong as it was before this
+        // restructuring -- only the control flow between them changed.
+        bool checksFailed = false;
+
         // --- 24. Pearson's chi-squared against the independent oracle. ---
         double chiSq = 0.0;
         uint32_t totalBinned = 0;
@@ -3722,20 +3754,18 @@ int main() {
                 worstBin = k;
             }
         }
+        const double df = static_cast<double>(kEnvTexels) - 1.0;
+        const double whT = 2.0 / (9.0 * df);
+        const double chiSqCritical =
+            df * std::pow(1.0 - whT + kChiSqZ * std::sqrt(whT), 3.0);
         if (totalBinned != kSampleCount) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: binned %u env samples, expected %u -- the "
                          "chi-squared statistic is only multinomial if every sample landed in "
                          "exactly one bin\n",
                          totalBinned, kSampleCount);
-            return 1;
-        }
-
-        const double df = static_cast<double>(kEnvTexels) - 1.0;
-        const double whT = 2.0 / (9.0 * df);
-        const double chiSqCritical =
-            df * std::pow(1.0 - whT + kChiSqZ * std::sqrt(whT), 3.0);
-        if (!(chiSq <= chiSqCritical)) {
+            checksFailed = true;
+        } else if (!(chiSq <= chiSqCritical)) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: env importance sampling chi-squared = %.4f over "
                          "%u samples in %u bins (df %.0f) exceeds the %.4f rejection threshold "
@@ -3746,16 +3776,17 @@ int main() {
                          chiSq, kSampleCount, kEnvTexels, df, chiSqCritical, kChiSqAlpha, worstBin,
                          worstBin % kEnvW, worstBin / kEnvW, binCount[worstBin],
                          expectedP[worstBin] * static_cast<double>(kSampleCount), worstTerm);
-            return 1;
+            checksFailed = true;
+        } else {
+            std::printf("[diff_gpu_probe] OK: env importance sampling matches an independent "
+                        "sin(theta)-weighted-luminance oracle -- chi-squared %.4f over %u samples "
+                        "in %u bins (df %.0f), below the derived %.4f threshold (alpha %.0e via "
+                        "Wilson-Hilferty; least likely bin expected %.2f >= %.1f, so Pearson's "
+                        "approximation holds); worst bin %u observed %u vs expected %.2f\n",
+                        chiSq, kSampleCount, kEnvTexels, df, chiSqCritical, kChiSqAlpha,
+                        minExpectedCount, kMinExpectedPerBin, worstBin, binCount[worstBin],
+                        expectedP[worstBin] * static_cast<double>(kSampleCount));
         }
-        std::printf("[diff_gpu_probe] OK: env importance sampling matches an independent "
-                    "sin(theta)-weighted-luminance oracle -- chi-squared %.4f over %u samples in "
-                    "%u bins (df %.0f), below the derived %.4f threshold (alpha %.0e via "
-                    "Wilson-Hilferty; least likely bin expected %.2f >= %.1f, so Pearson's "
-                    "approximation holds); worst bin %u observed %u vs expected %.2f\n",
-                    chiSq, kSampleCount, kEnvTexels, df, chiSqCritical, kChiSqAlpha,
-                    minExpectedCount, kMinExpectedPerBin, worstBin, binCount[worstBin],
-                    expectedP[worstBin] * static_cast<double>(kSampleCount));
 
         // --- 25. Every returned pdf strictly positive (asserted per sample
         // above) and every direction a texel centre (likewise), plus the
@@ -3802,16 +3833,17 @@ int main() {
                          "difference %.3g, tolerance %.3g)\n",
                          pdfRatio, lumRatio, std::abs(pdfRatio / lumRatio - 1.0),
                          kPdfRatioTolerance);
-            return 1;
+            checksFailed = true;
+        } else {
+            std::printf("[diff_gpu_probe] OK: all %u returned env pdfs are finite and strictly "
+                        "positive (min %.9g, max %.9g), their %.6f:1 range matches the map's own "
+                        "%.6f:1 luminance range to %.3g (tolerance %.3g -- the sin(theta) "
+                        "Jacobian cancels exactly), and every sampled direction inverts to a "
+                        "texel centre within %.3g (slack %.3g)\n",
+                        kSampleCount, static_cast<double>(minPdf), static_cast<double>(maxPdf),
+                        pdfRatio, lumRatio, std::abs(pdfRatio / lumRatio - 1.0),
+                        kPdfRatioTolerance, maxCentreError, kCentreSlack);
         }
-        std::printf("[diff_gpu_probe] OK: all %u returned env pdfs are finite and strictly "
-                    "positive (min %.9g, max %.9g), their %.6f:1 range matches the map's own "
-                    "%.6f:1 luminance range to %.3g (tolerance %.3g -- the sin(theta) Jacobian "
-                    "cancels exactly), and every sampled direction inverts to a texel centre "
-                    "within %.3g (slack %.3g)\n",
-                    kSampleCount, static_cast<double>(minPdf), static_cast<double>(maxPdf),
-                    pdfRatio, lumRatio, std::abs(pdfRatio / lumRatio - 1.0), kPdfRatioTolerance,
-                    maxCentreError, kCentreSlack);
 
         // --- 26. The returned pdfs integrate to 1 over the sphere. ---
         uint32_t unseen = 0;
@@ -3825,31 +3857,220 @@ int main() {
                          "compared against 1. Every texel's expected count is at least %.2f, so "
                          "this is not chance\n",
                          unseen, kEnvTexels, minExpectedCount);
-            return 1;
-        }
-        const double dOmegaScale = (2.0 * kPi / static_cast<double>(kEnvW)) *
-                                   (kPi / static_cast<double>(kEnvH));
-        double pdfIntegral = 0.0;
-        for (uint32_t y = 0; y < kEnvH; ++y) {
-            for (uint32_t x = 0; x < kEnvW; ++x) {
-                const std::size_t k = static_cast<std::size_t>(y) * kEnvW + x;
-                pdfIntegral += static_cast<double>(texelPdf[k]) * dOmegaScale * sinThetaRow[y];
+            checksFailed = true;
+        } else {
+            const double dOmegaScale = (2.0 * kPi / static_cast<double>(kEnvW)) *
+                                       (kPi / static_cast<double>(kEnvH));
+            double pdfIntegral = 0.0;
+            for (uint32_t y = 0; y < kEnvH; ++y) {
+                for (uint32_t x = 0; x < kEnvW; ++x) {
+                    const std::size_t k = static_cast<std::size_t>(y) * kEnvW + x;
+                    pdfIntegral += static_cast<double>(texelPdf[k]) * dOmegaScale * sinThetaRow[y];
+                }
+            }
+            if (!(std::abs(pdfIntegral - 1.0) <= kPdfSumTolerance)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: the pdfs sampleEnvMap returned integrate to "
+                             "%.9f over the sphere, not 1 within %.3g. pdf * dOmega is condDiff * "
+                             "margDiff exactly (the sin(theta) cancels), so the total is the "
+                             "CDF's own mass and any departure beyond float32 rounding is a "
+                             "normalisation error, not quadrature\n",
+                             pdfIntegral, kPdfSumTolerance);
+                checksFailed = true;
+            } else {
+                std::printf("[diff_gpu_probe] OK: the env pdfs integrate to %.9f over the sphere "
+                            "(|deviation| %.3g, derived float32 budget ~4e-6, asserted %.3g) "
+                            "across all %u texels\n",
+                            pdfIntegral, std::abs(pdfIntegral - 1.0), kPdfSumTolerance,
+                            kEnvTexels);
             }
         }
-        if (!(std::abs(pdfIntegral - 1.0) <= kPdfSumTolerance)) {
-            std::fprintf(stderr,
-                         "[diff_gpu_probe] FAIL: the pdfs sampleEnvMap returned integrate to "
-                         "%.9f over the sphere, not 1 within %.3g. pdf * dOmega is condDiff * "
-                         "margDiff exactly (the sin(theta) cancels), so the total is the CDF's "
-                         "own mass and any departure beyond float32 rounding is a normalisation "
-                         "error, not quadrature\n",
-                         pdfIntegral, kPdfSumTolerance);
+
+        // All three verdicts are computed and printed above regardless of
+        // one another's outcome; only now, after all three have reported,
+        // does the group return non-zero if any failed.
+        if (checksFailed) {
             return 1;
         }
-        std::printf("[diff_gpu_probe] OK: the env pdfs integrate to %.9f over the sphere "
-                    "(|deviation| %.3g, derived float32 budget ~4e-6, asserted %.3g) across all "
-                    "%u texels\n",
-                    pdfIntegral, std::abs(pdfIntegral - 1.0), kPdfSumTolerance, kEnvTexels);
+    }
+
+    // ------------------------------------------------------------------
+    // 27. WavefrontLoop::record's OWN push-constant fill (Stage 0b-2b Task 3
+    //     fix, finding 2).
+    // ------------------------------------------------------------------
+    //
+    // ohao/diff/wavefront/wavefront_loop.cpp fills ScatterPush's
+    // envWidth/envHeight/envIntegral tail from `buffers` at record()'s own
+    // call site. Checks 24-26 above never exercise that line: they run
+    // through GpuProbeContext::runWavefrontScatterProbe, which fills
+    // ScatterPush ITSELF (gpu_probe_context.cpp), at a different call site
+    // entirely. The only caller of record() anywhere in this file is
+    // runWavefrontFusedLoopProbe, which -- until this check was added --
+    // built its WavefrontBuffers at the default 1x1 environment and never
+    // read binding 6 back, so a transposed envWidth/envHeight inside
+    // record() was UNOBSERVABLE: at 1x1 the two dimensions are
+    // interchangeable and every direction still lands on the same one
+    // texel.
+    //
+    // This check gives the fused loop a genuinely NON-SQUARE environment
+    // (kEnvW != kEnvH) and reads the env-sample sink back after running
+    // record() once, so a W<->H swap is no longer symmetric.
+    //
+    // THE ORACLE. wf.build(allocator, capacity, kEnvW, kEnvH) with no
+    // uploadEnvironment() call afterward seeds the UV-uniform CDF
+    // wavefront_buffers.cpp documents: cond[y][x] = (x+1)/W, marg[y] =
+    // (y+1)/H (the SAME sampler task-3-report.md's Step 2 used to show the
+    // chi-squared test has discriminating power the ratio/integral checks
+    // alone do not -- see task-3-fix-report.md for that correction). Its CDF
+    // texel probability is uniform in UV, p_CDF(x,y) = margDiff * condDiff =
+    // (1/H)(1/W), so sampleEnvMap's pdf collapses to a CLOSED FORM that
+    // depends on nothing but which row y the texel is in:
+    //
+    //     pdfUV = condDiff * margDiff * W * H = 1
+    //     pdf = pdfUV / (2 pi^2 sin(theta_y)) = 1 / (2 pi^2 sin(theta_y))
+    //
+    // -- no CDF builder, no luminance image, just kEnvW, kEnvH and
+    // elementary trigonometry, computed here independently of anything the
+    // GPU did. If record() ever swaps envWidth and envHeight in the push
+    // constants it fills, sampleEnvMap's two binary searches run against the
+    // WRONG bound for each CDF array (the marginal array actually holds
+    // envHeight() entries; searching it as if it held envWidth() either
+    // walks off the array or stops short), so the returned direction stops
+    // being the centre of any texel under the buffers' REAL (kEnvW, kEnvH)
+    // -- caught by the texel-centre check below, the same technique check 25
+    // uses -- and the closed-form pdf above stops matching.
+    {
+        constexpr uint32_t kW = 64;
+        constexpr uint32_t kH = 8;  // wf_generate's 1-D dispatch requires this exactly.
+        constexpr uint32_t kCapacity = kW * kH;  // 512
+        constexpr float kAlbedo = 0.5f;
+        constexpr uint32_t kIterationSeed = 20260828u;
+        constexpr uint32_t kBounces = 1;  // One dispatch through record() is enough.
+
+        // Non-square on purpose -- see the comment above. A W<->H swap
+        // inside record() is invisible whenever kEnvW == kEnvH.
+        constexpr uint32_t kEnvW = 16;
+        constexpr uint32_t kEnvH = 4;
+        static_assert(kEnvW != kEnvH,
+                     "check 27 needs a non-square environment to detect a W<->H swap");
+
+        constexpr double kPi = 3.14159265358979323846;
+        // Same basis as check 25's texel-centre slack: three orders of
+        // magnitude of headroom over the float32 round trip, five hundred
+        // times tighter than the half-texel that would make the bin
+        // ambiguous.
+        constexpr double kCentreSlack = 1e-3;
+        // Same float32-cancellation budget as checks 25/26 (differences of
+        // CDF entries, a W*H product, a division by a float32 sin(theta));
+        // asserted at the same order of magnitude check 25 uses for its own
+        // pdf comparison.
+        constexpr double kPdfRelTolerance = 1e-4;
+
+        ohao::diff::WavefrontBuffers wf;
+        if (!wf.build(ctx.allocator(), kCapacity, kEnvW, kEnvH)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 27 buffers build\n");
+            return 1;
+        }
+
+        std::vector<std::vector<float>> drawsPerBounce;
+        std::vector<uint32_t> liveCountPerRun;
+        std::vector<uint32_t> finalQueue;
+        std::vector<float> envSamples;
+        if (!ctx.runWavefrontFusedLoopProbe(wf, kW, kH, kBounces, kAlbedo, kIterationSeed,
+                                            drawsPerBounce, liveCountPerRun, finalQueue,
+                                            &envSamples)) {
+            std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 27 fused loop dispatch\n");
+            wf.destroy(ctx.allocator());
+            return 1;
+        }
+        wf.destroy(ctx.allocator());
+
+        if (envSamples.size() != static_cast<std::size_t>(kCapacity) * 4u) {
+            std::fprintf(stderr,
+                         "[diff_gpu_probe] FAIL: check 27 env samples readback returned %zu "
+                         "floats, expected %u\n",
+                         envSamples.size(), kCapacity * 4u);
+            return 1;
+        }
+
+        double maxCentreError = 0.0;
+        double maxPdfRelError = 0.0;
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            const double dx = envSamples[static_cast<std::size_t>(i) * 4u + 0u];
+            const double dy = envSamples[static_cast<std::size_t>(i) * 4u + 1u];
+            const double dz = envSamples[static_cast<std::size_t>(i) * 4u + 2u];
+            const float pdf = envSamples[static_cast<std::size_t>(i) * 4u + 3u];
+
+            const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (!std::isfinite(len) || std::abs(len - 1.0) > 1e-4) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 27 path %u env sample direction "
+                             "(%.9g,%.9g,%.9g) has length %.9g, expected a unit vector\n",
+                             i, dx, dy, dz, len);
+                return 1;
+            }
+            if (!(pdf > 0.0f) || !std::isfinite(pdf)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 27 path %u env sample returned pdf "
+                             "%.9g -- the UV-uniform CDF wf.build seeds by default has strictly "
+                             "positive probability everywhere\n",
+                             i, static_cast<double>(pdf));
+                return 1;
+            }
+
+            // Invert equirectPixelToDir exactly as check 25 does.
+            const double theta = std::acos(std::clamp(dy, -1.0, 1.0));
+            const double phi = std::atan2(dz, dx);
+            const double uCoord = phi / (2.0 * kPi) + 0.5;
+            const double vCoord = theta / kPi;
+            const double fx = uCoord * static_cast<double>(kEnvW);
+            const double fy = vCoord * static_cast<double>(kEnvH);
+            const int ix =
+                std::clamp(static_cast<int>(std::floor(fx)), 0, static_cast<int>(kEnvW) - 1);
+            const int iy =
+                std::clamp(static_cast<int>(std::floor(fy)), 0, static_cast<int>(kEnvH) - 1);
+            const double centreError =
+                std::max(std::abs(fx - (ix + 0.5)), std::abs(fy - (iy + 0.5)));
+            if (!(centreError <= kCentreSlack)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 27 (WavefrontLoop::record's "
+                             "envWidth/envHeight fill): path %u's env sample direction "
+                             "(%.9g,%.9g,%.9g) inverts to (%.6f, %.6f) in %ux%u texel units, "
+                             "%.3g away from the nearest texel centre (%d, %d). record() fills "
+                             "ScatterPush's envWidth/envHeight from `buffers`, and this "
+                             "environment is non-square (%u != %u) specifically so a transposed "
+                             "fill cannot land on a valid texel by symmetry\n",
+                             i, dx, dy, dz, fx, fy, kEnvW, kEnvH, centreError, ix, iy, kEnvW,
+                             kEnvH);
+                return 1;
+            }
+            maxCentreError = std::max(maxCentreError, centreError);
+
+            const double thetaY =
+                kPi * (static_cast<double>(iy) + 0.5) / static_cast<double>(kEnvH);
+            const double expectedPdf = 1.0 / (2.0 * kPi * kPi * std::sin(thetaY));
+            const double relErr =
+                std::abs(static_cast<double>(pdf) - expectedPdf) / expectedPdf;
+            if (!(relErr <= kPdfRelTolerance)) {
+                std::fprintf(stderr,
+                             "[diff_gpu_probe] FAIL: check 27 (WavefrontLoop::record's "
+                             "envWidth/envHeight fill): path %u's env pdf is %.9g, expected "
+                             "%.9g (1/(2 pi^2 sin(theta)) for the UV-uniform CDF wf.build seeds "
+                             "by default) -- relative error %.3g, tolerance %.3g\n",
+                             i, static_cast<double>(pdf), expectedPdf, relErr, kPdfRelTolerance);
+                return 1;
+            }
+            maxPdfRelError = std::max(maxPdfRelError, relErr);
+        }
+        std::printf("[diff_gpu_probe] OK: check 27 -- WavefrontLoop::record's OWN "
+                    "envWidth/envHeight fill of ScatterPush (the production call site, not "
+                    "runWavefrontScatterProbe's hand-filled one behind checks 24-26) reaches "
+                    "wf_scatter.comp intact: all %u env samples from a %ux%u NON-SQUARE "
+                    "environment invert to a texel centre (max error %.3g, slack %.3g) and match "
+                    "the closed-form UV-uniform pdf 1/(2 pi^2 sin(theta)) to %.3g relative "
+                    "(tolerance %.3g)\n",
+                    kCapacity, kEnvW, kEnvH, maxCentreError, kCentreSlack, maxPdfRelError,
+                    kPdfRelTolerance);
     }
 
     arena.destroy(ctx.allocator());

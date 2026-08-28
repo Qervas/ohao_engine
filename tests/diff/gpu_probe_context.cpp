@@ -1752,7 +1752,8 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                                                  uint32_t iterationSeed,
                                                  std::vector<std::vector<float>>& outDrawsPerBounce,
                                                  std::vector<uint32_t>& outLiveCountPerRun,
-                                                 std::vector<uint32_t>& outFinalQueue) {
+                                                 std::vector<uint32_t>& outFinalQueue,
+                                                 std::vector<float>* outEnvSamples) {
     // Push constants for wf_generate.comp -- byte-identical to
     // runWavefrontGenerateProbe's (80 bytes, see that function's comment).
     struct GeneratePush {
@@ -1900,12 +1901,18 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
             ok = false;
         }
     }
-    // wf_scatter.comp's environment-sample sink (binding 6). This probe does
-    // not read it back -- the chi-squared check runs against the
-    // stage-by-stage scatter probe, which can vary the seed per dispatch --
-    // but the descriptor set needs it bound, and every scatter dispatch in
-    // the fused loop writes it, so it goes into loopExtras below for exactly
-    // the reason debugDrawsBuffer does.
+    // wf_scatter.comp's environment-sample sink (binding 6). The descriptor
+    // set needs it bound whether or not the caller asked to read it back --
+    // every scatter dispatch in the fused loop writes it, so it goes into
+    // loopExtras below for exactly the reason debugDrawsBuffer does -- and it
+    // is read back into outEnvSamples when non-null (see this function's doc
+    // comment: this is the ONLY probe that exercises WavefrontLoop::record's
+    // OWN fill of ScatterPush's envWidth/envHeight/envIntegral tail, as
+    // opposed to runWavefrontScatterProbe's hand-filled push constants, so it
+    // is also the only probe that can observe a bug in that fill). The
+    // chi-squared check (24-26 in diff_gpu_probe.cpp) still runs against the
+    // stage-by-stage scatter probe, which can vary the seed per dispatch;
+    // this sink exists for a different purpose (check 27).
     GpuBuffer envSamplesBuffer;
     const VkDeviceSize envSamplesBytes = static_cast<VkDeviceSize>(capacity) * 4u * sizeof(float);
     if (ok) {
@@ -2160,6 +2167,24 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(WavefrontBuffers& buffers, uint
                 break;
             }
             outFinalQueue.assign(mappedQueue, mappedQueue + capacity);
+        }
+
+        // outEnvSamples, when requested: binding 6 after the FINAL run,
+        // capacity*4 floats (dirX, dirY, dirZ, pdf per path index), written
+        // by ScatterPush fields THIS function never touches -- they are
+        // filled by ohao::diff::WavefrontLoop::record from `buffers`, not by
+        // this probe. See this function's doc comment.
+        if (ok && outEnvSamples != nullptr) {
+            m_allocator.invalidateBuffer(envSamplesBuffer);
+            const auto* mappedEnv = static_cast<const float*>(envSamplesBuffer.getMappedData());
+            if (mappedEnv == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runWavefrontFusedLoopProbe: env samples "
+                                      "buffer not mapped, cannot read back\n");
+                ok = false;
+            } else {
+                outEnvSamples->assign(mappedEnv,
+                                      mappedEnv + (static_cast<std::size_t>(capacity) * 4u));
+            }
         }
     }
 
