@@ -34,14 +34,14 @@ else()
     target_link_options(renderer_test PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
-# Copy shaders next to exe so renderer can find them
-add_custom_command(TARGET renderer_test POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:renderer_test>/bin/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_BINARY_DIR}/shaders"
-        "$<TARGET_FILE_DIR:renderer_test>/bin/shaders"
-    COMMENT "Copying shader SPVs for standalone renderer test"
-)
+# renderer_test does not copy shader SPVs itself -- the shaders target owns
+# that copy (shaders/CMakeLists.txt) once, so that this target and
+# diff_gpu_probe don't race two independent copy_directory commands into
+# the same destination under a parallel (-j8) build (Task 5). The explicit
+# dependency also fixes a pre-existing ordering gap: previously nothing
+# guaranteed renderer_test's own copy ran after shaders had been (re)built,
+# so building renderer_test alone could copy stale or missing SPVs.
+add_dependencies(renderer_test shaders)
 
 message(STATUS "Standalone renderer test configured")
 

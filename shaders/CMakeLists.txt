@@ -56,6 +56,35 @@ add_custom_target(shaders
     COMMENT "Compiling all shaders"
 )
 
+# Task 5: copy compiled SPVs into the runtime output directory ONCE, here,
+# instead of each consuming test target (diff_gpu_probe, renderer_test)
+# attaching its own POST_BUILD copy_directory into the same destination.
+# Two independent copies into the same directory race under a parallel
+# (-j8) build and can fail with "Error copying directory ...
+# build/Release/bin/shaders". Test targets should add_dependencies(<tgt>
+# shaders) and rely on this copy instead of performing their own.
+#
+# Mirror CMake's own default per-config RUNTIME_OUTPUT_DIRECTORY behavior
+# (CMAKE_RUNTIME_OUTPUT_DIRECTORY is set to CMAKE_BINARY_DIR with no
+# per-config override in the top-level CMakeLists.txt) so this resolves to
+# the same directory executables actually land in, on both multi-config
+# generators (e.g. Visual Studio, where CMake appends /$<CONFIG>) and
+# single-config generators (e.g. Ninja/Makefiles, where it does not).
+get_property(OHAO_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(OHAO_IS_MULTI_CONFIG)
+    set(OHAO_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
+else()
+    set(OHAO_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}")
+endif()
+
+add_custom_command(TARGET shaders POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${OHAO_SHADER_RUNTIME_DIR}/bin/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/shaders"
+        "${OHAO_SHADER_RUNTIME_DIR}/bin/shaders"
+    COMMENT "Copying shader SPVs to runtime output directory"
+)
+
 # Optional: Print found shader files
 message(STATUS "Found shader files:")
 foreach(SHADER ${SHADER_SOURCES})

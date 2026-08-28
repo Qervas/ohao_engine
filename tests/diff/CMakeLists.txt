@@ -30,17 +30,14 @@ target_link_libraries(diff_gpu_probe PRIVATE
 if(MSVC)
     target_link_options(diff_gpu_probe PRIVATE /FORCE:MULTIPLE)
 endif()
-# The POST_BUILD copy_directory below has no dependency of its own on the
-# shaders target's outputs -- without this, building diff_gpu_probe alone
-# after editing a .comp file silently copies a stale SPV (or fails outright
-# if shaders were never built at all). Task 6 adds visibility_probe.comp to
-# this same target, so staleness here would let it validate ray-query
-# behaviour against a shader it never actually built.
+# diff_gpu_probe does not copy shader SPVs itself -- the shaders target
+# owns that copy (shaders/CMakeLists.txt) once, so that this target and
+# renderer_test don't race two independent copy_directory commands into the
+# same destination under a parallel (-j8) build (Task 5). This dependency
+# still matters on its own: without it, building diff_gpu_probe alone after
+# editing a .comp file could run before the shaders target has (re)compiled
+# and copied its output, leaving a stale or missing SPV in place. Task 6
+# adds visibility_probe.comp to this same target, so staleness here would
+# let it validate ray-query behaviour against a shader it never actually
+# built.
 add_dependencies(diff_gpu_probe shaders)
-add_custom_command(TARGET diff_gpu_probe POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:diff_gpu_probe>/bin/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_BINARY_DIR}/shaders"
-        "$<TARGET_FILE_DIR:diff_gpu_probe>/bin/shaders"
-    COMMENT "Copying shader SPVs for diff_gpu_probe"
-)
