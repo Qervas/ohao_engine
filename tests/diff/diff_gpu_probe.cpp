@@ -469,7 +469,13 @@ double oracleRelDiff(double reference, double measured) {
 /// Commenting a declaration out is precisely how such a constant goes
 /// missing, so the one case this check exists to catch is the one raw
 /// scanning would miss.
-bool checkNeeStrideTie() {
+///
+/// Shared by checkNeeStrideTie and checkScatterPushSizeTie below: both are
+/// GLSL/C++ ties against this same source file, and both need the same
+/// comment-stripping for the same reason (see the previous paragraph), so
+/// this is the one place that logic lives rather than two copies that could
+/// drift apart from each other.
+bool loadWfScatterSourceStripped(std::string& outStripped, std::string& outFoundPath) {
     static const char* const kCandidates[] = {
         "shaders/diff/wf_scatter.comp",
         "../shaders/diff/wf_scatter.comp",
@@ -485,21 +491,13 @@ bool checkNeeStrideTie() {
         found = candidate;
         break;
     }
-    if (found == nullptr) {
-        std::fprintf(stderr,
-                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
-                     "of %zu candidate paths, so the binding-7 record stride could not be tied to "
-                     "ohao::diff::kNeeSampleFloats (%u). An unchecked tie is not a held tie: a "
-                     "mismatch is a silent wrong-slot read, not a validation error\n",
-                     sizeof(kCandidates) / sizeof(kCandidates[0]),
-                     ohao::diff::kNeeSampleFloats);
-        return false;
-    }
+    if (found == nullptr) return false;
+    outFoundPath = found;
 
     // Strip GLSL comments before matching. GLSL has no string literals, so a
     // two-state scan over // and /* */ is exact here. Newlines are preserved
-    // so that the regex's [ \t] (which cannot span lines) still rejects a
-    // reformatted multi-line declaration, as it did before.
+    // so that a regex's [ \t] (which cannot span lines) still rejects a
+    // reformatted multi-line declaration.
     std::string stripped;
     stripped.reserve(text.size());
     for (std::size_t i = 0; i < text.size();) {
@@ -517,6 +515,21 @@ bool checkNeeStrideTie() {
             ++i;
         }
     }
+    outStripped = std::move(stripped);
+    return true;
+}
+
+bool checkNeeStrideTie() {
+    std::string stripped, found;
+    if (!loadWfScatterSourceStripped(stripped, found)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "candidate path, so the binding-7 record stride could not be tied to "
+                     "ohao::diff::kNeeSampleFloats (%u). An unchecked tie is not a held tie: a "
+                     "mismatch is a silent wrong-slot read, not a validation error\n",
+                     ohao::diff::kNeeSampleFloats);
+        return false;
+    }
 
     const std::regex decl(R"(const[ \t]+uint[ \t]+kNeeSampleFloats[ \t]*=[ \t]*([0-9]+)u[ \t]*;)");
     std::smatch m;
@@ -526,7 +539,7 @@ bool checkNeeStrideTie() {
                      "<N>u;` on one line, so the binding-7 record stride cannot be tied to "
                      "ohao::diff::kNeeSampleFloats (%u). Restore the spelling or update this "
                      "check -- do not leave the two constants untied\n",
-                     found, ohao::diff::kNeeSampleFloats);
+                     found.c_str(), ohao::diff::kNeeSampleFloats);
         return false;
     }
     const unsigned long shaderStride = std::stoul(m[1].str());
@@ -537,12 +550,108 @@ bool checkNeeStrideTie() {
                      "the readback by its own number, so every slot past path 0 would be read at "
                      "the wrong offset and every check below would be measuring the wrong "
                      "floats\n",
-                     found, shaderStride, ohao::diff::kNeeSampleFloats);
+                     found.c_str(), shaderStride, ohao::diff::kNeeSampleFloats);
         return false;
     }
     std::printf("[diff_gpu_probe] NOTE: binding-7 record stride tied -- %s declares %lu floats per "
                 "path and ohao::diff::kNeeSampleFloats is %u\n",
-                found, shaderStride, ohao::diff::kNeeSampleFloats);
+                found.c_str(), shaderStride, ohao::diff::kNeeSampleFloats);
+    return true;
+}
+
+/// Ties wf_scatter.comp's `Push` block byte size to
+/// `ohao::diff::WavefrontLoop::ScatterPush`'s, the same way checkNeeStrideTie
+/// ties the NEE record stride: by parsing the SHADER SOURCE (comment-stripped
+/// via loadWfScatterSourceStripped, for the identical reason) rather than
+/// trusting a comment.
+///
+/// WHY THIS EXISTS (review Finding 6, Stage 0b-2b Task 5). ScatterPush has no
+/// static_assert and no runtime tie today, and it has grown a tail field in
+/// each of Tasks 2 (material), 3 (environment) and 5 (film) -- three chances
+/// for the C++ struct and the GLSL block to drift, caught so far only by two
+/// humans reading two files side by side. kNeeSampleFloats got a runtime tie
+/// precisely because "naming each other in a comment was not enough"; the
+/// same argument applies here with equal force, so this reuses that
+/// mechanism rather than settling for a static_assert against a hand-copied
+/// literal, which would tie ScatterPush to a DOCUMENTED number but not to the
+/// shader itself -- it would not notice a field added to the GLSL block
+/// without a matching C++ change, only the reverse.
+///
+/// HOW THE BYTE COUNT IS COMPUTED. Every field the Push block has ever had is
+/// a bare scalar `uint` or `float` -- no vec/mat/array member exists in it --
+/// so each one is 4 bytes with no interior padding, and the block's size is
+/// simply 4 * (field count). That assumption is exactly the kind of thing
+/// that could silently stop holding, so it is checked rather than baked in:
+/// the field-matching regex's count is cross-checked against a plain
+/// semicolon count over the same block, and a mismatch (e.g. a vec3 field,
+/// which this regex does not match) fails loudly instead of mis-sizing.
+bool checkScatterPushSizeTie() {
+    std::string stripped, found;
+    if (!loadWfScatterSourceStripped(stripped, found)) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: could not open shaders/diff/wf_scatter.comp from any "
+                     "candidate path, so its Push block size could not be tied to "
+                     "ohao::diff::WavefrontLoop::ScatterPush. An unchecked tie is not a held "
+                     "tie\n");
+        return false;
+    }
+
+    const std::string beginMarker = "layout(push_constant) uniform Push {";
+    const std::size_t beginPos = stripped.find(beginMarker);
+    if (beginPos == std::string::npos) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s no longer declares `layout(push_constant) uniform "
+                     "Push { ... } pc;` in the exact spelling this check looks for, so its size "
+                     "cannot be tied to ScatterPush. Restore the spelling or update this check -- "
+                     "do not leave the two untied\n",
+                     found.c_str());
+        return false;
+    }
+    const std::size_t blockStart = beginPos + beginMarker.size();
+    const std::size_t endPos = stripped.find("} pc;", blockStart);
+    if (endPos == std::string::npos) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s's Push block has no matching `} pc;` this check "
+                     "can find, so its size cannot be tied to ScatterPush\n",
+                     found.c_str());
+        return false;
+    }
+    const std::string block = stripped.substr(blockStart, endPos - blockStart);
+
+    const std::regex fieldRe(R"((?:uint|float)[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*;)");
+    const std::size_t fieldCount = static_cast<std::size_t>(
+        std::distance(std::sregex_iterator(block.begin(), block.end(), fieldRe),
+                      std::sregex_iterator()));
+    const std::size_t semicolons =
+        static_cast<std::size_t>(std::count(block.begin(), block.end(), ';'));
+    if (semicolons != fieldCount || fieldCount == 0) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s's Push block has %zu statement(s) but only %zu "
+                     "matched a bare `uint`/`float` scalar field. This check's byte-size math (4 "
+                     "bytes/field, no padding) assumes every field is one of those two scalar "
+                     "types; a vec/array/other-typed field would silently mis-size instead of "
+                     "being counted correctly. Update this check to handle it rather than "
+                     "trusting the mismatch away\n",
+                     found.c_str(), semicolons, fieldCount);
+        return false;
+    }
+
+    const std::size_t shaderBytes = fieldCount * 4u;
+    constexpr std::size_t kScatterPushBytes = sizeof(ohao::diff::WavefrontLoop::ScatterPush);
+    if (shaderBytes != kScatterPushBytes) {
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s's Push block is %zu scalar fields (%zu bytes) but "
+                     "sizeof(ohao::diff::WavefrontLoop::ScatterPush) is %zu bytes. "
+                     "WavefrontLoop::record fills that struct and vkCmdPushConstants pushes it "
+                     "byte-for-byte as this shader's push constants; a size mismatch is a silent "
+                     "wrong-field push, not a validation error, and every field after the point "
+                     "of drift is read at the wrong offset\n",
+                     found.c_str(), fieldCount, shaderBytes, kScatterPushBytes);
+        return false;
+    }
+    std::printf("[diff_gpu_probe] NOTE: wf_scatter.comp Push block tied to ScatterPush -- %s "
+                "declares %zu scalar fields (%zu bytes) and sizeof(ScatterPush) is %zu\n",
+                found.c_str(), fieldCount, shaderBytes, kScatterPushBytes);
     return true;
 }
 
@@ -552,6 +661,10 @@ int main() {
     // The GLSL/C++ record-stride tie, before any Vulkan object exists: if it
     // does not hold, nothing measured below means anything.
     if (!checkNeeStrideTie()) return 1;
+    // The GLSL/C++ ScatterPush byte-size tie (review Finding 6, Task 5): same
+    // reasoning, same failure mode (a silent wrong-field push), checked here
+    // for the same "before anything downstream trusts it" reason.
+    if (!checkScatterPushSizeTie()) return 1;
 
     ohao::diff::GpuProbeContext ctx;
     if (!ctx.init()) {
@@ -5181,6 +5294,24 @@ int main() {
     // 29-31 own the estimators, and Task 4's report records why those stay
     // host-accumulated and independent of this buffer.
     //
+    // WHY "APPLIES THE POST-DECAY THROUGHPUT" IS ACTUALLY REJECTED. The
+    // other failure modes above are backed by construction: an overwrite,
+    // reset, drop, double-count, wrong-pixel or single-strategy edit changes
+    // the RELATIONSHIP between what the sink records and what the film
+    // holds, so the reconstruction stops matching. A post-decay-throughput
+    // bug is different in kind -- wf_scatter.comp's sink write (slots 21-23)
+    // and its film term read the SAME local variable (`arrivalThroughput`),
+    // so an edit that moved that variable's value from the arrival
+    // throughput to the post-decay one would move the sink and the film
+    // TOGETHER, and a check that only compared them against each other could
+    // not see it move. What actually closes that seam is the per-path
+    // assertion below pinning slots 21-23 to kAlbedo^k -- a value computed
+    // from nothing in the shader at all. It is sound only because checks
+    // 14/17 already establish, bit-exactly, that this pure-Lambert scene's
+    // per-bounce estimator weight is exactly `albedo`, which is what lets
+    // "arrival throughput at bounce k" reduce to a closed-form constant
+    // instead of another shader-derived quantity.
+    //
     // WHERE THE PER-BOUNCE VALUES COME FROM. The binding-7 sink is written
     // at a fixed per-path offset every bounce, so only the LAST bounce's
     // record survives one fused run. runWavefrontFusedLoopProbe already runs
@@ -5201,6 +5332,19 @@ int main() {
     // is check 28 -- and a film check there would be comparing 0 against 0
     // and could not fail. Nothing about the estimator is concluded from this
     // run; see runWavefrontFusedLoopProbe's `unoccludedShadowRays` doc.
+    //
+    // WHAT THE FILM DOES NOT CONTAIN (informational; read this before Task 6
+    // compares it against a PathTracer image). This check, like the shader,
+    // sums ONLY MIS direct lighting at surface vertices. There is no escape
+    // term: wf_intersect.comp compacts only survivors, so a path that misses
+    // everything is dropped from the next bounce's queue and contributes
+    // nothing further. There is no emissive-surface term either: nothing in
+    // this pipeline evaluates one yet. A PathTracer parity comparison will
+    // therefore differ from this film by exactly the directly-visible
+    // environment plus any emissive-surface term -- see the doc on
+    // wf_scatter.comp's binding-9 Film declaration for the full argument.
+    // The closed-box rig above makes that gap unobservable from inside this
+    // check, which is precisely why it has to be written down here instead.
     //
     // THE BOUND, DERIVED. Let C_k(p,c) be the exact (real-arithmetic)
     // contribution of bounce k to pixel p, channel c, formed from the
@@ -5317,6 +5461,40 @@ int main() {
                 return 1;
             }
 
+            // Review Finding 1 (Task 5): pin the sink's arrival-throughput
+            // slots (21-23) to a constant computed independently of
+            // wf_scatter.comp's own `arrivalThroughput` variable, rather
+            // than letting them stand in for it unchecked. This is a pure
+            // Lambert material (specularWeight = 0, metallic = 0) with
+            // kAlbedo = 0.5, and checks 14/17 already establish -- bit-
+            // exactly, not approximately -- that this shader's per-bounce
+            // estimator weight f*cos/pdf is exactly `albedo`. So the
+            // throughput arriving at bounce k (0-based: k=0 is the first
+            // bounce, where the path has undergone zero decays yet) is
+            // exactly kAlbedo^k. kAlbedo = 0.5 is a dyadic rational, so
+            // every one of these powers -- 1, 0.5, 0.25, 0.125 for the
+            // k in {0,1,2,3} this check reaches -- is exactly representable
+            // in float32 AND float64 with no rounding at any step; computed
+            // here by repeated multiplication (not std::pow, whose result
+            // for a non-trivial exponent is not guaranteed bit-exact) so the
+            // comparison below is a bit-exact `!=`, not a tolerance.
+            //
+            // WHY THIS CLOSES A SEAM. Without it, slots 21-23 were checked
+            // only for internal consistency with the film's own
+            // accumulation (both read wf_scatter.comp's `arrivalThroughput`
+            // local): a shader edit that moved the sink write and the film
+            // term onto the SAME wrong value (e.g. the post-decay
+            // throughput instead of the arrival one) would move both
+            // together and this check would still pass. Comparing slots
+            // 21-23 against a value that does not come from the shader at
+            // all is what makes that edit detectable. See this task's
+            // report for a demonstration: recording the post-decay
+            // throughput here fails this exact assertion.
+            double expectedArrivalThroughput = 1.0;
+            for (uint32_t decays = 0; decays < k; ++decays) {
+                expectedArrivalThroughput *= static_cast<double>(kAlbedo);
+            }
+
             // Fold bounce k's per-path contributions into hostFilm, and
             // check that every pixel is written exactly once (the film is
             // indexed by PIXEL; the mapping is read from the sink rather
@@ -5355,6 +5533,25 @@ int main() {
                 for (uint32_t c = 0; c < 3u; ++c) {
                     const double thr =
                         neePerRun[k][b + ohao::diff::kNeeSlotArrivalThroughput + c];
+                    if (thr != expectedArrivalThroughput) {
+                        std::fprintf(stderr,
+                                     "[diff_gpu_probe] FAIL: check 32 path %u channel %u at "
+                                     "bounce %u recorded arrival throughput %.17g at binding-7 "
+                                     "slot %u, but this pure-Lambert scene's arrival throughput "
+                                     "at bounce %u is exactly kAlbedo^%u = %.17g, bit-exactly "
+                                     "(checks 14/17 already establish the per-bounce estimator "
+                                     "weight is exactly `albedo`). This pins slots 21-23 to a "
+                                     "value independent of wf_scatter.comp's own "
+                                     "`arrivalThroughput` variable -- see this check's header, "
+                                     "'the bolded claim', and the task-5 fix report's "
+                                     "demonstration: recording the POST-decay throughput here "
+                                     "instead of the arrival one fails this exact assertion\n",
+                                     i, c, k, thr,
+                                     static_cast<unsigned>(ohao::diff::kNeeSlotArrivalThroughput) +
+                                         c,
+                                     k, k, expectedArrivalThroughput);
+                        return 1;
+                    }
                     const double nee = neePerRun[k][b + ohao::diff::kNeeSlotNeeUnweighted + c];
                     const double bsdf = neePerRun[k][b + ohao::diff::kNeeSlotBsdfUnweighted + c];
                     const double contribution = thr * (wEnv * nee + wBsdf * bsdf);
@@ -5362,6 +5559,31 @@ int main() {
                     bounceTotal[k] += contribution;
                 }
             }
+            // STRUCTURALLY HARD-CODED TO 1 SAMPLE PER PIXEL (review Finding
+            // 4, Task 6 will want more). `pixelHits[p] != 1u` demands
+            // exactly one path per pixel; it cannot be re-pointed at >1 spp
+            // without editing this loop (and kCapacity/kPixels above, which
+            // are tied 1:1 here). That is a documented constraint for
+            // whoever wires more samples in, not a bug in this check as
+            // written for 1 spp.
+            //
+            // A second fact matters for that future work and does NOT show
+            // up as a failure today: at >1 spp, multiple paths sharing a
+            // pixel hit `atomicAdd(counters...)` for the SAME destination
+            // slot, so which path's record ends up at which queue slot
+            // becomes an intra-dispatch race -- nondeterministic run to run.
+            // That weakens (does not break) the cross-run bit-identity
+            // runWavefrontFusedLoopProbe's bounce-by-bounce reconstruction
+            // rests on: it only requires bounce k to be bit-identical FOR A
+            // GIVEN PATH across runs, and per-path RNG reconstruction from
+            // (pixelIndex, sampleIndex, iterationSeed, bounce) still gives
+            // that regardless of queue order -- so the reconstruction itself
+            // is fine, but a check written the way this one is (indexing by
+            // PATH, then reading which pixel it landed on) would need to sum
+            // per-pixel across paths rather than assume a 1:1 path<->pixel
+            // map. The gamma_{k+4} bound is unaffected either way: it is
+            // derived for a nonnegative sum and is order-independent by
+            // construction.
             for (uint32_t p = 0; p < kPixels; ++p) {
                 if (pixelHits[p] != 1u) {
                     std::fprintf(stderr,

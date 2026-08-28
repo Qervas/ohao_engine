@@ -565,11 +565,15 @@ public:
     /// Returns false on any Vulkan error.
     /// `outNeeSamples`, when non-null, receives binding 7 after the FINAL
     /// run: `capacity * kNeeSampleFloats` floats laid out by NeeSampleSlot.
-    /// The scene is the CLOSED box, so every shadow ray this probe's
-    /// next-event estimator traces is occluded and every contribution in
-    /// that record must be exactly zero -- which is what makes it the check
-    /// that the shadow ray is traced at all, as opposed to a visibility term
-    /// silently stuck at 1.
+    /// With `unoccludedShadowRays` at its default of false, the scene is the
+    /// CLOSED box, so every shadow ray this probe's next-event estimator
+    /// traces is occluded and every contribution in that record must be
+    /// exactly zero -- which is what makes it the check that the shadow ray
+    /// is traced at all, as opposed to a visibility term silently stuck at
+    /// 1. That does NOT hold when `unoccludedShadowRays` is true (see the
+    /// next paragraph): the shadow rays then reach the environment on
+    /// purpose, and a nonzero record is the expected, correct result -- the
+    /// film check below is exactly the caller that passes true.
     ///
     /// `unoccludedShadowRays` DECOUPLES the acceleration structure bound to
     /// wf_scatter.comp's shadow rays (binding 8) from the one

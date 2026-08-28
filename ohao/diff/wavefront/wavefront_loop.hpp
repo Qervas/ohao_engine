@@ -332,9 +332,17 @@ public:
         /// CALLER-OWNED. `WavefrontBuffers` does not allocate it and cannot
         /// state its size; the only object that can is the caller that
         /// allocated it and bound it into the scatter stage's descriptor
-        /// set. Getting it wrong is a write past the end of somebody else's
-        /// allocation, which is why the shader bounds-guards on it rather
-        /// than trusting it.
+        /// set.
+        ///
+        /// The shader's bounds guard checks a path's pixelIndex against THIS
+        /// number, not against the film buffer's real byte size -- it has no
+        /// other way to learn that size. So the guard rejects a pixelIndex
+        /// outside the range this value states, but it CANNOT catch this
+        /// value itself being wrong: a caller that passes a filmPixelCount
+        /// larger than the buffer it actually bound still gets a write past
+        /// the end of that allocation, guard and all. Keeping this number
+        /// and the buffer's real size in agreement is the caller's own
+        /// invariant, not something the shader verifies for it.
         std::uint32_t filmPixelCount{0};
         /// Per-iteration RNG seed. Combined with (pixelIndex, sampleIndex)
         /// and the path's stored bounce count, this is the ONLY thing a
@@ -372,7 +380,17 @@ public:
         std::uint32_t canarySlot;
     };
 
-    /// Matches `shaders/diff/wf_scatter.comp`'s Push block.
+    /// Matches `shaders/diff/wf_scatter.comp`'s Push block. This has grown a
+    /// tail field in Tasks 2, 3 and 5, each time by hand-editing both this
+    /// struct and the shader's Push block to match -- the same
+    /// naming-each-other-in-a-comment situation `kNeeSampleFloats` was in
+    /// before it got a runtime tie. `tests/diff/diff_gpu_probe.cpp`'s
+    /// `checkScatterPushSizeTie()` closes that gap the same way: it parses
+    /// wf_scatter.comp's Push block out of the SOURCE and fails the whole
+    /// probe if `sizeof(ScatterPush)` disagrees with it. A struct member
+    /// added here without a matching shader field (or vice versa) is
+    /// therefore a build-time-adjacent failure, not a silent wrong-field
+    /// push at every offset after the point of drift.
     struct ScatterPush {
         std::uint32_t capacity;
         std::uint32_t srcQueueBase;

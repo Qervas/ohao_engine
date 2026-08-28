@@ -215,6 +215,23 @@ layout(binding = 8) uniform accelerationStructureEXT topLevelAS;
 // WavefrontLoop::record's `extraBarrierBuffers`, which is what folds it into
 // the loop's post-dispatch COMPUTE -> COMPUTE barrier. See the note at the
 // atomicAdd itself.
+//
+// WHAT THIS BUFFER DOES NOT CONTAIN (informational, review Finding 3 on
+// Stage 0b-2b Task 5 -- read this before comparing it against a PathTracer
+// image in Task 6). It holds ONLY MIS direct lighting at surface vertices:
+//   * NO escape/environment term. wf_intersect.comp compacts only survivors
+//     of the trace, so a path that misses everything and escapes to the
+//     environment is simply dropped from the next bounce's queue -- it never
+//     reaches this stage again and contributes nothing further here.
+//   * NO emissive-surface term. Nothing in this pipeline evaluates one yet;
+//     a hit surface's own emission (if it had any) is not part of
+//     filmContribution below.
+// A PathTracer parity comparison will therefore differ from this film by
+// exactly the directly-visible environment plus any emissive-surface term --
+// neither exists on the PathTracer side of that comparison either today, but
+// closing the box here (this file's own test rig) makes the gap
+// unobservable from inside this subsystem. It is not a defect in this task;
+// it is the shape of what "MIS-combined radiance" was asked to accumulate.
 layout(std430, binding = 9) buffer Film {
     float v[];
 } film;
@@ -256,10 +273,15 @@ layout(push_constant) uniform Push {
     // --- Film (Stage 0b-2b Task 5), matching ScatterPush's tail. The
     // number of PIXELS the binding-9 film buffer holds; it is 3*this many
     // floats. 0 means "no film configured" and disables the accumulation
-    // entirely, which is also what makes the bounds guard below meaningful
-    // rather than decorative: unlike capacity, this is a property of a
-    // CALLER-OWNED allocation the shader cannot otherwise know the size of,
-    // so a mismatched caller would write past the end of it.
+    // entirely. The bounds guard below checks pixelIndex against THIS
+    // number -- unlike capacity, it is a property of a CALLER-OWNED
+    // allocation the shader has no other way to learn the size of. That
+    // guard rejects a pixelIndex this value says is out of range; it does
+    // NOT protect against this value itself being wrong. A caller that
+    // passes a filmPixelCount larger than the buffer it actually bound
+    // still gets a write past the end of that allocation -- keeping this
+    // number and the buffer's real size in agreement is the caller's own
+    // invariant, not something this guard verifies.
     uint filmPixelCount;
 } pc;
 
