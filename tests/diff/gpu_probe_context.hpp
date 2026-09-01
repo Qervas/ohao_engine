@@ -981,6 +981,18 @@ public:
     /// 0.01 floor, and a metallic run must sit strictly inside the [0,1]
     /// clamp -- at either endpoint the true derivative is one-sided and a
     /// central difference measures half of it.
+    /// STAGE 2 TASK 2: dispatch shaders/diff/loss_l2.comp over `film`
+    /// against `target`, returning dL/d(film) -- exactly the array
+    /// traverse.glsl reads at binding 12 -- and the scalar loss.
+    ///
+    /// Separate from every wavefront entry point on purpose. The loss is
+    /// its own kernel with its own bindings, and no path, queue or arena is
+    /// reachable from here: that is the structural half of spec 4.6's rule
+    /// that the loss may not reach into the integrator.
+    [[nodiscard]] bool runLossL2Probe(const std::vector<float>& film,
+                                      const std::vector<float>& target,
+                                      std::vector<float>& outSeed, double& outLoss);
+
     [[nodiscard]] bool runWavefrontGradientProbe(
         WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t bounces,
         const WavefrontGenerateCamera& camera, std::span<const float> positions,

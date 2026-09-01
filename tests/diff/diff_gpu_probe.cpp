@@ -213,6 +213,7 @@
 #include "probe/checks_parity.hpp"
 #include "probe/checks_replay.hpp"
 #include "probe/checks_adjoint_seed.hpp"
+#include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
 #include "probe/checks_texture.hpp"
@@ -274,6 +275,7 @@ using ohao::diff::probe::checkReplayEquivalence;
 using ohao::diff::probe::checkAlbedoGradient;
 using ohao::diff::probe::checkGgxGradients;
 using ohao::diff::probe::checkAdjointSeed;
+using ohao::diff::probe::checkLossL2;
 using ohao::diff::probe::checkAlbedoConvergence;
 using ohao::diff::probe::checkEmissionConvergence;
 using ohao::diff::probe::checkGgxConvergence;
@@ -429,6 +431,9 @@ int main() {
     // 50. STAGE 2 TASK 1: the adjoint seed IS dL/d(film), and the
     // sum-of-film objective every check above measures is its w = 1 case.
     if (!checkAdjointSeed(ctx)) return 1;
+    // 51. STAGE 2 TASK 2: the L2 loss, gated by a finite difference on the
+    // loss alone -- no renderer, so a failure there is unambiguous.
+    if (!checkLossL2(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

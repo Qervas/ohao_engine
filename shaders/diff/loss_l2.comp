@@ -1,0 +1,86 @@
+#version 460
+// Float atomicAdd into the scalar loss slot -- the same extension every
+// gradient scatter in this subsystem needs, and the same device feature
+// (shaderBufferFloat32AtomicAdd) DeviceCaps already requires.
+#extension GL_EXT_shader_atomic_float : require
+
+// STAGE 2 TASK 2 -- THE L2 LOSS, AND THE ONLY COMPONENT THAT KNOWS WHAT IS
+// BEING FITTED.
+//
+// The renderer's contract is exactly: give me dL/dpixel, I give you
+// dL/dtheta (spec 4.6). This is the other side of it. Nothing here reaches
+// into the integrator and nothing in the integrator reads this -- the two
+// meet only at the seed buffer traverse.glsl binds at 12, which this shader
+// writes and that one reads, and neither includes a line of the other's
+// source.
+//
+// THE LOSS, AND WHAT N IS.
+//
+//     L = (1/N) * SUM_i (I_i - T_i)^2
+//     dL/dI_i = 2 (I_i - T_i) / N
+//
+// where i runs over every FLOAT of the film -- every pixel AND every channel
+// -- so N = width * height * channels. That choice is stated because it is a
+// real one and the alternative is defensible: a mean over PIXELS would make
+// N three times smaller and every gradient three times larger. Nothing in
+// the pipeline would notice. Gate 5 would absorb the factor into the
+// learning rate and still converge, so a wrong N here is invisible
+// downstream and has to be pinned at the source. The probe's check asserts
+// the closed form on a hand-computed case for exactly that reason.
+//
+// A MEAN AND NOT A SUM, so the loss does not change scale with resolution --
+// which matters the moment multi-view batching (Task 4) averages losses from
+// films of different sizes.
+//
+// ONE INVOCATION PER FLOAT, not per pixel. The gradient is per-float and the
+// three channels are independent, so a per-pixel invocation would either
+// loop three times or leave two thirds of the work to a stride nobody
+// checks.
+
+layout(local_size_x = 64) in;
+
+// The rendered image. READ-ONLY here: a loss that wrote the film would make
+// the film depend on the objective, which is the direction spec 4.6 forbids.
+layout(std430, binding = 0) readonly buffer Film {
+    float v[];
+} film;
+
+layout(std430, binding = 1) readonly buffer Target {
+    float v[];
+} target;
+
+// dL/d(film[i]). This is exactly the array traverse.glsl reads at binding 12
+// -- same length, same order, same meaning -- and the ONLY thing that
+// crosses from here to the renderer.
+layout(std430, binding = 2) buffer AdjointSeed {
+    float v[];
+} seed;
+
+// The scalar loss, accumulated by atomicAdd into slot 0. A float atomicAdd,
+// which this subsystem requires anyway (shaderBufferFloat32AtomicAdd) and
+// which makes this value non-deterministic at ~1e-7 relative for the same
+// reason the gradient arena is. Slot 0 only; the buffer is one float.
+layout(std430, binding = 3) buffer LossScalar {
+    float v[];
+} loss;
+
+layout(push_constant) uniform Push {
+    // Number of FLOATS in the film, which is N above. Not a pixel count --
+    // see the header, where the difference is a factor of three.
+    uint floatCount;
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    // The dispatch is sized ceil(floatCount / 64) * 64, so the tail beyond
+    // the real length must write nothing at all -- not a zero, nothing. A
+    // zero would be indistinguishable from a real gradient of zero, and the
+    // seed buffer is exactly floatCount long.
+    if (i >= pc.floatCount) return;
+
+    const float d = film.v[i] - target.v[i];
+    const float invN = 1.0 / float(pc.floatCount);
+
+    seed.v[i] = 2.0 * d * invN;
+    atomicAdd(loss.v[0], d * d * invN);
+}
