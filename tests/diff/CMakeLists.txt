@@ -17,9 +17,18 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(diff_unit_tests)
 
-add_executable(diff_gpu_probe diff_gpu_probe.cpp gpu_probe_context.cpp)
+add_executable(diff_gpu_probe
+    diff_gpu_probe.cpp
+    gpu_probe_context.cpp
+    probe/oracle_bsdf.cpp
+    probe/oracle_integrator.cpp
+    probe/fd_harness.cpp
+    probe/scene.cpp
+    probe/ties.cpp
+)
 target_include_directories(diff_gpu_probe PRIVATE
     ${CMAKE_SOURCE_DIR}/ohao
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${Vulkan_INCLUDE_DIRS}
 )
 target_compile_features(diff_gpu_probe PRIVATE cxx_std_20)
