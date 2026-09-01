@@ -467,6 +467,15 @@ public:
         float emissionUvScaleV{0.0f};
         float emissionUvBiasU{0.0f};
         float emissionUvBiasV{0.0f};
+        /// Stage 2 Task 1: the number of floats behind binding 12, the
+        /// dL/dpixel adjoint seed. 0 -- the default, and what every caller
+        /// predating this task leaves it at -- means no seed is bound and the
+        /// objective is the sum of the film, which is what Stage 1's gradient
+        /// checks measure. Otherwise this must equal 3 * filmPixelCount and
+        /// the caller must have bound a buffer of at least that length at
+        /// binding 12; the shader guards the read but cannot verify the
+        /// LENGTH claim, exactly as it cannot for the film or the arena.
+        std::uint32_t adjointSeedFloats{0};
     };
 
     /// One end of the ping-pong: a queue ring's element base and the
@@ -585,9 +594,10 @@ public:
         // texture configured" -- a zero width or height is exactly that --
         // and therefore renders the pre-Task-5 film from `emission` above.
         //
-        // THESE MUST STAY THE LAST FIELDS, and `emissionUvBiasV` the very
+        // THESE MUST STAY THE LAST FIELDS, and `adjointSeedFloats` the very
         // last: traverse.glsl's Push block declares them in this order and
-        // ends with the same field.
+        // ends with the same field. (`emissionUvBiasV` held that position
+        // until Stage 2 Task 1 appended the adjoint seed's length after it.)
         //
         // WHAT `checkScatterPushSizeTie` COVERS (this comment corrects an
         // earlier version of itself, which said the check tied only the TOTAL
@@ -626,6 +636,8 @@ public:
         float emissionUvScaleV{0.0f};
         float emissionUvBiasU{0.0f};
         float emissionUvBiasV{0.0f};
+        // Stage 2 Task 1. See Config::adjointSeedFloats.
+        std::uint32_t adjointSeedFloats{0};
     };
 
     WavefrontLoop() = default;

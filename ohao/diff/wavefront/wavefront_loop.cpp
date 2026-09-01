@@ -423,7 +423,8 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       m_config.emissionUvScaleU,
                                       m_config.emissionUvScaleV,
                                       m_config.emissionUvBiasU,
-                                      m_config.emissionUvBiasV};
+                                      m_config.emissionUvBiasV,
+                                      m_config.adjointSeedFloats};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);

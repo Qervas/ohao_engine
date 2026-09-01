@@ -355,7 +355,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // include the same traverse.glsl. Binding 10 is the gradient arena and is
     // bound to the REAL arena for both -- unlike every other probe here,
     // which has none and re-binds its film there.
-    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[13] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -366,6 +366,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   // 12: the Stage 2 Task 1 adjoint seed.
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -430,7 +432,8 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                  // is read-only, and the forward read and the replay scatter
                  // must be looking at ONE array for the gradient to be the
                  // derivative of the film that was actually rendered.
-                 scatterStages[i]->bindStorageBuffer(m_device, 11, emissionTexBuffer.buffer);
+                 scatterStages[i]->bindStorageBuffer(m_device, 11, emissionTexBuffer.buffer) &&
+                 scatterStages[i]->bindStorageBuffer(m_device, 12, s.film.buffer);
         }
         if (!ok) {
             std::fprintf(stderr,

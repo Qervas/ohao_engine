@@ -457,6 +457,41 @@ layout(std430, binding = 11) readonly buffer EmissionTexture {
     float v[];
 } emissionTex;
 
+// --- THE ADJOINT SEED, dL/dpixel (Stage 2 Task 1). NOT probe-only --------
+//
+// WHAT dL_0 IS, AND WHY IT USED TO BE ABSENT. Every Stage 1 gradient is
+// dJ/dtheta for J = the sum of every float in the film, which makes
+// dJ/d(film[p][c]) identically 1 -- so the backward pass could seed its
+// adjoint with the path's own throughput and carry no separate quantity at
+// all. That identity is stated in wf_scatter_replay.comp's hook, and it is
+// exactly what a real loss breaks: an L2 against a target supplies a
+// DIFFERENT dL/dpixel per pixel and per channel, and the adjoint stops
+// coinciding with the throughput.
+//
+// THREE FLOATS PER PIXEL, not one. The loss is free to weight the channels
+// differently (a masked or per-channel loss does), so the seed has the film's
+// own shape and is addressed at `pixelIndex * 3 + c` -- the film's indexing,
+// deliberately, so one wrong stride cannot mean two different things on the
+// two sides.
+//
+// NO NEW PATH-STATE FIELD, and that is worth stating because it was an open
+// question in the stage plan. The seed is a pure function of the PIXEL, and
+// DiffVertex already carries `pixelIndex`, so the adjoint at bounce b is
+// still recoverable as `seed * throughput_b` at every vertex without storing
+// anything per path. What changes is the value, not the shape of the state.
+//
+// `pc.adjointSeedFloats == 0` means "no seed bound", and every caller that
+// predates this task pushes exactly that: the seed is then vec3(1.0) and the
+// adjoint is the throughput again, bit for bit. That is not a compatibility
+// shim -- it is the sum-of-film objective, which is a genuine loss and the
+// one every Stage 1 check measures.
+//
+// READ-ONLY, like the emission texture, so it is not among the buffers
+// WavefrontLoop::record must order against itself.
+layout(std430, binding = 12) readonly buffer AdjointSeed {
+    float v[];
+} adjointSeed;
+
 layout(push_constant) uniform Push {
     uint capacity;
     uint srcQueueBase;
@@ -645,7 +680,24 @@ layout(push_constant) uniform Push {
     float emissionUvScaleV;
     float emissionUvBiasU;
     float emissionUvBiasV;
+    // Stage 2 Task 1. The LENGTH of the binding-12 seed array, in floats --
+    // 0 meaning "no seed bound", which is the sum-of-film objective every
+    // Stage 1 check measures. Named a float COUNT rather than a pixel count
+    // so that the bounds guard in `diffAdjointSeed` compares like with like.
+    uint adjointSeedFloats;
 } pc;
+
+/// dL/d(film[pixelIndex]) as a vec3, or vec3(1.0) when no seed is bound.
+/// ONE spelling, used by whichever instantiation needs it, so the guard and
+/// the stride cannot drift between two copies of this expression.
+vec3 diffAdjointSeed(uint pixelIndex) {
+    const uint base = pixelIndex * 3u;
+    if (pc.adjointSeedFloats == 0u || base + 2u >= pc.adjointSeedFloats) {
+        return vec3(1.0);
+    }
+    return vec3(adjointSeed.v[base + 0u], adjointSeed.v[base + 1u],
+                adjointSeed.v[base + 2u]);
+}
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe
 // replaying ohao::diff::PathRng must agree on this exactly. Kept as a literal

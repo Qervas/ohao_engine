@@ -197,7 +197,7 @@ bool GpuProbeContext::runWavefrontParityProbe(
     // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
     // See runWavefrontScatterProbe's note at its binding-10 bind for why the
     // probes that have no arena re-bind the film buffer there.
-    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[13] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -208,6 +208,8 @@ bool GpuProbeContext::runWavefrontParityProbe(
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   // 12: the Stage 2 Task 1 adjoint seed.
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -264,7 +266,8 @@ bool GpuProbeContext::runWavefrontParityProbe(
             // harmless while a stray WRITE -- which the shader's `readonly`
             // already forbids -- would land somewhere three independent
             // film checks would notice.
-            !scatter.bindStorageBuffer(m_device, 11, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 11, filmBuffer.buffer) ||
+            !scatter.bindStorageBuffer(m_device, 12, filmBuffer.buffer)) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontParityProbe: descriptor binding\n");
             ok = false;
         }

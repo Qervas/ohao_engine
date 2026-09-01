@@ -230,7 +230,7 @@ bool GpuProbeContext::runWavefrontReplayProbe(
     // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
     // See runWavefrontScatterProbe's note at its binding-10 bind for why the
     // probes that have no arena re-bind the film buffer there.
-    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[13] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -241,6 +241,8 @@ bool GpuProbeContext::runWavefrontReplayProbe(
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                                   // 12: the Stage 2 Task 1 adjoint seed.
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
@@ -313,7 +315,8 @@ bool GpuProbeContext::runWavefrontReplayProbe(
                  // Binding 11, the emission-texture primal (Stage 1 Task 5):
                  // this probe configures no texture, so the film goes here
                  // too, for binding 10's reason.
-                 scatterStages[i]->bindStorageBuffer(m_device, 11, s.film.buffer);
+                 scatterStages[i]->bindStorageBuffer(m_device, 11, s.film.buffer) &&
+                 scatterStages[i]->bindStorageBuffer(m_device, 12, s.film.buffer);
         }
         if (!ok) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontReplayProbe: descriptor binding\n");

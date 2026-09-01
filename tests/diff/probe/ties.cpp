@@ -1012,7 +1012,7 @@ bool checkScatterPushSizeTie() {
         "sampleMetallic",    "sampleSpecularWeight", "diffParam",
         "emission",          "emissionTexWidth",   "emissionTexHeight",
         "emissionTexChannels", "emissionUvScaleU", "emissionUvScaleV",
-        "emissionUvBiasU",   "emissionUvBiasV",
+        "emissionUvBiasU",   "emissionUvBiasV",   "adjointSeedFloats",
     };
     if (fieldNames != kCanonicalFieldOrder) {
         const std::size_t n = std::min(fieldNames.size(), kCanonicalFieldOrder.size());
