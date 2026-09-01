@@ -297,7 +297,45 @@ public:
     /// `capacity` is not here: it comes from the `WavefrontBuffers` passed
     /// to `record()`, which is the only object that can state it
     /// authoritatively.
-    struct Config {
+    // STAGE 2 TASK 4 -- THE ">1 SPP" DECISION, MADE RATHER THAN DISCOVERED.
+//
+// Spec 4.5 records that the seed invariant covers the PATH and not the FILM:
+// at more than one sample per pixel, several paths belonging to one pixel
+// atomicAdd the same three floats WITHIN A SINGLE DISPATCH, and float
+// addition is not associative, so the film depends on a scheduling order the
+// seed does not control. The spec requires Stage 1 or 2 to resolve this
+// explicitly, and names three options: keep replay at 1 spp per dispatch,
+// accumulate per-path and reduce deterministically, or accept a documented
+// tolerance covering atomic reordering.
+//
+// THE CHOICE IS THE FIRST: ONE SAMPLE PER PIXEL PER DISPATCH.
+//
+// The reason is that it does not cost what it appears to. The hazard is
+// contention WITHIN a dispatch; at 1 spp there is exactly one path per pixel
+// per dispatch and therefore no contention at all, so each dispatch's film
+// write is a single atomicAdd per float. More samples are then obtained by
+// running MORE DISPATCHES, whose order is fixed by the barrier chain rather
+// than by the scheduler -- so the accumulation order is deterministic and the
+// film is a pure function of the seeds again. N sequential 1-spp dispatches
+// and one N-spp dispatch compute the same estimator; only the second is
+// order-dependent.
+//
+// It also happens to be free for the thing Stage 2 actually needs. Multi-view
+// batching is about VIEWS, not samples per pixel: each view is its own render
+// with its own camera, at 1 spp, and the arena accumulates across them (spec
+// 4.4, "the arena is cleared per iteration, not per view"). Nothing in the
+// optimisation loop requires a multi-sample dispatch.
+//
+// WHAT IS STILL NOT DETERMINISTIC, stated so the choice is not oversold: the
+// GRADIENT ARENA. Many paths scatter into one parameter's float within a
+// single replay dispatch, which is the same non-associativity in the other
+// buffer, and 1 spp does not remove it -- there is one path per pixel but
+// 512 pixels all adding to the same scalar. That is measured rather than
+// wished away: it is the ~1e-7 relative spread every gradient check's
+// tolerance carries, and the reason the probe's output is compared through a
+// normaliser rather than byte for byte. The film is what this decision makes
+// reproducible; the arena is what the tolerances are for.
+struct Config {
         /// The surface's base colour, as a grey scalar. `wf_scatter.comp`
         /// expands it to vec3(albedo) and feeds it to
         /// `shaders/includes/diff/bsdf.glsl`'s Lambert + GGX BSDF as the

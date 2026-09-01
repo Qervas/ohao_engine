@@ -149,6 +149,19 @@ struct WavefrontGradientOptions {
     /// rather than binding a buffer whose length contradicts the count it
     /// pushes, which the shader can guard but cannot check.
     std::vector<float> adjointSeed;
+
+    /// STAGE 2 TASK 4: ACCUMULATE into the arena rather than zeroing it
+    /// first. False -- the default, and what every caller predating this task
+    /// gets -- zeroes, which is what makes checks 38/43/47's "every other
+    /// float is exactly 0" assertions readable at all.
+    ///
+    /// True is how a MULTI-VIEW BATCH is expressed: spec 4.4 says the arena
+    /// is cleared per ITERATION, not per view, so a batch of views is a
+    /// sequence of runs with this set, and one optimizer step follows the
+    /// whole sequence. A per-view clear would silently reduce a batch to its
+    /// LAST view and the gradient would still look entirely plausible, which
+    /// is why check 53 asserts the sum rather than trusting the flag.
+    bool accumulate{false};
 };
 
 /// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.

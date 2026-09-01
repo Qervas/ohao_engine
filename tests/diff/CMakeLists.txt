@@ -47,6 +47,7 @@ add_executable(diff_gpu_probe
     probe/checks_adjoint_seed.cpp
     probe/checks_loss.cpp
     probe/checks_adam.cpp
+    probe/checks_batch.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

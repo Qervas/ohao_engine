@@ -214,6 +214,7 @@
 #include "probe/checks_replay.hpp"
 #include "probe/checks_adjoint_seed.hpp"
 #include "probe/checks_adam.hpp"
+#include "probe/checks_batch.hpp"
 #include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
@@ -276,6 +277,7 @@ using ohao::diff::probe::checkReplayEquivalence;
 using ohao::diff::probe::checkAlbedoGradient;
 using ohao::diff::probe::checkGgxGradients;
 using ohao::diff::probe::checkAdam;
+using ohao::diff::probe::checkMultiViewBatch;
 using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkLossL2;
 using ohao::diff::probe::checkAlbedoConvergence;
@@ -439,6 +441,9 @@ int main() {
     // 52. STAGE 2 TASK 3: Adam, against the paper over a whole trajectory,
     // plus a closed form for the first step that needs no reference.
     if (!checkAdam(ctx)) return 1;
+    // 53. STAGE 2 TASK 4: a multi-view batch is the sum of its views, and
+    // is separately required not to equal its last one.
+    if (!checkMultiViewBatch(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

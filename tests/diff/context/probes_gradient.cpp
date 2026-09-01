@@ -584,7 +584,14 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                 // SHADER_READ|SHADER_WRITE barrier, which is exactly the
                 // configuration its own comment says that barrier becomes
                 // load-bearing in.
-                arena.zero(cmd);
+                // STAGE 2 TASK 4: skipped when the caller is accumulating a
+                // multi-view batch. The barrier this call also records is
+                // then not recorded either -- which is correct, because
+                // there is no TRANSFER_WRITE to order against: the previous
+                // run's SHADER_WRITE was already ordered to HOST_READ by its
+                // own readback barrier, and this run's atomicAdd is
+                // read-modify-write on the same queue.
+                if (!options.accumulate) arena.zero(cmd);
 
                 const VkBuffer loopExtras[5] = {s.trace.buffer, s.env.buffer, s.nee.buffer,
                                                 s.film.buffer, arena.buffer()};
