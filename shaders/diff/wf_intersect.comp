@@ -141,7 +141,8 @@ void main() {
     // The offset is therefore bounded from BELOW as well as above, and both
     // bounds are enforced at compile time rather than assumed: see the
     // static_asserts on kFusedLoopScatterOriginOffset next to the fused-loop
-    // scene constants in gpu_probe_context.cpp, which require it to exceed
+    // scene constants in tests/diff/context/probe_scene.hpp, which require it
+    // to exceed
     // 8 * E * FLT_EPSILON (= 8 ulp(E), ~16x the rounding-away threshold).
     // A future scene at a much larger E, or a smaller offset, breaks this
     // argument and fails that build -- it does not silently degrade. What a
@@ -151,7 +152,8 @@ void main() {
     // rejected, the ray would leave the scene through the gap, and the path
     // would die. That turns "every path survives every bounce" from a
     // theorem about the geometry into a near-edge probability -- see the
-    // survival derivation in gpu_probe_context.cpp's fused-loop scene
+    // survival derivation in tests/diff/context/probe_scene.hpp's fused-loop
+    // scene
     // constants, which depends on tMin being exactly 0.
     //
     // A PRIMARY ray (this bounce's first trace of a path, straight out of
@@ -168,7 +170,7 @@ void main() {
     // by two different hypotheses -- the scatter offset for scattered rays,
     // the camera-not-on-a-surface guard for primary rays -- and both are
     // enforced, not assumed: see the static_asserts next to the fused-loop
-    // scene constants in gpu_probe_context.cpp and this file's own
+    // scene constants in tests/diff/context/probe_scene.hpp and this file's own
     // scattered-ray argument above.
     rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.0, dir,
                           kTraceTMax);

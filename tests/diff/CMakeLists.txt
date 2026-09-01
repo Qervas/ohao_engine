@@ -20,6 +20,7 @@ gtest_discover_tests(diff_unit_tests)
 add_executable(diff_gpu_probe
     diff_gpu_probe.cpp
     gpu_probe_context.cpp
+    context/probe_scene.cpp
     probe/oracle_bsdf.cpp
     probe/oracle_integrator.cpp
     probe/fd_harness.cpp
