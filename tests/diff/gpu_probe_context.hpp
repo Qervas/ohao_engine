@@ -86,8 +86,13 @@ struct WavefrontScatterMaterial {
 /// Running the same measurement with it OFF is the detached-sampling BIAS,
 /// which is a number to report rather than a gate to pass.
 struct WavefrontGradientOptions {
-    /// 0 = base colour (Stage 1 Task 2), 1 = roughness, 2 = metallic. Matches
-    /// DIFF_PARAM_* in shaders/includes/diff/bsdf_adjoint.glsl.
+    /// 0 = base colour (Task 2), 1 = roughness, 2 = metallic (Task 3),
+    /// 3 = emission (Task 4), 4 = emission texture (Task 5). Matches
+    /// DIFF_PARAM_* in shaders/includes/diff/bsdf_adjoint.glsl, which is the
+    /// definition; this list is a transcription of it and drifted once
+    /// already, naming only 0-2 for two tasks after 3 and 4 had live callers.
+    /// `runWavefrontGradientProbe` refuses anything outside the set rather
+    /// than dispatching it at a shader that has no branch for it.
     std::uint32_t diffParam{0};
     /// When true, `samplingAlbedo`/`samplingMaterial` are what every sampling
     /// decision uses, regardless of the evaluated material passed alongside.

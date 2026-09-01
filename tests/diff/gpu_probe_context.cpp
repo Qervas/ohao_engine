@@ -3571,6 +3571,34 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                      positions.size(), indices.size());
         return false;
     }
+    // THE PARAMETER-SET REFUSAL, and it comes FIRST because every refusal
+    // below it dispatches on `diffParam` BY NAME. So does
+    // wf_scatter_replay.comp's `diffVertexHook`, and so does traverse.glsl's
+    // forward-tangent gate. None of the three has a catch-all -- that is
+    // deliberate, and bsdf_adjoint.glsl's allow-list note is where the
+    // argument for it lives -- which means a value outside the DIFF_PARAM_*
+    // set is not a variant of some other parameter's run. It matches no branch
+    // anywhere.
+    //
+    // The shader scatters a quiet NaN in that case and check 42's finiteness
+    // precondition catches it, so the hole is not silent. But that catch is
+    // downstream of a whole render, it only fires for a run whose contribution
+    // reaches the arena at all (`mayScatter` false writes nothing), and what
+    // it reports is "the gradient is not finite" rather than the name of the
+    // cause. Refusing here says the cause, before any Vulkan work happens.
+    constexpr std::uint32_t kMaxKnownDiffParam = 4u;  // DIFF_PARAM_EMISSION_TEXTURE
+    if (options.diffParam > kMaxKnownDiffParam) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: refuses to run with diffParam "
+                     "%u. shaders/includes/diff/bsdf_adjoint.glsl defines exactly five, and they "
+                     "are contiguous: 0 DIFF_PARAM_BASECOLOR, 1 DIFF_PARAM_ROUGHNESS, 2 "
+                     "DIFF_PARAM_METALLIC, 3 DIFF_PARAM_EMISSION, 4 DIFF_PARAM_EMISSION_TEXTURE. "
+                     "A sixth parameter needs a branch in wf_scatter_replay.comp's diffVertexHook "
+                     "AND its own preconditions here -- raising this bound alone would buy it "
+                     "nothing but a NaN gradient from the shader's fallthrough sentinel\n",
+                     options.diffParam);
+        return false;
+    }
     // THE MATERIAL REFUSAL. See the doc comment: bsdf_adjoint.glsl's
     // derivative is exact only at metallic == 0 (where F0 and the lobe
     // probability q stop depending on the base colour) and its throughput
