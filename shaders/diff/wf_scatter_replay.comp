@@ -252,14 +252,73 @@ void diffVertexHook(inout DiffVertex v) {
     // MIS-weight term, d(1/p_B)) is identically zero for this parameter; see
     // bsdf_adjoint.glsl's "STAGE 1 TASK 4" banner for why each is zero
     // rather than merely small.
-    const vec3 contribution =
-        (pc.diffParam == DIFF_PARAM_BASECOLOR)
-            ? (diffVertexDirectAlbedoScatter(v, v.adjoint) +
-               diffVertexThroughputAlbedoTerm(v, pc.albedo))
-            : (pc.diffParam == DIFF_PARAM_EMISSION ||
-               pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE)
-                ? diffVertexEmissionScatter(v)
-                : diffVertexGgxScatter(v, pc.diffParam);
+    //
+    // EVERY KNOWN PARAMETER ROUTES BY NAME, AND THERE IS NO CATCH-ALL. This
+    // used to be a ternary chain whose final `else` was
+    // `diffVertexGgxScatter(v, pc.diffParam)` -- structurally the same
+    // deny-list that has already cost this branch twice (Task 4's
+    // DIFF_PARAM_EMISSION and Task 5's DIFF_PARAM_EMISSION_TEXTURE both fell
+    // through traverse.glsl's exclude-by-name tangent gate). A sixth
+    // `DIFF_PARAM_*` added without touching this file would have landed in
+    // the GGX branch and then fallen off the end of `diffBsdfEvalDeriv` --
+    // which returns `df = vec3(0.0), dpdf = 0.0` for a parameter matching
+    // neither its roughness nor its metallic case -- scattering a
+    // structurally zero adjoint that looks exactly like a correct answer for
+    // a parameter the film genuinely does not depend on. That is the
+    // failure this file is now closed against.
+    //
+    // THE GGX BRANCH IS GATED BY `diffParamNeedsForwardTangent`, NOT BY A
+    // SECOND HAND-WRITTEN {ROUGHNESS, METALLIC} TEST. Design call, and the
+    // reason is drift: those two sets are the SAME set, and structurally so
+    // (a parameter takes the GGX adjoint exactly when it moves a sampled
+    // direction, which is exactly when the traversal must carry a
+    // forward-mode tangent for it). Writing the membership twice makes it
+    // possible for a future parameter to be added HERE and not to the gate,
+    // and that direction is the dangerous one: the gate's own banner
+    // explains that a parameter missing from it gets `vtx.dBsdfWeight` and
+    // `vtx.dPdf` baked in as 0 while its NEE term keeps computing, i.e. a
+    // silently PARTIAL gradient. With one predicate that cannot happen; a
+    // parameter added to the gate but not here hits the sentinel below
+    // instead, which is the loud direction.
+    //
+    // AN UNRECOGNISED PARAMETER SCATTERS A QUIET NaN, deliberately, and this
+    // is the loudest mechanism available at this layer -- GLSL has no
+    // assert, no trap, and no side channel out of a compute invocation but
+    // the buffers already bound. It is observable because `contribution` is
+    // not a local dead end: it is summed and `atomicAdd`ed into
+    // `grad.v[pc.gradAlbedoOffset]` below (or, for a texture parameter,
+    // handed to `diffScatterEmissionTexture`), so a NaN here becomes a NaN
+    // in the gradient arena the host reads back, and EVERY gradient check
+    // compares that readback against a finite-difference reference with
+    // `fabs(got - ref) <= tol` -- a comparison that is FALSE for NaN
+    // whatever the tolerance, so the check fails rather than passing on a
+    // near-zero difference. The bit pattern is written with
+    // `uintBitsToFloat` rather than computed as 0.0/0.0 so that no constant
+    // folding, and no future relaxed-precision build, can turn it into a
+    // finite value.
+    //
+    // WHERE THIS IS NOT OBSERVABLE, stated rather than glossed: if the
+    // gradient arena is unconfigured or the pixel is outside the film,
+    // `mayScatter` is false and NOTHING is written, so an unrecognised
+    // parameter in that configuration is as silent as it ever was. That
+    // configuration produces no gradient at all, so there is nothing for it
+    // to corrupt -- but it does mean the shader cannot be the only guard.
+    // The host is where an unrecognised `diffParam` should be refused
+    // BEFORE the dispatch, which is what GpuProbeContext's per-parameter
+    // preconditions already do for every value they know (see
+    // runWavefrontGradientProbe's refusals).
+    vec3 contribution;
+    if (pc.diffParam == DIFF_PARAM_BASECOLOR) {
+        contribution = diffVertexDirectAlbedoScatter(v, v.adjoint) +
+                       diffVertexThroughputAlbedoTerm(v, pc.albedo);
+    } else if (diffParamNeedsForwardTangent(pc.diffParam)) {
+        contribution = diffVertexGgxScatter(v, pc.diffParam);
+    } else if (pc.diffParam == DIFF_PARAM_EMISSION ||
+               pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE) {
+        contribution = diffVertexEmissionScatter(v);
+    } else {
+        contribution = vec3(uintBitsToFloat(0x7fc00000u));  // quiet NaN
+    }
 
     v.adjoint = v.adjoint * v.bsdfWeight;
 
