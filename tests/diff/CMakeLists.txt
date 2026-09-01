@@ -21,6 +21,13 @@ add_executable(diff_gpu_probe
     diff_gpu_probe.cpp
     gpu_probe_context.cpp
     context/probe_scene.cpp
+    context/probes_basic.cpp
+    context/probes_wavefront.cpp
+    context/probes_scatter.cpp
+    context/probes_fused_loop.cpp
+    context/probes_replay.cpp
+    context/probes_parity.cpp
+    context/probes_gradient.cpp
     probe/oracle_bsdf.cpp
     probe/oracle_integrator.cpp
     probe/fd_harness.cpp
