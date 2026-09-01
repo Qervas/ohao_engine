@@ -538,6 +538,36 @@ const uint DIFF_PARAM_METALLIC = 2u;
 const uint DIFF_PARAM_EMISSION = 3u;
 const uint DIFF_PARAM_EMISSION_TEXTURE = 4u;
 
+/// WHICH PARAMETERS NEED THE FORWARD-MODE THROUGHPUT TANGENT (Stage 1 Task 3,
+/// traverse.glsl's `psSetTangent` gate), stated as an ALLOW-LIST rather than
+/// an exclusion, on purpose: this branch has now added two DIFF_PARAM_*
+/// values in a row that must NOT enter that branch (Task 4's
+/// DIFF_PARAM_EMISSION; Task 5's DIFF_PARAM_EMISSION_TEXTURE, which review
+/// caught falling through the exclude-by-name gate silently because the
+/// exclusion named 3 but not 4). An exclude-list is wrong by silent inclusion
+/// every time a new `DIFF_PARAM_*` is added and this comment is not
+/// remembered; an allow-list is wrong only by silent EXCLUSION of a parameter
+/// that DOES need a tangent -- and that parameter's own entry in
+/// `diffBsdfWeightDeriv` below would then be producing a derivative nothing
+/// reads, which is the kind of dead-weight cost this review is closing, not
+/// a correctness gap this predicate could hide.
+///
+/// ROUGHNESS and METALLIC are the only two, and the reason is structural, not
+/// a list of what happens to be true today: they are the only parameters
+/// `bsdf.glsl` reads to build the GGX VNDF's alpha or the lobe-selection
+/// probability `q`, i.e. the only ones whose perturbation moves a sampled
+/// direction, so they are the only ones whose per-bounce BSDF weight
+/// `diffBsdfWeightDeriv` computes a nonzero derivative for. BASECOLOR's
+/// throughput term is closed-form (`diffVertexThroughputAlbedoTerm` below);
+/// EMISSION and EMISSION_TEXTURE are additive and never sampled from, so
+/// their closed-form throughput derivative is exactly 0 at every vertex (see
+/// each one's own banner in this file). This function is the ONE place that
+/// decides membership; keep the gate in traverse.glsl calling it rather than
+/// re-testing `diffParam` itself.
+bool diffParamNeedsForwardTangent(uint diffParam) {
+    return diffParam == DIFF_PARAM_ROUGHNESS || diffParam == DIFF_PARAM_METALLIC;
+}
+
 /// d(unpacked)/d(pushed) for `pbr_unpack.glsl`'s roughness floor and metallic
 /// clamp, decided from the raw/unpacked pair rather than from a copy of the
 /// constant.
@@ -877,11 +907,11 @@ vec3 diffVertexGgxScatter(in DiffVertex v, uint param) {
 //     function. So the throughput a path arrives with does not depend on
 //     emission at ANY bounce: the closed form is 0 and it is exact, not
 //     approximate, at every theta. traverse.glsl's tangent-maintenance gate
-//     (`pc.diffParam != DIFF_PARAM_BASECOLOR && pc.diffParam !=
-//     DIFF_PARAM_EMISSION`) makes that closed form explicit -- this
-//     parameter carries NO forward-mode tangent in path state, by
-//     exclusion, not merely by every value that reaches it happening to be
-//     zero.
+//     (`diffParamNeedsForwardTangent(pc.diffParam)`, an ALLOW-list of just
+//     ROUGHNESS and METALLIC -- see that function's banner above) makes that
+//     closed form explicit -- this parameter carries NO forward-mode
+//     tangent in path state, by exclusion, not merely by every value that
+//     reaches it happening to be zero.
 //   * dLr_b/d(emission) = 0. `Lr` is nee.glsl's MIS-combined estimate --
 //     built from `neeTerm`/`bsdfTerm`, which read baseColor, the material,
 //     the environment CDF and the shadow-ray visibility, and again never
@@ -1076,12 +1106,23 @@ struct DiffBilinearFootprint {
 
 /// Clamp a floating texel coordinate into [0, size-1] and truncate.
 ///
-/// CLAMP, NOT WRAP, and the choice is load-bearing for the conservation
-/// identity rather than merely an edge convention: under clamping two (or all
-/// four) of a footprint's corners COLLAPSE onto the same texel near a border,
-/// and the scatter then adds two weights into one element -- which keeps
-/// SUM_i w_i exactly 1 and so keeps the identity true AT the border, where a
-/// wrap would move mass to the far edge and a border-drop would destroy it.
+/// CLAMP, NOT WRAP -- but conservation does not decide between them: wrapping
+/// would ALSO keep SUM_i w_i exactly 1 at the border (it moves mass to the far
+/// edge; it does not destroy it), so the identity holds either way. What
+/// actually decides it is that clamp matches every other texel-centre
+/// convention this subsystem uses (env_sampling.glsl's CDF, and the
+/// `(i + 0.5) / size` convention `diffBilinearFootprint` below is built on),
+/// and it matches diff_gpu_probe.cpp's `hostBilinearFootprint`, the
+/// independent host predictor check 44's footprint half is measured against
+/// -- a host that wrapped while this clamped would disagree at the border for
+/// a reason that has nothing to do with either being wrong. The choice that
+/// WOULD break the identity is a border-DROP (an out-of-bounds corner simply
+/// omitted rather than folded onto its in-bounds neighbour): that removes
+/// mass instead of moving it, so SUM_i w_i < 1 there.
+///
+/// MEASURED, not merely argued: check 45's element 23 is texel (x=3, y=1) of
+/// this task's 4x3x3 texture -- the last column, where x1 clamps onto x0 --
+/// and its finite difference agreed with the analytic gradient to 1.1e-05.
 uint diffClampTexel(float coord, uint size) {
     return uint(clamp(coord, 0.0, float(size) - 1.0));
 }

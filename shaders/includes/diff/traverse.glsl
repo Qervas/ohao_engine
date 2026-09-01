@@ -555,11 +555,14 @@ layout(push_constant) uniform Push {
     // (2); the enumerators are in bsdf_adjoint.glsl, which is included below.
     //
     // It selects TWO things, in this file and in the replay hook: whether the
-    // traversal maintains the forward-mode throughput tangent in path state
-    // (only 1 and 2 need one -- the base colour has a closed form), and which
-    // adjoint the hook scatters. The FORWARD instantiation is pushed the same
-    // value as the REPLAY one, so the branch is uniform across both and the
-    // two still walk the identical path.
+    // traversal maintains the forward-mode throughput tangent in path state,
+    // and which adjoint the hook scatters. Which values need a tangent is an
+    // ALLOW-list, not a fact to re-derive here: `diffParamNeedsForwardTangent`
+    // (bsdf_adjoint.glsl) is ROUGHNESS and METALLIC only -- the base colour
+    // and both emission parameters have a closed form and are excluded. The
+    // FORWARD instantiation is pushed the same value as the REPLAY one, so
+    // the branch is uniform across both and the two still walk the identical
+    // path.
     uint diffParam;
     // --- EMISSION (Stage 1 Task 4), matching ScatterPush's tail. A SECOND
     // grey scalar, exactly like `albedo` above: one uniform self-emitted
@@ -575,13 +578,14 @@ layout(push_constant) uniform Push {
     // unlike roughness and metallic, this parameter needs no detached
     // instrument. dT_b/d(emission) is exactly 0 for the same reason:
     // nothing the throughput recursion multiplies by ever reads it. Below
-    // (the `pc.diffParam != DIFF_PARAM_BASECOLOR` gate), the traversal makes
-    // that closed form EXPLICIT rather than incidental: DIFF_PARAM_EMISSION
-    // is excluded from the forward-mode tangent maintenance by name, the
-    // same way DIFF_PARAM_BASECOLOR is, rather than being left to enter that
-    // branch and fall through `diffBsdfEvalDeriv` to a zero it happens to
-    // match neither the roughness nor the metallic case to produce. See
-    // bsdf_adjoint.glsl's DIFF_PARAM_EMISSION section.
+    // (the `diffParamNeedsForwardTangent(pc.diffParam)` gate), the traversal
+    // makes that closed form EXPLICIT rather than incidental:
+    // DIFF_PARAM_EMISSION is excluded from the forward-mode tangent
+    // maintenance -- it is simply not one of the two parameters that ALLOW-
+    // list names -- rather than being left to enter that branch and fall
+    // through `diffBsdfEvalDeriv` to a zero it happens to match neither the
+    // roughness nor the metallic case to produce. See bsdf_adjoint.glsl's
+    // DIFF_PARAM_EMISSION section.
     //
     // Defaults to 0.0 via ScatterPush's own member initialiser, so a
     // ScatterPush built by hand with a braced list that stops before this
@@ -625,6 +629,13 @@ layout(push_constant) uniform Push {
     // vertex to one texture coordinate, which is what makes a bilinear
     // footprint knowable in closed form on the host and is exactly what
     // check 44 uses to predict which arena floats may be nonzero.
+    //
+    // LIKE `emission` ABOVE, DIFF_PARAM_EMISSION_TEXTURE (4) carries NO
+    // forward-mode throughput tangent: it is additive and never sampled from,
+    // the same as the scalar it replaces, so `diffParamNeedsForwardTangent`
+    // (bsdf_adjoint.glsl) names only ROUGHNESS and METALLIC and this
+    // parameter is simply not on that list, rather than being excluded by a
+    // separate name of its own.
     uint emissionTexWidth;
     uint emissionTexHeight;
     uint emissionTexChannels;
@@ -1532,34 +1543,44 @@ void diffTraverse() {
         // the replay one reads the result out of `DiffVertex`.
         //
         // The FORWARD instantiation therefore also maintains a tangent it
-        // never uses, at the cost of one derivative evaluation per vertex
-        // while `pc.diffParam` names a parameter. It is skipped entirely for
-        // DIFF_PARAM_BASECOLOR -- the default, and what every caller that
-        // predates this task pushes -- so no existing dispatch does any of
-        // this work, and the base colour's closed-form throughput term
-        // (bsdf_adjoint.glsl) is unaffected.
+        // never uses, at the cost of one derivative evaluation per vertex for
+        // every `pc.diffParam` that needs one.
         //
-        // DIFF_PARAM_EMISSION (Stage 1 Task 4) is excluded here too, and for
-        // the same STRUCTURAL reason, not merely the same numeric outcome:
-        // unlike roughness and metallic, emission has a closed-form
-        // throughput derivative that is EXACTLY 0 at every vertex (see the
-        // Push block's `emission` field doc above), so a tangent computed
-        // for it would be dead weight, not a value anything downstream
-        // reads -- `diffVertexEmissionScatter` (bsdf_adjoint.glsl) returns
-        // `v.adjoint` unmodified and never inspects `v.tangent`. Without
-        // this exclusion the branch below still produces the right zero for
-        // DIFF_PARAM_EMISSION -- `diffBsdfEvalDeriv` matches neither the
-        // roughness nor the metallic case and falls off its end with
-        // `df = vec3(0.0), dpdf = 0.0` -- but by FALL-THROUGH rather than by
-        // exclusion, which costs one wasted GGX derivative evaluation per
-        // hit vertex (in both instantiations) and leaves nothing to catch a
-        // future unhandled `diffParam`, or a future DIFF_PARAM_* that shares
-        // `diffBsdfEvalDeriv`'s fall-through path, silently acquiring a
-        // nonzero tangent nothing downstream consumes correctly. Naming the
-        // exclusion here removes both costs.
+        // WHICH PARAMETERS NEED ONE IS AN ALLOW-LIST, TESTED BY A SINGLE
+        // SHARED PREDICATE -- `diffParamNeedsForwardTangent` (bsdf_adjoint.glsl,
+        // defined beside the DIFF_PARAM_* enumerators) -- and not by naming
+        // every exclusion here. That function is ROUGHNESS and METALLIC only:
+        // they are the only parameters that move the GGX VNDF's alpha or the
+        // lobe-selection probability `q`, so they are the only ones whose
+        // per-bounce BSDF weight `diffBsdfWeightDeriv` computes a nonzero
+        // derivative for. BASECOLOR has a closed form (the throughput term is
+        // `T_b` itself); EMISSION and EMISSION_TEXTURE are additive and never
+        // sampled from, so their closed-form throughput derivative is EXACTLY
+        // 0 at every vertex (see each field's own doc) -- a tangent computed
+        // for either would be dead weight, not a value anything downstream
+        // reads (`diffVertexEmissionScatter` and `diffScatterEmissionTexture`,
+        // bsdf_adjoint.glsl, return/use the adjoint unmodified and never
+        // inspect `v.tangent`).
+        //
+        // WHY AN ALLOW-LIST AND NOT AN EXCLUDE-LIST, stated because this is
+        // now the SECOND time getting this wrong here has cost something.
+        // Task 4 excluded DIFF_PARAM_EMISSION by name; Task 5 added
+        // DIFF_PARAM_EMISSION_TEXTURE and this branch's exclude-list did not
+        // name it, so every check-44/45 run entered this branch for it --
+        // numerically harmless (`diffBsdfEvalDeriv` falls off its end with
+        // `df = vec3(0.0), dpdf = 0.0` for a parameter that matches neither
+        // the roughness nor the metallic case, so the tangent stayed exactly
+        // 0 from its zero seed) but not free: one wasted GGX derivative
+        // evaluation per hit vertex, in both instantiations, and nothing
+        // catching a THIRD future `DIFF_PARAM_*` that falls through the same
+        // way. An allow-list is wrong, if it is ever wrong, in the opposite
+        // and louder direction: omitting a parameter that DOES need a
+        // tangent leaves that parameter's own case in `diffBsdfWeightDeriv`
+        // computing a derivative nothing reads, which is exactly the
+        // dead-weight cost this fix removes, not a correctness gap it opens.
         vec3 dWeight = vec3(0.0);
         float dPdfBsdf = 0.0;
-        if (pc.diffParam != DIFF_PARAM_BASECOLOR && pc.diffParam != DIFF_PARAM_EMISSION) {
+        if (diffParamNeedsForwardTangent(pc.diffParam)) {
             diffBsdfWeightDeriv(normal, V, bsdfDir, vec3(pc.albedo), roughness, metallic,
                                 pc.specularWeight, pc.roughness, pc.metallic, weight, pdf,
                                 pc.diffParam, dWeight, dPdfBsdf);

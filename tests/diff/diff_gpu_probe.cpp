@@ -1873,18 +1873,22 @@ bool checkTraverseInstantiationTie() {
 /// shader itself -- it would not notice a field added to the GLSL block
 /// without a matching C++ change, only the reverse.
 ///
-/// WHAT IT ACTUALLY COVERS, AND WHERE IT IS NOT STRONGER (review finding).
-/// This ties the field COUNT, and through it the byte size. It does NOT tie
-/// field IDENTITY, ORDER or TYPE: every field is a 4-byte scalar, so a
-/// reorder of two same-width fields, or a `uint` swapped for a `float` in
-/// place, keeps the block at 14 fields and 56 bytes and passes here. Both of
-/// those are real wrong-value pushes. So this check is stronger than a
-/// static_assert only in the COUNT dimension -- it notices a field the GLSL
-/// grew that C++ did not, which a static_assert against a literal cannot --
-/// and is no stronger in the others. It does fail closed in every other
-/// degradation path it can see: an unopenable source, a renamed Push block,
-/// a missing `} pc;`, and a non-scalar field (caught by the semicolon
-/// cross-check) are all hard failures rather than silent passes.
+/// WHAT IT ACTUALLY COVERS, AND WHERE IT IS NOT STRONGER (review Finding 6,
+/// Task 5 fix -- this doc corrects an earlier version of itself). The
+/// field-matching regex ALREADY CAPTURED EACH FIELD'S NAME to count them; it
+/// just was not comparing them. It now is: the captured name list is compared
+/// IN ORDER against a canonical list held here (`kCanonicalFieldOrder`), so
+/// this ties field IDENTITY and ORDER, not merely COUNT -- a reorder within
+/// the block (a `scaleU`/`scaleV` swap, say) now fails here even though both
+/// fields are the same width and the byte count does not move. What it still
+/// does NOT tie is field TYPE: every field is a 4-byte scalar today, so a
+/// `uint` swapped for a `float` in place changes neither the name list nor
+/// the byte count and passes here -- a real wrong-value push (a float pushed
+/// where an integer bit-pattern is read, or vice versa) this check cannot
+/// see. It does fail closed in every other degradation path it can see: an
+/// unopenable source, a renamed Push block, a missing `} pc;`, and a
+/// non-scalar field (caught by the semicolon cross-check) are all hard
+/// failures rather than silent passes.
 ///
 /// HOW THE BYTE COUNT IS COMPUTED. Every field the Push block has ever had is
 /// a bare scalar `uint` or `float` -- no vec/mat/array member exists in it --
@@ -1927,10 +1931,15 @@ bool checkScatterPushSizeTie() {
     }
     const std::string block = stripped.substr(blockStart, endPos - blockStart);
 
-    const std::regex fieldRe(R"((?:uint|float)[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*;)");
-    const std::size_t fieldCount = static_cast<std::size_t>(
-        std::distance(std::sregex_iterator(block.begin(), block.end(), fieldRe),
-                      std::sregex_iterator()));
+    // Captures each field's NAME (group 1), not merely its presence -- this
+    // is what lets the order tie below compare identities, not just count.
+    const std::regex fieldRe(R"((?:uint|float)[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;)");
+    std::vector<std::string> fieldNames;
+    for (auto it = std::sregex_iterator(block.begin(), block.end(), fieldRe);
+         it != std::sregex_iterator(); ++it) {
+        fieldNames.push_back((*it)[1].str());
+    }
+    const std::size_t fieldCount = fieldNames.size();
     const std::size_t semicolons =
         static_cast<std::size_t>(std::count(block.begin(), block.end(), ';'));
     if (semicolons != fieldCount || fieldCount == 0) {
@@ -1958,8 +1967,58 @@ bool checkScatterPushSizeTie() {
                      found.c_str(), fieldCount, shaderBytes, kScatterPushBytes);
         return false;
     }
+
+    // --- THE ORDER TIE (review Finding 6, Task 5 fix). The regex above
+    // already captures every field's name; comparing that captured list, IN
+    // ORDER, against a canonical transcription of ScatterPush's own
+    // declaration order closes the gap the byte-size tie alone leaves open --
+    // a reorder within the block (same fields, same count, same total bytes,
+    // different offsets) now fails here instead of passing silently. This
+    // canonical list is a hand-kept transcription of
+    // `ohao::diff::WavefrontLoop::ScatterPush`'s member order (like
+    // `kCanonicalRhs` in `checkTexelOrderingTie` is a hand-kept transcription
+    // of the shader's ordering formula): update it in the same commit that
+    // reorders, renames, adds or removes a ScatterPush field.
+    static const std::vector<std::string> kCanonicalFieldOrder = {
+        "capacity",          "srcQueueBase",       "srcCountSlot",
+        "dstQueueBase",      "dstCountSlot",       "albedo",
+        "iterationSeed",     "roughness",          "metallic",
+        "specularWeight",    "envWidth",           "envHeight",
+        "envIntegral",       "filmPixelCount",     "gradArenaFloats",
+        "gradAlbedoOffset",  "sampleAlbedo",       "sampleRoughness",
+        "sampleMetallic",    "sampleSpecularWeight", "diffParam",
+        "emission",          "emissionTexWidth",   "emissionTexHeight",
+        "emissionTexChannels", "emissionUvScaleU", "emissionUvScaleV",
+        "emissionUvBiasU",   "emissionUvBiasV",
+    };
+    if (fieldNames != kCanonicalFieldOrder) {
+        const std::size_t n = std::min(fieldNames.size(), kCanonicalFieldOrder.size());
+        std::size_t firstDiff = n;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (fieldNames[i] != kCanonicalFieldOrder[i]) {
+                firstDiff = i;
+                break;
+            }
+        }
+        std::string got = (firstDiff < fieldNames.size()) ? fieldNames[firstDiff] : "<missing>";
+        std::string want = (firstDiff < kCanonicalFieldOrder.size()) ? kCanonicalFieldOrder[firstDiff]
+                                                                      : "<missing>";
+        std::fprintf(stderr,
+                     "[diff_gpu_probe] FAIL: %s's Push block and "
+                     "ohao::diff::WavefrontLoop::ScatterPush agree on field COUNT (%zu) and byte "
+                     "size (%zu) but not on field ORDER: field %zu is `%s` in the shader and `%s` "
+                     "in the canonical order this check holds. Both structs are 4-byte scalars "
+                     "throughout, so a reorder does not change the count or the byte size -- only "
+                     "which value lands at which offset. WavefrontLoop::record fills ScatterPush "
+                     "by NAME and vkCmdPushConstants pushes it byte-for-byte, so a drift here is a "
+                     "silent wrong-field push the size tie alone cannot see\n",
+                     found.c_str(), fieldCount, shaderBytes, firstDiff, got.c_str(), want.c_str());
+        return false;
+    }
+
     std::printf("[diff_gpu_probe] NOTE: the scatter traversal's Push block tied to ScatterPush -- %s "
-                "declares %zu scalar fields (%zu bytes) and sizeof(ScatterPush) is %zu\n",
+                "declares %zu scalar fields (%zu bytes), in the same order as ScatterPush, and "
+                "sizeof(ScatterPush) is %zu\n",
                 found.c_str(), fieldCount, shaderBytes, kScatterPushBytes);
     return true;
 }
@@ -2210,11 +2269,17 @@ bool checkParityRefConstantsTie() {
 ///      shader changing alone.
 ///   2. THE C++ FUNCTION'S SEMANTICS. `ParamShape::elementIndex` is EVALUATED
 ///      at every (x, y, c) of a non-degenerate, NON-SQUARE, multi-channel
-///      shape and must agree with the canonical formula at every one of them,
-///      and the resulting indices must be a BIJECTION onto [0, floatCount()).
-///      This is what catches the C++ changing alone, and the bijection is what
-///      turns "floatCount() is only a count" into something checked: the
-///      ordering must use exactly the floats the count reserves, each once.
+///      shape and must agree with the canonical formula at every one of them.
+///      THIS EXHAUSTIVE EQUALITY -- against the literal `kCanonicalRhs`, at
+///      all 36 triples -- is what pins the ordering, not the bijection check
+///      below it: a BIJECTION IS NOT SUFFICIENT, since the transposed
+///      ordering `(x*height + y)*channels + c` is also a bijection onto the
+///      same 36 floats and would be accepted by a bijection test alone. The
+///      resulting indices are additionally required to form a BIJECTION onto
+///      [0, floatCount()) -- a genuine EXTRA check (it catches a collision or
+///      a gap the pointwise equality above would not, were the canonical
+///      formula itself somehow non-bijective), not the half that does the
+///      pinning.
 ///
 /// The shape is 4x3x3 deliberately. A SQUARE shape hides a row/column
 /// transposition (both orderings agree); a SINGLE-CHANNEL shape hides the
@@ -11312,6 +11377,23 @@ int main() {
         // channel elements of a texel carry equal values -- swapping two of
         // them is unobservable HERE. That residue is covered by
         // `checkTexelOrderingTie()`, which pins the `+ c` term in the source.
+        //
+        // A SECOND THING THIS CHECK ALONE CANNOT SEE, for a different reason
+        // than the one above: an argument-order swap at
+        // `diffScatterEmissionTexture`'s call sites (`xs[i]`/`ys[i]` passed as
+        // `y`/`x` to `diffTexelElementIndex`) rather than in the ordering
+        // FORMULA itself. This constant-uv configuration's footprint is
+        // SYMMETRIC -- texels (1,1) (2,1) (1,2) (2,2) -- so swapping x and y
+        // at the call site maps to the SAME twelve elements, only exchanging
+        // w10 and w01 between two of them; the set this check compares
+        // against is unchanged and conservation still holds, so this check
+        // would pass either way. What this check DOES catch is the ordering
+        // FORMULA transposed (`(x*height+y)*channels+c`, landing at
+        // {12-14,15-17,21-23,24-26} above), which is a different bug from an
+        // argument-order swap at the call site even though both involve x and
+        // y. Check 45's per-element finite difference, run at three distinct
+        // texels under a VARYING uv where the footprint is not symmetric, is
+        // what actually catches the call-site swap.
         std::size_t nullFloatsChecked = 0;
         for (std::size_t f = 0; f < arenaAfterTexture.size(); ++f) {
             const bool predicted =
@@ -11328,8 +11410,11 @@ int main() {
                     "%.7g), whose bilinear footprint is texels (%u,%u) (%u,%u) (%u,%u) (%u,%u); "
                     "by ParamShape::elementIndex those are elements {%u..%u} of the texture's "
                     "gradient block, which starts at arena float %u. A nonzero anywhere else is a "
-                    "scatter that landed in the wrong slot -- which the conservation identity "
-                    "below is blind to, because it only reads totals\n",
+                    "scatter that landed outside these twelve predicted elements -- the "
+                    "conservation identity below, which sums only these twelve, is blind to a "
+                    "SWAP AMONG them (the total is unaffected), but NOT to a scatter that leaves "
+                    "them altogether: that drops a predicted element's contribution and the "
+                    "totals stop matching too\n",
                     f, static_cast<double>(arenaAfterTexture[f]), static_cast<double>(kConstUvU),
                     static_cast<double>(kConstUvV), fp.x0, fp.y0, fp.x1, fp.y0, fp.x0, fp.y1,
                     fp.x1, fp.y1, footprintElements.front(), footprintElements.back(),
@@ -11440,7 +11525,9 @@ int main() {
             "    FOOTPRINT: all %zu OTHER floats of the %u-float arena -- the 24 texture elements "
             "outside the footprint, the texture's Adam m/v state, both blocks of a scalar the "
             "scene does not depend on, and the 256-byte alignment padding -- are EXACTLY 0.0f, "
-            "compared as floats. The 12 predicted indices were computed from "
+            "compared as floats. The 12 predicted indices were computed from the four texel "
+            "coordinates of hostBilinearFootprint (a second, host-written bilinear "
+            "reconstruction that calls nothing shader-derived) mapped through "
             "ParamShape::elementIndex alone, so a transposed or channel-planar shader ordering "
             "would be rejected from both sides.\n"
             "    PER CHANNEL: %.9g / %.9g / %.9g, each a third of the total (this scene's "
@@ -11480,9 +11567,18 @@ int main() {
         // As in Task 4 this is not the true optimum -- the truncation half is
         // identically zero because J is exactly linear in every texel -- and
         // it is kept for procedure consistency across all five parameters
-        // this stage differentiates. The resulting bound resolves far inside
-        // the pre-registered limit, so nothing needs the extra resolution a
-        // larger h would buy.
+        // this stage differentiates.
+        //
+        // THE MARGIN THIS BUYS IS THIN -- record the number rather than a
+        // qualitative "resolves fine", per review (Task 5 Finding 7): the
+        // worst observed bound/gradient ratio across the three tested
+        // elements is 0.00662 against the pre-registered limit of 1e-2, i.e.
+        // 1.5x -- the tightest margin of any check in this task. It fails
+        // LOUD, refusing a verdict rather than passing falsely, so this is
+        // fragility in the instrument's headroom, not a defect in the
+        // gradient. A future scene where the emission texture's values sit
+        // further from 0.6 (changing `L`) or a step derived differently
+        // would need this margin re-checked before trusting it stays green.
         //
         // WHICH ELEMENTS ARE TESTED, and why they are chosen rather than
         // fixed. The finite difference's roundoff bound is set by the WHOLE
