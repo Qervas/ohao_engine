@@ -435,6 +435,38 @@ public:
         /// bounce. Defaults to 0.0, so every caller that predates this task
         /// renders the identical film it always did.
         float emission{0.0f};
+        /// THE EMISSION TEXTURE (Stage 1 Task 5) -- the shape of the primal
+        /// array bound at the traversal's binding 11 and of the gradient
+        /// block at `gradAlbedoOffset`, plus the affine map from a hit
+        /// point's XZ to a texture coordinate.
+        ///
+        /// `emissionTexWidth` or `emissionTexHeight` being 0 means "no
+        /// texture", which is the default and what every caller that predates
+        /// this task gets: the forward hook then adds the `emission` scalar
+        /// above exactly as before and renders the identical film. When a
+        /// texture IS configured it REPLACES that scalar rather than adding
+        /// to it -- a design call, so that DIFF_PARAM_EMISSION's closed form
+        /// (dJ/d(emission) = SUM_b T_b) is not silently the derivative of a
+        /// sum of two emission sources.
+        ///
+        /// A caller setting these MUST also bind the primal float array at
+        /// binding 11 and keep `emissionTexWidth * emissionTexHeight *
+        /// emissionTexChannels` equal to its real length -- the shader's
+        /// bounds guard covers the ARENA side (see `gradArenaFloats`), not
+        /// this one, exactly as `filmPixelCount`'s does not verify the film's
+        /// real size. The ELEMENT ORDERING both sides address it by is
+        /// `ohao::diff::ParamShape::elementIndex`.
+        ///
+        /// A ZERO uv SCALE is a legitimate configuration, not a degenerate
+        /// one: it pins every vertex to a single texel footprint, which is
+        /// what makes that footprint knowable in closed form on the host.
+        std::uint32_t emissionTexWidth{0};
+        std::uint32_t emissionTexHeight{0};
+        std::uint32_t emissionTexChannels{0};
+        float emissionUvScaleU{0.0f};
+        float emissionUvScaleV{0.0f};
+        float emissionUvBiasU{0.0f};
+        float emissionUvBiasV{0.0f};
     };
 
     /// One end of the ping-pong: a queue ring's element base and the
@@ -545,13 +577,27 @@ public:
         // braced list that stops before this tail must still render the
         // film every pre-Task-4 caller expects, and 0.0 emission is exactly
         // that film (see traverse.glsl's Push block and wf_scatter.comp's
-        // forward hook). MUST stay the LAST field: traverse.glsl's Push
-        // block declares `emission` as its own last field, and
-        // `checkScatterPushSizeTie` only ties the TOTAL byte size, not the
-        // per-field order -- keeping this struct's member order identical to
-        // the shader's declaration order is this file's own invariant to
-        // hold, not one any check enforces.
+        // forward hook).
         float emission{0.0f};
+        // --- The emission TEXTURE (Stage 1 Task 5). From Config, passed
+        // through verbatim. All seven default so that a ScatterPush built by
+        // hand with a braced list that stops before this tail reads as "no
+        // texture configured" -- a zero width or height is exactly that --
+        // and therefore renders the pre-Task-5 film from `emission` above.
+        //
+        // THESE MUST STAY THE LAST FIELDS, and `emissionUvBiasV` the very
+        // last: traverse.glsl's Push block declares them in this order and
+        // ends with the same field, and `checkScatterPushSizeTie` ties only
+        // the TOTAL byte size, not the per-field order -- keeping this
+        // struct's member order identical to the shader's declaration order
+        // is this file's own invariant to hold, not one any check enforces.
+        std::uint32_t emissionTexWidth{0};
+        std::uint32_t emissionTexHeight{0};
+        std::uint32_t emissionTexChannels{0};
+        float emissionUvScaleU{0.0f};
+        float emissionUvScaleV{0.0f};
+        float emissionUvBiasU{0.0f};
+        float emissionUvBiasV{0.0f};
     };
 
     WavefrontLoop() = default;

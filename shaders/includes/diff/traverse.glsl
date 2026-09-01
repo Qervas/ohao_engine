@@ -184,7 +184,8 @@
 //
 // Binding scheme: state (0, declared by path_state.glsl), queues (1),
 // counters (2), debug draws (3), env marginal CDF (4), env conditional CDF
-// (5), env samples (6), NEE samples (7), TLAS (8), film (9).
+// (5), env samples (6), NEE samples (7), TLAS (8), film (9), gradient arena
+// (10), emission-texture primal (11).
 
 #include "diff/path_state.glsl"
 #include "diff/rng.glsl"
@@ -344,17 +345,26 @@ layout(std430, binding = 9) buffer Film {
 // differentiates, k is 0, and the guard in the hook is written so that adding
 // a k stays a bounds check (see wf_scatter_replay.comp).
 //
-// THE ELEMENT ORDERING FOR k != 0 IS NOT YET ESTABLISHED, and an earlier
-// version of this comment said it was: it named
+// THE ELEMENT ORDERING FOR k != 0 IS ESTABLISHED AND TIED AS OF STAGE 1
+// TASK 5, and this comment records what it was before, because two earlier
+// versions of it were wrong in opposite directions. The first ASSERTED
 // k = (y*width + x)*channels + c as "the ordering ParamShape::floatCount()
-// already implies". floatCount() is w*h*c -- a COUNT. A count implies no
-// ordering whatsoever; row-major, column-major and channel-planar all have
-// the same float count. Stage 1 Task 5 must ESTABLISH that convention (the
-// row-major, channel-interleaved k above is the expected one) and TIE it: the
-// host side that uploads a texture parameter and the shader side that
-// addresses element k have to be checked against each other by a probe check,
-// the way check 38 ties the block layout, or a transposed gradient image is a
-// defect nothing in this file would catch.
+// already implies" -- which it does not: floatCount() is w*h*c, a COUNT, and
+// row-major, column-major and channel-planar all have the same float count.
+// The second (Task 2's fix round) correctly withdrew that claim and left the
+// ordering UNESTABLISHED, on the grounds that a host-side tie belongs to the
+// task that first has a texture to tie.
+//
+// That task is Task 5, and the convention it establishes is the row-major,
+// channel-interleaved one the first version guessed:
+//
+//     k = (y * width + x) * channels + c
+//
+// spelled ONCE, in `diffTexelElementIndex` (bsdf_adjoint.glsl, included
+// below), used by BOTH the primal read at binding 11 and the gradient
+// scatter into this buffer, tied to `ohao::diff::ParamShape::elementIndex`
+// at startup by `checkTexelOrderingTie()` and MEASURED end to end by
+// check 44. See binding 11's declaration above for the whole argument.
 //
 // BUFFER ATOMICS, NEVER IMAGE ATOMICS. Every write into this buffer is an
 // `atomicAdd` on a `float`, which is why the traversal requires
@@ -397,6 +407,55 @@ layout(std430, binding = 9) buffer Film {
 layout(std430, binding = 10) buffer GradientArena {
     float v[];
 } grad;
+
+// --- THE EMISSION TEXTURE'S PRIMAL (Stage 1 Task 5). NOT probe-only ------
+//
+// The FIRST parameter in this subsystem that is not a scalar: a
+// `ParamKind::Texture` (ohao/diff/param/param_registry.hpp) whose primal
+// values live here, as ONE flat float array, and whose gradient block lives
+// in the arena above -- element for element, under the SAME ordering.
+//
+// A FLAT `float[]`, NOT A SAMPLED IMAGE, and that is a requirement rather
+// than a convenience. The adjoint of a texture read is an atomicAdd into
+// each texel it touched, and this subsystem's standing rule is buffer float
+// atomics and NEVER image atomics (see the extension note at the top of this
+// file). A gradient block that lived in a VkImage could not be scattered
+// into at all without image atomics; keeping the PRIMAL in the same shape as
+// the gradient is what lets one index expression address both.
+//
+// THE ELEMENT ORDERING, ESTABLISHED HERE AND TIED. Element k of a texture
+// parameter of shape (width, height, channels) is
+//
+//     k = (y * width + x) * channels + c
+//
+// -- row-major over texels, channels INTERLEAVED within a texel. It is
+// spelled ONCE, in `diffTexelElementIndex` (bsdf_adjoint.glsl), and both
+// this buffer and the gradient arena above are addressed through that one
+// function. `ParamShape::floatCount()` is w*h*c, a COUNT, and a count
+// implies no ordering whatsoever -- row-major, column-major and
+// channel-planar all have the same float count -- so the host side that
+// UPLOADS these values and the shader side that READS them are tied by
+// `diff_gpu_probe.cpp`'s `checkTexelOrderingTie()` (which parses that one
+// line out of the shader source and checks it against
+// `ParamShape::elementIndex`) and MEASURED by check 44 (which predicts, from
+// the host's rule alone, exactly which arena floats a known bilinear
+// footprint may touch and requires every other float in the whole arena to
+// be exactly 0). A GLSL/C++ disagreement about texel order is a silent
+// wrong-slot scatter -- a transposed gradient image, plausible-looking and
+// attributed to the wrong texel -- which is why it is tied twice.
+//
+// READ-ONLY. Nothing in either instantiation writes it, so it is NOT among
+// the buffers WavefrontLoop::record must order against itself; its
+// extraBarrierBuffers parameter is for buffers the dispatches WRITE.
+//
+// `pc.emissionTexWidth == 0` or `pc.emissionTexHeight == 0` means "no
+// emission texture configured", which is what every caller that predates
+// this task pushes and what every probe binding a placeholder buffer here
+// gets: the forward hook then adds the uniform `pc.emission` scalar exactly
+// as it did before, and the replay hook's texture branch is unreachable.
+layout(std430, binding = 11) readonly buffer EmissionTexture {
+    float v[];
+} emissionTex;
 
 layout(push_constant) uniform Push {
     uint capacity;
@@ -530,6 +589,49 @@ layout(push_constant) uniform Push {
     // caller that predates this task already expects:
     // `throughput * (Lr + vec3(0.0))` is `throughput * Lr` exactly.
     float emission;
+    // --- THE EMISSION TEXTURE (Stage 1 Task 5), matching ScatterPush's
+    // tail. The shape of the binding-11 primal array and of the gradient
+    // block at `gradAlbedoOffset`, plus the affine map from a hit point to a
+    // texture coordinate.
+    //
+    // `emissionTexWidth`/`emissionTexHeight` being 0 means "no texture",
+    // which is what every caller that predates this task pushes (all five of
+    // these default to 0 through ScatterPush's own member initialisers) --
+    // the forward hook then adds `pc.emission` exactly as it did before and
+    // renders the identical film. When a texture IS configured it REPLACES
+    // the scalar rather than adding to it: one emitted radiance per vertex,
+    // read from the texture instead of from `emission`. That is a design
+    // call, made so that `DIFF_PARAM_EMISSION`'s closed form (dJ/d(emission)
+    // = SUM_b T_b) is not silently the derivative of a sum of two emission
+    // sources.
+    //
+    // `emissionTexChannels` is what the ordering's `* channels + c` factor
+    // uses; a read asks for channel `min(c, channels - 1)`, so a
+    // single-channel texture is grey and a 3-channel one is RGB, with no
+    // second code path.
+    //
+    // THE UV IS AFFINE IN THE HIT POINT'S XZ, and the coefficients are
+    // pushed rather than baked in because this stage has no scene knowledge:
+    // nothing in path state carries a UV (there is no per-hit material id
+    // either -- see `albedo` above), so a texture parameter needs SOME
+    // stated map from a vertex to a texture coordinate, and the caller is
+    // the only thing that knows the extent of the geometry it built. It is
+    // deliberately the simplest map that varies over the scene:
+    //
+    //     uv = vec2(position.x * emissionUvScaleU + emissionUvBiasU,
+    //               position.z * emissionUvScaleV + emissionUvBiasV)
+    //
+    // A ZERO SCALE IS A LEGITIMATE, AND USEFUL, CONFIGURATION: it pins every
+    // vertex to one texture coordinate, which is what makes a bilinear
+    // footprint knowable in closed form on the host and is exactly what
+    // check 44 uses to predict which arena floats may be nonzero.
+    uint emissionTexWidth;
+    uint emissionTexHeight;
+    uint emissionTexChannels;
+    float emissionUvScaleU;
+    float emissionUvScaleV;
+    float emissionUvBiasU;
+    float emissionUvBiasV;
 } pc;
 
 // Fixed, non-dynamic draw count per bounce: this shader and the CPU probe

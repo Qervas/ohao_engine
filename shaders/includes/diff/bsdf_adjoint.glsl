@@ -5,7 +5,7 @@
 // THE ADJOINTS -- d(film)/d(theta) at ONE vertex
 // ===========================================================================
 //
-// THIS FILE HAS THREE PARTS, and the split is by PARAMETER, not by
+// THIS FILE HAS FOUR PARTS, and the split is by PARAMETER, not by
 // convenience. The first is Stage 1 Task 2's d(film)/d(albedo), which is
 // exact only for the pure Lambertian configuration and uses a closed form for
 // the throughput term. The second, from the banner "STAGE 1 TASK 3" onward,
@@ -15,10 +15,22 @@
 // onward, is d(film)/d(emission) -- the simplest of the three, because
 // emission is ADDED to the film rather than sampled from or multiplied
 // through a density, so none of Task 3's machinery (a detached instrument, a
-// carried tangent, a moving MIS weight) is needed. `pc.diffParam` selects
-// among all three at the hook, and the constants that name it (DIFF_PARAM_*)
-// are declared in the second part. Everything down to the "STAGE 1 TASK 3"
-// banner is about the albedo alone and says so wherever it makes a claim.
+// carried tangent, a moving MIS weight) is needed. The fourth, from "STAGE 1
+// TASK 5" onward, is d(film)/d(an EMISSION TEXTURE) -- the same physics as
+// the third, distributed over four texels by a bilinear reconstruction, and
+// the FIRST parameter in this subsystem that is not a scalar. `pc.diffParam`
+// selects among all four at the hook, and the constants that name it
+// (DIFF_PARAM_*) are declared in the second part. Everything down to the
+// "STAGE 1 TASK 3" banner is about the albedo alone and says so wherever it
+// makes a claim.
+//
+// THE FOURTH PART ALSO CARRIES A FORWARD FUNCTION, WHICH THE OTHER THREE DO
+// NOT, and the exception is deliberate: a texture read's adjoint must use the
+// weights of the reconstruction the forward read actually used, so the
+// reconstruction and its derivative live side by side here rather than in two
+// files that could drift into being two different functions. That is the ONE
+// place in Stage 1 where forward/adjoint sharing is required rather than
+// forbidden, and the "STAGE 1 TASK 5" banner argues it at length.
 //
 // This file is the derivative half of shaders/includes/diff/bsdf.glsl. It is
 // included by shaders/includes/diff/traverse.glsl AFTER `DiffVertex` is
@@ -512,10 +524,19 @@ vec3 diffVertexThroughputAlbedoTerm(in DiffVertex v, float albedo) {
 /// state. 1 and 2 are the two this task adds, and they are the two with no
 /// closed form for the throughput -- see `DiffVertex::tangent`. 3 is Stage 1
 /// Task 4's -- see the "STAGE 1 TASK 4" banner at the end of this file.
+///
+/// 4 IS THE FIRST THAT IS NOT A SCALAR: Stage 1 Task 5's emission TEXTURE, a
+/// `ParamKind::Texture` whose gradient is w*h*channels floats rather than one.
+/// It is the same physics as 3 -- an added, never-sampled-from emitted
+/// radiance -- read through a bilinear reconstruction instead of out of a
+/// push constant, so its per-vertex adjoint is 3's answer distributed over
+/// four texels by the reconstruction's own weights. See the "STAGE 1 TASK 5"
+/// banner at the end of this file.
 const uint DIFF_PARAM_BASECOLOR = 0u;
 const uint DIFF_PARAM_ROUGHNESS = 1u;
 const uint DIFF_PARAM_METALLIC = 2u;
 const uint DIFF_PARAM_EMISSION = 3u;
+const uint DIFF_PARAM_EMISSION_TEXTURE = 4u;
 
 /// d(unpacked)/d(pushed) for `pbr_unpack.glsl`'s roughness floor and metallic
 /// clamp, decided from the raw/unpacked pair rather than from a copy of the
@@ -920,6 +941,258 @@ vec3 diffVertexGgxScatter(in DiffVertex v, uint param) {
 vec3 diffVertexEmissionScatter(in DiffVertex v) {
     if (!v.hit) return vec3(0.0);
     return v.adjoint;
+}
+
+// ===========================================================================
+// STAGE 1 TASK 5 -- THE TEXTURE SCATTER, AND THE ONE PLACE FORWARD AND
+// ADJOINT ARE REQUIRED TO SHARE
+// ===========================================================================
+//
+// THIS SECTION BREAKS THIS BRANCH'S OTHERWISE UNIFORM RULE, ON PURPOSE, AND A
+// READER WILL ASSUME OTHERWISE UNLESS IT SAYS SO IN THE CODE. Every other
+// adjoint on this branch was written from an INDEPENDENT source: Task 3's GGX
+// derivatives are transcribed from the published microfacet formulas rather
+// than differentiated off bsdf.glsl's statements, and Task 2's albedo
+// derivative likewise. That independence is what makes the finite-difference
+// gates evidence rather than tautology -- a derivative differentiated off the
+// same expression tree it is compared against can be wrong in the same way as
+// the thing it differentiates and still agree with it.
+//
+// A TEXTURE READ IS DIFFERENT, and the difference is not a matter of taste.
+// The read is
+//
+//     E(uv) = SUM over i in {00,10,01,11} of w_i(uv) * texel_i
+//
+// and the adjoint scatters `dL * w_i` into each of the four. The w_i are the
+// weights OF THAT RECONSTRUCTION. A second, independently written bilinear
+// reconstruction -- a different rounding of the texel coordinate, a different
+// edge rule, a half-texel offset placed differently -- is a DIFFERENT
+// FUNCTION E'(uv), and its derivative is the derivative of E', not of E. It
+// would not be an independent check of the same answer; it would be an exact
+// answer to a question nobody asked. So the footprint and the weights come
+// from ONE function, `diffBilinearFootprint` below, called by the forward
+// read and by the adjoint scatter, and the ordering from one
+// `diffTexelElementIndex`. THIS IS THE ONLY PLACE IN STAGE 1 WHERE SHARING IS
+// REQUIRED RATHER THAN FORBIDDEN.
+//
+// WHAT IS STILL INDEPENDENTLY CHECKED, so that the sharing does not swallow
+// the evidence with it:
+//
+//   * THE CONSERVATION IDENTITY. `SUM_i w_i == 1` for a bilinear
+//     reconstruction, so the four scattered values must sum to the incoming
+//     adjoint -- an identity that holds WHATEVER the individual weights are,
+//     and therefore one the shared reconstruction cannot make true by
+//     construction. diff_gpu_probe.cpp check 44 measures it against a
+//     SEPARATE run of DIFF_PARAM_EMISSION, whose scatter (one atomicAdd of a
+//     channel sum, no weights anywhere) shares no code with this at all.
+//   * THE ELEMENT ORDERING. Check 44 predicts, from the HOST's own rule and
+//     a constant-uv configuration, exactly which arena floats a known
+//     footprint may touch, and requires every other float of the whole arena
+//     to be exactly 0. That is absolute, not self-consistent: the host's
+//     prediction does not come from this file.
+//   * THE MAGNITUDE, PER ELEMENT. Check 45 perturbs one primal texel element
+//     on the HOST and compares (J(+h) - J(-h)) / 2h against the single arena
+//     float this scatter wrote for that element. That is what closes the
+//     forward/adjoint loop: the two are equal only if the read and the
+//     scatter agree about WHICH element and about the weight on it.
+//
+// WHAT NONE OF THEM CHECK, stated rather than left to be assumed: the UV MAP
+// ITSELF. `diffEmissionTexUv` is a modelling choice (see the Push block), and
+// the gradient this file computes is correct with respect to whatever uv the
+// forward read used, because the two read the same one. A wrong uv map is a
+// wrong SCENE, not a wrong derivative, and no check here claims otherwise.
+//
+// WHICH INSTRUMENT THIS PARAMETER NEEDS, and the STRUCTURAL argument that
+// settles it. Task 3's detached finite difference exists because perturbing
+// roughness or metallic moves the sampled direction: `bsdf.glsl` reads both
+// to build the GGX VNDF's alpha and the lobe-selection probability q. The
+// emission texture is read by `diffEmissionAt` below and by nothing else in
+// this translation unit -- `diffBsdfSample`/`diffBsdfSampleDetached` and
+// `sampleEnvMap` take no emission argument of any kind, and binding 11
+// appears in neither -- so perturbing a texel moves no draw and no direction
+// at any bounce, exactly as the uniform `pc.emission` scalar does not. PLAIN
+// COMMON RANDOM NUMBERS ARE THEREFORE EXACT for this parameter, and the
+// detached instrument is not merely unnecessary but wrong for it (it would
+// freeze a material this parameter never reaches). Check 45 MEASURES it the
+// way Task 4 did -- `traceGeometryMismatches` between the perturbed renders
+// and the centre one, required to be exactly 0 -- but the structural argument
+// is what actually closes it, because that trace record is overwritten each
+// bounce and so covers bounces 0..N-2 only.
+//
+// THE ADJOINT ITSELF IS TASK 4'S, UNCHANGED. With `dL` the adjoint arriving
+// at this vertex, the film contribution is `throughput * (Lr + E(uv))` and
+// every term of DiffVertex's recursion except d(E)/d(texel) is identically
+// zero for exactly the reasons the "STAGE 1 TASK 4" banner above gives, term
+// by term -- nothing about an emitted radiance reaches a throughput, a
+// density or an MIS weight, whether it came from a push constant or from a
+// texture. So
+//
+//     dJ/d(texel_i[c]) = SUM over hit vertices of dL[c] * w_i(uv)
+//
+// and the whole of the new work is distributing one number over four texels
+// by the reconstruction's own weights. That is why this task is the TEXTURE
+// SCATTER and not a fourth physics problem: the calculus is Task 4's and the
+// content is the indexing.
+//
+// THE PER-CHANNEL SPLIT, and why it is not the scalar branch's channel SUM. A
+// grey scalar parameter feeds all three channels, so its gradient is one
+// number and summing the three channel contributions is the chain rule for
+// `vec3(pc.emission)`. A 3-channel texture has a SEPARATE parameter per
+// channel, so channel c's adjoint goes to channel c's element and nowhere
+// else. Reading `min(c, channels - 1)` is what makes a 1-channel texture grey
+// -- three channels of adjoint landing on one element, which is again the
+// chain rule for one value feeding all three -- with no second code path.
+
+/// THE ELEMENT ORDERING FOR A TEXTURE PARAMETER, spelled once.
+///
+/// Row-major over texels, channels INTERLEAVED within a texel. It must equal
+/// `ohao::diff::ParamShape::elementIndex` (ohao/diff/param/param_registry.hpp)
+/// exactly, and naming each other in a comment is NOT the tie -- this branch
+/// carries four runtime source-parsing ties precisely because that was tried
+/// and was not enough. `diff_gpu_probe.cpp`'s `checkTexelOrderingTie()` READS
+/// THE RETURN STATEMENT BELOW out of this file at startup and refuses to run
+/// the probe unless it is, modulo whitespace, `(y * width + x) * channels + c`
+/// -- and unless the C++ function agrees with that formula at every (x, y, c)
+/// of a non-degenerate shape. Keep the spelling on one line and in this form.
+///
+/// `ParamShape::floatCount()` is w*h*c -- a COUNT, which implies no ordering
+/// whatsoever. This function is the ordering; that one is only its size.
+uint diffTexelElementIndex(uint width, uint channels, uint x, uint y, uint c) {
+    return (y * width + x) * channels + c;
+}
+
+/// One bilinear footprint: the four texel coordinates a uv touches and the
+/// four weights it touches them with.
+struct DiffBilinearFootprint {
+    uint x0;
+    uint x1;
+    uint y0;
+    uint y1;
+    float w00;  // (x0, y0)
+    float w10;  // (x1, y0)
+    float w01;  // (x0, y1)
+    float w11;  // (x1, y1)
+};
+
+/// Clamp a floating texel coordinate into [0, size-1] and truncate.
+///
+/// CLAMP, NOT WRAP, and the choice is load-bearing for the conservation
+/// identity rather than merely an edge convention: under clamping two (or all
+/// four) of a footprint's corners COLLAPSE onto the same texel near a border,
+/// and the scatter then adds two weights into one element -- which keeps
+/// SUM_i w_i exactly 1 and so keeps the identity true AT the border, where a
+/// wrap would move mass to the far edge and a border-drop would destroy it.
+uint diffClampTexel(float coord, uint size) {
+    return uint(clamp(coord, 0.0, float(size) - 1.0));
+}
+
+/// THE ONE BILINEAR RECONSTRUCTION. Called by the forward read and by the
+/// adjoint scatter; see this section's banner for why that sharing is
+/// required rather than forbidden.
+///
+/// Texel CENTRES at (i + 0.5) / size -- the convention env_sampling.glsl's CDF
+/// and every other texel-centre statement in this subsystem uses -- so the
+/// continuous coordinate of a uv is `uv * size - 0.5`, and the fractional part
+/// of that is the interpolant.
+DiffBilinearFootprint diffBilinearFootprint(vec2 uv, uint width, uint height) {
+    const float cx = uv.x * float(width) - 0.5;
+    const float cy = uv.y * float(height) - 0.5;
+    const float bx = floor(cx);
+    const float by = floor(cy);
+    const float tx = cx - bx;
+    const float ty = cy - by;
+
+    DiffBilinearFootprint fp;
+    fp.x0 = diffClampTexel(bx, width);
+    fp.x1 = diffClampTexel(bx + 1.0, width);
+    fp.y0 = diffClampTexel(by, height);
+    fp.y1 = diffClampTexel(by + 1.0, height);
+    fp.w00 = (1.0 - tx) * (1.0 - ty);
+    fp.w10 = tx * (1.0 - ty);
+    fp.w01 = (1.0 - tx) * ty;
+    fp.w11 = tx * ty;
+    return fp;
+}
+
+/// The uv this subsystem reads an emission texture at: an affine function of
+/// the hit point's XZ, coefficients pushed. See traverse.glsl's Push block for
+/// why the map is a caller's business and why a zero scale -- every vertex on
+/// one texel footprint -- is a legitimate configuration rather than a
+/// degenerate one.
+vec2 diffEmissionTexUv(in DiffVertex v) {
+    return vec2(v.position.x * pc.emissionUvScaleU + pc.emissionUvBiasU,
+                v.position.z * pc.emissionUvScaleV + pc.emissionUvBiasV);
+}
+
+/// THE FORWARD READ. `E(uv)` -- what the FORWARD instantiation's hook adds to
+/// the film at this vertex, and the function the scatter below is the
+/// derivative of.
+///
+/// With no texture configured (`pc.emissionTexWidth`/`Height` 0, which is what
+/// every caller that predates Stage 1 Task 5 pushes) it is the uniform
+/// `pc.emission` scalar, so the forward hook writes bit-identically what it
+/// wrote before this task existed.
+vec3 diffEmissionAt(in DiffVertex v) {
+    if (pc.emissionTexWidth == 0u || pc.emissionTexHeight == 0u ||
+        pc.emissionTexChannels == 0u) {
+        return vec3(pc.emission);
+    }
+    const DiffBilinearFootprint fp =
+        diffBilinearFootprint(diffEmissionTexUv(v), pc.emissionTexWidth, pc.emissionTexHeight);
+    vec3 result = vec3(0.0);
+    for (uint c = 0u; c < 3u; ++c) {
+        const uint ch = min(c, pc.emissionTexChannels - 1u);
+        result[c] =
+            fp.w00 * emissionTex.v[diffTexelElementIndex(pc.emissionTexWidth,
+                                                         pc.emissionTexChannels, fp.x0, fp.y0, ch)] +
+            fp.w10 * emissionTex.v[diffTexelElementIndex(pc.emissionTexWidth,
+                                                         pc.emissionTexChannels, fp.x1, fp.y0, ch)] +
+            fp.w01 * emissionTex.v[diffTexelElementIndex(pc.emissionTexWidth,
+                                                         pc.emissionTexChannels, fp.x0, fp.y1, ch)] +
+            fp.w11 * emissionTex.v[diffTexelElementIndex(pc.emissionTexWidth,
+                                                         pc.emissionTexChannels, fp.x1, fp.y1, ch)];
+    }
+    return result;
+}
+
+/// THE SCATTER. `dL * w_i` into each of the four texels the forward read
+/// touched, per channel.
+///
+/// `mayScatter` is the caller's arena/pixel guard, computed once in the hook
+/// beside the scalar branch's so the two cannot come apart; the PER-ELEMENT
+/// bound is applied here, in the subtraction form traverse.glsl's arena note
+/// requires (`k < gradArenaFloats - gradAlbedoOffset` after establishing
+/// `gradAlbedoOffset < gradArenaFloats`, never `base + k` which could wrap).
+///
+/// `gradAlbedoOffset` is the DIFFERENTIATED PARAMETER's gradient block base
+/// despite its name -- checks 39, 40 and 42 already push roughness's,
+/// metallic's and the emission scalar's through it -- and here it is the base
+/// of a w*h*channels-float block rather than of a one-float one. That is the
+/// whole of what "the first parameter that is not a scalar" changes on this
+/// side: the same base, a real k.
+void diffScatterEmissionTexture(in DiffVertex v, vec3 dL, bool mayScatter) {
+    if (!mayScatter || !v.hit) return;
+    if (pc.emissionTexWidth == 0u || pc.emissionTexHeight == 0u ||
+        pc.emissionTexChannels == 0u) {
+        return;
+    }
+    const DiffBilinearFootprint fp =
+        diffBilinearFootprint(diffEmissionTexUv(v), pc.emissionTexWidth, pc.emissionTexHeight);
+    const uint xs[4] = uint[4](fp.x0, fp.x1, fp.x0, fp.x1);
+    const uint ys[4] = uint[4](fp.y0, fp.y0, fp.y1, fp.y1);
+    const float ws[4] = float[4](fp.w00, fp.w10, fp.w01, fp.w11);
+    const uint span = pc.gradArenaFloats - pc.gradAlbedoOffset;
+
+    for (uint i = 0u; i < 4u; ++i) {
+        for (uint c = 0u; c < 3u; ++c) {
+            const uint ch = min(c, pc.emissionTexChannels - 1u);
+            const uint k = diffTexelElementIndex(pc.emissionTexWidth, pc.emissionTexChannels,
+                                                 xs[i], ys[i], ch);
+            if (k < span) {
+                atomicAdd(grad.v[pc.gradAlbedoOffset + k], ws[i] * dL[c]);
+            }
+        }
+    }
 }
 
 #endif  // OHAO_DIFF_BSDF_ADJOINT_GLSL

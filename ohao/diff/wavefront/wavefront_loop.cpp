@@ -408,10 +408,22 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
                                       m_config.samplingSpecularWeight,
                                       m_config.diffParam,
                                       // Emission (Stage 1 Task 4), passed
-                                      // through verbatim -- see
-                                      // ScatterPush's note on why this MUST
-                                      // stay the last initialiser.
-                                      m_config.emission};
+                                      // through verbatim.
+                                      m_config.emission,
+                                      // The emission TEXTURE (Stage 1 Task
+                                      // 5), passed through verbatim -- see
+                                      // ScatterPush's note on why these MUST
+                                      // stay the last initialisers. A zero
+                                      // width or height is "no texture", the
+                                      // default, and leaves the film exactly
+                                      // what `emission` above renders.
+                                      m_config.emissionTexWidth,
+                                      m_config.emissionTexHeight,
+                                      m_config.emissionTexChannels,
+                                      m_config.emissionUvScaleU,
+                                      m_config.emissionUvScaleV,
+                                      m_config.emissionUvBiasU,
+                                      m_config.emissionUvBiasV};
         m_scatter->setPushConstants(&scatterPush, sizeof(scatterPush));
         recordCompactingStage(cmd, buffers, *m_scatter, src, dst, extraBarrierBuffers);
         std::swap(src, dst);

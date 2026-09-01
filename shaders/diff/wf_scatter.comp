@@ -162,7 +162,17 @@ void diffVertexHook(inout DiffVertex v) {
     // contribute nothing on a miss. `pc.emission` defaults to 0.0, so for
     // every dispatch that predates this task this is bit-identically
     // `v.throughput * v.Lr`, unchanged.
-    const vec3 filmContribution = v.throughput * (v.Lr + vec3(pc.emission));
+    //
+    // Stage 1 Task 5: the emitted radiance now comes from `diffEmissionAt`
+    // (bsdf_adjoint.glsl) rather than from `pc.emission` directly. That
+    // function IS `vec3(pc.emission)` whenever no emission texture is
+    // configured -- which is what every caller that predates Task 5 pushes,
+    // so this line is byte-for-byte the film it was -- and is a bilinear
+    // read of the binding-11 texture when one is. It lives there, not here,
+    // because the REPLAY hook's scatter must use the weights of THIS read:
+    // see that file's "STAGE 1 TASK 5" banner for why sharing is required
+    // in this one place and forbidden everywhere else on this branch.
+    const vec3 filmContribution = v.throughput * (v.Lr + diffEmissionAt(v));
 
     if (pc.filmPixelCount > 0u && v.pixelIndex < pc.filmPixelCount) {
         const uint fb = v.pixelIndex * 3u;

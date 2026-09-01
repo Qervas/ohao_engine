@@ -109,6 +109,30 @@ struct WavefrontGradientOptions {
     /// evaluates. Defaults to 0.0, so an `options` left at `{}` renders the
     /// film every caller that predates this task already expects.
     float emission{0.0f};
+    /// Stage 1 Task 5. The EMISSION TEXTURE's primal values, uploaded to a
+    /// fresh buffer bound at the traversal's binding 11 for BOTH runs, and
+    /// its shape and uv map (`WavefrontLoop::Config`'s seven matching
+    /// fields).
+    ///
+    /// Empty (the default) means "no texture": width/height are then pushed
+    /// as 0, the forward hook adds the `emission` scalar above exactly as it
+    /// did before this task, and a placeholder buffer is bound at 11 so the
+    /// descriptor set still covers every binding the shader declares.
+    ///
+    /// The values are indexed by `ohao::diff::ParamShape::elementIndex` --
+    /// `(y*width + x)*channels + c` -- which is the SAME ordering the shader
+    /// addresses both this array and the gradient block by. A caller
+    /// perturbing one texel element for a finite difference perturbs
+    /// `emissionTexture[shape.elementIndex(x, y, c)]` and compares against
+    /// the arena float at the same k.
+    std::vector<float> emissionTexture;
+    std::uint32_t emissionTexWidth{0};
+    std::uint32_t emissionTexHeight{0};
+    std::uint32_t emissionTexChannels{0};
+    float emissionUvScaleU{0.0f};
+    float emissionUvScaleV{0.0f};
+    float emissionUvBiasU{0.0f};
+    float emissionUvBiasV{0.0f};
 };
 
 /// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.

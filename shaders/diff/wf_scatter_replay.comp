@@ -216,6 +216,19 @@
 //     ZERO (bsdf_adjoint.glsl's "STAGE 1 TASK 4" banner says why each one
 //     is, term by term), so `diffVertexEmissionScatter` is the recursion
 //     with every term but "d(emission)/d(emission) = 1" struck out.
+//   * DIFF_PARAM_EMISSION_TEXTURE is Task 5's, and is the FIRST parameter
+//     here that is not a scalar. Its per-vertex adjoint is EXACTLY the
+//     emission scalar's -- it calls the same `diffVertexEmissionScatter`,
+//     because an emitted radiance read out of a texture reaches no
+//     throughput, no density and no MIS weight any more than one read out of
+//     a push constant does -- and the whole of the difference is WHERE that
+//     number goes: distributed over the four texels the forward read
+//     touched, by that read's own bilinear weights, per channel.
+//     `diffScatterEmissionTexture` does that, and bsdf_adjoint.glsl's
+//     "STAGE 1 TASK 5" banner argues why the weights must come from the
+//     forward reconstruction rather than from a second, independently
+//     written one -- the single place on this branch where sharing is
+//     required rather than forbidden.
 //
 // The three are kept as separate call sites rather than merged behind one
 // entry point because merging the first two would have to reconcile the
@@ -243,15 +256,19 @@ void diffVertexHook(inout DiffVertex v) {
         (pc.diffParam == DIFF_PARAM_BASECOLOR)
             ? (diffVertexDirectAlbedoScatter(v, v.adjoint) +
                diffVertexThroughputAlbedoTerm(v, pc.albedo))
-            : (pc.diffParam == DIFF_PARAM_EMISSION)
+            : (pc.diffParam == DIFF_PARAM_EMISSION ||
+               pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE)
                 ? diffVertexEmissionScatter(v)
                 : diffVertexGgxScatter(v, pc.diffParam);
 
     v.adjoint = v.adjoint * v.bsdfWeight;
 
-    // Element 0 of the parameter's gradient block. Task 5's per-texel scatter
-    // replaces this constant with (y*width + x)*channels + c and changes
-    // NOTHING else below: the guard is already written to bound base + k.
+    // Element 0 of the parameter's gradient block -- the ONLY element every
+    // SCALAR parameter has. Stage 1 Task 5's texture parameter is the first
+    // with a real k, and it does not replace this constant: it takes the
+    // OTHER branch below, because a texture scatters into FOUR elements per
+    // channel rather than one and the element index is a function of the
+    // vertex, not a constant of the shader.
     const uint kGradElement = 0u;
 
     const bool arenaConfigured = pc.gradArenaFloats > 0u;
@@ -263,7 +280,20 @@ void diffVertexHook(inout DiffVertex v) {
     // The same path set the forward hook's film write covers.
     const bool pixelInFilm = pc.filmPixelCount > 0u && v.pixelIndex < pc.filmPixelCount;
 
-    if (arenaConfigured && elementInRange && pixelInFilm) {
+    // THE TWO SCATTER SHAPES, and why they are two. A SCALAR parameter owns
+    // one float, so its three channel contributions are summed into it (the
+    // chain rule for one grey value feeding all three channels). A TEXTURE
+    // parameter owns w*h*channels floats, so channel c's contribution goes to
+    // channel c's element of each of the four texels the forward read
+    // touched, weighted by that read's own bilinear weights -- there is
+    // nothing to sum and four places to put it. `mayScatter` is computed ONCE,
+    // above, and handed to both, so the arena/pixel guard cannot come apart
+    // between the two shapes; the per-element bound stays inside each.
+    const bool mayScatter = arenaConfigured && baseInRange && pixelInFilm;
+
+    if (pc.diffParam == DIFF_PARAM_EMISSION_TEXTURE) {
+        diffScatterEmissionTexture(v, contribution, mayScatter);
+    } else if (mayScatter && elementInRange) {
         atomicAdd(grad.v[pc.gradAlbedoOffset + kGradElement],
                   contribution.x + contribution.y + contribution.z);
     }

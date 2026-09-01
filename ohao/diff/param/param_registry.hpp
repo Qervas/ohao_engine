@@ -34,6 +34,45 @@ struct ParamShape {
         if (product > static_cast<std::uint64_t>(UINT32_MAX)) return 0;
         return static_cast<std::uint32_t>(product);
     }
+
+    /// THE ELEMENT ORDERING. Which float of this parameter's gradient block --
+    /// and of the matching primal array the shader reads -- holds channel `c`
+    /// of texel `(x, y)`.
+    ///
+    /// Row-major over texels, channels INTERLEAVED within a texel:
+    ///
+    ///     k = (y * width + x) * channels + c
+    ///
+    /// ESTABLISHED BY STAGE 1 TASK 5, AND IT IS NOT IMPLIED BY floatCount().
+    /// floatCount() is w*h*c -- a COUNT, and a count implies no ordering
+    /// whatsoever: row-major, column-major and channel-planar all have the
+    /// same float count. An earlier version of the shader's arena comment
+    /// claimed the ordering "ParamShape::floatCount() already implies", which
+    /// was the whole of the tie and was not one. Until this function existed
+    /// the mapping from (x, y, c) to an arena offset was asserted nowhere and
+    /// tested nowhere, and a GLSL/C++ disagreement about it is a silent
+    /// wrong-slot scatter: gradients that look plausible and are attributed to
+    /// the wrong texel.
+    ///
+    /// TIED, NOT MERELY DOCUMENTED. `shaders/includes/diff/bsdf_adjoint.glsl`
+    /// spells the same formula once, in `diffTexelElementIndex`, and
+    /// `tests/diff/diff_gpu_probe.cpp`'s `checkTexelOrderingTie()` refuses to
+    /// run the probe unless (a) that GLSL return statement is, modulo
+    /// whitespace, `(y * width + x) * channels + c` and (b) THIS function
+    /// agrees with the formula at every (x, y, c) of a non-degenerate,
+    /// non-square, multi-channel shape -- so neither side can drift alone.
+    /// Probe check 44 then MEASURES the same agreement on the GPU, by
+    /// predicting from this function alone which arena floats a known bilinear
+    /// footprint may touch and requiring every other float to be exactly 0.
+    ///
+    /// Out-of-range (x, y, c) are the caller's problem: this is arithmetic,
+    /// not a bounds check. The SHADER's per-element guard
+    /// (`k < gradArenaFloats - gradOffset`) is what stops an out-of-range k
+    /// reaching memory.
+    [[nodiscard]] std::uint32_t elementIndex(std::uint32_t x, std::uint32_t y,
+                                             std::uint32_t c) const noexcept {
+        return (y * width + x) * channels + c;
+    }
 };
 
 struct ParamId {

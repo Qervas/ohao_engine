@@ -1345,13 +1345,13 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
     // ... and binding 10, the gradient arena (Stage 1 Task 2). See the note
     // at the bindStorageBuffer call below for why THIS probe binds the film
     // buffer there rather than allocating a placeholder.
-    const VkDescriptorType scatterBindingTypes[11] = {
+    const VkDescriptorType scatterBindingTypes[12] = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
     if (!prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", counterOnly,
                                sizeof(WavefrontLoop::PrepareIndirectPush))) {
@@ -1486,7 +1486,16 @@ bool GpuProbeContext::runWavefrontScatterProbe(WavefrontBuffers& buffers, uint32
             // would absorb the same stray write in silence. The same
             // reasoning and the same re-bind appear in the fused-loop,
             // replay and parity probes.
-            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer) ||
+            // BINDING 11, THE EMISSION-TEXTURE PRIMAL (Stage 1 Task 5). The
+            // film again, for binding 10's reason exactly: this probe
+            // configures no texture (ScatterPush::emissionTexWidth stays 0,
+            // which makes the traversal read the uniform `emission` scalar
+            // and never touch this buffer), and a stray read here is
+            // harmless while a stray WRITE -- which the shader's `readonly`
+            // already forbids -- would land somewhere three independent
+            // film checks would notice.
+            !scatter.bindStorageBuffer(m_device, 11, filmBuffer.buffer)) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontScatterProbe: descriptor binding\n");
             ok = false;
@@ -2277,7 +2286,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
     // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
     // See runWavefrontScatterProbe's note at its binding-10 bind for why the
     // probes that have no arena re-bind the film buffer there.
-    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -2286,6 +2295,7 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
@@ -2334,7 +2344,16 @@ bool GpuProbeContext::runWavefrontFusedLoopProbe(
             // Binding 10, the gradient arena: none here, so the film is
             // re-bound and ScatterPush::gradArenaFloats stays 0. See
             // runWavefrontScatterProbe's note at the same call.
-            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer) ||
+            // BINDING 11, THE EMISSION-TEXTURE PRIMAL (Stage 1 Task 5). The
+            // film again, for binding 10's reason exactly: this probe
+            // configures no texture (ScatterPush::emissionTexWidth stays 0,
+            // which makes the traversal read the uniform `emission` scalar
+            // and never touch this buffer), and a stray read here is
+            // harmless while a stray WRITE -- which the shader's `readonly`
+            // already forbids -- would land somewhere three independent
+            // film checks would notice.
+            !scatter.bindStorageBuffer(m_device, 11, filmBuffer.buffer)) {
             std::fprintf(stderr,
                          "[GpuProbeContext] runWavefrontFusedLoopProbe: descriptor binding\n");
             ok = false;
@@ -2871,7 +2890,7 @@ bool GpuProbeContext::runWavefrontReplayProbe(
     // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
     // See runWavefrontScatterProbe's note at its binding-10 bind for why the
     // probes that have no arena re-bind the film buffer there.
-    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -2880,6 +2899,7 @@ bool GpuProbeContext::runWavefrontReplayProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
@@ -2949,7 +2969,11 @@ bool GpuProbeContext::runWavefrontReplayProbe(
                  // about gradients -- so each variant re-binds its OWN
                  // film there and gradArenaFloats stays 0. See
                  // runWavefrontScatterProbe's note at the same call.
-                 scatterStages[i]->bindStorageBuffer(m_device, 10, s.film.buffer);
+                 scatterStages[i]->bindStorageBuffer(m_device, 10, s.film.buffer) &&
+                 // Binding 11, the emission-texture primal (Stage 1 Task 5):
+                 // this probe configures no texture, so the film goes here
+                 // too, for binding 10's reason.
+                 scatterStages[i]->bindStorageBuffer(m_device, 11, s.film.buffer);
         }
         if (!ok) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontReplayProbe: descriptor binding\n");
@@ -3270,7 +3294,7 @@ bool GpuProbeContext::runWavefrontParityProbe(
     // Eleven, not ten: binding 10 is the gradient arena (Stage 1 Task 2).
     // See runWavefrontScatterProbe's note at its binding-10 bind for why the
     // probes that have no arena re-bind the film buffer there.
-    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -3279,6 +3303,7 @@ bool GpuProbeContext::runWavefrontParityProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
@@ -3327,7 +3352,16 @@ bool GpuProbeContext::runWavefrontParityProbe(
             // Binding 10, the gradient arena: none here, so the film is
             // re-bound and ScatterPush::gradArenaFloats stays 0. See
             // runWavefrontScatterProbe's note at the same call.
-            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer)) {
+            !scatter.bindStorageBuffer(m_device, 10, filmBuffer.buffer) ||
+            // BINDING 11, THE EMISSION-TEXTURE PRIMAL (Stage 1 Task 5). The
+            // film again, for binding 10's reason exactly: this probe
+            // configures no texture (ScatterPush::emissionTexWidth stays 0,
+            // which makes the traversal read the uniform `emission` scalar
+            // and never touch this buffer), and a stray read here is
+            // harmless while a stray WRITE -- which the shader's `readonly`
+            // already forbids -- would land somewhere three independent
+            // film checks would notice.
+            !scatter.bindStorageBuffer(m_device, 11, filmBuffer.buffer)) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontParityProbe: descriptor binding\n");
             ok = false;
         }
@@ -3702,6 +3736,53 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         }
     }
 
+    // --- THE EMISSION TEXTURE'S PRIMAL (Stage 1 Task 5), binding 11.
+    //
+    // Uploaded FRESH on every call, from `options.emissionTexture`, because
+    // that is exactly what a per-texel finite difference needs: the caller
+    // perturbs one element of its own vector and calls again, and the two
+    // renders differ in that one float and in nothing else. Read-only to
+    // both instantiations, so it is NOT passed to record()'s
+    // extraBarrierBuffers -- that parameter is for buffers the dispatches
+    // WRITE.
+    //
+    // With no texture requested (the default) a ONE-FLOAT placeholder is
+    // allocated rather than the film being re-bound, unlike the other probes
+    // in this file: this one has a real arena and a film that check 45's
+    // finite difference reads, and a private buffer keeps both out of reach
+    // of a shader bug at this binding entirely. `emissionTexWidth` is pushed
+    // as 0 in that case, which disables every read of it in the traversal.
+    const bool hasEmissionTexture =
+        !options.emissionTexture.empty() && options.emissionTexWidth > 0u &&
+        options.emissionTexHeight > 0u && options.emissionTexChannels > 0u;
+    if (ok && hasEmissionTexture) {
+        const std::size_t expected = static_cast<std::size_t>(options.emissionTexWidth) *
+                                     options.emissionTexHeight * options.emissionTexChannels;
+        if (options.emissionTexture.size() != expected) {
+            std::fprintf(stderr,
+                         "[GpuProbeContext] runWavefrontGradientProbe: emission texture holds %zu "
+                         "floats but its shape (%ux%ux%u) says %zu. The shader's bounds guard "
+                         "covers the ARENA side, not this one -- a short array here is a read "
+                         "past the end of the allocation\n",
+                         options.emissionTexture.size(), options.emissionTexWidth,
+                         options.emissionTexHeight, options.emissionTexChannels, expected);
+            ok = false;
+        }
+    }
+    const std::vector<float> kEmissionTexPlaceholder{0.0f};
+    GpuBuffer emissionTexBuffer;
+    if (ok) {
+        emissionTexBuffer = m_allocator.createBufferFromSpan<float>(
+            hasEmissionTexture ? std::span<const float>(options.emissionTexture)
+                               : std::span<const float>(kEmissionTexPlaceholder),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!emissionTexBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: emission texture "
+                                  "buffer allocation failed\n");
+            ok = false;
+        }
+    }
+
     WavefrontStage generate;
     WavefrontStage prepareIndirect;
     WavefrontStage intersect;
@@ -3723,7 +3804,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // include the same traverse.glsl. Binding 10 is the gradient arena and is
     // bound to the REAL arena for both -- unlike every other probe here,
     // which has none and re-binds its film there.
-    const VkDescriptorType kScatterBindings[11] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    const VkDescriptorType kScatterBindings[12] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -3732,6 +3813,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+                                                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
@@ -3791,7 +3873,13 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                  // The REAL gradient arena, bound to BOTH instantiations. The
                  // forward one never writes it (its hook is the film write)
                  // and is pushed gradArenaFloats = 0 below besides.
-                 scatterStages[i]->bindStorageBuffer(m_device, 10, arena.buffer());
+                 scatterStages[i]->bindStorageBuffer(m_device, 10, arena.buffer()) &&
+                 // BINDING 11, the emission-texture primal (Stage 1 Task 5).
+                 // The SAME buffer for both instantiations, deliberately: it
+                 // is read-only, and the forward read and the replay scatter
+                 // must be looking at ONE array for the gradient to be the
+                 // derivative of the film that was actually rendered.
+                 scatterStages[i]->bindStorageBuffer(m_device, 11, emissionTexBuffer.buffer);
         }
         if (!ok) {
             std::fprintf(stderr,
@@ -3851,6 +3939,19 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             // so both the forward film and the replay run's material context
             // must agree on it.
             loopConfig.emission = options.emission;
+            // Stage 1 Task 5, pushed to BOTH runs for `emission`'s reason:
+            // the emitted radiance is a property of the SCENE this loop
+            // renders. A zero width/height (the default) leaves the
+            // traversal reading the scalar above, exactly as before.
+            if (hasEmissionTexture) {
+                loopConfig.emissionTexWidth = options.emissionTexWidth;
+                loopConfig.emissionTexHeight = options.emissionTexHeight;
+                loopConfig.emissionTexChannels = options.emissionTexChannels;
+                loopConfig.emissionUvScaleU = options.emissionUvScaleU;
+                loopConfig.emissionUvScaleV = options.emissionUvScaleV;
+                loopConfig.emissionUvBiasU = options.emissionUvBiasU;
+                loopConfig.emissionUvBiasV = options.emissionUvBiasV;
+            }
             if (options.freezeSampling) {
                 loopConfig.samplingAlbedo = options.samplingAlbedo;
                 loopConfig.samplingRoughness = options.samplingMaterial.roughness;
@@ -3968,6 +4069,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         if (s->env.isValid()) m_allocator.destroyBuffer(s->env);
         if (s->trace.isValid()) m_allocator.destroyBuffer(s->trace);
     }
+    if (emissionTexBuffer.isValid()) m_allocator.destroyBuffer(emissionTexBuffer);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
     if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 
