@@ -25,6 +25,15 @@ add_executable(diff_gpu_probe
     probe/fd_harness.cpp
     probe/scene.cpp
     probe/ties.cpp
+    probe/checks_foundation.cpp
+    probe/checks_wavefront.cpp
+    probe/checks_bsdf.cpp
+    probe/checks_env.cpp
+    probe/checks_nee_film.cpp
+    probe/checks_parity.cpp
+    probe/checks_replay.cpp
+    probe/checks_gradients.cpp
+    probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE
     ${CMAKE_SOURCE_DIR}/ohao
