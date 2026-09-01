@@ -582,10 +582,12 @@ layout(push_constant) uniform Push {
     // makes that closed form EXPLICIT rather than incidental:
     // DIFF_PARAM_EMISSION is excluded from the forward-mode tangent
     // maintenance -- it is simply not one of the two parameters that ALLOW-
-    // list names -- rather than being left to enter that branch and fall
-    // through `diffBsdfEvalDeriv` to a zero it happens to match neither the
-    // roughness nor the metallic case to produce. See bsdf_adjoint.glsl's
-    // DIFF_PARAM_EMISSION section.
+    // list names -- rather than being left to enter that branch and reach
+    // `diffBsdfEvalDeriv` with a parameter it has no body for. That used to
+    // yield a silent zero; it now yields that function's quiet-NaN sentinel,
+    // which is a louder failure but still a failure, so the exclusion here
+    // remains the correct design and not merely the tidier one. See
+    // bsdf_adjoint.glsl's DIFF_PARAM_EMISSION section.
     //
     // Defaults to 0.0 via ScatterPush's own member initialiser, so a
     // ScatterPush built by hand with a braced list that stops before this
@@ -1567,13 +1569,25 @@ void diffTraverse() {
         // Task 4 excluded DIFF_PARAM_EMISSION by name; Task 5 added
         // DIFF_PARAM_EMISSION_TEXTURE and this branch's exclude-list did not
         // name it, so every check-44/45 run entered this branch for it --
-        // numerically harmless (`diffBsdfEvalDeriv` falls off its end with
-        // `df = vec3(0.0), dpdf = 0.0` for a parameter that matches neither
-        // the roughness nor the metallic case, so the tangent stayed exactly
-        // 0 from its zero seed) but not free: one wasted GGX derivative
-        // evaluation per hit vertex, in both instantiations, and nothing
-        // catching a THIRD future `DIFF_PARAM_*` that falls through the same
-        // way.
+        // numerically harmless AT THE TIME -- `diffBsdfEvalDeriv` then fell
+        // off its end with `df = vec3(0.0), dpdf = 0.0` for a parameter
+        // matching neither its roughness nor its metallic case, so the
+        // tangent stayed exactly 0 from its zero seed -- but not free: one
+        // wasted GGX derivative evaluation per hit vertex, in both
+        // instantiations, and nothing catching a THIRD future
+        // `DIFF_PARAM_*` that fell through the same way.
+        //
+        // THAT LAST CLAUSE IS NO LONGER TRUE, and this comment is updated
+        // rather than left standing: `diffBsdfEvalDeriv` now refuses a
+        // parameter outside {roughness, metallic} at its top with a quiet-NaN
+        // sentinel, before the cosine-band return that is a legitimate zero.
+        // A third parameter reaching it produces a non-finite gradient rather
+        // than a zero. Note what that is and is not worth: making exactly
+        // that mistake was run both ways, and check 42 rejects EITHER WAY --
+        // on `nan` with the sentinel, on `0` without it, because its
+        // non-vacuity precondition already requires a strictly positive
+        // gradient. The sentinel sharpened the diagnosis, not the detection.
+        // The allow-list here remains the first line of defence.
         //
         // BUT AN ALLOW-LIST FAILS JUST AS SILENTLY IN ITS OWN DIRECTION, and
         // an earlier version of this comment said otherwise -- it claimed a

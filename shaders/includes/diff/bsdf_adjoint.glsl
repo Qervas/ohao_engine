@@ -644,6 +644,60 @@ void diffBsdfEvalDeriv(vec3 N, vec3 V, vec3 L, vec3 baseColor, float roughness, 
     df = vec3(0.0);
     dpdf = 0.0;
 
+    // THE PARAMETER GATE, AND IT COMES BEFORE EVERY OTHER EARLY RETURN.
+    //
+    // This function has a body for exactly two parameters. It used to end
+    // after the metallic branch with no else, so a parameter matching
+    // neither fell off the end carrying the `df = 0, dpdf = 0` set above --
+    // a structurally zero derivative that is indistinguishable from the
+    // correct answer for a parameter the film genuinely does not depend on.
+    // Both call sites are gated by `diffParamNeedsForwardTangent`, so that
+    // was unreachable rather than wrong; it was still the same shape of
+    // hazard that has already cost this branch twice (Task 4's
+    // DIFF_PARAM_EMISSION, Task 5's DIFF_PARAM_EMISSION_TEXTURE), waiting
+    // for a third parameter to be added to the allow-list without a body
+    // being added here.
+    //
+    // ORDER MATTERS. The cosine-band return below is a LEGITIMATE zero --
+    // diffBsdfEval pins f and pdf to zero there, so both derivatives really
+    // are zero. Putting this gate first is what keeps "zero because the
+    // geometry says so" and "zero because no branch matched" distinguishable
+    // instead of arriving at the caller as the same two numbers.
+    //
+    // The sentinel is a quiet NaN written as a BIT PATTERN rather than
+    // 0.0/0.0, so no constant folding and no relaxed-precision build can
+    // make it finite -- wf_scatter_replay.comp's diffVertexHook carries the
+    // same sentinel for the same reason.
+    //
+    // WHAT THIS IS AND IS NOT WORTH, MEASURED RATHER THAN ASSERTED. Adding
+    // DIFF_PARAM_EMISSION to `diffParamNeedsForwardTangent` without adding a
+    // body here -- the exact mistake this guards -- was run both ways. With
+    // the sentinel the probe stops at
+    //     FAIL: check 42 ... the scattered gradient = nan
+    // and WITHOUT it, it stops anyway, at
+    //     FAIL: check 42 ... the scattered gradient = 0
+    // because that check's non-vacuity precondition already requires a
+    // strictly positive gradient. So this sentinel bought NO new detection
+    // for the one mistake that could be constructed today; it changed the
+    // diagnosis from "nothing was accumulated" to "no derivative body
+    // exists", which are different causes that the zero conflated.
+    //
+    // It is defence in depth, and worth having for the case the
+    // demonstration could not reach: a fall-through zero that suppresses
+    // only PART of a contribution. `dWeight`/`dPdfBsdf` are written to
+    // `vtx.dBsdfWeight`/`vtx.dPdf` unconditionally, and the s = B term reads
+    // them while the s = E (next-event) term keeps computing correctly out
+    // of this function -- so a parameter that lost its body here, rather
+    // than never having one, would produce a plausible NONZERO gradient
+    // missing its BSDF half, which no non-vacuity precondition can see. That
+    // is the failure this is aimed at, and it is stated as the reason rather
+    // than the demonstrated result because it is not the one demonstrated.
+    if (param != DIFF_PARAM_ROUGHNESS && param != DIFF_PARAM_METALLIC) {
+        df = vec3(uintBitsToFloat(0x7fc00000u));
+        dpdf = uintBitsToFloat(0x7fc00000u);
+        return;
+    }
+
     const float NdotL = dot(N, L);
     const float NdotV = dot(N, V);
     // diffBsdfEval PINS f and pdf to zero in this band, so both derivatives
