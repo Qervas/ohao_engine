@@ -320,6 +320,36 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             ok = false;
         }
     }
+    // STAGE 2 TASK 1: the adjoint seed. Its LENGTH is checked here rather
+    // than trusted, because the shader is told a float count and cannot
+    // verify the buffer actually holds that many -- the same gap
+    // `filmPixelCount` and `gradArenaFloats` carry, and the same answer.
+    const std::size_t kExpectedSeedFloats = static_cast<std::size_t>(width) * height * 3u;
+    const bool hasAdjointSeed = !options.adjointSeed.empty();
+    if (ok && hasAdjointSeed && options.adjointSeed.size() != kExpectedSeedFloats) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runWavefrontGradientProbe: adjointSeed holds %zu floats, "
+                     "but a %ux%u film needs exactly %zu (three per pixel, in the film's own "
+                     "pixelIndex*3 + c order). Binding a buffer shorter than the count pushed "
+                     "would read past its end; binding a longer one means the caller and the "
+                     "shader disagree about which pixel is which\n",
+                     options.adjointSeed.size(), width, height, kExpectedSeedFloats);
+        ok = false;
+    }
+    const std::vector<float> kAdjointSeedPlaceholder{0.0f};
+    GpuBuffer adjointSeedBuffer;
+    if (ok) {
+        adjointSeedBuffer = m_allocator.createBufferFromSpan<float>(
+            hasAdjointSeed ? std::span<const float>(options.adjointSeed)
+                           : std::span<const float>(kAdjointSeedPlaceholder),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        if (!adjointSeedBuffer.isValid()) {
+            std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: adjoint seed "
+                                  "buffer allocation failed\n");
+            ok = false;
+        }
+    }
+
     const std::vector<float> kEmissionTexPlaceholder{0.0f};
     GpuBuffer emissionTexBuffer;
     if (ok) {
@@ -433,7 +463,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                  // must be looking at ONE array for the gradient to be the
                  // derivative of the film that was actually rendered.
                  scatterStages[i]->bindStorageBuffer(m_device, 11, emissionTexBuffer.buffer) &&
-                 scatterStages[i]->bindStorageBuffer(m_device, 12, s.film.buffer);
+                 scatterStages[i]->bindStorageBuffer(m_device, 12, adjointSeedBuffer.buffer);
         }
         if (!ok) {
             std::fprintf(stderr,
@@ -486,6 +516,19 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             // tangent update in path state, and the sampling material gates
             // every direction.
             loopConfig.diffParam = options.diffParam;
+            // STAGE 2 TASK 1. Pushed to the REPLAY run only -- unlike the
+            // emission, which is a property of the scene, dL/dpixel is a
+            // property of the OBJECTIVE and the forward hook has no use for
+            // it: its job is to write the film, and the film does not depend
+            // on what will later be differentiated. Pushing it to both would
+            // be harmless today (the forward hook never calls
+            // diffAdjointSeed) and would be a standing invitation to make the
+            // film depend on the loss, which spec 4.6 forbids in that exact
+            // direction.
+            loopConfig.adjointSeedFloats =
+                (isReplay && hasAdjointSeed)
+                    ? static_cast<std::uint32_t>(options.adjointSeed.size())
+                    : 0u;
             // Stage 1 Task 4. Pushed to BOTH runs, unconditionally, like
             // `albedo` above and unlike the arena offset: the emission is a
             // property of the SCENE this loop renders (what the FORWARD
@@ -624,6 +667,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         if (s->trace.isValid()) m_allocator.destroyBuffer(s->trace);
     }
     if (emissionTexBuffer.isValid()) m_allocator.destroyBuffer(emissionTexBuffer);
+    if (adjointSeedBuffer.isValid()) m_allocator.destroyBuffer(adjointSeedBuffer);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
     if (indexBuffer.isValid()) m_allocator.destroyBuffer(indexBuffer);
 

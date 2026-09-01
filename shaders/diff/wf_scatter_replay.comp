@@ -320,6 +320,29 @@ void diffVertexHook(inout DiffVertex v) {
         contribution = vec3(uintBitsToFloat(0x7fc00000u));  // quiet NaN
     }
 
+    // STAGE 2 TASK 1: dL/d(film[pixelIndex]) scales this vertex's WHOLE
+    // contribution, and that is deliberately not the same as seeding
+    // `v.adjoint` above.
+    //
+    // The first attempt did seed the adjoint, and check 50 rejected it. Not
+    // every term of the recursion goes through `v.adjoint`:
+    // `diffVertexThroughputAlbedoTerm` is `(bounce/albedo) * throughput * Lr`
+    // and reads the THROUGHPUT directly, because it is the (dT_b/dtheta)*Lr
+    // term rather than an adjoint-weighted one. Seeding only the adjoint left
+    // that term carrying dL_0 = 1 while the direct term carried w, so a
+    // gradient split across two halves of the film summed to the whole PLUS
+    // the unseeded term -- 2555.997 against 2189.530, an excess of exactly
+    // the throughput term. A silently PARTIAL weighting, which is the failure
+    // mode this branch keeps producing and check 50's partition identity
+    // exists to catch.
+    //
+    // Scaling the contribution is uniformly correct and cannot miss a term:
+    // the path's total is SUM_b c_b, every c_b belongs to the same pixel, and
+    // dL/dtheta wants w_p * SUM_b c_b. Doing it here also means a future
+    // parameter's scatter term gets the weight without its author having to
+    // know that it must.
+    contribution *= diffAdjointSeed(v.pixelIndex);
+
     v.adjoint = v.adjoint * v.bsdfWeight;
 
     // Element 0 of the parameter's gradient block -- the ONLY element every

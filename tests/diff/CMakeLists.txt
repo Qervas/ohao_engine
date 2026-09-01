@@ -42,6 +42,7 @@ add_executable(diff_gpu_probe
     probe/checks_replay.cpp
     probe/checks_gradients.cpp
     probe/checks_convergence.cpp
+    probe/checks_adjoint_seed.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

@@ -212,6 +212,7 @@
 #include "probe/checks_nee_film.hpp"
 #include "probe/checks_parity.hpp"
 #include "probe/checks_replay.hpp"
+#include "probe/checks_adjoint_seed.hpp"
 #include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
 #include "probe/checks_texture.hpp"
@@ -272,6 +273,7 @@ using ohao::diff::probe::checkReplayEquivalence;
 //   probe/checks_gradients.cpp
 using ohao::diff::probe::checkAlbedoGradient;
 using ohao::diff::probe::checkGgxGradients;
+using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkAlbedoConvergence;
 using ohao::diff::probe::checkEmissionConvergence;
 using ohao::diff::probe::checkGgxConvergence;
@@ -423,6 +425,10 @@ int main() {
     if (!checkGgxConvergence(ctx)) return 1;
     if (!checkEmissionConvergence(ctx)) return 1;
     if (!checkTextureConvergence(ctx)) return 1;
+
+    // 50. STAGE 2 TASK 1: the adjoint seed IS dL/d(film), and the
+    // sum-of-film objective every check above measures is its w = 1 case.
+    if (!checkAdjointSeed(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

@@ -138,6 +138,17 @@ struct WavefrontGradientOptions {
     float emissionUvScaleV{0.0f};
     float emissionUvBiasU{0.0f};
     float emissionUvBiasV{0.0f};
+
+    /// STAGE 2 TASK 1: dL/d(film), three floats per pixel in the FILM's own
+    /// order (`pixelIndex * 3 + c`), or EMPTY for the sum-of-film objective
+    /// every Stage 1 check measures.
+    ///
+    /// Empty is not a disabled state, it is `dL/d(film[p][c]) = 1` -- which
+    /// is what J being the sum of the film means. A non-empty vector must
+    /// hold exactly `3 * width * height` floats; the probe refuses otherwise
+    /// rather than binding a buffer whose length contradicts the count it
+    /// pushes, which the shader can guard but cannot check.
+    std::vector<float> adjointSeed;
 };
 
 /// Floats per PATH INDEX in wf_scatter.comp's binding-7 next-event sink.
