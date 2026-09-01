@@ -93,3 +93,16 @@ Group by subsystem, not by count. Natural seams from the check numbering: founda
 - **No bug fixes.** Anything found gets reported, not fixed.
 - **No new checks**, no changed tolerances, no renumbering.
 - **No touching `gpu_probe_context.{hpp,cpp}`** (4,079 + 1,010 lines). It is the next candidate, and mixing it in would make the byte-identity gate ambiguous about which move broke what.
+
+## Follow-up: `gpu_probe_context.cpp`, done separately (2026-09-02)
+
+Split in two commits, exactly because it could then be gated on its own:
+
+1. **The shared scene first, and alone.** Five of the file's nine seams read two file-scope anonymous namespaces (`buildAxisAlignedBoxGeometry`; the fused-loop constants with their four `static_assert`s). Nothing else could move while those were private to one translation unit. They went to `tests/diff/context/probe_scene.hpp`, asserts included — now checked in every TU that includes it rather than in one. `wf_intersect.comp` cited that block **by name three times**; repointed.
+2. **The seven probe groups.** Every one a `GpuProbeContext::` member, so pure file-partitioning: no signature change, no new type, no context struct invented to bundle anything.
+
+`gpu_probe_context.cpp` **4,107 → 521**; largest new file 764.
+
+**The gate needed repairing before it could be used.** `probe_normalise.py` masks only arena-derived values, and Stage 1 Task 6's checks 46–49 print the analytic gradient and its derived errors in formats it did not know — 15 substantively-stable lines read as differences, so the gate was broken before the refactor began. Extended and re-validated over three runs of one unmodified binary: 34 lines vary, 47 masked, none varying left unmasked.
+
+**And the output gate was not trusted alone.** It proves the numbers still match; it does not prove a comment was not dropped or a member did not lose its closing brace to a neighbour. Each of the 18 members was pulled from the pre-split file and from wherever it now lives and compared line for line — 18 of 18 identical — with every non-blank original line accounted for in some new file.
