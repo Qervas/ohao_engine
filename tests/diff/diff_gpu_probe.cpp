@@ -213,6 +213,7 @@
 #include "probe/checks_parity.hpp"
 #include "probe/checks_replay.hpp"
 #include "probe/checks_adjoint_seed.hpp"
+#include "probe/checks_adam.hpp"
 #include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
@@ -274,6 +275,7 @@ using ohao::diff::probe::checkReplayEquivalence;
 //   probe/checks_gradients.cpp
 using ohao::diff::probe::checkAlbedoGradient;
 using ohao::diff::probe::checkGgxGradients;
+using ohao::diff::probe::checkAdam;
 using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkLossL2;
 using ohao::diff::probe::checkAlbedoConvergence;
@@ -434,6 +436,9 @@ int main() {
     // 51. STAGE 2 TASK 2: the L2 loss, gated by a finite difference on the
     // loss alone -- no renderer, so a failure there is unambiguous.
     if (!checkLossL2(ctx)) return 1;
+    // 52. STAGE 2 TASK 3: Adam, against the paper over a whole trajectory,
+    // plus a closed form for the first step that needs no reference.
+    if (!checkAdam(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

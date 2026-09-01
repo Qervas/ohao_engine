@@ -1,0 +1,97 @@
+#version 460
+
+// STAGE 2 TASK 3 -- ADAM, over one parameter block of the gradient arena.
+//
+// Kingma & Ba, "Adam: A Method for Stochastic Optimization", ICLR 2015,
+// Algorithm 1. Transcribed from the paper with its line numbers named, so
+// that what this implements is checkable against the source rather than
+// against a second copy of itself:
+//
+//   m_t     = beta1 * m_{t-1} + (1 - beta1) * g_t          (Alg. 1, line 5)
+//   v_t     = beta2 * v_{t-1} + (1 - beta2) * g_t^2        (Alg. 1, line 6)
+//   mHat_t  = m_t / (1 - beta1^t)                          (Alg. 1, line 7)
+//   vHat_t  = v_t / (1 - beta2^t)                          (Alg. 1, line 8)
+//   theta_t = theta_{t-1} - alpha * mHat_t                 (Alg. 1, line 9)
+//                           / (sqrt(vHat_t) + epsilon)
+//
+// THE BIAS CORRECTION (lines 7-8) IS NOT OPTIONAL AND ITS ABSENCE IS ALMOST
+// INVISIBLE. m and v are initialised to zero, so the raw moments are biased
+// towards zero and most heavily at t = 1: without correction the first step
+// is
+//
+//     alpha * (1-beta1) g / (sqrt((1-beta2) g^2) + eps)
+//        = alpha * 0.1 / 0.0316 * sign(g) ~ 3.16 * alpha * sign(g)
+//
+// -- more than three times too large. By t ~ 100 the correction factors are
+// within a percent of 1 and the difference has vanished, so an optimiser
+// missing it still CONVERGES on a well-conditioned problem and only differs
+// in its first few steps. That is precisely why the probe's check asserts
+// the whole TRAJECTORY against a reference and not merely the endpoint, and
+// why it carries a closed form for step 1 derived on paper:
+//
+//     with m_0 = v_0 = 0, mHat_1 = g and vHat_1 = g^2 exactly, so
+//     theta_1 = theta_0 - alpha * g / (|g| + epsilon)
+//
+// which is alpha * sign(g) up to epsilon, for ANY g. That single equation
+// separates a correct implementation from an uncorrected one by a factor of
+// 3.16, and it needs no reference implementation to state.
+//
+// beta1^t AND beta2^t ARE PUSHED, NOT COMPUTED HERE. pow(beta, t) in float32
+// drifts from the host's own value of the same expression as t grows, and
+// the host is what decides when to stop; computing it in two places is the
+// same shape of tie this subsystem keeps having to add checks for. One
+// value, pushed.
+
+layout(local_size_x = 64) in;
+
+// The parameters, updated IN PLACE. This is the "optimizer writes live
+// engine resources" ownership model of spec 4.3.
+layout(std430, binding = 0) buffer Params {
+    float v[];
+} params;
+
+// dL/dtheta, produced by the backward pass. Read-only: an optimiser that
+// wrote the gradient arena would make the next iteration's gradient depend
+// on this one's step.
+layout(std430, binding = 1) readonly buffer Gradients {
+    float v[];
+} grads;
+
+// Adam's m and v for this block, laid out as ParamRegistry's state block is:
+// `floatCount` values of m, then `floatCount` values of v. That ordering is
+// the host's (`stateBlock` is 2 * floatCount) and is asserted by the probe.
+layout(std430, binding = 2) buffer AdamState {
+    float v[];
+} state;
+
+layout(push_constant) uniform Push {
+    uint floatCount;
+    float alpha;
+    float beta1;
+    float beta2;
+    float epsilon;
+    // (1 - beta1^t) and (1 - beta2^t) for THIS step, computed on the host.
+    // See the header: not recomputed here, so the two sides cannot drift.
+    float oneMinusBeta1PowT;
+    float oneMinusBeta2PowT;
+} pc;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.floatCount) return;
+
+    const float g = grads.v[i];
+
+    // Alg. 1 lines 5-6.
+    const float m = pc.beta1 * state.v[i] + (1.0 - pc.beta1) * g;
+    const float v = pc.beta2 * state.v[pc.floatCount + i] + (1.0 - pc.beta2) * g * g;
+    state.v[i] = m;
+    state.v[pc.floatCount + i] = v;
+
+    // Alg. 1 lines 7-8.
+    const float mHat = m / pc.oneMinusBeta1PowT;
+    const float vHat = v / pc.oneMinusBeta2PowT;
+
+    // Alg. 1 line 9.
+    params.v[i] -= pc.alpha * mHat / (sqrt(vHat) + pc.epsilon);
+}

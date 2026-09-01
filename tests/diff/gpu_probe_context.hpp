@@ -981,6 +981,25 @@ public:
     /// 0.01 floor, and a metallic run must sit strictly inside the [0,1]
     /// clamp -- at either endpoint the true derivative is one-sided and a
     /// central difference measures half of it.
+    /// STAGE 2 TASK 3: Adam hyper-parameters, Kingma & Ba 2015 Algorithm 1.
+    /// The defaults are the paper's.
+    struct AdamOptions {
+        float alpha{0.001f};
+        float beta1{0.9f};
+        float beta2{0.999f};
+        float epsilon{1e-8f};
+    };
+
+    /// One Adam step over a caller-owned parameter block. `state` is m then
+    /// v, exactly ParamRegistry::stateBlock's 2 * floatCount layout, and is
+    /// updated in place along with `params`. `stepIndex` is Kingma & Ba's t
+    /// and is 1-BASED: the bias correction divides by 1 - beta^t, which is 0
+    /// at t = 0.
+    [[nodiscard]] bool runAdamProbe(std::vector<float>& params,
+                                    const std::vector<float>& grads,
+                                    std::vector<float>& state, const AdamOptions& options,
+                                    std::uint32_t stepIndex);
+
     /// STAGE 2 TASK 2: dispatch shaders/diff/loss_l2.comp over `film`
     /// against `target`, returning dL/d(film) -- exactly the array
     /// traverse.glsl reads at binding 12 -- and the scalar loss.

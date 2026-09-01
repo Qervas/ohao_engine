@@ -29,6 +29,7 @@ add_executable(diff_gpu_probe
     context/probes_parity.cpp
     context/probes_gradient.cpp
     context/probes_loss.cpp
+    context/probes_adam.cpp
     probe/oracle_bsdf.cpp
     probe/oracle_integrator.cpp
     probe/fd_harness.cpp
@@ -45,6 +46,7 @@ add_executable(diff_gpu_probe
     probe/checks_convergence.cpp
     probe/checks_adjoint_seed.cpp
     probe/checks_loss.cpp
+    probe/checks_adam.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

@@ -211,15 +211,19 @@ bool checkLossL2(ohao::diff::GpuProbeContext& ctx) {
         "same exactness Task 6 found for the albedo at one and two bounces. That leaves float32 "
         "cancellation as the ONLY error term, and it falls as 1/h, so the step is chosen LARGE "
         "(2^-2) rather than small: the usual trade-off does not exist here, and at 2^-7 the "
-        "cancellation alone put the comparison at 4.8e-5. All %zu elements agree to a worst "
-        "relative %.3g (element %zu), against %.3g. "
+        "cancellation alone put the comparison at 4.8e-5. All %zu elements agree, the worst at "
+        "%.3g OF ITS ALLOWANCE (element %zu). THE ALLOWANCE HAS TWO TERMS and takes the looser: "
+        "%.3g x |dL/dI|, or an absolute float32 accumulation floor. Two, because the "
+        "difference's error is ABSOLUTE -- the rounding of a %zu-term sum over 2h -- and does "
+        "not shrink with the gradient, so a purely relative gate fails wherever the gradient is "
+        "small. It did, at element 14, where a 1.4e-8 absolute error read as 1.3e-5 relative. "
         "N IS THE FLOAT COUNT, not the pixel count, and that is pinned by a closed form derived "
         "on paper rather than from the kernel: film = 0 against target = c gives L = c^2 for "
         "any N, and a mean over pixels would return three times it -- a factor nothing "
         "downstream would notice, since Gate 5 would absorb it into the learning rate and still "
         "converge. The dispatch is deliberately %zu elements over %zu threads so the tail guard "
         "is exercised.\n",
-        kN, worstRel, worstIndex, kRelTol, kN, ((kN + 63u) / 64u) * 64u);
+        kN, worstRel, worstIndex, kRelTol, kN, kN, ((kN + 63u) / 64u) * 64u);
     return true;
 }
 
