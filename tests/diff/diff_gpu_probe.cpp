@@ -215,6 +215,7 @@
 #include "probe/checks_adjoint_seed.hpp"
 #include "probe/checks_adam.hpp"
 #include "probe/checks_batch.hpp"
+#include "probe/checks_recovery.hpp"
 #include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
@@ -278,6 +279,7 @@ using ohao::diff::probe::checkAlbedoGradient;
 using ohao::diff::probe::checkGgxGradients;
 using ohao::diff::probe::checkAdam;
 using ohao::diff::probe::checkMultiViewBatch;
+using ohao::diff::probe::checkRecovery;
 using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkLossL2;
 using ohao::diff::probe::checkAlbedoConvergence;
@@ -444,6 +446,9 @@ int main() {
     // 53. STAGE 2 TASK 4: a multi-view batch is the sum of its views, and
     // is separately required not to equal its last one.
     if (!checkMultiViewBatch(ctx)) return 1;
+    // 54. GATE 5, the stage gate: a known theta* recovered from a synthetic
+    // target, against a criterion registered before the first run.
+    if (!checkRecovery(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();
