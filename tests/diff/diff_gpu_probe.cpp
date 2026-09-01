@@ -673,11 +673,15 @@ double oracleRelDiff(double reference, double measured) {
 //
 // -- the MIS-combined direct lighting from the environment at every surface
 // vertex a path visits, carried by the throughput on ARRIVAL at that vertex,
-// truncated at a fixed bounce count, with NO emissive-surface term (nothing
-// in this pipeline evaluates one) and NO background term for a ray that
-// escapes. parityReferenceSample below computes exactly that, with the same
-// truncation and the same two omissions, so the two sides are comparable
-// term for term.
+// truncated at a fixed bounce count, with NO background term for a ray that
+// escapes, and (as of Stage 1 Task 4) a uniform emissive-surface term gated
+// by `pc.emission` -- left at its 0.0 default here, as in every check that
+// predates Task 4, so it is absent from THIS comparison by construction,
+// not because the pipeline has nothing to evaluate; see traverse.glsl's
+// binding-9 Film doc for the general case and check 42 for the case where
+// it is not zero. parityReferenceSample below computes exactly that: the
+// same truncation, the same missing background term, and the same (zero)
+// emission, so the two sides are comparable term for term.
 //
 // THE ESCAPE TERM, AND WHY THERE IS NO GAP HERE. Two different things get
 // called "the missing escape term" and only one of them is real:
@@ -7724,11 +7728,16 @@ int main() {
     // sums ONLY MIS direct lighting at surface vertices. There is no escape
     // term: wf_intersect.comp compacts only survivors, so a path that misses
     // everything is dropped from the next bounce's queue and contributes
-    // nothing further. There is no emissive-surface term either: nothing in
-    // this pipeline evaluates one yet. A PathTracer parity comparison will
-    // therefore differ from this film by exactly the directly-visible
-    // environment plus any emissive-surface term -- see the doc on
-    // wf_scatter.comp's binding-9 Film declaration for the full argument.
+    // nothing further. There is, as of Stage 1 Task 4, a uniform
+    // emissive-surface term gated by `pc.emission` -- but this check leaves
+    // it at its 0.0 default, like every check that predates Task 4, so it
+    // is still absent from THIS film by construction, not by pipeline
+    // limitation (see check 42, which exercises the nonzero case). A
+    // PathTracer parity comparison will therefore differ from this film by
+    // exactly the directly-visible environment plus any PER-OBJECT
+    // emissive term a real scene's materials carry (this subsystem still
+    // has no per-object material id) -- see the doc on wf_scatter.comp's
+    // binding-9 Film declaration for the full argument.
     // The closed-box rig above makes that gap unobservable from inside this
     // check, which is precisely why it has to be written down here instead.
     //
@@ -10201,6 +10210,23 @@ int main() {
     // limit, so there is no practical need to push h larger. A future task
     // that wants the tightest possible emission gate should simply use a
     // bigger h; this one does not need to.
+    //
+    // WHAT THIS CONVENTION COSTS, QUANTIFIED (2026 review). With the
+    // truncation term identically zero, the roundoff-only bound falls as
+    // 1/h, so any h short of the largest one that keeps `emission - h > 0`
+    // (theta = kEmission = 0.6 admits h up to just under 0.6 -- ~0.5 stays
+    // comfortably clear) leaves resolution on the table. At h ~= 0.5 rather
+    // than 2^-7 (~7.81e-3), the bound would be roughly (0.6/0.5) * 2^-7 /
+    // 0.5, i.e. about 64x SHARPER than what this file measures --
+    // bound/gradient ~= 4e-6 rather than the ~2.59e-4 this h achieves. At
+    // 2^-7, this gate cannot discriminate a uniform-scaling bug below
+    // roughly 1.00026x (a 0.026% miscalibration passes undetected); at
+    // h ~= 0.5 that floor would drop to roughly 4e-6, a bug about 64x
+    // smaller. This is a genuine, paid-for cost of keeping this task's
+    // derivation procedure identical to Tasks 2/3's, not a free choice --
+    // recorded here so the next reader knows what the convention bought
+    // (auditability by inspection) and what it cost (resolution this
+    // parameter's exact linearity would have given away for free).
     {
         constexpr uint32_t kW = 64;
         constexpr uint32_t kH = 8;
@@ -10284,7 +10310,6 @@ int main() {
         CrnFdMeasurement measurements[3]{};
         double worstRatio = 0.0;
         double worstResolution = 0.0;
-        double worstMagnitudeError = 0.0;
         std::size_t totalTraceMismatches = 0;
 
         for (std::size_t i = 0; i < 3; ++i) {
@@ -10356,7 +10381,45 @@ int main() {
                 return 1;
             }
 
-            // --- THE GATE.
+            // --- THE GATE. THIS IS THE MAGNITUDE ASSERTION (Step 5's
+            // explicit requirement), not merely a direction check, and is
+            // stated as such rather than left implicit: it bounds
+            // |finiteDiff - analytic| in ABSOLUTE terms against a
+            // roundoff-only error bound derived independently of the two
+            // numbers being compared, and NON-VACUITY 2 above has already
+            // pre-registered that bound to resolve to <= 1e-2 of the
+            // gradient's own scale (`resolution = errorBound / analytic`).
+            // So passing this gate implies
+            // `|analytic/finiteDiff - 1| <= kMaxGradientResolution *
+            // (1 + O(kMaxGradientResolution))` in the worst CASE THE GATE
+            // ITSELF ADMITS, and at the resolution actually measured here
+            // (~2.6e-4, far inside that 1e-2 ceiling) it implies a ratio-to-1
+            // deviation about 38x tighter than a literal ratio-to-1 test
+            // pinned to the shared `kMaxGradientResolution` limit could ever
+            // discriminate. A same-sign-but-wrong-scale bug -- exactly what
+            // a direction-only (same-sign) check would miss -- still fails
+            // HERE, hard: see this check's own Step 5(a) transcript, where a
+            // synthetic uniform-scale bug at 38.6x this bound tripped this
+            // exact message.
+            //
+            // A SEPARATE ratio-to-1 assertion against `kMaxGradientResolution`
+            // used to sit after this gate, under a "MAGNITUDE, NOT ONLY
+            // DIRECTION" banner, for exactly the claim this comment now
+            // makes explicitly. It was deleted (2026 review, Task 4 Finding
+            // 1) because no perturbation exists that clears THIS gate while
+            // failing that one at the shared 1e-2 limit: both compare the
+            // same |finiteDiff - analytic| deviation, on two scales
+            // (`errorBound` here, `|finiteDiff|` there) that agree to within
+            // roundoff, so the loosely-thresholded one could never fire
+            // first -- a check that cannot fire is worse than no check. A
+            // magnitude check that used a materially TIGHTER threshold
+            // instead of the shared 1e-2 would not be independent either: at
+            // any threshold at or below this gate's own ~2.6e-4 resolution
+            // it degenerates into a restatement of THIS inequality with a
+            // hardcoded constant in place of the roundoff formula that
+            // derives `errorBound` -- strictly worse, since it loses the
+            // per-h, per-parameter derivation this file's checks otherwise
+            // share.
             const double ratio = m.absError / m.errorBound;
             if (ratio > worstRatio) worstRatio = ratio;
             if (!(m.absError <= m.errorBound)) {
@@ -10378,30 +10441,6 @@ int main() {
                     "before suspecting any calculus, because there is none here to get wrong\n",
                     bounces, m.finiteDiff, m.analytic, m.absError, m.relError, m.errorBound,
                     m.jMinus, m.jCenter, m.jPlus, m.hActual, kGradientSeed);
-                wf.destroy(ctx.allocator());
-                gradArena.destroy(ctx.allocator());
-                return 1;
-            }
-
-            // --- MAGNITUDE, NOT ONLY DIRECTION (Step 5's explicit
-            // requirement). The gate above already bounds |FD - analytic|
-            // to a tolerance ~1e-4 of the gradient's own scale, which a
-            // uniform-scale bug fails hard -- but that is stated here as an
-            // EXPLICIT ratio-to-1 assertion, separate from the error-bound
-            // framing, so a plumbing bug that scales every contribution by
-            // a constant (same SIGN, wrong SCALE -- exactly what a
-            // direction-only check would miss) is rejected by a comparison
-            // that says so in those terms.
-            const double magnitudeError = std::fabs(m.analytic / m.finiteDiff - 1.0);
-            if (magnitudeError > worstMagnitudeError) worstMagnitudeError = magnitudeError;
-            if (!(magnitudeError <= kMaxGradientResolution)) {
-                std::fprintf(stderr,
-                             "[diff_gpu_probe] FAIL: check 42 at %u bounce(s) -- MAGNITUDE check: "
-                             "analytic/finiteDiff = %.9g, i.e. %.3g away from 1 -- above the "
-                             "pre-registered %.3g. A direction-only check (same sign) would have "
-                             "passed this; this one does not\n",
-                             bounces, m.analytic / m.finiteDiff, magnitudeError,
-                             kMaxGradientResolution);
                 wf.destroy(ctx.allocator());
                 gradArena.destroy(ctx.allocator());
                 return 1;
@@ -10448,17 +10487,17 @@ int main() {
             "    1 bounce : FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g (roundoff only)\n"
             "    2 bounces: FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g (roundoff only)\n"
             "    3 bounces: FD %.9g vs analytic %.9g -- |err| %.4g <= bound %.4g (roundoff only)\n"
-            "  Worst |err|/bound %.4g; worst bound/gradient %.3g; worst |analytic/FD - 1| %.3g "
-            "(pre-registered limit %.3g for both). dJ/d(emission) rises from %.4f at one bounce "
-            "to %.4f at three, so every hit vertex is carrying real weight, not just bounce 0\n",
+            "  Worst |err|/bound %.4g; worst bound/gradient %.3g (pre-registered limit %.3g) -- "
+            "THE GATE above IS the magnitude assertion (see its comment); no separate "
+            "ratio-to-1 check follows it. dJ/d(emission) rises from %.4f at one bounce to %.4f "
+            "at three, so every hit vertex is carrying real weight, not just bounce 0\n",
             kGradientSeed, kW * kH, static_cast<double>(kStep), kFilmRelativeEps,
             static_cast<double>(kEmission), totalTraceMismatches, measurements[0].finiteDiff,
             measurements[0].analytic, measurements[0].absError, measurements[0].errorBound,
             measurements[1].finiteDiff, measurements[1].analytic, measurements[1].absError,
             measurements[1].errorBound, measurements[2].finiteDiff, measurements[2].analytic,
             measurements[2].absError, measurements[2].errorBound, worstRatio, worstResolution,
-            worstMagnitudeError, kMaxGradientResolution, measurements[0].analytic,
-            measurements[2].analytic);
+            kMaxGradientResolution, measurements[0].analytic, measurements[2].analytic);
 
         // -----------------------------------------------------------------
         // 43. THE NULL TEST. Exactly zero, not "small" -- check 38's shape,

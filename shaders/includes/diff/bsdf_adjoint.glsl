@@ -854,9 +854,13 @@ vec3 diffVertexGgxScatter(in DiffVertex v, uint param) {
 //     which takes baseColor/roughness/metallic/specularWeight and NEVER
 //     `pc.emission` -- grep the file and it is not a parameter of either
 //     function. So the throughput a path arrives with does not depend on
-//     emission at ANY bounce, and unlike roughness/metallic this parameter
-//     needs no forward-mode tangent carried in path state: the closed form
-//     is 0 and it is exact, not approximate, at every theta.
+//     emission at ANY bounce: the closed form is 0 and it is exact, not
+//     approximate, at every theta. traverse.glsl's tangent-maintenance gate
+//     (`pc.diffParam != DIFF_PARAM_BASECOLOR && pc.diffParam !=
+//     DIFF_PARAM_EMISSION`) makes that closed form explicit -- this
+//     parameter carries NO forward-mode tangent in path state, by
+//     exclusion, not merely by every value that reaches it happening to be
+//     zero.
 //   * dLr_b/d(emission) = 0. `Lr` is nee.glsl's MIS-combined estimate --
 //     built from `neeTerm`/`bsdfTerm`, which read baseColor, the material,
 //     the environment CDF and the shadow-ray visibility, and again never
