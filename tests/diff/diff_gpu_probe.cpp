@@ -212,6 +212,7 @@
 #include "probe/checks_nee_film.hpp"
 #include "probe/checks_parity.hpp"
 #include "probe/checks_replay.hpp"
+#include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
 #include "probe/checks_texture.hpp"
 #include "probe/ties.hpp"
@@ -271,6 +272,10 @@ using ohao::diff::probe::checkReplayEquivalence;
 //   probe/checks_gradients.cpp
 using ohao::diff::probe::checkAlbedoGradient;
 using ohao::diff::probe::checkGgxGradients;
+using ohao::diff::probe::checkAlbedoConvergence;
+using ohao::diff::probe::checkEmissionConvergence;
+using ohao::diff::probe::checkGgxConvergence;
+using ohao::diff::probe::checkTextureConvergence;
 using ohao::diff::probe::checkEmissionGradient;
 //   probe/checks_texture.cpp
 using ohao::diff::probe::checkTextureScatter;
@@ -407,6 +412,17 @@ int main() {
     // 44-45. The first parameter that is not a scalar: the conservation identity
     // plus an exact-zero footprint gate, then the per-element magnitude gate.
     if (!checkTextureScatter(ctx)) return 1;
+    // 46-49. STAGE 1 TASK 6 -- THE FOUR GATES, each at TWO STEP SIZES. Not
+    // four more agreements: the pair (D(h), D(2h)) measures the truncation
+    // term and SUBTRACTS it, so what is compared against the arena is the
+    // gradient's own error rather than a bound that contains it. The four
+    // parameters obey three different convergence laws and each is asserted
+    // in the direction its own analytic form dictates -- see
+    // checks_convergence.hpp.
+    if (!checkAlbedoConvergence(ctx)) return 1;
+    if (!checkGgxConvergence(ctx)) return 1;
+    if (!checkEmissionConvergence(ctx)) return 1;
+    if (!checkTextureConvergence(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

@@ -134,28 +134,52 @@ A texture read is `sum_i w_i * texel_i` over four texels; the adjoint scatters `
 
 ---
 
-### Task 6: The four gates
+### Task 6: The four gates — DONE
 
-**Files:** `tests/diff/diff_gpu_probe.cpp`, `tests/diff/gpu_probe_context.{hpp,cpp}`.
+**Files:** `tests/diff/probe/checks_convergence.{hpp,cpp}` (new, checks 46–49), `tests/diff/diff_gpu_probe.cpp`, `tests/diff/CMakeLists.txt`.
 
 Consolidate Gates 1–4 from the spec: albedo, roughness/metal, emission, light. Each is a CRN finite-difference agreement on a probe-owned scene with a stated, derived tolerance.
 
-- [ ] **Step 1:** Assert each gate at **two step sizes**, confirming the FD error falls as `h^2` for a central difference. **A single-`h` agreement can pass on a wrong gradient**; a convergence rate cannot.
-- [ ] **Step 2:** Assert every gradient the scene does not depend on is **exactly zero**.
-- [ ] **Step 3: Demonstrate failure** for each of the four gates independently — perturb one adjoint, confirm only that gate rejects. Specificity matters: a gate that fires for every perturbation localises nothing.
-- [ ] **Step 4: Commit.**
+**Two things in the wording above turned out to be wrong, and the corrections are the substance of the task.**
+
+*"albedo, roughness/metal, emission, light"* — there is no `light` parameter. Task 4 was titled "Emission and light-parameter gradients" and delivered `DIFF_PARAM_EMISSION` only, because in these scenes an emissive surface **is** the light. The fourth gate is `DIFF_PARAM_EMISSION_TEXTURE`, the spatially-varying emitter, which is the closest thing to a light parameter this stage built and the one with the most machinery to get wrong.
+
+*"confirming the FD error falls as `h^2`"* — true for **one** of the four gates. The order of a central difference is a property of the difference; the order of its **error** is a property of the function. Asserting an `h^2` falloff on emission would have been asserting something false.
+
+| Gate | J's dependence on the parameter | Law asserted | Points needed |
+|---|---|---|---|
+| 46 albedo | `SUM_{n=1..B} K_n a^n`, exactly | truncation **identically zero** at B=1,2; **exactly** `K_3 h^2` at B=3 | 2 |
+| 47 roughness/metallic | smooth, not polynomial | `C h^2 + O(h^4)` — the only asymptotic one | **3** |
+| 48 emission | exactly **linear** | truncation identically zero | 2 |
+| 49 emission texture | exactly **linear** in a texel | truncation identically zero | 2 |
+
+**How many step sizes a gate needs is set by the polynomial degree of J in the parameter, not by the order of the difference.** A two-point fit reports the gradient's error contaminated by `4*E*h^4`; where J is degree ≤ 3, `E` is exactly zero and two points are provably sufficient. For roughness/metallic `E` is genuinely nonzero and that contamination was measured at up to **5x the gradient's actual error** — a two-point gate there would have rejected a correct adjoint and named the wrong cause.
+
+- [x] **Step 1:** Each gate at two step sizes (three for 47), asserting the law its own analytic form dictates. The pair isolates the error exactly: with `T = (D(2h)-D(h))/3` and `e = D(h)-g`, `T - e = delta` for any `K`. `deltaImplied` is gated at `1e-5 * |g| * caseScale`, one pre-registered number.
+- [x] **Step 2:** Roughness/metallic was the one parameter family with no null test (38, 43 and 44 covered the other three). Check 47 now asserts all 255 other arena floats are **exactly** `0.0f`.
+- [x] **Step 3: Demonstrated, with perfect specificity.** One line injected into `wf_scatter_replay.comp`'s `diffVertexHook`, scaling one parameter's contribution:
+
+| Perturbation | Rejects | Pre-existing checks |
+|---|---|---|
+| `BASECOLOR x1.0001` | **46 only** | 37 passes (err 0.1989 ≤ bound 0.5891) |
+| `ROUGHNESS x1.002` | **47 only** | 39, 40 pass |
+| `EMISSION x1.0001` | **48 only** | 42 passes |
+| `EMISSION_TEXTURE x1.00005` | **49 only** | 44, 45 pass |
+
+  The albedo row is the headline: **a 0.01% error in the adjoint that the entire existing Stage 1 gradient suite cannot see.**
+- [x] **Step 4: Commit.**
 
 ---
 
 ## Exit criteria
 
-- [ ] `diff_gpu_probe` exits 0, 0 validation errors, every check existing at the start of this stage still passing with its original expected values, plus the new gradient checks. Report the `OK:` count — a description, never a target.
+- [x] `diff_gpu_probe` exits 0 with **54 `OK:` lines**, 0 validation errors, every check existing at the start of this stage still passing with its original expected values, plus the new gradient checks. Report the `OK:` count — a description, never a target.
 - [ ] **Replay consumes bit-identical RNG draws to the forward pass at every bounce**, demonstrated to fail on a single inserted draw.
-- [ ] Gates 1–4 pass at two step sizes each, with FD error falling as `h^2`.
-- [ ] Every gradient the scene does not depend on is exactly zero.
+- [x] Gates 1–4 pass at two step sizes each (three for the GGX gate), each asserting the convergence law its own analytic form dictates. **The criterion as written was not satisfiable**: only the albedo's 3-bounce case has an FD error that falls as `h^2`; emission and the emission texture are exactly linear in their parameter, so their truncation is identically zero at every `h`, and asserting a falloff would have been asserting something false. The stronger law is asserted instead.
+- [x] Every gradient the scene does not depend on is exactly zero (38, 43, 44, and now 47).
 - [ ] Every new check has a **demonstrated failure** recorded with pasted output.
 - [ ] The `>1 spp` film-accumulation hazard is resolved explicitly, with the choice stated in code.
-- [ ] `diff_unit_tests`, `renderer_test`, clean `-j8` build, and `python site/tools/generate_tree.py` all pass.
+- [x] `diff_unit_tests` 28/28, `renderer_test` passes, clean `-j8` build, and `python site/tools/generate_tree.py` exits 0.
 
 ## What this stage deliberately does not do
 
