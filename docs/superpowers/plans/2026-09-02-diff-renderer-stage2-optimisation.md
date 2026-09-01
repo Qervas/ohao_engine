@@ -40,7 +40,7 @@ It also comes with the best regression gate available anywhere in this project: 
 
 ---
 
-### Task 1: The adjoint seed becomes an image
+### Task 1: The adjoint seed becomes an image — DONE (check 50)
 
 **Files:** `shaders/diff/wf_scatter_replay.comp`, `shaders/includes/diff/traverse.glsl`, `ohao/diff/wavefront/{wavefront_loop,wavefront_buffers}.*`, the probe.
 
@@ -53,7 +53,7 @@ It also comes with the best regression gate available anywhere in this project: 
 
 ---
 
-### Task 2: The loss kernel
+### Task 2: The loss kernel — DONE (check 51)
 
 **Files:** `shaders/diff/loss_l2.comp`, `ohao/diff/loss/`, the probe.
 
@@ -66,7 +66,7 @@ L2 first, because its derivative is a line of algebra and its gradient is checka
 
 ---
 
-### Task 3: Adam over the registry
+### Task 3: Adam over the registry — DONE (check 52)
 
 **Files:** `shaders/diff/optimizer_adam.comp`, `ohao/diff/optimize/`, the probe.
 
@@ -80,7 +80,7 @@ The state blocks exist and are asserted zero today. This is the easy part (spec 
 
 ---
 
-### Task 4: Multi-view batching, and the `>1 spp` decision
+### Task 4: Multi-view batching, and the `>1 spp` decision — DONE (check 53)
 
 **Files:** the wavefront loop, the probe.
 
@@ -92,7 +92,7 @@ The state blocks exist and are asserted zero today. This is the easy part (spec 
 
 ---
 
-### Task 5: Gate 5 — recovery on synthetic ground truth
+### Task 5: Gate 5 — recovery on synthetic ground truth — SCALAR DONE (check 54); texture remains
 
 **Files:** the probe, `ohao/diff/apply/` if a driver is warranted.
 
@@ -115,6 +115,24 @@ The state blocks exist and are asserted zero today. This is the easy part (spec 
 - [ ] **Gate 5: a known `theta*` recovered from `theta_0`** for a scalar, and for a texture, against a pre-registered tolerance.
 - [ ] Every new check has a demonstrated failure with pasted output.
 - [ ] `diff_unit_tests`, `renderer_test`, clean `-j8`, and `generate_tree.py` all pass.
+
+---
+
+## Where this stands (2026-09-02)
+
+**Gate 5 passes for a scalar.** `theta*` = 0.6 recovered from `theta_0` = 0.3 to **0.599305** — an error of **0.000695** against the pre-registered **0.03**, 43x inside the criterion and 14x tighter than `alpha` itself.
+
+| Task | Check | What it turned on |
+|---|---|---|
+| 1 adjoint seed | 50 | Seeding `v.adjoint` is WRONG — `diffVertexThroughputAlbedoTerm` reads the throughput directly, so half the gradient stayed unweighted. The partition identity caught it; an all-ones test never could, because at `w = 1` a partially weighted gradient is identical to a correct one. |
+| 2 loss kernel | 51 | `N` is the FLOAT count, pinned by a closed form on paper because a per-pixel mean would be 3x off and Gate 5 would absorb it into the learning rate. |
+| 3 Adam | 52 | Dropping the bias correction makes the optimiser converge **five times faster** on this objective — an endpoint check would have REWARDED the bug. The non-vacuity bound is now two-sided and rejects it alone. |
+| 4 batching | 53 | A per-view clear reduces a batch to its last view, and the result is a real gradient of one view, so only a direct comparison sees it. |
+| 5 Gate 5 | 54 | Passes. Demonstrations: sign-flipped gradient runs `theta` to -0.9397 with the loss rising 0.177 -> 4.050; `theta_0 = theta*` reports the loss as EXACTLY 0, confirming `L(theta*) = 0` under CRN rather than assuming it. |
+
+**Still open in Task 5:** Step 3, recovery of the emission TEXTURE — many parameters at once, which is where a per-element scatter bug that survived checks 44/45/49 would finally show. The scalar path is what checks 54 covers.
+
+**Not yet due, and deliberately so:** the plan's Task 3 Step 5 expected checks 38/43/44/47 to need rework because Adam writes the state block they assert is exactly zero. The Adam kernel is generic over caller-owned buffers and the probe passes it its own, so the arena's state blocks are still untouched and those assertions remain true. They come due when a loop drives Adam from the arena directly.
 
 ## What this stage deliberately does not do
 
