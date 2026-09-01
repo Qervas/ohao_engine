@@ -546,11 +546,40 @@ const uint DIFF_PARAM_EMISSION_TEXTURE = 4u;
 /// caught falling through the exclude-by-name gate silently because the
 /// exclusion named 3 but not 4). An exclude-list is wrong by silent inclusion
 /// every time a new `DIFF_PARAM_*` is added and this comment is not
-/// remembered; an allow-list is wrong only by silent EXCLUSION of a parameter
-/// that DOES need a tangent -- and that parameter's own entry in
-/// `diffBsdfWeightDeriv` below would then be producing a derivative nothing
-/// reads, which is the kind of dead-weight cost this review is closing, not
-/// a correctness gap this predicate could hide.
+/// remembered.
+///
+/// BOTH FORMS FAIL SILENTLY, AND AN EARLIER VERSION OF THIS DOC CLAIMED
+/// OTHERWISE. It argued that an allow-list "can only fail in the louder
+/// direction", because a wrongly EXCLUDED parameter would leave nothing
+/// behind but a derivative in `diffBsdfWeightDeriv` that nothing reads --
+/// dead weight, not a correctness gap. THAT IS FALSE, and the data path in
+/// traverse.glsl is what shows it: `dWeight`/`dPdfBsdf` are declared and
+/// ZERO-INITIALISED before the gate, computed only INSIDE it, and then
+/// written to `vtx.dBsdfWeight`/`vtx.dPdf` UNCONDITIONALLY. `diffParam` is a
+/// push constant, fixed for a whole dispatch and not a per-vertex quantity,
+/// so a wrongly excluded parameter never calls `psSetTangent` even once: the
+/// tangent stays at its zero seed and BOTH of those vertex fields are baked
+/// in as 0 for every vertex of every path. `diffVertexGgxScatter` below then
+/// READS them, for its s = B (BSDF-sampled) term -- while its s = E
+/// (next-event) term stays CORRECT, because that term calls
+/// `diffBsdfEvalDeriv` directly with the real parameter and never passes
+/// through this predicate at all. So what a wrong EXCLUSION produces is a
+/// SILENTLY PARTIAL gradient: the BSDF-sampled contribution and the
+/// throughput term zeroed, the light-sampled term right, and a total wrong
+/// by an amount nothing here bounds. That is not "louder" than the
+/// exclude-list's failure -- it is the same silence, moved.
+///
+/// THE REAL ARGUMENT FOR AN ALLOW-LIST IS THEREFORE NOT ABOUT FAILURE
+/// DIRECTION, and must not be read as one. It is that the set which NEEDS a
+/// tangent is small and STRUCTURAL -- the next paragraph derives it, and it
+/// has not grown in three tasks -- while the set which does not need one
+/// grows with every parameter this branch adds. Stating the small set puts
+/// membership in ONE reviewable function; stating the large one makes it an
+/// obligation on every future author to remember a deny-list they have no
+/// reason to be reading. A wrong exclusion costs exactly what a wrong
+/// inclusion cost: silence. The allow-list buys VISIBILITY of the decision,
+/// not a louder failure -- making the failure actually loud takes a check,
+/// not a choice of list polarity.
 ///
 /// ROUGHNESS and METALLIC are the only two, and the reason is structural, not
 /// a list of what happens to be true today: they are the only parameters

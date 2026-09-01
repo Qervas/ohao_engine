@@ -1290,6 +1290,34 @@ bool checkGeometricNormals(ohao::diff::GpuProbeContext& ctx) {
     // 1e-4, loose enough for the ray-triangle solve and far tighter than the
     // gap between adjacent faces' distances.
     //
+    // kNormalTolerance IS DERIVED HEADROOM, NOT A CONSUMED BUDGET, and it is
+    // worth being explicit about the difference because its sibling
+    // kHitTRelTolerance is the other kind. The derivation above bounds what
+    // the SPEC PERMITS inversesqrt() to be wrong by; what this scene actually
+    // measures is a different number. The on-axis error here is EXACTLY zero
+    // at every one of the 3136 paths -- this check's own OK line prints
+    // `max |normal err| = 0`, and setting kNormalTolerance to 1e-30f leaves
+    // the whole probe passing -- because the only component reaching
+    // normalize() is c on a vector (0, 0, c), and every implementation this
+    // has run on returns c * inversesqrt(c*c) as exactly +/-1. So no measured
+    // error consumes any part of this constant today. kHitTRelTolerance, by
+    // contrast, is consumed: the ray-triangle solve measures ~2.9e-7 relative
+    // against its 1e-4 bound.
+    //
+    // IT IS KEPT ANYWAY, AND KEPT AT 1e-6, for two reasons and not because
+    // deleting it would be awkward. First, the 2-ULP allowance above is real
+    // even where it is unexercised: an implementation that took it would be
+    // CONFORMANT, and a comparison to exactly +/-1 would fail it as a
+    // renderer bug. Second, this box is axis-aligned by construction, which
+    // is what makes the exact answer available at all; the first non-axis-
+    // aligned scene to reach this check gets a cross product with three
+    // inexact components and needs a real bound on all three, not just on
+    // the one this scene happens to isolate. What this constant must NOT be
+    // read as is evidence that a nonzero error was observed and budgeted for.
+    // It is not a check that cannot fail: a wrong face moves a component by
+    // 1 or 2, which any threshold from 1e-30 upward catches -- the off-axis
+    // pair, compared bit-exactly, is where that class is actually caught.
+    //
     // LIMITATION: this check CANNOT distinguish a face from its opposite.
     // The stored normal's sign comes entirely from wf_intersect.comp's flip
     // against the ray direction, not from which primitive was actually hit:
@@ -1323,7 +1351,11 @@ bool checkGeometricNormals(ohao::diff::GpuProbeContext& ctx) {
     // hardcoded constant already had.
     constexpr float kTanHalfFov = 2.0f;
     constexpr float kBoxHalfExtent = 4.0f;
+    // Headroom, not a measured budget: the on-axis error is exactly 0 on this
+    // axis-aligned box. See the TOLERANCES note above for the derivation, the
+    // measurement, and why it is kept at 1e-6 regardless.
     constexpr float kNormalTolerance = 1e-6f;
+    // A budget that IS consumed: ~2.9e-7 relative, measured. See the same note.
     constexpr float kHitTRelTolerance = 1e-4f;
     // Minimum separation required between the largest and second-largest
     // |d_k| for the argmin face to be unambiguous. The construction above

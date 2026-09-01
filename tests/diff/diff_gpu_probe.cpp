@@ -184,14 +184,19 @@
 // arena float outside the host-predicted footprint is EXACTLY zero; 45 is the
 // per-element magnitude gate, perturbing ONE primal texel on the host.
 //
-// SIX GLSL/C++ ties run BEFORE any Vulkan object exists, and refuse to run
-// the probe at all if they do not hold -- see checkNeeStrideTie,
-// checkWfScatterSinkLayoutTie, checkScatterPushSizeTie,
+// EIGHT GLSL/C++ ties run BEFORE any Vulkan object exists, and refuse to run
+// the probe at all if they do not hold. In the order main() calls them:
+// checkNeeStrideTie, checkScatterPushSizeTie, checkWfScatterSinkLayoutTie,
+// checkDrawsPerBounceTie, checkTraverseInstantiationTie,
 // checkBsdfShaderConstantTies, checkParityRefConstantsTie and
 // checkTexelOrderingTie, which now live in probe/ties.{hpp,cpp} rather than
-// this file's anonymous namespace. They print NOTE lines rather than OK
-// lines: they are preconditions of the checks above meaning anything, not
-// checks in their own right.
+// this file's anonymous namespace. (This list said SIX and omitted
+// checkDrawsPerBounceTie and checkTraverseInstantiationTie, both of which
+// main() has always called and both of which print their own NOTE line; the
+// `using` block below already named all eight, which is where the count
+// should have been read off.) They print NOTE lines rather than OK lines:
+// they are preconditions of the checks above meaning anything, not checks in
+// their own right.
 
 #include "gpu_probe_context.hpp"
 

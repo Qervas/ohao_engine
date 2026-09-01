@@ -587,10 +587,38 @@ public:
         //
         // THESE MUST STAY THE LAST FIELDS, and `emissionUvBiasV` the very
         // last: traverse.glsl's Push block declares them in this order and
-        // ends with the same field, and `checkScatterPushSizeTie` ties only
-        // the TOTAL byte size, not the per-field order -- keeping this
-        // struct's member order identical to the shader's declaration order
-        // is this file's own invariant to hold, not one any check enforces.
+        // ends with the same field.
+        //
+        // WHAT `checkScatterPushSizeTie` COVERS (this comment corrects an
+        // earlier version of itself, which said the check tied only the TOTAL
+        // byte size and that per-field order was this file's own invariant --
+        // that stopped being true when the check grew an order tie, and the
+        // claim outlived the change because this file was not in that diff).
+        // It now ties three things: the shader block's field COUNT * 4 to
+        // `sizeof(ScatterPush)`, every field's NAME, and their ORDER.
+        //
+        // WHERE IT IS STILL NOT STRONGER, and why this file still owes an
+        // invariant. The names and order are compared against
+        // `kCanonicalFieldOrder`, a hand-kept transcription of THIS struct's
+        // member order living in tests/diff/probe/ties.cpp -- so the check
+        // compares two hand-transcriptions of each other, and never reads the
+        // live C++ type at all beyond its `sizeof`. Three drifts therefore
+        // still pass it:
+        //   * A REORDER OF THIS STRUCT ALONE. Same fields, same size, shader
+        //     and canonical list untouched and still agreeing -- and every
+        //     field from the point of drift on is pushed at the wrong offset.
+        //     Keeping this struct's member order identical to the shader's
+        //     declaration order remains this file's own invariant, exactly as
+        //     the old comment said; what changed is that the same drift made
+        //     in the SHADER is now caught.
+        //   * A RENAME APPLIED TO BOTH SIDES. Renaming a field in the shader
+        //     block and in `kCanonicalFieldOrder` keeps them agreeing; the
+        //     C++ member's name is never consulted.
+        //   * A TYPE SWAP IN PLACE. `uint` for `float` moves neither the name
+        //     list nor the byte count, so a float pushed where an integer bit
+        //     pattern is read passes.
+        // Update `kCanonicalFieldOrder` in the same commit that reorders,
+        // renames, adds or removes a field here.
         std::uint32_t emissionTexWidth{0};
         std::uint32_t emissionTexHeight{0};
         std::uint32_t emissionTexChannels{0};

@@ -1573,11 +1573,32 @@ void diffTraverse() {
         // 0 from its zero seed) but not free: one wasted GGX derivative
         // evaluation per hit vertex, in both instantiations, and nothing
         // catching a THIRD future `DIFF_PARAM_*` that falls through the same
-        // way. An allow-list is wrong, if it is ever wrong, in the opposite
-        // and louder direction: omitting a parameter that DOES need a
-        // tangent leaves that parameter's own case in `diffBsdfWeightDeriv`
-        // computing a derivative nothing reads, which is exactly the
-        // dead-weight cost this fix removes, not a correctness gap it opens.
+        // way.
+        //
+        // BUT AN ALLOW-LIST FAILS JUST AS SILENTLY IN ITS OWN DIRECTION, and
+        // an earlier version of this comment said otherwise -- it claimed a
+        // wrong exclusion could only leave dead weight behind. Read the six
+        // lines below and that is plainly false: `dWeight` and `dPdfBsdf`
+        // are zero-initialised HERE, assigned only INSIDE the gate, and
+        // written to `vtx.dBsdfWeight`/`vtx.dPdf` UNCONDITIONALLY further
+        // down. `pc.diffParam` is a push constant, so a parameter wrongly
+        // left off the allow-list takes the gate's false branch on every
+        // vertex of every path in the dispatch: `psSetTangent` is never
+        // called, the tangent stays at its zero seed, and those two vertex
+        // fields are baked in as 0. `diffVertexGgxScatter` (bsdf_adjoint.glsl)
+        // reads BOTH for its BSDF-sampled (s = B) term, while its next-event
+        // (s = E) term keeps computing correctly out of `diffBsdfEvalDeriv`
+        // with the real parameter, ungated. The product is a gradient that is
+        // PARTIALLY right and silently so -- light-sampled term correct,
+        // BSDF-sampled and throughput terms zeroed -- not dead weight and not
+        // a loud failure.
+        //
+        // What the allow-list actually buys is that the set needing a tangent
+        // is small and structural (above), so it can be stated ONCE in a
+        // function a reviewer reads, instead of living as a deny-list every
+        // future author must remember to extend. Both polarities fail
+        // silently; only one puts the decision where it is visible. See
+        // `diffParamNeedsForwardTangent`'s own banner for the same correction.
         vec3 dWeight = vec3(0.0);
         float dPdfBsdf = 0.0;
         if (diffParamNeedsForwardTangent(pc.diffParam)) {
