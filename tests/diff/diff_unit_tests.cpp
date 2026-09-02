@@ -1,5 +1,6 @@
 #include "diff/device_caps.hpp"
 #include "diff/geom/edge_adjacency.hpp"
+#include "diff/geom/boundary_integrand.hpp"
 #include "diff/geom/silhouette_set.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
@@ -8,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <set>
 #include <vector>
@@ -588,6 +590,136 @@ TEST(DiffSilhouetteSet, RejectsMalformedInput) {
     EXPECT_FALSE(sil.build(adj, {0.0f, 1.0f}, weldedCubeIndices(), camera));
     // An index past the end of the position array: caught rather than read.
     EXPECT_FALSE(sil.build(adj, {0.0f, 0.0f, 0.0f}, weldedCubeIndices(), camera));
+}
+
+// ===========================================================================
+// STAGE 3 TASK 3 -- THE BOUNDARY INTEGRAND
+// ===========================================================================
+//
+// THE ORACLE IS A SUPERSAMPLED AREA FINITE DIFFERENCE, which shares nothing
+// with the closed form it checks. It knows only "which side of a line is
+// this point on"; it has no chord, no normal, no barycentric weight and no
+// calculus. Two computations of one quantity with nothing in common but the
+// answer.
+
+namespace {
+
+/// dA/dtheta for theta = moving p0 along d, by central difference on an area
+/// obtained by counting supersamples. `n` is the grid resolution.
+double areaDerivativeBySupersampling(const ohao::diff::PixelEdge& edge, const float d[2],
+                                     double h, std::uint32_t n) {
+    ohao::diff::PixelEdge plus = edge;
+    ohao::diff::PixelEdge minus = edge;
+    for (int k = 0; k < 2; ++k) {
+        plus.p0[k] = static_cast<float>(edge.p0[k] + h * d[k]);
+        minus.p0[k] = static_cast<float>(edge.p0[k] - h * d[k]);
+    }
+    const double aPlus = ohao::diff::areaInsideBySupersampling(plus, n);
+    const double aMinus = ohao::diff::areaInsideBySupersampling(minus, n);
+    return (aPlus - aMinus) / (2.0 * h);
+}
+
+/// An edge that fully crosses the pixel, tilted so the chord length is not 1
+/// and the answer is not a round number by accident.
+ohao::diff::PixelEdge tiltedCrossingEdge() {
+    return {{-0.5f, -0.25f}, {1.5f, 1.1f}};
+}
+
+}  // namespace
+
+TEST(DiffBoundaryIntegrand, ClosedFormMatchesASupersampledAreaDerivative) {
+    const ohao::diff::PixelEdge edge = tiltedCrossingEdge();
+    const float d[2] = {0.0f, 1.0f};  // move p0 in +y
+    constexpr double kLIn = 1.0;
+    constexpr double kLOut = 0.0;
+
+    // With L_in - L_out = 1 the boundary term IS dA/dtheta, so the two sides
+    // are directly comparable without a scale in between.
+    const double closed = ohao::diff::boundaryTermMovingP0(edge, d, kLIn, kLOut);
+    const double oracle = areaDerivativeBySupersampling(edge, d, 1.0 / 64.0, 2048u);
+
+    // The oracle is a COUNT over a 2048^2 grid, so its own resolution is
+    // ~1/2048 per unit area over a step of 2/64 -- about 1.5e-2 relative.
+    // This tolerance is that, not a fitted number.
+    EXPECT_NEAR(closed, oracle, 2e-2 * std::fabs(oracle) + 1e-3)
+        << "closed form " << closed << " against a supersampled area derivative " << oracle;
+    EXPECT_GT(std::fabs(closed), 0.1)
+        << "the term is near zero, so agreeing with the oracle would mean little";
+}
+
+TEST(DiffBoundaryIntegrand, SampledEstimatorConvergesToTheClosedForm) {
+    const ohao::diff::PixelEdge edge = tiltedCrossingEdge();
+    const float d[2] = {0.3f, 0.9f};
+    const double closed = ohao::diff::boundaryTermMovingP0(edge, d, 2.0, 0.5);
+
+    // The midpoint rule on a LINEAR integrand is exact for any sample count,
+    // so this is not a convergence test in the usual sense -- it is the
+    // assertion that the estimator integrates the (1-u) weight rather than
+    // evaluating it at one end. A one-sided or endpoint-weighted estimator
+    // gets a different number at every count; this one is exact at all.
+    for (std::uint32_t samples : {1u, 2u, 8u, 64u}) {
+        const double sampled =
+            ohao::diff::boundaryTermMovingP0Sampled(edge, d, 2.0, 0.5, samples);
+        EXPECT_NEAR(sampled, closed, 1e-12 * std::fabs(closed) + 1e-12)
+            << "at " << samples << " samples";
+    }
+}
+
+TEST(DiffBoundaryIntegrand, IsAntisymmetricUnderSwappingTheSides) {
+    // Swapping which side is "inside" negates the integrand EXACTLY. A
+    // one-sided evaluation -- reading only L_in, say -- would pass a
+    // magnitude check and fail this one.
+    const ohao::diff::PixelEdge edge = tiltedCrossingEdge();
+    const float d[2] = {0.7f, -0.2f};
+    const double ab = ohao::diff::boundaryTermMovingP0(edge, d, 3.0, 1.0);
+    const double ba = ohao::diff::boundaryTermMovingP0(edge, d, 1.0, 3.0);
+    EXPECT_DOUBLE_EQ(ab, -ba);
+    EXPECT_NE(ab, 0.0);
+}
+
+TEST(DiffBoundaryIntegrand, IsLinearInTheJumpAndInTheDisplacement) {
+    // Two structural identities, each cheap and each catching a different
+    // wrong shape: a term that squared the jump, or that normalised the
+    // displacement away.
+    const ohao::diff::PixelEdge edge = tiltedCrossingEdge();
+    const float d[2] = {0.4f, 0.6f};
+    const double base = ohao::diff::boundaryTermMovingP0(edge, d, 1.0, 0.0);
+
+    const double doubledJump = ohao::diff::boundaryTermMovingP0(edge, d, 2.0, 0.0);
+    EXPECT_NEAR(doubledJump, 2.0 * base, 1e-12);
+
+    const float d2[2] = {0.8f, 1.2f};
+    const double doubledStep = ohao::diff::boundaryTermMovingP0(edge, d2, 1.0, 0.0);
+    EXPECT_NEAR(doubledStep, 2.0 * base, 1e-12);
+}
+
+TEST(DiffBoundaryIntegrand, AnEdgeMissingThePixelContributesNothing) {
+    // The boundary term is an integral over the chord, and an edge that does
+    // not cross the pixel has none. Zero, not small.
+    const ohao::diff::PixelEdge miss = {{2.0f, 2.0f}, {3.0f, 2.5f}};
+    const float d[2] = {1.0f, 0.0f};
+    EXPECT_FALSE(ohao::diff::clipEdgeToPixel(miss).crosses);
+    EXPECT_EQ(ohao::diff::boundaryTermMovingP0(miss, d, 5.0, 0.0), 0.0);
+    EXPECT_EQ(ohao::diff::boundaryTermMovingP0Sampled(miss, d, 5.0, 0.0, 16u), 0.0);
+}
+
+TEST(DiffBoundaryIntegrand, MovingAnEndpointAlongTheEdgeChangesNothing) {
+    // A displacement PARALLEL to the edge slides the endpoint along the line
+    // without moving the line, so (d.n) is 0 and the boundary term vanishes.
+    // This is the check that the term reads the NORMAL component and not the
+    // displacement's magnitude -- the most plausible way to get a boundary
+    // term that is right up to a factor and wrong in direction.
+    const ohao::diff::PixelEdge edge = tiltedCrossingEdge();
+    const double dx = static_cast<double>(edge.p1[0]) - edge.p0[0];
+    const double dy = static_cast<double>(edge.p1[1]) - edge.p0[1];
+    const double len = std::sqrt(dx * dx + dy * dy);
+    const float along[2] = {static_cast<float>(dx / len), static_cast<float>(dy / len)};
+    // The tolerance is float32 rounding, not a fitted number: `along` is a
+    // float and the normal is derived from float endpoints, so (d.n) lands at
+    // ~1e-7 rather than exactly 0, and it is then multiplied by the segment
+    // length (~2.3), the weight (~0.5) and the jump (3). An earlier 1e-12
+    // demanded exactness the inputs cannot carry.
+    EXPECT_NEAR(ohao::diff::boundaryTermMovingP0(edge, along, 4.0, 1.0), 0.0, 1e-6);
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
