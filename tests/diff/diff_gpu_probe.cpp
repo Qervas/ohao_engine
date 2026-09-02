@@ -217,6 +217,7 @@
 #include "probe/checks_batch.hpp"
 #include "probe/checks_recovery.hpp"
 #include "probe/checks_recovery_texture.hpp"
+#include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
 #include "probe/checks_gradients.hpp"
@@ -282,6 +283,7 @@ using ohao::diff::probe::checkAdam;
 using ohao::diff::probe::checkMultiViewBatch;
 using ohao::diff::probe::checkRecovery;
 using ohao::diff::probe::checkRecoveryTexture;
+using ohao::diff::probe::checkVertexFiniteDifference;
 using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkLossL2;
 using ohao::diff::probe::checkAlbedoConvergence;
@@ -454,6 +456,11 @@ int main() {
     // 55. Gate 5 for MANY parameters: a texture recovered element by
     // element, closing the loop through the per-element scatter.
     if (!checkRecoveryTexture(ctx)) return 1;
+
+    // 56. STAGE 3: dJ/d(vertex position) measured, and the contrast that says
+    // why a boundary term is needed -- the paths MOVE, unlike every parameter
+    // above.
+    if (!checkVertexFiniteDifference(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

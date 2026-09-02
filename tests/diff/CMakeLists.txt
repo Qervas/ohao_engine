@@ -50,6 +50,7 @@ add_executable(diff_gpu_probe
     probe/checks_batch.cpp
     probe/checks_recovery.cpp
     probe/checks_recovery_texture.cpp
+    probe/checks_vertex_fd.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE
