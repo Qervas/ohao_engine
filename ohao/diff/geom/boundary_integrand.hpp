@@ -74,6 +74,25 @@ struct EdgeChord {
 [[nodiscard]] double boundaryTermMovingP0(const PixelEdge& edge, const float d[2], double lIn,
                                           double lOut);
 
+/// The same, for the OTHER endpoint. A point at fraction u along p0->p1
+/// moves at u*d when p1 moves at d, so the weight is u where p0's is (1-u).
+///
+/// THE PAIR CARRIES A CONSERVATION IDENTITY, and it is the reason both exist
+/// as separate functions rather than one with a flag: (1-u) + u = 1
+/// identically, so moving BOTH endpoints by the same d -- a rigid
+/// translation of the edge, with velocity d everywhere -- must give exactly
+/// the sum of the two. That is checkable without knowing either weight, and
+/// it is the analogue of check 44's bilinear conservation identity: the
+/// scatter distributes the edge's contribution over its two vertices and
+/// must neither create nor destroy any of it.
+[[nodiscard]] double boundaryTermMovingP1(const PixelEdge& edge, const float d[2], double lIn,
+                                          double lOut);
+
+/// The boundary term for translating the WHOLE edge by `d`. The identity
+/// above says this equals movingP0 + movingP1.
+[[nodiscard]] double boundaryTermTranslating(const PixelEdge& edge, const float d[2],
+                                             double lIn, double lOut);
+
 /// The same quantity by SAMPLING the chord -- the form the GPU pass will
 /// take (spec 7.2: each sample evaluates both sides and weights by the
 /// edge's velocity). Converges to `boundaryTermMovingP0` as `samples` grows,

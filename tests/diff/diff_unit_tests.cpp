@@ -895,6 +895,104 @@ TEST(DiffBoundaryImage, EveryVertexMovesTheImage) {
     }
 }
 
+// ===========================================================================
+// STAGE 3 -- THE SCATTER TO TWO VERTICES
+// ===========================================================================
+
+TEST(DiffBoundaryScatter, TheTwoVertexTermsSumToARigidTranslation) {
+    // THE CONSERVATION IDENTITY. (1-u) + u = 1 identically, so a rigid
+    // translation of the edge -- velocity d everywhere -- must equal the sum
+    // of the two endpoints' terms. This is the analogue of check 44's
+    // bilinear conservation: the scatter distributes an edge's contribution
+    // over its two vertices and must neither create nor destroy any of it.
+    //
+    // The rigid term is computed INDEPENDENTLY of the two parts rather than
+    // as their sum; an identity checked against the sum of its own parts is
+    // not a check.
+    // SEVERAL EDGES, AND THE ASYMMETRIC ONES ARE THE POINT. The first entry
+    // here was the only one originally, and it is nearly SYMMETRIC about the
+    // segment's midpoint -- its chord has uA + uB ~= 1, and there the
+    // integral of u and a constant half-share of the chord are the SAME
+    // NUMBER. A demonstration that replaced p1's integrated weight with a
+    // flat half passed every assertion in this file. An identity is only as
+    // strong as the cases it is evaluated on.
+    const ohao::diff::PixelEdge edges[2] = {
+        {{0.1f, 0.1f}, {2.4f, 2.6f}},    // chord in the FIRST part of the segment
+        {{-1.4f, -1.6f}, {0.9f, 0.9f}},  // chord in the LAST part
+    };
+    // The edge {{-0.5,-0.25},{1.5,1.1}} was the ONLY one here originally and
+    // has been REMOVED: its chord is nearly symmetric about the segment
+    // midpoint, and the assertion below measured it splitting evenly to
+    // within a part in 10^4. Such an edge cannot fail this identity for the
+    // right reason, so keeping it would be keeping a case that cannot
+    // discriminate.
+    const float d[2] = {0.35f, 0.8f};
+    constexpr double kIn = 2.5, kOut = 0.75;
+
+    for (const auto& edge : edges) {
+        const double p0 = ohao::diff::boundaryTermMovingP0(edge, d, kIn, kOut);
+        const double p1 = ohao::diff::boundaryTermMovingP1(edge, d, kIn, kOut);
+        const double rigid = ohao::diff::boundaryTermTranslating(edge, d, kIn, kOut);
+
+        EXPECT_NEAR(p0 + p1, rigid, 1e-12 * std::fabs(rigid) + 1e-15)
+            << "p0 " << p0 << " + p1 " << p1 << " against rigid " << rigid;
+        // NON-VACUITY: both halves must carry something, or the identity
+        // holds because one of them is zero and the scatter really goes to
+        // one vertex.
+        EXPECT_GT(std::fabs(p0), 1e-4);
+        EXPECT_GT(std::fabs(p1), 1e-4);
+        // AND THEY MUST DIFFER. Where the two shares are equal the identity
+        // cannot tell an integrated weight from a flat half, which is exactly
+        // how the weaker version of this test passed a corrupted one.
+        EXPECT_GT(std::fabs(std::fabs(p0) - std::fabs(p1)), 1e-4 * std::fabs(rigid))
+            << "this edge splits evenly, so it cannot distinguish an integrated weight "
+               "from a constant half-share";
+    }
+}
+
+TEST(DiffBoundaryScatter, TheSplitFollowsWhereTheChordLies) {
+    // The weights are not half and half -- they are integrals of (1-u) and u
+    // over the CHORD, so a chord lying near p0 gives p0 the larger share.
+    // Asserting that ordering is what distinguishes an integrated weight from
+    // a constant 1/2 each, which would also satisfy the conservation identity
+    // above.
+    //
+    // This edge enters the pixel almost immediately and leaves near its
+    // midpoint, so the chord sits in the FIRST half of the segment and p0
+    // must dominate.
+    const ohao::diff::PixelEdge nearP0 = {{0.1f, 0.1f}, {2.4f, 2.6f}};
+    const float d[2] = {1.0f, 0.0f};
+    const double a0 = ohao::diff::boundaryTermMovingP0(nearP0, d, 1.0, 0.0);
+    const double a1 = ohao::diff::boundaryTermMovingP1(nearP0, d, 1.0, 0.0);
+    EXPECT_GT(std::fabs(a0), std::fabs(a1))
+        << "the chord lies near p0, so p0 must take the larger share; got "
+        << a0 << " and " << a1;
+
+    // And the mirror image: an edge whose chord sits in the LAST part of the
+    // segment gives p1 the larger share. Both directions, because a weight
+    // stuck at one endpoint would pass one of them.
+    const ohao::diff::PixelEdge nearP1 = {{-1.4f, -1.6f}, {0.9f, 0.9f}};
+    const double b0 = ohao::diff::boundaryTermMovingP0(nearP1, d, 1.0, 0.0);
+    const double b1 = ohao::diff::boundaryTermMovingP1(nearP1, d, 1.0, 0.0);
+    EXPECT_GT(std::fabs(b1), std::fabs(b0))
+        << "the chord lies near p1, so p1 must take the larger share; got "
+        << b0 << " and " << b1;
+}
+
+TEST(DiffBoundaryScatter, ARigidTranslationAlongTheEdgeMovesNothing) {
+    // Sliding the whole edge along its own direction does not move the LINE,
+    // so the rigid term vanishes -- and so must both halves, since each is a
+    // positive weight times the same (d.n).
+    const ohao::diff::PixelEdge edge = {{-0.5f, -0.25f}, {1.5f, 1.1f}};
+    const double dx = static_cast<double>(edge.p1[0]) - edge.p0[0];
+    const double dy = static_cast<double>(edge.p1[1]) - edge.p0[1];
+    const double len = std::sqrt(dx * dx + dy * dy);
+    const float along[2] = {static_cast<float>(dx / len), static_cast<float>(dy / len)};
+    EXPECT_NEAR(ohao::diff::boundaryTermTranslating(edge, along, 3.0, 1.0), 0.0, 1e-6);
+    EXPECT_NEAR(ohao::diff::boundaryTermMovingP0(edge, along, 3.0, 1.0), 0.0, 1e-6);
+    EXPECT_NEAR(ohao::diff::boundaryTermMovingP1(edge, along, 3.0, 1.0), 0.0, 1e-6);
+}
+
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
     auto rng = ohao::diff::PathRng::forPath(777, 5, 42);
     for (int i = 0; i < 4096; ++i) {

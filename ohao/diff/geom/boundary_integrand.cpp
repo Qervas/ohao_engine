@@ -100,6 +100,34 @@ double boundaryTermMovingP0(const PixelEdge& edge, const float d[2], double lIn,
     return (lIn - lOut) * dArea;
 }
 
+double boundaryTermMovingP1(const PixelEdge& edge, const float d[2], double lIn,
+                            double lOut) {
+    const Line l = lineOf(edge);
+    if (l.len <= 0.0) return 0.0;
+    const EdgeChord chord = clipEdgeToPixel(edge);
+    if (!chord.crosses) return 0.0;
+    const double dDotN = static_cast<double>(d[0]) * l.nx + static_cast<double>(d[1]) * l.ny;
+    // INTEGRAL of u over the chord, in arc length. p0's is the same integral
+    // of (1-u); the two sum to (uB - uA), which is the rigid case.
+    const double weight = 0.5 * (chord.uB * chord.uB - chord.uA * chord.uA);
+    return (lIn - lOut) * dDotN * l.len * weight;
+}
+
+double boundaryTermTranslating(const PixelEdge& edge, const float d[2], double lIn,
+                               double lOut) {
+    const Line l = lineOf(edge);
+    if (l.len <= 0.0) return 0.0;
+    const EdgeChord chord = clipEdgeToPixel(edge);
+    if (!chord.crosses) return 0.0;
+    const double dDotN = static_cast<double>(d[0]) * l.nx + static_cast<double>(d[1]) * l.ny;
+    // Velocity d everywhere, so the weight is the chord's own length in the
+    // segment's parameter. Written INDEPENDENTLY of the two above rather
+    // than as their sum -- a conservation identity checked against the sum of
+    // its own parts is not a check.
+    const double weight = chord.uB - chord.uA;
+    return (lIn - lOut) * dDotN * l.len * weight;
+}
+
 double boundaryTermMovingP0Sampled(const PixelEdge& edge, const float d[2], double lIn,
                                    double lOut, std::uint32_t samples) {
     if (samples == 0u) return 0.0;
