@@ -1,5 +1,6 @@
 #include "diff/device_caps.hpp"
 #include "diff/geom/edge_adjacency.hpp"
+#include "diff/geom/silhouette_set.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
 #include "diff/rng/diff_rng.hpp"
@@ -358,6 +359,19 @@ std::vector<std::uint32_t> weldedCubeIndices() {
     };
 }
 
+/// Positions for weldedCubeIndices(): corner c at (+/-1)^3 with bit0 = x,
+/// bit1 = y, bit2 = z -- the same bit convention the index list is written
+/// against, so the two cannot drift.
+std::vector<float> weldedCubePositions() {
+    std::vector<float> p;
+    for (std::uint32_t c = 0; c < 8u; ++c) {
+        p.push_back((c & 1u) ? 1.0f : -1.0f);
+        p.push_back((c & 2u) ? 1.0f : -1.0f);
+        p.push_back((c & 4u) ? 1.0f : -1.0f);
+    }
+    return p;
+}
+
 }  // namespace
 
 TEST(DiffEdgeAdjacency, WeldedCubeIsClosedAndSatisfiesEuler) {
@@ -439,6 +453,141 @@ TEST(DiffEdgeAdjacency, RejectsNonManifoldAndMalformedInput) {
     const std::vector<std::uint32_t> fin = {0, 1, 2, 0, 1, 3, 0, 1, 4};
     EXPECT_FALSE(adj.build(fin));
     EXPECT_EQ(adj.edgeCount(), 0u) << "a refused build must leave nothing behind";
+}
+
+// ===========================================================================
+// STAGE 3 TASK 2 -- THE SILHOUETTE SET
+// ===========================================================================
+
+TEST(DiffSilhouetteSet, CornerViewGivesAHexagonalLoop) {
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(weldedCubeIndices())) << adj.error();
+    const std::vector<float> pos = weldedCubePositions();
+
+    // Looking down the (1,1,1) diagonal: three faces front-facing, three
+    // back. The boundary between two connected sets of three cube faces is a
+    // HEXAGON -- six edges. That count is a fact about the cube and the
+    // direction, derived here and not read off the implementation.
+    const float camera[3] = {3.0f, 3.0f, 3.0f};
+    ohao::diff::SilhouetteSet sil;
+    ASSERT_TRUE(sil.build(adj, pos, weldedCubeIndices(), camera)) << sil.error();
+    EXPECT_EQ(sil.size(), 6u);
+
+    const char* why = "";
+    EXPECT_TRUE(sil.isSingleClosedLoop(adj, &why)) << why;
+}
+
+TEST(DiffSilhouetteSet, FaceOnViewGivesAFourEdgeLoop) {
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(weldedCubeIndices())) << adj.error();
+    const std::vector<float> pos = weldedCubePositions();
+
+    // Nearly face-on to +x, but NOT exactly: an exactly face-on camera puts
+    // the four side faces edge-on, where dot(n, c - p) is 0 and "front
+    // facing" is a coin toss between two equally defensible answers. The
+    // offset is what keeps this test about the silhouette rather than about
+    // a tie-break. One face front-facing, five back, so the silhouette is
+    // that face's four edges.
+    const float camera[3] = {5.0f, 0.1f, 0.1f};
+    ohao::diff::SilhouetteSet sil;
+    ASSERT_TRUE(sil.build(adj, pos, weldedCubeIndices(), camera)) << sil.error();
+    EXPECT_EQ(sil.size(), 4u);
+
+    const char* why = "";
+    EXPECT_TRUE(sil.isSingleClosedLoop(adj, &why)) << why;
+}
+
+TEST(DiffSilhouetteSet, IsViewDependent) {
+    // NON-VACUITY, and Stage 2's check 53 is why it is here: two "different"
+    // views that produce the same answer make every invariant above hold for
+    // a reason that has nothing to do with the view being read. Here the two
+    // sets differ in SIZE, which is the strongest form of differing.
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(weldedCubeIndices()));
+    const std::vector<float> pos = weldedCubePositions();
+
+    const float cornerView[3] = {3.0f, 3.0f, 3.0f};
+    const float faceView[3] = {5.0f, 0.1f, 0.1f};
+    ohao::diff::SilhouetteSet a;
+    ohao::diff::SilhouetteSet b;
+    ASSERT_TRUE(a.build(adj, pos, weldedCubeIndices(), cornerView));
+    ASSERT_TRUE(b.build(adj, pos, weldedCubeIndices(), faceView));
+
+    EXPECT_NE(a.size(), b.size())
+        << "two cameras gave silhouettes of the same size; the pass may not be reading the view";
+    EXPECT_NE(a.markedEdges(), b.markedEdges());
+}
+
+TEST(DiffSilhouetteSet, OpenMeshMarksEveryBoundaryEdgeRegardlessOfView) {
+    // THE CONSEQUENCE TASK 1 MEASURED, asserted so it cannot be forgotten.
+    // Spec 7.1 counts open boundary edges as silhouette unconditionally, so
+    // on the probe's split-corner box -- six disconnected quads, 24 of its 30
+    // edges open -- the silhouette contains all 24 for EVERY camera. That is
+    // correct behaviour and it is also why that box cannot be the scene this
+    // pass is tested on: its view-dependence test would compare two sets
+    // that differ only in the six interior diagonals.
+    ohao::diff::EdgeAdjacency adj;
+    const std::vector<std::uint32_t> idx = splitCornerBoxIndices();
+    ASSERT_TRUE(adj.build(idx));
+    ASSERT_EQ(adj.boundaryEdgeCount(), 24u);
+
+    std::vector<float> pos;
+    for (std::uint32_t face = 0; face < 6u; ++face) {
+        for (std::uint32_t corner = 0; corner < 4u; ++corner) {
+            pos.push_back(static_cast<float>(face) - 2.5f);
+            pos.push_back(static_cast<float>(corner) - 1.5f);
+            pos.push_back(static_cast<float>((face + corner) % 3u) - 1.0f);
+        }
+    }
+
+    const float viewA[3] = {10.0f, 0.0f, 0.0f};
+    const float viewB[3] = {0.0f, 10.0f, 0.0f};
+    ohao::diff::SilhouetteSet a;
+    ohao::diff::SilhouetteSet b;
+    ASSERT_TRUE(a.build(adj, pos, idx, viewA));
+    ASSERT_TRUE(b.build(adj, pos, idx, viewB));
+    EXPECT_GE(a.size(), 24u);
+    EXPECT_GE(b.size(), 24u);
+}
+
+TEST(DiffSilhouetteSet, DisjointLoopsFailTheSingleLoopTest) {
+    // The degree test alone is NOT sufficient: two disjoint cycles have
+    // every vertex at degree 2. This is what the connectedness walk is for,
+    // and asserting it here is what stops that walk being deleted as
+    // redundant.
+    //
+    // Two separate tetrahedra give an adjacency whose "silhouette" from a
+    // camera between them is two disjoint loops.
+    const std::vector<std::uint32_t> twoTets = {
+        0, 1, 2, 0, 2, 3, 0, 3, 1, 1, 3, 2,
+        4, 5, 6, 4, 6, 7, 4, 7, 5, 5, 7, 6,
+    };
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(twoTets)) << adj.error();
+
+    const std::vector<float> pos = {
+        0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f,
+        8.0f, 0.0f, 0.0f, 9.0f, 0.0f, 0.0f, 8.0f, 1.0f, 0.0f, 8.0f, 0.0f, 1.0f,
+    };
+    const float camera[3] = {4.0f, 6.0f, 6.0f};
+    ohao::diff::SilhouetteSet sil;
+    ASSERT_TRUE(sil.build(adj, pos, twoTets, camera)) << sil.error();
+
+    const char* why = "";
+    EXPECT_FALSE(sil.isSingleClosedLoop(adj, &why));
+    EXPECT_STREQ(why, "the marked set splits into more than one loop");
+}
+
+TEST(DiffSilhouetteSet, RejectsMalformedInput) {
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(weldedCubeIndices()));
+    const float camera[3] = {3.0f, 3.0f, 3.0f};
+
+    ohao::diff::SilhouetteSet sil;
+    EXPECT_FALSE(sil.build(adj, {}, weldedCubeIndices(), camera));
+    EXPECT_FALSE(sil.build(adj, {0.0f, 1.0f}, weldedCubeIndices(), camera));
+    // An index past the end of the position array: caught rather than read.
+    EXPECT_FALSE(sil.build(adj, {0.0f, 0.0f, 0.0f}, weldedCubeIndices(), camera));
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
