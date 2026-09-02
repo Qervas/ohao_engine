@@ -68,6 +68,24 @@ RegisterResult ParamRegistry::registerScalarBlock(std::string name, std::uint32_
     return addParam(std::move(name), ParamKind::ScalarBlock, ParamShape{}, floatCount);
 }
 
+RegisterResult ParamRegistry::registerVertexPositions(std::string name,
+                                                      std::uint32_t vertexCount,
+                                                      std::uint32_t componentsPerVertex) {
+    if (vertexCount == 0u || componentsPerVertex == 0u) {
+        return {false, ParamId{},
+                "a vertex-position block needs a nonzero vertex and component count"};
+    }
+    if (componentsPerVertex > 3u) {
+        return {false, ParamId{}, "a vertex has at most 3 position components"};
+    }
+    // The SHAPE carries (vertexCount, 1, componentsPerVertex) so the block's
+    // structure survives registration: a consumer can recover how many
+    // vertices there are, which `floatCount` alone cannot say.
+    return addParam(std::move(name), ParamKind::VertexPositions,
+                    ParamShape{vertexCount, 1u, componentsPerVertex},
+                    vertexCount * componentsPerVertex);
+}
+
 const DiffParam* ParamRegistry::find(std::string_view name) const {
     for (const auto& p : m_params) {
         if (p.name == name) return &p;

@@ -48,8 +48,15 @@ layout(std430, binding = 1) readonly buffer EdgeList {
     uint v[];
 } edges;
 
-// 2 floats per vertex: dJ/dvx and dJ/dvy. atomicAdd, because many (edge,
-// pixel) pairs land on the same vertex.
+// dJ/dvx and dJ/dvy per vertex, at `gradOffset + vertex * 2 + component`.
+// atomicAdd, because many (edge, pixel) pairs land on the same vertex.
+//
+// THIS IS THE GRADIENT ARENA, not a buffer of this pass's own. Spec 4.1:
+// "two separate kernels, two separate test suites, TWO GRADIENT
+// CONTRIBUTIONS SUMMED INTO THE SAME ARENA". The interior term writes an
+// appearance parameter's block, this writes a VertexPositions block, and
+// `gradOffset` is what keeps them disjoint -- the same float index the
+// interior kernel is given for its own parameter.
 layout(std430, binding = 2) buffer VertexGradients {
     float v[];
 } grad;
@@ -101,6 +108,10 @@ layout(push_constant) uniform Push {
     uint useFlags;
     // 0: w = 1 everywhere. 1: read binding 4.
     uint useSeed;
+    // FLOAT index of this parameter's block within the arena, not a byte
+    // offset -- the same convention gradAlbedoOffset uses on the interior
+    // side. 0 when the caller bound a standalone buffer.
+    uint gradOffset;
 } pc;
 
 /// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.
@@ -177,8 +188,10 @@ void main() {
     const float k0 = jump * len * w0;
     const float k1 = jump * len * w1;
 
-    atomicAdd(grad.v[i0 * 2u + 0u], k0 * n.x);
-    atomicAdd(grad.v[i0 * 2u + 1u], k0 * n.y);
-    atomicAdd(grad.v[i1 * 2u + 0u], k1 * n.x);
-    atomicAdd(grad.v[i1 * 2u + 1u], k1 * n.y);
+    const uint base0 = pc.gradOffset + i0 * 2u;
+    const uint base1 = pc.gradOffset + i1 * 2u;
+    atomicAdd(grad.v[base0 + 0u], k0 * n.x);
+    atomicAdd(grad.v[base0 + 1u], k0 * n.y);
+    atomicAdd(grad.v[base1 + 0u], k1 * n.x);
+    atomicAdd(grad.v[base1 + 1u], k1 * n.y);
 }

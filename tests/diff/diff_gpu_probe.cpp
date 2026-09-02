@@ -220,6 +220,7 @@
 #include "probe/checks_boundary_gpu.hpp"
 #include "probe/checks_boundary_silhouette.hpp"
 #include "probe/checks_geometry_recovery.hpp"
+#include "probe/checks_shared_arena.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -290,6 +291,7 @@ using ohao::diff::probe::checkRecoveryTexture;
 using ohao::diff::probe::checkBoundaryGpu;
 using ohao::diff::probe::checkBoundaryOverSilhouette;
 using ohao::diff::probe::checkGeometryRecovery;
+using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
 using ohao::diff::probe::checkAdjointSeed;
@@ -483,6 +485,9 @@ int main() {
     // 60. GATE 5 FOR GEOMETRY: a triangle recovered by descending the
     // boundary term, in a scene where the interior term is exactly zero.
     if (!checkGeometryRecovery(ctx)) return 1;
+    // 61. Spec 4.1's "summed into the same arena", made true: an appearance
+    // block and a geometry block in one arena, disjoint and exactly so.
+    if (!checkSharedArena(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

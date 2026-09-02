@@ -8,6 +8,7 @@
 // inside the interior one.
 #include "gpu_probe_context.hpp"
 
+#include "diff/grad/gradient_arena.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
 
 #include <cstdio>
@@ -21,6 +22,8 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
                                        float lIn, float lOut,
                                        const std::vector<std::uint32_t>& silhouetteFlags,
                                        const std::vector<float>& adjointSeed,
+                                       ohao::diff::GradientArena* arena,
+                                       std::size_t arenaBlock, std::uint32_t arenaFloatOffset,
                                        std::vector<float>& outVertexGradients) {
     outVertexGradients.clear();
     if (screenPositions.empty() || screenPositions.size() % 2u != 0u) {
@@ -86,6 +89,17 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         useSeed ? std::span<const float>(adjointSeed) : std::span<const float>(seedOnes),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
+    // THE ARENA, WHEN THE CALLER HAS ONE. Without it this pass allocates a
+    // buffer of its own, which is what the checks written before the arena
+    // existed use. With it, the gradient lands in a registered parameter's
+    // block beside the interior term's -- spec 4.1's "summed into the same
+    // arena".
+    const bool intoArena = arena != nullptr;
+    if (intoArena && arena->buffer() == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: an arena was supplied but is "
+                              "not built\n");
+        return false;
+    }
     const std::vector<float> zeroGrad(screenPositions.size(), 0.0f);
     GpuBuffer posBuffer = m_allocator.createBufferFromSpan<float>(
         std::span<const float>(screenPositions), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -107,8 +121,10 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         float lOut;
         std::uint32_t useFlags;
         std::uint32_t useSeed;
-    } push{edgeCount, imageWidth,      imageHeight,          vertexCount,
-           lIn,       lOut,            useFlags ? 1u : 0u,   useSeed ? 1u : 0u};
+        std::uint32_t gradOffset;
+    } push{edgeCount, imageWidth,          imageHeight,       vertexCount,
+           lIn,       lOut,                useFlags ? 1u : 0u, useSeed ? 1u : 0u,
+           intoArena ? arenaFloatOffset : 0u};
 
     WavefrontStage stage;
     if (ok) {
@@ -121,7 +137,8 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: build failed\n");
     }
     if (ok) {
-        const VkBuffer buffers[5] = {posBuffer.buffer, edgeBuffer.buffer, gradBuffer.buffer,
+        const VkBuffer buffers[5] = {posBuffer.buffer, edgeBuffer.buffer,
+                                     intoArena ? arena->buffer() : gradBuffer.buffer,
                                      flagBuffer.buffer, seedBuffer.buffer};
         ok = stage.bindBuffers(m_device, buffers);
         if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: bindBuffers failed\n");
@@ -139,6 +156,22 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         stage.setGroupCount(
             WavefrontStage::Fixed{static_cast<std::uint32_t>((total + 63u) / 64u)});
         runImmediate([&](VkCommandBuffer cmd) {
+            // ZERO THE ARENA FIRST, in the same command buffer.
+            //
+            // GradientArena::build does NOT zero, and this pass scatters with
+            // atomicAdd -- so without this it accumulates onto whatever the
+            // allocator last left in that memory. It was not zeros: the first
+            // run of check 61 read 1.69988 out of float 0, which is the
+            // triangle's own 1.7 coordinate recycled from a destroyed
+            // position buffer. That is the worst possible shape for such a
+            // bug, because a stale POSITION is numerically plausible as a
+            // gradient.
+            //
+            // The interior path has always done this (probes_gradient.cpp),
+            // and zero() records its own TRANSFER_WRITE -> SHADER_READ|WRITE
+            // barrier, which is exactly what makes the dispatch below safe to
+            // follow it.
+            if (intoArena) arena->zero(cmd);
             stage.record(cmd);
             VkBufferMemoryBarrier barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
@@ -146,20 +179,34 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
             barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
             barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.buffer = gradBuffer.buffer;
+            barrier.buffer = intoArena ? arena->buffer() : gradBuffer.buffer;
             barrier.offset = 0;
             barrier.size = VK_WHOLE_SIZE;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                  VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &barrier, 0,
                                  nullptr);
         });
-        const auto* mapped = static_cast<const float*>(gradBuffer.getMappedData());
-        if (mapped == nullptr) {
-            std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: the gradient buffer is not "
-                                  "host mapped\n");
-            ok = false;
+        if (intoArena) {
+            // Read the parameter's own block back, not the whole arena: the
+            // caller asked for this parameter's gradient, and the arena's
+            // other blocks are another parameter's business.
+            outVertexGradients = arena->readback(m_allocator, arenaBlock);
+            if (outVertexGradients.size() != screenPositions.size()) {
+                std::fprintf(stderr,
+                             "[GpuProbeContext] runBoundaryProbe: the arena block read back %zu "
+                             "floats for %zu vertex components\n",
+                             outVertexGradients.size(), screenPositions.size());
+                ok = false;
+            }
         } else {
-            outVertexGradients.assign(mapped, mapped + screenPositions.size());
+            const auto* mapped = static_cast<const float*>(gradBuffer.getMappedData());
+            if (mapped == nullptr) {
+                std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: the gradient buffer is "
+                                      "not host mapped\n");
+                ok = false;
+            } else {
+                outVertexGradients.assign(mapped, mapped + screenPositions.size());
+            }
         }
     }
 

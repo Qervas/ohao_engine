@@ -108,6 +108,20 @@ public:
 
     RegisterResult registerScalarBlock(std::string name, std::uint32_t floatCount);
 
+    /// STAGE 3: a block of vertex positions, `componentsPerVertex` floats each
+    /// (2 for the orthographic screen-space form, 3 in world).
+    ///
+    /// A DISTINCT KIND rather than a ScalarBlock of the same length, and the
+    /// distinction is not cosmetic: spec 4.1 splits the derivative into an
+    /// interior integral and a boundary one, and this is the only kind for
+    /// which the SECOND is nonzero. Appearance parameters have no boundary
+    /// term at all -- mathematically absent, not merely small -- so which
+    /// kernels may write a block is a property of its kind. Registering
+    /// geometry as a ScalarBlock would erase exactly the fact the split rests
+    /// on.
+    RegisterResult registerVertexPositions(std::string name, std::uint32_t vertexCount,
+                                           std::uint32_t componentsPerVertex);
+
     [[nodiscard]] std::size_t count() const noexcept { return m_params.size(); }
     [[nodiscard]] const DiffParam* find(std::string_view name) const;
     [[nodiscard]] const DiffParam* get(ParamId id) const;

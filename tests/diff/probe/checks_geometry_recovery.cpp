@@ -100,7 +100,7 @@ bool checkGeometryRecovery(ohao::diff::GpuProbeContext& ctx) {
         // filter applies -- every edge is a silhouette edge here.
         std::vector<float> grad;
         if (!ctx.runBoundaryProbe(theta, edges, kImage, kImage, static_cast<float>(kLTri),
-                                  static_cast<float>(kLEnv), {}, seed, grad)) {
+                                  static_cast<float>(kLEnv), {}, seed, nullptr, 0u, 0u, grad)) {
             std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 60 boundary dispatch at iter %u\n",
                          it);
             return false;

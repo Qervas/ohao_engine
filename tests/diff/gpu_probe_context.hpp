@@ -1034,6 +1034,8 @@ public:
                                         float lIn, float lOut,
                                         const std::vector<std::uint32_t>& silhouetteFlags,
                                         const std::vector<float>& adjointSeed,
+                                        ohao::diff::GradientArena* arena, std::size_t arenaBlock,
+                                        std::uint32_t arenaFloatOffset,
                                         std::vector<float>& outVertexGradients);
 
     /// One Adam step over a caller-owned parameter block. `state` is m then
