@@ -2,6 +2,7 @@
 #include "diff/geom/edge_adjacency.hpp"
 #include "diff/geom/boundary_integrand.hpp"
 #include "diff/geom/silhouette_set.hpp"
+#include "diff/geom/vertex_parameterisation.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
 #include "diff/rng/diff_rng.hpp"
@@ -991,6 +992,124 @@ TEST(DiffBoundaryScatter, ARigidTranslationAlongTheEdgeMovesNothing) {
     EXPECT_NEAR(ohao::diff::boundaryTermTranslating(edge, along, 3.0, 1.0), 0.0, 1e-6);
     EXPECT_NEAR(ohao::diff::boundaryTermMovingP0(edge, along, 3.0, 1.0), 0.0, 1e-6);
     EXPECT_NEAR(ohao::diff::boundaryTermMovingP1(edge, along, 3.0, 1.0), 0.0, 1e-6);
+}
+
+// ===========================================================================
+// STAGE 3 -- THE PARAMETERISATION, AND ITS PULLBACK
+// ===========================================================================
+//
+// THE ORACLE IS A FINITE DIFFERENCE ON THE JACOBIAN, not a second copy of the
+// chain rule. `pullback` claims to compute J^T g; the test builds J COLUMN BY
+// COLUMN by differencing `apply` -- which knows nothing about derivatives --
+// and multiplies. Two computations of one quantity with only `apply` in
+// common, and `apply` is the thing whose derivative is at issue.
+
+namespace {
+
+std::vector<float> paramBase() {
+    return {1.7f, 1.3f, 2.1f, 6.4f, 6.8f, 3.9f};
+}
+
+}  // namespace
+
+TEST(DiffVertexParameterisation, PullbackIsTheJacobianTransposeTimesTheGradient) {
+    ohao::diff::AffineVertexParameterisation param;
+    ASSERT_TRUE(param.setBase(paramBase()));
+
+    const std::vector<float> theta = {0.4f, -0.7f, 0.25f};
+    // An arbitrary, NON-UNIFORM position gradient. Uniform would make the
+    // translation columns indistinguishable from each other.
+    const std::vector<float> g = {0.9f, -0.3f, 0.2f, 1.4f, -0.6f, 0.5f};
+
+    const std::vector<float> got = param.pullback(theta, g);
+    ASSERT_EQ(got.size(), ohao::diff::AffineVertexParameterisation::kParamCount);
+
+    // J^T g, with J built by differencing `apply`.
+    constexpr double kStep = 1.0 / 512.0;
+    for (std::size_t k = 0; k < got.size(); ++k) {
+        std::vector<float> plus = theta;
+        std::vector<float> minus = theta;
+        plus[k] = static_cast<float>(theta[k] + kStep);
+        minus[k] = static_cast<float>(theta[k] - kStep);
+        const std::vector<float> pPlus = param.apply(plus);
+        const std::vector<float> pMinus = param.apply(minus);
+        ASSERT_EQ(pPlus.size(), g.size());
+
+        double want = 0.0;
+        for (std::size_t i = 0; i < g.size(); ++i) {
+            const double dPos = (static_cast<double>(pPlus[i]) - static_cast<double>(pMinus[i])) /
+                                (2.0 * kStep);
+            want += dPos * static_cast<double>(g[i]);
+        }
+        EXPECT_NEAR(static_cast<double>(got[k]), want, 1e-3 * std::fabs(want) + 1e-4)
+            << "parameter " << k;
+        EXPECT_GT(std::fabs(want), 1e-3) << "column " << k << " of the Jacobian is empty";
+    }
+}
+
+TEST(DiffVertexParameterisation, TheJacobianIsNotTheIdentity) {
+    // The POINT of the indirection. An identity Jacobian would make the
+    // pullback a copy and the test above vacuous, so this asserts the two
+    // properties that make it a real reparameterisation: three parameters
+    // move six components, and the scale column depends on the base shape
+    // where the translation columns do not.
+    ohao::diff::AffineVertexParameterisation param;
+    ASSERT_TRUE(param.setBase(paramBase()));
+    EXPECT_EQ(param.vertexCount(), 3u);
+    EXPECT_LT(ohao::diff::AffineVertexParameterisation::kParamCount, paramBase().size());
+
+    const std::vector<float> theta = {0.0f, 0.0f, 0.0f};
+    // A gradient pointing purely +x at every vertex. The translation picks up
+    // the plain sum; the scale picks up a sum WEIGHTED by the base x, which
+    // is a different number -- and would be the same if the scale column were
+    // the translation's.
+    const std::vector<float> g = {1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f};
+    const std::vector<float> got = param.pullback(theta, g);
+    EXPECT_NEAR(got[0], 3.0, 1e-5) << "dL/dtx is the plain sum of three unit x-gradients";
+    EXPECT_NEAR(got[1], 0.0, 1e-5);
+    // exp(0) * (1.7 + 2.1 + 6.8) = 10.6
+    EXPECT_NEAR(got[2], 10.6, 1e-4) << "dL/ds weights each vertex by its base x";
+    EXPECT_GT(std::fabs(got[2] - got[0]), 1.0)
+        << "the scale and translation columns coincide, so this is not a reparameterisation";
+}
+
+TEST(DiffVertexParameterisation, LogScaleCannotReflectTheShape) {
+    // Why log-scale and not scale. exp is strictly positive, so no value of
+    // the parameter -- however large a step lands on it -- turns the shape
+    // inside out. A raw scale parameter crossing zero would, and a reflected
+    // triangle has its winding reversed, which flips the sign of every
+    // boundary term computed from it.
+    ohao::diff::AffineVertexParameterisation param;
+    ASSERT_TRUE(param.setBase(paramBase()));
+    // THE PROPERTY IS INVARIANCE, NOT SIGN. An earlier version of this test
+    // asserted the signed area was POSITIVE, which is a claim about the base
+    // triangle's winding -- it happens to be clockwise, so the area is
+    // negative at every scale -- and not about the parameterisation at all.
+    // What matters is that no value of the parameter CHANGES the sign.
+    double reference = 0.0;
+    for (float s : {-5.0f, -1.0f, 0.0f, 2.0f, 5.0f}) {
+        const std::vector<float> p = param.apply({0.0f, 0.0f, s});
+        ASSERT_EQ(p.size(), 6u);
+        const double area = (p[2] - p[0]) * (p[5] - p[1]) - (p[4] - p[0]) * (p[3] - p[1]);
+        EXPECT_NE(area, 0.0) << "the shape degenerated at log-scale " << s;
+        if (reference == 0.0) {
+            reference = area;
+        } else {
+            EXPECT_GT(area * reference, 0.0)
+                << "the signed area changed sign at log-scale " << s
+                << ", so the shape was reflected -- which reverses the winding and flips the "
+                   "sign of every boundary term computed from it";
+        }
+    }
+}
+
+TEST(DiffVertexParameterisation, RejectsMalformedInput) {
+    ohao::diff::AffineVertexParameterisation param;
+    EXPECT_FALSE(param.setBase({}));
+    EXPECT_FALSE(param.setBase({1.0f, 2.0f, 3.0f}));
+    ASSERT_TRUE(param.setBase(paramBase()));
+    EXPECT_TRUE(param.apply({0.0f, 0.0f}).empty()) << "wrong parameter count";
+    EXPECT_TRUE(param.pullback({0.0f, 0.0f, 0.0f}, {1.0f}).empty()) << "wrong gradient length";
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
