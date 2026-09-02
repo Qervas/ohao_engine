@@ -222,6 +222,7 @@
 #include "probe/checks_geometry_recovery.hpp"
 #include "probe/checks_shared_arena.hpp"
 #include "probe/checks_param_recovery.hpp"
+#include "probe/checks_projection_recovery.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -293,6 +294,7 @@ using ohao::diff::probe::checkBoundaryGpu;
 using ohao::diff::probe::checkBoundaryOverSilhouette;
 using ohao::diff::probe::checkGeometryRecovery;
 using ohao::diff::probe::checkParameterisedRecovery;
+using ohao::diff::probe::checkProjectionRecovery;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -495,6 +497,11 @@ int main() {
     // parameters recovered through the pullback, with a sign-flipped control
     // that must not.
     if (!checkParameterisedRecovery(ctx)) return 1;
+
+    // 63. The "orthographic only" deviation closed: a WORLD-space
+    // translation recovered through the projection Jacobian, depth
+    // included, with an orthographic control that cannot move it.
+    if (!checkProjectionRecovery(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

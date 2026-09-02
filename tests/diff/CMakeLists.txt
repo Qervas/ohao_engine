@@ -60,6 +60,7 @@ add_executable(diff_gpu_probe
     probe/checks_shared_arena.cpp
     probe/coverage_render.cpp
     probe/checks_param_recovery.cpp
+    probe/checks_projection_recovery.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE
