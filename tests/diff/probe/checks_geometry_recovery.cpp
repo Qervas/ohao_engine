@@ -1,6 +1,8 @@
 // Stage 3 Task 5, check 60: GATE 5 FOR GEOMETRY.
 #include "probe/checks_geometry_recovery.hpp"
 
+#include "probe/coverage_render.hpp"
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -11,46 +13,13 @@ namespace ohao::diff::probe {
 
 namespace {
 
+// The forward model lives in probe/coverage_render.hpp, shared with check 62
+// -- one supersampled coverage render, so the two geometry gates descend the
+// same thing and the only difference between them is what they optimise.
 constexpr std::uint32_t kImage = 8u;
 constexpr std::uint32_t kSub = 64u;
 constexpr double kLTri = 3.0;
 constexpr double kLEnv = 0.5;
-
-bool insideTriangle(const std::vector<float>& v, double px, double py) {
-    auto cross = [](double ax, double ay, double bx, double by) { return ax * by - ay * bx; };
-    const double s0 = cross(v[2] - v[0], v[3] - v[1], px - v[0], py - v[1]);
-    const double s1 = cross(v[4] - v[2], v[5] - v[3], px - v[2], py - v[3]);
-    const double s2 = cross(v[0] - v[4], v[1] - v[5], px - v[4], py - v[5]);
-    return (s0 >= 0.0 && s1 >= 0.0 && s2 >= 0.0) || (s0 <= 0.0 && s1 <= 0.0 && s2 <= 0.0);
-}
-
-/// The forward render: a coverage image, one float per pixel.
-///
-/// SUPERSAMPLED ON THE HOST rather than traced. That is the whole reason
-/// this gate is measurable: with constant radiance inside and outside, moving
-/// a vertex changes NOTHING but coverage, so the interior term of spec 4.1 is
-/// exactly zero and the derivative being descended is PURELY the boundary
-/// term. Against a shaded scene the two are summed and a failed recovery
-/// could not be attributed to either.
-std::vector<float> renderCoverage(const std::vector<float>& tri) {
-    std::vector<float> image(static_cast<std::size_t>(kImage) * kImage, 0.0f);
-    for (std::uint32_t py = 0; py < kImage; ++py) {
-        for (std::uint32_t px = 0; px < kImage; ++px) {
-            std::uint32_t in = 0;
-            for (std::uint32_t sy = 0; sy < kSub; ++sy) {
-                for (std::uint32_t sx = 0; sx < kSub; ++sx) {
-                    if (insideTriangle(tri, px + (sx + 0.5) / kSub, py + (sy + 0.5) / kSub)) {
-                        ++in;
-                    }
-                }
-            }
-            const double cov = static_cast<double>(in) / (kSub * kSub);
-            image[static_cast<std::size_t>(py) * kImage + px] =
-                static_cast<float>(cov * kLTri + (1.0 - cov) * kLEnv);
-        }
-    }
-    return image;
-}
 
 }  // namespace
 
@@ -70,7 +39,7 @@ bool checkGeometryRecovery(ohao::diff::GpuProbeContext& ctx) {
     }
     const std::vector<float> theta0 = theta;
 
-    const std::vector<float> target = renderCoverage(star);
+    const std::vector<float> target = renderTriangleCoverage(star, kImage, kSub, kLTri, kLEnv);
     const std::size_t pixels = target.size();
 
     ohao::diff::GpuProbeContext::AdamOptions adam;
@@ -80,7 +49,7 @@ bool checkGeometryRecovery(ohao::diff::GpuProbeContext& ctx) {
     double lastLoss = 0.0;
 
     for (std::uint32_t it = 1; it <= kIterations; ++it) {
-        const std::vector<float> image = renderCoverage(theta);
+        const std::vector<float> image = renderTriangleCoverage(theta, kImage, kSub, kLTri, kLEnv);
         // L = (1/N) SUM (I - T)^2, so dL/dI_p = 2 (I_p - T_p) / N. Computed
         // on the HOST rather than through loss_l2.comp: that kernel is
         // written for a 3-channel film and this is a 1-channel coverage

@@ -221,6 +221,7 @@
 #include "probe/checks_boundary_silhouette.hpp"
 #include "probe/checks_geometry_recovery.hpp"
 #include "probe/checks_shared_arena.hpp"
+#include "probe/checks_param_recovery.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -291,6 +292,7 @@ using ohao::diff::probe::checkRecoveryTexture;
 using ohao::diff::probe::checkBoundaryGpu;
 using ohao::diff::probe::checkBoundaryOverSilhouette;
 using ohao::diff::probe::checkGeometryRecovery;
+using ohao::diff::probe::checkParameterisedRecovery;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -488,6 +490,11 @@ int main() {
     // 61. Spec 4.1's "summed into the same arena", made true: an appearance
     // block and a geometry block in one arena, disjoint and exactly so.
     if (!checkSharedArena(ctx)) return 1;
+
+    // 62. Spec 9's "never vertex positions directly", as a gate: three
+    // parameters recovered through the pullback, with a sign-flipped control
+    // that must not.
+    if (!checkParameterisedRecovery(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

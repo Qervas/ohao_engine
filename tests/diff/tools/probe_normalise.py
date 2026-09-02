@@ -74,6 +74,15 @@ SUBS = [
     sub(r'(worst )(' + F + r')( at element )(\d+)', r'\1<E>\3<K>'),
     sub(r'([Tt]he loss fell )(' + F + r')( -> )(' + F + r')', r'\1<L>\3<L>'),
     sub(r'(Loss )(' + F + r')( -> )(' + F + r')', r'\1<L>\3<L>'),
+    # --- check 62, recovery THROUGH the parameterisation. Every number
+    # here is the endpoint of an optimisation driven by the boundary
+    # pass's atomicAdd gradients, so all of them are accumulator-derived
+    # -- the control's included, and including any that happen to agree
+    # across the runs this was written against.
+    sub(r'(finished )(' + F + r')( from theta\\*)', r'\1<A>\3'),
+    sub(r'(finishes )(' + F + r')( from theta\\*)', r'\1<A>\3'),
+    sub(r'(the shape lands )(' + F + r')( from the target shape)', r'\1<A>\3'),
+    sub(r'( loss )(' + F + r')( -> )(' + F + r')', r'\1<L>\3<L>'),
 ]
 
 # `vs analytic` and `|err|` mean the arena only on the lines that pair them.
