@@ -6,10 +6,20 @@ differs at ~1e-7.  Everything else -- every finite difference, bound, chi^2,
 count, tolerance, verdict, string and ordering -- is stable and stays gated
 byte for byte.
 
-WHAT IS AND IS NOT ACCUMULATOR-DERIVED. The FORWARD film is deterministic
-(check 36), so every D(h), J and h^2 term is bit-stable and NOT masked. The
-analytic gradient `g`, the scalar loss, and everything computed from either
-ARE masked.
+WHAT IS AND IS NOT ACCUMULATOR-DERIVED. The analytic gradient `g`, the scalar
+loss, and everything computed from either ARE masked. D(h) and D(2h) are NOT,
+and that is a judgement rather than a guarantee: they come out of the scalar
+loss, so they are accumulator-derived too, but they agree to every one of the
+nine digits printed and they are the substance of the convergence gates --
+masking them would leave those lines saying nothing.
+
+THEIR DIFFERENCE IS ANOTHER MATTER, and this file said otherwise until check
+63 was added. An h^2 term is (D(2h) - D(h)) scaled, and for a case whose
+truncation is IDENTICALLY ZERO by the derivation that subtraction cancels
+nine digits and leaves the accumulator noise alone -- values around 1e-5 out
+of operands around 2e3. Three runs happened to agree twice, which is exactly
+the "it agreed this time" that --selfcheck exists to distrust; a fourth run
+disagreed. Every h^2 and h^4 term is masked now.
 
   usage:  probe_normalise.py A.txt B.txt          compare two runs
           probe_normalise.py --selfcheck A B C..  report masks gone stale
@@ -83,16 +93,41 @@ SUBS = [
     sub(r'(finishes )(' + F + r')( from theta\\*)', r'\1<A>\3'),
     sub(r'(the shape lands )(' + F + r')( from the target shape)', r'\1<A>\3'),
     sub(r'( loss )(' + F + r')( -> )(' + F + r')', r'\1<L>\3<L>'),
+    # --- check 63, the projection gate. Its depth and lateral Jacobian
+    # norms are pure arithmetic and stay gated; the run's endpoints are not.
+    sub(r'(and finished )(' + F + r')( away)', r'\1<A>\3'),
+    sub(r'(finishes at loss )(' + F + r')', r'\1<L>'),
+    # --- checks 46-49, the DIFFERENCE of two nearly equal accumulator
+    # values. See the module docstring: nine digits cancel and what is
+    # left is noise, so these are masked where D(h) and D(2h) are not.
+    sub(r'(h\^2 term )(' + F + r')', r'\1<C>'),
+    sub(r'(h\^4 term )(' + F + r')', r'\1<C>'),
+    sub(r'\((' + F + r')( x tolerance)', r'(<R>\2'),
+    sub(r'(i\.e\. )(' + F + r')( of the h\^2 term)', r'\1<R>\3'),
 ]
 
 # `vs analytic` and `|err|` mean the arena only on the lines that pair them.
 PAIRED = [sub(r'(vs analytic )(' + F + r')', r'\1<A>'),
           sub(r'(\|err\| )(' + F + r')', r'\1<E>')]
 
+# A line that names a WORST element is reporting a case the run CHOSE, by a
+# criterion computed from the accumulator. Which element wins moves between
+# runs (check 49 has reported both 18 and 20 of 36), and so do its D(h) and
+# D(2h) -- so on these lines the difference values are masked as well. Where
+# the case is fixed by the derivation instead, D(h) and D(2h) stay gated:
+# they agree to all nine printed digits and they are what those lines are
+# for.
+WORST = [sub(r'(element )(\d+)( of )(\d+)', r'\1<K>\3\4'),
+         sub(r'(D\(h\) )(' + F + r')', r'\1<D>'),
+         sub(r'(D\(2h\) )(' + F + r')', r'\1<D>')]
+
 
 def norm(line):
     if 'vs analytic' in line:
         for rx, rep in PAIRED:
+            line = rx.sub(rep, line)
+    if ' element ' in line and 'D(h)' in line:
+        for rx, rep in WORST:
             line = rx.sub(rep, line)
     for rx, rep in SUBS:
         line = rx.sub(rep, line)
