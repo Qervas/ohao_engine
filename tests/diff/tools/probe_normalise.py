@@ -63,6 +63,11 @@ SUBS = [
     sub(r'(one scene: )(' + F + r')( and )(' + F + r')( separately, )(' + F + r')',
         r'\1<A>\3<A>\5<A>'),
     sub(r'(sum of )(' + F + r')', r'\1<A>'),
+    # --- check 57, the GPU boundary pass (float32 atomicAdd into the
+    # vertex-gradient buffer, so the same non-determinism)
+    sub(r'(to within )(' + F + r')( of the largest)', r'\1<R>\3'),
+    sub(r'(worst relative )(' + F + r')( at component )(\d+)',
+        r'\1<R>\3<K>'),
     # --- checks 54-55, the recovery gates
     sub(r'(worst )(' + F + r')( at element )(\d+)', r'\1<E>\3<K>'),
     sub(r'([Tt]he loss fell )(' + F + r')( -> )(' + F + r')', r'\1<L>\3<L>'),

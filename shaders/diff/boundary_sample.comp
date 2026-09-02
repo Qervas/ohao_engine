@@ -1,0 +1,139 @@
+#version 460
+// Float atomicAdd into the vertex-gradient arena, for the reason every
+// gradient scatter in this subsystem needs it.
+#extension GL_EXT_shader_atomic_float : require
+
+// STAGE 3 -- THE BOUNDARY KERNEL, coverage form.
+//
+// Spec 4.1's second term, as a dispatch:
+//
+//     INTEGRAL_over_boundary  f * (v . n)  dl
+//
+// One invocation per (edge, pixel). The edge is clipped to the pixel, the
+// integrand is evaluated over the resulting chord, and the result is
+// scattered to the edge's TWO VERTICES with the barycentric weights that
+// integral produces.
+//
+// WHAT THIS FORM DOES AND DOES NOT DO. The radiances on the two sides are
+// PUSHED CONSTANTS here, not traced. That is the case
+// tests/diff/diff_unit_tests.cpp validated against a supersampled image
+// derivative -- a constant-radiance triangle against a constant background,
+// where moving a vertex changes nothing but coverage, so the interior term
+// is exactly zero and the measured derivative IS this integral. Substituting
+// two ray traces for the two constants is the next layer; everything below
+// it -- the clip, the weights, the scatter, the arena addressing -- is what
+// this dispatch exists to get right first, and it is checkable now.
+//
+// SCREEN SPACE IS WORLD XY (orthographic). Stated rather than assumed: a
+// vertex's screen velocity is its world velocity, so no projection Jacobian
+// enters. That derivative is real and belongs to the perspective case.
+//
+// THE GRADIENT IS A VECTOR PER VERTEX, two floats, and the two components
+// are computed in ONE invocation rather than by dispatching twice with
+// different directions. The integrand is linear in the displacement, so
+// d = (1,0) and d = (0,1) give the two partials directly, and computing both
+// here means the chord is clipped once instead of twice.
+
+layout(local_size_x = 64) in;
+
+// 2 floats per vertex: screen-space x, y.
+layout(std430, binding = 0) readonly buffer VertexPositions {
+    float v[];
+} verts;
+
+// 2 uints per edge: the endpoint vertex indices. Built once, on the host,
+// by ohao::diff::EdgeAdjacency -- moving a vertex changes geometry, not
+// connectivity, so this buffer is not rebuilt per iteration.
+layout(std430, binding = 1) readonly buffer EdgeList {
+    uint v[];
+} edges;
+
+// 2 floats per vertex: dJ/dvx and dJ/dvy. atomicAdd, because many (edge,
+// pixel) pairs land on the same vertex.
+layout(std430, binding = 2) buffer VertexGradients {
+    float v[];
+} grad;
+
+layout(push_constant) uniform Push {
+    uint edgeCount;
+    uint imageWidth;
+    uint imageHeight;
+    uint vertexCount;
+    // Radiance on the NEGATIVE side of the edge normal, and on the positive
+    // side. The normal convention is the one below, and it must match the
+    // host's -- a disagreement is an exact sign flip, which is how the CPU
+    // form's own sign error was found.
+    float lIn;
+    float lOut;
+} pc;
+
+/// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.
+/// Returns false when the edge misses the pixel entirely.
+bool clipToPixel(vec2 p0, vec2 p1, out float uA, out float uB) {
+    const vec2 d = p1 - p0;
+    uA = 0.0;
+    uB = 1.0;
+    const float p[4] = float[4](-d.x, d.x, -d.y, d.y);
+    const float q[4] = float[4](p0.x, 1.0 - p0.x, p0.y, 1.0 - p0.y);
+    for (int i = 0; i < 4; ++i) {
+        if (p[i] == 0.0) {
+            if (q[i] < 0.0) return false;
+            continue;
+        }
+        const float t = q[i] / p[i];
+        if (p[i] < 0.0) {
+            uA = max(uA, t);
+        } else {
+            uB = min(uB, t);
+        }
+    }
+    return uA < uB;
+}
+
+void main() {
+    const uint id = gl_GlobalInvocationID.x;
+    const uint pixels = pc.imageWidth * pc.imageHeight;
+    if (pixels == 0u || id >= pc.edgeCount * pixels) return;
+
+    const uint edge = id / pixels;
+    const uint pixel = id % pixels;
+    const uint px = pixel % pc.imageWidth;
+    const uint py = pixel / pc.imageWidth;
+
+    const uint i0 = edges.v[edge * 2u + 0u];
+    const uint i1 = edges.v[edge * 2u + 1u];
+    if (i0 >= pc.vertexCount || i1 >= pc.vertexCount) return;
+
+    // The edge in THIS pixel's local frame: Task 3's integrand is written for
+    // a unit pixel, and a unit pixel here IS one pixel, so no scale enters.
+    const vec2 p0 = vec2(verts.v[i0 * 2u + 0u], verts.v[i0 * 2u + 1u]) - vec2(px, py);
+    const vec2 p1 = vec2(verts.v[i1 * 2u + 0u], verts.v[i1 * 2u + 1u]) - vec2(px, py);
+
+    float uA, uB;
+    if (!clipToPixel(p0, p1, uA, uB)) return;
+
+    const vec2 seg = p1 - p0;
+    const float len = length(seg);
+    if (len <= 0.0) return;
+    // The direction rotated +90 degrees. "Inside" is the NEGATIVE side of
+    // this, which is the host's convention too.
+    const vec2 n = vec2(-seg.y, seg.x) / len;
+
+    // INTEGRAL over the chord of (1-u) for p0 and of u for p1, in arc length.
+    // The two sum to (uB - uA), which is the rigid-translation weight -- the
+    // conservation identity the unit tests assert.
+    const float wSpan = uB - uA;
+    const float wU = 0.5 * (uB * uB - uA * uA);
+    const float w0 = wSpan - wU;
+    const float w1 = wU;
+
+    const float jump = pc.lIn - pc.lOut;
+    // Both partials at once: d = (1,0) gives (d.n) = n.x, d = (0,1) gives n.y.
+    const float k0 = jump * len * w0;
+    const float k1 = jump * len * w1;
+
+    atomicAdd(grad.v[i0 * 2u + 0u], k0 * n.x);
+    atomicAdd(grad.v[i0 * 2u + 1u], k0 * n.y);
+    atomicAdd(grad.v[i1 * 2u + 0u], k1 * n.x);
+    atomicAdd(grad.v[i1 * 2u + 1u], k1 * n.y);
+}

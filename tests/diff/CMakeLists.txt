@@ -30,6 +30,7 @@ add_executable(diff_gpu_probe
     context/probes_gradient.cpp
     context/probes_loss.cpp
     context/probes_adam.cpp
+    context/probes_boundary.cpp
     probe/oracle_bsdf.cpp
     probe/oracle_integrator.cpp
     probe/fd_harness.cpp
@@ -51,6 +52,7 @@ add_executable(diff_gpu_probe
     probe/checks_recovery.cpp
     probe/checks_recovery_texture.cpp
     probe/checks_vertex_fd.cpp
+    probe/checks_boundary_gpu.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

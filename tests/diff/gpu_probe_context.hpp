@@ -1003,6 +1003,21 @@ public:
         float epsilon{1e-8f};
     };
 
+    /// STAGE 3: dispatch shaders/diff/boundary_sample.comp over an edge list
+    /// and a SCREEN-SPACE vertex array, returning dJ/dv (two floats per
+    /// vertex) for the coverage form of the boundary term -- the two sides'
+    /// radiances are given rather than traced.
+    ///
+    /// Binds no path state, no queue and no acceleration structure. That is
+    /// the structural half of spec 4.1's claim that the boundary term is a
+    /// SEPARATE dispatch summed into the same arena, not a branch inside the
+    /// interior one.
+    [[nodiscard]] bool runBoundaryProbe(const std::vector<float>& screenPositions,
+                                        const std::vector<std::uint32_t>& edgeVertexPairs,
+                                        std::uint32_t imageWidth, std::uint32_t imageHeight,
+                                        float lIn, float lOut,
+                                        std::vector<float>& outVertexGradients);
+
     /// One Adam step over a caller-owned parameter block. `state` is m then
     /// v, exactly ParamRegistry::stateBlock's 2 * floatCount layout, and is
     /// updated in place along with `params`. `stepIndex` is Kingma & Ba's t

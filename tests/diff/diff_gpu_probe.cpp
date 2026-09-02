@@ -217,6 +217,7 @@
 #include "probe/checks_batch.hpp"
 #include "probe/checks_recovery.hpp"
 #include "probe/checks_recovery_texture.hpp"
+#include "probe/checks_boundary_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
@@ -283,6 +284,7 @@ using ohao::diff::probe::checkAdam;
 using ohao::diff::probe::checkMultiViewBatch;
 using ohao::diff::probe::checkRecovery;
 using ohao::diff::probe::checkRecoveryTexture;
+using ohao::diff::probe::checkBoundaryGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
 using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkLossL2;
@@ -461,6 +463,10 @@ int main() {
     // why a boundary term is needed -- the paths MOVE, unlike every parameter
     // above.
     if (!checkVertexFiniteDifference(ctx)) return 1;
+    // 57. The boundary kernel as a DISPATCH: edge clipped per pixel, the
+    // integrand scattered to two vertices, checked against the host form and
+    // against a supersampled image derivative.
+    if (!checkBoundaryGpu(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();
