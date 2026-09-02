@@ -722,6 +722,179 @@ TEST(DiffBoundaryIntegrand, MovingAnEndpointAlongTheEdgeChangesNothing) {
     EXPECT_NEAR(ohao::diff::boundaryTermMovingP0(edge, along, 4.0, 1.0), 0.0, 1e-6);
 }
 
+// ===========================================================================
+// STAGE 3 TASK 4 -- THE BOUNDARY TERM OVER A WHOLE IMAGE
+// ===========================================================================
+//
+// Task 3 checked one pixel against a closed form. This is the step to an
+// IMAGE: a triangle summed over every pixel its edges cross, which is the
+// boundary integral of spec 4.1 as an optimiser would actually evaluate it.
+//
+// THE SCENE IS CHOSEN SO THE INTERIOR TERM IS EXACTLY ZERO. A constant-
+// radiance triangle against a constant background has no shading that varies
+// with position, so moving a vertex changes NOTHING except which pixels are
+// covered. dI/dtheta is then PURELY the boundary term, and the rendered
+// finite difference is directly comparable to it. Against a shaded scene the
+// two terms are summed and neither is separately observable -- which is why
+// this case, and not a prettier one, is what pins the boundary term down.
+//
+// ORTHOGRAPHIC, AND SAID RATHER THAN HIDDEN. Screen space IS world xy here,
+// so a vertex's screen-space velocity is its world velocity and no projection
+// Jacobian enters. That derivative is real and belongs to the perspective
+// case; separating it from the boundary integrand is the point of leaving it
+// out here.
+
+namespace {
+
+struct Tri2D {
+    float v[3][2];
+};
+
+/// Is p inside the triangle? Half-plane test on all three edges, with the
+/// sign taken from the triangle's own winding so the test does not assume
+/// one.
+bool insideTriangle(const Tri2D& t, double px, double py) {
+    auto cross = [](double ax, double ay, double bx, double by) { return ax * by - ay * bx; };
+    const double s0 = cross(t.v[1][0] - t.v[0][0], t.v[1][1] - t.v[0][1],
+                            px - t.v[0][0], py - t.v[0][1]);
+    const double s1 = cross(t.v[2][0] - t.v[1][0], t.v[2][1] - t.v[1][1],
+                            px - t.v[1][0], py - t.v[1][1]);
+    const double s2 = cross(t.v[0][0] - t.v[2][0], t.v[0][1] - t.v[2][1],
+                            px - t.v[2][0], py - t.v[2][1]);
+    return (s0 >= 0.0 && s1 >= 0.0 && s2 >= 0.0) || (s0 <= 0.0 && s1 <= 0.0 && s2 <= 0.0);
+}
+
+/// J = SUM over pixels of the pixel's average radiance, by supersampling.
+/// The ORACLE's primitive: it knows only "is this point inside the
+/// triangle", and nothing about edges, normals or derivatives.
+double imageTotalBySupersampling(const Tri2D& t, std::uint32_t w, std::uint32_t h, double lTri,
+                                 double lEnv, std::uint32_t sub) {
+    double total = 0.0;
+    for (std::uint32_t py = 0; py < h; ++py) {
+        for (std::uint32_t px = 0; px < w; ++px) {
+            std::uint32_t in = 0;
+            for (std::uint32_t sy = 0; sy < sub; ++sy) {
+                for (std::uint32_t sx = 0; sx < sub; ++sx) {
+                    const double x = px + (sx + 0.5) / sub;
+                    const double y = py + (sy + 0.5) / sub;
+                    if (insideTriangle(t, x, y)) ++in;
+                }
+            }
+            const double cov = static_cast<double>(in) / (sub * sub);
+            total += cov * lTri + (1.0 - cov) * lEnv;
+        }
+    }
+    return total;
+}
+
+/// The boundary term for moving vertex `movedVertex` along `d`, summed over
+/// every pixel every edge crosses. This is the estimator, built from Task 3's
+/// per-pixel integrand.
+double imageBoundaryTerm(const Tri2D& t, std::uint32_t w, std::uint32_t h, double lTri,
+                         double lEnv, std::uint32_t movedVertex, const float d[2]) {
+    double total = 0.0;
+    for (std::uint32_t e = 0; e < 3u; ++e) {
+        const std::uint32_t a = e;
+        const std::uint32_t b = (e + 1u) % 3u;
+        // Only the two edges TOUCHING the moved vertex have a velocity; the
+        // opposite edge does not move at all, so it contributes nothing.
+        // Skipping it is not an optimisation -- including it with a zero
+        // velocity would be the same number, and stating which edges move is
+        // what makes the (1-u) weight's endpoint unambiguous.
+        if (a != movedVertex && b != movedVertex) continue;
+        // Task 3's integrand takes p0 as the MOVING endpoint, so the edge is
+        // oriented with the moved vertex first.
+        const bool reversed = (a != movedVertex);
+        const std::uint32_t p0 = reversed ? b : a;
+        const std::uint32_t p1 = reversed ? a : b;
+        // REVERSING THE EDGE FLIPS ITS NORMAL, and boundaryTermMovingP0
+        // defines "inside" as the negative side of that normal -- so a
+        // reversed edge has its two sides swapped and must be given the
+        // radiances swapped to compensate.
+        //
+        // Getting this wrong is not a small error and it is not obviously a
+        // sign either: the two edges touching a moved vertex partly CANCEL,
+        // because extending one sweeps area in as the other sweeps it out.
+        // With one of them negated they ADD instead, and the sum came out at
+        // -9.625 against the oracle's -3.123 -- same sign, three times too
+        // large. A sign check would have passed it.
+        const double edgeIn = reversed ? lEnv : lTri;
+        const double edgeOut = reversed ? lTri : lEnv;
+
+        for (std::uint32_t py = 0; py < h; ++py) {
+            for (std::uint32_t px = 0; px < w; ++px) {
+                // Task 3 works in a UNIT pixel, so the edge is expressed in
+                // this pixel's local frame. The integrand is an area rate, so
+                // no scale factor is needed: a unit pixel here IS one pixel.
+                ohao::diff::PixelEdge pe;
+                pe.p0[0] = t.v[p0][0] - static_cast<float>(px);
+                pe.p0[1] = t.v[p0][1] - static_cast<float>(py);
+                pe.p1[0] = t.v[p1][0] - static_cast<float>(px);
+                pe.p1[1] = t.v[p1][1] - static_cast<float>(py);
+                total += ohao::diff::boundaryTermMovingP0(pe, d, edgeIn, edgeOut);
+            }
+        }
+    }
+    return total;
+}
+
+}  // namespace
+
+TEST(DiffBoundaryImage, SumOverPixelsMatchesARenderedFiniteDifference) {
+    // Wound so that the interior is on the NEGATIVE side of each edge's
+    // normal (Task 3's convention). Verified by the oracle rather than
+    // asserted: a wrong winding shows up as an exact sign flip, which is how
+    // Task 3's own sign error was found.
+    const Tri2D tri = {{{1.7f, 1.3f}, {2.1f, 6.4f}, {6.8f, 3.9f}}};
+    constexpr std::uint32_t kW = 8, kH = 8, kSub = 256;
+    constexpr double kLTri = 3.0, kLEnv = 0.5;
+    constexpr std::uint32_t kMoved = 0u;
+    const float d[2] = {1.0f, 0.0f};
+
+    const double boundary = imageBoundaryTerm(tri, kW, kH, kLTri, kLEnv, kMoved, d);
+
+    // THE ORACLE: a central difference on the supersampled image, which
+    // shares no line of code with the estimator -- no edge, no clip, no
+    // normal, no (1-u) weight.
+    constexpr double kH_step = 1.0 / 32.0;
+    Tri2D plus = tri, minus = tri;
+    plus.v[kMoved][0] = static_cast<float>(tri.v[kMoved][0] + kH_step * d[0]);
+    plus.v[kMoved][1] = static_cast<float>(tri.v[kMoved][1] + kH_step * d[1]);
+    minus.v[kMoved][0] = static_cast<float>(tri.v[kMoved][0] - kH_step * d[0]);
+    minus.v[kMoved][1] = static_cast<float>(tri.v[kMoved][1] - kH_step * d[1]);
+    const double jPlus = imageTotalBySupersampling(plus, kW, kH, kLTri, kLEnv, kSub);
+    const double jMinus = imageTotalBySupersampling(minus, kW, kH, kLTri, kLEnv, kSub);
+    const double oracle = (jPlus - jMinus) / (2.0 * kH_step);
+
+    EXPECT_GT(std::fabs(oracle), 0.5) << "the oracle is near zero, so agreement means little";
+    // The oracle's own resolution is one subsample of area per pixel over a
+    // step of 2/32 -- about 1/256^2 * 64 / (1/16), i.e. ~1.5e-2 absolute.
+    EXPECT_NEAR(boundary, oracle, 3e-2 * std::fabs(oracle) + 2e-2)
+        << "boundary sum " << boundary << " against a supersampled image derivative " << oracle;
+}
+
+TEST(DiffBoundaryImage, VanishesWhenTheJumpVanishes) {
+    // No discontinuity, no boundary term -- exactly, not approximately. This
+    // is spec 4.1's "for appearance-only parameters the boundary term is
+    // mathematically absent" seen from the other side: it is the JUMP that
+    // makes the term exist, and with lTri == lEnv there is nothing to move.
+    const Tri2D tri = {{{1.7f, 1.3f}, {2.1f, 6.4f}, {6.8f, 3.9f}}};
+    const float d[2] = {0.6f, -0.4f};
+    EXPECT_DOUBLE_EQ(imageBoundaryTerm(tri, 8u, 8u, 2.0, 2.0, 1u, d), 0.0);
+}
+
+TEST(DiffBoundaryImage, EveryVertexMovesTheImage) {
+    // NON-VACUITY over the vertices. A term that only ever accumulated for
+    // one endpoint -- the (1-u) weight applied to the wrong end, say -- would
+    // give zero for some vertex while still matching the oracle for another.
+    const Tri2D tri = {{{1.7f, 1.3f}, {2.1f, 6.4f}, {6.8f, 3.9f}}};
+    const float d[2] = {1.0f, 0.0f};
+    for (std::uint32_t v = 0; v < 3u; ++v) {
+        EXPECT_GT(std::fabs(imageBoundaryTerm(tri, 8u, 8u, 3.0, 0.5, v, d)), 0.1)
+            << "vertex " << v << " contributes nothing";
+    }
+}
+
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
     auto rng = ohao::diff::PathRng::forPath(777, 5, 42);
     for (int i = 0; i < 4096; ++i) {
