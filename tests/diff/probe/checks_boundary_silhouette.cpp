@@ -104,8 +104,8 @@ bool checkBoundaryOverSilhouette(ohao::diff::GpuProbeContext& ctx) {
 
     std::vector<float> filtered;
     std::vector<float> unfiltered;
-    if (!ctx.runBoundaryProbe(screen, pairs, kImage, kImage, kLIn, kLOut, flags, filtered) ||
-        !ctx.runBoundaryProbe(screen, pairs, kImage, kImage, kLIn, kLOut, {}, unfiltered)) {
+    if (!ctx.runBoundaryProbe(screen, pairs, kImage, kImage, kLIn, kLOut, flags, {}, filtered) ||
+        !ctx.runBoundaryProbe(screen, pairs, kImage, kImage, kLIn, kLOut, {}, {}, unfiltered)) {
         std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 59 boundary dispatch\n");
         return false;
     }

@@ -219,6 +219,7 @@
 #include "probe/checks_recovery_texture.hpp"
 #include "probe/checks_boundary_gpu.hpp"
 #include "probe/checks_boundary_silhouette.hpp"
+#include "probe/checks_geometry_recovery.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -288,6 +289,7 @@ using ohao::diff::probe::checkRecovery;
 using ohao::diff::probe::checkRecoveryTexture;
 using ohao::diff::probe::checkBoundaryGpu;
 using ohao::diff::probe::checkBoundaryOverSilhouette;
+using ohao::diff::probe::checkGeometryRecovery;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
 using ohao::diff::probe::checkAdjointSeed;
@@ -477,6 +479,10 @@ int main() {
     // 59. The two Stage 3 passes connected, with the boundary term's null
     // test: a vertex on no silhouette edge gets EXACTLY zero.
     if (!checkBoundaryOverSilhouette(ctx)) return 1;
+
+    // 60. GATE 5 FOR GEOMETRY: a triangle recovered by descending the
+    // boundary term, in a scene where the interior term is exactly zero.
+    if (!checkGeometryRecovery(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

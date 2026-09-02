@@ -69,6 +69,23 @@ layout(std430, binding = 3) readonly buffer SilhouetteFlags {
     uint v[];
 } silhouette;
 
+// dL/d(pixel), one float per pixel. The boundary term for a real objective
+// is
+//
+//     dL/dtheta = SUM_pixels  w[p] * (dI_p/dtheta)
+//
+// so each (edge, pixel) contribution is weighted by that pixel's own w. This
+// is the same generalisation Stage 2 Task 1 made for the INTERIOR term, and
+// for the same reason: without it the only objective expressible is the sum
+// of the image, and an optimiser needs the loss's gradient instead.
+//
+// `useSeed == 0` means w = 1 everywhere, which IS the sum-of-image
+// objective -- not a disabled state, the special case every check written
+// before this one measures.
+layout(std430, binding = 4) readonly buffer AdjointSeed {
+    float v[];
+} seed;
+
 layout(push_constant) uniform Push {
     uint edgeCount;
     uint imageWidth;
@@ -82,6 +99,8 @@ layout(push_constant) uniform Push {
     float lOut;
     // 0: every edge contributes. 1: only edges the silhouette pass marked.
     uint useFlags;
+    // 0: w = 1 everywhere. 1: read binding 4.
+    uint useSeed;
 } pc;
 
 /// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.
@@ -146,7 +165,14 @@ void main() {
     const float w0 = wSpan - wU;
     const float w1 = wU;
 
-    const float jump = pc.lIn - pc.lOut;
+    // THE PIXEL'S WEIGHT. Applied to the WHOLE contribution rather than to
+    // one of the two vertex terms -- Stage 2 Task 1 got that wrong for the
+    // interior term (seeding the adjoint left the throughput-derivative term
+    // unweighted, and check 50's partition identity caught it), and the same
+    // shape of mistake is available here: weighting only k0 would leave the
+    // p1 half carrying w = 1.
+    const float w = (pc.useSeed != 0u) ? seed.v[pixel] : 1.0;
+    const float jump = (pc.lIn - pc.lOut) * w;
     // Both partials at once: d = (1,0) gives (d.n) = n.x, d = (0,1) gives n.y.
     const float k0 = jump * len * w0;
     const float k1 = jump * len * w1;
