@@ -2,6 +2,7 @@
 #include "diff/geom/edge_adjacency.hpp"
 #include "diff/geom/boundary_integrand.hpp"
 #include "diff/geom/silhouette_set.hpp"
+#include "diff/geom/camera_projection.hpp"
 #include "diff/geom/vertex_parameterisation.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
@@ -1110,6 +1111,138 @@ TEST(DiffVertexParameterisation, RejectsMalformedInput) {
     ASSERT_TRUE(param.setBase(paramBase()));
     EXPECT_TRUE(param.apply({0.0f, 0.0f}).empty()) << "wrong parameter count";
     EXPECT_TRUE(param.pullback({0.0f, 0.0f, 0.0f}, {1.0f}).empty()) << "wrong gradient length";
+}
+
+// ===========================================================================
+// STAGE 3 -- THE PROJECTION, AND ITS PULLBACK
+// ===========================================================================
+//
+// Same oracle as the parameterisation's, for the same reason: J is built
+// COLUMN BY COLUMN by differencing `project`, which knows nothing about
+// derivatives, and the pullback's claim to be J^T g is checked against it.
+// The camera below is deliberately OFF-AXIS AND ROTATED -- eye away from
+// every axis, target away from the origin -- so that R is load-bearing. An
+// axis-aligned camera would make R the identity and a pullback that dropped
+// it entirely would pass.
+
+namespace {
+
+ohao::diff::PinholeProjection obliqueCamera() {
+    ohao::diff::PinholeProjection cam;
+    EXPECT_TRUE(cam.setLookAt({3.0f, 2.0f, 7.0f}, {0.5f, -0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    EXPECT_TRUE(cam.setIntrinsics(120.0f, 96.0f, 32.0f, 24.0f));
+    return cam;
+}
+
+std::vector<float> projectionWorld() {
+    // Three vertices at DIFFERENT DEPTHS. Equal depths would make the
+    // perspective divide a single constant and the third column of every
+    // vertex's Jacobian the same shape.
+    return {0.0f, 0.0f, 0.0f, 1.4f, 0.3f, -1.1f, -0.7f, 1.2f, 0.9f};
+}
+
+}  // namespace
+
+TEST(DiffCameraProjection, PullbackIsTheJacobianTransposeTimesTheGradient) {
+    const ohao::diff::PinholeProjection cam = obliqueCamera();
+    const std::vector<float> world = projectionWorld();
+    // Non-uniform, and different in u and v: a gradient equal in both would
+    // hide a swapped pair of Jacobian rows.
+    const std::vector<float> g = {0.9f, -0.3f, 0.2f, 1.4f, -0.6f, 0.5f};
+
+    const std::vector<float> got = cam.pullback(world, g);
+    ASSERT_EQ(got.size(), world.size());
+
+    constexpr double kStep = 1.0 / 1024.0;
+    for (std::size_t k = 0; k < world.size(); ++k) {
+        std::vector<float> plus = world;
+        std::vector<float> minus = world;
+        plus[k] = static_cast<float>(world[k] + kStep);
+        minus[k] = static_cast<float>(world[k] - kStep);
+        std::vector<float> sPlus;
+        std::vector<float> sMinus;
+        ASSERT_TRUE(cam.project(plus, sPlus));
+        ASSERT_TRUE(cam.project(minus, sMinus));
+        ASSERT_EQ(sPlus.size(), g.size());
+
+        double want = 0.0;
+        for (std::size_t i = 0; i < g.size(); ++i) {
+            const double dScreen =
+                (static_cast<double>(sPlus[i]) - static_cast<double>(sMinus[i])) / (2.0 * kStep);
+            want += dScreen * static_cast<double>(g[i]);
+        }
+        EXPECT_NEAR(static_cast<double>(got[k]), want, 2e-3 * std::fabs(want) + 1e-3)
+            << "world component " << k;
+        EXPECT_GT(std::fabs(want), 1e-2) << "column " << k << " of the Jacobian is empty";
+    }
+}
+
+TEST(DiffCameraProjection, TheDepthColumnIsWhatPerspectiveAdds) {
+    // The whole reason this file exists. Under an ORTHOGRAPHIC camera the
+    // third column of J is exactly zero -- depth does not move a point on
+    // screen -- so a motion along the view direction is not merely hard to
+    // fit but UNIDENTIFIABLE. Perspective makes it nonzero, and this is the
+    // assertion that says so in numbers.
+    ohao::diff::PinholeProjection cam;
+    ASSERT_TRUE(cam.setLookAt({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    ASSERT_TRUE(cam.setIntrinsics(100.0f, 100.0f, 32.0f, 32.0f));
+
+    // ON the optical axis the depth column vanishes even under perspective:
+    // a point dead ahead stays dead ahead however far away it is. So depth
+    // is carried by the OFF-AXIS vertices, and a shape whose vertices all
+    // sat on the axis would leave it unidentifiable no matter the camera.
+    const std::vector<double> onAxis = cam.jacobian(0.0, 0.0, 0.0);
+    ASSERT_EQ(onAxis.size(), 6u);
+    EXPECT_NEAR(onAxis[2], 0.0, 1e-12);
+    EXPECT_NEAR(onAxis[5], 0.0, 1e-12);
+
+    const std::vector<double> offAxis = cam.jacobian(2.0, -1.0, 0.0);
+    ASSERT_EQ(offAxis.size(), 6u);
+    EXPECT_GT(std::fabs(offAxis[2]), 1.0);
+    EXPECT_GT(std::fabs(offAxis[5]), 0.5);
+
+    // And the 1/z falloff: twice as far, half the lateral Jacobian.
+    const std::vector<double> nearJ = cam.jacobian(2.0, -1.0, 5.0);   // 5 from the eye
+    const std::vector<double> farJ = cam.jacobian(2.0, -1.0, 0.0);    // 10 from the eye
+    ASSERT_EQ(nearJ.size(), 6u);
+    ASSERT_EQ(farJ.size(), 6u);
+    EXPECT_NEAR(std::fabs(nearJ[0]) / std::fabs(farJ[0]), 2.0, 1e-9);
+}
+
+TEST(DiffCameraProjection, RefusesWhatItCannotProject) {
+    ohao::diff::PinholeProjection cam;
+    ASSERT_TRUE(cam.setLookAt({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    ASSERT_TRUE(cam.setIntrinsics(100.0f, 100.0f, 32.0f, 32.0f));
+
+    std::vector<float> screen;
+    // Behind the eye, and exactly AT it. Both would divide by a z at or
+    // through zero; a clamp would hand the optimiser a large finite number
+    // to descend, which is worse than a refusal.
+    EXPECT_FALSE(cam.project({0.0f, 0.0f, 12.0f}, screen));
+    EXPECT_TRUE(screen.empty());
+    EXPECT_FALSE(cam.project({0.0f, 0.0f, 10.0f}, screen));
+    EXPECT_TRUE(cam.jacobian(0.0, 0.0, 12.0).empty());
+    // One bad vertex poisons the whole shape, not just its own components.
+    EXPECT_TRUE(cam.pullback({0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 12.0f},
+                             {1.0f, 1.0f, 1.0f, 1.0f}).empty());
+}
+
+TEST(DiffCameraProjection, RejectsADegenerateSetup) {
+    ohao::diff::PinholeProjection cam;
+    EXPECT_FALSE(cam.valid());
+    // Up parallel to the view direction: no basis exists, and a fallback
+    // axis would silently give a camera nobody asked for.
+    EXPECT_FALSE(cam.setLookAt({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}));
+    EXPECT_FALSE(cam.setLookAt({1.0f, 2.0f, 3.0f}, {1.0f, 2.0f, 3.0f}, {0.0f, 1.0f, 0.0f}));
+    EXPECT_TRUE(cam.setLookAt({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    // Valid needs BOTH halves, in either order.
+    EXPECT_FALSE(cam.valid());
+    EXPECT_FALSE(cam.setIntrinsics(0.0f, 100.0f, 0.0f, 0.0f));
+    EXPECT_FALSE(cam.valid());
+    EXPECT_TRUE(cam.setIntrinsics(100.0f, 100.0f, 32.0f, 32.0f));
+    EXPECT_TRUE(cam.valid());
+    std::vector<float> screen;
+    EXPECT_FALSE(cam.project({0.0f, 1.0f}, screen)) << "world positions are 3 floats per vertex";
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
