@@ -692,8 +692,23 @@ layout(push_constant) uniform Push {
 /// the stride cannot drift between two copies of this expression.
 vec3 diffAdjointSeed(uint pixelIndex) {
     const uint base = pixelIndex * 3u;
-    if (pc.adjointSeedFloats == 0u || base + 2u >= pc.adjointSeedFloats) {
+    // TWO DIFFERENT THINGS, KEPT APART. An earlier version folded these into
+    // one condition and returned vec3(1.0) for both, which conflated "no seed
+    // bound" -- the sum-of-film objective, and correct -- with "a seed too
+    // short to cover this pixel", which is a caller error and would have
+    // produced a SILENTLY PARTIAL weighting: the covered pixels weighted by
+    // w, the rest by 1. That is precisely the failure check 50 caught in this
+    // task's first implementation, and it is invisible at w = 1.
+    if (pc.adjointSeedFloats == 0u) {
         return vec3(1.0);
+    }
+    if (base + 2u >= pc.adjointSeedFloats) {
+        // Quiet NaN as a bit pattern, for wf_scatter_replay.comp's reason: no
+        // folding or relaxed-precision build can make it finite. The host
+        // refuses a seed whose length is not exactly 3 * width * height, so
+        // this is unreachable from the probe -- it is the guard for a caller
+        // that does not go through it.
+        return vec3(uintBitsToFloat(0x7fc00000u));
     }
     return vec3(adjointSeed.v[base + 0u], adjointSeed.v[base + 1u],
                 adjointSeed.v[base + 2u]);
