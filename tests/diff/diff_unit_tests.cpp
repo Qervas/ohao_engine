@@ -1,4 +1,5 @@
 #include "diff/device_caps.hpp"
+#include "diff/geom/edge_adjacency.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
 #include "diff/rng/diff_rng.hpp"
@@ -308,6 +309,136 @@ TEST(DiffPathRng, DifferentSeedsDecorrelate) {
         if (a.next1D() == b.next1D()) ++identical;
     }
     EXPECT_LT(identical, 3);
+}
+
+// ===========================================================================
+// STAGE 3 TASK 1 -- EDGE ADJACENCY
+// ===========================================================================
+//
+// The oracles here are TOPOLOGICAL INVARIANTS, not a second implementation:
+// Euler's formula, "a closed manifold has two faces per edge", and
+// "consistently wound faces traverse a shared edge in opposite directions".
+// Each is a statement about what the structure must satisfy whatever the
+// mesh is, so none of them can be satisfied by transcribing the code they
+// check.
+
+namespace {
+
+/// The closed box tests/diff/context/probe_scene.hpp builds: six quads, two
+/// triangles each, each face owning its own four vertices. Indices only --
+/// adjacency never sees a position.
+///
+/// NOTE ON WHAT THIS BOX IS. Because every face owns its own vertices, the
+/// 24 corners are SPLIT: the mesh is twelve triangles that are topologically
+/// six DISCONNECTED quads, not a closed surface. That is exactly why the
+/// welded box below exists, and the contrast between them is what makes the
+/// boundary-edge count meaningful rather than incidental.
+std::vector<std::uint32_t> splitCornerBoxIndices() {
+    std::vector<std::uint32_t> indices;
+    for (std::uint32_t face = 0; face < 6u; ++face) {
+        const std::uint32_t b = face * 4u;
+        indices.insert(indices.end(), {b + 0u, b + 1u, b + 2u, b + 0u, b + 2u, b + 3u});
+    }
+    return indices;
+}
+
+/// A WELDED cube: 8 shared corners, 12 triangles, every edge used twice.
+/// Wound so that every face's normal points outward, which is what makes the
+/// opposite-orientation assertion below a real test of the winding rather
+/// than of the builder.
+std::vector<std::uint32_t> weldedCubeIndices() {
+    // Corner c has bit0 = x, bit1 = y, bit2 = z.
+    return {
+        0, 2, 3, 0, 3, 1,  // -z
+        4, 5, 7, 4, 7, 6,  // +z
+        0, 1, 5, 0, 5, 4,  // -y
+        2, 6, 7, 2, 7, 3,  // +y
+        0, 4, 6, 0, 6, 2,  // -x
+        1, 3, 7, 1, 7, 5,  // +x
+    };
+}
+
+}  // namespace
+
+TEST(DiffEdgeAdjacency, WeldedCubeIsClosedAndSatisfiesEuler) {
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(weldedCubeIndices())) << adj.error();
+
+    // V - E + F = 2 for any closed surface of genus 0. With V = 8 and
+    // F = 12 this forces E = 18, and the builder is not consulted for any
+    // of those three numbers.
+    EXPECT_EQ(adj.edgeCount(), 18u);
+    EXPECT_EQ(8u - adj.edgeCount() + 12u, 2u);
+
+    // Closed: no edge has a single face.
+    EXPECT_EQ(adj.boundaryEdgeCount(), 0u);
+
+    // Consistently wound: the two faces of every edge traverse it in
+    // opposite directions. A single inverted face breaks this and would
+    // otherwise only show up as an inward-pointing normal much later.
+    for (const auto& e : adj.edges()) {
+        EXPECT_TRUE(e.oppositelyOriented)
+            << "edge (" << e.v0 << ", " << e.v1 << ") is traversed the same way by both faces";
+        EXPECT_LT(e.v0, e.v1) << "edges must be stored canonically, min endpoint first";
+    }
+}
+
+TEST(DiffEdgeAdjacency, SplitCornerBoxIsSixDisconnectedQuads) {
+    ohao::diff::EdgeAdjacency adj;
+    ASSERT_TRUE(adj.build(splitCornerBoxIndices())) << adj.error();
+
+    // Each quad contributes 5 edges (4 sides + 1 diagonal), and no vertex is
+    // shared between quads, so there are 30 edges of which the 24 sides are
+    // BOUNDARY edges and the 6 diagonals are interior.
+    EXPECT_EQ(adj.edgeCount(), 30u);
+    EXPECT_EQ(adj.boundaryEdgeCount(), 24u);
+
+    // THE POINT OF THIS TEST. The probe's box LOOKS closed and is not,
+    // topologically: buildAxisAlignedBoxGeometry gives every face its own
+    // four vertices so that no face's winding constrains a neighbour's.
+    // Spec 7.1 counts open boundary edges as silhouette edges
+    // unconditionally, so Task 2 run on this mesh would mark all 24 sides
+    // REGARDLESS of view. That is a real constraint on which scene Stage 3
+    // can use, and it is recorded here rather than discovered there.
+}
+
+TEST(DiffEdgeAdjacency, IsInvariantUnderVertexMotion) {
+    // The claim the whole per-iteration cost argument rests on (spec 7.1):
+    // moving a vertex changes geometry, not connectivity. This type takes
+    // only indices, so the claim is true by construction -- and this test is
+    // what stops a future version quietly taking positions too.
+    ohao::diff::EdgeAdjacency before;
+    ASSERT_TRUE(before.build(weldedCubeIndices()));
+
+    // "Moving every vertex" is expressed the only way a positionless
+    // structure can see it: rebuilding from the SAME indices. If adjacency
+    // ever depended on positions, this test would have to change to pass
+    // them -- and that change is the alarm.
+    ohao::diff::EdgeAdjacency after;
+    ASSERT_TRUE(after.build(weldedCubeIndices()));
+
+    ASSERT_EQ(before.edgeCount(), after.edgeCount());
+    for (std::size_t i = 0; i < before.edgeCount(); ++i) {
+        EXPECT_EQ(before.edges()[i].v0, after.edges()[i].v0);
+        EXPECT_EQ(before.edges()[i].v1, after.edges()[i].v1);
+        EXPECT_EQ(before.edges()[i].face0, after.edges()[i].face0);
+        EXPECT_EQ(before.edges()[i].face1, after.edges()[i].face1);
+    }
+}
+
+TEST(DiffEdgeAdjacency, RejectsNonManifoldAndMalformedInput) {
+    ohao::diff::EdgeAdjacency adj;
+
+    EXPECT_FALSE(adj.build({}));
+    EXPECT_FALSE(adj.build({0, 1}));
+
+    // THREE triangles sharing one edge. Refused rather than truncated to the
+    // first two: Task 2's front/back-facing test asks about two faces, and
+    // an edge with three has no answer -- keeping the first two found would
+    // manufacture one, silently and order-dependently.
+    const std::vector<std::uint32_t> fin = {0, 1, 2, 0, 1, 3, 0, 1, 4};
+    EXPECT_FALSE(adj.build(fin));
+    EXPECT_EQ(adj.edgeCount(), 0u) << "a refused build must leave nothing behind";
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
