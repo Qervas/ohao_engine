@@ -104,6 +104,15 @@ SUBS = [
     sub(r'(h\^4 term )(' + F + r')', r'\1<C>'),
     sub(r'\((' + F + r')( x tolerance)', r'(<R>\2'),
     sub(r'(i\.e\. )(' + F + r')( of the h\^2 term)', r'\1<R>\3'),
+    # --- check 64, the varying jump. These AGREED across the four
+    # runs they were written against, and are masked anyway: they are
+    # relative errors of an atomicAdd-accumulated gradient, and the
+    # lesson three lines up is that agreeing on a given day is not
+    # evidence of being deterministic. The jump's min, max and mean are
+    # arithmetic on compile-time constants and stay gated.
+    sub(r'(worst relative disagreement is )(' + F + r')( at component )(\d+)', r'\1<R>\3<K>'),
+    sub(r'(misses the oracle by )(' + F + r')( at component )(\d+)', r'\1<R>\3<K>'),
+    sub(r'(, )(' + F + r')(x the bar)', r'\1<R>\3'),
 ]
 
 # `vs analytic` and `|err|` mean the arena only on the lines that pair them.

@@ -71,7 +71,7 @@ bool checkSharedArena(ohao::diff::GpuProbeContext& ctx) {
 
     // --- STANDALONE, for the value to compare against.
     std::vector<float> standalone;
-    if (!ctx.runBoundaryProbe(triangle, edges, kImage, kImage, kLIn, kLOut, {}, {}, nullptr, 0u,
+    if (!ctx.runBoundaryProbe(triangle, edges, kImage, kImage, {kLIn, kLOut}, {}, {}, nullptr, 0u,
                               0u, standalone)) {
         std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 61 standalone dispatch\n");
         arena.destroy(ctx.allocator());
@@ -80,7 +80,7 @@ bool checkSharedArena(ohao::diff::GpuProbeContext& ctx) {
 
     // --- INTO THE ARENA, at the registered block's own float offset.
     std::vector<float> inArena;
-    if (!ctx.runBoundaryProbe(triangle, edges, kImage, kImage, kLIn, kLOut, {}, {}, &arena,
+    if (!ctx.runBoundaryProbe(triangle, edges, kImage, kImage, {kLIn, kLOut}, {}, {}, &arena,
                               verts->gradBlock, vertOffset, inArena)) {
         std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 61 arena dispatch\n");
         arena.destroy(ctx.allocator());

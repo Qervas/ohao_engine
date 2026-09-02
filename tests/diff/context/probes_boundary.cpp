@@ -19,7 +19,7 @@ namespace ohao::diff {
 bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions,
                                        const std::vector<std::uint32_t>& edgeVertexPairs,
                                        std::uint32_t imageWidth, std::uint32_t imageHeight,
-                                       float lIn, float lOut,
+                                       const BoundaryRadiance& radiance,
                                        const std::vector<std::uint32_t>& silhouetteFlags,
                                        const std::vector<float>& adjointSeed,
                                        ohao::diff::GradientArena* arena,
@@ -119,11 +119,25 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         std::uint32_t vertexCount;
         float lIn;
         float lOut;
+        // Two vec2s in the shader. They sit at byte offsets 24 and 32, both
+        // multiples of 8, so the 4-byte-aligned C++ members below land where
+        // GLSL's 8-byte vec2 alignment puts them. Inserting a float above
+        // this point would silently break that.
+        float gradIn[2];
+        float gradOut[2];
         std::uint32_t useFlags;
         std::uint32_t useSeed;
         std::uint32_t gradOffset;
-    } push{edgeCount, imageWidth,          imageHeight,       vertexCount,
-           lIn,       lOut,                useFlags ? 1u : 0u, useSeed ? 1u : 0u,
+    } push{edgeCount,
+           imageWidth,
+           imageHeight,
+           vertexCount,
+           radiance.lIn,
+           radiance.lOut,
+           {radiance.gradIn[0], radiance.gradIn[1]},
+           {radiance.gradOut[0], radiance.gradOut[1]},
+           useFlags ? 1u : 0u,
+           useSeed ? 1u : 0u,
            intoArena ? arenaFloatOffset : 0u};
 
     WavefrontStage stage;

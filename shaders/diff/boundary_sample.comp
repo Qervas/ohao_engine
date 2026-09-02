@@ -14,15 +14,27 @@
 // scattered to the edge's TWO VERTICES with the barycentric weights that
 // integral produces.
 //
-// WHAT THIS FORM DOES AND DOES NOT DO. The radiances on the two sides are
-// PUSHED CONSTANTS here, not traced. That is the case
-// tests/diff/diff_unit_tests.cpp validated against a supersampled image
-// derivative -- a constant-radiance triangle against a constant background,
-// where moving a vertex changes nothing but coverage, so the interior term
-// is exactly zero and the measured derivative IS this integral. Substituting
-// two ray traces for the two constants is the next layer; everything below
-// it -- the clip, the weights, the scatter, the arena addressing -- is what
-// this dispatch exists to get right first, and it is checkable now.
+// WHAT THIS FORM DOES AND DOES NOT DO. The radiance on each side is an
+// AFFINE FIELD OF SCREEN POSITION, L(x) = L0 + gradL . x, pushed rather than
+// traced. It began as one constant per side, which made the jump constant
+// along an edge; it is now allowed to VARY along the edge, which is the
+// substantive half of what a trace would give and the reason the integration
+// below is a moment integral rather than a weight times a scalar.
+//
+// WHY A VARYING FIELD STILL LEAVES THE GATE ATTRIBUTABLE, which is the whole
+// reason this layer could be added without giving up the oracle: spec 4.1's
+// interior term is INTEGRAL (df/dtheta) dx, and these fields do not depend on
+// theta. They are fixed functions of screen position. So moving a vertex
+// still changes nothing but which side of the edge each point is on, the
+// interior integral is still EXACTLY zero, and a supersampled image
+// derivative is still purely this integral -- now with a jump that varies
+// along the chord instead of a constant one.
+//
+// WHAT IS STILL OWED. A traced radiance is not affine, so the two-point
+// exactness below becomes a two-point quadrature and acquires a truncation
+// term. Substituting two ray traces for the two fields is the next layer;
+// everything beneath it -- the clip, the moments, the scatter, the arena
+// addressing -- is what this dispatch exists to get right first.
 //
 // SCREEN SPACE IS WORLD XY (orthographic). Stated rather than assumed: a
 // vertex's screen velocity is its world velocity, so no projection Jacobian
@@ -99,11 +111,21 @@ layout(push_constant) uniform Push {
     uint imageHeight;
     uint vertexCount;
     // Radiance on the NEGATIVE side of the edge normal, and on the positive
-    // side. The normal convention is the one below, and it must match the
-    // host's -- a disagreement is an exact sign flip, which is how the CPU
-    // form's own sign error was found.
+    // side, each as an affine field of GLOBAL screen position:
+    //
+    //     L(x) = lIn + gradIn . x        (and lOut, gradOut)
+    //
+    // The constant-per-side case is gradIn = gradOut = 0, and it reproduces
+    // the earlier form's numbers exactly rather than approximately -- the
+    // moments below collapse to the old weights when the jump is constant.
+    //
+    // The normal convention is the one below, and it must match the host's --
+    // a disagreement is an exact sign flip, which is how the CPU form's own
+    // sign error was found.
     float lIn;
     float lOut;
+    vec2 gradIn;
+    vec2 gradOut;
     // 0: every edge contributes. 1: only edges the silhouette pass marked.
     uint useFlags;
     // 0: w = 1 everywhere. 1: read binding 4.
@@ -168,13 +190,19 @@ void main() {
     // this, which is the host's convention too.
     const vec2 n = vec2(-seg.y, seg.x) / len;
 
-    // INTEGRAL over the chord of (1-u) for p0 and of u for p1, in arc length.
-    // The two sum to (uB - uA), which is the rigid-translation weight -- the
-    // conservation identity the unit tests assert.
-    const float wSpan = uB - uA;
-    const float wU = 0.5 * (uB * uB - uA * uA);
-    const float w0 = wSpan - wU;
-    const float w1 = wU;
+    // THE MOMENTS OF THE CHORD, in the segment's own parameter u. The vertex
+    // weights are (1-u) for p0 and u for p1, and the jump is now affine in u,
+    // so each vertex's contribution is a second moment rather than a weight
+    // times a scalar:
+    //
+    //     M_k = INTEGRAL_{uA}^{uB} u^k du
+    //
+    // M0 is the rigid-translation weight the conservation identity asserts,
+    // and with a CONSTANT jump the two expressions below collapse to
+    // jump*(M0 - M1) and jump*M1 -- the earlier form, exactly.
+    const float m0 = uB - uA;
+    const float m1 = 0.5 * (uB * uB - uA * uA);
+    const float m2 = (uB * uB * uB - uA * uA * uA) / 3.0;
 
     // THE PIXEL'S WEIGHT. Applied to the WHOLE contribution rather than to
     // one of the two vertex terms -- Stage 2 Task 1 got that wrong for the
@@ -183,10 +211,24 @@ void main() {
     // shape of mistake is available here: weighting only k0 would leave the
     // p1 half carrying w = 1.
     const float w = (pc.useSeed != 0u) ? seed.v[pixel] : 1.0;
-    const float jump = (pc.lIn - pc.lOut) * w;
+
+    // THE JUMP ALONG THE CHORD, affine in u. Evaluated in GLOBAL screen
+    // coordinates -- p0 is pixel-local, so the pixel's own corner goes back
+    // in here. Getting that wrong would make every pixel evaluate the field
+    // as though it sat at the origin, which is invisible for a constant
+    // field and is exactly what this layer changes.
+    const vec2 dGrad = pc.gradIn - pc.gradOut;
+    const vec2 g0 = p0 + vec2(px, py);
+    const float j0 = ((pc.lIn - pc.lOut) + dot(dGrad, g0)) * w;
+    const float j1 = dot(dGrad, seg) * w;
+
+    // INTEGRAL (j0 + j1 u)(1-u) du and INTEGRAL (j0 + j1 u) u du.
+    const float w0 = j0 * (m0 - m1) + j1 * (m1 - m2);
+    const float w1 = j0 * m1 + j1 * m2;
+
     // Both partials at once: d = (1,0) gives (d.n) = n.x, d = (0,1) gives n.y.
-    const float k0 = jump * len * w0;
-    const float k1 = jump * len * w1;
+    const float k0 = len * w0;
+    const float k1 = len * w1;
 
     const uint base0 = pc.gradOffset + i0 * 2u;
     const uint base1 = pc.gradOffset + i1 * 2u;

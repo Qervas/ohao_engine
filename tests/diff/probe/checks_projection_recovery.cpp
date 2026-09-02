@@ -127,8 +127,8 @@ Run runRecovery(ohao::diff::GpuProbeContext& ctx, const ohao::diff::PinholeProje
         // positions and knows nothing about the camera -- which is the
         // property that lets the projection be swapped without touching it.
         std::vector<float> screenGrad;
-        if (!ctx.runBoundaryProbe(screen, edges, kImage, kImage, static_cast<float>(kLTri),
-                                  static_cast<float>(kLEnv), {}, seed, nullptr, 0u, 0u,
+        if (!ctx.runBoundaryProbe(screen, edges, kImage, kImage,
+                                  {static_cast<float>(kLTri), static_cast<float>(kLEnv)}, {}, seed, nullptr, 0u, 0u,
                                   screenGrad)) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: check 63 (%s) boundary dispatch at iter %u\n",

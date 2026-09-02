@@ -223,6 +223,7 @@
 #include "probe/checks_shared_arena.hpp"
 #include "probe/checks_param_recovery.hpp"
 #include "probe/checks_projection_recovery.hpp"
+#include "probe/checks_boundary_field.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -295,6 +296,7 @@ using ohao::diff::probe::checkBoundaryOverSilhouette;
 using ohao::diff::probe::checkGeometryRecovery;
 using ohao::diff::probe::checkParameterisedRecovery;
 using ohao::diff::probe::checkProjectionRecovery;
+using ohao::diff::probe::checkBoundaryField;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -502,6 +504,11 @@ int main() {
     // translation recovered through the projection Jacobian, depth
     // included, with an orthographic control that cannot move it.
     if (!checkProjectionRecovery(ctx)) return 1;
+
+    // 64. The jump VARYING along the edge: an affine radiance field per
+    // side, integrated as a moment, with the kernel's own previous form
+    // as the control it must beat.
+    if (!checkBoundaryField(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

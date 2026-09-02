@@ -95,8 +95,8 @@ Run runRecovery(ohao::diff::GpuProbeContext& ctx,
         run.lastLoss = loss;
 
         std::vector<float> posGrad;
-        if (!ctx.runBoundaryProbe(positions, edges, kImage, kImage, static_cast<float>(kLTri),
-                                  static_cast<float>(kLEnv), {}, seed, nullptr, 0u, 0u, posGrad)) {
+        if (!ctx.runBoundaryProbe(positions, edges, kImage, kImage,
+                                  {static_cast<float>(kLTri), static_cast<float>(kLEnv)}, {}, seed, nullptr, 0u, 0u, posGrad)) {
             std::fprintf(stderr,
                          "[diff_gpu_probe] FAIL: check 62 (%s) boundary dispatch at iter %u\n",
                          label, it);

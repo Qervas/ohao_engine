@@ -1028,10 +1028,30 @@ public:
     /// the structural half of spec 4.1's claim that the boundary term is a
     /// SEPARATE dispatch summed into the same arena, not a branch inside the
     /// interior one.
+    /// The radiance on each side of an edge, as an AFFINE FIELD of global
+    /// screen position: L(x) = value + grad . x.
+    ///
+    /// The default is a constant field, which is what every check written
+    /// before the field existed passes -- and constant is not a disabled
+    /// state but the case where the boundary integral has a closed form the
+    /// unit tests check against.
+    ///
+    /// A varying field keeps the geometry gates ATTRIBUTABLE even though it
+    /// is more general: spec 4.1's interior term integrates df/dtheta, and a
+    /// field that depends on screen position but not on theta contributes
+    /// exactly zero to it. Moving a vertex still changes nothing but which
+    /// side of the edge a point falls on.
+    struct BoundaryRadiance {
+        float lIn = 0.0f;
+        float lOut = 0.0f;
+        float gradIn[2] = {0.0f, 0.0f};
+        float gradOut[2] = {0.0f, 0.0f};
+    };
+
     [[nodiscard]] bool runBoundaryProbe(const std::vector<float>& screenPositions,
                                         const std::vector<std::uint32_t>& edgeVertexPairs,
                                         std::uint32_t imageWidth, std::uint32_t imageHeight,
-                                        float lIn, float lOut,
+                                        const BoundaryRadiance& radiance,
                                         const std::vector<std::uint32_t>& silhouetteFlags,
                                         const std::vector<float>& adjointSeed,
                                         ohao::diff::GradientArena* arena, std::size_t arenaBlock,
