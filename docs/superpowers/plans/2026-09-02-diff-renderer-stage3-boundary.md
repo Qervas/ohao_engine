@@ -44,7 +44,7 @@ That sentence is the whole reason this stage is *additive* rather than disruptiv
 
 ---
 
-### Task 1: `EdgeAdjacency`, built once
+### Task 1: `EdgeAdjacency`, built once — DONE (unit tests)
 
 **Files:** `ohao/diff/geom/edge_adjacency.{hpp,cpp}`, `diff_unit_tests`.
 
@@ -57,7 +57,7 @@ Topological, CPU-side, built once per mesh ever — moving a vertex changes geom
 
 ---
 
-### Task 2: `SilhouetteSet`, recomputed per view
+### Task 2: `SilhouetteSet`, recomputed per view — DONE (unit tests + check 58)
 
 **Files:** `shaders/diff/silhouette_mark.comp`, `ohao/diff/geom/silhouette_set.{hpp,cpp}`, the probe.
 
@@ -70,7 +70,7 @@ A GPU pass over the adjacency list marking edges where one adjacent face is fron
 
 ---
 
-### Task 3: The boundary integrand, at one edge
+### Task 3: The boundary integrand, at one edge — DONE (unit tests + check 57)
 
 **Files:** `shaders/diff/boundary_sample.comp`, the probe.
 
@@ -83,7 +83,7 @@ Each edge sample evaluates radiance on **both sides** of the edge (two rays); th
 
 ---
 
-### Task 4: Vertex gradients and the BLAS refit
+### Task 4: Vertex gradients and the BLAS refit — DONE (checks 56, 59)
 
 **Files:** `ohao/diff/geom/`, the wavefront loop, the probe.
 
@@ -95,7 +95,7 @@ Each edge sample evaluates radiance on **both sides** of the edge (two rays); th
 
 ---
 
-### Task 5: Gate — recovery of a geometric parameter
+### Task 5: Gate — recovery of a geometric parameter — DONE (check 60)
 
 - [ ] **Step 1: Pre-register the criterion** before running anything, as Stage 2's checks 54 and 55 do: which parameter, `theta*`, `theta_0`, iterations, and what counts as recovered.
 - [ ] **Step 2: Recover.** If it fails, **attribute it** — interior bias (hazard 3), boundary integrand, or the loop. Say which, with the measurement that decided it.
@@ -113,6 +113,40 @@ Each edge sample evaluates radiance on **both sides** of the edge (two rays); th
 - [ ] A vertex-position finite difference agrees with the scattered gradient.
 - [ ] A geometric `theta*` recovered against a pre-registered tolerance.
 - [ ] Every new check has a demonstrated failure with pasted output.
+
+---
+
+## Where this stands (2026-09-02)
+
+**The gate passes.** A triangle's six vertex components recovered from a synthetic target by descending the **boundary term** — started 0.5 from `theta*` at its worst component, finished **0.000565** away against a pre-registered 0.15 (check 60).
+
+| Piece | Where | Oracle |
+|---|---|---|
+| `EdgeAdjacency` | unit tests | Euler's `V-E+F=2`, two faces per edge, opposite traversal |
+| `SilhouetteSet` | unit tests, check 58 | single closed loop; GPU set compared to host **exactly** |
+| boundary integrand | unit tests, check 57 | **supersampled area/image derivative**, sharing no formula |
+| two-vertex scatter | unit tests | `(1-u) + u = 1` against an independently computed rigid translation |
+| `dJ/d(vertex)` target | check 56 | measured, with 2200 trace mismatches against 0 for every earlier parameter |
+| the two passes connected | check 59 | **exact-zero null test** on off-silhouette vertices |
+| Gate 5 for geometry | check 60 | pre-registered recovery, interior term exactly zero |
+
+**Three errors this stage produced, and what caught each.** All three were invisible to the check that shared their assumptions:
+
+1. A **sign error** in the closed-form integrand. The sampled estimator agreed with it perfectly at every sample count — they carried the same minus. Only the supersampled oracle disagreed.
+2. A **3x orientation error** when summing an image: the two edges touching a moved vertex partly *cancel*, so negating one makes them *add*. Correct sign, wrong magnitude — a sign check passes it.
+3. A **conservation test that could not fail**: its single edge had a chord symmetric about the segment midpoint, where the integrated `u` weight and a flat half-share are the same number.
+
+## Deviations from this plan's own constraints — recorded, not glossed
+
+**Vertex positions ARE the parameter.** The Global Constraints above say they never should be, and check 60 optimises screen-space positions directly. Spec §9 calls direct positions "the trivial case", so this is the trivial case rather than a wrong one — but the constraint as written is not met. The mitigation is structural: the boundary pass takes a position array and does not care what produced it, so a parameterisation layer is additive rather than a rewrite. It is still owed.
+
+**The radiances are pushed, not traced.** The boundary pass takes `lIn`/`lOut` as push constants, so the term is exact only where radiance is constant on each side of an edge. That is the case the gate uses — and deliberately, because it is the case where the interior term is exactly zero and a recovery is therefore *attributable*. Substituting two ray traces is the next layer and everything beneath it is checked.
+
+**Orthographic only.** Screen space is world xy, so no projection Jacobian enters. That derivative is real and belongs to the perspective case.
+
+**The boundary gradient does not reach the interior arena.** Spec §4.1 says the two contributions are "summed into the same arena"; here the boundary pass writes its own buffer. Nothing yet computes an interior *and* a boundary gradient for one parameter and adds them.
+
+**The regression gate the plan asked for holds** — checks 37–55 produce their original numbers, verified through `probe_normalise.py` after `--selfcheck`. That is easy here for a reason worth naming: the boundary pass never touches the interior arena, so the two cannot interfere. It will mean more once they share one.
 
 ## What this stage deliberately does not do
 
