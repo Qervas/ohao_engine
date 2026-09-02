@@ -1032,6 +1032,7 @@ public:
                                         const std::vector<std::uint32_t>& edgeVertexPairs,
                                         std::uint32_t imageWidth, std::uint32_t imageHeight,
                                         float lIn, float lOut,
+                                        const std::vector<std::uint32_t>& silhouetteFlags,
                                         std::vector<float>& outVertexGradients);
 
     /// One Adam step over a caller-owned parameter block. `state` is m then

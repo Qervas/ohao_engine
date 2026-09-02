@@ -19,6 +19,7 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
                                        const std::vector<std::uint32_t>& edgeVertexPairs,
                                        std::uint32_t imageWidth, std::uint32_t imageHeight,
                                        float lIn, float lOut,
+                                       const std::vector<std::uint32_t>& silhouetteFlags,
                                        std::vector<float>& outVertexGradients) {
     outVertexGradients.clear();
     if (screenPositions.empty() || screenPositions.size() % 2u != 0u) {
@@ -48,6 +49,24 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         }
     }
 
+    // An EMPTY flag array means "every edge", which the single-triangle
+    // coverage case wants: a lone triangle against a background has a real
+    // jump across all three edges and no silhouette pass is involved. A
+    // non-empty one must cover every edge, or the shader would read past it.
+    const bool useFlags = !silhouetteFlags.empty();
+    if (useFlags && silhouetteFlags.size() != edgeCount) {
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runBoundaryProbe: %zu silhouette flags for %u edges. "
+                     "They must correspond one to one, or the filter reads past its end\n",
+                     silhouetteFlags.size(), edgeCount);
+        return false;
+    }
+    const std::vector<std::uint32_t> allOnes(edgeCount, 1u);
+    GpuBuffer flagBuffer = m_allocator.createBufferFromSpan<std::uint32_t>(
+        useFlags ? std::span<const std::uint32_t>(silhouetteFlags)
+                 : std::span<const std::uint32_t>(allOnes),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+
     const std::vector<float> zeroGrad(screenPositions.size(), 0.0f);
     GpuBuffer posBuffer = m_allocator.createBufferFromSpan<float>(
         std::span<const float>(screenPositions), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -56,7 +75,8 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
     GpuBuffer gradBuffer = m_allocator.createBufferFromSpan<float>(
         std::span<const float>(zeroGrad), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
-    bool ok = posBuffer.isValid() && edgeBuffer.isValid() && gradBuffer.isValid();
+    bool ok = posBuffer.isValid() && edgeBuffer.isValid() && gradBuffer.isValid() &&
+              flagBuffer.isValid();
     if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: allocation failed\n");
 
     struct BoundaryPush {
@@ -66,19 +86,21 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         std::uint32_t vertexCount;
         float lIn;
         float lOut;
-    } push{edgeCount, imageWidth, imageHeight, vertexCount, lIn, lOut};
+        std::uint32_t useFlags;
+    } push{edgeCount, imageWidth, imageHeight, vertexCount, lIn, lOut, useFlags ? 1u : 0u};
 
     WavefrontStage stage;
     if (ok) {
-        const VkDescriptorType bindings[3] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        const VkDescriptorType bindings[4] = {
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
         ok = stage.build(m_device, "diff_boundary_sample.comp.spv", bindings,
                          sizeof(BoundaryPush));
         if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: build failed\n");
     }
     if (ok) {
-        const VkBuffer buffers[3] = {posBuffer.buffer, edgeBuffer.buffer, gradBuffer.buffer};
+        const VkBuffer buffers[4] = {posBuffer.buffer, edgeBuffer.buffer, gradBuffer.buffer,
+                                     flagBuffer.buffer};
         ok = stage.bindBuffers(m_device, buffers);
         if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: bindBuffers failed\n");
     }
@@ -120,6 +142,7 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
     }
 
     stage.destroy(m_device);
+    if (flagBuffer.isValid()) m_allocator.destroyBuffer(flagBuffer);
     if (gradBuffer.isValid()) m_allocator.destroyBuffer(gradBuffer);
     if (edgeBuffer.isValid()) m_allocator.destroyBuffer(edgeBuffer);
     if (posBuffer.isValid()) m_allocator.destroyBuffer(posBuffer);

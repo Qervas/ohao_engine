@@ -63,7 +63,7 @@ bool checkBoundaryGpu(ohao::diff::GpuProbeContext& ctx) {
 
     std::vector<float> gpuGrad;
     if (!ctx.runBoundaryProbe(positions, edges, kW, kH, static_cast<float>(kLTri),
-                              static_cast<float>(kLEnv), gpuGrad)) {
+                              static_cast<float>(kLEnv), {}, gpuGrad)) {
         std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 57 boundary dispatch\n");
         return false;
     }

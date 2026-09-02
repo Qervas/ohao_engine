@@ -218,6 +218,7 @@
 #include "probe/checks_recovery.hpp"
 #include "probe/checks_recovery_texture.hpp"
 #include "probe/checks_boundary_gpu.hpp"
+#include "probe/checks_boundary_silhouette.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -286,6 +287,7 @@ using ohao::diff::probe::checkMultiViewBatch;
 using ohao::diff::probe::checkRecovery;
 using ohao::diff::probe::checkRecoveryTexture;
 using ohao::diff::probe::checkBoundaryGpu;
+using ohao::diff::probe::checkBoundaryOverSilhouette;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
 using ohao::diff::probe::checkAdjointSeed;
@@ -472,6 +474,9 @@ int main() {
     // 58. The silhouette pass as a DISPATCH: marked set compared to the host
     // pass exactly, and required to be a single closed loop and view-dependent.
     if (!checkSilhouetteGpu(ctx)) return 1;
+    // 59. The two Stage 3 passes connected, with the boundary term's null
+    // test: a vertex on no silhouette edge gets EXACTLY zero.
+    if (!checkBoundaryOverSilhouette(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();
