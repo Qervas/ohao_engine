@@ -63,6 +63,8 @@ SUBS = [
     sub(r'(one scene: )(' + F + r')( and )(' + F + r')( separately, )(' + F + r')',
         r'\1<A>\3<A>\5<A>'),
     sub(r'(sum of )(' + F + r')', r'\1<A>'),
+    sub(r'(measured at )(' + F + r')( of the )(' + F + r')( tolerance)',
+        r'\1<R>\3<T>\5'),
     # --- check 57, the GPU boundary pass (float32 atomicAdd into the
     # vertex-gradient buffer, so the same non-determinism)
     sub(r'(to within )(' + F + r')( of the largest)', r'\1<R>\3'),

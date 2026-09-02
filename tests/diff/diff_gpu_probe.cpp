@@ -218,6 +218,7 @@
 #include "probe/checks_recovery.hpp"
 #include "probe/checks_recovery_texture.hpp"
 #include "probe/checks_boundary_gpu.hpp"
+#include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
 #include "probe/checks_convergence.hpp"
@@ -285,6 +286,7 @@ using ohao::diff::probe::checkMultiViewBatch;
 using ohao::diff::probe::checkRecovery;
 using ohao::diff::probe::checkRecoveryTexture;
 using ohao::diff::probe::checkBoundaryGpu;
+using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
 using ohao::diff::probe::checkAdjointSeed;
 using ohao::diff::probe::checkLossL2;
@@ -467,6 +469,9 @@ int main() {
     // integrand scattered to two vertices, checked against the host form and
     // against a supersampled image derivative.
     if (!checkBoundaryGpu(ctx)) return 1;
+    // 58. The silhouette pass as a DISPATCH: marked set compared to the host
+    // pass exactly, and required to be a single closed loop and view-dependent.
+    if (!checkSilhouetteGpu(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

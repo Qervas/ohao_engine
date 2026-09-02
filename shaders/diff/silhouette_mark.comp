@@ -1,0 +1,101 @@
+#version 460
+#extension GL_EXT_shader_atomic_float : require
+
+// STAGE 3 -- THE SILHOUETTE PASS.
+//
+// Spec 7.1's split, GPU half: adjacency is topological and built ONCE (moving
+// a vertex changes geometry, not connectivity), and this pass marks -- per
+// view, per iteration -- the edges where one adjacent face is front-facing
+// and the other is not, plus open boundary edges. That split is what makes
+// per-iteration geometry optimisation affordable, so this is the only part
+// of the edge machinery that runs every frame.
+//
+// ONE INVOCATION PER EDGE, and no compaction. Spec 7.1 says "then
+// compaction", and this writes FLAGS instead: a 0/1 per edge plus an atomic
+// count. Compaction is a second, separately checkable thing -- a prefix sum
+// whose failure mode (a wrong offset) is silent and looks like a missing
+// edge, so it does not belong in the same dispatch as the predicate it would
+// compact. The predicate is what this pass exists to get right.
+//
+// THE FRONT-FACING TEST IS A HALF-SPACE TEST ON THE FACE'S OWN PLANE:
+// dot(n, camera - p) where p is any vertex OF THAT FACE, so the sign does not
+// depend on which vertex is picked. The normal is NOT normalised -- only its
+// sign is read, and normalising would divide by a length that is zero for a
+// degenerate triangle, turning a detectable problem into a NaN.
+
+layout(local_size_x = 64) in;
+
+// 3 floats per vertex, world space -- the same array the BLAS is built from.
+layout(std430, binding = 0) readonly buffer VertexPositions {
+    float v[];
+} verts;
+
+// 4 uints per edge: v0, v1, face0, face1. face1 == 0xFFFFFFFF marks an OPEN
+// boundary edge, which spec 7.1 counts as silhouette unconditionally.
+layout(std430, binding = 1) readonly buffer EdgeRecords {
+    uint v[];
+} edges;
+
+// 3 uints per triangle, as the BLAS is built from.
+layout(std430, binding = 2) readonly buffer TriangleIndices {
+    uint v[];
+} tris;
+
+// One uint per edge: 1 if silhouette, 0 otherwise.
+layout(std430, binding = 3) buffer SilhouetteFlags {
+    uint v[];
+} flags;
+
+// Slot 0: how many edges were marked. An atomic COUNT rather than a
+// compacted list -- see the header.
+layout(std430, binding = 4) buffer SilhouetteCount {
+    uint v[];
+} count;
+
+layout(push_constant) uniform Push {
+    uint edgeCount;
+    uint triangleCount;
+    uint vertexCount;
+    float cameraX;
+    float cameraY;
+    float cameraZ;
+} pc;
+
+vec3 vertexAt(uint v) {
+    return vec3(verts.v[v * 3u + 0u], verts.v[v * 3u + 1u], verts.v[v * 3u + 2u]);
+}
+
+/// Is `face` front-facing from the camera?
+bool frontFacing(uint face) {
+    const vec3 a = vertexAt(tris.v[face * 3u + 0u]);
+    const vec3 b = vertexAt(tris.v[face * 3u + 1u]);
+    const vec3 c = vertexAt(tris.v[face * 3u + 2u]);
+    const vec3 n = cross(b - a, c - a);
+    const vec3 toCamera = vec3(pc.cameraX, pc.cameraY, pc.cameraZ) - a;
+    return dot(n, toCamera) > 0.0;
+}
+
+void main() {
+    const uint e = gl_GlobalInvocationID.x;
+    if (e >= pc.edgeCount) return;
+
+    const uint face0 = edges.v[e * 4u + 2u];
+    const uint face1 = edges.v[e * 4u + 3u];
+
+    bool marked;
+    if (face1 == 0xFFFFFFFFu) {
+        // OPEN BOUNDARY: no second face to disagree with, so the surface
+        // simply stops here and the edge is always silhouette.
+        marked = true;
+    } else if (face0 >= pc.triangleCount || face1 >= pc.triangleCount) {
+        // A face index past the end. Not marked, and not silently treated as
+        // a boundary either -- a boundary is a real geometric statement and
+        // this is a malformed record.
+        marked = false;
+    } else {
+        marked = frontFacing(face0) != frontFacing(face1);
+    }
+
+    flags.v[e] = marked ? 1u : 0u;
+    if (marked) atomicAdd(count.v[0], 1u);
+}

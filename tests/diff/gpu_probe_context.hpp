@@ -1003,6 +1003,22 @@ public:
         float epsilon{1e-8f};
     };
 
+    /// STAGE 3: dispatch shaders/diff/silhouette_mark.comp over an edge
+    /// record array (v0, v1, face0, face1 per edge), returning a 0/1 flag per
+    /// edge and the marked count.
+    ///
+    /// FLAGS, NOT A COMPACTED LIST. Spec 7.1 says "then compaction", and
+    /// that is a second, separately checkable thing: a prefix sum whose
+    /// failure mode is a wrong offset, which is silent and looks exactly
+    /// like a missing edge. It does not belong in the same dispatch as the
+    /// predicate it would compact.
+    [[nodiscard]] bool runSilhouetteProbe(const std::vector<float>& positions,
+                                          const std::vector<std::uint32_t>& edgeRecords,
+                                          const std::vector<std::uint32_t>& indices,
+                                          const float cameraPos[3],
+                                          std::vector<std::uint32_t>& outFlags,
+                                          std::uint32_t& outCount);
+
     /// STAGE 3: dispatch shaders/diff/boundary_sample.comp over an edge list
     /// and a SCREEN-SPACE vertex array, returning dJ/dv (two floats per
     /// vertex) for the coverage form of the boundary term -- the two sides'
