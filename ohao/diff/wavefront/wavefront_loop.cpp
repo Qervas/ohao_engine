@@ -290,11 +290,17 @@ void WavefrontLoop::record(VkCommandBuffer cmd, WavefrontBuffers& buffers,
     assert(isComplete() && "WavefrontLoop::record: all four stages must be set");
 
     // Fail closed, unconditionally (the assert above is compiled out under
-    // NDEBUG, which this repo's Release test targets define) -- same
-    // "assert, then unconditional guard" pattern WavefrontStage::record and
-    // ArenaLayout::block use. Recording half a loop would be worse than
-    // recording none of it: a partially-recorded bounce produces state that
-    // looks like a barrier bug.
+    // NDEBUG, which this repo's Release test targets define) -- the same
+    // "assert, then unconditional guard" pattern WavefrontStage::record
+    // uses. Recording half a loop would be worse than recording none of it:
+    // a partially-recorded bounce produces state that looks like a barrier
+    // bug.
+    //
+    // ArenaLayout::block deliberately does NOT do this, and the difference
+    // is worth keeping straight: an unbuilt stage is programmer error that
+    // no caller is entitled to reach, while an out-of-range block index is
+    // a documented return this API's callers are told to test for. An
+    // assert in front of the latter aborts a path that a test exercises.
     if (!isComplete()) return;
 
     const std::uint32_t capacity = buffers.layout().capacity();

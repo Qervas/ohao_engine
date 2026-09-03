@@ -1260,8 +1260,10 @@ TEST(DiffPathRng, DrawCountTracksConsumption) {
     // counter exists to be asserted on in later stages.
     auto rng = ohao::diff::PathRng::forPath(1, 1, 1);
     EXPECT_EQ(rng.drawCount(), 0u);
-    rng.next1D();
-    rng.next1D();
+    // (void): next1D is [[nodiscard]] and the DRAWS are the point here, not
+    // their values. MSVC warns C4834 and GCC -Wunused-result otherwise.
+    (void)rng.next1D();
+    (void)rng.next1D();
     EXPECT_EQ(rng.drawCount(), 2u);
 }
 

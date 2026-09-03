@@ -46,6 +46,37 @@ generator) in `build/Release/`.
 are missing. Shaders are compiled by the `shaders` target via `glslc`, which
 CMake locates with `find_program` — the Vulkan SDK must be on `PATH`.
 
+**What has actually been verified, and what has not.** MSVC 2026 / Windows:
+both binaries build clean, 58/58 unit tests, 69/69 probe checks against a
+real GPU. GCC 15 / libstdc++, asserts live: every one of the 61 translation
+units compiles, and `diff_unit_tests` links and passes 58/58. What has *not*
+been run anywhere is `diff_gpu_probe` on Linux — its sources compile under
+GCC, but no Linux GPU has executed it. The SPIR-V and the Vulkan calls are
+the same either way, so the risk is loader and driver behaviour rather than
+this module's code, but it is untested and should be the first thing tried.
+
+### Checking it still builds where it has not been built
+
+`tests/diff/tools/portability_check.sh` compiles every translation unit with
+GCC/libstdc++, then links and runs `diff_unit_tests` **with asserts live** —
+no `NDEBUG`, unlike the CMake Release targets.
+
+```bash
+tests/diff/tools/portability_check.sh              # compile, link, run
+tests/diff/tools/portability_check.sh --syntax-only
+```
+
+Both halves earned their place on the first run. MSVC's headers transitively
+include far more than libstdc++ does, so fourteen files were using
+`std::size_t`, `std::max` or `std::numeric_limits` with no `<cstddef>`,
+`<algorithm>` or `<limits>` anywhere in their include chain — fine on
+Windows, an error on GCC. And because the test targets build Release,
+`NDEBUG` had been hiding an `ArenaLayout::block()` that asserted its index
+was in range *and* returned an invalid block when it was not, with a test
+deliberately exercising the second path. With asserts compiled away the test
+passed; with them live it aborted the binary. A test that only passes in a
+configuration nobody ships is not testing what ships.
+
 ### The regression tool
 
 `tests/diff/tools/probe_normalise.py` compares two probe runs, masking only

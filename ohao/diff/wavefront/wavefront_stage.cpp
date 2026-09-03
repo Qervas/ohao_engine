@@ -65,9 +65,10 @@ void WavefrontStage::record(VkCommandBuffer cmd) const {
           "successful bindBuffers()/bindStorageBuffer()/bindAccelerationStructure() call since "
           "that build(), before record() is called");
 
-    // Unconditional guard backing the assert above, same pattern as
-    // ArenaLayout::block() (arena_layout.cpp): the assert is a debug-time
-    // diagnostic, this early return is what actually makes an unbuilt,
+    // Unconditional guard backing the assert above: the assert is a
+    // debug-time diagnostic for programmer error -- recording a stage that
+    // was never built, which no caller is entitled to do -- and this early
+    // return is what actually makes an unbuilt,
     // destroyed, or incompletely bound stage's record() a safe no-op in a
     // Release build (NDEBUG compiles the assert out, but not this check).
     if (m_pipeline.pipeline() == VK_NULL_HANDLE || m_pipeline.layout() == VK_NULL_HANDLE ||
