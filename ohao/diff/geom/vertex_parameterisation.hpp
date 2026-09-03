@@ -36,6 +36,7 @@
 // than a rewrite.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 

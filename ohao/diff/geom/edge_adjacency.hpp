@@ -17,6 +17,7 @@
 // the GPU over the structure this produces.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 

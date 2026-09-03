@@ -1,6 +1,7 @@
 #include "diff/geom/silhouette_set.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <map>
 #include <set>
 

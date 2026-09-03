@@ -1,0 +1,5 @@
+# Shell scripts must keep LF wherever they are checked out: a CRLF
+# shebang fails on Linux with "bad interpreter: /bin/bash^M". Deliberately
+# narrow -- a repo-wide "text=auto" here would renormalise every tracked
+# file on the next checkout, which is not a change to make in passing.
+*.sh text eol=lf

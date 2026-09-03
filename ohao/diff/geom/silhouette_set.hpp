@@ -28,6 +28,7 @@
 
 #include "diff/geom/edge_adjacency.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 

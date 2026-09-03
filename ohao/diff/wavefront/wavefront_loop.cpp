@@ -1,5 +1,6 @@
 #include "diff/wavefront/wavefront_loop.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <span>
 #include <utility>

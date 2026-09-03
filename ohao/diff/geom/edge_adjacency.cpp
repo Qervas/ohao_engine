@@ -1,6 +1,7 @@
 #include "diff/geom/edge_adjacency.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <map>
 #include <utility>
 

@@ -1,6 +1,7 @@
 // Stage 2 Task 2, check 51: the L2 loss kernel.
 #include "probe/checks_loss.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>

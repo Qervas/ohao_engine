@@ -5,6 +5,7 @@
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/param/param_registry.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>

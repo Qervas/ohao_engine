@@ -3,6 +3,7 @@
 
 #include "diff/geom/boundary_integrand.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>

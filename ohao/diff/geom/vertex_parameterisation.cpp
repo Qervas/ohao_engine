@@ -1,6 +1,7 @@
 #include "diff/geom/vertex_parameterisation.hpp"
 
 #include <cmath>
+#include <cstddef>
 
 namespace ohao::diff {
 

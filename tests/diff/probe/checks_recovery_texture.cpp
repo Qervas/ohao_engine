@@ -11,6 +11,7 @@
 #include "diff/wavefront/wavefront_loop.hpp"
 #include "render/rt/env_cdf.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
