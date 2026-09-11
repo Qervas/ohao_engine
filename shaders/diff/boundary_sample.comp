@@ -2,6 +2,10 @@
 // Float atomicAdd into the vertex-gradient arena, for the reason every
 // gradient scatter in this subsystem needs it.
 #extension GL_EXT_shader_atomic_float : require
+// ITEM 6: the radiance on each side of a silhouette, TRACED rather than
+// pushed. Declared here and unused until pc.traceRadiance says otherwise --
+// see the note on that flag.
+#extension GL_EXT_ray_query : require
 
 // STAGE 3 -- THE BOUNDARY KERNEL, coverage form.
 //
@@ -105,6 +109,25 @@ layout(std430, binding = 4) readonly buffer AdjointSeed {
     float v[];
 } seed;
 
+// ITEM 6, TASK 1. The scene, for tracing the radiance at a chord instead of
+// reading it off a push constant.
+//
+// BOUND BUT NOT YET READ. This task adds the bindings and the flag and
+// nothing else, so that the REGRESSION GATE can run before the integrand
+// changes: with pc.traceRadiance == 0 every check from 37 to 68 must still
+// produce its original numbers. A new binding that perturbs an existing
+// result means the descriptor set or the push block is wrong, and that is
+// far easier to find now than after the mathematics moves too.
+layout(binding = 5) uniform accelerationStructureEXT topLevelAS;
+
+// One emission value per primitive, indexed by the ray query's primitive
+// index. Constant per surface, which is what makes the traced jump PIECEWISE
+// CONSTANT along a chord and keeps the moment integral exact -- see the item
+// 6 plan for why that means 6a does not want a convergence gate.
+layout(std430, binding = 6) readonly buffer PrimitiveEmission {
+    float v[];
+} emission;
+
 layout(push_constant) uniform Push {
     uint edgeCount;
     uint imageWidth;
@@ -134,6 +157,11 @@ layout(push_constant) uniform Push {
     // offset -- the same convention gradAlbedoOffset uses on the interior
     // side. 0 when the caller bound a standalone buffer.
     uint gradOffset;
+    // ITEM 6: 0 uses lIn/lOut and their gradients as before; 1 traces.
+    // Zero everywhere until task 2, which is what makes task 1's regression
+    // gate meaningful rather than a formality.
+    uint traceRadiance;
+    uint primitiveCount;
 } pc;
 
 /// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.

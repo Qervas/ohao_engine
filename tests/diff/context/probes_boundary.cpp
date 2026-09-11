@@ -128,6 +128,11 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         std::uint32_t useFlags;
         std::uint32_t useSeed;
         std::uint32_t gradOffset;
+        // ITEM 6 task 1: declared, pushed as zero, not yet read by the
+        // shader. The point is that the regression gate runs before the
+        // integrand changes.
+        std::uint32_t traceRadiance;
+        std::uint32_t primitiveCount;
     } push{edgeCount,
            imageWidth,
            imageHeight,
@@ -138,7 +143,9 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
            {radiance.gradOut[0], radiance.gradOut[1]},
            useFlags ? 1u : 0u,
            useSeed ? 1u : 0u,
-           intoArena ? arenaFloatOffset : 0u};
+           intoArena ? arenaFloatOffset : 0u,
+           0u,
+           0u};
 
     WavefrontStage stage;
     if (ok) {
