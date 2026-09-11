@@ -293,6 +293,15 @@ bool GpuProbeContext::init() {
 void GpuProbeContext::shutdown() {
     if (m_device != VK_NULL_HANDLE) vkDeviceWaitIdle(m_device);
 
+    // The null scene and its emission buffer are built lazily and live for
+    // the context's lifetime, so this is the only place they can be
+    // released. Missing it left a TLAS, its backing buffers and a
+    // VkDeviceMemory alive at vkDestroyDevice, which the validation layer
+    // reports as object-tracking leaks -- and does so ten times before
+    // hitting its duplicate limit, which is how it was found.
+    destroyOwnedScene(m_nullScene);
+    if (m_nullEmission.isValid()) m_allocator.destroyBuffer(m_nullEmission);
+
     m_allocator.shutdown();
 
     if (m_commandPool != VK_NULL_HANDLE) {

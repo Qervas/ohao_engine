@@ -1155,6 +1155,25 @@ public:
         [[nodiscard]] bool valid() const noexcept { return handle().valid(); }
     };
 
+    /// A TLAS over a single degenerate triangle, built once and kept for the
+    /// life of this context.
+    ///
+    /// WHY IT EXISTS. boundary_sample.comp now STATICALLY references a TLAS
+    /// and an emission buffer, and Vulkan requires a descriptor for every
+    /// statically-used binding whether the branch that reads it runs or not.
+    /// The alternatives were two shader variants -- this subsystem's usual
+    /// answer, and the right one when the two differ substantially -- or
+    /// building a real acceleration structure per call, which the boundary
+    /// probe makes hundreds of times inside a single recovery gate. A null
+    /// scene shared across every call costs one TLAS for the whole run and
+    /// keeps ONE shader, which is the cheaper trade when the branch is a
+    /// single flag rather than a different integrand.
+    ///
+    /// It is never traced against: pc.traceRadiance is 0 whenever it is
+    /// bound.
+    [[nodiscard]] VkAccelerationStructureKHR nullSceneTlas();
+    [[nodiscard]] VkBuffer nullEmissionBuffer();
+
     /// Release the five pipelines a caller kept across calls. They are built
     /// on first use by `runWavefrontGradientProbe`, so there is no matching
     /// build entry point -- one piece of code knows the binding tables.
@@ -1195,6 +1214,9 @@ private:
     VkInstance m_instance{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
     VkDevice m_device{VK_NULL_HANDLE};
+    OwnedScene m_nullScene;
+    GpuBuffer m_nullEmission{};
+
     VkQueue m_queue{VK_NULL_HANDLE};
     uint32_t m_queueFamily{0};
     VkCommandPool m_commandPool{VK_NULL_HANDLE};

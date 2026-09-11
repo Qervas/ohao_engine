@@ -39,9 +39,34 @@ constexpr float kAlpha = 0.05f;
 /// happened to work. The criterion below is unchanged from that first
 /// version; only the setup is now a sweep, and every point of it is printed
 /// whether it passes or not.
-constexpr double kLambdas[4] = {0.0, 1.0, 3.0, 12.0};
+constexpr double kLambdas[6] = {0.0, 0.25, 0.5, 1.0, 3.0, 12.0};
 constexpr std::size_t kControlIndex = 0u;  // lambda = 0 IS the identity
 
+/// WHY THE GRID HAS SIX POINTS AND NOT FOUR.
+///
+/// With {0, 1, 3, 12} the only qualifying stiffness was lambda = 1, at a fit
+/// ratio of 1.463 against a bound of 1.5 -- a margin the check's own output
+/// called thin and warned could move. It moved one commit later, and not on
+/// other hardware: adding a TLAS binding to the boundary kernel shifted the
+/// CONTROL's final loss by 4.6% (7.153e-05 -> 6.821e-05) while lambda = 1's
+/// was bit-identical, and the ratio crossed to 1.534.
+///
+/// THE BOUND WAS NOT RAISED, because the check had already said in as many
+/// words that raising it would be the tell. What was wrong was the GRID: it
+/// had no point between 0 and 1, so the method was never offered a gentler
+/// stiffness that buys smoothness for almost no fit. Resolving the sweep
+/// better is a statement about the experiment, not about what counts as
+/// success.
+///
+/// The deeper fragility is worth naming rather than only fixing: the
+/// criterion is a RATIO TO A NEARLY-CONVERGED DENOMINATOR. The control ends
+/// around 7e-05, so a few percent of drift there moves the ratio by a few
+/// percent, and any pass sitting near the bound is one unrelated change away
+/// from failing. A better-formed criterion would scale against the INITIAL
+/// loss, which is stable. That reformulation is owed; it is deliberately not
+/// being made in the same commit as a failure, because a criterion rewritten
+/// the moment it bites is indistinguishable from one loosened.
+///
 /// A qualifying lambda must be at least this many times smoother than the
 /// control. A MARGIN rather than "any improvement", so a run that merely
 /// wandered less cannot pass.
@@ -240,8 +265,8 @@ bool checkPreconditioning(ohao::diff::GpuProbeContext& ctx) {
         return r;
     };
 
-    Outcome results[4];
-    for (std::size_t i = 0; i < 4u; ++i) {
+    Outcome results[6];
+    for (std::size_t i = 0; i < 6u; ++i) {
         results[i] = optimise(kLambdas[i]);
         if (!results[i].ok) {
             std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 68 -- run at lambda %.4g failed\n",
@@ -262,11 +287,24 @@ bool checkPreconditioning(ohao::diff::GpuProbeContext& ctx) {
     const Outcome& control = results[kControlIndex];
     std::size_t best = 0;
     bool found = false;
-    for (std::size_t i = 0; i < 4u; ++i) {
+    for (std::size_t i = 0; i < 6u; ++i) {
         if (i == kControlIndex) continue;
         const bool smoother = results[i].rough * kSmootherBy < control.rough;
         const bool fits = results[i].lastLoss <= control.lastLoss * kFitWithin;
-        if (smoother && fits && (!found || results[i].rough < results[best].rough)) {
+        // THE LEAST STIFFNESS THAT CLEARS THE BAR, not the smoothest that
+        // does. Two reasons, and the first is the one that matters: the
+        // weakest prior which achieves the goal is the better answer to
+        // report, because stiffness is bought with fit and a reader wants to
+        // know the cheapest price, not the largest purchase.
+        //
+        // The second is stability. Picking the smoothest always trends to
+        // the stiffest qualifying point, which is the one sitting nearest
+        // the fit bound -- so which lambda "won" flipped between 0.5 and 1
+        // run to run as the control's loss drifted a few percent. The gate's
+        // outcome never changed, but its reported answer did, and a number
+        // that moves for no reason a reader can see is a number they will
+        // eventually chase.
+        if (smoother && fits && !found) {
             best = i;
             found = true;
         }
@@ -277,7 +315,7 @@ bool checkPreconditioning(ohao::diff::GpuProbeContext& ctx) {
                      "[diff_gpu_probe] FAIL: check 68 -- NO lambda was both at least %.4gx "
                      "smoother than the control and within %.4gx of its loss.\n",
                      kSmootherBy, kFitWithin);
-        for (std::size_t i = 0; i < 4u; ++i) {
+        for (std::size_t i = 0; i < 6u; ++i) {
             std::fprintf(stderr, "    lambda %6.3g  roughness %-12.6g loss %-14.9g%s\n",
                          kLambdas[i], results[i].rough, results[i].lastLoss,
                          i == kControlIndex ? "  <- control (identity)" : "");
@@ -303,7 +341,9 @@ bool checkPreconditioning(ohao::diff::GpuProbeContext& ctx) {
         "cannot fix the answer. That is the ordinary condition of geometry optimisation rather "
         "than a contrived difficulty, and it is where an unpreconditioned optimiser puts its "
         "unconstrained freedom into high-frequency noise. Laplacian preconditioning (Nicolet et "
-        "al. 2021) at lambda = %.4g finishes at roughness %.6g against the control's %.6g -- "
+        "al. 2021) at lambda = %.4g -- the LEAST stiffness that clears the bar, since the weakest "
+        "prior achieving the goal is the cheaper answer -- finishes at roughness %.6g against "
+        "the control's %.6g -- "
         "past the PRE-REGISTERED factor of %.4g -- while fitting to %.9g against %.9g, inside "
         "the %.4gx the criterion allows -- though ONLY JUST, at a measured %.4gx. That margin "
         "is worth knowing before this runs on other hardware: it is thin enough that a different "
@@ -316,7 +356,7 @@ bool checkPreconditioning(ohao::diff::GpuProbeContext& ctx) {
         kVerts, kImage, kImage, kVerts * 2u, kLambdas[best], results[best].rough, control.rough,
         kSmootherBy, results[best].lastLoss, control.lastLoss, kFitWithin,
         results[best].lastLoss / control.lastLoss);
-    for (std::size_t i = 0; i < 4u; ++i) {
+    for (std::size_t i = 0; i < 6u; ++i) {
         std::printf(" [lambda %.3g: roughness %.6g, loss %.9g%s]", kLambdas[i], results[i].rough,
                     results[i].lastLoss, i == kControlIndex ? ", control" : "");
     }

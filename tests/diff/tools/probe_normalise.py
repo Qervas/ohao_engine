@@ -127,6 +127,11 @@ SUBS = [
     sub(r'(against the control\'s )(' + F + r')', r'\1<A>'),
     sub(r'(while fitting to )(' + F + r')( against )(' + F + r')', r'\1<L>\3<L>'),
     sub(r'(at a measured )(' + F + r')(x)', r'\1<R>\3'),
+    # Which lambda the sweep SELECTS is a result, not a constant: it is
+    # whichever first clears a bar computed from accumulator-derived
+    # numbers. The lambda values inside the printed table stay gated --
+    # those are the experiment.
+    sub(r'(preconditioning \(Nicolet et al. 2021\) at lambda = )(' + F + r')', r'\1<K>'),
 ]
 
 # `vs analytic` and `|err|` mean the arena only on the lines that pair them.

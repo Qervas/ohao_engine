@@ -16,6 +16,32 @@
 
 namespace ohao::diff {
 
+VkAccelerationStructureKHR GpuProbeContext::nullSceneTlas() {
+    if (!m_nullScene.valid()) {
+        // One degenerate triangle. Its geometry is irrelevant -- nothing
+        // traces against it -- so the smallest thing a BLAS build accepts is
+        // the right thing to build.
+        const std::vector<float> positions = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+                                              0.0f, 1.0f, 0.0f};
+        const std::vector<std::uint32_t> indices = {0u, 1u, 2u};
+        if (!buildOwnedScene(std::span<const float>(positions),
+                             std::span<const std::uint32_t>(indices), m_nullScene)) {
+            std::fprintf(stderr, "[GpuProbeContext] nullSceneTlas: build failed\n");
+            return VK_NULL_HANDLE;
+        }
+    }
+    return m_nullScene.tlas;
+}
+
+VkBuffer GpuProbeContext::nullEmissionBuffer() {
+    if (!m_nullEmission.isValid()) {
+        const std::vector<float> one{0.0f};
+        m_nullEmission = m_allocator.createBufferFromSpan<float>(
+            std::span<const float>(one), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    }
+    return m_nullEmission.buffer;
+}
+
 bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions,
                                        const std::vector<std::uint32_t>& edgeVertexPairs,
                                        std::uint32_t imageWidth, std::uint32_t imageHeight,
@@ -149,9 +175,13 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
 
     WavefrontStage stage;
     if (ok) {
-        const VkDescriptorType bindings[5] = {
-            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        // SEVEN now: the shader statically references a TLAS at 5 and an
+        // emission buffer at 6, so a descriptor must exist for both even
+        // when pc.traceRadiance is 0 and neither is read.
+        const VkDescriptorType bindings[7] = {
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,           VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,           VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
         ok = stage.build(m_device, "diff_boundary_sample.comp.spv", bindings,
                          sizeof(BoundaryPush));
@@ -161,7 +191,12 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         const VkBuffer buffers[5] = {posBuffer.buffer, edgeBuffer.buffer,
                                      intoArena ? arena->buffer() : gradBuffer.buffer,
                                      flagBuffer.buffer, seedBuffer.buffer};
-        ok = stage.bindBuffers(m_device, buffers);
+        ok = stage.bindBuffers(m_device, buffers) &&
+             // Bindings 5 and 6 exist because the shader references them
+             // statically. Nothing reads them while traceRadiance is 0; the
+             // null scene is what satisfies Vulkan, not the branch.
+             stage.bindAccelerationStructure(m_device, 5u, nullSceneTlas()) &&
+             stage.bindStorageBuffer(m_device, 6u, nullEmissionBuffer());
         if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: bindBuffers failed\n");
     }
     if (ok) {
