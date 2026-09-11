@@ -228,6 +228,7 @@
 #include "probe/checks_ownership.hpp"
 #include "probe/checks_engine_recovery.hpp"
 #include "probe/checks_precondition.hpp"
+#include "probe/checks_traced_jump.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -305,6 +306,7 @@ using ohao::diff::probe::checkFacadeParity;
 using ohao::diff::probe::checkOwnership;
 using ohao::diff::probe::checkEngineRecovery;
 using ohao::diff::probe::checkPreconditioning;
+using ohao::diff::probe::checkTracedJump;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -537,6 +539,11 @@ int main() {
     // underdetermined polygon, where Laplacian preconditioning must
     // reach a smoother shape than the same run at lambda = 0.
     if (!checkPreconditioning(ctx)) return 1;
+
+    // 69. THE RADIANCE, TRACED: the last Stage 3 deviation, with an
+    // INVERTED control -- the pushed form must AGREE, because on this
+    // scene its two constants are exactly the right answer.
+    if (!checkTracedJump(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

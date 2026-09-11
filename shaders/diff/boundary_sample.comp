@@ -158,11 +158,55 @@ layout(push_constant) uniform Push {
     // side. 0 when the caller bound a standalone buffer.
     uint gradOffset;
     // ITEM 6: 0 uses lIn/lOut and their gradients as before; 1 traces.
-    // Zero everywhere until task 2, which is what makes task 1's regression
-    // gate meaningful rather than a formality.
     uint traceRadiance;
     uint primitiveCount;
+    // Screen <-> world, which is AFFINE here because this pass is
+    // orthographic by construction: screen = world.xy * screenScale +
+    // screenOffset. The inverse is what turns a chord point into a ray.
+    float screenScale;
+    vec2 screenOffset;
+    // Where the orthographic ray starts, and how far to either side of the
+    // edge the two samples are taken. The epsilon must be small enough to
+    // stay on the correct side of a neighbouring edge and large enough to
+    // clear the one being integrated; the host picks it and check 69 asserts
+    // the result does not depend on the choice.
+    float rayOriginZ;
+    float traceEps;
+    // What a miss returns.
+    float background;
 } pc;
+
+/// The radiance at one GLOBAL screen point, by tracing.
+///
+/// ORTHOGRAPHIC, which is not a simplification here but the pass's existing
+/// premise: `boundary_sample.comp` has always taken screen space to be world
+/// xy, and checks 57-68 are written against that. So the ray is straight down
+/// -z from a plane above the scene, and the only work is undoing the affine
+/// screen map.
+///
+/// PIECEWISE CONSTANT, because emission is per primitive. That is what keeps
+/// the moment integral below EXACT rather than a quadrature: along a chord
+/// that does not cross a second silhouette the traced jump does not vary, so
+/// the j1 term is zero and there is no truncation error to bound. A SHADED
+/// radiance would change that, and is the layer after this one.
+float tracedRadianceAt(vec2 screenPoint) {
+    const vec2 world = (screenPoint - pc.screenOffset) / pc.screenScale;
+    const vec3 origin = vec3(world, pc.rayOriginZ);
+    const vec3 dir = vec3(0.0, 0.0, -1.0);
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, topLevelAS, gl_RayFlagsOpaqueEXT, 0xFF, origin, 0.0, dir, 1e30);
+    while (rayQueryProceedEXT(rq)) { }
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return pc.background;
+    }
+    const uint prim = uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, true));
+    // The bounds test is the same one every arena write in this subsystem
+    // carries: the shader is told a count and cannot verify the buffer holds
+    // it, so a short buffer would read past its end.
+    if (prim >= pc.primitiveCount) return pc.background;
+    return emission.v[prim];
+}
 
 /// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.
 /// Returns false when the edge misses the pixel entirely.
@@ -245,10 +289,25 @@ void main() {
     // in here. Getting that wrong would make every pixel evaluate the field
     // as though it sat at the origin, which is invisible for a constant
     // field and is exactly what this layer changes.
-    const vec2 dGrad = pc.gradIn - pc.gradOut;
     const vec2 g0 = p0 + vec2(px, py);
-    const float j0 = ((pc.lIn - pc.lOut) + dot(dGrad, g0)) * w;
-    const float j1 = dot(dGrad, seg) * w;
+    float j0;
+    float j1;
+    if (pc.traceRadiance != 0u) {
+        // TRACED. Sampled once at the chord's midpoint and constant along it:
+        // see tracedRadianceAt's note on why that is exact rather than a
+        // one-point quadrature. "Inside" is the NEGATIVE side of n, which is
+        // this pass's convention everywhere and the thing a reversed winding
+        // silently swaps.
+        const vec2 mid = g0 + (0.5 * (uA + uB)) * seg;
+        const float lIn = tracedRadianceAt(mid - pc.traceEps * n);
+        const float lOut = tracedRadianceAt(mid + pc.traceEps * n);
+        j0 = (lIn - lOut) * w;
+        j1 = 0.0;
+    } else {
+        const vec2 dGrad = pc.gradIn - pc.gradOut;
+        j0 = ((pc.lIn - pc.lOut) + dot(dGrad, g0)) * w;
+        j1 = dot(dGrad, seg) * w;
+    }
 
     // INTEGRAL (j0 + j1 u)(1-u) du and INTEGRAL (j0 + j1 u) u du.
     const float w0 = j0 * (m0 - m1) + j1 * (m1 - m2);

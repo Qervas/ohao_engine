@@ -1102,6 +1102,30 @@ public:
         float lOut = 0.0f;
         float gradIn[2] = {0.0f, 0.0f};
         float gradOut[2] = {0.0f, 0.0f};
+
+        /// ITEM 6: take the radiance from the SCENE instead of from the four
+        /// numbers above. When set, `lIn`, `lOut` and the gradients are
+        /// ignored entirely -- they are not a fallback for a missed ray, and
+        /// `background` is.
+        ///
+        /// The screen map is affine because this pass is orthographic by
+        /// construction: screen = world.xy * screenScale + screenOffset. A
+        /// caller that gets it wrong traces the right scene at the wrong
+        /// place, which looks like a plausible gradient rather than an error,
+        /// so check 69 pins it against the pushed form on a scene where both
+        /// must agree.
+        bool trace = false;
+        VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+        VkBuffer emission = VK_NULL_HANDLE;
+        std::uint32_t primitiveCount = 0;
+        float screenScale = 1.0f;
+        float screenOffset[2] = {0.0f, 0.0f};
+        float rayOriginZ = 0.0f;
+        /// How far either side of the edge the two samples are taken, in
+        /// SCREEN units. Large enough to clear the edge being integrated,
+        /// small enough not to cross a neighbouring one.
+        float traceEps = 0.05f;
+        float background = 0.0f;
     };
 
     [[nodiscard]] bool runBoundaryProbe(const std::vector<float>& screenPositions,

@@ -66,6 +66,7 @@ add_executable(diff_gpu_probe
     probe/checks_ownership.cpp
     probe/checks_engine_recovery.cpp
     probe/checks_precondition.cpp
+    probe/checks_traced_jump.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

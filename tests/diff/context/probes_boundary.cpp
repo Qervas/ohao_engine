@@ -62,6 +62,21 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
                               "non-zero multiple of 2 uints\n");
         return false;
     }
+    if (radiance.trace && (radiance.tlas == VK_NULL_HANDLE ||
+                           radiance.emission == VK_NULL_HANDLE ||
+                           radiance.primitiveCount == 0u || radiance.screenScale == 0.0f)) {
+        // Refused rather than silently falling back to the null scene, which
+        // would trace a degenerate triangle, miss everything, and return a
+        // uniform background -- a zero jump, which reads as "this edge has no
+        // radiance discontinuity" rather than as a caller error.
+        std::fprintf(stderr,
+                     "[GpuProbeContext] runBoundaryProbe: trace was requested but the scene is "
+                     "incomplete (tlas %p, emission %p, primitives %u, screenScale %g)\n",
+                     static_cast<const void*>(radiance.tlas),
+                     static_cast<const void*>(radiance.emission), radiance.primitiveCount,
+                     static_cast<double>(radiance.screenScale));
+        return false;
+    }
     if (imageWidth == 0u || imageHeight == 0u) {
         std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: a zero-sized image has no "
                               "pixels for an edge to cross\n");
@@ -159,6 +174,11 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         // integrand changes.
         std::uint32_t traceRadiance;
         std::uint32_t primitiveCount;
+        float screenScale;
+        float screenOffset[2];
+        float rayOriginZ;
+        float traceEps;
+        float background;
     } push{edgeCount,
            imageWidth,
            imageHeight,
@@ -170,8 +190,13 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
            useFlags ? 1u : 0u,
            useSeed ? 1u : 0u,
            intoArena ? arenaFloatOffset : 0u,
-           0u,
-           0u};
+           radiance.trace ? 1u : 0u,
+           radiance.primitiveCount,
+           radiance.screenScale,
+           {radiance.screenOffset[0], radiance.screenOffset[1]},
+           radiance.rayOriginZ,
+           radiance.traceEps,
+           radiance.background};
 
     WavefrontStage stage;
     if (ok) {
@@ -195,8 +220,10 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
              // Bindings 5 and 6 exist because the shader references them
              // statically. Nothing reads them while traceRadiance is 0; the
              // null scene is what satisfies Vulkan, not the branch.
-             stage.bindAccelerationStructure(m_device, 5u, nullSceneTlas()) &&
-             stage.bindStorageBuffer(m_device, 6u, nullEmissionBuffer());
+             stage.bindAccelerationStructure(
+                 m_device, 5u, radiance.trace ? radiance.tlas : nullSceneTlas()) &&
+             stage.bindStorageBuffer(
+                 m_device, 6u, radiance.trace ? radiance.emission : nullEmissionBuffer());
         if (!ok) std::fprintf(stderr, "[GpuProbeContext] runBoundaryProbe: bindBuffers failed\n");
     }
     if (ok) {
