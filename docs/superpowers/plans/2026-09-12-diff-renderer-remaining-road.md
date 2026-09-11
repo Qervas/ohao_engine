@@ -12,6 +12,42 @@ a gap in memory.
 
 ---
 
+## Progress — updated 2026-09-12
+
+| # | Item | State |
+|---|---|---|
+| 1 | Engine integration | **partial** — facade, ownership contract and optimiser gated (checks 65–67); the render orchestration and a real call site remain |
+| 2 | Sensitivity maps | not started |
+| 3 | Renderer fitting | not started; the differentiability decision below is still owed |
+| 4 | SVBRDF as a client | not started |
+| 5 | Mitsuba oracle | not started |
+| 6 | Traced radiance | not started |
+| 7 | Stage 4 — scale | not started |
+| 8 | Laplacian preconditioning | **DONE** — `LaplacianVertexParameterisation`, 5 unit tests, check 68 |
+
+Item 8 went first among the independent ones because it was the best ratio:
+a quarter of a stage for a capability the spec calls close to mandatory, with
+a control that writes itself (lambda = 0 is exactly the identity). Its gate
+turned into a **lambda sweep** rather than a single stiffness, because a
+single pre-registered lambda = 12 failed informatively — nine times smoother
+than the control and three hundred times worse fitting. Choosing lambda is
+part of using the method, so the sweep reports the trade-off instead of
+replacing 12 with whatever worked.
+
+Three things learned in item 1 that outlive it, and belong with the hazards
+at the bottom of this file:
+
+- **The winding convention has now bitten three times** (checks 63, 68, and
+  the boundary term's original sign error). A reversed winding negates the
+  whole boundary term, which is gradient ASCENT rather than a small error.
+  Assert the signed area wherever a shape is built.
+- **A refactor that changes nothing while its new path is unused proves only
+  that it is inert.** Both the persistent-scene and persistent-pipeline
+  changes were gated twice: byte-identical with the option off, and
+  byte-identical *through the new path* with it on.
+- **Release hides asserts, and 94% of the probe's output was setup chatter.**
+  Both were found by looking at a diff that seemed to say something else.
+
 ## Where this starts
 
 Verified on 2026-09-04, at `diff-stage3-boundary`:
