@@ -1,5 +1,6 @@
 #include "rt_acceleration_structure.hpp"
 #include <cstring>
+#include <mutex>
 #include <algorithm>
 
 namespace ohao {
@@ -53,9 +54,18 @@ bool RTAccelerationStructure::init(VkDevice device, VkPhysicalDevice physicalDev
     props2.pNext = &m_rtPipelineProperties;
     vkGetPhysicalDeviceProperties2(physicalDevice, &props2);
 
-    std::cout << "[RT] Ray tracing supported!" << std::endl;
-    std::cout << "[RT]   maxRayRecursionDepth: " << m_rtPipelineProperties.maxRayRecursionDepth << std::endl;
-    std::cout << "[RT]   shaderGroupHandleSize: " << m_rtPipelineProperties.shaderGroupHandleSize << std::endl;
+    // ONCE, not per init. These are properties of the DEVICE, not of this
+    // acceleration structure, so the second printing says nothing the first
+    // did not -- and a caller that builds many structures says it many times.
+    // diff_gpu_probe builds several hundred: these three lines were 94% of
+    // its entire output, and probe_normalise.py compares runs line by line,
+    // so that was 94% of a regression diff carrying no information.
+    static std::once_flag rtPropertiesReported;
+    std::call_once(rtPropertiesReported, [this]() {
+        std::cout << "[RT] Ray tracing supported!" << std::endl;
+        std::cout << "[RT]   maxRayRecursionDepth: " << m_rtPipelineProperties.maxRayRecursionDepth << std::endl;
+        std::cout << "[RT]   shaderGroupHandleSize: " << m_rtPipelineProperties.shaderGroupHandleSize << std::endl;
+    });
 
     m_supported = true;
     return true;
