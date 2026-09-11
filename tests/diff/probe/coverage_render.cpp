@@ -40,4 +40,48 @@ std::vector<float> renderTriangleCoverage(const std::vector<float>& tri, std::ui
     return out;
 }
 
+bool coverageInsidePolygon(const std::vector<float>& poly, double px, double py) {
+    const std::size_t n = poly.size() / 2u;
+    if (n < 3u) return false;
+    // Even-odd crossing count. The half-open test on y (one endpoint strictly
+    // above, one not) is what stops a vertex exactly on the scanline being
+    // counted twice and flipping the answer for the pixel below it.
+    bool inside = false;
+    for (std::size_t i = 0, j = n - 1u; i < n; j = i++) {
+        const double yi = poly[i * 2u + 1u];
+        const double yj = poly[j * 2u + 1u];
+        if ((yi > py) == (yj > py)) continue;
+        const double xi = poly[i * 2u + 0u];
+        const double xj = poly[j * 2u + 0u];
+        const double t = (py - yi) / (yj - yi);
+        if (px < xi + t * (xj - xi)) inside = !inside;
+    }
+    return inside;
+}
+
+std::vector<float> renderPolygonCoverage(const std::vector<float>& poly, std::uint32_t image,
+                                         std::uint32_t sub, double lIn, double lOut) {
+    std::vector<float> out(static_cast<std::size_t>(image) * image, 0.0f);
+    if (poly.size() < 6u || image == 0u || sub == 0u) return out;
+    const double invSub = 1.0 / static_cast<double>(sub);
+    const double invSamples = invSub * invSub;
+    for (std::uint32_t py = 0; py < image; ++py) {
+        for (std::uint32_t px = 0; px < image; ++px) {
+            std::uint32_t in = 0;
+            for (std::uint32_t sy = 0; sy < sub; ++sy) {
+                for (std::uint32_t sx = 0; sx < sub; ++sx) {
+                    if (coverageInsidePolygon(poly, px + (sx + 0.5) * invSub,
+                                              py + (sy + 0.5) * invSub)) {
+                        ++in;
+                    }
+                }
+            }
+            const double cov = static_cast<double>(in) * invSamples;
+            out[static_cast<std::size_t>(py) * image + px] =
+                static_cast<float>(cov * lIn + (1.0 - cov) * lOut);
+        }
+    }
+    return out;
+}
+
 }  // namespace ohao::diff::probe

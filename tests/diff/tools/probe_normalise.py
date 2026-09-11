@@ -113,6 +113,20 @@ SUBS = [
     sub(r'(worst relative disagreement is )(' + F + r')( at component )(\d+)', r'\1<R>\3<K>'),
     sub(r'(misses the oracle by )(' + F + r')( at component )(\d+)', r'\1<R>\3<K>'),
     sub(r'(, )(' + F + r')(x the bar)', r'\1<R>\3'),
+    # --- check 68, the preconditioning sweep. Every number here is the
+    # endpoint of 120 Adam iterations driven by the boundary pass's
+    # atomicAdd gradients. Only the lambda = 12 entry was observed to
+    # vary -- the stiffest run amplifies a tiny gradient difference over
+    # 120 steps -- and the rest are masked anyway, on the rule that
+    # agreeing across today's runs is not evidence of determinism.
+    # The LAMBDA values themselves are compile-time constants and stay
+    # gated: they are the experiment, not its result.
+    sub(r'(: roughness )(' + F + r')', r'\1<A>'),
+    sub(r'(, loss )(' + F + r')', r'\1<L>'),
+    sub(r'(finishes at roughness )(' + F + r')', r'\1<A>'),
+    sub(r'(against the control\'s )(' + F + r')', r'\1<A>'),
+    sub(r'(while fitting to )(' + F + r')( against )(' + F + r')', r'\1<L>\3<L>'),
+    sub(r'(at a measured )(' + F + r')(x)', r'\1<R>\3'),
 ]
 
 # `vs analytic` and `|err|` mean the arena only on the lines that pair them.

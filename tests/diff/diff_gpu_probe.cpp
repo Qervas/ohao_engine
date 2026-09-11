@@ -227,6 +227,7 @@
 #include "probe/checks_facade_parity.hpp"
 #include "probe/checks_ownership.hpp"
 #include "probe/checks_engine_recovery.hpp"
+#include "probe/checks_precondition.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -303,6 +304,7 @@ using ohao::diff::probe::checkBoundaryField;
 using ohao::diff::probe::checkFacadeParity;
 using ohao::diff::probe::checkOwnership;
 using ohao::diff::probe::checkEngineRecovery;
+using ohao::diff::probe::checkPreconditioning;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -530,6 +532,11 @@ int main() {
     // criterion, with DiffRenderer owning the arena and the value living
     // in an engine-style owner. Control: no authority sync, no progress.
     if (!checkEngineRecovery(ctx)) return 1;
+
+    // 68. WHAT PRECONDITIONING IS FOR: a deliberately
+    // underdetermined polygon, where Laplacian preconditioning must
+    // reach a smoother shape than the same run at lambda = 0.
+    if (!checkPreconditioning(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

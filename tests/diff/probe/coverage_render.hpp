@@ -29,4 +29,15 @@ namespace ohao::diff::probe {
                                                         std::uint32_t image, std::uint32_t sub,
                                                         double lIn, double lOut);
 
+/// Even-odd point-in-polygon, for a CLOSED polyline of N vertices, given
+/// as 2 floats each. Not the triangle test generalised: a polygon an optimiser has
+/// been let loose on may be non-convex or self-intersecting, and three
+/// same-sign cross products would call such a shape empty.
+[[nodiscard]] bool coverageInsidePolygon(const std::vector<float>& poly, double px, double py);
+
+/// One float per pixel, as renderTriangleCoverage but for a closed polygon.
+[[nodiscard]] std::vector<float> renderPolygonCoverage(const std::vector<float>& poly,
+                                                       std::uint32_t image, std::uint32_t sub,
+                                                       double lIn, double lOut);
+
 }  // namespace ohao::diff::probe
