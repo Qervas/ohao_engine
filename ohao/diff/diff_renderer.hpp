@@ -54,6 +54,7 @@
 
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/param/param_registry.hpp"
+#include "diff/wavefront/wavefront_stage.hpp"
 
 #include <vulkan/vulkan.h>
 
@@ -123,6 +124,37 @@ public:
     /// enough.
     [[nodiscard]] bool zeroGradients(VkCommandBuffer cmd);
 
+    /// Kingma & Ba's hyperparameters. The defaults are the paper's.
+    struct AdamSettings {
+        float alpha{1e-3f};
+        float beta1{0.9f};
+        float beta2{0.999f};
+        float epsilon{1e-8f};
+    };
+
+    /// RECORDS one Adam step for a registered parameter into `cmd`. Does not
+    /// submit, does not wait.
+    ///
+    /// `values` is the buffer holding the parameter's primal floats, and it is
+    /// updated IN PLACE by the kernel. The gradient and the optimiser state
+    /// come from THE ARENA, at this parameter's registered block offsets --
+    /// which is the whole reason optimizer_adam.comp grew gradOffset and
+    /// stateOffset, and what makes this a two-binding-and-two-integers
+    /// operation rather than three buffer copies.
+    ///
+    /// `stepIndex` is Kingma & Ba's t and is 1-BASED: the bias correction
+    /// divides by 1 - beta^t, which is zero at t = 0.
+    ///
+    /// WHOSE BUFFER `values` IS is the caller's decision and a consequential
+    /// one -- see the note on ownership at the top of this file. Passing the
+    /// engine's own live buffer is spec 4.3's model and costs no readback;
+    /// passing a scratch buffer seeded from a CPU-side authority costs a
+    /// readback per step but keeps one authority for the number. For a dozen
+    /// scalars the readback is free and the second is right; for a texture it
+    /// is not. This class deliberately does not choose for you.
+    [[nodiscard]] bool recordAdamStep(VkCommandBuffer cmd, ParamId id, VkBuffer values,
+                                      const AdamSettings& settings, std::uint32_t stepIndex);
+
     [[nodiscard]] State state() const noexcept { return m_state; }
     [[nodiscard]] bool ready() const noexcept { return m_state == State::Ready; }
     [[nodiscard]] const ParamRegistry& registry() const noexcept { return m_registry; }
@@ -135,11 +167,17 @@ public:
 private:
     [[nodiscard]] RegisterResult refuseUnlessConfiguring(const char* what) const;
 
+    /// Built lazily on the first recordAdamStep and kept: rebuilding a
+    /// pipeline per optimiser step would dominate the step itself.
+    [[nodiscard]] bool ensureAdamStage();
+
     VkDevice m_device{VK_NULL_HANDLE};
     VkPhysicalDevice m_physicalDevice{VK_NULL_HANDLE};
     State m_state{State::Uninitialised};
     ParamRegistry m_registry;
     GradientArena m_arena;
+    WavefrontStage m_adamStage;
+    bool m_adamStageBuilt{false};
 };
 
 }  // namespace ohao::diff

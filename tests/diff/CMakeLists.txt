@@ -62,6 +62,7 @@ add_executable(diff_gpu_probe
     probe/checks_param_recovery.cpp
     probe/checks_projection_recovery.cpp
     probe/checks_boundary_field.cpp
+    probe/checks_facade_parity.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE
