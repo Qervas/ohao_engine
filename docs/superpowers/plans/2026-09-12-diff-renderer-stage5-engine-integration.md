@@ -117,7 +117,7 @@ it must not be stepped while a frame reading those resources is in flight.
 
 ---
 
-### Task 1: `DiffRenderer`, the facade
+### Task 1: `DiffRenderer`, the facade — DONE (4 lifecycle unit tests)
 
 **Files:** `ohao/diff/diff_renderer.{hpp,cpp}`.
 
@@ -138,7 +138,7 @@ caller-supplied command buffer**.
 
 ---
 
-### Task 2: THE PARITY GATE — the facade computes what the probe computes
+### Task 2: THE PARITY GATE — DONE (check 65), REFRAMED
 
 **This is the task that makes the rest safe, and it comes before any engine
 resource is involved.**
@@ -160,7 +160,7 @@ and no way to separate them.
 
 ---
 
-### Task 3: A live parameter, end to end
+### Task 3: A live parameter, end to end — DONE (check 66)
 
 **Files:** `ohao/diff/diff_renderer.cpp`, plus whatever the scene exposes.
 
@@ -184,7 +184,7 @@ the CPU-side value, re-upload through the engine's existing path.
 
 ---
 
-### Task 4: GATE — recovery against engine resources
+### Task 4: GATE — recovery against engine resources — DONE (check 67)
 
 - [ ] **Step 1: Pre-register** `theta*`, `theta_0`, iterations, alpha, tolerance.
 - [ ] **Step 2:** Detune an engine-owned material parameter, render the target
@@ -196,7 +196,7 @@ the CPU-side value, re-upload through the engine's existing path.
 
 ---
 
-### Task 5: THE REGRESSION GATE
+### Task 5: THE REGRESSION GATE — DONE
 
 - [ ] **Step 1:** `diff_gpu_probe` produces its original numbers for every check
       1–64, compared through `probe_normalise.py` against a pre-Stage-5 baseline,
@@ -207,6 +207,80 @@ the CPU-side value, re-upload through the engine's existing path.
 - [ ] **Step 3:** `tests/diff/tools/portability_check.sh` clean.
 
 ---
+
+---
+
+## Results — recorded 2026-09-12
+
+`diff_gpu_probe` 72 `OK:` lines (checks numbered to 67), exit 0, 19.6s.
+`diff_unit_tests` 62/62 under MSVC and under GCC 15 with asserts live, 65/65
+translation units clean. Full build clean at `-j8`; `renderer_test` ALL PASS;
+`generate_tree.py` exit 0. Checks 1–64 byte-for-byte unchanged through
+`probe_normalise.py`, verified link by link as each commit landed, with
+`--selfcheck` clean over four runs at every step.
+
+### What the stage actually delivered
+
+The facade, the ownership contract, and the optimiser half of the loop — all
+gated. `DiffRenderer` owns a registry and an arena through a three-state
+lifecycle, drives Adam from the arena at registry-assigned offsets, and check
+67 recovers check 54's `theta*` to 0.0063 against its unchanged pre-registered
+0.03 with the value living in an engine-style owner.
+
+### Deviations from this plan — recorded, not glossed
+
+**Task 1 shipped no `step`.** The plan's first step said the facade must
+"refuse to step". It has no `step` method: there was nothing for it to
+compute, and a method whose name promises a gradient while zeroing an arena
+is worse than its absence. What ships is the lifecycle plus `zeroGradients`,
+and the refusals are gated by removing them and watching two tests fail.
+
+**Task 2 was reframed once the code was read.** The plan assumed
+`DiffRenderer` computing "what the probe computes" was a thin call.
+`runWavefrontGradientProbe` is **640 lines and IS the orchestration** — the
+library owns the pieces, the harness owns the sequence. So check 65 pins the
+**optimiser half** rather than the whole loop, and the whole-loop gate becomes
+the existing checks producing identical numbers through the new path, which is
+stronger than the parity check the plan imagined.
+
+**Task 3 gates a reproduction, not `PathTracer`.** Standing the real class up
+needs its images and pipelines. Check 66 gates the protocol against a faithful
+copy of `setMaterialData`'s map-and-memcpy, and says so in its own output.
+
+**The headline goal is only half met, and this is the important one.**
+"`ohao_diff` stops being a library that only the test harness links" is NOT
+true: it is still linked by `diff_unit_tests` and `diff_gpu_probe` and nothing
+else. `DiffRenderer` exists and is gated, but no engine code constructs one,
+and the forward and backward dispatches still live in the harness. What this
+stage proves is that **the ends are connected** — parameters, arena, optimiser
+and value ownership — not that the engine runs an optimisation.
+
+### One tension the stage resolved
+
+`optimizer_adam.comp` says the parameters are "updated IN PLACE... the
+optimizer writes live engine resources"; `DiffRenderer`'s header says the
+engine object owns the value and the registry never does. Those read as
+contradictory and are not: the optimiser **does** write the live device
+buffer, and the host **must then** read it back into the CPU authority.
+Checks 66 and 67 establish exactly that, and 67 shows the omission is not
+untidiness but a severed loop.
+
+Still unresolved, and deliberately: for a TEXTURE parameter the per-step
+readback is not free, and the GPU copy would have to be the authority with the
+CPU side treated as an invalidated cache. Nothing here needs that yet.
+
+### What remains of engine integration
+
+1. **Move the render orchestration into the library.** The 640 lines are the
+   work. The gate is free and already exists: every check must produce
+   identical numbers through the moved code.
+2. **An actual engine call site**, so `ohao_diff` is linked by something that
+   is not a test — and the CMake link list stops being the honest answer to
+   "is this integrated".
+
+Only after both is item 1 of the remaining-road plan closed. Items 2–8 of that
+plan are unaffected by this distinction except item 2, which needs a call site
+to draw a sensitivity map from.
 
 ## What this stage deliberately does not do
 
