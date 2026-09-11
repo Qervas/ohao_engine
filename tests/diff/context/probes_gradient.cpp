@@ -41,6 +41,15 @@ using namespace probe_scene;  // NOLINT(google-build-using-namespace)
 // realisation -- a second seed would be a second measurement, not a better
 // one. Generalising the parity probe would have put its calibrated
 // non-vacuity gates one parameter default away from a different question.
+void GpuProbeContext::destroyOwnedStages(WavefrontGradientOptions::OwnedStages& stages) {
+    stages.scatterReplay.destroy(m_device);
+    stages.scatterForward.destroy(m_device);
+    stages.intersect.destroy(m_device);
+    stages.prepareIndirect.destroy(m_device);
+    stages.generate.destroy(m_device);
+    stages.built = false;
+}
+
 bool GpuProbeContext::buildOwnedScene(std::span<const float> positions,
                                       std::span<const std::uint32_t> indices, OwnedScene& out) {
     destroyOwnedScene(out);
@@ -450,11 +459,19 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         }
     }
 
-    WavefrontStage generate;
-    WavefrontStage prepareIndirect;
-    WavefrontStage intersect;
-    WavefrontStage scatterForward;
-    WavefrontStage scatterReplay;
+    // The pipelines: the caller's if it brought some, otherwise ours for the
+    // duration of this call. The references mean everything below is unaware
+    // of which, and `st.built` is what makes a caller's set build once.
+    WavefrontGradientOptions::OwnedStages localStages;
+    WavefrontGradientOptions::OwnedStages& st =
+        (options.stages != nullptr) ? *options.stages : localStages;
+    const bool ownStages = (options.stages == nullptr);
+
+    WavefrontStage& generate = st.generate;
+    WavefrontStage& prepareIndirect = st.prepareIndirect;
+    WavefrontStage& intersect = st.intersect;
+    WavefrontStage& scatterForward = st.scatterForward;
+    WavefrontStage& scatterReplay = st.scatterReplay;
     WavefrontStage* const scatterStages[2] = {&scatterForward, &scatterReplay};
 
     const VkDescriptorType kStateQueueCounter[3] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -486,34 +503,37 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                                                    // 12: the Stage 2 Task 1 adjoint seed.
                                                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
 
-    if (ok && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
+    const bool buildStages = ok && !st.built;
+    if (buildStages && !generate.build(m_device, "diff_wf_generate.comp.spv", kStateQueueCounter,
                               sizeof(GeneratePush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: generate build\n");
         ok = false;
     }
-    if (ok && !prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", kCounterOnly,
+    if (buildStages && ok && !prepareIndirect.build(m_device, "diff_wf_prepare_indirect.comp.spv", kCounterOnly,
                                      sizeof(WavefrontLoop::PrepareIndirectPush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: prepare_indirect "
                               "build\n");
         ok = false;
     }
-    if (ok && !intersect.build(m_device, "diff_wf_intersect.comp.spv", kIntersectBindings,
+    if (buildStages && ok && !intersect.build(m_device, "diff_wf_intersect.comp.spv", kIntersectBindings,
                                sizeof(WavefrontLoop::IntersectPush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: intersect build\n");
         ok = false;
     }
-    if (ok && !scatterForward.build(m_device, "diff_wf_scatter.comp.spv", kScatterBindings,
+    if (buildStages && ok && !scatterForward.build(m_device, "diff_wf_scatter.comp.spv", kScatterBindings,
                                     sizeof(WavefrontLoop::ScatterPush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: forward scatter "
                               "build\n");
         ok = false;
     }
-    if (ok && !scatterReplay.build(m_device, "diff_wf_scatter_replay.comp.spv", kScatterBindings,
+    if (buildStages && ok && !scatterReplay.build(m_device, "diff_wf_scatter_replay.comp.spv", kScatterBindings,
                                    sizeof(WavefrontLoop::ScatterPush))) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: REPLAY scatter build "
                               "failed (diff_wf_scatter_replay.comp.spv)\n");
         ok = false;
     }
+
+    if (buildStages && ok) st.built = true;
 
     if (ok) {
         const VkBuffer stateQueueCounter[3] = {buffers.stateBuffer(), buffers.queueBuffer(),
@@ -748,11 +768,10 @@ bool GpuProbeContext::runWavefrontGradientProbe(
         }
     }
 
-    scatterReplay.destroy(m_device);
-    scatterForward.destroy(m_device);
-    intersect.destroy(m_device);
-    prepareIndirect.destroy(m_device);
-    generate.destroy(m_device);
+    // Only ours. A caller's stages outlive this call by definition -- that
+    // is what they are for -- and destroying them here would leave the next
+    // call recording against pipelines that no longer exist.
+    if (ownStages) destroyOwnedStages(localStages);
     for (ScatterSinks* s : sinkSets) {
         if (s->film.isValid()) m_allocator.destroyBuffer(s->film);
         if (s->nee.isValid()) m_allocator.destroyBuffer(s->nee);

@@ -110,6 +110,10 @@ bool checkEngineRecovery(ohao::diff::GpuProbeContext& ctx) {
         return false;
     }
     const ohao::diff::WavefrontGradientOptions::PrebuiltScene sceneHandle = scene.handle();
+    // AND THE PIPELINES ONCE. Five compute pipelines per render, 402 renders.
+    // Built on first use and kept; the descriptor bindings are still written
+    // every call, because the adjoint seed really is a new buffer each time.
+    ohao::diff::WavefrontGradientOptions::OwnedStages stages;
 
     auto render = [&](float albedo, const std::vector<float>& seed,
                       std::vector<float>& outFilm) -> bool {
@@ -117,6 +121,7 @@ bool checkEngineRecovery(ohao::diff::GpuProbeContext& ctx) {
         options.diffParam = 0u;
         options.adjointSeed = seed;
         options.scene = &sceneHandle;
+        options.stages = &stages;
         return ctx.runWavefrontGradientProbe(
             wf, kW, kH, kBounces, camera, std::span<const float>(positions),
             std::span<const std::uint32_t>(indices), albedo, kMaterial, kSeed,
@@ -124,6 +129,7 @@ bool checkEngineRecovery(ohao::diff::GpuProbeContext& ctx) {
     };
 
     auto cleanup = [&]() {
+        ctx.destroyOwnedStages(stages);
         ctx.destroyOwnedScene(scene);
         wf.destroy(ctx.allocator());
         (void)renderer.shutdown(&ctx.allocator());

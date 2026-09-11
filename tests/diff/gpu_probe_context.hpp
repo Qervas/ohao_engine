@@ -2,6 +2,7 @@
 
 #include "diff/grad/gradient_arena.hpp"
 #include "diff/wavefront/wavefront_buffers.hpp"
+#include "diff/wavefront/wavefront_stage.hpp"
 #include "gpu/vulkan/gpu_allocator.hpp"
 
 #include <vulkan/vulkan.h>
@@ -124,6 +125,35 @@ struct WavefrontGradientOptions {
         }
     };
     const PrebuiltScene* scene{nullptr};
+
+    /// STAGE 5. The five compute pipelines, kept across calls instead of
+    /// built and torn down on every one.
+    ///
+    /// Same argument as `scene`, one layer up: five pipeline creations are
+    /// invisible at two calls and are much of the per-call cost at four
+    /// hundred, and an engine builds its pipelines at load and keeps them.
+    /// The DESCRIPTOR BINDINGS are still written every call, because the
+    /// adjoint-seed and emission-texture buffers really are new each time --
+    /// it is the pipelines that are reusable, not the bindings.
+    ///
+    /// BUILT LAZILY, on the first call that receives it, so there is exactly
+    /// ONE piece of code that knows the binding tables and the push-constant
+    /// sizes. A separate `buildStages` helper would be a second copy of that
+    /// knowledge, and the two would drift.
+    ///
+    /// Null builds them locally and tears them down at return, which is what
+    /// every check written before this does.
+    /// Non-copyable and non-movable, because WavefrontStage is; a caller
+    /// holds one by value and passes its address.
+    struct OwnedStages {
+        WavefrontStage generate;
+        WavefrontStage prepareIndirect;
+        WavefrontStage intersect;
+        WavefrontStage scatterForward;
+        WavefrontStage scatterReplay;
+        bool built{false};
+    };
+    OwnedStages* stages{nullptr};
 
     /// Optional: receives the FORWARD run's binding-3 vertex trace as it stood
     /// after the LAST bounce (`capacity * kDebugDrawFloats` floats). It is how
@@ -1124,6 +1154,11 @@ public:
         }
         [[nodiscard]] bool valid() const noexcept { return handle().valid(); }
     };
+
+    /// Release the five pipelines a caller kept across calls. They are built
+    /// on first use by `runWavefrontGradientProbe`, so there is no matching
+    /// build entry point -- one piece of code knows the binding tables.
+    void destroyOwnedStages(WavefrontGradientOptions::OwnedStages& stages);
 
     /// Upload a triangle soup and build its BLAS and TLAS, once.
     [[nodiscard]] bool buildOwnedScene(std::span<const float> positions,
