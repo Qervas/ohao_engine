@@ -74,19 +74,41 @@ layout(push_constant) uniform Push {
     // See the header: not recomputed here, so the two sides cannot drift.
     float oneMinusBeta1PowT;
     float oneMinusBeta2PowT;
+    // FLOAT indices of this parameter's gradient and state blocks within
+    // whatever buffer is bound at bindings 1 and 2 -- the same convention
+    // boundary_sample.comp's `gradOffset` uses, and for the same reason.
+    //
+    // WHY THESE EXIST. The gradient arena already holds BOTH blocks: spec 4.1
+    // wants the interior and boundary terms summed into one buffer, and
+    // ParamRegistry allocates a `gradBlock` and a `stateBlock` per parameter
+    // inside it (check 61). Without offsets the only way to drive Adam from
+    // the arena is to copy two blocks out to standalone buffers and copy one
+    // back, which is three transfers to avoid two integers.
+    //
+    // Zero for a caller binding standalone buffers, which is what every check
+    // written before this did -- and the arithmetic below collapses to the
+    // earlier form exactly, not approximately, when both are zero.
+    uint gradOffset;
+    uint stateOffset;
 } pc;
 
 void main() {
     const uint i = gl_GlobalInvocationID.x;
     if (i >= pc.floatCount) return;
 
-    const float g = grads.v[i];
+    const float g = grads.v[pc.gradOffset + i];
+
+    // m then v, `floatCount` apart, which is ParamRegistry's stateBlock
+    // layout -- so the second index is the state base plus floatCount, NOT
+    // the gradient base.
+    const uint mIdx = pc.stateOffset + i;
+    const uint vIdx = pc.stateOffset + pc.floatCount + i;
 
     // Alg. 1 lines 5-6.
-    const float m = pc.beta1 * state.v[i] + (1.0 - pc.beta1) * g;
-    const float v = pc.beta2 * state.v[pc.floatCount + i] + (1.0 - pc.beta2) * g * g;
-    state.v[i] = m;
-    state.v[pc.floatCount + i] = v;
+    const float m = pc.beta1 * state.v[mIdx] + (1.0 - pc.beta1) * g;
+    const float v = pc.beta2 * state.v[vIdx] + (1.0 - pc.beta2) * g * g;
+    state.v[mIdx] = m;
+    state.v[vIdx] = v;
 
     // Alg. 1 lines 7-8.
     const float mHat = m / pc.oneMinusBeta1PowT;

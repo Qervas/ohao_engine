@@ -52,6 +52,10 @@ bool GpuProbeContext::runAdamProbe(std::vector<float>& params, const std::vector
         float epsilon;
         float oneMinusBeta1PowT;
         float oneMinusBeta2PowT;
+        // This probe binds standalone buffers, so both blocks start at 0.
+        // DiffRenderer binds the arena and passes real offsets.
+        std::uint32_t gradOffset;
+        std::uint32_t stateOffset;
     } push{floatCount,
            options.alpha,
            options.beta1,
@@ -62,7 +66,12 @@ bool GpuProbeContext::runAdamProbe(std::vector<float>& params, const std::vector
            static_cast<float>(1.0 - std::pow(static_cast<double>(options.beta1),
                                              static_cast<double>(stepIndex))),
            static_cast<float>(1.0 - std::pow(static_cast<double>(options.beta2),
-                                             static_cast<double>(stepIndex)))};
+                                             static_cast<double>(stepIndex))),
+           // Explicit rather than left to aggregate value-initialisation:
+           // these two mean "this buffer starts here", and a zero that
+           // arrives by omission reads as an oversight to the next person.
+           0u,
+           0u};
 
     WavefrontStage stage;
     if (ok) {
