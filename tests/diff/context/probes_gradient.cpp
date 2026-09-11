@@ -41,6 +41,64 @@ using namespace probe_scene;  // NOLINT(google-build-using-namespace)
 // realisation -- a second seed would be a second measurement, not a better
 // one. Generalising the parity probe would have put its calibrated
 // non-vacuity gates one parameter default away from a different question.
+bool GpuProbeContext::buildOwnedScene(std::span<const float> positions,
+                                      std::span<const std::uint32_t> indices, OwnedScene& out) {
+    destroyOwnedScene(out);
+    out.vertexBuffer = m_allocator.createBufferFromSpan<float>(
+        positions, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                       VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    out.indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
+        indices, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    if (!out.vertexBuffer.isValid() || !out.indexBuffer.isValid()) {
+        std::fprintf(stderr, "[GpuProbeContext] buildOwnedScene: vertex/index buffer alloc\n");
+        destroyOwnedScene(out);
+        return false;
+    }
+
+    auto accel = std::make_shared<RTAccelerationStructure>();
+    if (!accel->init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool,
+                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
+        std::fprintf(stderr, "[GpuProbeContext] buildOwnedScene: accel init\n");
+        destroyOwnedScene(out);
+        return false;
+    }
+    BlasHandle blas = INVALID_BLAS;
+    runImmediate([&](VkCommandBuffer cmd) {
+        blas = accel->createBLASFromPositions(
+            out.vertexBuffer.buffer, static_cast<uint32_t>(positions.size() / 3),
+            out.indexBuffer.buffer, static_cast<uint32_t>(indices.size()),
+            /*indexByteOffset=*/0, cmd);
+    });
+    if (blas == INVALID_BLAS) {
+        std::fprintf(stderr, "[GpuProbeContext] buildOwnedScene: createBLASFromPositions\n");
+        destroyOwnedScene(out);
+        return false;
+    }
+    accel->clearInstances();
+    accel->addInstance(blas, glm::mat4(1.0f));
+    runImmediate([&](VkCommandBuffer cmd) { accel->buildTLAS(cmd); });
+    if (accel->getTLAS() == VK_NULL_HANDLE) {
+        std::fprintf(stderr, "[GpuProbeContext] buildOwnedScene: buildTLAS produced no TLAS\n");
+        destroyOwnedScene(out);
+        return false;
+    }
+    out.tlas = accel->getTLAS();
+    out.accel = std::move(accel);
+    return true;
+}
+
+void GpuProbeContext::destroyOwnedScene(OwnedScene& scene) {
+    // The RTAccelerationStructure releases its own device objects when the
+    // last reference goes; the two buffers are ours.
+    scene.accel.reset();
+    scene.tlas = VK_NULL_HANDLE;
+    if (scene.vertexBuffer.isValid()) m_allocator.destroyBuffer(scene.vertexBuffer);
+    if (scene.indexBuffer.isValid()) m_allocator.destroyBuffer(scene.indexBuffer);
+}
+
 bool GpuProbeContext::runWavefrontGradientProbe(
     WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t bounces,
     const WavefrontGenerateCamera& camera, std::span<const float> positions,
@@ -195,11 +253,34 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // --- Scene. ONE triangle soup, bound to the primary trace (acceleration
     // structure plus wf_intersect.comp's vertex/index storage buffers) and to
     // the traversal's shadow rays. Not two.
-    GpuBuffer vertexBuffer = m_allocator.createBufferFromSpan<float>(
+    //
+    // OR NONE OF THAT, when the caller brought its own (options.scene): an
+    // engine has a persistent BLAS and is not going to hand over a span of
+    // floats, and a check that renders four hundred times should not build
+    // four hundred acceleration structures. The handles below are what the
+    // dispatches actually bind, and they come from whichever source applies.
+    const bool ownScene = (options.scene == nullptr);
+    if (!ownScene && !options.scene->valid()) {
+        std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: options.scene was "
+                              "supplied but is incomplete -- a TLAS, a vertex buffer and an "
+                              "index buffer are all required\n");
+        return false;
+    }
+    GpuBuffer vertexBuffer{};
+    GpuBuffer indexBuffer{};
+    VkAccelerationStructureKHR sceneTlas =
+        ownScene ? VK_NULL_HANDLE : options.scene->tlas;
+    VkBuffer sceneVertexBuffer =
+        ownScene ? VK_NULL_HANDLE : options.scene->vertexBuffer;
+    VkBuffer sceneIndexBuffer = ownScene ? VK_NULL_HANDLE : options.scene->indexBuffer;
+
+    RTAccelerationStructure accel;
+    if (ownScene) {
+    vertexBuffer = m_allocator.createBufferFromSpan<float>(
         positions, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    GpuBuffer indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
+    indexBuffer = m_allocator.createBufferFromSpan<uint32_t>(
         indices, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -209,7 +290,6 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                               "vertex/index buffers\n");
     }
 
-    RTAccelerationStructure accel;
     if (ok && !accel.init(m_device, m_physicalDevice, m_queue, m_queueFamily, m_commandPool,
                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
         std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: "
@@ -241,6 +321,12 @@ bool GpuProbeContext::runWavefrontGradientProbe(
             ok = false;
         }
     }
+    if (ok) {
+        sceneTlas = accel.getTLAS();
+        sceneVertexBuffer = vertexBuffer.buffer;
+        sceneIndexBuffer = indexBuffer.buffer;
+    }
+    }  // ownScene
 
     // --- Sinks. Two INDEPENDENT sets, one per instantiation, for
     // runWavefrontReplayProbe's reason: nothing the replay run writes may
@@ -434,12 +520,12 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                                                buffers.counterBuffer()};
         const VkBuffer counterOnly[1] = {buffers.counterBuffer()};
         const VkBuffer intersectBuffers[5] = {buffers.stateBuffer(), buffers.queueBuffer(),
-                                              buffers.counterBuffer(), vertexBuffer.buffer,
-                                              indexBuffer.buffer};
+                                              buffers.counterBuffer(), sceneVertexBuffer,
+                                              sceneIndexBuffer};
         ok = generate.bindBuffers(m_device, stateQueueCounter) &&
              prepareIndirect.bindBuffers(m_device, counterOnly) &&
              intersect.bindBuffers(m_device, intersectBuffers) &&
-             intersect.bindAccelerationStructure(m_device, 5, accel.getTLAS());
+             intersect.bindAccelerationStructure(m_device, 5, sceneTlas);
         for (int i = 0; ok && i < 2; ++i) {
             const ScatterSinks& s = *sinkSets[i];
             const VkBuffer scatterBuffers[8] = {buffers.stateBuffer(),
@@ -451,7 +537,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
                                                 s.env.buffer,
                                                 s.nee.buffer};
             ok = scatterStages[i]->bindBuffers(m_device, scatterBuffers) &&
-                 scatterStages[i]->bindAccelerationStructure(m_device, 8, accel.getTLAS()) &&
+                 scatterStages[i]->bindAccelerationStructure(m_device, 8, sceneTlas) &&
                  scatterStages[i]->bindStorageBuffer(m_device, 9, s.film.buffer) &&
                  // The REAL gradient arena, bound to BOTH instantiations. The
                  // forward one never writes it (its hook is the film write)

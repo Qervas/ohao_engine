@@ -96,11 +96,27 @@ bool checkEngineRecovery(ohao::diff::GpuProbeContext& ctx) {
     }
     const ohao::diff::WavefrontScatterMaterial kMaterial{1.0f, 0.0f, 0.0f};
 
+    // THE SCENE IS BUILT ONCE. This check renders 402 times -- 100 iterations
+    // of a forward and a backward, twice over, plus the target -- and the
+    // gradient probe used to upload a triangle soup and build a BLAS and a
+    // TLAS for every one of them. A persistent acceleration structure is also
+    // the shape an ENGINE has; handing over a span of floats per frame is not.
+    ohao::diff::GpuProbeContext::OwnedScene scene;
+    if (!ctx.buildOwnedScene(std::span<const float>(positions),
+                             std::span<const std::uint32_t>(indices), scene)) {
+        std::fprintf(stderr, "[diff_gpu_probe] FAIL: check 67 -- buildOwnedScene\n");
+        wf.destroy(ctx.allocator());
+        (void)renderer.shutdown(&ctx.allocator());
+        return false;
+    }
+    const ohao::diff::WavefrontGradientOptions::PrebuiltScene sceneHandle = scene.handle();
+
     auto render = [&](float albedo, const std::vector<float>& seed,
                       std::vector<float>& outFilm) -> bool {
         ohao::diff::WavefrontGradientOptions options;
         options.diffParam = 0u;
         options.adjointSeed = seed;
+        options.scene = &sceneHandle;
         return ctx.runWavefrontGradientProbe(
             wf, kW, kH, kBounces, camera, std::span<const float>(positions),
             std::span<const std::uint32_t>(indices), albedo, kMaterial, kSeed,
@@ -108,6 +124,7 @@ bool checkEngineRecovery(ohao::diff::GpuProbeContext& ctx) {
     };
 
     auto cleanup = [&]() {
+        ctx.destroyOwnedScene(scene);
         wf.destroy(ctx.allocator());
         (void)renderer.shutdown(&ctx.allocator());
     };

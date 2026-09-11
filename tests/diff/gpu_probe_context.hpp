@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -99,6 +100,31 @@ struct WavefrontGradientOptions {
     bool freezeSampling{false};
     float samplingAlbedo{0.0f};
     WavefrontScatterMaterial samplingMaterial{};
+    /// STAGE 5. A scene the CALLER built and owns, instead of one this
+    /// function uploads and builds a BLAS for on every single call.
+    ///
+    /// WHY THIS EXISTS. Per-call scene construction is invisible while a
+    /// check renders twice, and expensive the moment one renders four hundred
+    /// times: check 67 optimises for 100 iterations with a forward and a
+    /// backward render each, twice over, and was rebuilding an acceleration
+    /// structure for every one of them. It is also the WRONG SHAPE for an
+    /// engine, which has a persistent BLAS and a vertex buffer it is not
+    /// going to hand over as a span of floats.
+    ///
+    /// When null, the positions/indices arguments are uploaded and built as
+    /// before -- which is what every check written before this does, and the
+    /// path they still take.
+    struct PrebuiltScene {
+        VkAccelerationStructureKHR tlas{VK_NULL_HANDLE};
+        VkBuffer vertexBuffer{VK_NULL_HANDLE};
+        VkBuffer indexBuffer{VK_NULL_HANDLE};
+        [[nodiscard]] bool valid() const noexcept {
+            return tlas != VK_NULL_HANDLE && vertexBuffer != VK_NULL_HANDLE &&
+                   indexBuffer != VK_NULL_HANDLE;
+        }
+    };
+    const PrebuiltScene* scene{nullptr};
+
     /// Optional: receives the FORWARD run's binding-3 vertex trace as it stood
     /// after the LAST bounce (`capacity * kDebugDrawFloats` floats). It is how
     /// a caller MEASURES the frozen-direction claim instead of asserting it:
@@ -1079,6 +1105,30 @@ public:
     [[nodiscard]] bool runLossL2Probe(const std::vector<float>& film,
                                       const std::vector<float>& target,
                                       std::vector<float>& outSeed, double& outLoss);
+
+    /// A scene built ONCE and reused across many gradient calls, which is
+    /// what `WavefrontGradientOptions::scene` exists to consume.
+    ///
+    /// Owning, and destroyed by `destroyOwnedScene`. The acceleration
+    /// structure is held by pointer so this header does not need
+    /// RTAccelerationStructure's definition.
+    struct OwnedScene {
+        GpuBuffer vertexBuffer{};
+        GpuBuffer indexBuffer{};
+        std::shared_ptr<void> accel;  // RTAccelerationStructure, type-erased
+        VkAccelerationStructureKHR tlas{VK_NULL_HANDLE};
+
+        [[nodiscard]] WavefrontGradientOptions::PrebuiltScene handle() const {
+            return WavefrontGradientOptions::PrebuiltScene{tlas, vertexBuffer.buffer,
+                                                           indexBuffer.buffer};
+        }
+        [[nodiscard]] bool valid() const noexcept { return handle().valid(); }
+    };
+
+    /// Upload a triangle soup and build its BLAS and TLAS, once.
+    [[nodiscard]] bool buildOwnedScene(std::span<const float> positions,
+                                       std::span<const std::uint32_t> indices, OwnedScene& out);
+    void destroyOwnedScene(OwnedScene& scene);
 
     [[nodiscard]] bool runWavefrontGradientProbe(
         WavefrontBuffers& buffers, uint32_t width, uint32_t height, uint32_t bounces,
