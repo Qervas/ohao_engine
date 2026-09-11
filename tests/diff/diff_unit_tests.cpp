@@ -2,6 +2,7 @@
 #include "diff/geom/edge_adjacency.hpp"
 #include "diff/geom/boundary_integrand.hpp"
 #include "diff/geom/silhouette_set.hpp"
+#include "diff/diff_renderer.hpp"
 #include "diff/geom/camera_projection.hpp"
 #include "diff/geom/vertex_parameterisation.hpp"
 #include "diff/grad/arena_layout.hpp"
@@ -1243,6 +1244,97 @@ TEST(DiffCameraProjection, RejectsADegenerateSetup) {
     EXPECT_TRUE(cam.valid());
     std::vector<float> screen;
     EXPECT_FALSE(cam.project({0.0f, 1.0f}, screen)) << "world positions are 3 floats per vertex";
+}
+
+// ===========================================================================
+// STAGE 5 -- THE FACADE'S LIFECYCLE
+// ===========================================================================
+//
+// No device needed, and that is deliberate rather than convenient: the whole
+// point of DiffRenderer's shutdown() taking a POINTER is that a lifecycle
+// which can only be exercised on a GPU is a lifecycle that gets exercised
+// rarely. Everything up to build() is reachable with two fake handles.
+//
+// What is NOT covered here, and belongs to the GPU probe: build(), which needs
+// a real GpuAllocator, and everything downstream of Ready.
+
+namespace {
+
+// Non-null handles that are never dereferenced. init() only stores them --
+// it creates nothing, exactly as PathTracer::init creates no device.
+VkDevice fakeDevice() { return reinterpret_cast<VkDevice>(0x1); }
+VkPhysicalDevice fakePhysical() { return reinterpret_cast<VkPhysicalDevice>(0x2); }
+
+}  // namespace
+
+TEST(DiffRendererLifecycle, StartsUninitialisedAndRefusesEverything) {
+    ohao::diff::DiffRenderer r;
+    EXPECT_EQ(r.state(), ohao::diff::DiffRenderer::State::Uninitialised);
+    EXPECT_FALSE(r.ready());
+
+    // A facade that half-works is the one that later produces a plausible
+    // wrong number rather than an obvious failure, so every entry point
+    // refuses before init().
+    EXPECT_FALSE(r.registerScalarBlock("a", 4).ok);
+    EXPECT_FALSE(r.registerVertexPositions("v", 3, 3).ok);
+    EXPECT_FALSE(r.zeroGradients(reinterpret_cast<VkCommandBuffer>(0x3)));
+
+    // The refusal NAMES THE STATE. An error string that says only "failed"
+    // sends the reader to the wrong file.
+    const ohao::diff::RegisterResult res = r.registerScalarBlock("a", 4);
+    EXPECT_NE(res.error.find("Uninitialised"), std::string::npos) << res.error;
+}
+
+TEST(DiffRendererLifecycle, InitNeedsBothHandles) {
+    ohao::diff::DiffRenderer r;
+    EXPECT_FALSE(r.init(VK_NULL_HANDLE, fakePhysical()));
+    EXPECT_EQ(r.state(), ohao::diff::DiffRenderer::State::Uninitialised);
+    EXPECT_FALSE(r.init(fakeDevice(), VK_NULL_HANDLE));
+    EXPECT_EQ(r.state(), ohao::diff::DiffRenderer::State::Uninitialised);
+
+    EXPECT_TRUE(r.init(fakeDevice(), fakePhysical()));
+    EXPECT_EQ(r.state(), ohao::diff::DiffRenderer::State::Configuring);
+    // Still not Ready: Configuring means parameters may be registered, and
+    // nothing may be recorded. Conflating the two is what the third state
+    // exists to prevent.
+    EXPECT_FALSE(r.ready());
+    EXPECT_FALSE(r.zeroGradients(reinterpret_cast<VkCommandBuffer>(0x3)));
+
+    // Re-initialising an initialised renderer is refused rather than silently
+    // resetting: it would orphan whatever had already been registered.
+    EXPECT_FALSE(r.init(fakeDevice(), fakePhysical()));
+    EXPECT_EQ(r.state(), ohao::diff::DiffRenderer::State::Configuring);
+}
+
+TEST(DiffRendererLifecycle, ParametersRegisterOnlyWhileConfiguring) {
+    ohao::diff::DiffRenderer r;
+    ASSERT_TRUE(r.init(fakeDevice(), fakePhysical()));
+
+    EXPECT_TRUE(r.registerScalarBlock("albedo", 3).ok);
+    EXPECT_TRUE(r.registerVertexPositions("positions", 3, 3).ok);
+    EXPECT_EQ(r.registry().count(), 2u);
+
+    // The registry's own rules still apply through the facade -- it delegates
+    // rather than reimplementing. A zero-length block is the registry's
+    // rejection, not the facade's.
+    EXPECT_FALSE(r.registerScalarBlock("empty", 0).ok);
+    EXPECT_EQ(r.registry().count(), 2u);
+}
+
+TEST(DiffRendererLifecycle, ShutdownWithoutAnArenaNeedsNoAllocator) {
+    ohao::diff::DiffRenderer r;
+    ASSERT_TRUE(r.init(fakeDevice(), fakePhysical()));
+    ASSERT_TRUE(r.registerScalarBlock("albedo", 3).ok);
+
+    // Nothing was built, so there is nothing an allocator could release.
+    EXPECT_TRUE(r.shutdown(nullptr));
+    EXPECT_EQ(r.state(), ohao::diff::DiffRenderer::State::Uninitialised);
+
+    // Idempotent, and the registry is gone with it -- so a second lifecycle
+    // starts clean rather than inheriting the first one's layout.
+    EXPECT_TRUE(r.shutdown(nullptr));
+    ASSERT_TRUE(r.init(fakeDevice(), fakePhysical()));
+    EXPECT_TRUE(r.registerScalarBlock("albedo", 3).ok);
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
