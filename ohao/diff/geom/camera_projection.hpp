@@ -86,6 +86,29 @@ public:
     [[nodiscard]] std::vector<float> pullback(const std::vector<float>& worldPositions,
                                               const std::vector<float>& screenGradients) const;
 
+    /// dL/d(eye) from dL/d(screen), for a camera that TRANSLATES with its
+    /// orientation held fixed. 3 floats; empty on a length mismatch or a
+    /// vertex behind the near plane.
+    ///
+    /// THE DERIVATIVE IS THE NEGATED SUM OF THE WORLD ONES, and that is not a
+    /// shortcut but the geometry: camera space is p_c = R(p_w - eye), so
+    /// moving the eye by +d and moving every world point by -d produce the
+    /// identical camera-space configuration and therefore the identical
+    /// image. Hence d(screen)/d(eye) = -SUM_v d(screen)/d(p_v), and the
+    /// pullback follows.
+    ///
+    /// ORIENTATION HELD FIXED, which is a real restriction and not an
+    /// oversight. `setLookAt` derives R from the eye AND the target, so a
+    /// look-at camera that moves also ROTATES, and its derivative carries a
+    /// second term this does not. A caller wanting that composite must
+    /// parameterise the rotation too -- which is a different object, with a
+    /// different Jacobian, and is not this. The unit test pins the
+    /// distinction by translating the eye and the target TOGETHER, which is
+    /// the motion that leaves R untouched.
+    [[nodiscard]] std::vector<float> pullbackToEyeTranslation(
+        const std::vector<float>& worldPositions,
+        const std::vector<float>& screenGradients) const;
+
     /// The 2x3 Jacobian at one world point, row-major (du/dx du/dy du/dz,
     /// then dv/...). Empty if the point is not in front of the eye. Exposed
     /// so a test can look at the third column directly -- the one that

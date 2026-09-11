@@ -21,7 +21,7 @@ a gap in memory.
 | 3 | Renderer fitting | not started; the differentiability decision below is still owed |
 | 4 | SVBRDF as a client | not started |
 | 5 | Mitsuba oracle | not started |
-| 6 | Traced radiance | not started |
+| 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
 | 7 | Stage 4 — scale | not started |
 | 8 | Laplacian preconditioning | **DONE** — `LaplacianVertexParameterisation`, 5 unit tests, check 68 |
 
@@ -33,6 +33,21 @@ single pre-registered lambda = 12 failed informatively — nine times smoother
 than the control and three hundred times worse fitting. Choosing lambda is
 part of using the method, so the sweep reports the trade-off instead of
 replacing 12 with whatever worked.
+
+Item 6 split into 6a (traced but piecewise constant, fixed tolerance) and 6b
+(shaded, convergence order), because this file's original claim that the
+whole item wants a convergence gate was only half right: a piecewise-constant
+traced radiance is integrated EXACTLY by the moments and has no truncation
+term whose order could be measured.
+
+**A NEW HAZARD, and the most instructive one yet.** An edge lying exactly on
+a pixel seam is clipped into BOTH adjacent pixels and its contribution
+scattered twice — the gradient comes out at exactly double. Check 70's
+supersampled oracle found it; **check 69 could not have**, because it
+compares the traced form against the pushed form and both run through the
+same kernel, so a factor common to the two cancels. Test scenes now step off
+integer coordinates. The degeneracy is measure-zero and is not fixed: a
+half-open pixel convention touches every boundary check.
 
 Three things learned in item 1 that outlive it, and belong with the hazards
 at the bottom of this file:

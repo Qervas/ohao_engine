@@ -1361,6 +1361,87 @@ std::vector<std::uint32_t> hexagonEdges() {
 
 }  // namespace
 
+TEST(DiffCameraProjection, EyeTranslationPullbackAgainstFiniteDifferences) {
+    // The camera as a PARAMETER (spec 9's stage 4, "camera/pose"), and it
+    // costs almost nothing because the projection pullback already exists.
+    //
+    // THE ORACLE MOVES THE EYE AND THE TARGET TOGETHER. That is the whole
+    // subtlety: setLookAt derives R from both, so translating only the eye
+    // ROTATES the camera as well, and its derivative would carry a second
+    // term pullbackToEyeTranslation does not claim. Moving both leaves `back`
+    // -- and therefore R -- bit-identical, which is the motion whose
+    // derivative this is.
+    const std::array<float, 3> eye = {3.0f, 2.0f, 7.0f};
+    const std::array<float, 3> target = {0.5f, -0.25f, 0.0f};
+    const std::array<float, 3> up = {0.0f, 1.0f, 0.0f};
+
+    ohao::diff::PinholeProjection cam;
+    ASSERT_TRUE(cam.setLookAt(eye, target, up));
+    ASSERT_TRUE(cam.setIntrinsics(120.0f, 96.0f, 32.0f, 24.0f));
+
+    const std::vector<float> world = projectionWorld();
+    const std::vector<float> g = {0.9f, -0.3f, 0.2f, 1.4f, -0.6f, 0.5f};
+    const std::vector<float> got = cam.pullbackToEyeTranslation(world, g);
+    ASSERT_EQ(got.size(), 3u);
+
+    constexpr double kStep = 1.0 / 1024.0;
+    for (std::size_t axis = 0; axis < 3u; ++axis) {
+        std::array<float, 3> ePlus = eye, eMinus = eye, tPlus = target, tMinus = target;
+        ePlus[axis] = static_cast<float>(eye[axis] + kStep);
+        tPlus[axis] = static_cast<float>(target[axis] + kStep);
+        eMinus[axis] = static_cast<float>(eye[axis] - kStep);
+        tMinus[axis] = static_cast<float>(target[axis] - kStep);
+
+        ohao::diff::PinholeProjection plus, minus;
+        ASSERT_TRUE(plus.setLookAt(ePlus, tPlus, up));
+        ASSERT_TRUE(plus.setIntrinsics(120.0f, 96.0f, 32.0f, 24.0f));
+        ASSERT_TRUE(minus.setLookAt(eMinus, tMinus, up));
+        ASSERT_TRUE(minus.setIntrinsics(120.0f, 96.0f, 32.0f, 24.0f));
+
+        std::vector<float> sPlus, sMinus;
+        ASSERT_TRUE(plus.project(world, sPlus));
+        ASSERT_TRUE(minus.project(world, sMinus));
+
+        double want = 0.0;
+        for (std::size_t i = 0; i < g.size(); ++i) {
+            const double dScreen =
+                (static_cast<double>(sPlus[i]) - static_cast<double>(sMinus[i])) / (2.0 * kStep);
+            want += dScreen * static_cast<double>(g[i]);
+        }
+        EXPECT_NEAR(static_cast<double>(got[axis]), want, 3e-3 * std::fabs(want) + 1e-3)
+            << "eye axis " << axis;
+        EXPECT_GT(std::fabs(want), 1e-2) << "axis " << axis << " has no effect on the image";
+    }
+}
+
+TEST(DiffCameraProjection, MovingTheEyeIsMovingTheWorldTheOtherWay) {
+    // The identity the pullback rests on, asserted directly rather than left
+    // as a comment: p_c = R(p_w - eye), so eye += d and every p_w -= d give
+    // the SAME image. If that ever stopped holding, the negated sum would be
+    // the wrong formula and this is what would say so.
+    ohao::diff::PinholeProjection cam;
+    ASSERT_TRUE(cam.setLookAt({2.0f, 1.0f, 6.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    ASSERT_TRUE(cam.setIntrinsics(100.0f, 80.0f, 32.0f, 24.0f));
+    const std::vector<float> world = projectionWorld();
+
+    const std::array<float, 3> d = {0.3f, -0.2f, 0.15f};
+    ohao::diff::PinholeProjection moved;
+    ASSERT_TRUE(moved.setLookAt({2.0f + d[0], 1.0f + d[1], 6.0f + d[2]},
+                                {0.0f + d[0], 0.0f + d[1], 0.0f + d[2]}, {0.0f, 1.0f, 0.0f}));
+    ASSERT_TRUE(moved.setIntrinsics(100.0f, 80.0f, 32.0f, 24.0f));
+
+    std::vector<float> shifted = world;
+    for (std::size_t v = 0; v < shifted.size() / 3u; ++v) {
+        for (std::size_t c = 0; c < 3u; ++c) shifted[v * 3u + c] -= d[c];
+    }
+
+    std::vector<float> a, b;
+    ASSERT_TRUE(cam.project(shifted, a));
+    ASSERT_TRUE(moved.project(world, b));
+    ASSERT_EQ(a.size(), b.size());
+    for (std::size_t i = 0; i < a.size(); ++i) EXPECT_NEAR(a[i], b[i], 1e-4) << i;
+}
+
 TEST(DiffLaplacianParam, PullbackIsTheJacobianTransposeTimesTheGradient) {
     ohao::diff::LaplacianVertexParameterisation p;
     ASSERT_TRUE(p.build(6u, hexagonEdges(), 4.0));

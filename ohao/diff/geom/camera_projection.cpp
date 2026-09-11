@@ -118,6 +118,18 @@ std::vector<double> PinholeProjection::jacobian(double wx, double wy, double wz)
     return j;
 }
 
+std::vector<float> PinholeProjection::pullbackToEyeTranslation(
+    const std::vector<float>& worldPositions, const std::vector<float>& screenGradients) const {
+    const std::vector<float> perVertex = pullback(worldPositions, screenGradients);
+    if (perVertex.empty()) return {};
+    // Negated sum: moving the eye by +d is moving every point by -d.
+    std::vector<float> out(3, 0.0f);
+    for (std::size_t v = 0; v < perVertex.size() / 3u; ++v) {
+        for (std::size_t c = 0; c < 3u; ++c) out[c] -= perVertex[v * 3u + c];
+    }
+    return out;
+}
+
 std::vector<float> PinholeProjection::pullback(const std::vector<float>& worldPositions,
                                                const std::vector<float>& screenGradients) const {
     if (!valid() || worldPositions.empty() || worldPositions.size() % 3u != 0u) return {};
