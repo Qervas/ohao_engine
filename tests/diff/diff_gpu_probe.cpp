@@ -225,6 +225,7 @@
 #include "probe/checks_projection_recovery.hpp"
 #include "probe/checks_boundary_field.hpp"
 #include "probe/checks_facade_parity.hpp"
+#include "probe/checks_ownership.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -299,6 +300,7 @@ using ohao::diff::probe::checkParameterisedRecovery;
 using ohao::diff::probe::checkProjectionRecovery;
 using ohao::diff::probe::checkBoundaryField;
 using ohao::diff::probe::checkFacadeParity;
+using ohao::diff::probe::checkOwnership;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -516,6 +518,11 @@ int main() {
     // Adam from the ARENA at registered offsets and must agree with the
     // probe's standalone-buffer path to the exact float.
     if (!checkFacadeParity(ctx)) return 1;
+
+    // 66. WHO OWNS THE NUMBER: the ownership contract as a
+    // measurement, with the wrong protocol demonstrated reverting an
+    // optimised value on the next unrelated edit.
+    if (!checkOwnership(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();
