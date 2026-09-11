@@ -229,6 +229,7 @@
 #include "probe/checks_engine_recovery.hpp"
 #include "probe/checks_precondition.hpp"
 #include "probe/checks_traced_jump.hpp"
+#include "probe/checks_shaded_order.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -307,6 +308,7 @@ using ohao::diff::probe::checkOwnership;
 using ohao::diff::probe::checkEngineRecovery;
 using ohao::diff::probe::checkPreconditioning;
 using ohao::diff::probe::checkTracedJump;
+using ohao::diff::probe::checkShadedOrder;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -544,6 +546,11 @@ int main() {
     // INVERTED control -- the pushed form must AGREE, because on this
     // scene its two constants are exactly the right answer.
     if (!checkTracedJump(ctx)) return 1;
+
+    // 70. THE ORDER OF THE QUADRATURE: a radiance varying WITHIN a
+    // surface makes the midpoint rule approximate, and its error must
+    // fall at the second order the derivation predicts.
+    if (!checkShadedOrder(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();

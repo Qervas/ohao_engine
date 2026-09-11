@@ -17,8 +17,14 @@ constexpr float kBackground = 0.5f;
 // screen = world.xy * kScale + kOffset, the same affine map check 59 uses.
 // The quad's [-1,1] square lands on [2,6] of an 8x8 image, inside it with
 // margin so no edge is clipped by the frame.
-constexpr float kScale = 2.0f;
-constexpr float kOffset = 4.0f;
+// OFF-INTEGER, because an edge lying exactly on a pixel seam is clipped
+// into BOTH adjacent pixels and its contribution scattered twice -- see the
+// note in checks_shaded_order.cpp, whose oracle found it. This check compares
+// two paths through the same kernel, so the doubling would cancel and go
+// unnoticed here; the scene steps off the boundary so that what it measures
+// is the non-degenerate case.
+constexpr float kScale = 1.7f;
+constexpr float kOffset = 4.05f;
 
 /// A quad at z = 0, as two triangles. Its four boundary edges ARE its
 /// silhouette -- an open mesh seen face-on -- so no silhouette pass is

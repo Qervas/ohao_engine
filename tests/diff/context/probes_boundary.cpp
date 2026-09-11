@@ -179,6 +179,9 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
         float rayOriginZ;
         float traceEps;
         float background;
+        float shadeAmp;
+        float shadeFreq;
+        std::uint32_t subdivisions;
     } push{edgeCount,
            imageWidth,
            imageHeight,
@@ -196,7 +199,10 @@ bool GpuProbeContext::runBoundaryProbe(const std::vector<float>& screenPositions
            {radiance.screenOffset[0], radiance.screenOffset[1]},
            radiance.rayOriginZ,
            radiance.traceEps,
-           radiance.background};
+           radiance.background,
+           radiance.shadeAmp,
+           radiance.shadeFreq,
+           radiance.subdivisions};
 
     WavefrontStage stage;
     if (ok) {

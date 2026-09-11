@@ -1126,6 +1126,14 @@ public:
         /// small enough not to cross a neighbouring one.
         float traceEps = 0.05f;
         float background = 0.0f;
+        /// ITEM 6 TASK 3. A radiance varying WITHIN a surface:
+        /// L = emission * (1 + shadeAmp * sin(shadeFreq * world.x)).
+        /// Zero is the piecewise-constant case check 69 gates.
+        float shadeAmp = 0.0f;
+        float shadeFreq = 0.0f;
+        /// Sub-chords per chord, each sampled at its own midpoint. The
+        /// quadrature step, and the knob a convergence gate turns.
+        std::uint32_t subdivisions = 1u;
     };
 
     [[nodiscard]] bool runBoundaryProbe(const std::vector<float>& screenPositions,

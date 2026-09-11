@@ -174,6 +174,23 @@ layout(push_constant) uniform Push {
     float traceEps;
     // What a miss returns.
     float background;
+    // ITEM 6 TASK 3: a radiance that varies WITHIN a surface, so the traced
+    // jump stops being piecewise constant along a chord and the midpoint rule
+    // stops being exact.
+    //
+    //     L(x) = emission[prim] * (1 + shadeAmp * sin(shadeFreq * world.x))
+    //
+    // Deliberately NOT affine. An affine variation is integrated EXACTLY by
+    // the moments -- that is what check 64 does with a pushed field -- so it
+    // would leave nothing whose order could be measured. A sine has every
+    // order.
+    float shadeAmp;
+    float shadeFreq;
+    // How many sub-chords the chord splits into, each sampled at its own
+    // midpoint. THE QUADRATURE'S STEP SIZE, and the only reason it is a
+    // parameter at all: a convergence gate needs a knob to turn. 1 reproduces
+    // the unsubdivided form exactly, which is what keeps check 69 green.
+    uint traceSubdivisions;
 } pc;
 
 /// The radiance at one GLOBAL screen point, by tracing.
@@ -189,8 +206,24 @@ layout(push_constant) uniform Push {
 /// that does not cross a second silhouette the traced jump does not vary, so
 /// the j1 term is zero and there is no truncation error to bound. A SHADED
 /// radiance would change that, and is the layer after this one.
-float tracedRadianceAt(vec2 screenPoint) {
-    const vec2 world = (screenPoint - pc.screenOffset) / pc.screenScale;
+/// TWO POINTS, and the separation is the whole correctness of this function.
+///
+/// `probePoint` decides WHICH SURFACE -- it is nudged off the edge by
+/// traceEps so the ray commits to one side of the discontinuity. `shadePoint`
+/// decides WHERE ON IT the radiance is read, and that must be the chord point
+/// itself, because spec 4.1's boundary integral wants the radiance AT the
+/// boundary approached from each side, not a little way inside.
+///
+/// Using the nudged point for both costs an O(traceEps) bias that does NOT
+/// shrink as the chord is subdivided -- so it survives any amount of
+/// quadrature refinement. It is invisible for a radiance that is constant per
+/// surface, which is why check 69 agreed to the exact float, and it is what
+/// made check 70's converged run disagree with a supersampled oracle by a
+/// factor of two while its convergence ratios looked perfect. Convergence to
+/// the wrong number is still convergence; that is why check 70 measures both.
+float tracedRadianceAt(vec2 probePoint, vec2 shadePoint) {
+    const vec2 world = (probePoint - pc.screenOffset) / pc.screenScale;
+    const vec2 shadeWorld = (shadePoint - pc.screenOffset) / pc.screenScale;
     const vec3 origin = vec3(world, pc.rayOriginZ);
     const vec3 dir = vec3(0.0, 0.0, -1.0);
 
@@ -205,7 +238,10 @@ float tracedRadianceAt(vec2 screenPoint) {
     // carries: the shader is told a count and cannot verify the buffer holds
     // it, so a short buffer would read past its end.
     if (prim >= pc.primitiveCount) return pc.background;
-    return emission.v[prim];
+    // Shaded in WORLD x, so a host oracle can evaluate the same function
+    // without knowing anything about the screen map. shadeAmp == 0 is the
+    // piecewise-constant case check 69 gates.
+    return emission.v[prim] * (1.0 + pc.shadeAmp * sin(pc.shadeFreq * shadeWorld.x));
 }
 
 /// Liang-Barsky clip of the segment to [0,1]^2, in the segment's parameter.
@@ -290,28 +326,47 @@ void main() {
     // as though it sat at the origin, which is invisible for a constant
     // field and is exactly what this layer changes.
     const vec2 g0 = p0 + vec2(px, py);
-    float j0;
-    float j1;
+
+    // Each branch produces the two VERTEX WEIGHTS directly rather than a
+    // jump the caller then integrates: the traced path accumulates its own
+    // sub-interval moments, so handing back a j0/j1 pair would mean applying
+    // the moments twice.
+    float w0;
+    float w1;
     if (pc.traceRadiance != 0u) {
-        // TRACED. Sampled once at the chord's midpoint and constant along it:
-        // see tracedRadianceAt's note on why that is exact rather than a
-        // one-point quadrature. "Inside" is the NEGATIVE side of n, which is
-        // this pass's convention everywhere and the thing a reversed winding
-        // silently swaps.
-        const vec2 mid = g0 + (0.5 * (uA + uB)) * seg;
-        const float lIn = tracedRadianceAt(mid - pc.traceEps * n);
-        const float lOut = tracedRadianceAt(mid + pc.traceEps * n);
-        j0 = (lIn - lOut) * w;
-        j1 = 0.0;
+        // TRACED, as a MIDPOINT RULE over `traceSubdivisions` sub-chords.
+        // Exact while the jump is piecewise constant (check 69); a one-point
+        // quadrature per sub-chord once shadeAmp makes it vary.
+        //
+        // "Inside" is the NEGATIVE side of n, this pass's convention
+        // everywhere and the thing a reversed winding silently swaps.
+        const uint subdivisions = max(pc.traceSubdivisions, 1u);
+        const float du = (uB - uA) / float(subdivisions);
+        w0 = 0.0;
+        w1 = 0.0;
+        for (uint s = 0u; s < subdivisions; ++s) {
+            const float s0 = uA + float(s) * du;
+            const float s1 = s0 + du;
+            const vec2 mid = g0 + (0.5 * (s0 + s1)) * seg;
+            const float lIn = tracedRadianceAt(mid - pc.traceEps * n, mid);
+            const float lOut = tracedRadianceAt(mid + pc.traceEps * n, mid);
+            const float jump = (lIn - lOut) * w;
+            // The same moments as the affine branch, over this sub-interval
+            // only -- so the weights stay the (1-u) and u the integral
+            // produces rather than a flat share.
+            const float sm0 = s1 - s0;
+            const float sm1 = 0.5 * (s1 * s1 - s0 * s0);
+            w0 += jump * (sm0 - sm1);
+            w1 += jump * sm1;
+        }
     } else {
         const vec2 dGrad = pc.gradIn - pc.gradOut;
-        j0 = ((pc.lIn - pc.lOut) + dot(dGrad, g0)) * w;
-        j1 = dot(dGrad, seg) * w;
+        const float j0 = ((pc.lIn - pc.lOut) + dot(dGrad, g0)) * w;
+        const float j1 = dot(dGrad, seg) * w;
+        // INTEGRAL (j0 + j1 u)(1-u) du and INTEGRAL (j0 + j1 u) u du.
+        w0 = j0 * (m0 - m1) + j1 * (m1 - m2);
+        w1 = j0 * m1 + j1 * m2;
     }
-
-    // INTEGRAL (j0 + j1 u)(1-u) du and INTEGRAL (j0 + j1 u) u du.
-    const float w0 = j0 * (m0 - m1) + j1 * (m1 - m2);
-    const float w1 = j0 * m1 + j1 * m2;
 
     // Both partials at once: d = (1,0) gives (d.n) = n.x, d = (0,1) gives n.y.
     const float k0 = len * w0;
