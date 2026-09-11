@@ -4,6 +4,7 @@
 #include "diff/geom/silhouette_set.hpp"
 #include "diff/diff_renderer.hpp"
 #include "diff/geom/camera_projection.hpp"
+#include "diff/geom/laplacian_parameterisation.hpp"
 #include "diff/geom/vertex_parameterisation.hpp"
 #include "diff/grad/arena_layout.hpp"
 #include "diff/param/param_registry.hpp"
@@ -1335,6 +1336,155 @@ TEST(DiffRendererLifecycle, ShutdownWithoutAnArenaNeedsNoAllocator) {
     EXPECT_TRUE(r.shutdown(nullptr));
     ASSERT_TRUE(r.init(fakeDevice(), fakePhysical()));
     EXPECT_TRUE(r.registerScalarBlock("albedo", 3).ok);
+}
+
+// ===========================================================================
+// LAPLACIAN PRECONDITIONING (Nicolet et al. 2021)
+// ===========================================================================
+//
+// The substitution the parameterisation layer was built to accept: same
+// apply/pullback pair, and spec 9 calls it close to mandatory for usable
+// geometry optimisation.
+//
+// The oracle is the same one the affine parameterisation gets, for the same
+// reason -- J built column by column by differencing `apply`, which knows
+// nothing about derivatives.
+
+namespace {
+
+/// A closed 6-gon. Enough vertices that M is not trivially diagonal, and a
+/// cycle so every vertex has degree 2 -- a path would leave two endpoints
+/// with degree 1 and hide an error in how the degree is accumulated.
+std::vector<std::uint32_t> hexagonEdges() {
+    return {0u, 1u, 1u, 2u, 2u, 3u, 3u, 4u, 4u, 5u, 5u, 0u};
+}
+
+}  // namespace
+
+TEST(DiffLaplacianParam, PullbackIsTheJacobianTransposeTimesTheGradient) {
+    ohao::diff::LaplacianVertexParameterisation p;
+    ASSERT_TRUE(p.build(6u, hexagonEdges(), 4.0));
+    ASSERT_EQ(p.paramCount(), 12u);
+
+    const std::vector<float> u = {0.5f, -1.0f, 2.0f,  0.25f, -0.75f, 1.5f,
+                                  3.0f, 0.125f, -2.5f, -0.5f, 1.25f, 0.75f};
+    // Non-uniform: a gradient equal everywhere is in the null space of
+    // nothing here, but it would still let a wrongly-symmetrised solve pass.
+    const std::vector<float> g = {1.0f,  0.0f,  -0.5f, 2.0f, 0.25f, -1.5f,
+                                  0.75f, -0.25f, 1.75f, 0.5f, -2.0f, 0.125f};
+
+    const std::vector<float> got = p.pullback(u, g);
+    ASSERT_EQ(got.size(), u.size());
+
+    constexpr double kStep = 1.0 / 512.0;
+    for (std::size_t k = 0; k < u.size(); ++k) {
+        std::vector<float> plus = u, minus = u;
+        plus[k] = static_cast<float>(u[k] + kStep);
+        minus[k] = static_cast<float>(u[k] - kStep);
+        const std::vector<float> vPlus = p.apply(plus);
+        const std::vector<float> vMinus = p.apply(minus);
+        ASSERT_EQ(vPlus.size(), g.size());
+
+        double want = 0.0;
+        for (std::size_t i = 0; i < g.size(); ++i) {
+            const double dv =
+                (static_cast<double>(vPlus[i]) - static_cast<double>(vMinus[i])) / (2.0 * kStep);
+            want += dv * static_cast<double>(g[i]);
+        }
+        EXPECT_NEAR(static_cast<double>(got[k]), want, 2e-3 * std::fabs(want) + 1e-4)
+            << "latent component " << k;
+    }
+}
+
+TEST(DiffLaplacianParam, LambdaZeroIsTheIdentity) {
+    // The control the geometry gate uses: lambda = 0 makes M = I, so the
+    // parameterisation is the unpreconditioned case and apply is a copy.
+    // If this were not exactly true, a comparison between preconditioned and
+    // unpreconditioned runs would be confounded by the parameterisation
+    // itself rather than isolating the preconditioner.
+    ohao::diff::LaplacianVertexParameterisation p;
+    ASSERT_TRUE(p.build(6u, hexagonEdges(), 0.0));
+    const std::vector<float> u = {0.5f, -1.0f, 2.0f,  0.25f, -0.75f, 1.5f,
+                                  3.0f, 0.125f, -2.5f, -0.5f, 1.25f, 0.75f};
+    const std::vector<float> v = p.apply(u);
+    ASSERT_EQ(v.size(), u.size());
+    for (std::size_t k = 0; k < u.size(); ++k) EXPECT_FLOAT_EQ(v[k], u[k]) << k;
+    const std::vector<float> back = p.pullback(u, u);
+    for (std::size_t k = 0; k < u.size(); ++k) EXPECT_FLOAT_EQ(back[k], u[k]) << k;
+}
+
+TEST(DiffLaplacianParam, LatentForInvertsApply) {
+    // latentFor is the forward multiply u = M v, so an optimisation can START
+    // from a known shape. Round-tripping it through apply must return the
+    // shape, or the starting point is not the shape the caller asked for.
+    ohao::diff::LaplacianVertexParameterisation p;
+    ASSERT_TRUE(p.build(6u, hexagonEdges(), 7.5));
+    const std::vector<float> v = {2.0f, 0.0f,  1.0f, 1.7f, -1.0f, 1.7f,
+                                  -2.0f, 0.0f, -1.0f, -1.7f, 1.0f, -1.7f};
+    const std::vector<float> u = p.latentFor(v);
+    ASSERT_EQ(u.size(), v.size());
+    const std::vector<float> roundTrip = p.apply(u);
+    ASSERT_EQ(roundTrip.size(), v.size());
+    for (std::size_t k = 0; k < v.size(); ++k) EXPECT_NEAR(roundTrip[k], v[k], 1e-4) << k;
+
+    // And the latent is NOT the shape -- otherwise the round trip above is
+    // two copies and proves nothing.
+    double worst = 0.0;
+    for (std::size_t k = 0; k < v.size(); ++k) {
+        worst = std::max(worst, std::fabs(static_cast<double>(u[k] - v[k])));
+    }
+    EXPECT_GT(worst, 1.0) << "M is too close to the identity for this test to mean anything";
+}
+
+TEST(DiffLaplacianParam, SmoothsAConcentratedGradient) {
+    // The property the whole method exists for, stated as a measurement.
+    // A gradient on ONE vertex -- which is what an image loss concentrated at
+    // a silhouette looks like -- must reach its neighbours after the
+    // pullback, and must do so MORE as lambda grows.
+    const std::vector<float> u(12u, 0.0f);
+    std::vector<float> g(12u, 0.0f);
+    g[0] = 1.0f;  // vertex 0, x only
+
+    double previousSpread = -1.0;
+    for (const double lambda : {0.0, 1.0, 8.0}) {
+        ohao::diff::LaplacianVertexParameterisation p;
+        ASSERT_TRUE(p.build(6u, hexagonEdges(), lambda));
+        const std::vector<float> out = p.pullback(u, g);
+        ASSERT_EQ(out.size(), g.size());
+
+        // How much of the step went somewhere other than vertex 0's x.
+        double elsewhere = 0.0;
+        for (std::size_t k = 1; k < out.size(); ++k) elsewhere += std::fabs(out[k]);
+        const double spread = elsewhere / std::fabs(out[0]);
+
+        if (lambda == 0.0) {
+            EXPECT_NEAR(spread, 0.0, 1e-6) << "unpreconditioned: the step must stay put";
+        } else {
+            EXPECT_GT(spread, previousSpread) << "lambda = " << lambda;
+        }
+        previousSpread = spread;
+    }
+}
+
+TEST(DiffLaplacianParam, RejectsWhatWouldSilentlyChangeTheOperator) {
+    ohao::diff::LaplacianVertexParameterisation p;
+    EXPECT_FALSE(p.valid());
+    EXPECT_FALSE(p.build(0u, {}, 1.0)) << "no vertices";
+    EXPECT_FALSE(p.build(4u, {0u, 1u, 2u}, 1.0)) << "odd edge list";
+    EXPECT_FALSE(p.build(4u, {0u, 9u}, 1.0)) << "index out of range";
+    EXPECT_FALSE(p.build(4u, {2u, 2u}, 1.0)) << "self-edge inflates a degree";
+    // A DUPLICATE doubles one edge's weight and nothing else -- the solve
+    // still succeeds and the mesh is merely stiffer in one place than the
+    // caller believes, which is the definition of a silent wrong answer.
+    EXPECT_FALSE(p.build(4u, {0u, 1u, 1u, 0u}, 1.0)) << "duplicate edge, reversed";
+    EXPECT_FALSE(p.build(4u, {0u, 1u, 0u, 1u}, 1.0)) << "duplicate edge";
+    EXPECT_FALSE(p.build(4u, {0u, 1u}, -1.0)) << "negative lambda";
+    EXPECT_FALSE(p.valid());
+
+    ASSERT_TRUE(p.build(4u, {0u, 1u, 1u, 2u, 2u, 3u}, 2.0));
+    EXPECT_TRUE(p.valid());
+    EXPECT_TRUE(p.apply({1.0f, 2.0f}).empty()) << "wrong latent length";
+    EXPECT_TRUE(p.pullback({}, {1.0f}).empty()) << "wrong gradient length";
 }
 
 TEST(DiffPathRng, DrawsAreInUnitInterval) {
