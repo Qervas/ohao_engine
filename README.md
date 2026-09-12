@@ -206,7 +206,7 @@ See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, go
 after the fact:
 
 - The **differentiable renderer** now lives in its own repository,
-  [`ohao_diff`](../ohao_diff) — a Vulkan-compute path tracer with Path Replay
+  `ohao_diff` — a Vulkan-compute path tracer with Path Replay
   Backpropagation and an explicit boundary term, gated by 83 unit tests, 75 GPU
   checks and a three-way comparison against Mitsuba 3. It **vendors** four
   shader includes from here (`material/ggx_aniso.glsl`, `rt/env_sampling.glsl`,

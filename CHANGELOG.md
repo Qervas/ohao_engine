@@ -6,6 +6,30 @@ All notable changes to OHAO Engine are documented here. Newest first.
 
 Standalone pure-C++ engine (no Godot host). Hybrid path: KHR path tracer + deferred raster + RT shadows/GI, shared scene/materials/TLAS.
 
+### Removed
+
+Recorded here because this file promises "all notable changes" and three
+removals had gone undocumented -- which left the section below reading as
+current when it describes code that is gone.
+
+- **Differentiable renderer -> its own repository.** `ohao/diff`, `tests/diff`,
+  `shaders/diff` and `shaders/includes/diff` now live in `ohao_diff`: a
+  Vulkan-compute path tracer with Path Replay Backpropagation and an explicit
+  boundary term, gated by 83 unit tests, 75 GPU checks and a three-way
+  comparison against Mitsuba 3. It **vendors** `material/ggx_aniso.glsl`,
+  `rt/env_sampling.glsl`, `rt/mis.glsl`, `pbr_unpack.glsl`, `EnvCDF` and
+  `RTAccelerationStructure` from here on purpose, so the two renderers cannot
+  disagree about their surface physics -- change any of those and run
+  `ohao_diff/tools/check_vendor_drift.sh`.
+- **Inverse-rendering lab** (`e0a260b`). `inverse_fit`, `ohao/inverse/`,
+  `tools/inverse_lab/`, `tools/inverse_c1/` and the figure/result packs under
+  `docs/media/inverse/`. **The section immediately below documents that stack
+  and is kept as the record of what was built** -- it is history, not a
+  description of the current tree.
+- **Animation, the OptiX denoiser, the tscn loader, scene serialization**
+  (`0873766`). `--denoise=optix` is still parsed and falls back to OIDN with a
+  warning; the live denoise set is `none|oidn|nrd|atrous|dlss`.
+
 ### Inverse rendering (Phase A–C1 hybrid)
 
 - **Modular split**: `examples/inverse_fit.cpp` is a thin CLI; pipeline in `ohao/inverse/` — `fit_config`, `scene_builder`, `io`, `render_session`, `export_dataset`, `staged_fit`, `visual_polish`, `fit_engine` (+ loss/optimizer/quality).
