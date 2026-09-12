@@ -154,8 +154,21 @@ float ggxD_anisoOrIso(vec3 N, vec3 H, float NdotH, float roughness,
 // that is worth knowing before you touch it. What used to cover it was a
 // separate wavefront path that shared the formula but not the raygen; that
 // moved out and took the coverage with it. A change here at roughness in
-// [0.02, ~0.155] is exercised by nothing: verify it by eye or with a new
-// test, never by a green renderer_test.
+// [0.02, ~0.155] is exercised by no test: never read a green renderer_test as
+// covering it.
+//
+// IT IS, HOWEVER, REACHABLE HEADLESSLY, which the earlier version of this note
+// did not say and which makes the difference between "verify it by eye" and a
+// command you can run:
+//
+//     build/Release/cornell_box <out.png> 16 rt_realtime --denoise=none
+//
+// `rt_realtime` is a bare positional token parsed by examples/example_cli.hpp,
+// and it selects RTRealtimeRenderer and therefore this function. The render is
+// deterministic -- two runs are byte-identical -- so a before/after pixel
+// comparison is a real gate, just not an automatic one. Adding an
+// `rt_realtime` scene to tests/golden/manifest.json would make it one; the
+// manifest's own comment invites exactly that.
 //
 // This file is also VENDORED by ohao_diff, which reads it rather than owning
 // it, so an edit here changes two renderers. That repository's
