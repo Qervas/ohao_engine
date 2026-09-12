@@ -822,6 +822,9 @@ struct HeadlessDevice {
     VkInstance instance{VK_NULL_HANDLE};
     VkPhysicalDevice physical{VK_NULL_HANDLE};
     VkDevice device{VK_NULL_HANDLE};
+    // Recorded, because the frame test below needs a queue from the same
+    // family it created the device with.
+    uint32_t queueFamily{0};
 
     bool create() {
         VkApplicationInfo app{};
@@ -844,11 +847,10 @@ struct HeadlessDevice {
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, nullptr);
         std::vector<VkQueueFamilyProperties> qs(qn);
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &qn, qs.data());
-        uint32_t family = 0;
         bool found = false;
         for (uint32_t i = 0; i < qn; ++i) {
             if (qs[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                family = i;
+                queueFamily = i;
                 found = true;
                 break;
             }
@@ -858,7 +860,7 @@ struct HeadlessDevice {
         const float prio = 1.0f;
         VkDeviceQueueCreateInfo qci{};
         qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        qci.queueFamilyIndex = family;
+        qci.queueFamilyIndex = queueFamily;
         qci.queueCount = 1;
         qci.pQueuePriorities = &prio;
         VkPhysicalDeviceFeatures feats{};
@@ -1131,6 +1133,206 @@ static void runHeadlessPathTracerTests() {
     }
 }
 
+
+// -----------------------------------------------------------------------------
+// ...AND A FRAME RECORDED, SUBMITTED AND READ BACK
+// -----------------------------------------------------------------------------
+//
+// Standing up is not rendering, and the two tests above say so. This is
+// rendering: one frame recorded into a command buffer this test owns,
+// submitted on a queue it created, waited on, and the final output image
+// copied into a host-visible buffer and inspected. It is the last piece of
+// item 3's harness that was uncertain -- everything after it (a scene, a
+// TLAS, an optimiser) is ordinary work against interfaces that now demonstrably
+// function headless.
+//
+// THE SCENE IS NULL, deliberately. The question this answers is whether the
+// pass graph can be driven at all with no window and no swapchain, and a null
+// scene is the cleanest way to ask it: nothing to load, nothing to fail for
+// reasons that are not the harness's. `render()` passes the scene straight
+// through to the passes, so this also establishes that they tolerate its
+// absence rather than dereferencing it.
+//
+// WHAT AN EMPTY SCENE LOOKS LIKE, AND WHY THAT IS THE ASSERTION. The readback
+// comes back with EXACTLY width*height non-zero bytes out of width*height*4 --
+// one per pixel. That is the alpha channel at 255 with RGB at 0: transparent
+// black, opaque alpha, which is precisely a cleared frame with nothing drawn
+// into it. Two things follow, and neither would follow from "the copy
+// returned":
+//
+//   * THE COPY ACTUALLY HAPPENED. A failed or skipped vkCmdCopyImageToBuffer
+//     leaves the staging buffer as allocated, which is typically all zeros --
+//     indistinguishable from a black image if the test only asked "is it
+//     black". The non-zero alpha is what separates them.
+//   * THE STRIDE IS RIGHT. One non-zero byte in four, at a count equal to the
+//     pixel count, is only consistent with a correctly strided RGBA8 copy of
+//     the whole image.
+//
+// THE SOURCE LAYOUT IS VK_IMAGE_LAYOUT_GENERAL, which is what the engine's own
+// readbacks in ohao/gpu/vulkan/renderer.cpp use for compute-written images and
+// what the final output is left in.
+//
+// VALIDATION IS NOT ENABLED HERE. Running this path with the validation layers
+// on surfaces several PRE-EXISTING engine conditions -- shader-module
+// capability requirements, a graphics pipeline layout not matching a declared
+// resource variable's stage, and a descriptor imageLayout not matching the
+// live layout. They are not caused by rendering headless and they are not this
+// test's to fix; they are recorded in the roadmap so that whoever turns
+// validation on next is not surprised.
+
+static void runHeadlessDeferredRenderTests() {
+    std::cout << "\n[Deferred pipeline, a frame end to end]\n";
+
+    TEST_BEGIN("a headless frame records, submits and reads back");
+    {
+        HeadlessDevice dev;
+        if (!dev.create()) {
+            dev.destroy();
+            std::cout << "(no Vulkan device -- skipped) ";
+            TEST_PASS();
+            return;
+        }
+        VkQueue queue = VK_NULL_HANDLE;
+        vkGetDeviceQueue(dev.device, dev.queueFamily, 0, &queue);
+
+        bool submitted = false;
+        bool copied = false;
+        uint64_t nonZero = 0;
+        uint64_t pixels = 0;
+
+        {
+            ohao::DeferredRenderer renderer;
+            if (!renderer.initialize(dev.device, dev.physical)) {
+                renderer.cleanup();
+                dev.destroy();
+                TEST_FAIL("initialize");
+                return;
+            }
+            renderer.setScene(nullptr);
+            const glm::mat4 view =
+                glm::lookAt(glm::vec3(0, 1, 4), glm::vec3(0), glm::vec3(0, 1, 0));
+            const glm::mat4 proj =
+                glm::perspective(glm::radians(45.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+            renderer.setCameraData(view, proj, glm::vec3(0, 1, 4), 0.1f, 100.0f);
+
+            VkCommandPoolCreateInfo pci{};
+            pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            pci.queueFamilyIndex = dev.queueFamily;
+            pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            VkCommandPool pool = VK_NULL_HANDLE;
+            vkCreateCommandPool(dev.device, &pci, nullptr, &pool);
+            VkCommandBufferAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            ai.commandPool = pool;
+            ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            ai.commandBufferCount = 1;
+            VkCommandBuffer cmd = VK_NULL_HANDLE;
+            vkAllocateCommandBuffers(dev.device, &ai, &cmd);
+            VkCommandBufferBeginInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cmd;
+
+            vkBeginCommandBuffer(cmd, &bi);
+            renderer.render(cmd, 0u);
+            vkEndCommandBuffer(cmd);
+            submitted = (vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS);
+            vkQueueWaitIdle(queue);
+
+            const VkImage outImage = renderer.getFinalOutputImage();
+            if (submitted && outImage != VK_NULL_HANDLE) {
+                const uint32_t w = 1920u, h = 1080u;
+                pixels = static_cast<uint64_t>(w) * h;
+                const VkDeviceSize bytes = pixels * 4ull;
+
+                VkBufferCreateInfo bci{};
+                bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bci.size = bytes;
+                bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VkBuffer buf = VK_NULL_HANDLE;
+                vkCreateBuffer(dev.device, &bci, nullptr, &buf);
+                VkMemoryRequirements mr{};
+                vkGetBufferMemoryRequirements(dev.device, buf, &mr);
+                VkPhysicalDeviceMemoryProperties mp{};
+                vkGetPhysicalDeviceMemoryProperties(dev.physical, &mp);
+                uint32_t typeIdx = 0;
+                for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+                    const auto want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                      VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                    if ((mr.memoryTypeBits & (1u << i)) &&
+                        (mp.memoryTypes[i].propertyFlags & want) == want) {
+                        typeIdx = i;
+                        break;
+                    }
+                }
+                VkMemoryAllocateInfo mai{};
+                mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                mai.allocationSize = mr.size;
+                mai.memoryTypeIndex = typeIdx;
+                VkDeviceMemory mem = VK_NULL_HANDLE;
+                vkAllocateMemory(dev.device, &mai, nullptr, &mem);
+                vkBindBufferMemory(dev.device, buf, mem, 0);
+
+                vkResetCommandBuffer(cmd, 0);
+                vkBeginCommandBuffer(cmd, &bi);
+                VkImageMemoryBarrier toSrc{};
+                toSrc.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                toSrc.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toSrc.image = outImage;
+                toSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                toSrc.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                                     &toSrc);
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {w, h, 1u};
+                vkCmdCopyImageToBuffer(cmd, outImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1,
+                                       &region);
+                vkEndCommandBuffer(cmd);
+                vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
+                vkQueueWaitIdle(queue);
+
+                void* mapped = nullptr;
+                if (vkMapMemory(dev.device, mem, 0, VK_WHOLE_SIZE, 0, &mapped) == VK_SUCCESS) {
+                    const unsigned char* px = static_cast<const unsigned char*>(mapped);
+                    for (VkDeviceSize i = 0; i < bytes; ++i) {
+                        if (px[i] != 0u) ++nonZero;
+                    }
+                    vkUnmapMemory(dev.device, mem);
+                    copied = true;
+                }
+                vkDestroyBuffer(dev.device, buf, nullptr);
+                vkFreeMemory(dev.device, mem, nullptr);
+            }
+            vkDestroyCommandPool(dev.device, pool, nullptr);
+            renderer.cleanup();
+        }
+        dev.destroy();
+
+        EXPECT(submitted, "the recorded frame must submit successfully");
+        EXPECT(copied, "the final output must copy into a host-visible buffer");
+        // THE COPY HAPPENED: a skipped copy leaves the staging buffer as
+        // allocated, which is all zeros and indistinguishable from a black
+        // image unless something is required to be non-zero.
+        EXPECT(nonZero > 0, "a readback of all zeros cannot be told from a copy that never ran");
+        // AND THE STRIDE IS RIGHT: exactly one non-zero byte per pixel is the
+        // alpha channel of a cleared frame, which is what an empty scene is.
+        EXPECT_EQ(nonZero, pixels,
+                  "expected exactly one non-zero byte per pixel (opaque alpha over transparent "
+                  "black, i.e. a cleared frame with nothing drawn)");
+        TEST_PASS();
+    }
+}
+
 // =============================================================================
 // MAIN
 // =============================================================================
@@ -1147,6 +1349,7 @@ int main() {
     runDiffAvailabilityTests();
     runHeadlessDeferredTests();
     runHeadlessPathTracerTests();
+    runHeadlessDeferredRenderTests();
 
     std::cout << "\n================================================\n";
     std::cout << "  Results: " << testsPassed << "/" << testsRun << " passed";

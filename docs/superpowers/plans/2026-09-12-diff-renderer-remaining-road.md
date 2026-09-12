@@ -18,7 +18,7 @@ a gap in memory.
 |---|---|---|
 | 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
 | 2 | Sensitivity maps | **DONE** — binding 13 and check 73, gated by an identity against the gradient plus a derived null test |
-| 3 | Renderer fitting | not started, but **UNBLOCKED and measured**: BOTH pipelines initialise headless (engine_tests 49/49), FD decided; a scene, a TLAS and a readback remain |
+| 3 | Renderer fitting | **harness proven**: both pipelines initialise headless and a deferred frame records, submits and reads back (engine_tests 50/50); FD decided. A scene, a TLAS and the path tracer's own render remain — all ordinary |
 | 4 | SVBRDF as a client | **its differentiable half is DONE** — the environment is a parameter (binding 14, checks 74–75); the client rewrite itself has no client in version control |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
@@ -327,12 +327,42 @@ half check 66 said had never been stood up anywhere.
    from a process that then died. `device_setup.cpp` adds this under its DLSS
    block, so an engine build gets it incidentally and never sees this.
 
-**What is left of item 3, in order:** a Scene with geometry, materials and a
-light; an `RTAccelerationStructure` (which `render()` requires and which
-`diff_gpu_probe` already builds routinely); a render and an image readback
-from each pipeline; then the FD-over-knobs optimiser, which remains the small
-half. Both pipelines existing headless was the uncertain part, and it is now
-measured rather than assumed.
+**AND A FRAME GOES END TO END.** `runHeadlessDeferredRenderTests` records one
+frame into a command buffer the test owns, submits it on its own queue, waits,
+and copies the final output image into a host-visible buffer:
+
+> **exactly `width*height` non-zero bytes out of `width*height*4`** — one per
+> pixel, which is the alpha channel at 255 over transparent black: a cleared
+> frame with nothing drawn, since the scene is null.
+
+That count is the assertion, and it is stronger than "the copy returned". A
+skipped copy leaves the staging buffer as allocated — all zeros — which is
+indistinguishable from a black image unless something is *required* to be
+non-zero; and one non-zero byte in four at exactly the pixel count is only
+consistent with a correctly strided RGBA8 copy of the whole image. Source
+layout is `VK_IMAGE_LAYOUT_GENERAL`, matching the engine's own readbacks in
+`ohao/gpu/vulkan/renderer.cpp`.
+
+**So the harness is proven: initialise → render → submit → read back, headless,
+for the deferred pipeline; initialise for the path tracer.** engine_tests
+50/50 in 1.5 s.
+
+**What is left of item 3, in order, and none of it is uncertain any more:** a
+Scene with geometry, materials and a light (so the image is not empty); an
+`RTAccelerationStructure`, which `render()` on the path-tracer side requires
+and which `diff_gpu_probe` already builds routinely; the path tracer's own
+render and readback, which is the deferred one's shape against a different
+image; then the FD-over-knobs optimiser, which was always the small half.
+
+**One thing found on the way, not this module's to fix.** Running this path
+with the validation layers ON surfaces several PRE-EXISTING engine conditions:
+`VUID-VkShaderModuleCreateInfo-pCode-08740` (shader-module capability
+requirements), `VUID-VkGraphicsPipelineCreateInfo-layout-07988` (a pipeline
+layout not matching a declared resource variable's stage), and
+`VUID-VkDescriptorImageInfo-imageLayout-00344` (a descriptor `imageLayout` not
+matching the live layout). They are not caused by rendering headless. The
+committed test does **not** enable validation; this is recorded so whoever
+turns it on next is not surprised by it.
 
 The spec calls this "the distinctive one": register the deferred pipeline's
 hand-tuned knobs — SSAO radius and bias, SSR thickness and step count, the
