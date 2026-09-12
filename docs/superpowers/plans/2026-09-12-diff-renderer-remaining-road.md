@@ -20,7 +20,7 @@ a gap in memory.
 | 2 | Sensitivity maps | not started |
 | 3 | Renderer fitting | not started; the differentiability decision below is still owed |
 | 4 | SVBRDF as a client | not started |
-| 5 | Mitsuba oracle | not started — **needs a decision**: `mitsuba` is not installed and installing it changes a Python environment, not this repo |
+| 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
 | 7 | Stage 4 — scale | **partial** — camera translation as a parameter (2 unit tests); edge importance sampling, BSDF unification and warped-area remain |
 | 8 | Laplacian preconditioning | **DONE** — `LaplacianVertexParameterisation`, 5 unit tests, check 68 |
@@ -80,10 +80,12 @@ at the bottom of this file:
 The three categories the remaining work falls into, which is more useful than
 a list:
 
-**Blocked on a decision.** Item 5 is the only unblocked item left and it is
-owed — Gate 4 has never run at any stage. It needs `pip install mitsuba`,
-which changes a Python environment rather than this repository, so it is not
-a call to make unilaterally.
+**Nothing is blocked on a decision any more.** Item 5 is closed. The install
+worry that had held it up dissolved once it was looked at properly: `pip
+install --target build/mitsuba-pkgs mitsuba` puts mitsuba 3.9.1 and drjit
+1.5.0 under `build/` — already git-ignored — reached through `PYTHONPATH`,
+so no Python environment is touched at all. Deferring that to the user was
+more caution than the situation needed.
 
 **Blocked on item 1's remainder**, which is items 2, 3 and 4 — half of what
 is left. Two things close it: moving the render orchestration into the library
@@ -266,21 +268,48 @@ texels registered as parameters — rather than a stub returning baked constants
 
 ---
 
-### 5. Gate 4 — the Mitsuba 3 oracle (spec §8.4) — ≈ ½ stage
+### 5. Gate 4 — the Mitsuba 3 oracle (spec §8.4) — **DONE**
 
-**This is owed.** Stage 1's gate as written is "Gates 1–4", and Gate 4 has never
-been run at any stage. It was deferred each time on the grounds that the
-closed-form edge test is the stronger oracle, which is true and remains true —
-but "stronger oracle exists" is a reason to *order* it later, not to skip it.
+`tests/diff/tools/mitsuba_gate.py` plus check 72
+(`tests/diff/probe/checks_mitsuba_scale.cpp`). Mitsuba 3.9.1 / drjit 1.5.0
+installed out of tree under `build/mitsuba-pkgs`, reached by `PYTHONPATH`.
 
-**Gate:** agreement with Mitsuba 3 on a scene both can express, to a tolerance
-pre-registered before the first comparison.
+**Three-way, not two-way**, because a disagreement between two numbers says
+something is wrong without saying which. The scene is a Lambertian plate
+filling the frame under a constant environment of radiance L, for which
+`mean pixel = a*L` and `d(mean pixel)/d(albedo) = L` exactly, so the closed
+form arbitrates. Leg 1 (mitsuba vs the closed form) runs first and alone: if
+those two disagree the SCENE is wrong and nothing has been learned about this
+renderer. Leg 2 runs `diff_gpu_probe` and parses check 72's own line rather
+than quoting numbers, and the shared constants are read out of the C++ source
+so the two renderers cannot silently describe different scenes.
 
-Small code — `pip install mitsuba` plus a script — and **fiddly reconciliation**.
-Coordinate handedness, units, the environment map's phase, and RNG differences
-make a first-run disagreement the norm rather than the exception. Budget the
-time for convention archaeology, not for the script. Expect to discover that one
-of the two is right and to have to prove which.
+**The convention archaeology this section warned about did not happen**, and
+the reason is worth keeping: the closed form `a*L` is independent of the
+camera, of the plate's size and of the environment map's phase, so there was
+nothing to reconcile. Choosing a scene whose answer no convention can affect
+was cheaper than reconciling the conventions. What *did* bite was the
+definition of the quantity — `dr.mean` divides by W·H·3 while one albedo
+channel drives one channel, so the first run came out at exactly a third —
+and the three-way structure localised that to neither renderer.
+
+**IT FOUND SOMETHING**, which is the whole reason an independent oracle is
+worth the trouble: the film sat **+0.124% above a\*L at a 64×32 environment,
+5.1 standard errors at two million samples**. `sampleEnvMap` emits texel
+CENTRES, so the environment strategy is a composite midpoint rule in the polar
+angle — documented in `site/content/units/sampling/env-cdf.md`, never measured,
+and invisible to every other gate here because they all compare this renderer
+against itself. Check 72 now measures it on a ladder (H = 8, 16, 32: excess
+0.01292, 0.003732, 0.0009683, ratios 3.46 and 3.85 against a **derived** 4)
+and takes its absolute verdict at H = 256, where the bias is 2.5e-05 and the
+sampling error is 1.8e-04.
+
+**Follow-up, not done and not this module's call.** Jittering within the
+chosen texel would make the environment strategy unbiased at every resolution.
+That edits `shaders/includes/rt/env_sampling.glsl`, which the production path
+tracer shares, so it is a renderer decision rather than a differentiable-
+renderer one. If it is ever taken, check 72's ladder becomes obsolete and its
+own failure message says to delete it rather than loosen it.
 
 ---
 

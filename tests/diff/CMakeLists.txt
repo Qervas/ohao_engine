@@ -69,6 +69,7 @@ add_executable(diff_gpu_probe
     probe/checks_traced_jump.cpp
     probe/checks_shaded_order.cpp
     probe/checks_pixel_seam.cpp
+    probe/checks_mitsuba_scale.cpp
     probe/checks_texture.cpp
 )
 target_include_directories(diff_gpu_probe PRIVATE

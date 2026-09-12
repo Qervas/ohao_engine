@@ -231,6 +231,7 @@
 #include "probe/checks_traced_jump.hpp"
 #include "probe/checks_shaded_order.hpp"
 #include "probe/checks_pixel_seam.hpp"
+#include "probe/checks_mitsuba_scale.hpp"
 #include "probe/checks_silhouette_gpu.hpp"
 #include "probe/checks_vertex_fd.hpp"
 #include "probe/checks_loss.hpp"
@@ -311,6 +312,7 @@ using ohao::diff::probe::checkPreconditioning;
 using ohao::diff::probe::checkTracedJump;
 using ohao::diff::probe::checkShadedOrder;
 using ohao::diff::probe::checkPixelSeam;
+using ohao::diff::probe::checkMitsubaScale;
 using ohao::diff::probe::checkSharedArena;
 using ohao::diff::probe::checkSilhouetteGpu;
 using ohao::diff::probe::checkVertexFiniteDifference;
@@ -558,6 +560,12 @@ int main() {
     // which were counted twice until clipToPixel became half-open. The
     // only check that can tell the fix from its absence.
     if (!checkPixelSeam(ctx)) return 1;
+
+    // 72. GATE 4, leg 2: the absolute radiometric scale against a
+    // closed form Mitsuba 3 confirms independently. The one error
+    // class every other check here is blind to, because they all
+    // compare this renderer against itself.
+    if (!checkMitsubaScale(ctx)) return 1;
 
     arena.destroy(ctx.allocator());
     ctx.shutdown();
