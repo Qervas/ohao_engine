@@ -7,6 +7,7 @@
 #include "context/probe_scene.hpp"
 
 #include "diff/wavefront/compute_pipeline.hpp"
+#include "diff/wavefront/scatter_sinks.hpp"
 #include "diff/wavefront/wavefront_loop.hpp"
 #include "diff/wavefront/wavefront_stage.hpp"
 #include "render/rt/rt_acceleration_structure.hpp"
@@ -344,43 +345,30 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // read -- a descriptor set must cover every binding the shader statically
     // uses -- and still go through extraBarrierBuffers, because every scatter
     // dispatch overwrites the same per-path offsets in them.
-    struct ScatterSinks {
-        GpuBuffer trace;
-        GpuBuffer env;
-        GpuBuffer nee;
-        GpuBuffer film;
-    };
-    ScatterSinks fwdSinks;
-    ScatterSinks repSinks;
-    ScatterSinks* const sinkSets[2] = {&fwdSinks, &repSinks};
+    // ITEM 1. The sinks now live in the LIBRARY (ohao/diff/wavefront/
+    // scatter_sinks.hpp) rather than as locals here, because a record-only
+    // gradient entry point cannot own them: DiffRenderer records into a
+    // caller-supplied command buffer and does not submit, so the buffers the
+    // caller reads after its OWN submit have to outlive the recording call.
+    //
+    // The STRIDES stay here, and are passed in. They are tied to the shader's
+    // writes by checkNeeStrideTie and checkWfScatterSinkLayoutTie, which parse
+    // wf_scatter.comp and refuse to run if the numbers disagree; a copy in the
+    // library would be a third home for the same fact and the only one nothing
+    // checks.
+    ScatterSinks sinks;
     const uint32_t filmPixelCount = width * height;
-    const VkDeviceSize filmBytes = static_cast<VkDeviceSize>(filmPixelCount) * 3u * sizeof(float);
-    for (ScatterSinks* s : sinkSets) {
-        if (!ok) break;
-        // HOST-READABLE, unlike the other two sinks: Stage 1 Task 3's
-        // frozen-direction measurement reads the FORWARD run's vertex trace
-        // back and compares two renders' ray origins, directions and hit
-        // distances bit for bit. That is how the detached instrument's
-        // defining claim is MEASURED rather than argued.
-        s->trace = m_allocator.createBuffer(
-            static_cast<VkDeviceSize>(capacity) * kDebugDrawFloats * sizeof(float),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuToCpu,
-            /*persistentlyMapped=*/true);
-        s->env = m_allocator.createBuffer(
-            static_cast<VkDeviceSize>(capacity) * kEnvSampleFloats * sizeof(float),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
-        s->nee = m_allocator.createBuffer(
-            static_cast<VkDeviceSize>(capacity) * kNeeSampleFloats * sizeof(float),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, AllocationUsage::GpuOnly);
-        s->film = m_allocator.createBuffer(
-            filmBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            AllocationUsage::GpuToCpu, /*persistentlyMapped=*/true);
-        if (!s->trace.isValid() || !s->env.isValid() || !s->nee.isValid() || !s->film.isValid()) {
+    if (ok) {
+        const ScatterSinks::Strides strides{kDebugDrawFloats, kEnvSampleFloats,
+                                            kNeeSampleFloats};
+        ok = sinks.create(m_allocator, capacity, width, height, strides);
+        if (!ok) {
             std::fprintf(stderr, "[GpuProbeContext] runWavefrontGradientProbe: scatter sink "
                                   "allocation failed\n");
-            ok = false;
         }
     }
+    // Non-const: invalidateBuffer needs a mutable handle for the host reads.
+    ScatterSinkSet* const sinkSets[2] = {&sinks.forward(), &sinks.replay()};
 
     // --- THE EMISSION TEXTURE'S PRIMAL (Stage 1 Task 5), binding 11.
     //
@@ -547,7 +535,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
              intersect.bindBuffers(m_device, intersectBuffers) &&
              intersect.bindAccelerationStructure(m_device, 5, sceneTlas);
         for (int i = 0; ok && i < 2; ++i) {
-            const ScatterSinks& s = *sinkSets[i];
+            ScatterSinkSet& s = *sinkSets[i];
             const VkBuffer scatterBuffers[8] = {buffers.stateBuffer(),
                                                 buffers.queueBuffer(),
                                                 buffers.counterBuffer(),
@@ -599,7 +587,7 @@ bool GpuProbeContext::runWavefrontGradientProbe(
 
         for (int variant = 0; ok && variant < 2; ++variant) {
             const bool isReplay = (variant == 1);
-            ScatterSinks& s = *sinkSets[variant];
+            ScatterSinkSet& s = *sinkSets[variant];
             loop.setScatter(*scatterStages[variant]);
 
             WavefrontLoop::Config loopConfig;
@@ -772,12 +760,9 @@ bool GpuProbeContext::runWavefrontGradientProbe(
     // is what they are for -- and destroying them here would leave the next
     // call recording against pipelines that no longer exist.
     if (ownStages) destroyOwnedStages(localStages);
-    for (ScatterSinks* s : sinkSets) {
-        if (s->film.isValid()) m_allocator.destroyBuffer(s->film);
-        if (s->nee.isValid()) m_allocator.destroyBuffer(s->nee);
-        if (s->env.isValid()) m_allocator.destroyBuffer(s->env);
-        if (s->trace.isValid()) m_allocator.destroyBuffer(s->trace);
-    }
+    // One call now: ScatterSinks owns the release, in the reverse order of
+    // creation, and is idempotent.
+    sinks.destroy(m_allocator);
     if (emissionTexBuffer.isValid()) m_allocator.destroyBuffer(emissionTexBuffer);
     if (adjointSeedBuffer.isValid()) m_allocator.destroyBuffer(adjointSeedBuffer);
     if (vertexBuffer.isValid()) m_allocator.destroyBuffer(vertexBuffer);
