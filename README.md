@@ -19,153 +19,25 @@ A solo **Vulkan 1.3** hybrid renderer in **C++20**: KHR path tracing for ground 
 
 ## What it is
 
-Built to learn how a modern hybrid renderer is wired end to end. ~52K lines of **C++20** and ~14K lines of GLSL across 121 shaders, with two pipelines that share scene, materials, and acceleration structures. No engine SDK, no editor host. Path tracer is for ground truth. Deferred is for interactive iteration. The hybrid mode runs RT shadows and 1-bounce RT GI on top of the deferred G-buffer.
+Built to learn how a modern hybrid renderer is wired end to end. ~54K lines of **C++20** and ~17K lines of GLSL across 125 shaders, with two pipelines that share scene, materials, and acceleration structures. No engine SDK, no editor host. Path tracer is for ground truth. Deferred is for interactive iteration. The hybrid mode runs RT shadows and 1-bounce RT GI on top of the deferred G-buffer.
 
-**Recent focus:** multi-pipeline **inverse rendering lab** (path-tracer oracle + Diff-IR Deferred sibling) on one Vulkan host — capture-gated holdout/relight bars, modular C++20.
+**Recent focus:** real-time path tracing at ~67 fps (1 spp, 720p) with DLSS Ray
+Reconstruction and ReSTIR GI, and the environment-sampling work that made it
+usable at one sample per pixel — see below.
 
-## Inverse lab — recover materials from pixels
-
-Multi-pipeline inverse rendering on one Vulkan host: **path-tracer oracle** (capture-gated LABTEST) + **Diff-IR Deferred** sibling (free dense maps as beauty SoT). Fit is train-only; published dB always name the **metric domain**. Full tables + machine-readable pack: [`docs/media/inverse/RESULTS.md`](docs/media/inverse/RESULTS.md).
-
-### Publish face — Diff-IR quality plate (1080p SHOW)
-
-Hard presets only (spheres · helmet · outdoor). Free dense **roughness** (ORM.g), map ≥128², multi-view, wrong-init → recovered → GT. **Not** the 256×144 lab_fast toy.
-
-<p align="center">
-  <img src="docs/media/inverse/readme_quality_matrix.jpg" width="920" alt="Diff-IR quality plate — spheres, helmet, outdoor: wrong init, recovered, GT at 1080p" />
-</p>
-
-| Preset | Init → train PSNR | ΔPSNR | Rough map MSE | Relight Δ | Domain |
-|--------|-------------------|-------|---------------|-----------|--------|
-| spheres | 38.3 → 58.1 | **+19.8 dB** | 0.362 → 0.179 | +19.9 dB | Deferred dense ORM · 1920×1080 |
-| helmet | 35.8 → 57.6 | **+21.8 dB** | 0.362 → 0.081 | +21.8 dB | same |
-| outdoor | 32.4 → 56.9 | **+24.5 dB** | 0.362 → 0.194 | +24.5 dB | same |
-
-<p align="center">
-  <img src="docs/media/inverse/readme_quality_relight.jpg" width="920" alt="Spheres novel-light relight + recovered roughness maps" />
-</p>
-
-<sub>Novel-HDRI relight on spheres (+19.9 dB vs wrong init) and free-grid roughness maps (init → recovered → GT).</sub>
-
-### PT capture-gated LABTEST (oracle plate)
-
-Wrong init → recovered → **capture export** GT (not live-oracle theater). Holdout / relight gates on exported PNGs.
-
-<p align="center">
-  <img src="docs/media/inverse/readme_pt_frontier.jpg" width="920" alt="PT inverse lab lantern frontier — wrong init, recovered, capture GT, relight" />
-</p>
-
-| Gate | Target | Measured |
-|------|--------|----------|
-| Holdout PSNR / SSIM | ≥ 28 dB | **32.5 dB** / 0.983 |
-| Relight PSNR / SSIM | ≥ 26 dB | **34.4 dB** / 0.989 |
-| Holdout gain vs wrong init | ≥ 8 dB | **+20.5 dB** |
-| Train RMSE before → after | — | **0.299 → 0.0195 (−93.5%)** |
-| Metric domain | — | `capture_export_images` |
-
-### Museum publish face — NIUA amphora · 1080p SHOW
-
-Dark museum product shell with a **clear amphora** hero (not lantern / sphere chart). Free dense **marble floor** maps: wrong-init cool solid → recovered checker → GT. Optim at draft FIT; **publish stills at 1920×1080**. Domain `ohao_museum_studio_protocol` — not a public IR bench claim.
-
-<p align="center">
-  <img src="docs/media/inverse/readme_museum.jpg" width="920" alt="Museum amphora dense albedo — wrong init, recovered, GT at 1080p" />
-</p>
-
-| Gate | Measured |
-|------|----------|
-| SHOW stills | **1920×1080** wrong / recovered / GT |
-| MAPTEST ΔPSNR | **+21.5 dB** (16.9 → 38.3) |
-| Map MSE | 0.232 → **0.0019** |
-| Hero | NIUA `amphora.glb` · free θ = ground albedo only |
-| Domain | `ohao_museum_studio_protocol` |
-
-```bash
-./build/inverse_fit --backend diff --preset museum --dense-map --dense-map-res 128 \
-  --quality draft --out-dir renders/diff_museum_plate --no-visual-polish
-python3 tools/inverse_lab/test_dense_map.py renders/diff_museum_plate
-python3 tools/inverse_lab/make_readme_figures.py
-```
-
-### Diff-IR dense maps (albedo · metal) + analytic speed
-
-Beauty θ is a **bindless Deferred-sampled map** (albedo / ORM). Wrong-init is cool solid / low-metal / high-rough — never free-gift GT warm start. Map MSE is first-class beside PSNR.
-
-<p align="center">
-  <img src="docs/media/inverse/readme_dense_albedo.jpg" width="820" alt="Dense albedo MAPTEST — beauty and map triple" />
-</p>
-<p align="center">
-  <img src="docs/media/inverse/readme_dense_metal.jpg" width="820" alt="Dense metallic MAPTEST — beauty, relight, metal maps" />
-</p>
-
-| Task | ΔPSNR (train) | Map MSE | Relight Δ | Notes |
-|------|---------------|---------|-----------|--------|
-| Dense albedo 64² free-grid | +7.3 dB | 0.104 → 0.084 | — | MAPTEST; cool wrong-init |
-| Dense albedo 128² | +7.2 dB | 0.104 → 0.080 | — | same protocol |
-| Dense metallic ORM.b | **+26.8 dB** | 0.405 → **0.006** | +26.9 dB | extreme flip + relight |
-| Dense roughness ORM.g (lab) | +21.0 dB | 0.378 → 0.169 | +22.1 dB | floor-crop specular loss |
-
-**H4 analytic albedo** (linear solve + residual + sparse polish; GRADCHECK vs FD — **not** a reverse-mode autodiff claim):
-
-| Metric | Value |
-|--------|-------|
-| GRADCHECK median rel err vs coord FD | 0.198 (gate &lt; 0.20) |
-| Analytic optim wall-clock | 2.2 s |
-| Est. full 3-pass coord FD | 42.8 s |
-| **Speedup** | **19.7×** |
-| MAPTEST after analytic path | +2.8 dB · map MSE drop |
-
-<p align="center">
-  <img src="docs/media/inverse/readme_analytic.jpg" width="820" alt="Analytic albedo optim recovery strip" />
-</p>
-
-### Photo proxy (domain shift) — PHOTOTEST
-
-Domain-shifted multi-view capture. Gates are **gain vs wrong-init**, not synthetic ≥28 absolute theater under photo noise.
-
-<p align="center">
-  <img src="docs/media/inverse/readme_photo_proxy.jpg" width="820" alt="Photo proxy PHOTOTEST strip" />
-</p>
-
-| Metric | Value | Domain |
-|--------|-------|--------|
-| Holdout gain vs wrong init | **+14.9 dB** | `photo_proxy_images` |
-| Holdout / relight PSNR | 28.7 / 27.4 dB | capture-exported |
-| PHOTOTEST | PASS (gain ≥ 3 dB) | no fake LABTEST bar |
-
-### Reproduce
-
-```bash
-# Publish-face quality plate (1080p hard presets)
-./scripts/run_inverse_quality_plate.sh
-
-# PT capture-gated frontier
-./build/inverse_fit --backend pt \
-  --lab-bundle renders/inverse_lab/lantern_frontier/capture \
-  --quality draft --out-dir renders/inverse_lab/lantern_frontier_fit
-
-# Dense albedo + analytic ≥10× path
-./build/inverse_fit --backend diff --dense-map --dense-map-res 64 --dense-grid 8 \
-  --fit-width 256 --fit-height 144 --preset lantern --out-dir renders/diff_dense_analytic
-python3 tools/inverse_lab/test_dense_analytic.py renders/diff_dense_analytic
-
-# Rebuild README figures + RESULTS pack from existing renders/
-python3 tools/inverse_lab/make_readme_figures.py
-```
-
-Docs: [`docs/inverse_lab.md`](docs/inverse_lab.md) · [`docs/inverse_lab_roadmap.md`](docs/inverse_lab_roadmap.md) · [`docs/media/inverse/RESULTS.md`](docs/media/inverse/RESULTS.md) · [`docs/inverse_photo_lab.md`](docs/inverse_photo_lab.md) · deck: [`docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx`](docs/media/inverse/OHAO_Inverse_Lab_Showcase.pptx)
 
 ## Headline numbers
 
 | Metric | Value |
 |---|---|
 | Language | **C++20** |
-| C++ source | ~52K LOC across `ohao/` |
-| GLSL shaders | ~14K LOC across 121 files |
-| Render code | ~24K LOC |
-| GPU/Vulkan layer | ~9K LOC |
+| C++ source | ~54K LOC across `ohao/` |
+| GLSL shaders | ~17K LOC across 125 files |
+| Render code | ~26K LOC |
+| GPU/Vulkan layer | ~10K LOC |
 | Physics (Jolt) | ~11K LOC |
-| Scene graph | ~7K LOC |
-| Denoise backends | 4 (Intel OIDN, NVIDIA OptiX, NVIDIA NRD, NVIDIA DLSS-RR) |
+| Scene graph | ~6K LOC |
+| Denoise backends | 4 (Intel OIDN, NVIDIA NRD, NVIDIA DLSS-RR, built-in a-trous) |
 
 ## Real-time path tracing — and the firefly that taught me the most
 
@@ -279,14 +151,13 @@ OptiX is optional. If the SDK isn't found, the OptiX backend compiles as a no-op
 
 ```
 ohao/
-  core/         413 LOC   logging, events, commands
-  gpu/vulkan/  9,021 LOC  device, memory, descriptors, dispatch
-  render/     23,780 LOC  rt/, deferred/, graph/, ibl/, particles/, picking/, async/
-  scene/       7,042 LOC  actor, component, asset (gltf/obj/fbx via Assimp)
-  physics/    10,989 LOC  Jolt 5.1 backend behind IPhysicsBackend plugin
-  animation/     966 LOC  skeleton, clips, controller, GPU skinning
-  audio/         383 LOC  miniaudio backend
-shaders/      14,738 LOC  121 files, mostly rt/, core/, postprocess/, compute/
+  core/          828 LOC  logging, events, commands
+  gpu/vulkan/  9,639 LOC  device, memory, descriptors, dispatch
+  render/     25,558 LOC  rt/, deferred/, graph/, ibl/, particles/, picking/, async/
+  scene/       5,918 LOC  actor, component, asset (gltf/obj/fbx via Assimp)
+  physics/    11,083 LOC  Jolt 5.1 backend behind IPhysicsBackend plugin
+  audio/         476 LOC  miniaudio backend
+shaders/      17,058 LOC  125 files, mostly rt/, core/, postprocess/, compute/
 ```
 
 ## Build
@@ -305,21 +176,20 @@ Requires CMake 3.20+, Vulkan SDK 1.3+ with RT extensions, a **C++20** compiler. 
 ./build/cornell_box       output.png 1024                 # 1024 spp path-traced reference
 ./build/cornell_box       output.png 1   deferred         # deferred + RT hybrid
 ./build/model_viewer      model.glb  output.png 256       # GLB in Cornell box, OIDN denoised
-./build/model_viewer      model.fbx  output.png 1 deferred # FBX with skinned animation
+./build/model_viewer      model.fbx  output.png 1 deferred # FBX geometry via Assimp
 ./build/env_demo          model.glb  env.hdr output.png 256
 ./build/interactive       model.glb  env.hdr              # GLFW viewer, ~75 fps
 ./build/turntable         model.glb  mirror 256 480       # turntable video frames
 ./build/renderer_test                                      # smoke test
 ```
 
-All examples accept `--denoise=oidn|optix|nrd|none`. The interactive viewer uses NRD's REBLUR_DIFFUSE_SPECULAR for realtime denoising.
+All examples accept `--denoise=none|oidn|nrd|atrous|dlss`. The interactive viewer uses NRD's REBLUR_DIFFUSE_SPECULAR for realtime denoising.
 
 ## Dependencies
 
 - Vulkan SDK 1.3+ with RT extensions
 - GLFW 3.x (interactive viewer only)
 - Intel OpenImageDenoise 2.x
-- NVIDIA OptiX SDK 9.1 (optional, requires CUDA Toolkit). Set `OPTIX_ROOT` or install under `$HOME/optix-sdk/NVIDIA-OptiX-SDK-9.1.0-linux64-x86_64/`. CMake auto-detects.
 - NVIDIA NRD (RayTracingDenoiser) v4.17, fetched via FetchContent. Pure Vulkan, no CUDA. Opt out with `-DOHAO_NRD=OFF`.
 - Jolt Physics 5.1.0, Assimp 5.4.3, tinygltf, stb, glm, VMA, nlohmann/json (all FetchContent)
 
@@ -331,7 +201,25 @@ See **`CHANGELOG.md`** for the current line (C++20 refactor, hybrid RT stack, go
 - **NRD** REBLUR + cinematic post is shippable for interactive quality (`--denoise=nrd`).
 - Pre-push **golden-image** regression (`tests/golden/`).
 - ReSTIR DI was tried and reverted (added more noise than it removed).
-- Remaining path-tracer gap: RT BLAS rebuild for skinned meshes.
+
+**Moved out or removed**, listed because the README described some of it long
+after the fact:
+
+- The **differentiable renderer** now lives in its own repository,
+  [`ohao_diff`](../ohao_diff) — a Vulkan-compute path tracer with Path Replay
+  Backpropagation and an explicit boundary term, gated by 83 unit tests, 75 GPU
+  checks and a three-way comparison against Mitsuba 3. It **vendors** four
+  shader includes from here (`material/ggx_aniso.glsl`, `rt/env_sampling.glsl`,
+  `rt/mis.glsl`, `pbr_unpack.glsl`) plus `EnvCDF` and
+  `RTAccelerationStructure`, deliberately, so the two renderers cannot
+  disagree about their surface physics. **If you change any of those, run
+  `ohao_diff/tools/check_vendor_drift.sh`** — the split removed the compiler's
+  enforcement of that coupling, not the coupling itself.
+- The **inverse-rendering lab** (`inverse_fit`, the Diff-IR deferred sibling)
+  was removed in `e0a260b`.
+- **Animation, the OptiX denoiser, the tscn loader and scene serialization**
+  were removed in `0873766`. `--denoise=optix` is still accepted on the command
+  line and falls back to OIDN with a warning.
 
 Deeper docs: `docs/render_pipelines.md`, `docs/bugs_solved/`, `devlog/`, and the monograph in `site/`.
 
