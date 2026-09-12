@@ -18,8 +18,8 @@ a gap in memory.
 |---|---|---|
 | 1 | Engine integration | **DONE** — the render records into a caller's command buffer (`recordGradientRun`), and `ohao_renderer` links `ohao_diff` at a real call site |
 | 2 | Sensitivity maps | **DONE** — binding 13 and check 73, gated by an identity against the gradient plus a derived null test |
-| 3 | Renderer fitting | not started; the differentiability decision below is still owed |
-| 4 | SVBRDF as a client | not started |
+| 3 | Renderer fitting | not started — the FD-vs-differentiable decision is RESOLVED (FD), but the bulk is an engine-harness job, measured below |
+| 4 | SVBRDF as a client | **GATE UNREACHABLE FROM THIS REPOSITORY** — the client it rewrites was never in version control |
 | 5 | Mitsuba oracle | **DONE** — `tests/diff/tools/mitsuba_gate.py` (three-way) and check 72; found and pinned a real +0.12% environment-sampling bias |
 | 6 | Traced radiance | **DONE** — checks 69 (traced, emissive) and 70 (shaded, second order) |
 | 7 | Stage 4 — scale | **partial** — camera pose complete (translation + rotation, 5 unit tests); BSDF unification investigated and deliberately not done; edge importance sampling premature; warped-area not ready |
@@ -87,7 +87,10 @@ install --target build/mitsuba-pkgs mitsuba` puts mitsuba 3.9.1 and drjit
 so no Python environment is touched at all. Deferring that to the user was
 more caution than the situation needed.
 
-**Items 2, 3 and 4 are unblocked.** Item 1 is closed. The orchestration move
+**Item 2 is closed too** — see its section for why "nearly free, this is
+display" was wrong and what was built instead.
+
+**Item 1 is closed.** The orchestration move
 finished in five slices — the scene, the sinks, the pipelines and their
 bindings, the push constants and both loop configurations, and finally the
 recording itself — each verified the same way: byte-identical with the new
@@ -110,10 +113,22 @@ a DiffRenderer the engine owns with nothing to render: that plumbing arrives
 with the feature that needs it. What this closes is the link itself, which no
 number of passing tests inside `tests/diff` could establish.
 
-**Not ready by its own criterion.** Warped-area reparameterisation: this file
-already says to give it its own plan and its own oracle first, and that if the
-oracle is not identified the implementation is not ready to begin. It still
-is not.
+**WHAT IS LEFT, AND WHOSE IT IS.** Everything still open is open for one of
+four reasons, and none of them is "not got to yet":
+
+1. **The project owner's decision.** The GGX specular-peak clamp in
+   `pt_raygen.rgen` (item 7) — fixing it changes every highlight on a smooth
+   material in the production path tracer. And the
+   `feat/diff-stage0b2a` + `0b-2b` merge to master, which must go together.
+2. **Engine-harness work, not differentiable-renderer work.** Item 3's bulk: a
+   headless deferred pipeline and a `PathTracer` that stands up, in a binary
+   that links the engine. Measured, not guessed — see item 3.
+3. **No caller.** Item 4's remaining half (environment texels as parameters).
+   The client it would serve is not in version control.
+4. **Not ready by its own criterion.** Warped-area reparameterisation: this
+   file already says to give it its own plan and its own oracle first, and
+   that if the oracle is not identified the implementation is not ready to
+   begin. It still is not.
 
 What is deliberately NOT being done, and why, so nobody repeats the reasoning:
 edge importance sampling would convert an estimator that is currently EXACT
@@ -291,11 +306,13 @@ minimise the difference from the path tracer.
 
 Two ways out, and they are not close in cost:
 
-- [ ] **Finite differences over the knobs.** There are on the order of ten
-      scalars. Two renders per knob per step is entirely affordable, needs no
-      new machinery, and reuses the FD harness that already exists. **Start
-      here.** It is not a compromise: for a handful of scalars, FD *is* the
-      right method.
+- [x] **DECIDED: finite differences over the knobs.** There are on the order of
+      ten scalars. Two renders per knob per step is entirely affordable, needs
+      no new machinery, and reuses the FD harness that already exists. It is
+      not a compromise: for a handful of scalars, FD *is* the right method.
+      **Nothing about this decision is blocked** — what is blocked is the
+      harness that would render the two images to difference, which is the
+      paragraph above.
 - [ ] **Differentiable deferred passes.** A stage of work in its own right, and
       only worth it if the parameter count grows past what FD can carry — a
       learned shading term, say, rather than a dozen knobs.
@@ -314,19 +331,37 @@ Say which of the two is being claimed.
 
 ---
 
-### 4. SVBRDF, rewritten as a client (spec §10.3) — ≈ ¾ stage
+### 4. SVBRDF, rewritten as a client (spec §10.3) — **GATE UNREACHABLE AS WRITTEN**
 
-Ingest a bundle, register three texture parameters, pick a loss, run the
-optimiser. `schedule.cpp`'s 943 lines of fixture-tuned heuristics get **deleted
-rather than maintained**.
+**CHECKED, and the premise does not hold.** This entry says
+"`schedule.cpp`'s 943 lines of fixture-tuned heuristics get deleted rather than
+maintained" and gates the rewrite on "a loss no worse than the heuristic stack
+on the same fixture". Neither is available here:
 
-**Gate:** the rewritten client reaches a loss no worse than the heuristic stack
-on the same fixture, with an order of magnitude less code. Deleting the old path
-is part of the gate, not a follow-up: if both survive, the heuristics will be
-what actually runs.
+* There is no `ohao/svbrdf/` in the tree. `ohao/` holds audio, core, diff, gpu,
+  physics, render and scene, and nothing else.
+* `git log --all -- 'ohao/svbrdf*'` is **empty** — the client was never
+  tracked. The only copy is `_backup/svbrdf-2026-08-28/`, which is itself
+  untracked and which the project owner has said to ignore.
 
-Mostly deletion. The new work is `estimateLighting` becoming real — environment
-texels registered as parameters — rather than a stub returning baked constants.
+So the deletion this item is "mostly" made of has already happened, and the
+**heuristic stack the rewrite must beat is not in version control** — the
+comparison that is the gate cannot be run from this repository at all. Saying
+"reaches a loss no worse than the heuristics" when the heuristics cannot be
+run would be a claim with nothing behind it.
+
+**What is actually left of this item** is its last sentence: `estimateLighting`
+becoming real, i.e. **environment texels registered as parameters**. That is a
+genuine differentiable-renderer capability and the path is well trodden — the
+emission TEXTURE parameter already does per-texel scatter with bilinear
+weights, gated by check 45 and by check 55's 17-element recovery — so it is
+assembly rather than invention.
+
+**It is not built, on purpose.** It has no caller. Building a parameter kind
+for a client that is not in the repository is the same mistake as giving the
+engine a `DiffRenderer` with nothing to render, and that was declined under
+item 1 for the same reason. Whoever brings an SVBRDF client back should
+register environment texels as part of doing so, with that client as the gate.
 
 ---
 
