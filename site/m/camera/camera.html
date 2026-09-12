@@ -111,7 +111,7 @@ $$</div>
 </div>
 <div class="section-rule"><h2 id="a-second-camera-model-with-the-opposite-yaw">A second camera model, with the opposite yaw</h2></div>
 <div class="prose reveal">
-<p>The differentiable renderer does not use this class. `DiffCamera` re-derives its own forward vector with a different convention:</p>
+<p>A second camera that once lived beside this one re-derived its forward vector with a different convention — kept here because the mismatch is the interesting part, and because a future second camera will be tempted into the same one:</p>
 <div class="citation-chip"><code class="citation-code">const glm::vec3 forward{std::sin(yaw) * std::cos(pitch), std::sin(pitch),</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/223ff7f/ohao/render/diff/diff_camera.hpp#L24" target="_blank" rel="noopener">ohao/render/diff/diff_camera.hpp@223ff7f:24</a></div>
 <p>that is $\mathbf{f}&#x27; = (\sin\psi\cos\theta,\; \sin\theta,\; -\cos\psi\cos\theta)$. Matching it to `Camera`&#x27;s $(\cos\psi\cos\theta,\; \sin\theta,\; \sin\psi\cos\theta)$ requires $\sin\psi&#x27; = \cos\psi$ *and* $-\cos\psi&#x27; = \sin\psi$ simultaneously, whose only solution is $\psi&#x27; = \psi + 90°$. `DiffCamera` at yaw $\psi$ is `Camera` at yaw $\psi - 90°$: an exact quarter turn about world up.</p>
 <p>Nothing applies that offset. Both are driven from the same `CameraView` list and both read the same field — `InverseScene::applyCamera` hands `v.yawDeg` to `Camera::setRotation`,</p>

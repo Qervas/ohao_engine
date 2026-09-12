@@ -97,7 +97,7 @@
 <li>`as_span` has zero callers anywhere, the test binary included. Its two neighbours</li>
 </ul>
 <p>`as_const_span` and `span_covers_image` are reached only from one test block — the one whose label still advertises `as_span`:</p>
-<div class="citation-chip"><code class="citation-code">auto s = as_const_span&lt;float&gt;(v);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L530" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:530</a></div>
+<div class="citation-chip"><code class="citation-code">auto s = as_const_span&lt;float&gt;(v);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L533" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:533</a></div>
 <p>`ContiguousRangeOf` exists only to constrain the first two. This is the *range*-to-span family, distinct from the *pointer*-to-span chain in `vk_utils.hpp` above: different functions, the same concept guarding them, and neither reached from engine code.</p>
 <ul>
 <li>`GpuLayoutBytes`, the `Predicate` concept, and `layout::gpu_sizeof` have no users</li>

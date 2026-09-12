@@ -125,10 +125,10 @@
 <ul>
 <li>On the `m_pixelBuffer` paths — None, Atrous, DLSS-RR — `render()` must be called at least `MAX_FRAMES_IN_FLIGHT` times before `getPixels()` returns real content; a single render then read yields an unwritten buffer. The NRD and OIDN branches never touch `m_pixelBuffer` and are correct after one call.</li>
 <li>`setRenderMode` may silently keep the previous mode. Read back `getRenderMode()` rather than trusting the argument.</li>
-<li>`resize()` destroys and recreates every RT image, so descriptors bound before the resize are stale — the inverse-rendering session forces a full scene rebind after resizing for exactly this reason.</li>
+<li>`resize()` destroys and recreates every RT image, so descriptors bound before the resize are stale: any caller holding bound descriptors must force a full scene rebind afterwards.</li>
 <li>Any new `RTRenderSettings` field a caller can set must be added to the preserve list in `prepareRTSceneForFrame` or re-injected in `applyRTRenderSettings`, or the per-frame reload will discard it.</li>
 <li>`getPixels()` is not reentrant with GPU work in flight: on the NRD and OIDN branches it allocates a command buffer, submits and waits on the graphics queue. It skips that whenever `m_denoiseCacheValid` still holds, so only the first call after each `render()` costs the stall.</li>
-<li>`getDevice()` / `getPhysicalDevice()` currently have no callers in the tree; the header describes them as wiring for sibling differentiable-rendering pipelines.</li>
+<li>`getDevice()` / `getPhysicalDevice()` currently have no callers in the tree; the header describes them as wiring for out-of-tree consumers.</li>
 </ul>
 <div class="citation-chip"><code class="citation-code">[[nodiscard]] VkDevice getDevice() const noexcept { return m_device; }</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/gpu/vulkan/renderer.hpp#L136" target="_blank" rel="noopener">ohao/gpu/vulkan/renderer.hpp:136</a></div>
 </div>

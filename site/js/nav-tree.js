@@ -569,11 +569,6 @@ window.OHAO_NAV_TREE = [
         "id": "systems/status",
         "title": "Status discipline",
         "href": "m/systems/status.html"
-      },
-      {
-        "id": "systems/public-scope",
-        "title": "Public scope note",
-        "href": "m/systems/public-scope.html"
       }
     ]
   }

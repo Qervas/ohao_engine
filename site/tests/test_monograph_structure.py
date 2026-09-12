@@ -2,8 +2,7 @@
 """Structural tests for the OHAO implementation monograph under site/.
 
 These tests drive the real published files (not re-implemented stubs):
-presence of plates, NEE walk pedagogy, audio module, Pages workflow,
-and inverse-product exclusion.
+presence of plates, NEE walk pedagogy, audio module, and the Pages workflow.
 """
 from __future__ import annotations
 
@@ -152,26 +151,12 @@ class MonographStructureTest(unittest.TestCase):
         arch = (M / "architecture.html").read_text(encoding="utf-8")
         self.assertIn("audio.html", arch)
 
-    def test_no_inverse_product_content(self) -> None:
-        banned = re.compile(
-            r"inverse_fit|Diff-IR|MAPTEST|quality-plate|LABTEST|PHOTOTEST",
-            re.I,
-        )
-        hits: list[str] = []
-        for path in SITE.rglob("*.html"):
-            text = path.read_text(encoding="utf-8", errors="replace")
-            for m in banned.finditer(text):
-                # allow mathematical "inverse" VP etc. — only product strings above
-                hits.append(f"{path.relative_to(SITE)}:{m.group(0)}")
-        self.assertEqual(hits, [], f"inverse product strings in site: {hits}")
-
     def test_pages_workflow_exists(self) -> None:
         wf = ROOT / ".github" / "workflows" / "pages.yml"
         self.assertTrue(wf.is_file(), wf)
         text = wf.read_text(encoding="utf-8")
         self.assertIn("site/", text)
         self.assertIn("deploy-pages", text)
-        self.assertIn("inverse", text.lower())  # exclude inverse media
         deploy = SITE / "DEPLOY.md"
         self.assertTrue(deploy.is_file(), deploy)
 

@@ -90,7 +90,7 @@
 <div class="citation-chip"><code class="citation-code">PCG   = 0,   // pseudo-random; realtime default</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/ohao/render/rt/sampler_types.hpp#L13" target="_blank" rel="noopener">ohao/render/rt/sampler_types.hpp:13</a></div>
 <div class="citation-chip"><code class="citation-code">#define SAMPLER_PCG   0u</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/shaders/includes/rt/sampler_api.glsl#L12" target="_blank" rel="noopener">shaders/includes/rt/sampler_api.glsl:12</a></div>
 <p>There is no generated header, no `static_assert`, and no test that compares the two — the one engine test that touches this header asserts only that `isQmcSampler` picks out Sobol. Renumbering the enum would compile, link, run, and silently select the other backend.</p>
-<div class="citation-chip"><code class="citation-code">EXPECT(isQmcSampler(SamplerType::Sobol) &amp;&amp; !isQmcSampler(SamplerType::PCG), &quot;QMC&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L650" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:650</a></div>
+<div class="citation-chip"><code class="citation-code">EXPECT(isQmcSampler(SamplerType::Sobol) &amp;&amp; !isQmcSampler(SamplerType::PCG), &quot;QMC&quot;);</code><a class="citation-loc" href="https://github.com/Qervas/ohao_engine/blob/master/tests/engine/engine_tests.cpp#L653" target="_blank" rel="noopener">tests/engine/engine_tests.cpp:653</a></div>
 </div>
 <div class="section-rule"><h2 id="the-stage-that-gets-the-constant-and-the-three-that-do-not">The stage that gets the constant, and the three that do not</h2></div>
 <div class="prose reveal">
